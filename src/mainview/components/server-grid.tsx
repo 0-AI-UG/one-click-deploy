@@ -13,7 +13,24 @@ export function ServerGrid({
 }) {
   const allApps = servers.flatMap(s => s.apps.map(a => ({ ...a, server: s })));
 
-  if (allApps.length === 0 && servers.length === 0) return null;
+  if (allApps.length === 0 && servers.length === 0) {
+    return (
+      <div style={{
+        textAlign: 'center', padding: '28px 16px',
+        border: '2px dashed var(--fg)', background: 'var(--bg-alt)',
+      }}>
+        <div className="mono" style={{ fontSize: 28, fontWeight: 900, marginBottom: 4, letterSpacing: '-0.04em' }}>
+          :/
+        </div>
+        <div className="mono" style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: 4 }}>
+          Nothing running
+        </div>
+        <div className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>
+          it's quiet here. too quiet.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
