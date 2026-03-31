@@ -1,0 +1,158 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;0,9..40,900;1,9..40,400&display=swap');
+
+:root {
+    --bg: #FFFDF5;
+    --bg-raised: #FFFFFF;
+    --bg-alt: #F0EBE1;
+    --fg: #1A1A1A;
+    --fg-dim: #4A4A4A;
+    --fg-faint: #8A8A8A;
+    --accent: #BAFF39;
+    --accent-h: #A8E830;
+    --blue: #5B8DEF;
+    --blue-dim: #5B8DEF20;
+    --red: #FF4444;
+    --red-dim: #FF444412;
+    --amber: #FFB800;
+    --bw: 2px;
+    --b: var(--bw) solid var(--fg);
+    --shadow: 4px 4px 0 var(--fg);
+    --shadow-sm: 2px 2px 0 var(--fg);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    font-size: 11px;
+}
+
+.drag-region { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+.mono { font-family: 'Space Mono', monospace; }
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--fg); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.pulse { animation: pulse 1.2s ease-in-out infinite; }
+.spin { animation: spin .6s linear infinite; }
+
+/* Status dots — small squares */
+.dot { width: 7px; height: 7px; flex-shrink: 0; border: 1.5px solid var(--fg); }
+.dot-ok { background: var(--accent); }
+.dot-warn { background: var(--amber); }
+.dot-err { background: var(--red); }
+.dot-off { background: var(--bg-alt); }
+
+/* Neo input */
+.inp {
+    width: 100%;
+    background: var(--bg-raised);
+    border: var(--b);
+    padding: 7px 10px;
+    font: 400 10px/1.3 'Space Mono', monospace;
+    color: var(--fg);
+    outline: none;
+    transition: box-shadow .1s, transform .1s;
+}
+.inp::placeholder { color: var(--fg-faint); }
+.inp:focus { box-shadow: var(--shadow-sm); transform: translate(-1px,-1px); }
+
+/* Neo select */
+.sel {
+    width: 100%;
+    background: var(--bg-raised);
+    border: var(--b);
+    padding: 6px 10px;
+    font: 400 10px/1 'Space Mono', monospace;
+    color: var(--fg);
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+}
+
+/* Neo card */
+.card {
+    background: var(--bg-raised);
+    border: var(--b);
+    box-shadow: var(--shadow);
+}
+
+/* Stamp label */
+.stamp {
+    font: 700 9px/1 'Space Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--fg);
+    display: inline-block;
+    padding: 3px 8px;
+    background: var(--accent);
+    border: var(--b);
+}
+
+/* Neo button — with shadow press */
+.btn {
+    font: 700 10px/1 'Space Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    border: var(--b);
+    padding: 7px 14px;
+    cursor: pointer;
+    transition: box-shadow .08s, transform .08s;
+    box-shadow: var(--shadow);
+    background: var(--accent);
+    color: var(--fg);
+}
+.btn:hover { transform: translate(-1px,-1px); box-shadow: 5px 5px 0 var(--fg); background: var(--accent-h); }
+.btn:active { transform: translate(2px,2px); box-shadow: 0 0 0 var(--fg); }
+.btn:disabled { opacity: .35; cursor: not-allowed; box-shadow: var(--shadow-sm); transform: none; }
+
+.btn-ghost {
+    background: var(--bg-raised);
+    color: var(--fg-dim);
+    box-shadow: var(--shadow-sm);
+}
+.btn-ghost:hover { background: var(--bg-alt); }
+
+/* Tiny tag */
+.tag {
+    font: 700 8px/1 'Space Mono', monospace;
+    padding: 1px 5px;
+    border: 1.5px solid var(--fg);
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+/* Inline action link */
+.act {
+    font: 700 9px/1 'Space Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    background: none;
+    border: none;
+    color: var(--fg-faint);
+    cursor: pointer;
+    padding: 0;
+}
+.act:hover { color: var(--fg); }
+
+/* Field label */
+.lbl {
+    font: 700 9px/1 'Space Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--fg);
+    display: block;
+    margin-bottom: 4px;
+}

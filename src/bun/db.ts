@@ -1,0 +1,230 @@
+import { Database } from "bun:sqlite";
+import path from "path";
+import { mkdirSync } from "fs";
+
+function log(context: string, ...args: any[]) {
+  console.log(`[${new Date().toISOString()}] [db:${context}]`, ...args);
+}
+
+const home = process.env.HOME || process.env.USERPROFILE || "/tmp";
+const dataDir = process.env.OCD_DATA_DIR || path.join(home, ".one-click-deploy");
+mkdirSync(dataDir, { recursive: true });
+
+const dbPath = path.join(dataDir, "deploy.db");
+log("init", `Opening database at ${dbPath}`);
+const db = new Database(dbPath);
+log("init", "Database opened successfully");
+
+db.run("PRAGMA journal_mode = WAL");
+db.run("PRAGMA foreign_keys = ON");
+
+db.run(`CREATE TABLE IF NOT EXISTS servers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  hetzner_id TEXT NOT NULL UNIQUE,
+  ipv4 TEXT NOT NULL DEFAULT '',
+  ipv6 TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL DEFAULT 'cx23',
+  location TEXT NOT NULL DEFAULT 'nbg1',
+  status TEXT NOT NULL DEFAULT 'provisioning',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS apps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  git_repo TEXT NOT NULL,
+  dockerfile_path TEXT NOT NULL DEFAULT 'Dockerfile',
+  container_port INTEGER NOT NULL DEFAULT 3000,
+  env_vars TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'deploying',
+  deploy_log TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS dns_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  zone_id TEXT NOT NULL,
+  record_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'A',
+  value TEXT NOT NULL
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+)`);
+
+// Insert defaults
+const defaults: Record<string, string> = {
+  hetzner_api_token: "",
+  hetzner_dns_token: "",
+  ssh_public_key: "",
+  dns_zone_id: "",
+  default_server_type: "cpx12",
+  default_location: "nbg1",
+};
+
+const insertSetting = db.prepare(
+  "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
+);
+for (const [key, value] of Object.entries(defaults)) {
+  insertSetting.run(key, value);
+}
+
+export default db;
+
+// Query helpers
+export function getServers() {
+  return db
+    .query("SELECT * FROM servers ORDER BY created_at DESC")
+    .all() as any[];
+}
+
+export function getServer(id: number) {
+  return db.query("SELECT * FROM servers WHERE id = ?").get(id) as any;
+}
+
+export function getServerByHetznerId(hetznerId: string) {
+  return db
+    .query("SELECT * FROM servers WHERE hetzner_id = ?")
+    .get(hetznerId) as any;
+}
+
+export function insertServer(server: {
+  name: string;
+  hetzner_id: string;
+  ipv4: string;
+  ipv6: string;
+  type: string;
+  location: string;
+  status: string;
+}) {
+  return db
+    .query(
+      "INSERT INTO servers (name, hetzner_id, ipv4, ipv6, type, location, status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+    )
+    .get(
+      server.name,
+      server.hetzner_id,
+      server.ipv4,
+      server.ipv6,
+      server.type,
+      server.location,
+      server.status
+    ) as any;
+}
+
+export function updateServerStatus(id: number, status: string) {
+  db.query("UPDATE servers SET status = ? WHERE id = ?").run(status, id);
+}
+
+export function deleteServer(id: number) {
+  db.query("DELETE FROM servers WHERE id = ?").run(id);
+}
+
+export function getApps(serverId?: number) {
+  if (serverId) {
+    return db
+      .query("SELECT * FROM apps WHERE server_id = ? ORDER BY created_at DESC")
+      .all(serverId) as any[];
+  }
+  return db
+    .query("SELECT * FROM apps ORDER BY created_at DESC")
+    .all() as any[];
+}
+
+export function getApp(id: number) {
+  return db.query("SELECT * FROM apps WHERE id = ?").get(id) as any;
+}
+
+export function insertApp(app: {
+  server_id: number;
+  name: string;
+  domain: string;
+  git_repo: string;
+  dockerfile_path: string;
+  container_port: number;
+  env_vars: string;
+}) {
+  return db
+    .query(
+      "INSERT INTO apps (server_id, name, domain, git_repo, dockerfile_path, container_port, env_vars) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+    )
+    .get(
+      app.server_id,
+      app.name,
+      app.domain,
+      app.git_repo,
+      app.dockerfile_path,
+      app.container_port,
+      app.env_vars
+    ) as any;
+}
+
+export function updateAppStatus(id: number, status: string) {
+  db.query("UPDATE apps SET status = ? WHERE id = ?").run(status, id);
+}
+
+export function appendDeployLog(id: number, line: string) {
+  db.query(
+    "UPDATE apps SET deploy_log = deploy_log || ? WHERE id = ?"
+  ).run(line + "\n", id);
+}
+
+export function getDeployLog(id: number): string {
+  const row = db
+    .query("SELECT deploy_log FROM apps WHERE id = ?")
+    .get(id) as any;
+  return row?.deploy_log ?? "";
+}
+
+export function deleteApp(id: number) {
+  db.query("DELETE FROM apps WHERE id = ?").run(id);
+}
+
+export function getSettings(): Record<string, string> {
+  const rows = db.query("SELECT key, value FROM settings").all() as any[];
+  const result: Record<string, string> = {};
+  for (const row of rows) result[row.key] = row.value;
+  return result;
+}
+
+export function saveSetting(key: string, value: string) {
+  db.query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(
+    key,
+    value
+  );
+}
+
+export function insertDnsRecord(record: {
+  app_id: number;
+  zone_id: string;
+  record_id: string;
+  name: string;
+  type: string;
+  value: string;
+}) {
+  return db
+    .query(
+      "INSERT INTO dns_records (app_id, zone_id, record_id, name, type, value) VALUES (?, ?, ?, ?, ?, ?) RETURNING *"
+    )
+    .get(
+      record.app_id,
+      record.zone_id,
+      record.record_id,
+      record.name,
+      record.type,
+      record.value
+    ) as any;
+}
+
+export function getDnsRecords(appId: number) {
+  return db
+    .query("SELECT * FROM dns_records WHERE app_id = ?")
+    .all(appId) as any[];
+}
