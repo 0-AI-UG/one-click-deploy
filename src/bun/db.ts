@@ -1,9 +1,76 @@
 import { Database } from "bun:sqlite";
 import path from "path";
 import { mkdirSync } from "fs";
+import { runMigrations } from "./migrations.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [db:${context}]`, ...args);
+}
+
+export function createDatabase(dbPathOrMemory: string): Database {
+  const instance = new Database(dbPathOrMemory);
+  instance.run("PRAGMA journal_mode = WAL");
+  instance.run("PRAGMA foreign_keys = ON");
+  initSchema(instance);
+  runMigrations(instance);
+  return instance;
+}
+
+function initSchema(instance: Database) {
+  instance.run(`CREATE TABLE IF NOT EXISTS servers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    hetzner_id TEXT NOT NULL UNIQUE,
+    ipv4 TEXT NOT NULL DEFAULT '',
+    ipv6 TEXT NOT NULL DEFAULT '',
+    type TEXT NOT NULL DEFAULT 'cx23',
+    location TEXT NOT NULL DEFAULT 'nbg1',
+    status TEXT NOT NULL DEFAULT 'provisioning',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+
+  instance.run(`CREATE TABLE IF NOT EXISTS apps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    git_repo TEXT NOT NULL,
+    dockerfile_path TEXT NOT NULL DEFAULT 'Dockerfile',
+    container_port INTEGER NOT NULL DEFAULT 3000,
+    env_vars TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'deploying',
+    deploy_log TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+
+  instance.run(`CREATE TABLE IF NOT EXISTS dns_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+    zone_id TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'A',
+    value TEXT NOT NULL
+  )`);
+
+  instance.run(`CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+  )`);
+
+  const defaults: Record<string, string> = {
+    ssh_public_key: "",
+    dns_zone_id: "",
+    default_server_type: "cpx12",
+    default_location: "nbg1",
+  };
+
+  const insertSetting = instance.prepare(
+    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
+  );
+  for (const [key, value] of Object.entries(defaults)) {
+    insertSetting.run(key, value);
+  }
 }
 
 const home = process.env.HOME || process.env.USERPROFILE || "/tmp";
@@ -12,69 +79,8 @@ mkdirSync(dataDir, { recursive: true });
 
 const dbPath = path.join(dataDir, "deploy.db");
 log("init", `Opening database at ${dbPath}`);
-const db = new Database(dbPath);
+const db = createDatabase(dbPath);
 log("init", "Database opened successfully");
-
-db.run("PRAGMA journal_mode = WAL");
-db.run("PRAGMA foreign_keys = ON");
-
-db.run(`CREATE TABLE IF NOT EXISTS servers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  hetzner_id TEXT NOT NULL UNIQUE,
-  ipv4 TEXT NOT NULL DEFAULT '',
-  ipv6 TEXT NOT NULL DEFAULT '',
-  type TEXT NOT NULL DEFAULT 'cx23',
-  location TEXT NOT NULL DEFAULT 'nbg1',
-  status TEXT NOT NULL DEFAULT 'provisioning',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-)`);
-
-db.run(`CREATE TABLE IF NOT EXISTS apps (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  domain TEXT NOT NULL,
-  git_repo TEXT NOT NULL,
-  dockerfile_path TEXT NOT NULL DEFAULT 'Dockerfile',
-  container_port INTEGER NOT NULL DEFAULT 3000,
-  env_vars TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'deploying',
-  deploy_log TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-)`);
-
-db.run(`CREATE TABLE IF NOT EXISTS dns_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
-  zone_id TEXT NOT NULL,
-  record_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'A',
-  value TEXT NOT NULL
-)`);
-
-db.run(`CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL DEFAULT ''
-)`);
-
-// Insert defaults
-const defaults: Record<string, string> = {
-  hetzner_api_token: "",
-  hetzner_dns_token: "",
-  ssh_public_key: "",
-  dns_zone_id: "",
-  default_server_type: "cpx12",
-  default_location: "nbg1",
-};
-
-const insertSetting = db.prepare(
-  "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
-);
-for (const [key, value] of Object.entries(defaults)) {
-  insertSetting.run(key, value);
-}
 
 export default db;
 
@@ -227,4 +233,55 @@ export function getDnsRecords(appId: number) {
   return db
     .query("SELECT * FROM dns_records WHERE app_id = ?")
     .all(appId) as any[];
+}
+
+// Server host key management
+export function updateServerHostKey(id: number, hostKey: string) {
+  db.query("UPDATE servers SET ssh_host_key = ? WHERE id = ?").run(hostKey, id);
+}
+
+// Deployment history
+export function insertDeployment(deployment: {
+  app_id: number;
+  image_tag: string;
+  git_commit: string;
+  deploy_log?: string;
+}) {
+  return db
+    .query(
+      "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log) VALUES (?, ?, ?, ?) RETURNING *"
+    )
+    .get(
+      deployment.app_id,
+      deployment.image_tag,
+      deployment.git_commit,
+      deployment.deploy_log ?? ""
+    ) as any;
+}
+
+export function getDeployments(appId: number) {
+  return db
+    .query(
+      "SELECT * FROM deployment_history WHERE app_id = ? ORDER BY created_at DESC"
+    )
+    .all(appId) as any[];
+}
+
+export function getDeployment(id: number) {
+  return db
+    .query("SELECT * FROM deployment_history WHERE id = ?")
+    .get(id) as any;
+}
+
+// App updates
+export function updateAppEnvVars(id: number, envVars: string) {
+  db.query("UPDATE apps SET env_vars = ? WHERE id = ?").run(envVars, id);
+}
+
+export function updateAppDomain(id: number, domain: string) {
+  db.query("UPDATE apps SET domain = ? WHERE id = ?").run(domain, id);
+}
+
+export function updateAppVolume(id: number, volumeId: string, volumeMount: string) {
+  db.query("UPDATE apps SET volume_id = ?, volume_mount = ? WHERE id = ?").run(volumeId, volumeMount, id);
 }
