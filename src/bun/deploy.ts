@@ -1,11 +1,100 @@
 import type { DeployRequest, ServerWithApps } from "../shared/rpc.ts";
 import * as db from "./db.ts";
 import * as hetzner from "./hetzner.ts";
+import { validateDeployRequest, validateEnvVars } from "./validate.ts";
+import { createMasker } from "./mask.ts";
+import { getTokens } from "./keychain.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [deploy:${context}]`, ...args);
+}
+
+// Tracks resources created during deploy for rollback on failure
+type DeployState = {
+  hetznerServerId?: string;
+  dbServerId?: number;
+  dbAppId?: number;
+  dnsRecordId?: string;
+  dnsZoneId?: string;
+  containerName?: string;
+  caddyConfigured?: boolean;
+  caddyDomain?: string;
+  serverIsNew?: boolean;
+  volumeId?: string;
+};
+
+async function rollback(state: DeployState, serverIp: string): Promise<void> {
+  log("rollback", "Rolling back deploy state:", state);
+
+  // Remove Caddy site
+  if (state.caddyConfigured && state.caddyDomain && serverIp) {
+    try {
+      await hetzner.removeCaddySite(serverIp, state.caddyDomain);
+      log("rollback", "Removed Caddy site");
+    } catch (err) {
+      log("rollback", `Failed to remove Caddy site: ${err}`);
+    }
+  }
+
+  // Remove container
+  if (state.containerName && serverIp) {
+    try {
+      await hetzner.removeContainer(serverIp, state.containerName);
+      log("rollback", `Removed container ${state.containerName}`);
+    } catch (err) {
+      log("rollback", `Failed to remove container: ${err}`);
+    }
+  }
+
+  // Delete volume
+  if (state.volumeId) {
+    try {
+      await hetzner.deleteVolume(state.volumeId);
+      log("rollback", `Deleted volume ${state.volumeId}`);
+    } catch (err) {
+      log("rollback", `Failed to delete volume: ${err}`);
+    }
+  }
+
+  // Delete DNS record
+  if (state.dnsRecordId) {
+    try {
+      await hetzner.deleteDnsRecord(state.dnsRecordId);
+      log("rollback", `Deleted DNS record ${state.dnsRecordId}`);
+    } catch (err) {
+      log("rollback", `Failed to delete DNS record: ${err}`);
+    }
+  }
+
+  // Delete app record from DB
+  if (state.dbAppId) {
+    try {
+      db.deleteApp(state.dbAppId);
+      log("rollback", `Deleted app record ${state.dbAppId}`);
+    } catch (err) {
+      log("rollback", `Failed to delete app record: ${err}`);
+    }
+  }
+
+  // Delete newly created server (only if we created it and no other apps exist)
+  if (state.serverIsNew && state.dbServerId) {
+    const remainingApps = db.getApps(state.dbServerId);
+    if (remainingApps.length === 0) {
+      try {
+        if (state.hetznerServerId) {
+          await hetzner.deleteHetznerServer(state.hetznerServerId);
+        }
+        db.deleteServer(state.dbServerId);
+        log("rollback", `Deleted server ${state.dbServerId}`);
+      } catch (err) {
+        log("rollback", `Failed to delete server: ${err}`);
+      }
+    }
+  }
+
+  log("rollback", "Rollback complete");
 }
 
 export async function deploy(
@@ -15,11 +104,34 @@ export async function deploy(
   const deployStart = Date.now();
   log("start", "Deploy request:", { app_name: req.app_name, git_repo: req.git_repo, domain: req.domain, server_id: req.server_id, container_port: req.container_port });
 
+  // Validate all inputs before any side effects
+  const validation = validateDeployRequest(req);
+  if (!validation.valid) {
+    log("validation", `Failed: ${validation.error}`);
+    return { ok: false, error: validation.error };
+  }
+
+  // Set up log masking for secrets
+  const tokens = await getTokens();
+  const secretValues = [
+    tokens.hetzner_api_token,
+    tokens.hetzner_dns_token,
+    ...Object.values(req.env_vars),
+  ];
+  const mask = createMasker(secretValues);
+
+  const maskedLog = (appId: number, line: string) => {
+    db.appendDeployLog(appId, mask(line));
+  };
+
+  const state: DeployState = {};
+  let serverIp = "";
+  let serverHostKey = "";
+
   try {
     const settings = db.getSettings();
-    log("settings", "Loaded settings", { hasApiToken: !!settings.hetzner_api_token, hasDnsToken: !!settings.hetzner_dns_token, dnsZoneId: settings.dns_zone_id, serverType: settings.default_server_type, location: settings.default_location });
+    log("settings", "Loaded settings");
     let serverId = req.server_id;
-    let serverIp = "";
 
     // Step 1: Get or create server
     if (serverId) {
@@ -31,30 +143,36 @@ export async function deploy(
         throw new Error("Server not found");
       }
       serverIp = server.ipv4;
+      serverHostKey = server.ssh_host_key || "";
       log("server", `Using existing server: ${server.name} ip=${serverIp} status=${server.status}`);
       onProgress("server", `Using server ${server.name} (${serverIp})`);
     } else {
       onProgress("server", "Creating new Hetzner server...");
 
-      log("ssh", "Ensuring SSH key exists...");
-      const sshKeyStart = Date.now();
-      const sshKey = await hetzner.ensureSshKey("one-click-deploy");
-      log("ssh", `SSH key ready in ${Date.now() - sshKeyStart}ms: ${sshKey.name}`);
-      onProgress("server", `SSH key ready: ${sshKey.name}`);
+      log("ssh", "Ensuring SSH key and firewall exist...");
+      const [sshKey, firewallId] = await Promise.all([
+        hetzner.ensureSshKey("one-click-deploy"),
+        hetzner.ensureFirewall(),
+      ]);
+      log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}`);
+      onProgress("server", `SSH key + firewall ready`);
 
       const serverType = req.server_type || settings.default_server_type || "cx23";
       const location = req.server_location || settings.default_location || "nbg1";
       const serverName = `ocd-${req.app_name}-${Date.now()}`;
 
-      log("server", `Creating Hetzner server: name=${serverName} type=${serverType} location=${location} ssh_key=${sshKey.name}`);
+      log("server", `Creating Hetzner server: name=${serverName} type=${serverType} location=${location}`);
       const createStart = Date.now();
       const hServer = await hetzner.createServer({
         name: serverName,
         server_type: serverType,
         location,
         ssh_key_name: sshKey.name,
+        firewall_id: firewallId,
       });
-      log("server", `Hetzner server created in ${Date.now() - createStart}ms: id=${hServer.id} ip=${hServer.public_net.ipv4.ip}`);
+      state.hetznerServerId = String(hServer.id);
+      state.serverIsNew = true;
+      log("server", `Hetzner server created in ${Date.now() - createStart}ms: id=${hServer.id}`);
 
       serverIp = hServer.public_net.ipv4.ip;
       const dbServer = db.insertServer({
@@ -67,12 +185,13 @@ export async function deploy(
         status: "provisioning",
       });
       serverId = dbServer.id;
+      state.dbServerId = dbServer.id;
       log("server", `Server saved to DB: id=${dbServer.id}`);
       onProgress("server", `Server created: ${serverName} (${serverIp})`);
 
       // Wait for provisioning
       onProgress("provision", "Waiting for server to be ready...");
-      log("provision", `Waiting for server ${serverIp} to be provisioned (polling SSH)...`);
+      log("provision", `Waiting for server ${serverIp} to be provisioned...`);
       const provisionStart = Date.now();
       await hetzner.waitForServer(serverIp, 30, (msg) => {
         onProgress("provision", msg);
@@ -88,12 +207,19 @@ export async function deploy(
       }
       log("provision", `Docker verified: ${dockerCheck.stdout.trim()}`);
 
+      // Capture SSH host key for future verification
+      serverHostKey = await hetzner.captureHostKey(serverIp);
+      if (serverHostKey) {
+        db.updateServerHostKey(dbServer.id, serverHostKey);
+        log("provision", "SSH host key captured and stored");
+      }
+
       db.updateServerStatus(dbServer.id, "ready");
       onProgress("provision", "Server provisioned with Docker + Caddy");
     }
 
     // Step 2: Determine domain + create DNS record
-    const useDomain = req.domain || `${serverIp}.nip.io`;
+    const useDomain = req.domain || `${req.app_name}.${serverIp}.nip.io`;
     const useInternalTls = !req.domain;
     log("dns", `Domain: ${useDomain} (internal TLS: ${useInternalTls})`);
 
@@ -103,21 +229,19 @@ export async function deploy(
     // Extract subdomain from full domain
     const parts = useDomain.split(".");
     const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
-    log("dns", `Subdomain: ${subdomain}, zone: ${dnsZoneId || "(none)"}`);
 
-    let dnsRecordId: string | null = null;
     if (req.domain && dnsZoneId) {
       try {
         log("dns", `Creating DNS A record: ${subdomain} -> ${serverIp} in zone ${dnsZoneId}`);
-        const dnsStart = Date.now();
         const record = await hetzner.createDnsRecord({
           zone_id: dnsZoneId,
           name: subdomain,
           type: "A",
           value: serverIp,
         });
-        dnsRecordId = record.id;
-        log("dns", `DNS record created in ${Date.now() - dnsStart}ms: id=${record.id}`);
+        state.dnsRecordId = record.id;
+        state.dnsZoneId = dnsZoneId;
+        log("dns", `DNS record created: id=${record.id}`);
         onProgress("dns", `DNS A record created: ${req.domain} -> ${serverIp}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -125,93 +249,144 @@ export async function deploy(
         onProgress("dns", `DNS failed (continuing): ${msg}`);
       }
     } else if (req.domain) {
-      log("dns", "No DNS zone configured, skipping");
       onProgress("dns", "No DNS zone configured, skipping DNS record");
     } else {
-      log("dns", `Using nip.io domain: ${useDomain}`);
       onProgress("dns", `Will use ${useDomain}`);
     }
 
-    // Step 3: Clone repo, find Dockerfile, build & run
+    // Step 3: Create volume if requested
+    let volumeMount: string | undefined;
+    if (req.volume_size && req.volume_size > 0) {
+      // Get the Hetzner server ID (either from new server or existing)
+      let hetznerServerId: number;
+      if (state.hetznerServerId) {
+        hetznerServerId = parseInt(state.hetznerServerId, 10);
+      } else {
+        const existingServer = db.getServer(serverId!);
+        hetznerServerId = parseInt(existingServer.hetzner_id, 10);
+      }
+
+      onProgress("build", `Creating ${req.volume_size}GB persistent volume...`);
+      const vol = await hetzner.createVolume({
+        name: `ocd-${req.app_name}-data`,
+        size: req.volume_size,
+        server_id: hetznerServerId,
+        location: req.server_location || settings.default_location || "nbg1",
+      });
+      state.volumeId = String(vol.id);
+      const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
+      const containerPath = req.volume_path || "/data";
+      await hetzner.sshExec(serverIp, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, serverHostKey || undefined);
+      volumeMount = `${hostMountPath}:${containerPath}`;
+      log("build", `Volume mounted: ${volumeMount}`);
+      onProgress("build", `Volume ready (${req.volume_size}GB at /data)`);
+    }
+
+    // Step 4: Create app record, then clone & build
     onProgress("build", `Cloning ${req.git_repo} and building...`);
-    log("build", `Starting clone & build for ${req.git_repo}`);
 
     let dockerfilePath = "Dockerfile";
-    const createApp = () =>
-      db.insertApp({
-        server_id: serverId!,
-        name: req.app_name,
-        domain: useDomain,
-        git_repo: req.git_repo,
-        dockerfile_path: dockerfilePath,
-        container_port: req.container_port,
-        env_vars: JSON.stringify(req.env_vars),
-      });
-
-    const app = createApp();
+    const app = db.insertApp({
+      server_id: serverId!,
+      name: req.app_name,
+      domain: useDomain,
+      git_repo: req.git_repo,
+      dockerfile_path: dockerfilePath,
+      container_port: req.container_port,
+      env_vars: JSON.stringify(req.env_vars),
+    });
+    state.dbAppId = app.id;
+    state.containerName = req.app_name;
     log("build", `App record created: id=${app.id}`);
 
-    if (dnsRecordId && dnsZoneId) {
+    if (state.dnsRecordId && state.dnsZoneId) {
       db.insertDnsRecord({
         app_id: app.id,
-        zone_id: dnsZoneId,
-        record_id: dnsRecordId,
+        zone_id: state.dnsZoneId,
+        record_id: state.dnsRecordId,
         name: subdomain,
         type: "A",
         value: serverIp,
       });
-      log("dns", `DNS record linked to app id=${app.id}`);
     }
 
-    try {
-      const buildStart = Date.now();
-      const result = await hetzner.cloneAndBuild(
-        serverIp,
-        {
-          name: req.app_name,
-          gitRepo: req.git_repo,
-          port: req.container_port,
-          envVars: req.env_vars,
-        },
-        (line) => {
-          db.appendDeployLog(app.id, `[build] ${line}`);
-          onProgress("build", line);
-        }
-      );
-      dockerfilePath = result.dockerfilePath;
-      log("build", `Clone & build completed in ${((Date.now() - buildStart) / 1000).toFixed(1)}s, dockerfile=${dockerfilePath}, container=${result.containerId}`);
-      onProgress("build", "Container running");
+    // Persist volume association
+    if (state.volumeId && volumeMount) {
+      db.updateAppVolume(app.id, state.volumeId, volumeMount);
+    }
 
-      // Step 4: Configure Caddy reverse proxy
-      onProgress("caddy", `Configuring TLS + reverse proxy for ${useDomain}...`);
-      log("caddy", `Configuring Caddy: domain=${useDomain} port=${req.container_port} internalTls=${useInternalTls}`);
-      const caddyStart = Date.now();
-      await hetzner.deployCaddySite(serverIp, useDomain, req.container_port, useInternalTls);
-      log("caddy", `Caddy configured in ${Date.now() - caddyStart}ms`);
-      db.appendDeployLog(app.id, `[caddy] Reverse proxy configured for ${useDomain}`);
-      onProgress("caddy", useInternalTls ? "Caddy configured with self-signed TLS" : "Caddy configured with auto-TLS");
+    const buildStart = Date.now();
+    const result = await hetzner.cloneAndBuild(
+      serverIp,
+      {
+        name: req.app_name,
+        gitRepo: req.git_repo,
+        port: req.container_port,
+        envVars: req.env_vars,
+        volumeMount,
+      },
+      (line) => {
+        maskedLog(app.id, `[build] ${line}`);
+        onProgress("build", mask(line));
+      }
+    );
+    dockerfilePath = result.dockerfilePath;
+    log("build", `Clone & build completed in ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
+    onProgress("build", "Container running");
 
-      // Done
+    // Step 5: Configure Caddy reverse proxy
+    onProgress("caddy", `Configuring TLS + reverse proxy for ${useDomain}...`);
+    await hetzner.deployCaddySite(serverIp, useDomain, req.container_port, useInternalTls, serverHostKey || undefined);
+    state.caddyConfigured = true;
+    state.caddyDomain = useDomain;
+    maskedLog(app.id, `[caddy] Reverse proxy configured for ${useDomain}`);
+    onProgress("caddy", useInternalTls ? "Caddy configured with self-signed TLS" : "Caddy configured with auto-TLS");
+
+    // Step 5: Health check
+    onProgress("health", "Checking app health...");
+    const health = await hetzner.healthCheck(serverIp, req.app_name, req.container_port, 5, serverHostKey || undefined);
+    if (health.healthy) {
+      maskedLog(app.id, `[health] Health check passed (HTTP ${health.statusCode})`);
+      onProgress("health", `Health check passed (HTTP ${health.statusCode})`);
       db.updateAppStatus(app.id, "running");
-      db.appendDeployLog(app.id, `[done] App deployed successfully`);
-      log("done", `Deploy completed successfully in ${((Date.now() - deployStart) / 1000).toFixed(1)}s — https://${useDomain}`);
-      onProgress("done", `Deployed! https://${useDomain}`);
-      return { ok: true };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log("error", `Build/run failed after ${((Date.now() - deployStart) / 1000).toFixed(1)}s:`, msg);
-      if (err instanceof Error && err.stack) log("error", "Stack:", err.stack);
-      db.appendDeployLog(app.id, `[error] ${msg}`);
-      db.updateAppStatus(app.id, "error");
-      onProgress("error", msg);
-      return { ok: false, error: msg };
+    } else {
+      maskedLog(app.id, `[health] ${health.error || "Health check failed"}`);
+      onProgress("health", `Warning: ${health.error || "Health check failed"} — app may still be starting`);
+      db.updateAppStatus(app.id, "unhealthy");
     }
+
+    // Record deployment history
+    const imageTag = `${req.app_name}:latest`;
+    const gitCommitResult = await hetzner.sshExec(
+      serverIp,
+      `su - deploy -c "cd /home/deploy/apps/${req.app_name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
+      serverHostKey || undefined
+    );
+    const gitCommit = gitCommitResult.stdout.trim();
+    db.insertDeployment({
+      app_id: app.id,
+      image_tag: imageTag,
+      git_commit: gitCommit,
+    });
+
+    maskedLog(app.id, `[done] App deployed successfully`);
+    log("done", `Deploy completed in ${((Date.now() - deployStart) / 1000).toFixed(1)}s — https://${useDomain}`);
+    onProgress("done", `Deployed! https://${useDomain}`);
+    return { ok: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log("error", `Deploy failed after ${((Date.now() - deployStart) / 1000).toFixed(1)}s:`, msg);
     if (err instanceof Error && err.stack) log("error", "Stack:", err.stack);
-    onProgress("error", msg);
-    return { ok: false, error: msg };
+
+    // Clean up any resources created during this deploy
+    try {
+      await rollback(state, serverIp);
+    } catch (rollbackErr) {
+      log("error", "Rollback also failed:", rollbackErr);
+    }
+
+    onProgress("error", mask(msg));
+    return { ok: false, error: mask(msg) };
   }
 }
 
@@ -223,31 +398,32 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       log("destroyApp", `App id=${appId} not found`);
       throw new Error("App not found");
     }
-    log("destroyApp", `App: name=${app.name} domain=${app.domain} server_id=${app.server_id}`);
 
     const server = db.getServer(app.server_id);
 
-    // Remove container and app directory
     if (server) {
-      log("destroyApp", `Removing container ${app.name} from ${server.ipv4}`);
+      const hostKey = server.ssh_host_key || undefined;
       await hetzner.removeContainer(server.ipv4, app.name);
-      log("destroyApp", `Removing Caddy site ${app.domain}`);
-      await hetzner.removeCaddySite(server.ipv4, app.domain);
-      log("destroyApp", `Removing app directory /home/deploy/apps/${app.name}`);
-      await hetzner.sshExec(server.ipv4, `rm -rf /home/deploy/apps/${app.name}`);
-    } else {
-      log("destroyApp", `Server id=${app.server_id} not found, skipping remote cleanup`);
+      await hetzner.removeCaddySite(server.ipv4, app.domain, hostKey);
+      await hetzner.sshExec(server.ipv4, `rm -rf /home/deploy/apps/${app.name}`, hostKey);
     }
 
-    // Remove DNS records
     const dnsRecords = db.getDnsRecords(appId);
-    log("destroyApp", `Removing ${dnsRecords.length} DNS records`);
     for (const record of dnsRecords) {
       try {
         await hetzner.deleteDnsRecord(record.record_id);
-        log("destroyApp", `Deleted DNS record ${record.record_id}`);
       } catch (err) {
         log("destroyApp", `Failed to delete DNS record ${record.record_id}:`, err instanceof Error ? err.message : err);
+      }
+    }
+
+    // Delete Hetzner volume if attached
+    if (app.volume_id) {
+      try {
+        await hetzner.deleteVolume(app.volume_id);
+        log("destroyApp", `Deleted volume ${app.volume_id}`);
+      } catch (err) {
+        log("destroyApp", `Failed to delete volume ${app.volume_id}:`, err instanceof Error ? err.message : err);
       }
     }
 
@@ -265,21 +441,13 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
   log("destroyServer", `Destroying server id=${serverId}`);
   try {
     const server = db.getServer(serverId);
-    if (!server) {
-      log("destroyServer", `Server id=${serverId} not found`);
-      throw new Error("Server not found");
-    }
-    log("destroyServer", `Server: name=${server.name} hetzner_id=${server.hetzner_id} ip=${server.ipv4}`);
+    if (!server) throw new Error("Server not found");
 
-    // Destroy all apps first
     const apps = db.getApps(serverId);
-    log("destroyServer", `Destroying ${apps.length} apps on server`);
     for (const app of apps) {
       await destroyApp(app.id);
     }
 
-    // Delete Hetzner server
-    log("destroyServer", `Deleting Hetzner server ${server.hetzner_id}`);
     await hetzner.deleteHetznerServer(server.hetzner_id);
     db.deleteServer(serverId);
     log("destroyServer", `Server id=${serverId} destroyed successfully`);
@@ -287,6 +455,200 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log("destroyServer", `Failed:`, msg);
+    return { ok: false, error: msg };
+  }
+}
+
+export async function restartApp(appId: number): Promise<{ ok: boolean; error?: string }> {
+  log("restartApp", `Restarting app id=${appId}`);
+  try {
+    const app = db.getApp(appId);
+    if (!app) throw new Error("App not found");
+    const server = db.getServer(app.server_id);
+    if (!server) throw new Error("Server not found");
+
+    const hostKey = server.ssh_host_key || undefined;
+    await hetzner.restartContainer(server.ipv4, app.name, hostKey);
+
+    const health = await hetzner.healthCheck(server.ipv4, app.name, app.container_port, 5, hostKey);
+    db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
+
+    log("restartApp", `App id=${appId} restarted, healthy=${health.healthy}`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log("restartApp", `Failed:`, msg);
+    return { ok: false, error: msg };
+  }
+}
+
+export async function redeployApp(
+  appId: number,
+  onProgress: ProgressFn
+): Promise<{ ok: boolean; error?: string }> {
+  log("redeployApp", `Redeploying app id=${appId}`);
+  try {
+    const app = db.getApp(appId);
+    if (!app) throw new Error("App not found");
+    const server = db.getServer(app.server_id);
+    if (!server) throw new Error("Server not found");
+
+    const envVars = JSON.parse(app.env_vars || "{}");
+    const hostKey = server.ssh_host_key || undefined;
+
+    db.updateAppStatus(appId, "deploying");
+    onProgress("build", "Pulling latest code and rebuilding...");
+
+    await hetzner.cloneAndBuild(
+      server.ipv4,
+      {
+        name: app.name,
+        gitRepo: app.git_repo,
+        port: app.container_port,
+        envVars,
+        volumeMount: app.volume_mount || undefined,
+      },
+      (line) => {
+        db.appendDeployLog(appId, `[redeploy] ${line}`);
+        onProgress("build", line);
+      }
+    );
+
+    onProgress("caddy", "Reloading reverse proxy...");
+    const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
+    await hetzner.deployCaddySite(server.ipv4, app.domain, app.container_port, useInternalTls);
+
+    onProgress("health", "Checking app health...");
+    const health = await hetzner.healthCheck(server.ipv4, app.name, app.container_port, 5, hostKey);
+    db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
+
+    // Record deployment
+    const gitCommitResult = await hetzner.sshExec(
+      server.ipv4,
+      `su - deploy -c "cd /home/deploy/apps/${app.name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
+      hostKey
+    );
+    db.insertDeployment({
+      app_id: appId,
+      image_tag: `${app.name}:latest`,
+      git_commit: gitCommitResult.stdout.trim(),
+    });
+
+    db.appendDeployLog(appId, `[done] Redeployed successfully`);
+    onProgress("done", "Redeployed successfully");
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log("redeployApp", `Failed:`, msg);
+    db.updateAppStatus(appId, "error");
+    return { ok: false, error: msg };
+  }
+}
+
+export async function updateAppEnv(
+  appId: number,
+  envVars: Record<string, string>
+): Promise<{ ok: boolean; error?: string }> {
+  log("updateAppEnv", `Updating env vars for app id=${appId}`);
+  try {
+    const envResult = validateEnvVars(envVars);
+    if (!envResult.valid) return { ok: false, error: envResult.error };
+
+    const app = db.getApp(appId);
+    if (!app) throw new Error("App not found");
+    const server = db.getServer(app.server_id);
+    if (!server) throw new Error("Server not found");
+
+    // Update DB
+    db.updateAppEnvVars(appId, JSON.stringify(envVars));
+
+    // Recreate container with new env vars
+    const hostKey = server.ssh_host_key || undefined;
+    await hetzner.removeContainer(server.ipv4, app.name);
+
+    // Write new env file and start container
+    await hetzner.cloneAndBuild(
+      server.ipv4,
+      {
+        name: app.name,
+        gitRepo: app.git_repo,
+        port: app.container_port,
+        envVars,
+        volumeMount: app.volume_mount || undefined,
+      },
+      (line) => {
+        db.appendDeployLog(appId, `[env-update] ${line}`);
+      }
+    );
+
+    const health = await hetzner.healthCheck(server.ipv4, app.name, app.container_port, 5, hostKey);
+    db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
+
+    log("updateAppEnv", `Env vars updated for app id=${appId}`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log("updateAppEnv", `Failed:`, msg);
+    return { ok: false, error: msg };
+  }
+}
+
+export async function rollbackApp(
+  appId: number,
+  deploymentId: number
+): Promise<{ ok: boolean; error?: string }> {
+  log("rollbackApp", `Rolling back app id=${appId} to deployment id=${deploymentId}`);
+  try {
+    const app = db.getApp(appId);
+    if (!app) throw new Error("App not found");
+    const server = db.getServer(app.server_id);
+    if (!server) throw new Error("Server not found");
+    const deployment = db.getDeployment(deploymentId);
+    if (!deployment) throw new Error("Deployment not found");
+    if (deployment.app_id !== appId) throw new Error("Deployment does not belong to this app");
+
+    const hostKey = server.ssh_host_key || undefined;
+    const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+    // Stop current container
+    await hetzner.removeContainer(server.ipv4, app.name);
+
+    // Start container with the old image tag
+    const envVars = JSON.parse(app.env_vars || "{}");
+    const envEntries = Object.entries(envVars);
+    let envFileFlag = "";
+    if (envEntries.length > 0) {
+      const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
+      const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
+      const escapedContent = envFileContent.replace(/'/g, "'\\''");
+      await hetzner.sshExec(server.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, hostKey);
+      envFileFlag = `--env-file ${envFilePath}`;
+    }
+
+    const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
+    const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${app.container_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${deployment.image_tag}`;
+    const result = await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to start container with image ${deployment.image_tag}: ${result.stderr}`);
+    }
+
+    // Health check
+    const health = await hetzner.healthCheck(server.ipv4, app.name, app.container_port, 5, hostKey);
+    db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
+
+    // Record rollback as new deployment
+    db.insertDeployment({
+      app_id: appId,
+      image_tag: deployment.image_tag,
+      git_commit: `rollback-from-${deployment.git_commit}`,
+    });
+
+    db.appendDeployLog(appId, `[rollback] Rolled back to deployment ${deploymentId} (${deployment.image_tag})`);
+    log("rollbackApp", `Rollback complete for app id=${appId}`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log("rollbackApp", `Failed:`, msg);
     return { ok: false, error: msg };
   }
 }
