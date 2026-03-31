@@ -1,78 +1,146 @@
 import { getSettings } from "./db.ts";
+import { getSecret } from "./keychain.ts";
+import { withRetry, isRetryableHttpError, isRetryableSshError } from "./retry.ts";
+import { writeFileSync, unlinkSync } from "fs";
+import { tmpdir } from "os";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
-function apiToken() {
-  return getSettings().hetzner_api_token;
+async function apiToken(): Promise<string> {
+  // Try keychain first, fall back to DB settings
+  const keychainToken = await getSecret("hetzner_api_token");
+  if (keychainToken) return keychainToken;
+  return getSettings().hetzner_api_token ?? "";
 }
 
-function dnsToken() {
-  return getSettings().hetzner_dns_token;
+async function dnsToken(): Promise<string> {
+  const keychainToken = await getSecret("hetzner_dns_token");
+  if (keychainToken) return keychainToken;
+  return getSettings().hetzner_dns_token ?? "";
 }
 
 async function hetznerApi(
-  path: string,
+  apiPath: string,
   options: RequestInit = {}
 ): Promise<any> {
-  const token = apiToken();
+  const token = await apiToken();
   if (!token) throw new Error("Hetzner API token not configured");
-  const method = options.method || "GET";
-  log("api", `${method} ${path}`);
-  const start = Date.now();
-  const res = await fetch(`https://api.hetzner.cloud/v1${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
-  const elapsed = Date.now() - start;
-  if (!res.ok) {
-    const body = await res.text();
-    log("api", `${method} ${path} FAILED ${res.status} in ${elapsed}ms: ${body}`);
-    throw new Error(`Hetzner API error ${res.status}: ${body}`);
-  }
-  log("api", `${method} ${path} OK ${res.status} in ${elapsed}ms`);
-  return res.json();
+  return withRetry(async () => {
+    const method = options.method || "GET";
+    log("api", `${method} ${apiPath}`);
+    const start = Date.now();
+    const res = await fetch(`https://api.hetzner.cloud/v1${apiPath}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    });
+    const elapsed = Date.now() - start;
+    if (!res.ok) {
+      const body = await res.text();
+      log("api", `${method} ${apiPath} FAILED ${res.status} in ${elapsed}ms: ${body}`);
+      throw new Error(`Hetzner API error ${res.status}: ${body}`);
+    }
+    log("api", `${method} ${apiPath} OK ${res.status} in ${elapsed}ms`);
+    return res.json();
+  }, { retryOn: isRetryableHttpError });
 }
 
 async function hetznerDns(
-  path: string,
+  apiPath: string,
   options: RequestInit = {}
 ): Promise<any> {
-  const token = dnsToken();
+  const token = await dnsToken();
   if (!token) throw new Error("Hetzner DNS token not configured");
-  const method = options.method || "GET";
-  log("dns", `${method} ${path}`);
-  const start = Date.now();
-  const res = await fetch(`https://dns.hetzner.com/api/v1${path}`, {
-    ...options,
-    headers: {
-      "Auth-API-Token": token,
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
-  const elapsed = Date.now() - start;
-  if (!res.ok) {
-    const body = await res.text();
-    log("dns", `${method} ${path} FAILED ${res.status} in ${elapsed}ms: ${body}`);
-    throw new Error(`Hetzner DNS error ${res.status}: ${body}`);
-  }
-  log("dns", `${method} ${path} OK ${res.status} in ${elapsed}ms`);
-  return res.json();
+  return withRetry(async () => {
+    const method = options.method || "GET";
+    log("dns", `${method} ${apiPath}`);
+    const start = Date.now();
+    const res = await fetch(`https://dns.hetzner.com/api/v1${apiPath}`, {
+      ...options,
+      headers: {
+        "Auth-API-Token": token,
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    });
+    const elapsed = Date.now() - start;
+    if (!res.ok) {
+      const body = await res.text();
+      log("dns", `${method} ${apiPath} FAILED ${res.status} in ${elapsed}ms: ${body}`);
+      throw new Error(`Hetzner DNS error ${res.status}: ${body}`);
+    }
+    log("dns", `${method} ${apiPath} OK ${res.status} in ${elapsed}ms`);
+    return res.json();
+  }, { retryOn: isRetryableHttpError });
 }
 
 // --- Server Management ---
+
+// --- Firewall ---
+
+const FIREWALL_NAME = "one-click-deploy";
+
+export async function ensureFirewall(): Promise<number> {
+  // Check if our firewall already exists
+  const list = await hetznerApi(`/firewalls?name=${FIREWALL_NAME}`);
+  if (list.firewalls.length > 0) {
+    log("firewall", `Using existing firewall: id=${list.firewalls[0].id}`);
+    return list.firewalls[0].id;
+  }
+
+  // Create firewall with SSH, HTTP, HTTPS inbound rules
+  log("firewall", "Creating Hetzner Cloud Firewall...");
+  const data = await hetznerApi("/firewalls", {
+    method: "POST",
+    body: JSON.stringify({
+      name: FIREWALL_NAME,
+      labels: { managed_by: "one-click-deploy" },
+      rules: [
+        {
+          direction: "in",
+          protocol: "tcp",
+          port: "22",
+          source_ips: ["0.0.0.0/0", "::/0"],
+          description: "SSH",
+        },
+        {
+          direction: "in",
+          protocol: "tcp",
+          port: "80",
+          source_ips: ["0.0.0.0/0", "::/0"],
+          description: "HTTP",
+        },
+        {
+          direction: "in",
+          protocol: "tcp",
+          port: "443",
+          source_ips: ["0.0.0.0/0", "::/0"],
+          description: "HTTPS",
+        },
+        {
+          direction: "in",
+          protocol: "icmp",
+          source_ips: ["0.0.0.0/0", "::/0"],
+          description: "ICMP ping",
+        },
+      ],
+    }),
+  });
+  log("firewall", `Firewall created: id=${data.firewall.id}`);
+  return data.firewall.id;
+}
 
 export async function createServer(opts: {
   name: string;
   server_type: string;
   location: string;
   ssh_key_name: string;
+  firewall_id: number;
 }) {
   const data = await hetznerApi("/servers", {
     method: "POST",
@@ -82,6 +150,7 @@ export async function createServer(opts: {
       location: opts.location,
       image: "docker-ce",
       ssh_keys: [opts.ssh_key_name],
+      firewalls: [{ firewall: opts.firewall_id }],
       labels: { managed_by: "one-click-deploy" },
       user_data: cloudInitScript(),
     }),
@@ -96,6 +165,41 @@ export async function getHetznerServer(serverId: string) {
 
 export async function deleteHetznerServer(serverId: string) {
   await hetznerApi(`/servers/${serverId}`, { method: "DELETE" });
+}
+
+// --- Volumes ---
+
+export async function createVolume(opts: {
+  name: string;
+  size: number; // GB
+  server_id: number;
+  location: string;
+}): Promise<{ id: number; linux_device: string }> {
+  log("volume", `Creating ${opts.size}GB volume "${opts.name}" for server ${opts.server_id}`);
+  const data = await hetznerApi("/volumes", {
+    method: "POST",
+    body: JSON.stringify({
+      name: opts.name,
+      size: opts.size,
+      server: opts.server_id,
+      format: "ext4",
+      automount: true,
+      labels: { managed_by: "one-click-deploy" },
+    }),
+  });
+  log("volume", `Volume created: id=${data.volume.id} device=${data.volume.linux_device}`);
+  return { id: data.volume.id, linux_device: data.volume.linux_device };
+}
+
+export async function deleteVolume(volumeId: string) {
+  // Detach first, then delete
+  try {
+    await hetznerApi(`/volumes/${volumeId}/actions/detach`, { method: "POST", body: "{}" });
+    // Wait a moment for detach to complete
+    await Bun.sleep(3000);
+  } catch {}
+  await hetznerApi(`/volumes/${volumeId}`, { method: "DELETE" });
+  log("volume", `Volume ${volumeId} deleted`);
 }
 
 export async function listHetznerServers() {
@@ -216,9 +320,11 @@ wait_for_apt
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 
-# Install essentials (docker comes from the image)
+# docker-ce image already includes Docker, curl, git
+# Firewall is handled by Hetzner Cloud Firewall (not UFW)
+# Only install unattended-upgrades + Caddy
 apt-get update -qq || { sleep 10; wait_for_apt; apt-get update -qq; }
-apt-get install -y -qq curl git ufw unattended-upgrades || { sleep 10; wait_for_apt; apt-get install -y -qq curl git ufw unattended-upgrades; }
+apt-get install -y -qq unattended-upgrades || { sleep 10; wait_for_apt; apt-get install -y -qq unattended-upgrades; }
 
 # Create deploy user for running containers
 useradd -m -s /bin/bash deploy
@@ -231,41 +337,42 @@ APT::Periodic::Unattended-Upgrade "1";
 AUTOUPGRADE
 systemctl enable unattended-upgrades
 
-# Firewall: only SSH, HTTP, HTTPS
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw --force enable
-
 # Install Caddy
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || true
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
 apt-get update -qq || true
 apt-get install -y -qq caddy || { sleep 10; wait_for_apt; apt-get install -y -qq caddy; }
 
-# Create Caddyfile with security headers
+# Configure Caddy with JSON config for admin API support
 mkdir -p /etc/caddy/sites
-cat > /etc/caddy/Caddyfile <<'CADDY'
+cat > /etc/caddy/caddy.json <<'CADDYJSON'
 {
-    email admin@localhost
-}
-
-(security_headers) {
-    header {
-        X-Content-Type-Options nosniff
-        X-Frame-Options DENY
-        Referrer-Policy strict-origin-when-cross-origin
-        X-XSS-Protection "1; mode=block"
-        -Server
+  "admin": {
+    "listen": "localhost:2019"
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [":80", ":443"],
+          "routes": []
+        }
+      }
     }
+  }
 }
+CADDYJSON
 
-import /etc/caddy/sites/*.caddy
-CADDY
+# Override systemd to use JSON config
+mkdir -p /etc/systemd/system/caddy.service.d
+cat > /etc/systemd/system/caddy.service.d/override.conf <<'OVERRIDE'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/caddy run --config /etc/caddy/caddy.json
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/caddy.json
+OVERRIDE
 
-# Enable and start Caddy
+systemctl daemon-reload
 systemctl enable caddy
 systemctl restart caddy
 
@@ -278,36 +385,73 @@ touch /root/.provisioned
 
 export async function sshExec(
   ip: string,
-  command: string
+  command: string,
+  hostKey?: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const keyPath = getSshKeyPath();
   const shortCmd = command.length > 120 ? command.slice(0, 120) + "..." : command;
   log("ssh", `Exec on ${ip}: ${shortCmd}`);
   const start = Date.now();
+
+  let knownHostsFile = "/dev/null";
+  let strictHostKeyChecking = "no";
+  let tmpKnownHostsPath: string | null = null;
+
+  if (hostKey) {
+    // Write host key to temp file for verification
+    tmpKnownHostsPath = `${tmpdir()}/ocd-known-hosts-${ip.replace(/\./g, "-")}-${Date.now()}`;
+    writeFileSync(tmpKnownHostsPath, hostKey);
+    knownHostsFile = tmpKnownHostsPath;
+    strictHostKeyChecking = "yes";
+  }
+
+  try {
+    const proc = Bun.spawn(
+      [
+        "ssh",
+        "-i", keyPath,
+        "-o", `StrictHostKeyChecking=${strictHostKeyChecking}`,
+        "-o", `UserKnownHostsFile=${knownHostsFile}`,
+        "-o", "ConnectTimeout=10",
+        `root@${ip}`,
+        command,
+      ],
+      { stdout: "pipe", stderr: "pipe" }
+    );
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const exitCode = await proc.exited;
+    const elapsed = Date.now() - start;
+    if (exitCode !== 0) {
+      log("ssh", `FAILED (exit=${exitCode}) in ${elapsed}ms: ${stderr.trim().slice(0, 200)}`);
+    } else {
+      log("ssh", `OK in ${elapsed}ms (stdout=${stdout.trim().length} bytes)`);
+    }
+    return { stdout, stderr, exitCode };
+  } finally {
+    if (tmpKnownHostsPath) {
+      try { unlinkSync(tmpKnownHostsPath); } catch {}
+    }
+  }
+}
+
+export async function captureHostKey(ip: string): Promise<string> {
+  log("ssh", `Capturing host key for ${ip}`);
   const proc = Bun.spawn(
-    [
-      "ssh",
-      "-i", keyPath,
-      "-o", "StrictHostKeyChecking=no",
-      "-o", "UserKnownHostsFile=/dev/null",
-      "-o", "ConnectTimeout=10",
-      `root@${ip}`,
-      command,
-    ],
+    ["ssh-keyscan", "-t", "ed25519", ip],
     { stdout: "pipe", stderr: "pipe" }
   );
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const exitCode = await proc.exited;
-  const elapsed = Date.now() - start;
-  if (exitCode !== 0) {
-    log("ssh", `FAILED (exit=${exitCode}) in ${elapsed}ms: ${stderr.trim().slice(0, 200)}`);
+  const stdout = await new Response(proc.stdout).text();
+  await proc.exited;
+  const hostKey = stdout.trim();
+  if (!hostKey) {
+    log("ssh", `Warning: no host key captured for ${ip}`);
   } else {
-    log("ssh", `OK in ${elapsed}ms (stdout=${stdout.trim().length} bytes)`);
+    log("ssh", `Host key captured for ${ip}: ${hostKey.slice(0, 60)}...`);
   }
-  return { stdout, stderr, exitCode };
+  return hostKey;
 }
 
 export async function waitForServer(
@@ -350,23 +494,103 @@ export async function deployCaddySite(
   ip: string,
   domain: string,
   containerPort: number,
-  internalTls: boolean = false
+  internalTls: boolean = false,
+  hostKey?: string
 ) {
-  log("caddy", `Deploying site: domain=${domain} port=${containerPort} internalTls=${internalTls}`);
-  const siteConfig = internalTls
-    ? `${domain} {\n  tls internal\n  import security_headers\n  reverse_proxy localhost:${containerPort}\n}\n`
-    : `${domain} {\n  import security_headers\n  reverse_proxy localhost:${containerPort}\n}\n`;
-  const escaped = siteConfig.replace(/'/g, "'\\''");
-  await sshExec(ip, `echo '${escaped}' > /etc/caddy/sites/${domain}.caddy`);
-  log("caddy", "Site config written, reloading Caddy...");
-  await sshExec(ip, "caddy reload --config /etc/caddy/Caddyfile");
-  log("caddy", "Caddy reloaded");
+  log("caddy", `Deploying site via admin API: domain=${domain} port=${containerPort} internalTls=${internalTls}`);
+
+  // Build the Caddy JSON config for this route
+  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
+  const handler: any = {
+    handler: "reverse_proxy",
+    upstreams: [{ dial: `localhost:${containerPort}` }],
+  };
+
+  const route: any = {
+    "@id": routeId,
+    match: [{ host: [domain] }],
+    handle: [
+      {
+        handler: "headers",
+        response: {
+          set: {
+            "X-Content-Type-Options": ["nosniff"],
+            "X-Frame-Options": ["DENY"],
+            "Referrer-Policy": ["strict-origin-when-cross-origin"],
+            "X-XSS-Protection": ["1; mode=block"],
+          },
+          deferred: true,
+        },
+      },
+      handler,
+    ],
+    terminal: true,
+  };
+
+  const tlsPolicy: any = internalTls
+    ? { automation: { policies: [{ subjects: [domain], issuers: [{ module: "internal" }] }] } }
+    : {};
+
+  // Try to delete existing route first (ignore errors if not found)
+  await sshExec(
+    ip,
+    `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`,
+    hostKey
+  );
+
+  // Add the route via the admin API
+  const routeJson = JSON.stringify(route);
+  const escaped = routeJson.replace(/'/g, "'\\''");
+  const addResult = await sshExec(
+    ip,
+    `curl -sf -X POST -H 'Content-Type: application/json' -d '${escaped}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
+    hostKey
+  );
+
+  if (addResult.exitCode !== 0) {
+    log("caddy", `Admin API route add failed: ${addResult.stderr}. Falling back to config file.`);
+    // Fallback: write config file and reload
+    const siteConfig = internalTls
+      ? `${domain} {\n  tls internal\n  reverse_proxy localhost:${containerPort}\n}\n`
+      : `${domain} {\n  reverse_proxy localhost:${containerPort}\n}\n`;
+    const fileEscaped = siteConfig.replace(/'/g, "'\\''");
+    await sshExec(ip, `echo '${fileEscaped}' > /etc/caddy/sites/${domain}.caddy`, hostKey);
+    await sshExec(ip, "caddy reload --config /etc/caddy/Caddyfile", hostKey);
+    log("caddy", "Fallback: config file written and reloaded");
+    return;
+  }
+
+  // If using internal TLS, set the TLS automation policy
+  if (internalTls) {
+    const tlsJson = JSON.stringify(tlsPolicy);
+    const tlsEscaped = tlsJson.replace(/'/g, "'\\''");
+    await sshExec(
+      ip,
+      `curl -sf -X PATCH -H 'Content-Type: application/json' -d '${tlsEscaped}' http://localhost:2019/config/apps/tls`,
+      hostKey
+    );
+  }
+
+  log("caddy", "Site configured via admin API");
 }
 
-export async function removeCaddySite(ip: string, domain: string) {
+export async function removeCaddySite(ip: string, domain: string, hostKey?: string) {
   log("caddy", `Removing site: ${domain}`);
-  await sshExec(ip, `rm -f /etc/caddy/sites/${domain}.caddy`);
-  await sshExec(ip, "caddy reload --config /etc/caddy/Caddyfile");
+  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
+
+  // Try admin API first
+  const result = await sshExec(
+    ip,
+    `curl -sf -X DELETE http://localhost:2019/id/${routeId}`,
+    hostKey
+  );
+
+  if (result.exitCode !== 0) {
+    // Fallback: remove config file
+    await sshExec(ip, `rm -f /etc/caddy/sites/${domain}.caddy`, hostKey);
+    await sshExec(ip, "caddy reload --config /etc/caddy/Caddyfile", hostKey);
+  }
+
   log("caddy", `Site ${domain} removed`);
 }
 
@@ -377,6 +601,7 @@ export async function cloneAndBuild(
     gitRepo: string;
     port: number;
     envVars: Record<string, string>;
+    volumeMount?: string; // e.g. "/mnt/data:/data" — host:container
   },
   onLog?: (line: string) => void
 ) {
@@ -431,14 +656,23 @@ export async function cloneAndBuild(
   log("build", `Docker build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
   emit("Image built successfully");
 
-  // Build env flags
-  const envFlags = Object.entries(opts.envVars)
-    .map(([k, v]) => `-e ${k}='${v.replace(/'/g, "'\\''")}'`)
-    .join(" ");
+  // Write env file to server (avoids shell injection via env var values)
+  const envFileEntries = Object.entries(opts.envVars);
+  let envFileFlag = "";
+  if (envFileEntries.length > 0) {
+    const envFilePath = `/home/deploy/apps/${opts.name}/.env.deploy`;
+    const envFileContent = envFileEntries
+      .map(([k, v]) => `${k}=${v}`)
+      .join("\n");
+    const escapedContent = envFileContent.replace(/'/g, "'\\''");
+    await sshExec(ip, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`);
+    envFileFlag = `--env-file ${envFilePath}`;
+  }
 
   // Run container
   emit("Starting container...");
-  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped -p 127.0.0.1:${opts.port}:${opts.port} ${envFlags} ${opts.name}:latest`;
+  const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
+  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped -p 127.0.0.1:${opts.port}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
   log("build", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
@@ -451,4 +685,91 @@ export async function cloneAndBuild(
 
 export async function removeContainer(ip: string, name: string) {
   await sshExec(ip, `su - deploy -c "docker rm -f ${name} 2>/dev/null || true"`);
+}
+
+// --- Health Checks ---
+
+export async function healthCheck(
+  ip: string,
+  containerName: string,
+  port: number,
+  maxAttempts = 5,
+  hostKey?: string
+): Promise<{ healthy: boolean; statusCode?: number; error?: string }> {
+  log("health", `Checking health of ${containerName} on ${ip}:${port}`);
+
+  for (let i = 0; i < maxAttempts; i++) {
+    // Check container is running
+    const inspect = await sshExec(
+      ip,
+      `su - deploy -c "docker inspect --format='{{.State.Running}}' ${containerName} 2>/dev/null"`,
+      hostKey
+    );
+    if (inspect.stdout.trim() !== "true") {
+      if (i < maxAttempts - 1) {
+        log("health", `Container not running yet (attempt ${i + 1}/${maxAttempts})`);
+        await Bun.sleep(3000);
+        continue;
+      }
+      return { healthy: false, error: "Container is not running" };
+    }
+
+    // Check HTTP response
+    const curl = await sshExec(
+      ip,
+      `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:${port}/`,
+      hostKey
+    );
+    const statusCode = parseInt(curl.stdout.trim(), 10);
+    if (statusCode >= 200 && statusCode < 500) {
+      log("health", `Health check passed: HTTP ${statusCode}`);
+      return { healthy: true, statusCode };
+    }
+
+    if (i < maxAttempts - 1) {
+      log("health", `Health check returned ${statusCode} (attempt ${i + 1}/${maxAttempts})`);
+      await Bun.sleep(3000);
+    } else {
+      return {
+        healthy: false,
+        statusCode: isNaN(statusCode) ? undefined : statusCode,
+        error: `Health check failed with HTTP ${statusCode || "no response"}`,
+      };
+    }
+  }
+
+  return { healthy: false, error: "Health check timed out" };
+}
+
+// --- Container Logs ---
+
+export async function getContainerLogs(
+  ip: string,
+  containerName: string,
+  tail: number = 100,
+  hostKey?: string
+): Promise<string> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker logs --tail ${tail} ${containerName} 2>&1"`,
+    hostKey
+  );
+  return result.stdout;
+}
+
+// --- Container Restart ---
+
+export async function restartContainer(
+  ip: string,
+  containerName: string,
+  hostKey?: string
+): Promise<void> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker restart ${containerName}"`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(`Failed to restart container: ${result.stderr}`);
+  }
 }
