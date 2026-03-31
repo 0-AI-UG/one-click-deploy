@@ -1,13 +1,15 @@
 import { useState, useRef, useCallback } from "react";
 import { request } from "../rpc.ts";
-import type { ServerWithApps, App } from "../../shared/rpc.ts";
+import type { ServerWithApps, App, DeploymentRecord } from "../../shared/rpc.ts";
 
 export function ServerGrid({
   servers,
   onChanged,
+  onViewLogs,
 }: {
   servers: ServerWithApps[];
   onChanged: () => void;
+  onViewLogs: (app: App) => void;
 }) {
   const allApps = servers.flatMap(s => s.apps.map(a => ({ ...a, server: s })));
 
@@ -25,12 +27,11 @@ export function ServerGrid({
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {allApps.map(app => (
-            <AppCard key={app.id} app={app} serverName={app.server.name} onChanged={onChanged} />
+            <AppCard key={app.id} app={app} serverName={app.server.name} onChanged={onChanged} onViewLogs={onViewLogs} />
           ))}
         </div>
       )}
 
-      {/* Servers summary */}
       {servers.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
@@ -69,31 +70,66 @@ function useConfirmAction(action: () => Promise<void>, timeout = 2000) {
   return { armed, busy, click };
 }
 
-function AppCard({ app, serverName, onChanged }: { app: App; serverName: string; onChanged: () => void }) {
-  const { armed, busy, click } = useConfirmAction(async () => {
+function AppCard({ app, serverName, onChanged, onViewLogs }: { app: App; serverName: string; onChanged: () => void; onViewLogs: (app: App) => void }) {
+  const remove = useConfirmAction(async () => {
     await request.destroyApp({ app_id: app.id });
     onChanged();
   });
 
+  const restart = useConfirmAction(async () => {
+    await request.restartApp({ app_id: app.id });
+    onChanged();
+  });
+
+  const redeploy = useConfirmAction(async () => {
+    await request.redeployApp({ app_id: app.id });
+    onChanged();
+  });
+
+  const [showHistory, setShowHistory] = useState(false);
+  const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
+  const [actionBusy, setActionBusy] = useState(false);
+
+  const anyBusy = remove.busy || restart.busy || redeploy.busy || actionBusy;
+
   const statusLabel =
     app.status === "running" ? "Online" :
     app.status === "deploying" ? "Starting..." :
+    app.status === "unhealthy" ? "Unhealthy" :
     app.status === "error" ? "Error" : "Stopped";
 
   const statusDot =
     app.status === "running" ? "dot-ok" :
     app.status === "deploying" ? "dot-warn" :
+    app.status === "unhealthy" ? "dot-warn" :
     app.status === "error" ? "dot-err" : "dot-off";
 
+  const toggleHistory = async () => {
+    if (!showHistory) {
+      setShowHistory(true);
+      const deps = await request.getDeployments({ app_id: app.id });
+      setDeployments(deps);
+    } else {
+      setShowHistory(false);
+    }
+  };
+
+  const handleRollback = async (deploymentId: number) => {
+    setActionBusy(true);
+    await request.rollbackApp({ app_id: app.id, deployment_id: deploymentId });
+    setActionBusy(false);
+    onChanged();
+  };
+
   return (
-    <div className="card" style={{ padding: 10, opacity: busy ? 0.4 : 1 }}>
+    <div className="card" style={{ padding: 10, opacity: anyBusy ? 0.4 : 1 }}>
       {/* Top row: name + status */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
         <div className={`dot ${statusDot}`} />
         <span style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{app.name}</span>
         <span className="mono" style={{
           fontSize: 9, fontWeight: 700, letterSpacing: '.04em',
-          color: app.status === "running" ? 'var(--fg)' : app.status === "error" ? 'var(--red)' : 'var(--fg-faint)',
+          color: app.status === "running" ? 'var(--fg)' : app.status === "error" ? 'var(--red)' : app.status === "unhealthy" ? 'var(--amber)' : 'var(--fg-faint)',
         }}>
           {statusLabel}
         </span>
@@ -115,18 +151,77 @@ function AppCard({ app, serverName, onChanged }: { app: App; serverName: string;
         </svg>
       </button>
 
+      {/* Action buttons row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 6, flexWrap: 'wrap' }}>
+        <button onClick={() => onViewLogs(app)} className="act" disabled={anyBusy}>
+          Logs
+        </button>
+        <button
+          onClick={restart.click}
+          disabled={anyBusy}
+          className="act"
+          style={{ color: restart.armed ? 'var(--amber)' : undefined }}
+        >
+          {restart.armed ? 'Confirm?' : 'Restart'}
+        </button>
+        <button
+          onClick={redeploy.click}
+          disabled={anyBusy}
+          className="act"
+          style={{ color: redeploy.armed ? 'var(--amber)' : undefined }}
+        >
+          {redeploy.armed ? 'Confirm?' : 'Redeploy'}
+        </button>
+        <button onClick={toggleHistory} className="act" disabled={anyBusy}>
+          {showHistory ? '− History' : '+ History'}
+        </button>
+      </div>
+
+      {/* Deployment history panel */}
+      {showHistory && (
+        <div style={{ marginBottom: 6 }}>
+          {deployments.length === 0 ? (
+            <div className="mono" style={{ fontSize: 9, color: 'var(--fg-faint)', padding: 4 }}>
+              No deployment history
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {deployments.map((dep, i) => (
+                <div key={dep.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '3px 6px',
+                  background: 'var(--bg-alt)', border: '1px solid var(--fg)',
+                  fontSize: 9,
+                }}>
+                  <span className="mono" style={{ color: 'var(--fg-faint)', width: 50, flexShrink: 0 }}>
+                    {dep.git_commit.slice(0, 7)}
+                  </span>
+                  <span className="mono" style={{ flex: 1, color: 'var(--fg-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {new Date(dep.created_at).toLocaleString()}
+                  </span>
+                  {i > 0 && (
+                    <button onClick={() => handleRollback(dep.id)} className="act" style={{ fontSize: 8 }} disabled={anyBusy}>
+                      Rollback
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Bottom row: server + remove */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontSize: 10, color: 'var(--fg-faint)' }}>
           on {serverName}
         </span>
         <button
-          onClick={click}
-          disabled={busy}
+          onClick={remove.click}
+          disabled={anyBusy}
           className="act"
-          style={{ color: armed || busy ? 'var(--red)' : undefined }}
+          style={{ color: remove.armed ? 'var(--red)' : undefined }}
         >
-          Remove
+          {remove.armed ? 'Confirm?' : 'Remove'}
         </button>
       </div>
     </div>
@@ -165,7 +260,7 @@ function ServerRow({ server, onChanged }: { server: ServerWithApps; onChanged: (
         className="act"
         style={{ color: armed || busy ? 'var(--red)' : undefined }}
       >
-        Delete
+        {armed ? 'Confirm?' : 'Delete'}
       </button>
     </div>
   );
