@@ -9,6 +9,7 @@ export type Server = {
   type: string;
   location: string;
   status: string;
+  ssh_host_key: string;
   created_at: string;
 };
 
@@ -35,6 +36,15 @@ export type DnsRecord = {
   value: string;
 };
 
+export type DeploymentRecord = {
+  id: number;
+  app_id: number;
+  image_tag: string;
+  git_commit: string;
+  status: string;
+  created_at: string;
+};
+
 export type ServerWithApps = Server & { apps: App[] };
 
 export type DeployRequest = {
@@ -46,6 +56,8 @@ export type DeployRequest = {
   server_id?: number;
   server_type?: string;
   server_location?: string;
+  volume_size?: number; // GB, if set a Hetzner Volume is created and mounted
+  volume_path?: string; // Container mount path, defaults to /data
 };
 
 export type Settings = {
@@ -98,6 +110,31 @@ export type DeployAppRPC = {
       openExternal: {
         params: { url: string };
         response: { ok: boolean };
+      };
+      // New operations
+      restartApp: {
+        params: { app_id: number };
+        response: { ok: boolean; error?: string };
+      };
+      redeployApp: {
+        params: { app_id: number };
+        response: { ok: boolean; error?: string };
+      };
+      updateAppEnv: {
+        params: { app_id: number; env_vars: Record<string, string> };
+        response: { ok: boolean; error?: string };
+      };
+      getContainerLogs: {
+        params: { app_id: number; tail?: number };
+        response: { logs: string; error?: string };
+      };
+      getDeployments: {
+        params: { app_id: number };
+        response: DeploymentRecord[];
+      };
+      rollbackApp: {
+        params: { app_id: number; deployment_id: number };
+        response: { ok: boolean; error?: string };
       };
     };
     messages: {};
