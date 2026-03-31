@@ -22,3 +22,6 @@ jobs:
 
       - name: Type check
         run: bun run typecheck
+
+      - name: Run tests
+        run: bun test src/bun/

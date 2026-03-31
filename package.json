@@ -6,7 +6,8 @@
     "start": "electrobun dev",
     "dev": "electrobun dev --watch",
     "build": "electrobun build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src/bun/"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
