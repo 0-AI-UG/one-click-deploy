@@ -21,8 +21,14 @@ export type App = {
   git_repo: string;
   dockerfile_path: string;
   container_port: number;
+  host_port: number;
   env_vars: string;
   status: string;
+  webhook_enabled: number;
+  webhook_secret: string;
+  webhook_branch: string;
+  github_webhook_id: string;
+  auth_password: string;
   created_at: string;
 };
 
@@ -58,11 +64,16 @@ export type DeployRequest = {
   server_location?: string;
   volume_size?: number; // GB, if set a Hetzner Volume is created and mounted
   volume_path?: string; // Container mount path, defaults to /data
+  dockerfile_path?: string; // Path to Dockerfile in repo, auto-discovered if omitted
+  webhook_enabled?: boolean;
+  webhook_branch?: string; // Branch to watch, defaults to "main"
+  auth_password?: string; // If set, deploys a login gate in front of the app
 };
 
 export type Settings = {
   hetzner_api_token: string;
   hetzner_dns_token: string;
+  github_pat: string;
   dns_zone_id: string;
   default_server_type: string;
   default_location: string;
@@ -116,8 +127,16 @@ export type DeployAppRPC = {
         params: { app_id: number };
         response: { ok: boolean; error?: string };
       };
-      redeployApp: {
+      pauseApp: {
         params: { app_id: number };
+        response: { ok: boolean; error?: string };
+      };
+      unpauseApp: {
+        params: { app_id: number };
+        response: { ok: boolean; error?: string };
+      };
+      redeployApp: {
+        params: { app_id: number; env_vars?: Record<string, string>; auth_password?: string | null };
         response: { ok: boolean; error?: string };
       };
       updateAppEnv: {
@@ -134,6 +153,14 @@ export type DeployAppRPC = {
       };
       rollbackApp: {
         params: { app_id: number; deployment_id: number };
+        response: { ok: boolean; error?: string };
+      };
+      enableWebhook: {
+        params: { app_id: number; branch?: string };
+        response: { ok: boolean; error?: string };
+      };
+      disableWebhook: {
+        params: { app_id: number };
         response: { ok: boolean; error?: string };
       };
     };

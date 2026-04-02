@@ -7,13 +7,16 @@ import {
   destroyServer,
   getServersWithApps,
   restartApp,
+  pauseApp,
+  unpauseApp,
   redeployApp,
   updateAppEnv,
   rollbackApp,
 } from "./deploy.ts";
 import * as hetzner from "./hetzner.ts";
-import { getTokens, maskToken, setSecret } from "./keychain.ts";
-import { validateHetznerToken } from "./validate.ts";
+import * as github from "./github.ts";
+import { getTokens, maskToken, setSecret, getSecret, deleteSecret } from "./keychain.ts";
+import { validateHetznerToken, validateGitHubPat } from "./validate.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [rpc:${context}]`, ...args);
@@ -44,6 +47,7 @@ const rpc = BrowserView.defineRPC<DeployAppRPC>({
         return {
           hetzner_api_token: maskToken(tokens.hetzner_api_token),
           hetzner_dns_token: maskToken(tokens.hetzner_dns_token),
+          github_pat: maskToken(tokens.github_pat),
           dns_zone_id: s.dns_zone_id ?? "",
           default_server_type: s.default_server_type ?? "cpx12",
           default_location: s.default_location ?? "nbg1",
@@ -62,6 +66,24 @@ const rpc = BrowserView.defineRPC<DeployAppRPC>({
                 throw new Error(`${key}: ${tokenValidation.error}`);
               }
               await setSecret(key, value);
+            }
+          } else if (key === "github_pat") {
+            if (value.includes("...") || value === "****") continue;
+            if (value) {
+              const patValidation = validateGitHubPat(value);
+              if (!patValidation.valid) {
+                throw new Error(`GitHub token: ${patValidation.error}`);
+              }
+              await setSecret(key, value);
+              // Verify the token was stored
+              const stored = await getSecret(key);
+              if (!stored) {
+                throw new Error("Failed to save GitHub token to Keychain. Check that the app has Keychain access.");
+              }
+              log("saveSettings", `GitHub PAT saved (${value.length} chars)`);
+            } else {
+              // Allow clearing the token
+              await deleteSecret(key);
             }
           } else {
             db.saveSetting(key, String(value));
@@ -129,7 +151,17 @@ const rpc = BrowserView.defineRPC<DeployAppRPC>({
         return await restartApp(app_id);
       },
 
-      redeployApp: async ({ app_id }: { app_id: number }) => {
+      pauseApp: async ({ app_id }: { app_id: number }) => {
+        log("pauseApp", `Pausing app ${app_id}...`);
+        return await pauseApp(app_id);
+      },
+
+      unpauseApp: async ({ app_id }: { app_id: number }) => {
+        log("unpauseApp", `Unpausing app ${app_id}...`);
+        return await unpauseApp(app_id);
+      },
+
+      redeployApp: async ({ app_id, env_vars, auth_password }: { app_id: number; env_vars?: Record<string, string>; auth_password?: string | null }) => {
         log("redeployApp", `Redeploying app ${app_id}...`);
         return await redeployApp(app_id, (step, detail) => {
           try {
@@ -139,7 +171,7 @@ const rpc = BrowserView.defineRPC<DeployAppRPC>({
               detail,
             });
           } catch {}
-        });
+        }, env_vars, auth_password);
       },
 
       updateAppEnv: async ({ app_id, env_vars }: { app_id: number; env_vars: Record<string, string> }) => {
@@ -174,6 +206,93 @@ const rpc = BrowserView.defineRPC<DeployAppRPC>({
       rollbackApp: async ({ app_id, deployment_id }: { app_id: number; deployment_id: number }) => {
         log("rollbackApp", `Rolling back app ${app_id} to deployment ${deployment_id}...`);
         return await rollbackApp(app_id, deployment_id);
+      },
+
+      enableWebhook: async ({ app_id, branch }: { app_id: number; branch?: string }) => {
+        log("enableWebhook", `Enabling webhook for app ${app_id}...`);
+        try {
+          const app = db.getApp(app_id);
+          if (!app) throw new Error("App not found");
+          const server = db.getServer(app.server_id);
+          if (!server) throw new Error("Server not found");
+
+          const pat = await github.getGitHubPat();
+          if (!pat) throw new Error("GitHub token not configured. Add it in Settings.");
+
+          const webhookBranch = branch || "main";
+          const webhookSecret = crypto.randomUUID();
+          const hostKey = server.ssh_host_key || undefined;
+
+          // Deploy webhook receiver + Caddy route on server
+          await hetzner.deployWebhookReceiver(server.ipv4, hostKey);
+          await hetzner.ensureWebhookCaddyRoute(server.ipv4, hostKey);
+
+          // Configure this app's webhook on the server
+          await hetzner.setupAppWebhook(
+            server.ipv4, app.name, webhookSecret,
+            app.host_port, webhookBranch, pat, hostKey
+          );
+
+          // Create GitHub webhook
+          const webhook = await github.createWebhook({
+            gitRepo: app.git_repo,
+            appName: app.name,
+            serverDomain: app.domain,
+            webhookSecret,
+            token: pat,
+          });
+
+          // Save to DB
+          db.updateAppWebhook(app_id, true, webhookSecret, webhookBranch, String(webhook.id));
+
+          log("enableWebhook", `Webhook enabled for app ${app_id}, GitHub webhook id=${webhook.id}`);
+          return { ok: true };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log("enableWebhook", `Failed:`, msg);
+          return { ok: false, error: msg };
+        }
+      },
+
+      disableWebhook: async ({ app_id }: { app_id: number }) => {
+        log("disableWebhook", `Disabling webhook for app ${app_id}...`);
+        try {
+          const app = db.getApp(app_id);
+          if (!app) throw new Error("App not found");
+          const server = db.getServer(app.server_id);
+
+          // Delete GitHub webhook
+          if (app.github_webhook_id) {
+            const pat = await github.getGitHubPat();
+            if (pat) {
+              try {
+                await github.deleteWebhook({
+                  gitRepo: app.git_repo,
+                  webhookId: app.github_webhook_id,
+                  token: pat,
+                });
+              } catch (err) {
+                log("disableWebhook", `Failed to delete GitHub webhook: ${err instanceof Error ? err.message : err}`);
+              }
+            }
+          }
+
+          // Remove webhook config from server
+          if (server) {
+            const hostKey = server.ssh_host_key || undefined;
+            await hetzner.removeAppWebhook(server.ipv4, app.name, hostKey);
+          }
+
+          // Update DB
+          db.updateAppWebhook(app_id, false, "", app.webhook_branch || "main", "");
+
+          log("disableWebhook", `Webhook disabled for app ${app_id}`);
+          return { ok: true };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log("disableWebhook", `Failed:`, msg);
+          return { ok: false, error: msg };
+        }
       },
     },
     messages: {},

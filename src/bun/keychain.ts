@@ -74,14 +74,17 @@ export async function deleteSecret(account: string): Promise<void> {
 export async function getTokens(): Promise<{
   hetzner_api_token: string;
   hetzner_dns_token: string;
+  github_pat: string;
 }> {
-  const [apiToken, dnsToken] = await Promise.all([
+  const [apiToken, dnsToken, githubPat] = await Promise.all([
     getSecret("hetzner_api_token"),
     getSecret("hetzner_dns_token"),
+    getSecret("github_pat"),
   ]);
   return {
     hetzner_api_token: apiToken ?? "",
     hetzner_dns_token: dnsToken ?? "",
+    github_pat: githubPat ?? "",
   };
 }
 

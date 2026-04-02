@@ -41,6 +41,32 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN volume_mount TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 4,
+    description: "Add webhook fields to apps",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN webhook_enabled INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE apps ADD COLUMN webhook_secret TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE apps ADD COLUMN webhook_branch TEXT NOT NULL DEFAULT 'main'");
+      db.run("ALTER TABLE apps ADD COLUMN github_webhook_id TEXT NOT NULL DEFAULT ''");
+    },
+  },
+  {
+    version: 5,
+    description: "Add host_port to apps for unique port mapping",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN host_port INTEGER NOT NULL DEFAULT 0");
+      // Backfill existing apps: set host_port = container_port
+      db.run("UPDATE apps SET host_port = container_port WHERE host_port = 0");
+    },
+  },
+  {
+    version: 6,
+    description: "Add auth_password to apps for password-protected deployments",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN auth_password TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

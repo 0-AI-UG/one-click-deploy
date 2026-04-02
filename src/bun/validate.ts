@@ -120,6 +120,18 @@ export function validateHetznerToken(token: string): ValidationResult<string> {
   return { valid: true, value: trimmed };
 }
 
+export function validateGitHubPat(token: string): ValidationResult<string> {
+  const trimmed = token.trim();
+  if (!trimmed) return { valid: false, error: "Token is required" };
+  if (trimmed.length < 30)
+    return { valid: false, error: "Token is too short" };
+  if (trimmed.length > 256)
+    return { valid: false, error: "Token is too long" };
+  if (!/^[\x20-\x7e]+$/.test(trimmed))
+    return { valid: false, error: "Token contains invalid characters" };
+  return { valid: true, value: trimmed };
+}
+
 export function validateDeployRequest(req: {
   app_name: string;
   domain?: string;

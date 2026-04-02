@@ -1,6 +1,7 @@
 import type { DeployRequest, ServerWithApps } from "../shared/rpc.ts";
 import * as db from "./db.ts";
 import * as hetzner from "./hetzner.ts";
+import * as github from "./github.ts";
 import { validateDeployRequest, validateEnvVars } from "./validate.ts";
 import { createMasker } from "./mask.ts";
 import { getTokens } from "./keychain.ts";
@@ -113,9 +114,12 @@ export async function deploy(
 
   // Set up log masking for secrets
   const tokens = await getTokens();
+  const githubPat = tokens.github_pat || undefined;
+  log("deploy", `GitHub PAT ${githubPat ? `present (${githubPat.length} chars)` : "not configured"}`);
   const secretValues = [
     tokens.hetzner_api_token,
     tokens.hetzner_dns_token,
+    ...(githubPat ? [githubPat] : []),
     ...Object.values(req.env_vars),
   ];
   const mask = createMasker(secretValues);
@@ -285,7 +289,7 @@ export async function deploy(
     // Step 4: Create app record, then clone & build
     onProgress("build", `Cloning ${req.git_repo} and building...`);
 
-    let dockerfilePath = "Dockerfile";
+    let dockerfilePath = req.dockerfile_path || "Dockerfile";
     const app = db.insertApp({
       server_id: serverId!,
       name: req.app_name,
@@ -294,6 +298,7 @@ export async function deploy(
       dockerfile_path: dockerfilePath,
       container_port: req.container_port,
       env_vars: JSON.stringify(req.env_vars),
+      auth_password: req.auth_password,
     });
     state.dbAppId = app.id;
     state.containerName = req.app_name;
@@ -322,8 +327,11 @@ export async function deploy(
         name: req.app_name,
         gitRepo: req.git_repo,
         port: req.container_port,
+        hostPort: app.host_port,
         envVars: req.env_vars,
         volumeMount,
+        dockerfilePath: req.dockerfile_path,
+        gitToken: githubPat,
       },
       (line) => {
         maskedLog(app.id, `[build] ${line}`);
@@ -334,9 +342,17 @@ export async function deploy(
     log("build", `Clone & build completed in ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
     onProgress("build", "Container running");
 
+    // Step 4b: Deploy auth proxy if password protection is enabled
+    let caddyPort = app.host_port;
+    if (req.auth_password) {
+      onProgress("build", "Deploying auth proxy...");
+      caddyPort = await hetzner.deployAuthProxy(serverIp, req.app_name, req.auth_password, app.host_port, serverHostKey || undefined);
+      maskedLog(app.id, `[auth] Auth proxy deployed on port ${caddyPort}`);
+    }
+
     // Step 5: Configure Caddy reverse proxy
     onProgress("caddy", `Configuring TLS + reverse proxy for ${useDomain}...`);
-    await hetzner.deployCaddySite(serverIp, useDomain, req.container_port, useInternalTls, serverHostKey || undefined);
+    await hetzner.deployCaddySite(serverIp, useDomain, caddyPort, useInternalTls, serverHostKey || undefined);
     state.caddyConfigured = true;
     state.caddyDomain = useDomain;
     maskedLog(app.id, `[caddy] Reverse proxy configured for ${useDomain}`);
@@ -344,7 +360,7 @@ export async function deploy(
 
     // Step 5: Health check
     onProgress("health", "Checking app health...");
-    const health = await hetzner.healthCheck(serverIp, req.app_name, req.container_port, 5, serverHostKey || undefined);
+    const health = await hetzner.healthCheck(serverIp, req.app_name, app.host_port, 5, serverHostKey || undefined);
     if (health.healthy) {
       maskedLog(app.id, `[health] Health check passed (HTTP ${health.statusCode})`);
       onProgress("health", `Health check passed (HTTP ${health.statusCode})`);
@@ -368,6 +384,38 @@ export async function deploy(
       image_tag: imageTag,
       git_commit: gitCommit,
     });
+
+    // Set up webhook for auto-redeploy if requested
+    if (req.webhook_enabled && githubPat) {
+      try {
+        const webhookBranch = req.webhook_branch || "main";
+        const webhookSecret = crypto.randomUUID();
+        const hostKey = serverHostKey || undefined;
+
+        await hetzner.deployWebhookReceiver(serverIp, hostKey);
+        await hetzner.ensureWebhookCaddyRoute(serverIp, hostKey);
+        await hetzner.setupAppWebhook(
+          serverIp, req.app_name, webhookSecret,
+          app.host_port, webhookBranch, githubPat, hostKey
+        );
+
+        const webhook = await github.createWebhook({
+          gitRepo: req.git_repo,
+          appName: req.app_name,
+          serverDomain: useDomain,
+          webhookSecret,
+          token: githubPat,
+        });
+
+        db.updateAppWebhook(app.id, true, webhookSecret, webhookBranch, String(webhook.id));
+        maskedLog(app.id, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}`);
+        onProgress("health", `Webhook configured for auto-redeploy on ${webhookBranch}`);
+      } catch (err) {
+        const webhookErr = err instanceof Error ? err.message : String(err);
+        maskedLog(app.id, `[webhook] Warning: failed to set up webhook: ${webhookErr}`);
+        log("webhook", `Webhook setup failed (non-fatal): ${webhookErr}`);
+      }
+    }
 
     maskedLog(app.id, `[done] App deployed successfully`);
     log("done", `Deploy completed in ${((Date.now() - deployStart) / 1000).toFixed(1)}s — https://${useDomain}`);
@@ -401,8 +449,32 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
 
     const server = db.getServer(app.server_id);
 
+    // Clean up GitHub webhook if enabled
+    if (app.webhook_enabled && app.github_webhook_id) {
+      try {
+        const pat = await github.getGitHubPat();
+        if (pat) {
+          await github.deleteWebhook({
+            gitRepo: app.git_repo,
+            webhookId: app.github_webhook_id,
+            token: pat,
+          });
+        }
+      } catch (err) {
+        log("destroyApp", `Failed to delete GitHub webhook: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     if (server) {
       const hostKey = server.ssh_host_key || undefined;
+      // Remove webhook config from server
+      if (app.webhook_enabled) {
+        await hetzner.removeAppWebhook(server.ipv4, app.name, hostKey);
+      }
+      // Remove auth proxy if enabled
+      if (app.auth_password) {
+        await hetzner.removeAuthProxy(server.ipv4, app.name, hostKey);
+      }
       await hetzner.removeContainer(server.ipv4, app.name);
       await hetzner.removeCaddySite(server.ipv4, app.domain, hostKey);
       await hetzner.sshExec(server.ipv4, `rm -rf /home/deploy/apps/${app.name}`, hostKey);
@@ -470,7 +542,7 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
     const hostKey = server.ssh_host_key || undefined;
     await hetzner.restartContainer(server.ipv4, app.name, hostKey);
 
-    const health = await hetzner.healthCheck(server.ipv4, app.name, app.container_port, 5, hostKey);
+    const health = await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     log("restartApp", `App id=${appId} restarted, healthy=${health.healthy}`);
@@ -482,9 +554,55 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
   }
 }
 
+export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: string }> {
+  log("pauseApp", `Pausing app id=${appId}`);
+  try {
+    const app = db.getApp(appId);
+    if (!app) throw new Error("App not found");
+    const server = db.getServer(app.server_id);
+    if (!server) throw new Error("Server not found");
+
+    const hostKey = server.ssh_host_key || undefined;
+    await hetzner.pauseContainer(server.ipv4, app.name, hostKey);
+    db.updateAppStatus(appId, "paused");
+
+    log("pauseApp", `App id=${appId} paused`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log("pauseApp", `Failed:`, msg);
+    return { ok: false, error: msg };
+  }
+}
+
+export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: string }> {
+  log("unpauseApp", `Unpausing app id=${appId}`);
+  try {
+    const app = db.getApp(appId);
+    if (!app) throw new Error("App not found");
+    const server = db.getServer(app.server_id);
+    if (!server) throw new Error("Server not found");
+
+    const hostKey = server.ssh_host_key || undefined;
+    await hetzner.unpauseContainer(server.ipv4, app.name, hostKey);
+
+    const health = await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
+    db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
+
+    log("unpauseApp", `App id=${appId} unpaused, healthy=${health.healthy}`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log("unpauseApp", `Failed:`, msg);
+    return { ok: false, error: msg };
+  }
+}
+
 export async function redeployApp(
   appId: number,
-  onProgress: ProgressFn
+  onProgress: ProgressFn,
+  newEnvVars?: Record<string, string>,
+  newAuthPassword?: string | null
 ): Promise<{ ok: boolean; error?: string }> {
   log("redeployApp", `Redeploying app id=${appId}`);
   try {
@@ -493,8 +611,20 @@ export async function redeployApp(
     const server = db.getServer(app.server_id);
     if (!server) throw new Error("Server not found");
 
-    const envVars = JSON.parse(app.env_vars || "{}");
+    if (newEnvVars) {
+      db.updateAppEnvVars(appId, JSON.stringify(newEnvVars));
+    }
+    // Update auth password: string = set/change, null = remove, undefined = no change
+    if (newAuthPassword !== undefined) {
+      db.updateAppAuthPassword(appId, newAuthPassword || "");
+    }
+    const authPassword = newAuthPassword !== undefined ? (newAuthPassword || "") : app.auth_password;
+
+    const envVars = newEnvVars ?? JSON.parse(app.env_vars || "{}");
     const hostKey = server.ssh_host_key || undefined;
+
+    const tokens = await getTokens();
+    const githubPat = tokens.github_pat || undefined;
 
     db.updateAppStatus(appId, "deploying");
     onProgress("build", "Pulling latest code and rebuilding...");
@@ -505,8 +635,11 @@ export async function redeployApp(
         name: app.name,
         gitRepo: app.git_repo,
         port: app.container_port,
+        hostPort: app.host_port,
         envVars,
         volumeMount: app.volume_mount || undefined,
+        dockerfilePath: app.dockerfile_path || undefined,
+        gitToken: githubPat,
       },
       (line) => {
         db.appendDeployLog(appId, `[redeploy] ${line}`);
@@ -514,12 +647,21 @@ export async function redeployApp(
       }
     );
 
+    // Handle auth proxy: deploy, update, or remove
+    let caddyPort = app.host_port;
+    if (authPassword) {
+      caddyPort = await hetzner.deployAuthProxy(server.ipv4, app.name, authPassword, app.host_port, hostKey);
+    } else if (app.auth_password && !authPassword) {
+      // Password was removed — tear down the auth proxy
+      await hetzner.removeAuthProxy(server.ipv4, app.name, hostKey);
+    }
+
     onProgress("caddy", "Reloading reverse proxy...");
     const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-    await hetzner.deployCaddySite(server.ipv4, app.domain, app.container_port, useInternalTls);
+    await hetzner.deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls);
 
     onProgress("health", "Checking app health...");
-    const health = await hetzner.healthCheck(server.ipv4, app.name, app.container_port, 5, hostKey);
+    const health = await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Record deployment
@@ -566,6 +708,9 @@ export async function updateAppEnv(
     const hostKey = server.ssh_host_key || undefined;
     await hetzner.removeContainer(server.ipv4, app.name);
 
+    const tokens = await getTokens();
+    const githubPat = tokens.github_pat || undefined;
+
     // Write new env file and start container
     await hetzner.cloneAndBuild(
       server.ipv4,
@@ -573,15 +718,18 @@ export async function updateAppEnv(
         name: app.name,
         gitRepo: app.git_repo,
         port: app.container_port,
+        hostPort: app.host_port,
         envVars,
         volumeMount: app.volume_mount || undefined,
+        dockerfilePath: app.dockerfile_path || undefined,
+        gitToken: githubPat,
       },
       (line) => {
         db.appendDeployLog(appId, `[env-update] ${line}`);
       }
     );
 
-    const health = await hetzner.healthCheck(server.ipv4, app.name, app.container_port, 5, hostKey);
+    const health = await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     log("updateAppEnv", `Env vars updated for app id=${appId}`);
@@ -626,14 +774,14 @@ export async function rollbackApp(
     }
 
     const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-    const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${app.container_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${deployment.image_tag}`;
+    const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${app.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${deployment.image_tag}`;
     const result = await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
     if (result.exitCode !== 0) {
       throw new Error(`Failed to start container with image ${deployment.image_tag}: ${result.stderr}`);
     }
 
     // Health check
-    const health = await hetzner.healthCheck(server.ipv4, app.name, app.container_port, 5, hostKey);
+    const health = await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Record rollback as new deployment

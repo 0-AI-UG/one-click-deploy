@@ -156,10 +156,12 @@ export function insertApp(app: {
   dockerfile_path: string;
   container_port: number;
   env_vars: string;
+  auth_password?: string;
 }) {
+  const hostPort = nextHostPort(app.server_id);
   return db
     .query(
-      "INSERT INTO apps (server_id, name, domain, git_repo, dockerfile_path, container_port, env_vars) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO apps (server_id, name, domain, git_repo, dockerfile_path, container_port, host_port, env_vars, auth_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       app.server_id,
@@ -168,7 +170,9 @@ export function insertApp(app: {
       app.git_repo,
       app.dockerfile_path,
       app.container_port,
-      app.env_vars
+      hostPort,
+      app.env_vars,
+      app.auth_password || ""
     ) as any;
 }
 
@@ -284,4 +288,29 @@ export function updateAppDomain(id: number, domain: string) {
 
 export function updateAppVolume(id: number, volumeId: string, volumeMount: string) {
   db.query("UPDATE apps SET volume_id = ?, volume_mount = ? WHERE id = ?").run(volumeId, volumeMount, id);
+}
+
+export function nextHostPort(serverId: number): number {
+  const BASE_PORT = 10000;
+  const row = db
+    .query("SELECT MAX(host_port) as max_port FROM apps WHERE server_id = ?")
+    .get(serverId) as any;
+  const maxPort = row?.max_port;
+  return (maxPort && maxPort >= BASE_PORT) ? maxPort + 1 : BASE_PORT;
+}
+
+export function updateAppAuthPassword(id: number, authPassword: string) {
+  db.query("UPDATE apps SET auth_password = ? WHERE id = ?").run(authPassword, id);
+}
+
+export function updateAppWebhook(
+  id: number,
+  enabled: boolean,
+  secret: string,
+  branch: string,
+  githubWebhookId: string
+) {
+  db.query(
+    "UPDATE apps SET webhook_enabled = ?, webhook_secret = ?, webhook_branch = ?, github_webhook_id = ? WHERE id = ?"
+  ).run(enabled ? 1 : 0, secret, branch, githubWebhookId, id);
 }
