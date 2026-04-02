@@ -98,26 +98,63 @@ function AppCard({ app, serverName, onChanged, onViewLogs }: { app: App; serverN
     onChanged();
   });
 
-  const redeploy = useConfirmAction(async () => {
-    await request.redeployApp({ app_id: app.id });
+  const pause = useConfirmAction(async () => {
+    if (app.status === "paused") {
+      await request.unpauseApp({ app_id: app.id });
+    } else {
+      await request.pauseApp({ app_id: app.id });
+    }
     onChanged();
   });
+
+  const [showRedeploy, setShowRedeploy] = useState(false);
+  const [redeployEnv, setRedeployEnv] = useState("");
+  const [redeployAuthEnabled, setRedeployAuthEnabled] = useState(false);
+  const [redeployAuthPassword, setRedeployAuthPassword] = useState("");
+  const [redeployBusy, setRedeployBusy] = useState(false);
+
+  const openRedeploy = () => {
+    const env = JSON.parse(app.env_vars || "{}") as Record<string, string>;
+    setRedeployEnv(Object.entries(env).map(([k, v]) => `${k}=${v}`).join("\n"));
+    setRedeployAuthEnabled(!!app.auth_password);
+    setRedeployAuthPassword(app.auth_password || "");
+    setShowRedeploy(true);
+  };
+
+  const doRedeploy = async () => {
+    setRedeployBusy(true);
+    const env: Record<string, string> = {};
+    for (const line of redeployEnv.split("\n")) {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) continue;
+      const eq = t.indexOf("=");
+      if (eq > 0) env[t.slice(0, eq)] = t.slice(eq + 1);
+    }
+    const authPassword = redeployAuthEnabled && redeployAuthPassword ? redeployAuthPassword : null;
+    await request.redeployApp({ app_id: app.id, env_vars: env, auth_password: authPassword });
+    setRedeployBusy(false);
+    setShowRedeploy(false);
+    onChanged();
+  };
 
   const [showHistory, setShowHistory] = useState(false);
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
   const [actionBusy, setActionBusy] = useState(false);
+  const [webhookBusy, setWebhookBusy] = useState(false);
 
-  const anyBusy = remove.busy || restart.busy || redeploy.busy || actionBusy;
+  const anyBusy = remove.busy || restart.busy || pause.busy || redeployBusy || actionBusy || webhookBusy;
 
   const statusLabel =
     app.status === "running" ? "Online" :
     app.status === "deploying" ? "Starting..." :
+    app.status === "paused" ? "Paused" :
     app.status === "unhealthy" ? "Unhealthy" :
     app.status === "error" ? "Error" : "Stopped";
 
   const statusDot =
     app.status === "running" ? "dot-ok" :
     app.status === "deploying" ? "dot-warn" :
+    app.status === "paused" ? "dot-off" :
     app.status === "unhealthy" ? "dot-warn" :
     app.status === "error" ? "dot-err" : "dot-off";
 
@@ -135,6 +172,17 @@ function AppCard({ app, serverName, onChanged, onViewLogs }: { app: App; serverN
     setActionBusy(true);
     await request.rollbackApp({ app_id: app.id, deployment_id: deploymentId });
     setActionBusy(false);
+    onChanged();
+  };
+
+  const toggleWebhook = async () => {
+    setWebhookBusy(true);
+    if (app.webhook_enabled) {
+      await request.disableWebhook({ app_id: app.id });
+    } else {
+      await request.enableWebhook({ app_id: app.id });
+    }
+    setWebhookBusy(false);
     onChanged();
   };
 
@@ -182,17 +230,80 @@ function AppCard({ app, serverName, onChanged, onViewLogs }: { app: App; serverN
           {restart.armed ? 'Confirm?' : 'Restart'}
         </button>
         <button
-          onClick={redeploy.click}
+          onClick={pause.click}
           disabled={anyBusy}
           className="act"
-          style={{ color: redeploy.armed ? 'var(--amber)' : undefined }}
+          style={{ color: pause.armed ? 'var(--amber)' : undefined }}
         >
-          {redeploy.armed ? 'Confirm?' : 'Redeploy'}
+          {pause.armed ? 'Confirm?' : app.status === "paused" ? 'Resume' : 'Pause'}
+        </button>
+        <button
+          onClick={() => showRedeploy ? setShowRedeploy(false) : openRedeploy()}
+          disabled={anyBusy}
+          className="act"
+          style={{ color: showRedeploy ? 'var(--amber)' : undefined }}
+        >
+          {showRedeploy ? '− Redeploy' : 'Redeploy'}
         </button>
         <button onClick={toggleHistory} className="act" disabled={anyBusy}>
           {showHistory ? '− History' : '+ History'}
         </button>
+        <button
+          onClick={toggleWebhook}
+          disabled={anyBusy}
+          className="act"
+          style={{ color: app.webhook_enabled ? 'var(--accent)' : undefined }}
+        >
+          {webhookBusy ? '...' : app.webhook_enabled ? '− Webhook' : '+ Webhook'}
+        </button>
       </div>
+
+      {/* Webhook status indicator */}
+      {!!app.webhook_enabled && (
+        <div className="mono" style={{
+          fontSize: 8, fontWeight: 700, letterSpacing: '.06em',
+          color: 'var(--fg-dim)', marginBottom: 6,
+          display: 'flex', alignItems: 'center', gap: 4,
+        }}>
+          <span style={{ color: 'var(--accent)' }}>AUTO-DEPLOY</span>
+          <span style={{ color: 'var(--fg-faint)' }}>on {app.webhook_branch || 'main'}</span>
+        </div>
+      )}
+
+      {/* Redeploy with env editor */}
+      {showRedeploy && (
+        <div style={{ marginBottom: 6 }}>
+          <textarea
+            className="inp mono"
+            value={redeployEnv}
+            onChange={e => setRedeployEnv(e.target.value)}
+            placeholder={"KEY=value\nDB_URL=postgres://..."}
+            rows={4}
+            style={{
+              width: '100%', fontSize: 9, resize: 'vertical',
+              fontFamily: 'inherit', boxSizing: 'border-box',
+              marginBottom: 4,
+            }}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', flex: 1 }}>
+              <input type="checkbox" checked={redeployAuthEnabled} onChange={e => setRedeployAuthEnabled(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
+              <span className="mono" style={{ fontSize: 9, fontWeight: 600 }}>Password protect</span>
+            </label>
+            {redeployAuthEnabled && (
+              <input type="password" value={redeployAuthPassword} onChange={e => setRedeployAuthPassword(e.target.value)} placeholder="Password" className="inp" style={{ width: 120, flex: 'none', fontSize: 9 }} />
+            )}
+          </div>
+          <button
+            onClick={doRedeploy}
+            disabled={redeployBusy}
+            className="btn"
+            style={{ width: '100%', fontSize: 9 }}
+          >
+            {redeployBusy ? 'Redeploying...' : 'Redeploy Now'}
+          </button>
+        </div>
+      )}
 
       {/* Deployment history panel */}
       {showHistory && (

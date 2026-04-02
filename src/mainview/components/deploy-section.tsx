@@ -103,8 +103,13 @@ export function DeploySection({
   const [port, setPort] = useState("3000");
   const [envVars, setEnvVars] = useState("");
   const [serverId, setServerId] = useState("new");
+  const [dockerfilePath, setDockerfilePath] = useState("");
   const [volumeSize, setVolumeSize] = useState("");
   const [volumePath, setVolumePath] = useState("");
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
+  const [webhookBranch, setWebhookBranch] = useState("main");
+  const [authEnabled, setAuthEnabled] = useState(false);
+  const [authPassword, setAuthPassword] = useState("");
   const [deploying, setDeploying] = useState(false);
   const [stepStatuses, setStepStatuses] = useState<Record<string, StepStatus>>({});
   const [stepDetails, setStepDetails] = useState<Record<string, string>>({});
@@ -168,8 +173,12 @@ export function DeploySection({
         container_port: parseInt(port, 10),
         env_vars: env,
         server_id: serverId !== "new" ? parseInt(serverId, 10) : undefined,
+        dockerfile_path: dockerfilePath || undefined,
         volume_size: volumeSize ? parseInt(volumeSize, 10) : undefined,
         volume_path: volumePath || undefined,
+        webhook_enabled: webhookEnabled || undefined,
+        webhook_branch: webhookEnabled ? webhookBranch : undefined,
+        auth_password: authEnabled && authPassword ? authPassword : undefined,
       });
       if (!result.ok) setError(result.error || "Deploy failed");
       else onDeployed();
@@ -192,6 +201,10 @@ export function DeploySection({
     setEnvVars("");
     setVolumeSize("");
     setVolumePath("");
+    setWebhookEnabled(false);
+    setWebhookBranch("main");
+    setAuthEnabled(false);
+    setAuthPassword("");
     onDeployed();
   };
 
@@ -285,9 +298,28 @@ export function DeploySection({
                 <input type="number" value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="inp" style={{ width: 70, flex: 'none' }} />
                 <input value={envVars} onChange={e => setEnvVars(e.target.value)} placeholder="KEY=val KEY=val" className="inp" style={{ flex: 1 }} />
               </div>
+              <input value={dockerfilePath} onChange={e => setDockerfilePath(e.target.value)} placeholder="Dockerfile" className="inp" style={{ width: '100%' }} />
               <div style={{ display: 'flex', gap: 6 }}>
-                <input type="number" value={volumeSize} onChange={e => setVolumeSize(e.target.value)} placeholder="Vol GB" className="inp" style={{ width: 70, flex: 'none' }} />
+                <input type="number" value={volumeSize} onChange={e => setVolumeSize(e.target.value)} placeholder="Vol GB" className="inp" style={{ width: 70, flex: 'none' }} min={10} max={10240} />
                 <input value={volumePath} onChange={e => setVolumePath(e.target.value)} placeholder="/data" className="inp" style={{ flex: 1, opacity: volumeSize ? 1 : 0.35 }} disabled={!volumeSize} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', flex: 1 }}>
+                  <input type="checkbox" checked={webhookEnabled} onChange={e => setWebhookEnabled(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
+                  <span className="mono" style={{ fontSize: 9, fontWeight: 600 }}>Auto-redeploy on push</span>
+                </label>
+                {webhookEnabled && (
+                  <input value={webhookBranch} onChange={e => setWebhookBranch(e.target.value)} placeholder="main" className="inp" style={{ width: 80, flex: 'none', fontSize: 9 }} />
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', flex: 1 }}>
+                  <input type="checkbox" checked={authEnabled} onChange={e => setAuthEnabled(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
+                  <span className="mono" style={{ fontSize: 9, fontWeight: 600 }}>Password protect</span>
+                </label>
+                {authEnabled && (
+                  <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="Password" className="inp" style={{ width: 120, flex: 'none', fontSize: 9 }} />
+                )}
               </div>
             </>
           )}
