@@ -67,6 +67,65 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN auth_password TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 7,
+    description: "Add Docker Compose support fields to apps",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN deploy_mode TEXT NOT NULL DEFAULT 'dockerfile'");
+      db.run("ALTER TABLE apps ADD COLUMN compose_file TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE apps ADD COLUMN compose_web_service TEXT NOT NULL DEFAULT ''");
+    },
+  },
+  {
+    version: 8,
+    description: "Add horizontal scaling support (replicas, scaling_events, app scaling columns)",
+    up: (db) => {
+      // New table: replicas
+      db.run(`CREATE TABLE replicas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        host_port INTEGER NOT NULL,
+        container_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'deploying',
+        cpu_percent REAL NOT NULL DEFAULT 0,
+        memory_percent REAL NOT NULL DEFAULT 0,
+        last_health_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      // New table: scaling_events
+      db.run(`CREATE TABLE scaling_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL,
+        from_count INTEGER NOT NULL,
+        to_count INTEGER NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      // New columns on apps for scaling config
+      db.run("ALTER TABLE apps ADD COLUMN desired_replicas INTEGER NOT NULL DEFAULT 1");
+      db.run("ALTER TABLE apps ADD COLUMN min_replicas INTEGER NOT NULL DEFAULT 1");
+      db.run("ALTER TABLE apps ADD COLUMN max_replicas INTEGER NOT NULL DEFAULT 1");
+      db.run("ALTER TABLE apps ADD COLUMN autoscale_enabled INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE apps ADD COLUMN autoscale_cpu_threshold INTEGER NOT NULL DEFAULT 80");
+      db.run("ALTER TABLE apps ADD COLUMN autoscale_mem_threshold INTEGER NOT NULL DEFAULT 85");
+      db.run("ALTER TABLE apps ADD COLUMN autoscale_cooldown INTEGER NOT NULL DEFAULT 300");
+      db.run("ALTER TABLE apps ADD COLUMN last_scale_at TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN hetzner_lb_id TEXT NOT NULL DEFAULT ''");
+
+      // Data migration: create a replica row for each existing app
+      const apps = db.query("SELECT id, name, server_id, host_port, status FROM apps").all() as any[];
+      const insertReplica = db.prepare(
+        "INSERT INTO replicas (app_id, server_id, host_port, container_name, status) VALUES (?, ?, ?, ?, ?)"
+      );
+      for (const app of apps) {
+        insertReplica.run(app.id, app.server_id, app.host_port, app.name, app.status);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {
@@ -107,7 +166,7 @@ export function runMigrations(db: Database): void {
       db.run("ROLLBACK");
       log("run", `Migration ${migration.version} failed:`, err);
       throw new Error(
-        `Migration ${migration.version} (${migration.description}) failed: ${err instanceof Error ? err.message : err}`
+        `Database migration failed (${migration.description}). The app may need to be reinstalled if this persists.`
       );
     }
   }

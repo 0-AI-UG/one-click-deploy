@@ -23,7 +23,7 @@ export async function setSecret(
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
     const stderr = await new Response(proc.stderr).text();
-    throw new Error(`Failed to store secret in Keychain: ${stderr.trim()}`);
+    throw new Error("Failed to store secret in Keychain — check that the app has Keychain access");
   }
   log("set", `Secret stored for account: ${account}`);
 }

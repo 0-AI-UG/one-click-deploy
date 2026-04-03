@@ -1,0 +1,143 @@
+import { hetznerApi } from "./api.ts";
+import { pollAction } from "./actions.ts";
+
+function log(context: string, ...args: any[]) {
+  console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
+}
+
+export async function createLoadBalancer(
+  appName: string,
+  location: string
+): Promise<{ id: number; ipv4: string }> {
+  log("lb", `Creating load balancer for ${appName} in ${location}`);
+  const data = await hetznerApi("/load_balancers", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `ocd-lb-${appName}`,
+      load_balancer_type: "lb11",
+      location,
+      algorithm: { type: "least_connections" },
+      labels: { managed_by: "one-click-deploy", app: appName },
+    }),
+  });
+  const lb = data.load_balancer;
+  log("lb", `Load balancer created: id=${lb.id} ipv4=${lb.public_net.ipv4.ip}`);
+  return { id: lb.id, ipv4: lb.public_net.ipv4.ip };
+}
+
+export async function deleteLoadBalancer(lbId: string): Promise<void> {
+  log("lb", `Deleting load balancer ${lbId}`);
+  await hetznerApi(`/load_balancers/${lbId}`, { method: "DELETE" });
+  log("lb", `Load balancer ${lbId} deleted`);
+}
+
+export async function addLBTarget(lbId: string, serverId: string): Promise<void> {
+  log("lb", `Adding server ${serverId} to LB ${lbId}`);
+  const data = await hetznerApi(`/load_balancers/${lbId}/actions/add_target`, {
+    method: "POST",
+    body: JSON.stringify({
+      type: "server",
+      server: { id: parseInt(serverId, 10) },
+      use_private_net: false,
+    }),
+  });
+  if (data.action?.id) {
+    await pollAction(data.action.id);
+  }
+  log("lb", `Server ${serverId} added to LB ${lbId}`);
+}
+
+export async function removeLBTarget(lbId: string, serverId: string): Promise<void> {
+  log("lb", `Removing server ${serverId} from LB ${lbId}`);
+  const data = await hetznerApi(`/load_balancers/${lbId}/actions/remove_target`, {
+    method: "POST",
+    body: JSON.stringify({
+      type: "server",
+      server: { id: parseInt(serverId, 10) },
+    }),
+  });
+  if (data.action?.id) {
+    await pollAction(data.action.id);
+  }
+  log("lb", `Server ${serverId} removed from LB ${lbId}`);
+}
+
+export async function addLBService(
+  lbId: string,
+  destPort: number,
+  certId?: number,
+  stickySession?: boolean
+): Promise<void> {
+  log("lb", `Adding service to LB ${lbId}: destPort=${destPort} sticky=${stickySession} cert=${certId}`);
+
+  // Use HTTPS if we have a certificate, otherwise use plain HTTP on port 80
+  const useHttps = !!certId;
+  const protocol = useHttps ? "https" : "http";
+  const listenPort = useHttps ? 443 : 80;
+
+  const httpConfig: any = {
+    redirect_http: useHttps,
+    sticky_sessions: !!stickySession,
+  };
+  if (stickySession) {
+    httpConfig.cookie_name = "HCLBSTICKY";
+    httpConfig.cookie_lifetime = 86400; // max allowed: 86400 (24h)
+  }
+  if (useHttps) {
+    httpConfig.certificates = [certId];
+  }
+
+  const service: any = {
+    protocol,
+    listen_port: listenPort,
+    destination_port: destPort,
+    health_check: {
+      protocol: "http",
+      port: destPort,
+      interval: 15,
+      timeout: 10,
+      retries: 3,
+      http: {
+        path: "/",
+        status_codes: ["2xx", "3xx", "4xx"],
+      },
+    },
+    http: httpConfig,
+  };
+  const data = await hetznerApi(`/load_balancers/${lbId}/actions/add_service`, {
+    method: "POST",
+    body: JSON.stringify(service),
+  });
+  if (data.action?.id) {
+    await pollAction(data.action.id);
+  }
+  log("lb", `Service added to LB ${lbId} (${protocol}:${listenPort})`);
+}
+
+export async function createManagedCertificate(
+  appName: string,
+  domain: string
+): Promise<{ id: number }> {
+  log("lb", `Creating managed certificate for ${domain}`);
+  const data = await hetznerApi("/certificates", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `ocd-cert-${appName}`,
+      type: "managed",
+      domain_names: [domain],
+    }),
+  });
+  log("lb", `Certificate created: id=${data.certificate.id}`);
+  return { id: data.certificate.id };
+}
+
+export async function deleteCertificate(certId: string): Promise<void> {
+  log("lb", `Deleting certificate ${certId}`);
+  await hetznerApi(`/certificates/${certId}`, { method: "DELETE" });
+  log("lb", `Certificate ${certId} deleted`);
+}
+
+export async function getLoadBalancer(lbId: string): Promise<any> {
+  const data = await hetznerApi(`/load_balancers/${lbId}`);
+  return data.load_balancer;
+}

@@ -1,0 +1,733 @@
+import { unlinkSync } from "fs";
+import { tmpdir } from "os";
+import { sshExec, getSshKeyPath } from "./ssh.ts";
+
+function log(context: string, ...args: any[]) {
+  console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
+}
+
+// --- Image Transfer ---
+
+export async function transferImage(
+  sourceIp: string,
+  targetIp: string,
+  imageName: string,
+  sourceHostKey?: string,
+  targetHostKey?: string
+): Promise<void> {
+  log("transfer", `Transferring image ${imageName} from ${sourceIp} to ${targetIp}`);
+  const keyPath = getSshKeyPath();
+  const ts = Date.now();
+  const tmpFile = `/tmp/ocd-image-${ts}.tar.gz`;
+  const localTmp = `${tmpdir()}/ocd-image-transfer-${ts}.tar.gz`;
+
+  try {
+    // Save and compress on source (as deploy user who owns docker)
+    const saveResult = await sshExec(
+      sourceIp,
+      `su - deploy -c "docker save ${imageName} | gzip" > ${tmpFile}`,
+      sourceHostKey
+    );
+    if (saveResult.exitCode !== 0) {
+      throw new Error("Failed to export Docker image from source server");
+    }
+
+    // Download to local
+    const scpDown = Bun.spawn([
+      "scp", "-i", keyPath,
+      "-o", "StrictHostKeyChecking=no",
+      "-o", "ConnectTimeout=30",
+      `root@${sourceIp}:${tmpFile}`,
+      localTmp,
+    ], { stdout: "pipe", stderr: "pipe" });
+    const downExit = await scpDown.exited;
+    if (downExit !== 0) {
+      const stderr = await new Response(scpDown.stderr).text();
+      throw new Error("Failed to download image from source server — check SSH connectivity");
+    }
+
+    // Upload to target
+    const scpUp = Bun.spawn([
+      "scp", "-i", keyPath,
+      "-o", "StrictHostKeyChecking=no",
+      "-o", "ConnectTimeout=30",
+      localTmp,
+      `root@${targetIp}:${tmpFile}`,
+    ], { stdout: "pipe", stderr: "pipe" });
+    const upExit = await scpUp.exited;
+    if (upExit !== 0) {
+      const stderr = await new Response(scpUp.stderr).text();
+      throw new Error("Failed to upload image to target server — check SSH connectivity");
+    }
+
+    // Load on target — run docker load as deploy, but file is owned by root
+    // So: gunzip as root, pipe to deploy's docker load
+    const loadResult = await sshExec(
+      targetIp,
+      `gunzip -c ${tmpFile} | su - deploy -c "docker load"`,
+      targetHostKey
+    );
+    if (loadResult.exitCode !== 0) {
+      throw new Error("Failed to import Docker image on target server");
+    }
+
+    log("transfer", `Image ${imageName} transferred successfully`);
+  } finally {
+    // Cleanup remote temp files (as root, which owns them)
+    await sshExec(sourceIp, `rm -f ${tmpFile}`, sourceHostKey).catch(() => {});
+    await sshExec(targetIp, `rm -f ${tmpFile}`, targetHostKey).catch(() => {});
+    try { unlinkSync(localTmp); } catch {}
+  }
+}
+
+// --- Caddy Sites ---
+
+export async function deployCaddySite(
+  ip: string,
+  domain: string,
+  containerPort: number,
+  internalTls: boolean = false,
+  hostKey?: string
+) {
+  log("caddy", `Deploying site via admin API: domain=${domain} port=${containerPort} internalTls=${internalTls}`);
+
+  // Build the Caddy JSON config for this route
+  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
+  const handler: any = {
+    handler: "reverse_proxy",
+    upstreams: [{ dial: `localhost:${containerPort}` }],
+  };
+
+  const route: any = {
+    "@id": routeId,
+    match: [{ host: [domain] }],
+    handle: [
+      {
+        handler: "headers",
+        response: {
+          set: {
+            "X-Content-Type-Options": ["nosniff"],
+            "X-Frame-Options": ["DENY"],
+            "Referrer-Policy": ["strict-origin-when-cross-origin"],
+            "X-XSS-Protection": ["1; mode=block"],
+          },
+          deferred: true,
+        },
+      },
+      handler,
+    ],
+    terminal: true,
+  };
+
+  const tlsPolicy: any = internalTls
+    ? { automation: { policies: [{ subjects: [domain], issuers: [{ module: "internal" }] }] } }
+    : {};
+
+  // Try to delete existing route first (ignore errors if not found)
+  await sshExec(
+    ip,
+    `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`,
+    hostKey
+  );
+
+  // Add the route via the admin API
+  const routeJson = JSON.stringify(route);
+  const escaped = routeJson.replace(/'/g, "'\\''");
+  const addResult = await sshExec(
+    ip,
+    `curl -sf -X POST -H 'Content-Type: application/json' -d '${escaped}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
+    hostKey
+  );
+
+  if (addResult.exitCode !== 0) {
+    log("caddy", `Admin API route add failed: ${addResult.stderr}. Falling back to config file.`);
+    // Fallback: write config file and reload
+    const siteConfig = internalTls
+      ? `${domain} {\n  tls internal\n  reverse_proxy localhost:${containerPort}\n}\n`
+      : `${domain} {\n  reverse_proxy localhost:${containerPort}\n}\n`;
+    const fileEscaped = siteConfig.replace(/'/g, "'\\''");
+    await sshExec(ip, `echo '${fileEscaped}' > /etc/caddy/sites/${domain}.caddy`, hostKey);
+    await sshExec(ip, "caddy reload --config /etc/caddy/Caddyfile", hostKey);
+    log("caddy", "Fallback: config file written and reloaded");
+    return;
+  }
+
+  // If using internal TLS, set the TLS automation policy
+  if (internalTls) {
+    const tlsJson = JSON.stringify(tlsPolicy);
+    const tlsEscaped = tlsJson.replace(/'/g, "'\\''");
+    await sshExec(
+      ip,
+      `curl -sf -X PATCH -H 'Content-Type: application/json' -d '${tlsEscaped}' http://localhost:2019/config/apps/tls`,
+      hostKey
+    );
+  }
+
+  log("caddy", "Site configured via admin API");
+}
+
+export async function removeCaddySite(ip: string, domain: string, hostKey?: string) {
+  log("caddy", `Removing site: ${domain}`);
+  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
+
+  // Try admin API first
+  const result = await sshExec(
+    ip,
+    `curl -sf -X DELETE http://localhost:2019/id/${routeId}`,
+    hostKey
+  );
+
+  if (result.exitCode !== 0) {
+    // Fallback: remove config file
+    await sshExec(ip, `rm -f /etc/caddy/sites/${domain}.caddy`, hostKey);
+    await sshExec(ip, "caddy reload --config /etc/caddy/Caddyfile", hostKey);
+  }
+
+  log("caddy", `Site ${domain} removed`);
+}
+
+// --- Clone & Build ---
+
+// Shared git clone/pull logic used by both cloneAndBuild and cloneAndComposeBuild
+async function cloneRepo(
+  ip: string,
+  appName: string,
+  gitRepo: string,
+  gitToken?: string,
+  emit?: (msg: string) => void
+) {
+  const appDir = `/home/deploy/apps/${appName}`;
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+  let cloneUrl = gitRepo;
+  if (gitToken && cloneUrl.match(/^https:\/\/github\.com\//)) {
+    cloneUrl = cloneUrl.replace(
+      /^https:\/\/github\.com\//,
+      `https://x-access-token:${gitToken}@github.com/`
+    );
+  }
+
+  emit?.("Cloning repository...");
+  log("build", `Cloning ${gitRepo} into ${appDir} (token: ${gitToken ? "yes" : "no"})`);
+  await sshExec(ip, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps`);
+  const gitEnv = gitToken ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
+  const cloneResult = await sshExec(
+    ip,
+    asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git remote set-url origin ${cloneUrl} && git pull; else rm -rf ${appDir} && git clone ${cloneUrl} ${appDir}; fi`)
+  );
+  if (cloneResult.exitCode !== 0) {
+    const stderr = cloneResult.stderr;
+    const notFound = stderr.match(/Repository not found/i);
+    const isAuthError = stderr.match(/could not read Username|Authentication failed|403/i);
+    if (notFound && gitToken) {
+      throw new Error(`Git clone failed: repository not found. Check that the repo URL is correct and your GitHub token has access to it.`);
+    }
+    if ((isAuthError || notFound) && !gitToken) {
+      throw new Error(`Git clone failed: repository requires authentication. Add a GitHub Personal Access Token in Settings.`);
+    }
+    if (isAuthError && gitToken) {
+      throw new Error(`Git clone failed: authentication rejected. Check that your GitHub token is valid and has the "repo" scope.`);
+    }
+    throw new Error("Git clone failed — check that the repository URL is correct and accessible");
+  }
+
+  // Strip token from git remote
+  if (gitToken && cloneUrl !== gitRepo) {
+    await sshExec(ip, asUser(`cd ${appDir} && git remote set-url origin ${gitRepo}`));
+  }
+  log("build", `Clone done, stdout: ${cloneResult.stdout.trim().slice(0, 200)}`);
+}
+
+export async function cloneAndBuild(
+  ip: string,
+  opts: {
+    name: string;
+    gitRepo: string;
+    port: number; // container port
+    hostPort: number; // host-side port for docker binding
+    envVars: Record<string, string>;
+    volumeMount?: string; // e.g. "/mnt/data:/data" — host:container
+    dockerfilePath?: string; // explicit path to Dockerfile in repo
+    gitToken?: string; // GitHub PAT for private repos
+  },
+  onLog?: (line: string) => void
+) {
+  const appDir = `/home/deploy/apps/${opts.name}`;
+  const emit = (msg: string) => onLog?.(msg);
+  const buildStart = Date.now();
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+  // Clone or pull repo
+  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit);
+
+  // Find Dockerfile
+  let dockerfilePath = opts.dockerfilePath?.replace(/^\/+/, "");
+  if (dockerfilePath) {
+    emit(`Using specified Dockerfile: ${dockerfilePath}`);
+    const checkResult = await sshExec(ip, asUser(`test -f ${appDir}/${dockerfilePath} && echo ok`));
+    if (checkResult.stdout.trim() !== "ok") {
+      throw new Error(`Dockerfile not found at "${dockerfilePath}" in the repository. The path should be relative to the repo root, e.g. "Dockerfile" or "docker/Dockerfile".`);
+    }
+    log("build", `Using specified Dockerfile: ${dockerfilePath}`);
+  } else {
+    emit("Searching for Dockerfile...");
+    const findResult = await sshExec(
+      ip,
+      asUser(`cd ${appDir} && if [ -f Dockerfile ]; then echo Dockerfile; elif [ -f docker/Dockerfile ]; then echo docker/Dockerfile; else find . -maxdepth 3 -name Dockerfile -type f | head -1 | sed 's|^\\./||'; fi`)
+    );
+    dockerfilePath = findResult.stdout.trim();
+    if (!dockerfilePath) {
+      throw new Error("No Dockerfile found in repository");
+    }
+    log("build", `Found Dockerfile: ${dockerfilePath}`);
+    emit(`Found Dockerfile at: ${dockerfilePath}`);
+  }
+
+  // Build image first (before stopping old container — build-before-destroy)
+  emit("Building Docker image...");
+  const dockerContext = dockerfilePath.includes("/")
+    ? dockerfilePath.substring(0, dockerfilePath.lastIndexOf("/"))
+    : ".";
+  const buildCmd = `cd ${appDir} && docker build -t ${opts.name}:latest -f ${dockerfilePath} ${dockerContext}`;
+  log("build", `Docker build command: ${buildCmd}`);
+  const dockerBuildStart = Date.now();
+  const buildResult = await sshExec(ip, asUser(buildCmd));
+  if (buildResult.exitCode !== 0) {
+    log("build", `Docker build stderr: ${buildResult.stderr.slice(0, 500)}`);
+    throw new Error("Docker build failed — check your Dockerfile and build logs for errors");
+  }
+  log("build", `Docker build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
+  emit("Image built successfully");
+
+  // Tag image with git commit hash for rollback support
+  const commitResult = await sshExec(ip, asUser(`cd ${appDir} && git rev-parse --short HEAD 2>/dev/null || echo unknown`));
+  const gitCommit = commitResult.stdout.trim() || "unknown";
+  const imageTag = `${opts.name}:${gitCommit}`;
+  if (gitCommit !== "unknown") {
+    await sshExec(ip, asUser(`docker tag ${opts.name}:latest ${imageTag}`));
+    log("build", `Image tagged as ${imageTag}`);
+  }
+
+  // Build succeeded — now safe to stop old container and swap
+  log("build", `Removing existing container ${opts.name} (if any)`);
+  await sshExec(ip, asUser(`docker rm -f ${opts.name} 2>/dev/null || true`));
+
+  // Write env file to server (avoids shell injection via env var values)
+  const envFileEntries = Object.entries(opts.envVars);
+  let envFileFlag = "";
+  if (envFileEntries.length > 0) {
+    const envFilePath = `/home/deploy/apps/${opts.name}/.env.deploy`;
+    const envFileContent = envFileEntries
+      .map(([k, v]) => `${k}=${v}`)
+      .join("\n");
+    const escapedContent = envFileContent.replace(/'/g, "'\\''");
+    await sshExec(ip, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`);
+    envFileFlag = `--env-file ${envFilePath}`;
+  }
+
+  // Run container
+  emit("Starting container...");
+  const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
+  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped -p 127.0.0.1:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
+  log("build", `Docker run: ${cmd}`);
+  const result = await sshExec(ip, asUser(cmd));
+  if (result.exitCode !== 0) {
+    log("build", `Docker run stderr: ${result.stderr}`);
+    throw new Error("Failed to start container — check your port configuration and environment variables");
+  }
+  log("build", `Container started: ${result.stdout.trim().slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
+  return { containerId: result.stdout.trim(), dockerfilePath, imageTag };
+}
+
+export async function removeContainer(ip: string, name: string, hostKey?: string) {
+  await sshExec(ip, `su - deploy -c "docker rm -f ${name} 2>/dev/null || true"`, hostKey);
+}
+
+// --- Docker Compose Support ---
+
+const COMPOSE_FILE_NAMES = ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"];
+
+export async function detectComposeFile(
+  ip: string,
+  appName: string,
+  hostKey?: string
+): Promise<string | null> {
+  const appDir = `/home/deploy/apps/${appName}`;
+  const check = COMPOSE_FILE_NAMES.map((f) => `[ -f "${appDir}/${f}" ] && echo "${f}"`).join("; ");
+  const result = await sshExec(ip, `su - deploy -c '${check}'`, hostKey);
+  const found = result.stdout.trim().split("\n").filter(Boolean);
+  return found.length > 0 ? found[0] : null;
+}
+
+export async function detectWebService(
+  ip: string,
+  appName: string,
+  composeFile: string,
+  hostKey?: string
+): Promise<string | null> {
+  const appDir = `/home/deploy/apps/${appName}`;
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+  // Parse compose file to find the web-facing service
+  const configResult = await sshExec(
+    ip,
+    asUser(`cd ${appDir} && docker compose -f ${composeFile} config --format json 2>/dev/null`),
+    hostKey
+  );
+  if (configResult.exitCode !== 0 || !configResult.stdout.trim()) {
+    return null;
+  }
+
+  try {
+    const config = JSON.parse(configResult.stdout);
+    const services = config.services || {};
+    const serviceNames = Object.keys(services);
+    if (serviceNames.length === 0) return null;
+
+    // Prefer service with ports defined
+    for (const name of serviceNames) {
+      if (services[name].ports && services[name].ports.length > 0) {
+        return name;
+      }
+    }
+
+    // Fall back to well-known names
+    const wellKnown = ["web", "app", "frontend", "server", "api"];
+    for (const name of wellKnown) {
+      if (serviceNames.includes(name)) return name;
+    }
+
+    // Fall back to first service
+    return serviceNames[0];
+  } catch {
+    return null;
+  }
+}
+
+export async function cloneAndComposeBuild(
+  ip: string,
+  opts: {
+    name: string;
+    gitRepo: string;
+    port: number; // container port (web service)
+    hostPort: number; // host-side port for Caddy
+    envVars: Record<string, string>;
+    volumeMount?: string; // e.g. "/mnt/data:/data" — host:container
+    composeFile: string; // e.g. "docker-compose.yml"
+    webService: string; // e.g. "web"
+    gitToken?: string;
+  },
+  onLog?: (line: string) => void
+) {
+  const appDir = `/home/deploy/apps/${opts.name}`;
+  const emit = (msg: string) => onLog?.(msg);
+  const buildStart = Date.now();
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+  // Clone or pull repo (shared with cloneAndBuild)
+  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit);
+
+  // Note: No explicit "docker compose down" here — "docker compose up -d --build"
+  // handles stopping old containers and replacing them atomically (build-before-destroy).
+
+  // Generate override file for port mapping and volume
+  emit("Generating compose override...");
+  const overrideServices: any = {
+    [opts.webService]: {
+      ports: [`127.0.0.1:${opts.hostPort}:${opts.port}`],
+    },
+  };
+  if (opts.volumeMount) {
+    overrideServices[opts.webService].volumes = [opts.volumeMount];
+  }
+  const override = JSON.stringify({ services: overrideServices });
+  const overridePath = `${appDir}/docker-compose.ocd.yml`;
+  const escapedOverride = override.replace(/'/g, "'\\''");
+  // Convert JSON to YAML-compatible format that docker compose can read
+  // Docker compose accepts JSON as a valid YAML superset
+  await sshExec(ip, `echo '${escapedOverride}' > ${overridePath} && chown deploy:deploy ${overridePath}`);
+  log("compose", `Override written to ${overridePath}`);
+
+  // Write env file
+  const envFileEntries = Object.entries(opts.envVars);
+  let envFileFlag = "";
+  if (envFileEntries.length > 0) {
+    const envFilePath = `${appDir}/.env.deploy`;
+    const envFileContent = envFileEntries.map(([k, v]) => `${k}=${v}`).join("\n");
+    const escapedContent = envFileContent.replace(/'/g, "'\\''");
+    await sshExec(ip, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`);
+    envFileFlag = `--env-file ${envFilePath}`;
+  }
+
+  // Build and start compose project
+  emit("Building and starting compose project...");
+  const composeCmd = `cd ${appDir} && docker compose -f ${opts.composeFile} -f docker-compose.ocd.yml -p ${opts.name} ${envFileFlag} up -d --build`;
+  log("compose", `Compose command: ${composeCmd}`);
+  const buildResult = await sshExec(ip, asUser(composeCmd));
+  if (buildResult.exitCode !== 0) {
+    log("compose", `Compose build stderr: ${buildResult.stderr.slice(0, 500)}`);
+    throw new Error("Docker Compose build failed — check your compose file and build logs for errors");
+  }
+  log("compose", `Compose project started in ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
+  emit("Compose project started");
+
+  return { composeFile: opts.composeFile, webService: opts.webService };
+}
+
+// --- Compose Lifecycle Operations ---
+
+export async function restartCompose(ip: string, projectName: string, hostKey?: string) {
+  const appDir = `/home/deploy/apps/${projectName}`;
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} restart"`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to restart compose project — check container logs for details");
+  }
+}
+
+export async function pauseCompose(ip: string, projectName: string, hostKey?: string) {
+  const appDir = `/home/deploy/apps/${projectName}`;
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} pause"`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to pause compose project");
+  }
+}
+
+export async function unpauseCompose(ip: string, projectName: string, hostKey?: string) {
+  const appDir = `/home/deploy/apps/${projectName}`;
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} unpause"`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to unpause compose project");
+  }
+}
+
+export async function removeCompose(ip: string, projectName: string, removeVolumes = false, hostKey?: string) {
+  const appDir = `/home/deploy/apps/${projectName}`;
+  const volFlag = removeVolumes ? " -v" : "";
+  await sshExec(
+    ip,
+    `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} down${volFlag} 2>/dev/null || true"`,
+    hostKey
+  );
+}
+
+export async function getComposeLogs(
+  ip: string,
+  projectName: string,
+  tail: number = 100,
+  hostKey?: string
+): Promise<string> {
+  const appDir = `/home/deploy/apps/${projectName}`;
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} logs --tail ${tail} 2>&1"`,
+    hostKey
+  );
+  return result.stdout;
+}
+
+// --- Health Checks ---
+
+export async function composeHealthCheck(
+  ip: string,
+  projectName: string,
+  port: number,
+  maxAttempts = 5,
+  hostKey?: string
+): Promise<{ healthy: boolean; statusCode?: number; error?: string }> {
+  log("health", `Checking compose health of ${projectName} on ${ip}:${port}`);
+
+  for (let i = 0; i < maxAttempts; i++) {
+    // Check all services are running
+    const appDir = `/home/deploy/apps/${projectName}`;
+    const ps = await sshExec(
+      ip,
+      `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} ps --format json 2>/dev/null"`,
+      hostKey
+    );
+    if (ps.exitCode !== 0) {
+      if (i < maxAttempts - 1) {
+        log("health", `Compose ps failed (attempt ${i + 1}/${maxAttempts})`);
+        await Bun.sleep(3000);
+        continue;
+      }
+      return { healthy: false, error: "Failed to check compose services" };
+    }
+
+    // Parse service statuses — docker compose ps --format json outputs one JSON per line
+    const lines = ps.stdout.trim().split("\n").filter(Boolean);
+    let allRunning = lines.length > 0;
+    for (const line of lines) {
+      try {
+        const svc = JSON.parse(line);
+        if (svc.State !== "running") {
+          allRunning = false;
+          break;
+        }
+      } catch {
+        allRunning = false;
+        break;
+      }
+    }
+
+    if (!allRunning) {
+      if (i < maxAttempts - 1) {
+        log("health", `Not all compose services running yet (attempt ${i + 1}/${maxAttempts})`);
+        await Bun.sleep(3000);
+        continue;
+      }
+      return { healthy: false, error: "Not all compose services are running" };
+    }
+
+    // Check HTTP response on web service port
+    const curl = await sshExec(
+      ip,
+      `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:${port}/`,
+      hostKey
+    );
+    const statusCode = parseInt(curl.stdout.trim(), 10);
+    if (statusCode >= 200 && statusCode < 500) {
+      log("health", `Compose health check passed: HTTP ${statusCode}`);
+      return { healthy: true, statusCode };
+    }
+
+    if (i < maxAttempts - 1) {
+      log("health", `Compose health check returned ${statusCode} (attempt ${i + 1}/${maxAttempts})`);
+      await Bun.sleep(3000);
+    } else {
+      return {
+        healthy: false,
+        statusCode: isNaN(statusCode) ? undefined : statusCode,
+        error: `Health check failed with HTTP ${statusCode || "no response"}`,
+      };
+    }
+  }
+
+  return { healthy: false, error: "Health check timed out" };
+}
+
+export async function healthCheck(
+  ip: string,
+  containerName: string,
+  port: number,
+  maxAttempts = 5,
+  hostKey?: string
+): Promise<{ healthy: boolean; statusCode?: number; error?: string }> {
+  log("health", `Checking health of ${containerName} on ${ip}:${port}`);
+
+  for (let i = 0; i < maxAttempts; i++) {
+    // Check container is running
+    const inspect = await sshExec(
+      ip,
+      `su - deploy -c "docker inspect --format='{{.State.Running}}' ${containerName} 2>/dev/null"`,
+      hostKey
+    );
+    if (inspect.stdout.trim() !== "true") {
+      if (i < maxAttempts - 1) {
+        log("health", `Container not running yet (attempt ${i + 1}/${maxAttempts})`);
+        await Bun.sleep(3000);
+        continue;
+      }
+      return { healthy: false, error: "Container is not running" };
+    }
+
+    // Check HTTP response
+    const curl = await sshExec(
+      ip,
+      `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:${port}/`,
+      hostKey
+    );
+    const statusCode = parseInt(curl.stdout.trim(), 10);
+    if (statusCode >= 200 && statusCode < 500) {
+      log("health", `Health check passed: HTTP ${statusCode}`);
+      return { healthy: true, statusCode };
+    }
+
+    if (i < maxAttempts - 1) {
+      log("health", `Health check returned ${statusCode} (attempt ${i + 1}/${maxAttempts})`);
+      await Bun.sleep(3000);
+    } else {
+      return {
+        healthy: false,
+        statusCode: isNaN(statusCode) ? undefined : statusCode,
+        error: `Health check failed with HTTP ${statusCode || "no response"}`,
+      };
+    }
+  }
+
+  return { healthy: false, error: "Health check timed out" };
+}
+
+// --- Container Logs ---
+
+export async function getContainerLogs(
+  ip: string,
+  containerName: string,
+  tail: number = 100,
+  hostKey?: string
+): Promise<string> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker logs --tail ${tail} ${containerName} 2>&1"`,
+    hostKey
+  );
+  return result.stdout;
+}
+
+// --- Container Restart / Pause / Unpause ---
+
+export async function restartContainer(
+  ip: string,
+  containerName: string,
+  hostKey?: string
+): Promise<void> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker restart ${containerName}"`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to restart container — it may have crashed, check logs for details");
+  }
+}
+
+export async function pauseContainer(
+  ip: string,
+  containerName: string,
+  hostKey?: string
+): Promise<void> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker pause ${containerName}"`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to pause container");
+  }
+}
+
+export async function unpauseContainer(
+  ip: string,
+  containerName: string,
+  hostKey?: string
+): Promise<void> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker unpause ${containerName}"`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to unpause container");
+  }
+}

@@ -1,82 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { request, onDeployProgress } from "../rpc.ts";
 import type { ServerWithApps } from "../../shared/rpc.ts";
-
-type SelectOption = { value: string; label: string };
-
-function NeoSelect({ value, options, onChange }: {
-  value: string;
-  options: SelectOption[];
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const selected = options.find(o => o.value === value);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-
-  return (
-    <div ref={ref} style={{ position: 'relative' }}>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="mono"
-        style={{
-          width: '100%', textAlign: 'left',
-          background: 'var(--bg-raised)', border: 'var(--b)',
-          padding: '7px 10px', fontSize: 10, color: 'var(--fg)',
-          cursor: 'pointer', display: 'flex', alignItems: 'center',
-          transition: 'box-shadow .1s, transform .1s',
-          boxShadow: open ? 'var(--shadow-sm)' : 'none',
-          transform: open ? 'translate(-1px,-1px)' : 'none',
-        }}
-      >
-        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {selected?.label || value}
-        </span>
-        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
-          style={{ flexShrink: 0, marginLeft: 6, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
-      {open && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-          background: 'var(--bg-raised)', border: 'var(--b)', borderTop: 'none',
-          boxShadow: 'var(--shadow)',
-          maxHeight: 160, overflow: 'auto',
-        }}>
-          {options.map(opt => (
-            <button
-              key={opt.value}
-              type="button"
-              className="mono"
-              onClick={() => { onChange(opt.value); setOpen(false); }}
-              style={{
-                width: '100%', textAlign: 'left', display: 'block',
-                padding: '6px 10px', fontSize: 10,
-                background: opt.value === value ? 'var(--accent)' : 'transparent',
-                color: 'var(--fg)', border: 'none', borderBottom: '1px solid var(--fg)',
-                cursor: 'pointer', fontWeight: opt.value === value ? 700 : 400,
-              }}
-              onMouseEnter={e => { if (opt.value !== value) (e.target as HTMLElement).style.background = 'var(--bg-alt)'; }}
-              onMouseLeave={e => { if (opt.value !== value) (e.target as HTMLElement).style.background = 'transparent'; }}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+import { NeoSelect } from "./neo-select.tsx";
 
 const STEPS = [
   { key: "server", label: "SRV" },
@@ -103,6 +28,7 @@ export function DeploySection({
   const [port, setPort] = useState("3000");
   const [envVars, setEnvVars] = useState("");
   const [serverId, setServerId] = useState("new");
+  const [multiContainer, setMultiContainer] = useState(false);
   const [dockerfilePath, setDockerfilePath] = useState("");
   const [volumeSize, setVolumeSize] = useState("");
   const [volumePath, setVolumePath] = useState("");
@@ -110,6 +36,8 @@ export function DeploySection({
   const [webhookBranch, setWebhookBranch] = useState("main");
   const [authEnabled, setAuthEnabled] = useState(false);
   const [authPassword, setAuthPassword] = useState("");
+  const [composeWebService, setComposeWebService] = useState("");
+  const [replicas, setReplicas] = useState("1");
   const [deploying, setDeploying] = useState(false);
   const [stepStatuses, setStepStatuses] = useState<Record<string, StepStatus>>({});
   const [stepDetails, setStepDetails] = useState<Record<string, string>>({});
@@ -179,6 +107,8 @@ export function DeploySection({
         webhook_enabled: webhookEnabled || undefined,
         webhook_branch: webhookEnabled ? webhookBranch : undefined,
         auth_password: authEnabled && authPassword ? authPassword : undefined,
+        compose_web_service: composeWebService || undefined,
+        replicas: parseInt(replicas, 10) > 1 ? parseInt(replicas, 10) : undefined,
       });
       if (!result.ok) setError(result.error || "Deploy failed");
       else onDeployed();
@@ -203,8 +133,11 @@ export function DeploySection({
     setVolumePath("");
     setWebhookEnabled(false);
     setWebhookBranch("main");
+    setMultiContainer(false);
     setAuthEnabled(false);
     setAuthPassword("");
+    setComposeWebService("");
+    setReplicas("1");
     onDeployed();
   };
 
@@ -298,11 +231,53 @@ export function DeploySection({
                 <input type="number" value={port} onChange={e => setPort(e.target.value)} placeholder="Port" className="inp" style={{ width: 70, flex: 'none' }} />
                 <input value={envVars} onChange={e => setEnvVars(e.target.value)} placeholder="KEY=val KEY=val" className="inp" style={{ flex: 1 }} />
               </div>
-              <input value={dockerfilePath} onChange={e => setDockerfilePath(e.target.value)} placeholder="Dockerfile" className="inp" style={{ width: '100%' }} />
+              {/* Single / Multi container toggle */}
+              <div style={{ display: 'flex', gap: 0, border: 'var(--b)', overflow: 'hidden' }}>
+                <button
+                  type="button"
+                  className="mono"
+                  onClick={() => { setMultiContainer(false); setComposeWebService(""); }}
+                  style={{
+                    flex: 1, padding: '5px 0', fontSize: 9, fontWeight: 700,
+                    letterSpacing: '.04em', cursor: 'pointer', border: 'none',
+                    background: !multiContainer ? 'var(--fg)' : 'var(--bg-raised)',
+                    color: !multiContainer ? 'var(--bg)' : 'var(--fg-dim)',
+                    borderRight: '1.5px solid var(--fg)',
+                  }}
+                >
+                  SINGLE CONTAINER
+                </button>
+                <button
+                  type="button"
+                  className="mono"
+                  onClick={() => { setMultiContainer(true); }}
+                  style={{
+                    flex: 1, padding: '5px 0', fontSize: 9, fontWeight: 700,
+                    letterSpacing: '.04em', cursor: 'pointer', border: 'none',
+                    background: multiContainer ? 'var(--fg)' : 'var(--bg-raised)',
+                    color: multiContainer ? 'var(--bg)' : 'var(--fg-dim)',
+                  }}
+                >
+                  MULTI CONTAINER
+                </button>
+              </div>
+              {!multiContainer ? (
+                <input value={dockerfilePath} onChange={e => setDockerfilePath(e.target.value)} placeholder="Dockerfile path (auto-detect)" className="inp" style={{ width: '100%' }} />
+              ) : (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input value={dockerfilePath} onChange={e => setDockerfilePath(e.target.value)} placeholder="Compose file (auto)" className="inp" style={{ flex: 1 }} />
+                  <input value={composeWebService} onChange={e => setComposeWebService(e.target.value)} placeholder="Web service (auto)" className="inp" style={{ flex: 1 }} />
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 6 }}>
                 <input type="number" value={volumeSize} onChange={e => setVolumeSize(e.target.value)} placeholder="Vol GB" className="inp" style={{ width: 70, flex: 'none' }} min={10} max={10240} />
                 <input value={volumePath} onChange={e => setVolumePath(e.target.value)} placeholder="/data" className="inp" style={{ flex: 1, opacity: volumeSize ? 1 : 0.35 }} disabled={!volumeSize} />
               </div>
+              {volumeSize && (
+                <div className="mono" style={{ fontSize: 8, color: 'var(--fg-dim)', lineHeight: 1.4 }}>
+                  ⚠ Mount path must match where your app stores data inside the container (e.g. /app/data), not just /data. Check your Dockerfile's WORKDIR.
+                </div>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', flex: 1 }}>
                   <input type="checkbox" checked={webhookEnabled} onChange={e => setWebhookEnabled(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
@@ -319,6 +294,24 @@ export function DeploySection({
                 </label>
                 {authEnabled && (
                   <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="Password" className="inp" style={{ width: 120, flex: 'none', fontSize: 9 }} />
+                )}
+              </div>
+              {/* Replicas */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span className="mono" style={{ fontSize: 9, fontWeight: 600, flex: 'none' }}>Replicas</span>
+                <input
+                  type="number"
+                  value={replicas}
+                  onChange={e => setReplicas(e.target.value)}
+                  min={1}
+                  max={10}
+                  className="inp"
+                  style={{ width: 50, flex: 'none', fontSize: 9, textAlign: 'center' }}
+                />
+                {parseInt(replicas, 10) > 1 && (
+                  <span className="mono" style={{ fontSize: 8, color: 'var(--fg-faint)' }}>
+                    ~{replicas} servers + LB (~€6/mo)
+                  </span>
                 )}
               </div>
             </>

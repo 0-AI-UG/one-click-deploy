@@ -23,7 +23,13 @@ async function githubApi(
   if (!res.ok) {
     const body = await res.text();
     log("api", `${method} ${path} FAILED ${res.status}: ${body}`);
-    throw new Error(`GitHub API error ${res.status}: ${body}`);
+    const friendly = res.status === 401 ? "GitHub token is invalid or expired — update it in Settings"
+      : res.status === 403 ? "GitHub access denied — check your token has the required scopes"
+      : res.status === 404 ? "GitHub repository or resource not found — check the URL and token permissions"
+      : res.status === 422 ? "GitHub rejected the request — the resource may already exist"
+      : res.status >= 500 ? "GitHub is experiencing issues — try again shortly"
+      : `GitHub error (HTTP ${res.status})`;
+    throw new Error(friendly);
   }
   if (res.status === 204) return null;
   return res.json();
@@ -42,7 +48,7 @@ export function parseGitHubRepo(url: string): { owner: string; repo: string } {
   if (sshMatch) {
     return { owner: sshMatch[1], repo: sshMatch[2] };
   }
-  throw new Error(`Cannot parse GitHub owner/repo from: ${url}`);
+  throw new Error("Invalid GitHub URL — expected format: https://github.com/owner/repo");
 }
 
 export async function createWebhook(opts: {

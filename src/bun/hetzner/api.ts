@@ -1,0 +1,114 @@
+import { getSettings } from "../db.ts";
+import { getSecret } from "../keychain.ts";
+import { withRetry, isRetryableHttpError } from "../retry.ts";
+
+function log(context: string, ...args: any[]) {
+  console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
+}
+
+async function apiToken(): Promise<string> {
+  // Try keychain first, fall back to DB settings
+  const keychainToken = await getSecret("hetzner_api_token");
+  if (keychainToken) return keychainToken;
+  return getSettings().hetzner_api_token ?? "";
+}
+
+async function dnsToken(): Promise<string> {
+  const keychainToken = await getSecret("hetzner_dns_token");
+  if (keychainToken) return keychainToken;
+  return getSettings().hetzner_dns_token ?? "";
+}
+
+function friendlyHetznerError(status: number, body: string, method: string, apiPath: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    const code = parsed?.error?.code;
+    const msg = parsed?.error?.message;
+    if (code === "uniqueness_error") return `Resource already exists (${msg || "duplicate name"})`;
+    if (code === "not_found") return `Resource not found — it may have been deleted`;
+    if (code === "forbidden") return "Access denied — check that your API token has the required permissions";
+    if (code === "unauthorized") return "Invalid API token — update it in Settings";
+    if (code === "rate_limit_exceeded") return "Rate limit exceeded — wait a moment and try again";
+    if (code === "conflict") return `Resource conflict: ${msg || "another operation is in progress"}`;
+    if (code === "server_limit_exceeded") return "Server limit reached — delete unused servers or request a limit increase from Hetzner";
+    if (code === "placement_error") return "No capacity available in this location — try a different datacenter";
+    if (msg) return msg;
+  } catch {}
+  if (status === 401) return "Invalid API token — update it in Settings";
+  if (status === 403) return "Access denied — check your API token permissions";
+  if (status === 404) return `API route not found (${method} ${apiPath})`;
+  if (status === 409) return "Resource conflict — another operation may be in progress";
+  if (status === 422) return "Invalid request — check your configuration";
+  if (status === 429) return "Rate limit exceeded — wait a moment and try again";
+  if (status >= 500) return "Hetzner is experiencing issues — try again shortly";
+  return `Unexpected error (HTTP ${status})`;
+}
+
+export async function hetznerApi(
+  apiPath: string,
+  options: RequestInit = {}
+): Promise<any> {
+  const token = await apiToken();
+  if (!token) throw new Error("Hetzner API token not configured");
+  return withRetry(async () => {
+    const method = options.method || "GET";
+    log("api", `${method} ${apiPath}`);
+    const start = Date.now();
+    const res = await fetch(`https://api.hetzner.cloud/v1${apiPath}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    });
+    const elapsed = Date.now() - start;
+    if (!res.ok) {
+      const body = await res.text();
+      log("api", `${method} ${apiPath} FAILED ${res.status} in ${elapsed}ms: ${body}`);
+      throw new Error(friendlyHetznerError(res.status, body, method, apiPath));
+    }
+    log("api", `${method} ${apiPath} OK ${res.status} in ${elapsed}ms`);
+    return res.json();
+  }, { retryOn: isRetryableHttpError });
+}
+
+export async function hetznerDns(
+  apiPath: string,
+  options: RequestInit = {}
+): Promise<any> {
+  const token = await dnsToken();
+  if (!token) throw new Error("Hetzner DNS token not configured");
+  return withRetry(async () => {
+    const method = options.method || "GET";
+    log("dns", `${method} ${apiPath}`);
+    const start = Date.now();
+    const res = await fetch(`https://dns.hetzner.com/api/v1${apiPath}`, {
+      ...options,
+      headers: {
+        "Auth-API-Token": token,
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    });
+    const elapsed = Date.now() - start;
+    if (!res.ok) {
+      const body = await res.text();
+      log("dns", `${method} ${apiPath} FAILED ${res.status} in ${elapsed}ms: ${body}`);
+      const friendly = res.status === 401 ? "Invalid DNS token — update it in Settings"
+        : res.status === 403 ? "DNS access denied — check your token permissions"
+        : res.status === 404 ? "DNS zone or record not found"
+        : res.status === 422 ? "Invalid DNS record — check the domain and record type"
+        : res.status >= 500 ? "Hetzner DNS is experiencing issues — try again shortly"
+        : `DNS error (HTTP ${res.status})`;
+      throw new Error(friendly);
+    }
+    log("dns", `${method} ${apiPath} OK ${res.status} in ${elapsed}ms`);
+    return res.json();
+  }, { retryOn: isRetryableHttpError });
+}
+
+// Public wrapper for hetznerApi (used by RPC handlers for resource listing)
+export async function hetznerApiPublic(apiPath: string, options: RequestInit = {}): Promise<any> {
+  return hetznerApi(apiPath, options);
+}
