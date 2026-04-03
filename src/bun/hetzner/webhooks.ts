@@ -184,7 +184,7 @@ export async function ensureWebhookCaddyRoute(ip: string, hostKey?: string): Pro
   const routeJson = JSON.stringify(route).replace(/'/g, "'\\''");
   await sshExec(
     ip,
-    `curl -sf -X POST -H 'Content-Type: application/json' -d '${routeJson}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
+    `curl -sf -X POST -H 'Content-Type: application/json' -d '${routeJson}' http://localhost:2019/config/apps/http/servers/srv0/routes/0`,
     hostKey
   );
 
