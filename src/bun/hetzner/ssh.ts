@@ -44,8 +44,17 @@ export async function ensureSshKey(name: string) {
 
   const existing = await hetznerApi(`/ssh_keys?name=${name}`);
   if (existing.ssh_keys.length > 0) {
-    log("ssh-key", `Found existing SSH key on Hetzner: id=${existing.ssh_keys[0].id}`);
-    return { ...existing.ssh_keys[0], privateKeyPath };
+    const remote = existing.ssh_keys[0];
+    const remoteFingerprint = remote.public_key?.trim().split(/\s+/).slice(0, 2).join(" ");
+    const localFingerprint = publicKey.trim().split(/\s+/).slice(0, 2).join(" ");
+    if (remoteFingerprint === localFingerprint) {
+      log("ssh-key", `Found existing SSH key on Hetzner: id=${remote.id} (matches local)`);
+      return { ...remote, privateKeyPath };
+    }
+    // Local key differs from Hetzner — replace it
+    log("ssh-key", `Local key differs from Hetzner key id=${remote.id}, replacing...`);
+    await hetznerApi(`/ssh_keys/${remote.id}`, { method: "DELETE" });
+    log("ssh-key", `Deleted stale SSH key id=${remote.id}`);
   }
 
   log("ssh-key", "Uploading SSH key to Hetzner...");
@@ -84,6 +93,7 @@ export async function sshExec(
       [
         "ssh",
         "-i", keyPath,
+        "-o", "BatchMode=yes",
         "-o", `StrictHostKeyChecking=${strictHostKeyChecking}`,
         "-o", `UserKnownHostsFile=${knownHostsFile}`,
         "-o", "ConnectTimeout=10",
