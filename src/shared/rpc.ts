@@ -288,6 +288,10 @@ export type DeployAppRPC = {
         params: { volume_id: string; from_app_id: number; to_app_id: number; mount_path?: string };
         response: { ok: boolean; error?: string };
       };
+      selfDeploy: {
+        params: { domain?: string; server_id?: number; server_type?: string; server_location?: string };
+        response: { ok: boolean; url?: string; error?: string };
+      };
     };
     messages: {};
   }>;

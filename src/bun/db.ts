@@ -11,6 +11,7 @@ export function createDatabase(dbPathOrMemory: string): Database {
   const instance = new Database(dbPathOrMemory);
   instance.run("PRAGMA journal_mode = WAL");
   instance.run("PRAGMA foreign_keys = ON");
+  instance.run("PRAGMA busy_timeout = 5000");
   initSchema(instance);
   runMigrations(instance);
   return instance;
@@ -61,8 +62,8 @@ function initSchema(instance: Database) {
   const defaults: Record<string, string> = {
     ssh_public_key: "",
     dns_zone_id: "",
-    default_server_type: "cpx12",
-    default_location: "nbg1",
+    default_server_type: "",
+    default_location: "",
   };
 
   const insertSetting = instance.prepare(
@@ -73,8 +74,7 @@ function initSchema(instance: Database) {
   }
 }
 
-const home = process.env.HOME || process.env.USERPROFILE || "/tmp";
-const dataDir = process.env.OCD_DATA_DIR || path.join(home, ".one-click-deploy");
+const dataDir = process.env.OCD_DATA_DIR || path.join(process.cwd(), "data");
 mkdirSync(dataDir, { recursive: true });
 
 const dbPath = path.join(dataDir, "deploy.db");
@@ -467,4 +467,134 @@ export function nextReplicaHostPort(serverId: number): number {
     .get(serverId) as any;
   const maxPort = Math.max(appRow?.max_port || 0, replicaRow?.max_port || 0);
   return (maxPort && maxPort >= BASE_PORT) ? maxPort + 1 : BASE_PORT;
+}
+
+// --- Users ---
+
+export type UserRow = {
+  id: string;
+  email: string;
+  password_hash: string;
+  is_admin: number;
+  totp_secret: string | null;
+  totp_enabled: number;
+  created_at: string;
+};
+
+export function getUserCount(): number {
+  const row = db.query("SELECT COUNT(*) as count FROM users").get() as any;
+  return row?.count ?? 0;
+}
+
+export function getUserByEmail(email: string): UserRow | null {
+  return db.query("SELECT * FROM users WHERE email = ?").get(email) as UserRow | null;
+}
+
+export function getUserById(id: string): UserRow | null {
+  return db.query("SELECT * FROM users WHERE id = ?").get(id) as UserRow | null;
+}
+
+export function getUsers(): UserRow[] {
+  return db.query("SELECT id, email, is_admin, totp_enabled, created_at FROM users ORDER BY created_at").all() as UserRow[];
+}
+
+export function insertUser(user: { id: string; email: string; password_hash: string; is_admin?: boolean }): void {
+  db.query("INSERT INTO users (id, email, password_hash, is_admin) VALUES (?, ?, ?, ?)").run(
+    user.id, user.email, user.password_hash, user.is_admin ? 1 : 0,
+  );
+}
+
+export function updateUserPassword(id: string, passwordHash: string): void {
+  db.query("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, id);
+}
+
+export function deleteUser(id: string): void {
+  db.query("DELETE FROM users WHERE id = ?").run(id);
+}
+
+// --- TOTP ---
+
+export function setTotpSecret(userId: string, secret: string): void {
+  db.query("UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?").run(secret, userId);
+}
+
+export function enableTotp(userId: string): void {
+  db.query("UPDATE users SET totp_enabled = 1 WHERE id = ?").run(userId);
+}
+
+export function disableTotp(userId: string): void {
+  db.query("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?").run(userId);
+  db.query("DELETE FROM totp_backup_codes WHERE user_id = ?").run(userId);
+}
+
+export function getTotpSecret(userId: string): string | null {
+  const row = db.query("SELECT totp_secret FROM users WHERE id = ?").get(userId) as any;
+  return row?.totp_secret ?? null;
+}
+
+export function insertBackupCodes(userId: string, codeHashes: string[]): void {
+  db.query("DELETE FROM totp_backup_codes WHERE user_id = ?").run(userId);
+  const stmt = db.prepare("INSERT INTO totp_backup_codes (id, user_id, code_hash) VALUES (?, ?, ?)");
+  for (const hash of codeHashes) {
+    stmt.run(crypto.randomUUID(), userId, hash);
+  }
+}
+
+export function getUnusedBackupCodes(userId: string): Array<{ id: string; code_hash: string }> {
+  return db.query("SELECT id, code_hash FROM totp_backup_codes WHERE user_id = ? AND used = 0").all(userId) as any[];
+}
+
+export function markBackupCodeUsed(codeId: string): void {
+  db.query("UPDATE totp_backup_codes SET used = 1 WHERE id = ?").run(codeId);
+}
+
+export function getUnusedBackupCodeCount(userId: string): number {
+  const row = db.query("SELECT COUNT(*) as count FROM totp_backup_codes WHERE user_id = ? AND used = 0").get(userId) as any;
+  return row?.count ?? 0;
+}
+
+// --- Permissions ---
+
+export const ALL_PERMISSIONS = [
+  "settings.manage",
+  "apps.deploy",
+  "apps.redeploy",
+  "apps.rollback",
+  "apps.restart",
+  "apps.pause",
+  "apps.destroy",
+  "apps.logs",
+  "apps.env",
+  "servers.view",
+  "servers.delete",
+  "volumes.create",
+  "volumes.manage",
+  "volumes.delete",
+  "scaling.manage",
+  "webhooks.manage",
+  "resources.view",
+  "resources.delete",
+] as const;
+
+export type Permission = typeof ALL_PERMISSIONS[number];
+
+export function getUserPermissions(userId: string): string[] {
+  const rows = db.query("SELECT permission FROM user_permissions WHERE user_id = ?").all(userId) as any[];
+  return rows.map((r: any) => r.permission);
+}
+
+export function hasPermission(userId: string, permission: string): boolean {
+  const user = getUserById(userId);
+  if (!user) return false;
+  if (user.is_admin) return true;
+  const row = db.query("SELECT 1 FROM user_permissions WHERE user_id = ? AND permission = ?").get(userId, permission);
+  return !!row;
+}
+
+export function setUserPermissions(userId: string, permissions: string[]): void {
+  db.query("DELETE FROM user_permissions WHERE user_id = ?").run(userId);
+  const stmt = db.prepare("INSERT INTO user_permissions (user_id, permission) VALUES (?, ?)");
+  for (const perm of permissions) {
+    stmt.run(userId, perm);
+  }
 }

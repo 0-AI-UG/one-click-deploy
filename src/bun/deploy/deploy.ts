@@ -176,8 +176,10 @@ export async function deploy(
       log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}`);
       onProgress("server", `SSH key + firewall ready`);
 
-      const serverType = req.server_type || settings.default_server_type || "cx23";
-      const location = req.server_location || settings.default_location || "nbg1";
+      const serverType = req.server_type || settings.default_server_type;
+      if (!serverType) throw new Error("No server type specified — configure a default in Settings");
+      const location = req.server_location || settings.default_location;
+      if (!location) throw new Error("No server location specified — configure a default in Settings");
       const serverName = `ocd-${req.app_name}-${Date.now()}`;
 
       // Insert placeholder DB record BEFORE Hetzner API call to prevent orphans

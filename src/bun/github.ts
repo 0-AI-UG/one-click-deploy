@@ -1,4 +1,4 @@
-import { getSecret } from "./keychain.ts";
+import { secretStore } from "./secret-store.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [github:${context}]`, ...args);
@@ -97,6 +97,6 @@ export async function deleteWebhook(opts: {
 }
 
 export async function getGitHubPat(): Promise<string | null> {
-  const pat = await getSecret("github_pat");
+  const pat = await secretStore.get("github_pat");
   return pat || null;
 }

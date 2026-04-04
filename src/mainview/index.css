@@ -67,6 +67,20 @@ body {
 .inp::placeholder { color: var(--fg-faint); }
 .inp:focus { box-shadow: var(--shadow-sm); transform: translate(-1px,-1px); }
 
+/* Neo checkbox */
+input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none;
+    width: 16px; height: 16px; min-width: 16px;
+    border: var(--b); background: var(--bg-raised);
+    cursor: pointer; position: relative; display: inline-block; vertical-align: middle;
+}
+input[type="checkbox"]:checked { background: var(--accent); }
+input[type="checkbox"]:checked::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; background: var(--fg);
+}
+input[type="checkbox"]:hover { background: var(--bg-alt); }
+input[type="checkbox"]:checked:hover { background: var(--accent-h); }
+
 /* Neo select */
 .sel {
     width: 100%;

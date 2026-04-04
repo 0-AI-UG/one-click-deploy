@@ -1,3 +1,4 @@
+import path from "path";
 import { sshExec } from "./ssh.ts";
 
 function log(context: string, ...args: any[]) {
@@ -30,7 +31,8 @@ async function hetznerApi(token, path, opts = {}) {
 }
 
 async function sshExec(ip, cmd) {
-  const proc = Bun.spawn(["ssh", "-i", "/root/.one-click-deploy/ssh/id_ed25519", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", "root@" + ip, cmd], { stdout: "pipe", stderr: "pipe" });
+  const keyPath = path.join(process.cwd(), "data", "ssh", "id_ed25519");
+  const proc = Bun.spawn(["ssh", "-i", keyPath, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", "root@" + ip, cmd], { stdout: "pipe", stderr: "pipe" });
   const stdout = await new Response(proc.stdout).text();
   await proc.exited;
   return stdout.trim();

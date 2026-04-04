@@ -126,6 +126,43 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 9,
+    description: "Add users, permissions, TOTP backup codes, and encrypted secrets for web mode",
+    up: (db) => {
+      db.run(`CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        totp_secret TEXT,
+        totp_enabled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      db.run(`CREATE TABLE IF NOT EXISTS totp_backup_codes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL,
+        used INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      db.run(`CREATE TABLE IF NOT EXISTS user_permissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        permission TEXT NOT NULL,
+        UNIQUE(user_id, permission)
+      )`);
+
+      db.run(`CREATE TABLE IF NOT EXISTS encrypted_secrets (
+        key TEXT PRIMARY KEY,
+        encrypted_value TEXT NOT NULL,
+        iv TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

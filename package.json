@@ -1,25 +1,31 @@
 {
   "name": "one-click-deploy",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "start": "electrobun dev",
     "dev": "electrobun dev --watch",
     "build": "electrobun build",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src/bun/"
+    "test": "bun test src/bun/",
+    "server": "OCD_MODE=server bun run src/server/index.ts",
+    "server:dev": "OCD_MODE=server SKIP_2FA=1 bun --watch run src/server/index.ts"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "electrobun": "1.16.0",
+    "jose": "^6.2.2",
     "lucide-react": "^1.7.0",
+    "otpauth": "^9.5.0",
+    "qrcode": "^1.5.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "typescript": "^5.9.3"

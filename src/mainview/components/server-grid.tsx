@@ -384,7 +384,7 @@ function AppCard({ app, serverName, onChanged, onViewLogs }: { app: App; serverN
           <div style={{ padding: '6px 8px', background: 'var(--bg-alt)', border: '1px solid var(--fg)', marginBottom: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', flex: 1 }}>
-                <input type="checkbox" checked={autoScaleEnabled} onChange={e => setAutoScaleEnabled(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
+                <input type="checkbox" checked={autoScaleEnabled} onChange={e => setAutoScaleEnabled(e.target.checked)} />
                 <span className="mono" style={{ fontSize: 9, fontWeight: 700 }}>Auto-scale</span>
               </label>
             </div>
@@ -502,7 +502,7 @@ function AppCard({ app, serverName, onChanged, onViewLogs }: { app: App; serverN
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', flex: 1 }}>
-              <input type="checkbox" checked={redeployAuthEnabled} onChange={e => setRedeployAuthEnabled(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
+              <input type="checkbox" checked={redeployAuthEnabled} onChange={e => setRedeployAuthEnabled(e.target.checked)} />
               <span className="mono" style={{ fontSize: 9, fontWeight: 600 }}>Password protect</span>
             </label>
             {redeployAuthEnabled && (

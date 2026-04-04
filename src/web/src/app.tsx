@@ -1,0 +1,101 @@
+import { useState, useEffect } from "react";
+import { useAuth } from "./stores/auth.ts";
+import { get } from "./api/client.ts";
+import { Toasts, ConfirmDialog, Spinner } from "./components/ui.tsx";
+import { Nav } from "./components/nav.tsx";
+import { ProtectedRoute } from "./components/protected-route.tsx";
+import { LoginPage } from "./pages/login.tsx";
+import { TotpVerifyPage } from "./pages/totp-verify.tsx";
+import { TotpSetupPage } from "./pages/totp-setup.tsx";
+import { SetupPage } from "./pages/setup.tsx";
+import { DashboardPage } from "./pages/dashboard.tsx";
+import { DeployPage } from "./pages/deploy.tsx";
+import { AppDetailPage } from "./pages/app-detail.tsx";
+import { ResourcesPage } from "./pages/resources.tsx";
+import { SettingsPage } from "./pages/settings.tsx";
+import { UsersPage } from "./pages/admin/users.tsx";
+import { UserDetailPage } from "./pages/admin/user-detail.tsx";
+
+function useHash() {
+  const [hash, setHash] = useState(window.location.hash || "#/");
+  useEffect(() => {
+    const handler = () => setHash(window.location.hash || "#/");
+    window.addEventListener("hashchange", handler);
+    return () => window.removeEventListener("hashchange", handler);
+  }, []);
+  return hash;
+}
+
+export function App() {
+  const hash = useHash();
+  const { token } = useAuth();
+  const [setupChecked, setSetupChecked] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
+
+  useEffect(() => {
+    get("/api/setup/status").then((res) => {
+      setNeedsSetup(!res.setupComplete);
+      setSetupChecked(true);
+      if (!res.setupComplete && hash !== "#/setup") {
+        window.location.hash = "#/setup";
+      }
+    }).catch(() => {
+      setSetupChecked(true);
+    });
+  }, []);
+
+  if (!setupChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Spinner />
+      </div>
+    );
+  }
+
+  // Public routes (no auth required)
+  if (hash === "#/setup") return <><SetupPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/login") return <><LoginPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/totp-verify") return <><TotpVerifyPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/totp-setup") return <><TotpSetupPage /><Toasts /><ConfirmDialog /></>;
+
+  // Redirect to login if not authenticated
+  if (!token) {
+    if (needsSetup) {
+      window.location.hash = "#/setup";
+    } else {
+      window.location.hash = "#/login";
+    }
+    return null;
+  }
+
+  // Parse route
+  let content;
+  if (hash === "#/" || hash === "") {
+    content = <DashboardPage />;
+  } else if (hash === "#/deploy") {
+    content = <DeployPage />;
+  } else if (hash.startsWith("#/apps/")) {
+    const appId = parseInt(hash.split("/")[2], 10);
+    content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;
+  } else if (hash === "#/resources") {
+    content = <ResourcesPage />;
+  } else if (hash === "#/settings") {
+    content = <SettingsPage />;
+  } else if (hash === "#/admin/users") {
+    content = <UsersPage />;
+  } else if (hash.startsWith("#/admin/users/")) {
+    const userId = hash.split("/")[3];
+    content = userId ? <UserDetailPage userId={userId} /> : <UsersPage />;
+  } else {
+    content = <DashboardPage />;
+  }
+
+  return (
+    <>
+      <Nav />
+      <ProtectedRoute>{content}</ProtectedRoute>
+      <Toasts />
+      <ConfirmDialog />
+    </>
+  );
+}

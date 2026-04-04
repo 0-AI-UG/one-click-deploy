@@ -15,8 +15,8 @@ export function SetupGate({ onSaved }: { onSaved: () => void }) {
         hetzner_api_token: token,
         hetzner_dns_token: "",
         dns_zone_id: "",
-        default_server_type: "cx23",
-        default_location: "nbg1",
+        default_server_type: "",
+        default_location: "",
       });
       onSaved();
     } catch (err: any) {

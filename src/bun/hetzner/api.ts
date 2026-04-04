@@ -1,5 +1,5 @@
 import { getSettings } from "../db.ts";
-import { getSecret } from "../keychain.ts";
+import { secretStore } from "../secret-store.ts";
 import { withRetry, isRetryableHttpError } from "../retry.ts";
 
 function log(context: string, ...args: any[]) {
@@ -7,15 +7,14 @@ function log(context: string, ...args: any[]) {
 }
 
 async function apiToken(): Promise<string> {
-  // Try keychain first, fall back to DB settings
-  const keychainToken = await getSecret("hetzner_api_token");
-  if (keychainToken) return keychainToken;
+  const token = await secretStore.get("hetzner_api_token");
+  if (token) return token;
   return getSettings().hetzner_api_token ?? "";
 }
 
 async function dnsToken(): Promise<string> {
-  const keychainToken = await getSecret("hetzner_dns_token");
-  if (keychainToken) return keychainToken;
+  const token = await secretStore.get("hetzner_dns_token");
+  if (token) return token;
   return getSettings().hetzner_dns_token ?? "";
 }
 

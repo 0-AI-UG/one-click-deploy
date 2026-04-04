@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { request, onDeployProgress } from "../rpc.ts";
+import { request, onDeployProgress, connectDeployStream } from "../rpc.ts";
 import type { ServerWithApps } from "../../shared/rpc.ts";
 import { NeoSelect } from "./neo-select.tsx";
 
@@ -45,6 +45,7 @@ export function DeploySection({
 
   useEffect(() => {
     if (!deploying) return undefined;
+    const closeStream = connectDeployStream(appName);
     const unsub = onDeployProgress(({ step, detail }) => {
       if (step === "error") {
         setError(detail);
@@ -69,7 +70,7 @@ export function DeploySection({
       });
       setStepDetails((prev) => ({ ...prev, [step]: detail }));
     });
-    return () => { unsub(); };
+    return () => { unsub(); closeStream(); };
   }, [deploying]);
 
   const appName = gitRepo
@@ -280,7 +281,7 @@ export function DeploySection({
               )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', flex: 1 }}>
-                  <input type="checkbox" checked={webhookEnabled} onChange={e => setWebhookEnabled(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
+                  <input type="checkbox" checked={webhookEnabled} onChange={e => setWebhookEnabled(e.target.checked)} />
                   <span className="mono" style={{ fontSize: 9, fontWeight: 600 }}>Auto-redeploy on push</span>
                 </label>
                 {webhookEnabled && (
@@ -289,7 +290,7 @@ export function DeploySection({
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', flex: 1 }}>
-                  <input type="checkbox" checked={authEnabled} onChange={e => setAuthEnabled(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
+                  <input type="checkbox" checked={authEnabled} onChange={e => setAuthEnabled(e.target.checked)} />
                   <span className="mono" style={{ fontSize: 9, fontWeight: 600 }}>Password protect</span>
                 </label>
                 {authEnabled && (

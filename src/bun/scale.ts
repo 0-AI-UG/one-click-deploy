@@ -658,8 +658,9 @@ async function pickTargetServer(
       hetzner.ensureFirewall(),
     ]);
 
-    const serverType = settings.default_server_type || "cpx12";
-    const location = primaryServer.location || settings.default_location || "nbg1";
+    const serverType = settings.default_server_type;
+    if (!serverType) throw new Error("No default server type configured — set one in Settings");
+    const location = primaryServer.location || settings.default_location;
     const serverName = `ocd-${app.name}-r${Date.now()}`;
 
     const hServer = await hetzner.createServer({

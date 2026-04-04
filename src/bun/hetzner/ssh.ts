@@ -6,11 +6,7 @@ function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
-const sshDir = path.join(
-  process.env.HOME || process.env.USERPROFILE || "/tmp",
-  ".one-click-deploy",
-  "ssh"
-);
+const sshDir = path.join(process.cwd(), "data", "ssh");
 
 async function getOrCreateLocalKeyPair(): Promise<{ publicKey: string; privateKeyPath: string }> {
   mkdirSync(sshDir, { recursive: true });

@@ -1,0 +1,232 @@
+import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { X, AlertTriangle, Loader2 } from "lucide-react";
+
+// --- Toast system ---
+type Toast = { id: number; message: string; type: "success" | "error" | "info" };
+let toastId = 0;
+let toastListeners: Array<(toasts: Toast[]) => void> = [];
+let currentToasts: Toast[] = [];
+
+function notifyToastListeners() {
+  toastListeners.forEach((l) => l([...currentToasts]));
+}
+
+export function showToast(message: string, type: Toast["type"] = "info") {
+  const id = ++toastId;
+  currentToasts = [...currentToasts, { id, message, type }];
+  notifyToastListeners();
+  setTimeout(() => {
+    currentToasts = currentToasts.filter((t) => t.id !== id);
+    notifyToastListeners();
+  }, 4000);
+}
+
+export function Toasts() {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  useEffect(() => {
+    toastListeners.push(setToasts);
+    return () => { toastListeners = toastListeners.filter((l) => l !== setToasts); };
+  }, []);
+
+  return (
+    <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`pointer-events-auto animate-slide-up font-mono text-[10px] font-bold uppercase tracking-wider px-4 py-2.5 border-2 border-fg max-w-sm shadow-neo-sm ${
+            t.type === "success" ? "bg-accent text-fg" :
+            t.type === "error" ? "bg-accent-red text-white" :
+            "bg-accent-blue text-white"
+          }`}
+        >
+          {t.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// --- Confirm Dialog ---
+type ConfirmState = {
+  open: boolean;
+  title: string;
+  message: string;
+  danger?: boolean;
+  resolve?: (v: boolean) => void;
+};
+
+let confirmState: ConfirmState = { open: false, title: "", message: "" };
+let confirmListeners: Array<(s: ConfirmState) => void> = [];
+
+function notifyConfirmListeners() {
+  confirmListeners.forEach((l) => l({ ...confirmState }));
+}
+
+export function confirm(title: string, message: string, danger = false): Promise<boolean> {
+  return new Promise((resolve) => {
+    confirmState = { open: true, title, message, danger, resolve };
+    notifyConfirmListeners();
+  });
+}
+
+export function ConfirmDialog() {
+  const [state, setState] = useState<ConfirmState>({ open: false, title: "", message: "" });
+
+  useEffect(() => {
+    confirmListeners.push(setState);
+    return () => { confirmListeners = confirmListeners.filter((l) => l !== setState); };
+  }, []);
+
+  if (!state.open) return null;
+
+  const close = (v: boolean) => {
+    state.resolve?.(v);
+    confirmState = { open: false, title: "", message: "" };
+    notifyConfirmListeners();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-fg/40 animate-fade-in">
+      <div className="bg-bg-raised border-2 border-fg shadow-neo p-6 max-w-md w-full mx-4 animate-slide-up">
+        <div className="flex items-start gap-3 mb-4">
+          {state.danger && <AlertTriangle size={20} className="text-accent-red mt-0.5 flex-shrink-0" />}
+          <div>
+            <h3 className="font-mono font-bold text-sm text-fg uppercase">{state.title}</h3>
+            <p className="text-xs text-fg-dim mt-1">{state.message}</p>
+          </div>
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={() => close(false)} className="font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg bg-bg-raised text-fg-dim px-3 py-1.5 shadow-neo-sm hover:bg-alt transition-all active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none">
+            Cancel
+          </button>
+          <button
+            onClick={() => close(true)}
+            className={`font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg px-3 py-1.5 shadow-neo-sm transition-all active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none ${
+              state.danger
+                ? "bg-accent-red text-white"
+                : "bg-accent text-fg"
+            }`}
+          >
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Spinner ---
+export function Spinner({ className = "" }: { className?: string }) {
+  return <Loader2 size={16} className={`animate-spin text-fg ${className}`} />;
+}
+
+// --- Status Badge ---
+export function StatusBadge({ status }: { status: string }) {
+  const s = status?.toLowerCase() || "unknown";
+  const dotColor =
+    s === "running" ? "bg-accent" :
+    s === "deploying" ? "bg-accent-amber" :
+    s === "paused" ? "bg-alt" :
+    s === "error" || s === "failed" ? "bg-accent-red" :
+    "bg-alt";
+
+  return (
+    <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-fg">
+      <span className={`w-[7px] h-[7px] border-[1.5px] border-fg flex-shrink-0 ${dotColor} ${s === "deploying" ? "pulse" : ""}`} />
+      {status}
+    </span>
+  );
+}
+
+// --- Card ---
+export function Card({ children, className = "" }: { children: ReactNode; className?: string; accent?: boolean }) {
+  return (
+    <div className={`bg-bg-raised border-2 border-fg shadow-neo ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+// --- Btn ---
+export function Btn({
+  children,
+  onClick,
+  type = "button",
+  variant = "default",
+  size = "sm",
+  disabled = false,
+  loading = false,
+  className = "",
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  type?: "button" | "submit" | "reset";
+  variant?: "default" | "primary" | "danger" | "ghost";
+  size?: "xs" | "sm";
+  disabled?: boolean;
+  loading?: boolean;
+  className?: string;
+}) {
+  const base = "inline-flex items-center gap-1.5 font-mono font-bold uppercase tracking-wider border-2 border-fg cursor-pointer transition-all disabled:opacity-35 disabled:cursor-not-allowed disabled:shadow-neo-sm disabled:translate-x-0 disabled:translate-y-0";
+  const sizes = size === "xs" ? "px-2 py-1 text-[9px]" : "px-3 py-1.5 text-[10px]";
+
+  const variants = {
+    default: "bg-bg-raised text-fg shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none",
+    primary: "bg-accent text-fg shadow-neo-sm hover:bg-accent-h hover:-translate-x-px hover:-translate-y-px hover:shadow-neo active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none",
+    danger: "bg-accent-red text-white shadow-neo-sm hover:-translate-x-px hover:-translate-y-px hover:shadow-neo active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none",
+    ghost: "bg-bg-raised text-fg-dim shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none",
+  };
+
+  return (
+    <button type={type} onClick={onClick} disabled={disabled || loading} className={`${base} ${sizes} ${variants[variant]} ${className}`}>
+      {loading && <Spinner />}
+      {children}
+    </button>
+  );
+}
+
+// --- Table ---
+export function Table({ headers, children }: { headers: string[]; children: ReactNode }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs font-mono">
+        <thead>
+          <tr className="border-b-2 border-fg">
+            {headers.map((h) => (
+              <th key={h} className="text-left py-2.5 px-3 font-bold uppercase tracking-wider text-[9px] text-fg">
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-fg/10">{children}</tbody>
+      </table>
+    </div>
+  );
+}
+
+// --- Checkbox ---
+export function Checkbox({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
+  return (
+    <label className="inline-flex items-center gap-2 cursor-pointer group">
+      <span
+        onClick={(e) => { e.preventDefault(); onChange(!checked); }}
+        className={`w-4 h-4 border-2 border-fg flex-shrink-0 flex items-center justify-center transition-colors ${checked ? "bg-accent" : "bg-bg-raised group-hover:bg-alt"}`}
+      >
+        {checked && <span className="block w-2 h-2 bg-fg" />}
+      </span>
+      {label && <span className="font-mono text-[10px] text-fg">{label}</span>}
+    </label>
+  );
+}
+
+// --- Empty State ---
+export function EmptyState({ message, icon: Icon }: { message: string; icon?: any }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 text-muted">
+      {Icon && <Icon size={32} className="mb-3 opacity-30" />}
+      <p className="font-mono text-[10px] uppercase tracking-wider">{message}</p>
+    </div>
+  );
+}
