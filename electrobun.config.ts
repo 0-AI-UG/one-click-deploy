@@ -4,7 +4,7 @@ export default {
   app: {
     name: "one-click-deploy",
     identifier: "com.one-click-deploy.app",
-    version: "0.1.0",
+    version: "0.5.0",
   },
   build: {
     views: {
@@ -19,6 +19,7 @@ export default {
     mac: {
       bundleCEF: false,
       icons: "icon.iconset",
+      createDmg: true,
     },
     linux: {
       bundleCEF: false,
