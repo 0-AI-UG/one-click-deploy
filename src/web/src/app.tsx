@@ -63,7 +63,15 @@ export function App() {
   }
 
   // Public routes (no auth required)
-  if (hash === "#/setup") return <><SetupPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/setup") {
+    // Once setup is complete, the setup page is no longer reachable —
+    // bounce to the dashboard (if authenticated) or login page.
+    if (!needsSetup) {
+      window.location.hash = token ? "#/" : "#/login";
+      return null;
+    }
+    return <><SetupPage /><Toasts /><ConfirmDialog /></>;
+  }
   if (hash === "#/login") return <><LoginPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/totp-verify") return <><TotpVerifyPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/totp-setup") return <><TotpSetupPage /><Toasts /><ConfirmDialog /></>;

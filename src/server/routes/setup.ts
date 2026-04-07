@@ -16,6 +16,55 @@ export async function handleSetupStatus(_request: Request): Promise<Response> {
   );
 }
 
+export async function handleSetupServerTypes(request: Request): Promise<Response> {
+  try {
+    if (isSetupComplete()) {
+      return Response.json(
+        { error: "Setup already completed" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const body = await request.json() as { hetzner_api_token?: string };
+    const token = body.hetzner_api_token?.trim();
+    if (!token) {
+      return Response.json({ server_types: [] }, { headers: corsHeaders });
+    }
+    const validation = validateHetznerToken(token);
+    if (!validation.valid) {
+      return Response.json(
+        { error: `Hetzner API token: ${validation.error}` },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const res = await fetch("https://api.hetzner.cloud/v1/server_types?per_page=50", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      return Response.json(
+        { error: res.status === 401 ? "Invalid Hetzner API token" : `Hetzner API error (${res.status})` },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const data = await res.json() as any;
+    const types: Array<{ name: string; description: string; cores: number; memory: number; disk: number; locations: string[] }> = [];
+    for (const t of data.server_types ?? []) {
+      if (t.deprecation?.announced) continue;
+      types.push({
+        name: t.name,
+        description: t.description,
+        cores: t.cores,
+        memory: t.memory,
+        disk: t.disk,
+        locations: (t.prices ?? []).map((p: any) => p.location),
+      });
+    }
+    types.sort((a, b) => a.memory - b.memory || a.cores - b.cores);
+    return Response.json({ server_types: types }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleSetupComplete(request: Request): Promise<Response> {
   try {
     if (isSetupComplete()) {

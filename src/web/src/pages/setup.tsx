@@ -4,17 +4,39 @@ import { setTempToken } from "../stores/auth.ts";
 import { showToast, Spinner, Card } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Terminal, ArrowRight, ArrowLeft, Key, Server } from "lucide-react";
-import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
+import { type HetznerServerType, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 
 export function SetupPage() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const { serverTypes } = useServerTypes();
+  const [serverTypes, setServerTypes] = useState<HetznerServerType[]>([]);
+  const [typesLoading, setTypesLoading] = useState(false);
   const [form, setForm] = useState({
     email: "", password: "", confirmPassword: "",
     hetzner_api_token: "", hetzner_dns_token: "", github_pat: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
+
+  // Debounced fetch of server types as the Hetzner token is typed.
+  useEffect(() => {
+    const token = form.hetzner_api_token.trim();
+    if (!token) {
+      setServerTypes([]);
+      return;
+    }
+    setTypesLoading(true);
+    const handle = setTimeout(async () => {
+      try {
+        const res = await post("/api/setup/server-types", { hetzner_api_token: token });
+        setServerTypes(res.server_types ?? []);
+      } catch {
+        setServerTypes([]);
+      } finally {
+        setTypesLoading(false);
+      }
+    }, 500);
+    return () => { clearTimeout(handle); setTypesLoading(false); };
+  }, [form.hetzner_api_token]);
 
   useEffect(() => {
     if (serverTypes.length > 0 && !form.default_server_type) {
@@ -116,6 +138,9 @@ export function SetupPage() {
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>
                 <input type="text" value={form.dns_zone_id} onChange={set("dns_zone_id")} placeholder="Optional" />
+              </div>
+              <div className="text-[9px] font-mono uppercase tracking-wider text-muted -mt-1">
+                {typesLoading ? "Loading server types…" : serverTypes.length === 0 ? "Enter a valid Hetzner token to load server types" : `${serverTypes.length} server types available`}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

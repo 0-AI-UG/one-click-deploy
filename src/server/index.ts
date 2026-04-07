@@ -3,7 +3,7 @@ if (!process.env.OCD_MODE) process.env.OCD_MODE = "server";
 
 import path from "path";
 import { corsHeaders } from "./lib/cors.ts";
-import { handleSetupStatus, handleSetupComplete } from "./routes/setup.ts";
+import { handleSetupStatus, handleSetupComplete, handleSetupServerTypes } from "./routes/setup.ts";
 import { handleLogin, handleMe, handleUpdateMe } from "./routes/auth.ts";
 import {
   handleTotpSetup,
@@ -124,6 +124,7 @@ export const server = Bun.serve({
     // --- Setup ---
     "/api/setup/status": { GET: (req: Request) => handleSetupStatus(req) },
     "/api/setup/complete": { POST: (req: Request) => handleSetupComplete(req) },
+    "/api/setup/server-types": { POST: (req: Request) => handleSetupServerTypes(req) },
 
     // --- Auth ---
     "/api/auth/login": { POST: (req: Request) => handleLogin(req) },
