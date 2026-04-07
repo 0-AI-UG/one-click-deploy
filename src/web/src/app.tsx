@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAuth, logout } from "./stores/auth.ts";
+import { useAuth } from "./stores/auth.ts";
 import { get } from "./api/client.ts";
 import { Toasts, ConfirmDialog, Spinner } from "./components/ui.tsx";
 import { Nav } from "./components/nav.tsx";
@@ -34,12 +34,10 @@ export function App() {
 
   useEffect(() => {
     get("/api/setup/status").then((res) => {
-      setNeedsSetup(!res.setupComplete);
+      const incomplete = !res.setupComplete;
+      setNeedsSetup(incomplete);
       setSetupChecked(true);
-      if (!res.setupComplete) {
-        // Stale tokens (e.g. from a previous deploy with a different JWT_SECRET)
-        // would otherwise trap the user on /login. Wipe and force /setup.
-        logout();
+      if (incomplete && !token) {
         if (window.location.hash !== "#/setup") {
           window.location.hash = "#/setup";
         }
@@ -57,8 +55,9 @@ export function App() {
     );
   }
 
-  // If setup isn't complete, only the setup page is reachable.
-  if (needsSetup && hash !== "#/setup") {
+  // If setup isn't complete and the user isn't already authenticated,
+  // only the setup page is reachable. (An authenticated user has passed setup.)
+  if (needsSetup && !token && hash !== "#/setup") {
     window.location.hash = "#/setup";
     return null;
   }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { get } from "../api/client.ts";
+import { getToken } from "../stores/auth.ts";
 
 export type HetznerServerType = {
   name: string;
@@ -15,6 +16,12 @@ export function useServerTypes() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // The endpoint requires auth and a configured Hetzner token, so skip during
+    // initial setup — otherwise the 401 triggers a redirect loop on /setup.
+    if (!getToken()) {
+      setLoading(false);
+      return;
+    }
     get("/api/settings/server-types")
       .then((data: any) => setServerTypes(data.server_types ?? []))
       .catch(() => {})

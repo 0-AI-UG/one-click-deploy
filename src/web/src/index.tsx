@@ -6,6 +6,10 @@ import { getToken, logout } from "./stores/auth.ts";
 configureClient({
   getToken,
   onUnauthorized: () => {
+    // If there's no token to begin with, don't redirect — the request was
+    // anonymous (e.g. during /setup), and bouncing to /login would clobber
+    // the in-progress route.
+    if (!getToken()) return;
     logout();
     window.location.hash = "#/login";
   },
