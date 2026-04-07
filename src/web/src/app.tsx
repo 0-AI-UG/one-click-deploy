@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "./stores/auth.ts";
+import { useAuth, logout } from "./stores/auth.ts";
 import { get } from "./api/client.ts";
 import { Toasts, ConfirmDialog, Spinner } from "./components/ui.tsx";
 import { Nav } from "./components/nav.tsx";
@@ -36,8 +36,13 @@ export function App() {
     get("/api/setup/status").then((res) => {
       setNeedsSetup(!res.setupComplete);
       setSetupChecked(true);
-      if (!res.setupComplete && hash !== "#/setup") {
-        window.location.hash = "#/setup";
+      if (!res.setupComplete) {
+        // Stale tokens (e.g. from a previous deploy with a different JWT_SECRET)
+        // would otherwise trap the user on /login. Wipe and force /setup.
+        logout();
+        if (window.location.hash !== "#/setup") {
+          window.location.hash = "#/setup";
+        }
       }
     }).catch(() => {
       setSetupChecked(true);
@@ -50,6 +55,12 @@ export function App() {
         <Spinner />
       </div>
     );
+  }
+
+  // If setup isn't complete, only the setup page is reachable.
+  if (needsSetup && hash !== "#/setup") {
+    window.location.hash = "#/setup";
+    return null;
   }
 
   // Public routes (no auth required)
