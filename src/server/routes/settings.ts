@@ -5,6 +5,7 @@ import * as db from "../../bun/db.ts";
 import { secretStore, maskToken } from "../../bun/secret-store.ts";
 import { validateHetznerToken, validateGitHubPat } from "../../bun/validate.ts";
 import { hetznerApi } from "../../bun/hetzner/api.ts";
+import { readSshKeyPair, writeSshKeyPair } from "../../bun/hetzner/ssh.ts";
 
 export async function handleGetSettings(request: Request): Promise<Response> {
   try {
@@ -47,6 +48,30 @@ export async function handleGetServerTypes(request: Request): Promise<Response> 
     // Sort by memory then cores
     types.sort((a, b) => a.memory - b.memory || a.cores - b.cores);
     return Response.json({ server_types: types }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleExportSshKey(request: Request): Promise<Response> {
+  try {
+    await requirePermission(request, "settings.manage");
+    const { privateKey, publicKey } = readSshKeyPair();
+    return Response.json({ private_key: privateKey, public_key: publicKey }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleImportSshKey(request: Request): Promise<Response> {
+  try {
+    await requirePermission(request, "settings.manage");
+    const { private_key, public_key } = await request.json() as { private_key?: string; public_key?: string };
+    if (!private_key || !public_key) {
+      return Response.json({ error: "private_key and public_key are required" }, { status: 400, headers: corsHeaders });
+    }
+    writeSshKeyPair(private_key, public_key);
+    return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

@@ -74,6 +74,8 @@ const methods: Record<string, (params: any) => Promise<any>> = {
   reattachVolume: ({ volume_id, from_app_id, to_app_id, mount_path }) =>
     post("/api/volumes/reattach", { volume_id, from_app_id, to_app_id, mount_path }),
   getServerTypes: () => get("/api/settings/server-types"),
+  exportSshKey: () => get("/api/settings/ssh-key/export"),
+  importSshKey: (bundle) => post("/api/settings/ssh-key/import", bundle),
 };
 
 export const request = new Proxy({} as any, {

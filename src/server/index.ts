@@ -32,7 +32,7 @@ import {
   handleRollbackApp,
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
-import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
+import { handleGetSettings, handleSaveSettings, handleGetServerTypes, handleExportSshKey, handleImportSshKey } from "./routes/settings.ts";
 import { handleGetResources, handleDeleteResource } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics } from "./routes/scaling.ts";
@@ -197,6 +197,8 @@ export const server = Bun.serve({
       PUT: (req: Request) => handleSaveSettings(req),
     },
     "/api/settings/server-types": { GET: (req: Request) => handleGetServerTypes(req) },
+    "/api/settings/ssh-key/export": { GET: (req: Request) => handleExportSshKey(req) },
+    "/api/settings/ssh-key/import": { POST: (req: Request) => handleImportSshKey(req) },
 
     // --- Resources ---
     "/api/resources": { GET: (req: Request) => handleGetResources(req) },

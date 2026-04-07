@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { request } from "../rpc.ts";
 import type { Settings } from "../../shared/rpc.ts";
 import { NeoSelect } from "./neo-select.tsx";
@@ -33,6 +33,41 @@ export function SettingsView({ settings, onSaved }: { settings: Settings; onSave
       setLocation(availableLocations[0]);
     }
   }, [serverType, availableLocations]);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+
+  const exportSshKey = async () => {
+    setKeyBusy(true);
+    try {
+      const data = await request.exportSshKey({});
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ocd-ssh-key-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.message || "Export failed");
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
+  const importSshKey = async (file: File) => {
+    if (!confirm("Importing will overwrite this instance's SSH key. Servers provisioned with the current key will become unreachable unless you have a backup. Continue?")) return;
+    setKeyBusy(true);
+    try {
+      const parsed = JSON.parse(await file.text());
+      await request.importSshKey(parsed);
+      alert("SSH key imported.");
+    } catch (err: any) {
+      alert(err.message || "Import failed");
+    } finally {
+      setKeyBusy(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -93,6 +128,32 @@ export function SettingsView({ settings, onSaved }: { settings: Settings; onSave
         </div>
       </div>
 
+      <div>
+        <div className="stamp" style={{ marginBottom: 8 }}>SSH Key</div>
+        <div className="card" style={{ padding: 12 }}>
+          <div className="mono" style={{ fontSize: 9, color: 'var(--fg-faint)', marginBottom: 8, lineHeight: 1.5 }}>
+            Share this instance's SSH key with another OCD instance so both can manage the same Hetzner fleet.
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={exportSshKey} disabled={keyBusy} className="btn" style={{ flex: 1 }}>Export</button>
+            <button onClick={() => fileInputRef.current?.click()} disabled={keyBusy} className="btn" style={{ flex: 1 }}>Import</button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) importSshKey(f);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          <div className="mono" style={{ fontSize: 8, color: '#c00', marginTop: 8, lineHeight: 1.4 }}>
+            The exported file contains a private key that can root every server this instance has provisioned. Handle like a password.
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
