@@ -28,7 +28,7 @@ function useHash() {
 
 export function App() {
   const hash = useHash();
-  const { token } = useAuth();
+  const { token, tempToken } = useAuth();
   const [setupChecked, setSetupChecked] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
 
@@ -47,6 +47,15 @@ export function App() {
     });
   }, []);
 
+  // Once a temp token appears (setup just completed, or login is mid-2FA),
+  // re-check setup status so the guard below stops forcing #/setup.
+  useEffect(() => {
+    if (!tempToken) return;
+    get("/api/setup/status").then((res) => {
+      setNeedsSetup(!res.setupComplete);
+    }).catch(() => {});
+  }, [tempToken]);
+
   if (!setupChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -57,7 +66,7 @@ export function App() {
 
   // If setup isn't complete and the user isn't already authenticated,
   // only the setup page is reachable. (An authenticated user has passed setup.)
-  if (needsSetup && !token && hash !== "#/setup") {
+  if (needsSetup && !token && !tempToken && hash !== "#/setup") {
     window.location.hash = "#/setup";
     return null;
   }
