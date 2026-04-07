@@ -27,8 +27,7 @@ type DeployState = {
   hetznerServerId?: string;
   dbServerId?: number;
   dbAppId?: number;
-  dnsRecordId?: string;
-  dnsZoneId?: string;
+  dnsRecord?: { zone_id: string; name: string; type: string; value: string };
   containerName?: string;
   deployMode?: "dockerfile" | "compose";
   caddyConfigured?: boolean;
@@ -75,10 +74,10 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
   }
 
   // Delete DNS record
-  if (state.dnsRecordId) {
+  if (state.dnsRecord) {
     try {
-      await hetzner.deleteDnsRecord(state.dnsRecordId);
-      log("rollback", `Deleted DNS record ${state.dnsRecordId}`);
+      await hetzner.deleteDnsRecord(state.dnsRecord);
+      log("rollback", `Deleted DNS record ${state.dnsRecord.name}/${state.dnsRecord.type}`);
     } catch (err) {
       log("rollback", `Failed to delete DNS record: ${err}`);
     }
@@ -133,7 +132,6 @@ export async function deploy(
   log("deploy", `GitHub PAT ${githubPat ? `present (${githubPat.length} chars)` : "not configured"}`);
   const secretValues = [
     tokens.hetzner_api_token,
-    tokens.hetzner_dns_token,
     ...(githubPat ? [githubPat] : []),
     ...Object.values(req.env_vars),
   ];
@@ -275,9 +273,8 @@ export async function deploy(
           type: "A",
           value: serverIp,
         });
-        state.dnsRecordId = record.id;
-        state.dnsZoneId = dnsZoneId;
-        log("dns", `DNS record created: id=${record.id}`);
+        state.dnsRecord = { zone_id: dnsZoneId, name: subdomain, type: "A", value: serverIp };
+        log("dns", `DNS record created: ${record.id}`);
         onProgress("dns", `DNS A record created: ${req.domain} -> ${serverIp}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -336,14 +333,14 @@ export async function deploy(
     state.containerName = req.app_name;
     log("build", `App record created: id=${app.id}`);
 
-    if (state.dnsRecordId && state.dnsZoneId) {
+    if (state.dnsRecord) {
       db.insertDnsRecord({
         app_id: app.id,
-        zone_id: state.dnsZoneId,
-        record_id: state.dnsRecordId,
-        name: subdomain,
-        type: "A",
-        value: serverIp,
+        zone_id: state.dnsRecord.zone_id,
+        record_id: `${state.dnsRecord.name}/${state.dnsRecord.type}/${state.dnsRecord.value}`,
+        name: state.dnsRecord.name,
+        type: state.dnsRecord.type,
+        value: state.dnsRecord.value,
       });
     }
 

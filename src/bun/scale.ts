@@ -152,7 +152,12 @@ async function scaleUp(
       // Now safe to delete old records
       for (const record of dnsRecords) {
         try {
-          await hetzner.deleteDnsRecord(record.record_id);
+          await hetzner.deleteDnsRecord({
+            zone_id: record.zone_id,
+            name: record.name,
+            type: record.type,
+            value: record.value,
+          });
           db.deleteDnsRecord(record.record_id);
         } catch {}
       }
@@ -460,7 +465,12 @@ async function scaleDown(
       // Now safe to delete old records
       for (const record of dnsRecords) {
         try {
-          await hetzner.deleteDnsRecord(record.record_id);
+          await hetzner.deleteDnsRecord({
+            zone_id: record.zone_id,
+            name: record.name,
+            type: record.type,
+            value: record.value,
+          });
           db.deleteDnsRecord(record.record_id);
         } catch {}
       }

@@ -13,7 +13,6 @@ export function SetupGate({ onSaved }: { onSaved: () => void }) {
     try {
       await request.saveSettings({
         hetzner_api_token: token,
-        hetzner_dns_token: "",
         dns_zone_id: "",
         default_server_type: "",
         default_location: "",

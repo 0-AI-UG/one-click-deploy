@@ -75,7 +75,7 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     }
 
     const body = await request.json() as Record<string, string>;
-    const { email, password, hetzner_api_token, hetzner_dns_token, github_pat, dns_zone_id, default_server_type, default_location } = body;
+    const { email, password, hetzner_api_token, github_pat, dns_zone_id, default_server_type, default_location } = body;
 
     if (!email || !password) {
       return Response.json(
@@ -117,7 +117,6 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
 
     // Store secrets
     await secretStore.set("hetzner_api_token", hetzner_api_token);
-    if (hetzner_dns_token) await secretStore.set("hetzner_dns_token", hetzner_dns_token);
     if (github_pat) await secretStore.set("github_pat", github_pat);
 
     // Store non-secret settings

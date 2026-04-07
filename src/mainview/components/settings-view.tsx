@@ -7,7 +7,6 @@ type HetznerServerType = { name: string; description: string; cores: number; mem
 
 export function SettingsView({ settings, onSaved }: { settings: Settings; onSaved: () => void }) {
   const [token, setToken] = useState(settings.hetzner_api_token);
-  const [dnsToken, setDnsToken] = useState(settings.hetzner_dns_token);
   const [githubPat, setGithubPat] = useState(settings.github_pat);
   const [zoneId, setZoneId] = useState(settings.dns_zone_id);
   const [serverType, setServerType] = useState(settings.default_server_type || "");
@@ -71,7 +70,7 @@ export function SettingsView({ settings, onSaved }: { settings: Settings; onSave
 
   const save = async () => {
     setSaving(true);
-    await request.saveSettings({ ...settings, hetzner_api_token: token, hetzner_dns_token: dnsToken, github_pat: githubPat, dns_zone_id: zoneId, default_server_type: serverType, default_location: location });
+    await request.saveSettings({ ...settings, hetzner_api_token: token, github_pat: githubPat, dns_zone_id: zoneId, default_server_type: serverType, default_location: location });
     setSaving(false);
     onSaved();
   };
@@ -85,10 +84,6 @@ export function SettingsView({ settings, onSaved }: { settings: Settings; onSave
             <div>
               <label className="lbl">API Token</label>
               <input type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="Hetzner API token" className="inp" />
-            </div>
-            <div>
-              <label className="lbl">DNS Token</label>
-              <input type="password" value={dnsToken} onChange={e => setDnsToken(e.target.value)} placeholder="DNS API token" className="inp" />
             </div>
             <div>
               <label className="lbl">GitHub Token</label>

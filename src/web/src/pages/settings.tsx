@@ -7,7 +7,7 @@ import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-serve
 
 export function SettingsPage() {
   const [form, setForm] = useState({
-    hetzner_api_token: "", hetzner_dns_token: "", github_pat: "",
+    hetzner_api_token: "", github_pat: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
   const [loading, setLoading] = useState(true);
@@ -88,10 +88,6 @@ export function SettingsPage() {
         <div>
           <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner API Token</label>
           <input type="password" value={form.hetzner_api_token} onChange={set("hetzner_api_token")} placeholder="Enter token" />
-        </div>
-        <div>
-          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner DNS Token</label>
-          <input type="password" value={form.hetzner_dns_token} onChange={set("hetzner_dns_token")} placeholder="Optional" />
         </div>
         <div>
           <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">GitHub Personal Access Token</label>

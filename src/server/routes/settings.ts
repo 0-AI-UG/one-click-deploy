@@ -15,7 +15,6 @@ export async function handleGetSettings(request: Request): Promise<Response> {
     return Response.json(
       {
         hetzner_api_token: maskToken(tokens.hetzner_api_token),
-        hetzner_dns_token: maskToken(tokens.hetzner_dns_token),
         github_pat: maskToken(tokens.github_pat),
         dns_zone_id: s.dns_zone_id ?? "",
         default_server_type: s.default_server_type ?? "",
@@ -83,7 +82,7 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
     const settings = await request.json() as Record<string, string>;
 
     for (const [key, value] of Object.entries(settings)) {
-      if (key === "hetzner_api_token" || key === "hetzner_dns_token") {
+      if (key === "hetzner_api_token") {
         if (value.includes("...") || value === "****") continue;
         if (value) {
           const validation = validateHetznerToken(value);

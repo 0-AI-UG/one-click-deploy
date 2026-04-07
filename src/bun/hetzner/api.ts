@@ -12,12 +12,6 @@ async function apiToken(): Promise<string> {
   return getSettings().hetzner_api_token ?? "";
 }
 
-async function dnsToken(): Promise<string> {
-  const token = await secretStore.get("hetzner_dns_token");
-  if (token) return token;
-  return getSettings().hetzner_dns_token ?? "";
-}
-
 function friendlyHetznerError(status: number, body: string, method: string, apiPath: string): string {
   try {
     const parsed = JSON.parse(body);
@@ -68,41 +62,6 @@ export async function hetznerApi(
       throw new Error(friendlyHetznerError(res.status, body, method, apiPath));
     }
     log("api", `${method} ${apiPath} OK ${res.status} in ${elapsed}ms`);
-    return res.json();
-  }, { retryOn: isRetryableHttpError });
-}
-
-export async function hetznerDns(
-  apiPath: string,
-  options: RequestInit = {}
-): Promise<any> {
-  const token = await dnsToken();
-  if (!token) throw new Error("Hetzner DNS token not configured");
-  return withRetry(async () => {
-    const method = options.method || "GET";
-    log("dns", `${method} ${apiPath}`);
-    const start = Date.now();
-    const res = await fetch(`https://dns.hetzner.com/api/v1${apiPath}`, {
-      ...options,
-      headers: {
-        "Auth-API-Token": token,
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
-    });
-    const elapsed = Date.now() - start;
-    if (!res.ok) {
-      const body = await res.text();
-      log("dns", `${method} ${apiPath} FAILED ${res.status} in ${elapsed}ms: ${body}`);
-      const friendly = res.status === 401 ? "Invalid DNS token — update it in Settings"
-        : res.status === 403 ? "DNS access denied — check your token permissions"
-        : res.status === 404 ? "DNS zone or record not found"
-        : res.status === 422 ? "Invalid DNS record — check the domain and record type"
-        : res.status >= 500 ? "Hetzner DNS is experiencing issues — try again shortly"
-        : `DNS error (HTTP ${res.status})`;
-      throw new Error(friendly);
-    }
-    log("dns", `${method} ${apiPath} OK ${res.status} in ${elapsed}ms`);
     return res.json();
   }, { retryOn: isRetryableHttpError });
 }

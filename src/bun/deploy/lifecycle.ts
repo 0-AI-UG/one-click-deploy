@@ -114,9 +114,14 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     const dnsRecords = db.getDnsRecords(appId);
     for (const record of dnsRecords) {
       try {
-        await hetzner.deleteDnsRecord(record.record_id);
+        await hetzner.deleteDnsRecord({
+          zone_id: record.zone_id,
+          name: record.name,
+          type: record.type,
+          value: record.value,
+        });
       } catch (err) {
-        log("destroyApp", `Failed to delete DNS record ${record.record_id}:`, err instanceof Error ? err.message : err);
+        log("destroyApp", `Failed to delete DNS record ${record.name}/${record.type}:`, err instanceof Error ? err.message : err);
         cleanupFailed = true;
       }
     }

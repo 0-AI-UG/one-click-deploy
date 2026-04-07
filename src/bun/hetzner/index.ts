@@ -1,5 +1,5 @@
 // API clients
-export { hetznerApi, hetznerDns, hetznerApiPublic } from "./api.ts";
+export { hetznerApi, hetznerApiPublic } from "./api.ts";
 
 // Action polling
 export { pollAction } from "./actions.ts";

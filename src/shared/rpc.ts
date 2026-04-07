@@ -112,7 +112,6 @@ export type DeployRequest = {
 
 export type Settings = {
   hetzner_api_token: string;
-  hetzner_dns_token: string;
   github_pat: string;
   dns_zone_id: string;
   default_server_type: string;
