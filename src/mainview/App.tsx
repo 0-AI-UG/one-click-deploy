@@ -81,7 +81,7 @@ export function App() {
           <LogsView app={logsApp} />
         ) : view === "settings" && settings ? (
           <div style={{ margin: 'auto 0', width: '100%', display: 'flex', justifyContent: 'center' }}>
-            <SettingsView settings={settings} servers={servers} onSaved={() => { load(); }} />
+            <SettingsView settings={settings} onSaved={() => { load(); }} />
           </div>
         ) : view === "deploy" ? (
           <div style={{ margin: 'auto 0', width: '100%', maxWidth: 360 }}>

@@ -23,6 +23,7 @@ export function DeploySection({
   onDeployed: () => void;
 }) {
   const [gitRepo, setGitRepo] = useState("");
+  const [appNameOverride, setAppNameOverride] = useState("");
   const [domain, setDomain] = useState("");
   const [showOpts, setShowOpts] = useState(false);
   const [port, setPort] = useState("3000");
@@ -73,12 +74,26 @@ export function DeploySection({
     return () => { unsub(); closeStream(); };
   }, [deploying]);
 
-  const appName = gitRepo
+  const derivedName = gitRepo
     .replace(/\.git$/, "")
     .split("/")
     .pop()
     ?.replace(/[^a-z0-9-]/gi, "-")
     .toLowerCase() || "";
+  const appName = appNameOverride || derivedName;
+
+  const presetWebPanel = () => {
+    const jwt = crypto.randomUUID() + crypto.randomUUID();
+    setGitRepo("https://github.com/0-AI-UG/one-click-deploy.git");
+    setAppNameOverride("ocd-panel");
+    setPort("3001");
+    setEnvVars(
+      `OCD_MODE=server\nNODE_ENV=production\nOCD_DATA_DIR=/app/data\nPORT=3001\nJWT_SECRET=${jwt}`,
+    );
+    setVolumeSize("10");
+    setVolumePath("/app/data");
+    setShowOpts(true);
+  };
 
   const handleDeploy = async () => {
     setError("");
@@ -128,6 +143,7 @@ export function DeploySection({
     setStepDetails({});
     setError("");
     setGitRepo("");
+    setAppNameOverride("");
     setDomain("");
     setEnvVars("");
     setVolumeSize("");
@@ -206,7 +222,12 @@ export function DeploySection({
       <div className="stamp" style={{ marginBottom: 8 }}>Deploy</div>
       <div className="card" style={{ padding: 10 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <input value={gitRepo} onChange={e => setGitRepo(e.target.value)} placeholder="github.com/user/repo.git" className="inp" />
+          <input value={gitRepo} onChange={e => { setGitRepo(e.target.value); setAppNameOverride(""); }} placeholder="github.com/user/repo.git" className="inp" />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button type="button" onClick={presetWebPanel} className="act" title="Prefill config to deploy this tool as a web panel">
+              ⚡ web panel preset
+            </button>
+          </div>
           <input value={domain} onChange={e => setDomain(e.target.value)} placeholder="Domain (optional)" className="inp" />
 
           {/* App name + options row */}

@@ -37,7 +37,6 @@ import { handleGetResources, handleDeleteResource } from "./routes/resources.ts"
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics } from "./routes/scaling.ts";
 import { handleEnableWebhook, handleDisableWebhook } from "./routes/webhooks.ts";
-import { handleSelfDeploy } from "./routes/self-deploy.ts";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -187,9 +186,6 @@ export const server = Bun.serve({
         return handleDeleteResource(req, type, id);
       },
     },
-
-    // --- Self-deploy ---
-    "/api/self-deploy": { POST: (req: Request) => handleSelfDeploy(req) },
 
     // --- Volumes ---
     "/api/volumes/attach": { POST: (req: Request) => handleAttachVolume(req) },
