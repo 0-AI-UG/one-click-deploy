@@ -9,7 +9,24 @@ export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
 
-    const dbServers = db.getServers();
+    let dbServers = db.getServers();
+    try {
+      const remote = await hetzner.hetznerApiPublic("/servers?label_selector=managed_by%3Done-click-deploy&per_page=50");
+      for (const rs of remote.servers || []) {
+        const hetznerId = String(rs.id);
+        if (dbServers.find((s: any) => s.hetzner_id === hetznerId)) continue;
+        db.insertServer({
+          name: rs.name,
+          hetzner_id: hetznerId,
+          ipv4: rs.public_net?.ipv4?.ip || "",
+          ipv6: rs.public_net?.ipv6?.ip || "",
+          type: rs.server_type?.name || "",
+          location: rs.datacenter?.location?.name || "",
+          status: rs.status || "running",
+        });
+      }
+      dbServers = db.getServers();
+    } catch {}
     const servers = dbServers.map((s: any) => ({
       id: s.id,
       name: s.name,
