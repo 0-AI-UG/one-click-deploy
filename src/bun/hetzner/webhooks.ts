@@ -6,6 +6,7 @@ function log(context: string, ...args: any[]) {
 
 function webhookReceiverScript(): string {
   return `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
 const WEBHOOKS_DIR = "/opt/ocd/webhooks";
 const LOCK_COOLDOWN = 30_000; // 30s between rebuilds per app
 const locks = new Map();
@@ -24,7 +25,7 @@ async function verifySignature(secret, body, signature) {
 async function rebuild(appName, meta) {
   const logFile = WEBHOOKS_DIR + "/" + appName + ".log";
   const ts = new Date().toISOString();
-  const appendLog = (msg) => Bun.write(Bun.file(logFile), { append: true }, ts + " " + msg + "\\n").catch(() => {});
+  const appendLog = (msg) => { try { appendFileSync(logFile, ts + " " + msg + "\\n"); } catch {} };
 
   appendLog("Starting rebuild for " + appName);
   const appDir = "/home/deploy/apps/" + appName;
