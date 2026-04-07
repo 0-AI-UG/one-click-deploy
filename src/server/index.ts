@@ -102,6 +102,25 @@ function resourcePartsFrom(req: Request): { type: string; id: string } {
 export const server = Bun.serve({
   port: PORT,
   routes: {
+    // --- Desktop helpers ---
+    "/api/open-external": {
+      POST: async (req: Request) => {
+        if (process.env.OCD_MODE !== "desktop") {
+          return new Response("not found", { status: 404 });
+        }
+        const { url } = (await req.json()) as { url: string };
+        if (!/^https?:\/\//i.test(url)) {
+          return Response.json({ ok: false, error: "invalid url" }, { status: 400 });
+        }
+        const cmd =
+          process.platform === "darwin" ? ["open", url] :
+          process.platform === "win32" ? ["cmd", "/c", "start", "", url] :
+          ["xdg-open", url];
+        Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" });
+        return Response.json({ ok: true });
+      },
+    },
+
     // --- Setup ---
     "/api/setup/status": { GET: (req: Request) => handleSetupStatus(req) },
     "/api/setup/complete": { POST: (req: Request) => handleSetupComplete(req) },

@@ -43,10 +43,7 @@ const methods: Record<string, (params: any) => Promise<any>> = {
     const data = await get(`/api/apps/${app_id}/deploy-log`);
     return data.log; // server wraps in { log }, RPC returned raw string
   },
-  openExternal: ({ url }) => {
-    window.open(url, "_blank");
-    return Promise.resolve({ ok: true });
-  },
+  openExternal: ({ url }) => post("/api/open-external", { url }),
   restartApp: ({ app_id }) => post(`/api/apps/${app_id}/restart`),
   pauseApp: ({ app_id }) => post(`/api/apps/${app_id}/pause`),
   unpauseApp: ({ app_id }) => post(`/api/apps/${app_id}/unpause`),
