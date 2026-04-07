@@ -35,9 +35,13 @@ export function SettingsView({ settings, onSaved }: { settings: Settings; onSave
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [keyBusy, setKeyBusy] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+  const [importArmed, setImportArmed] = useState(false);
+  const importArmTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const exportSshKey = async () => {
     setKeyBusy(true);
+    setKeyStatus(null);
     try {
       const data = await request.exportSshKey({});
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -47,22 +51,36 @@ export function SettingsView({ settings, onSaved }: { settings: Settings; onSave
       a.download = `ocd-ssh-key-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
+      setKeyStatus({ kind: "ok", msg: "Exported." });
     } catch (err: any) {
-      alert(err.message || "Export failed");
+      setKeyStatus({ kind: "err", msg: err.message || "Export failed" });
     } finally {
       setKeyBusy(false);
     }
   };
 
+  const onImportClick = () => {
+    if (keyBusy) return;
+    if (!importArmed) {
+      setImportArmed(true);
+      setKeyStatus(null);
+      importArmTimer.current = setTimeout(() => setImportArmed(false), 3000);
+      return;
+    }
+    clearTimeout(importArmTimer.current);
+    setImportArmed(false);
+    fileInputRef.current?.click();
+  };
+
   const importSshKey = async (file: File) => {
-    if (!confirm("Importing will overwrite this instance's SSH key. Servers provisioned with the current key will become unreachable unless you have a backup. Continue?")) return;
     setKeyBusy(true);
+    setKeyStatus(null);
     try {
       const parsed = JSON.parse(await file.text());
       await request.importSshKey(parsed);
-      alert("SSH key imported.");
+      setKeyStatus({ kind: "ok", msg: "SSH key imported." });
     } catch (err: any) {
-      alert(err.message || "Import failed");
+      setKeyStatus({ kind: "err", msg: err.message || "Import failed" });
     } finally {
       setKeyBusy(false);
     }
@@ -126,12 +144,14 @@ export function SettingsView({ settings, onSaved }: { settings: Settings; onSave
       <div>
         <div className="stamp" style={{ marginBottom: 8 }}>SSH Key</div>
         <div className="card" style={{ padding: 12 }}>
-          <div className="mono" style={{ fontSize: 9, color: 'var(--fg-faint)', marginBottom: 8, lineHeight: 1.5 }}>
-            Share this instance's SSH key with another OCD instance so both can manage the same Hetzner fleet.
+          <div className="mono" style={{ fontSize: 8, color: 'var(--fg-faint)', marginBottom: 6, lineHeight: 1.4 }}>
+            Share with another OCD instance to manage the same fleet.
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
             <button onClick={exportSshKey} disabled={keyBusy} className="btn" style={{ flex: 1 }}>Export</button>
-            <button onClick={() => fileInputRef.current?.click()} disabled={keyBusy} className="btn" style={{ flex: 1 }}>Import</button>
+            <button onClick={onImportClick} disabled={keyBusy} className="btn" style={{ flex: 1 }}>
+              {importArmed ? "Confirm?" : "Import"}
+            </button>
             <input
               ref={fileInputRef}
               type="file"
@@ -144,8 +164,18 @@ export function SettingsView({ settings, onSaved }: { settings: Settings; onSave
               }}
             />
           </div>
-          <div className="mono" style={{ fontSize: 8, color: '#c00', marginTop: 8, lineHeight: 1.4 }}>
-            The exported file contains a private key that can root every server this instance has provisioned. Handle like a password.
+          {importArmed && (
+            <div className="mono" style={{ fontSize: 7, color: 'var(--fg-faint)', marginTop: 6, lineHeight: 1.4 }}>
+              Overwrites current key. Old-key servers become unreachable without a backup.
+            </div>
+          )}
+          {keyStatus && (
+            <div className="mono" style={{ fontSize: 7, color: keyStatus.kind === "err" ? "#c00" : "var(--fg-faint)", marginTop: 6, lineHeight: 1.4 }}>
+              {keyStatus.msg}
+            </div>
+          )}
+          <div className="mono" style={{ fontSize: 7, color: '#c00', marginTop: 6, lineHeight: 1.3 }}>
+            Export contains a private key that can root every provisioned server.
           </div>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { get, post, put } from "../api/client.ts";
-import { Card, Btn, Spinner, showToast } from "../components/ui.tsx";
+import { Card, Btn, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Settings as SettingsIcon, Save, Download, Upload, Key } from "lucide-react";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
@@ -51,7 +51,7 @@ export function SettingsPage() {
   };
 
   const importSshKey = async (file: File) => {
-    if (!confirm("Importing will overwrite this instance's SSH key. Any servers provisioned by this instance with the current key will only remain accessible if you keep a backup. Continue?")) return;
+    if (!await confirm("Import SSH Key", "This overwrites the current SSH key. Servers provisioned with the old key will be unreachable without a backup.", true)) return;
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -136,8 +136,8 @@ export function SettingsPage() {
           <Key size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">SSH Key</h3>
         </div>
-        <p className="font-mono text-[10px] text-fg/70 leading-relaxed">
-          This instance's SSH key is what lets it operate servers it provisioned on Hetzner. Export it to share with another OCD instance (e.g. a web-hosted one) so it can manage the same fleet. Import to take over operation of a fleet from another instance.
+        <p className="font-mono text-[9px] text-fg/70 leading-snug">
+          Share this instance's SSH key with another OCD instance to manage the same fleet.
         </p>
         <div className="flex gap-2">
           <Btn onClick={exportSshKey}><Download size={13} /> Export SSH Key</Btn>
@@ -154,8 +154,8 @@ export function SettingsPage() {
             }}
           />
         </div>
-        <p className="font-mono text-[10px] text-red-600 leading-relaxed">
-          Warning: the exported file contains a private key that can root every server this instance has provisioned. Handle like a password.
+        <p className="font-mono text-[9px] text-red-600 leading-snug">
+          The export contains a private key that can root every provisioned server. Handle like a password.
         </p>
       </Card>
     </div>
