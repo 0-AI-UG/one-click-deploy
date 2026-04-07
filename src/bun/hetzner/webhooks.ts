@@ -155,41 +155,51 @@ WantedBy=multi-user.target`;
 export async function ensureWebhookCaddyRoute(ip: string, hostKey?: string): Promise<void> {
   log("caddy", `Ensuring webhook Caddy route on ${ip}`);
 
-  // Check if route already exists
-  const check = await sshExec(
-    ip,
-    `curl -sf http://localhost:2019/id/ocd-webhook-route 2>/dev/null && echo exists || echo missing`,
-    hostKey
-  );
-  if (check.stdout.trim().includes("exists")) {
-    log("caddy", "Webhook route already exists");
-    return;
-  }
-
-  // Add a route that matches /_ocd/webhook/* and proxies to the receiver
-  const route = {
+  const webhookRoute = {
     "@id": "ocd-webhook-route",
     match: [{ path: ["/_ocd/webhook/*"] }],
     handle: [
-      {
-        handler: "rewrite",
-        strip_path_prefix: "/_ocd/webhook",
-      },
-      {
-        handler: "reverse_proxy",
-        upstreams: [{ dial: "localhost:9876" }],
-      },
+      { handler: "rewrite", strip_path_prefix: "/_ocd/webhook" },
+      { handler: "reverse_proxy", upstreams: [{ dial: "localhost:9876" }] },
     ],
     terminal: true,
   };
-  const routeJson = JSON.stringify(route).replace(/'/g, "'\\''");
+
+  // Remove any existing webhook route so we can re-add it at index 0.
+  // A previous version used POST /routes/0 to prepend, but on live servers
+  // that call appended instead, leaving the webhook route behind the app's
+  // terminal host-match route — so requests never reached the receiver.
   await sshExec(
     ip,
-    `curl -sf -X POST -H 'Content-Type: application/json' -d '${routeJson}' http://localhost:2019/config/apps/http/servers/srv0/routes/0`,
+    `curl -sf -X DELETE http://localhost:2019/id/ocd-webhook-route 2>/dev/null || true`,
     hostKey
   );
 
-  log("caddy", "Webhook Caddy route created");
+  // Fetch current routes, prepend the webhook route, and PATCH the whole array back.
+  const getRes = await sshExec(
+    ip,
+    `curl -sf http://localhost:2019/config/apps/http/servers/srv0/routes`,
+    hostKey
+  );
+  let existing: any[] = [];
+  try {
+    const parsed = JSON.parse(getRes.stdout.trim() || "[]");
+    if (Array.isArray(parsed)) existing = parsed;
+  } catch {
+    existing = [];
+  }
+  const newRoutes = [
+    webhookRoute,
+    ...existing.filter((r) => r?.["@id"] !== "ocd-webhook-route"),
+  ];
+  const payload = JSON.stringify(newRoutes).replace(/'/g, "'\\''");
+  await sshExec(
+    ip,
+    `curl -sf -X PATCH -H 'Content-Type: application/json' -d '${payload}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
+    hostKey
+  );
+
+  log("caddy", "Webhook Caddy route ensured at index 0");
 }
 
 export async function setupAppWebhook(
