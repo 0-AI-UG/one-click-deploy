@@ -3,7 +3,17 @@ import { get, post, put, del } from "../api/client.ts";
 import { Card, Btn, StatusBadge, Spinner, showToast, confirm, Table, Checkbox } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu, Terminal, Gauge, Server as ServerIcon, Zap, History } from "lucide-react";
+import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu, Terminal, Gauge, Server as ServerIcon, Zap, History, Info } from "lucide-react";
+
+// Small icon-only tooltip — uses native browser title for zero-dependency
+// hover help text. Sits inline next to labels so the visible UI stays terse.
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span title={text} className="inline-flex items-center text-muted hover:text-fg cursor-help">
+      <Info size={11} />
+    </span>
+  );
+}
 
 function Sparkline({ values, color = "#3b82f6" }: { values: number[]; color?: string }) {
   if (values.length < 2) return <span className="text-[9px] text-muted font-mono">no data</span>;
@@ -28,7 +38,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
   const [scalingEvents, setScalingEvents] = useState<any[]>([]);
   const [allServers, setAllServers] = useState<any[]>([]);
-  const [targetServerId, setTargetServerId] = useState<string>("auto");
+  const [showScaleControls, setShowScaleControls] = useState(false);
   const [policy, setPolicy] = useState<{
     autoscale_enabled: boolean;
     min_replicas: number;
@@ -40,6 +50,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [tail, setTail] = useState(100);
+  const [webhookForm, setWebhookForm] = useState<{ branch: string; path: string }>({ branch: "main", path: "" });
 
   const load = async () => {
     try {
@@ -294,6 +305,21 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
       {tab === "scaling" && (
         <div className="space-y-4">
+          <PermissionGate permission="scaling.manage">
+            <div className="flex justify-end">
+              <Btn
+                size="sm"
+                variant={showScaleControls ? "primary" : "ghost"}
+                onClick={() => setShowScaleControls((v) => !v)}
+                title="Show or hide manual scaling and autoscale policy controls"
+              >
+                {showScaleControls ? "Hide controls" : "Configure scaling"}
+              </Btn>
+            </div>
+          </PermissionGate>
+
+          {showScaleControls && (
+          <>
           {/* Manual scale: WHERE to place the next replica */}
           <Card className="p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -312,58 +338,30 @@ export function AppDetailPage({ appId }: { appId: number }) {
             </div>
 
             <PermissionGate permission="scaling.manage">
-              <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-end">
-                <div>
-                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">
-                    Place Next Replica On
-                  </label>
-                  <NeoSelect
-                    value={targetServerId}
-                    onChange={setTargetServerId}
-                    options={[
-                      { value: "auto", label: "Auto — least loaded / new server" },
-                      ...allServers
-                        .filter((s: any) => s.status === "ready")
-                        .map((s: any) => {
-                          const count = replicas.filter((r: any) => r.server_id === s.id).length;
-                          const inUse = count > 0;
-                          return {
-                            value: String(s.id),
-                            label: `${s.name} · ${s.location} · ${s.type} · ${count} replica${count === 1 ? "" : "s"}${inUse ? " · in-use" : ""}`,
-                          };
-                        }),
-                    ]}
-                  />
-                  <p className="font-mono text-[9px] text-muted mt-1">
-                    Where to scale. "Auto" provisions a new server if every ready server already hosts a replica.
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <Btn
-                    size="sm"
-                    loading={actionLoading === "scale-up"}
-                    onClick={() => action("scale-up", async () => {
-                      const current = replicas.length || app.desired_replicas || 1;
-                      await post(`/api/apps/${appId}/scale`, {
-                        replicas: current + 1,
-                        target_server_id: targetServerId === "auto" ? undefined : Number(targetServerId),
-                      });
-                      await loadReplicas();
-                    })}
-                  >+ Scale Up</Btn>
-                  <Btn
-                    size="sm"
-                    variant="ghost"
-                    disabled={replicas.length <= 1}
-                    loading={actionLoading === "scale-down"}
-                    onClick={() => action("scale-down", async () => {
-                      const current = replicas.length || app.desired_replicas || 1;
-                      if (current <= 1) return;
-                      await post(`/api/apps/${appId}/scale`, { replicas: current - 1 });
-                      await loadReplicas();
-                    })}
-                  >– Scale Down</Btn>
-                </div>
+              <div className="flex justify-end gap-2">
+                <Btn
+                  size="sm"
+                  variant="ghost"
+                  disabled={replicas.length <= 1}
+                  loading={actionLoading === "scale-down"}
+                  title="Remove one replica"
+                  onClick={() => action("scale-down", async () => {
+                    const current = replicas.length || app.desired_replicas || 1;
+                    if (current <= 1) return;
+                    await post(`/api/apps/${appId}/scale`, { replicas: current - 1 });
+                    await loadReplicas();
+                  })}
+                >–</Btn>
+                <Btn
+                  size="sm"
+                  loading={actionLoading === "scale-up"}
+                  title="Add one replica. Placement is automatic: reuse a ready server with no replica of this app, or provision a new one."
+                  onClick={() => action("scale-up", async () => {
+                    const current = replicas.length || app.desired_replicas || 1;
+                    await post(`/api/apps/${appId}/scale`, { replicas: current + 1 });
+                    await loadReplicas();
+                  })}
+                >+</Btn>
               </div>
             </PermissionGate>
           </Card>
@@ -380,15 +378,18 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
             {policy && (
               <div className="space-y-4">
-                <Checkbox
-                  checked={policy.autoscale_enabled}
-                  onChange={(v) => setPolicy({ ...policy, autoscale_enabled: v })}
-                  label="Enable autoscaling — the reconciler checks metrics every 30s and scales automatically"
-                />
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={policy.autoscale_enabled}
+                    onChange={(v) => setPolicy({ ...policy, autoscale_enabled: v })}
+                    label="Enable autoscaling"
+                  />
+                  <InfoTip text="Reconciler checks CPU/memory every 30s and scales between min and max replicas." />
+                </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div>
-                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Min Replicas</label>
+                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Min <InfoTip text="Lowest replica count the autoscaler is allowed to scale down to." /></label>
                     <input
                       type="number"
                       min={1}
@@ -398,7 +399,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
                     />
                   </div>
                   <div>
-                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Max Replicas</label>
+                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Max <InfoTip text="Highest replica count the autoscaler will scale up to." /></label>
                     <input
                       type="number"
                       min={1}
@@ -408,7 +409,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
                     />
                   </div>
                   <div>
-                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">CPU Threshold %</label>
+                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">CPU % <InfoTip text="Average CPU above this triggers scale-up. Scale-down kicks in below half this value." /></label>
                     <input
                       type="number"
                       min={1}
@@ -419,7 +420,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
                     />
                   </div>
                   <div>
-                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Memory Threshold %</label>
+                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Mem % <InfoTip text="Average memory above this triggers scale-up. Scale-down kicks in below half this value." /></label>
                     <input
                       type="number"
                       min={1}
@@ -433,7 +434,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div>
-                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Cooldown (sec)</label>
+                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Cooldown s <InfoTip text="Minimum seconds between scaling actions to prevent flapping." /></label>
                     <input
                       type="number"
                       min={30}
@@ -442,14 +443,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
                       onChange={(e) => setPolicy({ ...policy, cooldown: parseInt(e.target.value) || 30 })}
                     />
                   </div>
-                </div>
-
-                <div className="text-[10px] font-mono text-muted bg-alt border-2 border-fg px-3 py-2">
-                  <span className="text-fg font-bold">RULE →</span>{" "}
-                  scale up when avg CPU &gt; <span className="text-fg">{policy.cpu_threshold}%</span> or mem &gt; <span className="text-fg">{policy.mem_threshold}%</span>,
-                  scale down when both are below half-threshold,
-                  bounded by <span className="text-fg">{policy.min_replicas}–{policy.max_replicas}</span>,
-                  waiting <span className="text-fg">{policy.cooldown}s</span> between changes.
                 </div>
 
                 <PermissionGate permission="scaling.manage">
@@ -468,6 +461,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
               </div>
             )}
           </Card>
+          </>
+          )}
 
           {/* Replicas table */}
           <Card className="p-4">
@@ -547,7 +542,10 @@ export function AppDetailPage({ appId }: { appId: number }) {
           <div className="space-y-2 text-[10px] font-mono mb-4">
             <div className="flex justify-between"><span className="text-muted">Status</span><span className={`font-bold ${app.webhook_enabled ? "text-fg" : "text-muted"}`}>{app.webhook_enabled ? "Enabled" : "Disabled"}</span></div>
             {app.webhook_enabled && (
-              <div className="flex justify-between"><span className="text-muted">Branch</span><span>{app.webhook_branch}</span></div>
+              <>
+                <div className="flex justify-between"><span className="text-muted">Branch</span><span>{app.webhook_branch}</span></div>
+                <div className="flex justify-between"><span className="text-muted">Path filter</span><span>{app.webhook_path || "—"}</span></div>
+              </>
             )}
           </div>
           <PermissionGate permission="webhooks.manage">
@@ -556,9 +554,29 @@ export function AppDetailPage({ appId }: { appId: number }) {
                 Disable Webhook
               </Btn>
             ) : (
-              <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: "main" }))}>
-                Enable Webhook
-              </Btn>
+              <div className="space-y-2">
+                <div>
+                  <label className="block text-[9px] uppercase tracking-wider text-muted mb-1">Branch</label>
+                  <input
+                    type="text"
+                    value={webhookForm.branch}
+                    onChange={(e) => setWebhookForm((f) => ({ ...f, branch: e.target.value }))}
+                    placeholder="main"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9px] uppercase tracking-wider text-muted mb-1">Path filter (optional)</label>
+                  <input
+                    type="text"
+                    value={webhookForm.path}
+                    onChange={(e) => setWebhookForm((f) => ({ ...f, path: e.target.value }))}
+                    placeholder="e.g. services/api"
+                  />
+                </div>
+                <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: webhookForm.branch || "main", path: webhookForm.path || undefined }))}>
+                  Enable Webhook
+                </Btn>
+              </div>
             )}
           </PermissionGate>
         </Card>

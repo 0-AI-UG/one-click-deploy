@@ -12,10 +12,7 @@ import {
   Check,
   AlertTriangle,
 } from "lucide-react";
-import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 import { startDeploy } from "../stores/deploy-progress.ts";
-
-type ServerOption = { id: number; name: string; ipv4: string; type: string; location: string };
 
 type IntrospectResult =
   | {
@@ -97,8 +94,6 @@ function ReceiptRow({
 }
 
 export function DeployPage() {
-  const { serverTypes } = useServerTypes();
-  const [servers, setServers] = useState<ServerOption[]>([]);
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [extraEnv, setExtraEnv] = useState<Array<{ key: string; value: string }>>([]);
 
@@ -113,46 +108,17 @@ export function DeployPage() {
     git_repo: "",
     domain: "",
     container_port: "3000",
-    server_id: "",
-    server_type: "",
-    server_location: "",
     volume_size: "",
     volume_path: "/data",
     dockerfile_path: "",
     webhook_enabled: false,
     webhook_branch: "main",
+    webhook_path: "",
     auth_password: "",
     replicas: "1",
     compose_file: "",
     compose_web_service: "",
   });
-
-  useEffect(() => {
-    get("/api/servers")
-      .then((data: any[]) => {
-        setServers(
-          data.map((s: any) => ({
-            id: s.id,
-            name: s.name,
-            ipv4: s.ipv4,
-            type: s.type,
-            location: s.location,
-          })),
-        );
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (serverTypes.length > 0 && !form.server_type) {
-      const first = serverTypes[0];
-      setForm((f) => ({
-        ...f,
-        server_type: first.name,
-        server_location: first.locations[0] ?? "",
-      }));
-    }
-  }, [serverTypes]);
 
   // Debounced auto-introspect when the user pastes/types a URL that looks
   // like a GitHub repo. Each call increments a seq so out-of-order responses
@@ -255,14 +221,12 @@ export function DeployPage() {
       domain: form.domain || undefined,
       container_port: parseInt(form.container_port, 10),
       env_vars: env,
-      server_id: form.server_id ? parseInt(form.server_id, 10) : undefined,
-      server_type: form.server_id ? undefined : form.server_type,
-      server_location: form.server_id ? undefined : form.server_location,
       volume_size: form.volume_size ? parseInt(form.volume_size, 10) : undefined,
       volume_path: form.volume_size ? form.volume_path : undefined,
       dockerfile_path: form.dockerfile_path || undefined,
       webhook_enabled: form.webhook_enabled,
       webhook_branch: form.webhook_enabled ? form.webhook_branch : undefined,
+      webhook_path: form.webhook_enabled && form.webhook_path ? form.webhook_path : undefined,
       auth_password: form.auth_password || undefined,
       replicas: parseInt(form.replicas, 10) || 1,
       compose_file: form.compose_file || undefined,
@@ -400,47 +364,6 @@ export function DeployPage() {
                 <input type="number" value={form.container_port} onChange={set("container_port")} />
               </ReceiptRow>
 
-              <ReceiptRow label="Server">
-                <NeoSelect
-                  value={form.server_id}
-                  onChange={(v) => setForm((f) => ({ ...f, server_id: v }))}
-                  placeholder="Create new server"
-                  options={[
-                    { value: "", label: "✦  Spin up a new server" },
-                    ...servers.map((s) => ({
-                      value: String(s.id),
-                      label: `${s.name} (${s.ipv4}) — ${s.type} @ ${s.location}`,
-                    })),
-                  ]}
-                />
-                {!form.server_id && (
-                  <div className="grid grid-cols-2 gap-2 mt-2">
-                    <NeoSelect
-                      value={form.server_type}
-                      onChange={(v) => {
-                        setForm((f) => {
-                          const locs = locationOptions(serverTypes, v);
-                          const locValid = locs.some((l) => l.value === f.server_location);
-                          return {
-                            ...f,
-                            server_type: v,
-                            ...(!locValid && locs.length
-                              ? { server_location: locs[0].value }
-                              : {}),
-                          };
-                        });
-                      }}
-                      options={typeOptions(serverTypes)}
-                    />
-                    <NeoSelect
-                      value={form.server_location}
-                      onChange={(v) => setForm((f) => ({ ...f, server_location: v }))}
-                      options={locationOptions(serverTypes, form.server_type)}
-                    />
-                  </div>
-                )}
-              </ReceiptRow>
-
               <ReceiptRow label="Domain">
                 <input
                   type="text"
@@ -546,6 +469,7 @@ export function DeployPage() {
                 label="Auto-deploy on git push"
               />
               {form.webhook_enabled && (
+                <>
                 <div className="mt-2">
                   <Label>Branch</Label>
                   <input
@@ -554,6 +478,16 @@ export function DeployPage() {
                     onChange={set("webhook_branch")}
                   />
                 </div>
+                <div className="mt-2">
+                  <Label>Path filter (optional)</Label>
+                  <input
+                    type="text"
+                    value={form.webhook_path}
+                    onChange={set("webhook_path")}
+                    placeholder="e.g. services/api — only redeploy when files under this path change"
+                  />
+                </div>
+                </>
               )}
             </div>
             <div>

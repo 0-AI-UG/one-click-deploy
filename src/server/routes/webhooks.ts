@@ -7,6 +7,30 @@ import { enqueueWebhookRedeploy } from "../../bun/deploy/redeploy.ts";
 import { redeployPanel } from "../../bun/deploy/panel.ts";
 import { timingSafeEqual } from "node:crypto";
 
+// Normalize a user-supplied repo path filter: strip leading/trailing slashes
+// and surrounding whitespace. Empty string means "no filter".
+export function normalizeWebhookPath(p: string): string {
+  return p.trim().replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+// Returns true if any file mentioned in the push payload's commits sits under
+// `prefix`. An empty prefix matches everything.
+export function pushTouchesPath(payload: any, prefix: string): boolean {
+  if (!prefix) return true;
+  const needle = prefix + "/";
+  const commits = Array.isArray(payload?.commits) ? payload.commits : [];
+  for (const c of commits) {
+    for (const list of [c?.added, c?.modified, c?.removed]) {
+      if (!Array.isArray(list)) continue;
+      for (const f of list) {
+        if (typeof f !== "string") continue;
+        if (f === prefix || f.startsWith(needle)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Verify GitHub HMAC-SHA256 signature against a secret using constant-time
 // compare. Returns true iff the X-Hub-Signature-256 header matches.
 export async function verifyGithubSignature(
@@ -34,7 +58,7 @@ export async function verifyGithubSignature(
 export async function handleEnableWebhook(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "webhooks.manage");
-    const body = await request.json() as { branch?: string };
+    const body = await request.json() as { branch?: string; path?: string };
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
@@ -51,6 +75,7 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
     if (!pat) return Response.json({ ok: false, error: "GitHub token not configured. Add it in Settings." }, { headers: corsHeaders });
 
     const webhookBranch = body.branch || "main";
+    const webhookPath = normalizeWebhookPath(body.path || "");
     const webhookSecret = crypto.randomUUID();
 
     const url = `https://${panel.domain}/webhooks/github/${appId}`;
@@ -61,7 +86,7 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
       token: pat,
     });
 
-    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id));
+    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
@@ -89,7 +114,7 @@ export async function handleDisableWebhook(request: Request, appId: number): Pro
       }
     }
 
-    db.updateAppWebhook(appId, false, "", app.webhook_branch || "main", "");
+    db.updateAppWebhook(appId, false, "", app.webhook_branch || "main", "", "");
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
@@ -126,6 +151,11 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
     const expectedRef = `refs/heads/${app.webhook_branch || "main"}`;
     if (payload.ref !== expectedRef) {
       return new Response("Branch mismatch", { status: 204 });
+    }
+
+    const pathFilter = (app as any).webhook_path || "";
+    if (!pushTouchesPath(payload, pathFilter)) {
+      return new Response("Path filter: no matching files", { status: 204 });
     }
 
     const sha = (payload.after && String(payload.after).slice(0, 7)) || "unknown";

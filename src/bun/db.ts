@@ -407,6 +407,41 @@ export function getDeployment(id: number) {
     .get(id) as any;
 }
 
+// Deploy jobs (durable progress tracking for in-flight deploys)
+export function createDeployJob(appName: string): { id: number } {
+  return db
+    .query("INSERT INTO deploy_jobs (app_name) VALUES (?) RETURNING id")
+    .get(appName) as { id: number };
+}
+
+export function appendDeployJobEvent(jobId: number, step: string, detail: string): number {
+  const row = db
+    .query("SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM deploy_job_events WHERE job_id = ?")
+    .get(jobId) as { next: number };
+  db.query(
+    "INSERT INTO deploy_job_events (job_id, seq, step, detail) VALUES (?, ?, ?, ?)"
+  ).run(jobId, row.next, step, detail);
+  return row.next;
+}
+
+export function finishDeployJob(jobId: number, result: { ok: boolean; error?: string }) {
+  db.query(
+    "UPDATE deploy_jobs SET status = ?, result_json = ?, finished_at = datetime('now') WHERE id = ?"
+  ).run(result.ok ? "done" : "error", JSON.stringify(result), jobId);
+}
+
+export function getDeployJob(id: number): { id: number; app_name: string; status: string; result_json: string; started_at: string; finished_at: string | null } | null {
+  return db.query("SELECT * FROM deploy_jobs WHERE id = ?").get(id) as any;
+}
+
+export function getDeployJobEvents(jobId: number, sinceSeq: number): Array<{ seq: number; ts: string; step: string; detail: string }> {
+  return db
+    .query(
+      "SELECT seq, ts, step, detail FROM deploy_job_events WHERE job_id = ? AND seq > ? ORDER BY seq ASC"
+    )
+    .all(jobId, sinceSeq) as any[];
+}
+
 // App updates
 export function updateAppEnvVars(id: number, envVars: string) {
   db.query("UPDATE apps SET env_vars = ? WHERE id = ?").run(envVars, id);
@@ -440,11 +475,12 @@ export function updateAppWebhook(
   enabled: boolean,
   secret: string,
   branch: string,
-  githubWebhookId: string
+  githubWebhookId: string,
+  path: string = ""
 ) {
   db.query(
-    "UPDATE apps SET webhook_enabled = ?, webhook_secret = ?, webhook_branch = ?, github_webhook_id = ? WHERE id = ?"
-  ).run(enabled ? 1 : 0, secret, branch, githubWebhookId, id);
+    "UPDATE apps SET webhook_enabled = ?, webhook_secret = ?, webhook_branch = ?, webhook_path = ?, github_webhook_id = ? WHERE id = ?"
+  ).run(enabled ? 1 : 0, secret, branch, path, githubWebhookId, id);
 }
 
 // --- Panel (self-hosted panel, singleton) ---

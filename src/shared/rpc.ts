@@ -27,6 +27,7 @@ export type App = {
   webhook_enabled: number;
   webhook_secret: string;
   webhook_branch: string;
+  webhook_path: string;
   github_webhook_id: string;
   auth_password: string;
   deploy_mode: string; // "dockerfile" | "compose"
@@ -96,14 +97,12 @@ export type DeployRequest = {
   git_repo: string;
   container_port: number;
   env_vars: Record<string, string>;
-  server_id?: number;
-  server_type?: string;
-  server_location?: string;
   volume_size?: number; // GB, if set a Hetzner Volume is created and mounted
   volume_path?: string; // Container mount path, defaults to /data
   dockerfile_path?: string; // Path to Dockerfile in repo, auto-discovered if omitted
   webhook_enabled?: boolean;
   webhook_branch?: string; // Branch to watch, defaults to "main"
+  webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
   auth_password?: string; // If set, deploys a login gate in front of the app
   compose_file?: string; // Path to compose file, auto-detected if omitted
   compose_web_service?: string; // Which compose service Caddy proxies to (default: auto-detect)

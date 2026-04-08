@@ -367,6 +367,35 @@ export const migrations: Migration[] = [
       db.run("UPDATE panel_deployments SET source = 'webhook' WHERE source = 'self-redeploy'");
     },
   },
+  {
+    version: 16,
+    description: "Add deploy_jobs and deploy_job_events for durable progress tracking",
+    up: (db) => {
+      db.run(`CREATE TABLE deploy_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        app_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        result_json TEXT NOT NULL DEFAULT '',
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT
+      )`);
+      db.run(`CREATE TABLE deploy_job_events (
+        job_id INTEGER NOT NULL REFERENCES deploy_jobs(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        ts TEXT NOT NULL DEFAULT (datetime('now')),
+        step TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        PRIMARY KEY (job_id, seq)
+      )`);
+    },
+  },
+  {
+    version: 17,
+    description: "Add webhook_path filter to apps",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN webhook_path TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

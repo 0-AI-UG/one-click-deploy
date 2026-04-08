@@ -134,7 +134,7 @@ export async function deploy(
   onProgress: ProgressFn
 ): Promise<{ ok: boolean; error?: string }> {
   const deployStart = Date.now();
-  log("start", "Deploy request:", { app_name: req.app_name, git_repo: req.git_repo, domain: req.domain, server_id: req.server_id, container_port: req.container_port });
+  log("start", "Deploy request:", { app_name: req.app_name, git_repo: req.git_repo, domain: req.domain, container_port: req.container_port });
 
   // Validate all inputs before any side effects
   const validation = validateDeployRequest(req);
@@ -165,22 +165,21 @@ export async function deploy(
   try {
     const settings = db.getSettings();
     log("settings", "Loaded settings");
-    let serverId = req.server_id;
+    let serverId: number | undefined;
 
-    // Step 1: Get or create server
-    if (serverId) {
-      onProgress("server", "Using existing server...");
-      log("server", `Looking up existing server id=${serverId}`);
-      const server = db.getServer(serverId);
-      if (!server) {
-        log("server", `Server id=${serverId} not found in DB`);
-        throw new Error("Server not found");
-      }
-      serverIp = server.ipv4;
-      serverHostKey = server.ssh_host_key || "";
-      state.dbServerId = server.id;
-      log("server", `Using existing server: ${server.name} ip=${serverIp} status=${server.status}`);
-      onProgress("server", `Using server ${server.name} (${serverIp})`);
+    // Step 1: Reuse an existing ready server if one exists, otherwise
+    // provision a new Hetzner box. Replicas table is the source of truth
+    // for placement, so we don't need an explicit server selection — the
+    // first ready server is fine for a brand-new app, and scale-up uses
+    // pickTargetServer to spread further replicas.
+    const existingReady = db.getServers().find((s: any) => s.status === "ready");
+    if (existingReady) {
+      serverIp = existingReady.ipv4;
+      serverHostKey = existingReady.ssh_host_key || "";
+      serverId = existingReady.id;
+      state.dbServerId = existingReady.id;
+      log("server", `Reusing existing ready server: ${existingReady.name} ip=${serverIp}`);
+      onProgress("server", `Using server ${existingReady.name} (${serverIp})`);
     } else {
       onProgress("server", "Creating new Hetzner server...");
 
@@ -192,10 +191,10 @@ export async function deploy(
       log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}`);
       onProgress("server", `SSH key + firewall ready`);
 
-      const serverType = req.server_type || settings.default_server_type;
-      if (!serverType) throw new Error("No server type specified — configure a default in Settings");
-      const location = req.server_location || settings.default_location;
-      if (!location) throw new Error("No server location specified — configure a default in Settings");
+      const serverType = settings.default_server_type;
+      if (!serverType) throw new Error("No default server type configured — set one in Settings");
+      const location = settings.default_location;
+      if (!location) throw new Error("No default server location configured — set one in Settings");
       const serverName = `ocd-${req.app_name}-${Date.now()}`;
 
       // Insert placeholder DB record BEFORE Hetzner API call to prevent orphans
@@ -321,7 +320,7 @@ export async function deploy(
         name: `ocd-${req.app_name}-data`,
         size: req.volume_size,
         server_id: hetznerServerId,
-        location: req.server_location || settings.default_location || "nbg1",
+        location: settings.default_location || "nbg1",
       });
       state.volumeId = String(vol.id);
       const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
@@ -528,6 +527,7 @@ export async function deploy(
           throw new Error("Panel domain is not set; cannot register webhook URL");
         }
         const webhookBranch = req.webhook_branch || "main";
+        const webhookPath = (req.webhook_path || "").trim().replace(/^\/+/, "").replace(/\/+$/, "");
         const webhookSecret = crypto.randomUUID();
         const url = `https://${panel.domain}/webhooks/github/${app.id}`;
         const created = await github.createWebhookAtUrl({
@@ -536,9 +536,10 @@ export async function deploy(
           webhookSecret,
           token: githubPat,
         });
-        db.updateAppWebhook(app.id, true, webhookSecret, webhookBranch, String(created.id));
-        maskedLog(app.id, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}`);
-        onProgress("health", `Webhook configured for auto-redeploy on ${webhookBranch}`);
+        db.updateAppWebhook(app.id, true, webhookSecret, webhookBranch, String(created.id), webhookPath);
+        const filterDesc = webhookPath ? ` (path: ${webhookPath})` : "";
+        maskedLog(app.id, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}${filterDesc}`);
+        onProgress("health", `Webhook configured for auto-redeploy on ${webhookBranch}${filterDesc}`);
       } catch (err) {
         const webhookErr = err instanceof Error ? err.message : String(err);
         maskedLog(app.id, `[webhook] Warning: failed to set up webhook: ${webhookErr}`);
