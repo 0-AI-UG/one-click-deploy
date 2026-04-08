@@ -145,7 +145,7 @@ export async function handleUnpauseApp(request: Request, appId: number): Promise
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.redeploy");
-    const body = await request.json() as { env_vars?: Record<string, string>; auth_password?: string | null };
+    const body = (await request.json().catch(() => ({}))) as { env_vars?: Record<string, string>; auth_password?: string | null };
     const progressKey = `redeploy-${appId}`;
 
     const result = await redeployApp(appId, (step, detail) => {

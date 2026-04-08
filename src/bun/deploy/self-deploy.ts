@@ -110,6 +110,27 @@ async function buildSnapshot(opts: { newJwtSecret: string }): Promise<string> {
     );
   }
 
+  // The snapshot is taken before the build/health-check that flips app
+  // status to 'running', so without this the hosted instance would show
+  // every app as DEPLOYING forever (it never re-runs the deploy itself).
+  // Mark them as running; the hosted reconciler will correct any drift.
+  await step("mark apps as running in snapshot", () =>
+    snap.query("UPDATE apps SET status = 'running' WHERE status = 'deploying'").run(),
+  );
+
+  // The snapshot is also taken before insertDeployment runs, so the
+  // hosted instance would show an empty deployment history. Insert a
+  // synthetic initial-deploy row for each app so the timeline reflects
+  // that the app was deployed at handoff time.
+  await step("seed initial deployment_history rows", () =>
+    snap
+      .query(
+        "INSERT INTO deployment_history (app_id, image_tag, git_commit, status, deploy_log, source) " +
+          "SELECT id, name || ':latest', 'initial', 'deployed', '', 'self-deploy' FROM apps",
+      )
+      .run(),
+  );
+
   // Clear user-account state. The hosted instance is NOT in bootstrap mode,
   // so its setup wizard will run on first visit and create the real admin.
   await step("clear users table", () => snap.query("DELETE FROM users").run());

@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { Server, Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Terminal } from "lucide-react";
+import { Server, Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Terminal, Check } from "lucide-react";
 
 type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
@@ -18,6 +18,20 @@ export function DashboardPage() {
   const [servers, setServers] = useState<ServerData[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const confirmTimeoutRef = useRef<number | null>(null);
+
+  const armOrRun = (key: string, run: () => void) => {
+    if (confirmKey === key) {
+      if (confirmTimeoutRef.current) window.clearTimeout(confirmTimeoutRef.current);
+      setConfirmKey(null);
+      run();
+    } else {
+      if (confirmTimeoutRef.current) window.clearTimeout(confirmTimeoutRef.current);
+      setConfirmKey(key);
+      confirmTimeoutRef.current = window.setTimeout(() => setConfirmKey(null), 3000);
+    }
+  };
 
   const load = async () => {
     try {
@@ -115,25 +129,45 @@ export function DashboardPage() {
                         <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/apps/${app.id}`; }}><ScrollText size={12} /></Btn>
                       </PermissionGate>
                       <PermissionGate permission="apps.restart">
-                        <Btn size="xs" variant="ghost" loading={actionLoading === `restart-${app.id}`} onClick={() => appAction("restart", app.id, "Restart")}>
-                          <RotateCcw size={12} />
-                        </Btn>
+                        {(() => {
+                          const k = `restart-${app.id}`;
+                          const armed = confirmKey === k;
+                          return (
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("restart", app.id, "Restart"))} title={armed ? "Click again to confirm restart" : "Restart"}>
+                              {armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />}
+                            </Btn>
+                          );
+                        })()}
                       </PermissionGate>
                       <PermissionGate permission="apps.pause">
-                        {app.status === "paused" ? (
-                          <Btn size="xs" variant="ghost" loading={actionLoading === `unpause-${app.id}`} onClick={() => appAction("unpause", app.id, "Unpause")}>
-                            <Play size={12} />
-                          </Btn>
-                        ) : (
-                          <Btn size="xs" variant="ghost" loading={actionLoading === `pause-${app.id}`} onClick={() => appAction("pause", app.id, "Pause")}>
-                            <Pause size={12} />
-                          </Btn>
-                        )}
+                        {app.status === "paused" ? (() => {
+                          const k = `unpause-${app.id}`;
+                          const armed = confirmKey === k;
+                          return (
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("unpause", app.id, "Unpause"))} title={armed ? "Click again to confirm unpause" : "Unpause"}>
+                              {armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />}
+                            </Btn>
+                          );
+                        })() : (() => {
+                          const k = `pause-${app.id}`;
+                          const armed = confirmKey === k;
+                          return (
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("pause", app.id, "Pause"))} title={armed ? "Click again to confirm pause" : "Pause"}>
+                              {armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />}
+                            </Btn>
+                          );
+                        })()}
                       </PermissionGate>
                       <PermissionGate permission="apps.redeploy">
-                        <Btn size="xs" variant="ghost" loading={actionLoading === `redeploy-${app.id}`} onClick={() => appAction("redeploy", app.id, "Redeploy")}>
-                          <RefreshCw size={12} />
-                        </Btn>
+                        {(() => {
+                          const k = `redeploy-${app.id}`;
+                          const armed = confirmKey === k;
+                          return (
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("redeploy", app.id, "Redeploy"))} title={armed ? "Click again to confirm redeploy" : "Redeploy"}>
+                              {armed ? <Check size={12} className="text-accent-blue" /> : <RefreshCw size={12} />}
+                            </Btn>
+                          );
+                        })()}
                       </PermissionGate>
                       <PermissionGate permission="apps.destroy">
                         <Btn
