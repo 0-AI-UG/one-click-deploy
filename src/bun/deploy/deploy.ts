@@ -301,6 +301,7 @@ export async function deploy(
 
     // Step 3: Create volume if requested
     let volumeMount: string | undefined;
+    let volumeHostMountPath: string | undefined;
     if (req.volume_size && req.volume_size > 0) {
       // Get the Hetzner server ID (either from new server or existing)
       let hetznerServerId: number;
@@ -320,25 +321,12 @@ export async function deploy(
       });
       state.volumeId = String(vol.id);
       const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
+      volumeHostMountPath = hostMountPath;
       const containerPath = req.volume_path || "/data";
       await hetzner.sshExec(serverIp, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, serverHostKey || undefined);
       volumeMount = `${hostMountPath}:${containerPath}`;
       log("build", `Volume mounted: ${volumeMount}`);
       onProgress("build", `Volume ready (${req.volume_size}GB at /data)`);
-
-      // Self-deploy: copy the local bootstrap DB onto the mounted volume
-      // *before* the container starts, so the hosted instance boots with
-      // full knowledge of itself, its server, and the Hetzner token.
-      if (req.self_deploy) {
-        onProgress("build", "Handing off panel database to hosted instance...");
-        await performSelfDeployHandoff({
-          serverIp,
-          hostKey: serverHostKey || undefined,
-          hostMountPath,
-          newJwtSecret: req.env_vars.JWT_SECRET!,
-        });
-        onProgress("build", "Panel database handed off");
-      }
     }
 
     // Step 4: Create app record, then clone & build
@@ -373,6 +361,23 @@ export async function deploy(
     // Persist volume association
     if (state.volumeId && volumeMount) {
       db.updateAppVolume(app.id, state.volumeId, volumeMount);
+    }
+
+    // Self-deploy handoff: at this point the local bootstrap DB contains
+    // everything the hosted instance needs (server, apps, dns_records,
+    // volume association, encrypted Hetzner token). Snapshot the DB and
+    // scp it onto the mounted volume BEFORE the container starts, so the
+    // hosted panel boots with full awareness of itself. Must run before
+    // cloneAndBuild (which is when docker run starts the container).
+    if (req.self_deploy && volumeHostMountPath) {
+      onProgress("build", "Handing off panel database to hosted instance...");
+      await performSelfDeployHandoff({
+        serverIp,
+        hostKey: serverHostKey || undefined,
+        hostMountPath: volumeHostMountPath,
+        newJwtSecret: req.env_vars.JWT_SECRET!,
+      });
+      onProgress("build", "Panel database handed off");
     }
 
     const buildStart = Date.now();
