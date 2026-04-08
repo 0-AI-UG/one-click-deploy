@@ -133,7 +133,7 @@ export function DashboardPage() {
                           const k = `restart-${app.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("restart", app.id, "Restart"))} title={armed ? "Click again to confirm restart" : "Restart"}>
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("restart", app.id, "Restart"))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />}
                             </Btn>
                           );
@@ -144,7 +144,7 @@ export function DashboardPage() {
                           const k = `unpause-${app.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("unpause", app.id, "Unpause"))} title={armed ? "Click again to confirm unpause" : "Unpause"}>
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("unpause", app.id, "Unpause"))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />}
                             </Btn>
                           );
@@ -152,7 +152,7 @@ export function DashboardPage() {
                           const k = `pause-${app.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("pause", app.id, "Pause"))} title={armed ? "Click again to confirm pause" : "Pause"}>
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("pause", app.id, "Pause"))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />}
                             </Btn>
                           );
@@ -163,7 +163,7 @@ export function DashboardPage() {
                           const k = `redeploy-${app.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("redeploy", app.id, "Redeploy"))} title={armed ? "Click again to confirm redeploy" : "Redeploy"}>
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("redeploy", app.id, "Redeploy"))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <RefreshCw size={12} />}
                             </Btn>
                           );
