@@ -274,6 +274,16 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 13,
+    description: "Track panel DNS record on the panel row so destroyServer can clean it up",
+    up: (db) => {
+      db.run("ALTER TABLE panel ADD COLUMN dns_zone_id TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE panel ADD COLUMN dns_name TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE panel ADD COLUMN dns_type TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE panel ADD COLUMN dns_value TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

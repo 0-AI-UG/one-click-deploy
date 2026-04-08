@@ -396,7 +396,26 @@ export type PanelRow = {
   status: string;
   deploy_log: string;
   created_at: string;
+  dns_zone_id: string;
+  dns_name: string;
+  dns_type: string;
+  dns_value: string;
 };
+
+export function updatePanelDnsRecord(rec: {
+  zone_id: string;
+  name: string;
+  type: string;
+  value: string;
+}) {
+  db.query(
+    "UPDATE panel SET dns_zone_id = ?, dns_name = ?, dns_type = ?, dns_value = ? WHERE id = 1",
+  ).run(rec.zone_id, rec.name, rec.type, rec.value);
+}
+
+export function deletePanel() {
+  db.query("DELETE FROM panel WHERE id = 1").run();
+}
 
 export function getPanel(): PanelRow | null {
   return (db.query("SELECT * FROM panel WHERE id = 1").get() as PanelRow) || null;

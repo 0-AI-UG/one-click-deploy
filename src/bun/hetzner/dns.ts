@@ -22,19 +22,26 @@ export async function createDnsRecord(opts: {
   };
   if (opts.ttl != null) body.ttl = opts.ttl;
 
-  try {
-    await hetznerApi(`/zones/${encodeURIComponent(opts.zone_id)}/rrsets`, {
+  const postRrset = () =>
+    hetznerApi(`/zones/${encodeURIComponent(opts.zone_id)}/rrsets`, {
       method: "POST",
       body: JSON.stringify(body),
     });
+
+  try {
+    await postRrset();
   } catch (err: any) {
-    // RRSet already exists — append this value to the existing rrset.
+    // RRSet already exists. For OCD's use case an app "owns" its (name,type)
+    // rrset and should resolve to a single IP — replace any existing values
+    // instead of appending. Appending caused apex deploys to round-robin
+    // between the new OCD server and stale values (e.g. an old hoster's IP),
+    // which broke Let's Encrypt validation and served the wrong backend.
     const msg = String(err?.message || "");
     if (/already exists|uniqueness|conflict/i.test(msg)) {
-      await hetznerApi(`${rrsetPath(opts.zone_id, opts.name, opts.type)}/actions/add_records`, {
-        method: "POST",
-        body: JSON.stringify({ records: [{ value: opts.value }] }),
-      });
+      await hetznerApi(rrsetPath(opts.zone_id, opts.name, opts.type), {
+        method: "DELETE",
+      }).catch(() => {}); // ignore if it vanished between calls
+      await postRrset();
     } else {
       throw err;
     }

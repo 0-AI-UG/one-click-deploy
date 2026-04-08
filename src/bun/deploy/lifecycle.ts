@@ -164,6 +164,39 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
       await destroyApp(app.id);
     }
 
+    // If this server hosts the self-deployed panel, clean up its DNS record
+    // and volume too. The panel lives in its own table (not `apps`), so the
+    // loop above wouldn't touch it. Note: if the panel is destroying the
+    // server it's running on, it will `docker rm` itself mid-request — so
+    // these cleanups MUST run before deleteHetznerServer.
+    const panel = db.getPanel();
+    if (panel && panel.server_id === serverId) {
+      if (panel.dns_zone_id && panel.dns_name && panel.dns_type && panel.dns_value) {
+        try {
+          await hetzner.deleteDnsRecord({
+            zone_id: panel.dns_zone_id,
+            name: panel.dns_name,
+            type: panel.dns_type,
+            value: panel.dns_value,
+          });
+          log("destroyServer", `Deleted panel DNS record ${panel.dns_name}/${panel.dns_type}`);
+        } catch (err) {
+          log("destroyServer", `Failed to delete panel DNS record:`, err instanceof Error ? err.message : err);
+        }
+      }
+      if (panel.volume_id) {
+        try {
+          await hetzner.deleteVolume(panel.volume_id);
+          log("destroyServer", `Deleted panel volume ${panel.volume_id}`);
+        } catch (err) {
+          log("destroyServer", `Failed to delete panel volume ${panel.volume_id}:`, err instanceof Error ? err.message : err);
+        }
+      }
+      // The panel row will cascade-delete via FK when the server row goes,
+      // but clear it explicitly for clarity.
+      db.deletePanel();
+    }
+
     await hetzner.deleteHetznerServer(server.hetzner_id);
     db.deleteServer(serverId);
     log("destroyServer", `Server id=${serverId} destroyed successfully`);

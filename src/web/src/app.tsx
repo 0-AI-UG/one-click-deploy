@@ -10,6 +10,7 @@ import { TotpSetupPage } from "./pages/totp-setup.tsx";
 import { SetupPage } from "./pages/setup.tsx";
 import { DashboardPage } from "./pages/dashboard.tsx";
 import { DeployPage } from "./pages/deploy.tsx";
+import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
 import { SettingsPage } from "./pages/settings.tsx";
@@ -107,6 +108,8 @@ export function App() {
     content = <DashboardPage />;
   } else if (hash === "#/deploy") {
     content = <DeployPage />;
+  } else if (hash === "#/deploy/progress") {
+    content = <DeployProgressPage />;
   } else if (hash.startsWith("#/apps/")) {
     const appId = parseInt(hash.split("/")[2], 10);
     content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;

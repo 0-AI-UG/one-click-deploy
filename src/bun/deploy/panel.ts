@@ -192,6 +192,13 @@ export async function bootstrapPanel(
     });
     db.appendPanelDeployLog(`[bootstrap] Panel deployed to ${opts.domain}`);
 
+    // Persist the DNS record on the panel row so destroyServer can clean it
+    // up later (the panel lives outside the apps table, so dns_records keyed
+    // by app_id wouldn't catch it).
+    if (dnsRecordKey) {
+      db.updatePanelDnsRecord(dnsRecordKey);
+    }
+
     // 8. Handoff: snapshot bootstrap DB onto the mounted volume BEFORE the
     //    hosted container starts (so it opens the handed-off DB on first
     //    boot rather than a fresh one).

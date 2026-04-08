@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get, del } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { HardDrive, Server, Network, Database, Trash2, RefreshCw } from "lucide-react";
+import { HardDrive, Server, Network, Database, Trash2, RefreshCw, Terminal } from "lucide-react";
 
 export function ResourcesPage() {
   const [data, setData] = useState<any>(null);
@@ -69,11 +69,18 @@ export function ResourcesPage() {
                 <td className="py-2 px-3 text-fg-dim">{s.app_count}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
                 <td className="py-2 px-3">
-                  <PermissionGate permission="resources.delete">
-                    <Btn size="xs" variant="danger" loading={deleting === `server-${s.hetzner_id}`} onClick={() => handleDelete("server", s.hetzner_id, s.name)}>
-                      <Trash2 size={11} />
-                    </Btn>
-                  </PermissionGate>
+                  <div className="flex items-center gap-1">
+                    <PermissionGate permission="terminal.access">
+                      <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/server/${s.id}`; }}>
+                        <Terminal size={11} /> Shell
+                      </Btn>
+                    </PermissionGate>
+                    <PermissionGate permission="resources.delete">
+                      <Btn size="xs" variant="danger" disabled={s.app_count > 0 || s.replica_count > 0} title={s.app_count > 0 || s.replica_count > 0 ? "In use by apps or replicas" : undefined} loading={deleting === `server-${s.hetzner_id}`} onClick={() => handleDelete("server", s.hetzner_id, s.name)}>
+                        <Trash2 size={11} />
+                      </Btn>
+                    </PermissionGate>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -99,7 +106,7 @@ export function ResourcesPage() {
                 <td className="py-2 px-3 text-fg-dim">{lb.targets}</td>
                 <td className="py-2 px-3">
                   <PermissionGate permission="resources.delete">
-                    <Btn size="xs" variant="danger" loading={deleting === `load_balancer-${lb.id}`} onClick={() => handleDelete("load_balancer", lb.id, lb.name)}>
+                    <Btn size="xs" variant="danger" disabled={!!lb.app_name} title={lb.app_name ? `In use by ${lb.app_name}` : undefined} loading={deleting === `load_balancer-${lb.id}`} onClick={() => handleDelete("load_balancer", lb.id, lb.name)}>
                       <Trash2 size={11} />
                     </Btn>
                   </PermissionGate>
@@ -127,7 +134,7 @@ export function ResourcesPage() {
                 <td className="py-2 px-3 text-accent-blue font-bold">{v.app_name || "—"}</td>
                 <td className="py-2 px-3">
                   <PermissionGate permission="resources.delete">
-                    <Btn size="xs" variant="danger" loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>
+                    <Btn size="xs" variant="danger" disabled={!!v.app_name} title={v.app_name ? `In use by ${v.app_name}` : undefined} loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>
                       <Trash2 size={11} />
                     </Btn>
                   </PermissionGate>
