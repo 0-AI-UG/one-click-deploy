@@ -9,8 +9,16 @@ import { secretStore } from "../../bun/secret-store.ts";
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "scaling.manage");
-    const { replicas } = await request.json() as { replicas: number };
-    const result = await scaleApp(appId, replicas, () => {});
+    const body = await request.json() as { replicas: number; target_server_id?: number };
+    const replicas = Number(body.replicas);
+    if (!Number.isFinite(replicas) || replicas < 1) {
+      return Response.json({ error: "replicas must be an integer >= 1" }, { status: 400, headers: corsHeaders });
+    }
+    const targetServerId = body.target_server_id ? Number(body.target_server_id) : undefined;
+    const result = await scaleApp(appId, replicas, () => {}, targetServerId);
+    if (!result.ok) {
+      return Response.json({ error: result.error || "Scaling failed" }, { status: 400, headers: corsHeaders });
+    }
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -20,13 +28,18 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
 export async function handleUpdateScalingPolicy(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "scaling.manage");
-    const { min_replicas, max_replicas, autoscale_enabled, cpu_threshold, mem_threshold } = await request.json() as {
+    const { min_replicas, max_replicas, autoscale_enabled, cpu_threshold, mem_threshold, cooldown } = await request.json() as {
       min_replicas: number;
       max_replicas: number;
       autoscale_enabled: boolean;
       cpu_threshold: number;
       mem_threshold: number;
+      cooldown?: number;
     };
+
+    if (min_replicas < 1 || max_replicas < min_replicas) {
+      return Response.json({ error: "Require 1 <= min_replicas <= max_replicas" }, { status: 400, headers: corsHeaders });
+    }
 
     db.updateAppScaling(appId, {
       min_replicas,
@@ -34,6 +47,7 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
       autoscale_enabled,
       autoscale_cpu_threshold: cpu_threshold,
       autoscale_mem_threshold: mem_threshold,
+      ...(typeof cooldown === "number" ? { autoscale_cooldown: cooldown } : {}),
     });
 
     // Update scale daemon config if app is scaled

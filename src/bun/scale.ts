@@ -15,7 +15,8 @@ function log(context: string, ...args: any[]) {
 export async function scaleApp(
   appId: number,
   targetReplicas: number,
-  onProgress?: ProgressFn
+  onProgress?: ProgressFn,
+  targetServerId?: number
 ): Promise<{ ok: boolean; error?: string }> {
   const emit = onProgress || (() => {});
   log("scale", `Scaling app ${appId} to ${targetReplicas} replicas`);
@@ -40,7 +41,7 @@ export async function scaleApp(
 
     if (targetReplicas > currentCount) {
       try {
-        await scaleUp(app, primaryServer, currentReplicas, currentCount, targetReplicas, emit);
+        await scaleUp(app, primaryServer, currentReplicas, currentCount, targetReplicas, emit, targetServerId);
       } catch (err) {
         // Rollback: clean up any resources created during failed scale-up
         emit("scale", "Scale-up failed, rolling back...");
@@ -79,7 +80,8 @@ async function scaleUp(
   currentReplicas: any[],
   currentCount: number,
   targetCount: number,
-  emit: ProgressFn
+  emit: ProgressFn,
+  targetServerId?: number
 ) {
   const settings = db.getSettings();
   const tokens = await getTokens();
@@ -226,8 +228,8 @@ async function scaleUp(
     const replicaNum = i + 1;
     emit("scale", `Provisioning replica ${replicaNum}/${targetCount}...`);
 
-    // Pick target server: find server with fewest replicas, or create new
-    let targetServer = await pickTargetServer(app, primaryServer, settings, emit);
+    // Pick target server: user-specified, least-loaded existing, or newly provisioned
+    let targetServer = await pickTargetServer(app, primaryServer, settings, emit, targetServerId);
     const targetHostKey = targetServer.ssh_host_key || undefined;
 
     // Transfer image to target server
@@ -637,8 +639,18 @@ async function pickTargetServer(
   app: any,
   primaryServer: any,
   settings: Record<string, string>,
-  emit: ProgressFn
+  emit: ProgressFn,
+  preferredServerId?: number
 ): Promise<any> {
+  // Explicit placement: caller chose a specific server
+  if (preferredServerId) {
+    const preferred = db.getServer(preferredServerId);
+    if (!preferred) throw new Error(`Target server ${preferredServerId} not found`);
+    if (preferred.status !== "ready") throw new Error(`Target server ${preferred.name} is not ready (status: ${preferred.status})`);
+    emit("scale", `Placing replica on ${preferred.name} (user-selected)`);
+    return preferred;
+  }
+
   // Find servers with fewest replicas of this app
   const allServers = db.getServers();
   const appReplicas = db.getReplicas(app.id);
