@@ -60,43 +60,61 @@ async function buildSnapshot(opts: { newJwtSecret: string }): Promise<string> {
   const snapshotPath = path.join(tmpdir(), `ocd-handoff-${Date.now()}.sqlite`);
   try { unlinkSync(snapshotPath); } catch {}
 
-  // Dump the live DB to a byte buffer via Bun's Database.serialize(). This
-  // sidesteps both VACUUM INTO (fails generically in the slim container)
-  // and plain file copy (races with WAL). Write the buffer to disk and
-  // open it as an independent file-backed snapshot we can mutate.
-  log("snapshot", `Serializing live DB to ${snapshotPath}`);
-  const bytes = localDb.serialize();
-  writeFileSync(snapshotPath, bytes);
+  async function step<T>(name: string, fn: () => T | Promise<T>): Promise<T> {
+    try {
+      log("snapshot", `→ ${name}`);
+      const result = await fn();
+      log("snapshot", `✓ ${name}`);
+      return result;
+    } catch (err) {
+      const e = err as Error;
+      log("snapshot", `✗ ${name} FAILED: ${e.name}: ${e.message}`);
+      if (e.stack) log("snapshot", `stack: ${e.stack.split("\n").slice(0, 5).join(" | ")}`);
+      throw err;
+    }
+  }
 
-  const snap = new Database(snapshotPath);
+  // Dump the live DB to a byte buffer via Bun's Database.serialize(). This
+  // sidesteps VACUUM INTO and WAL-racing file copies.
+  const bytes = await step("serialize live DB", () => localDb.serialize());
+  await step(`write ${bytes.length} bytes to ${snapshotPath}`, () =>
+    writeFileSync(snapshotPath, bytes),
+  );
+
+  const snap = await step("open snapshot DB", () => new Database(snapshotPath));
 
   // Re-encrypt every row in encrypted_secrets with the hosted JWT_SECRET.
   const oldSecret = process.env.JWT_SECRET || "one-click-deploy-dev-secret";
-  const oldKey = await deriveEncryptionKey(oldSecret);
-  const newKey = await deriveEncryptionKey(opts.newJwtSecret);
+  const oldKey = await step("derive old encryption key", () => deriveEncryptionKey(oldSecret));
+  const newKey = await step("derive new encryption key", () => deriveEncryptionKey(opts.newJwtSecret));
 
-  const rows = snap.query("SELECT key, encrypted_value, iv FROM encrypted_secrets").all() as Array<{
-    key: string;
-    encrypted_value: string;
-    iv: string;
-  }>;
+  const rows = await step("read encrypted_secrets rows", () =>
+    snap.query("SELECT key, encrypted_value, iv FROM encrypted_secrets").all() as Array<{
+      key: string;
+      encrypted_value: string;
+      iv: string;
+    }>,
+  );
+  log("snapshot", `Found ${rows.length} secret row(s) to re-encrypt`);
+
   for (const row of rows) {
-    const reenc = await reencryptSecret(row.encrypted_value, row.iv, oldKey, newKey);
-    snap.query("UPDATE encrypted_secrets SET encrypted_value = ?, iv = ? WHERE key = ?").run(
-      reenc.encrypted,
-      reenc.iv,
-      row.key,
+    const reenc = await step(`re-encrypt secret "${row.key}"`, () =>
+      reencryptSecret(row.encrypted_value, row.iv, oldKey, newKey),
+    );
+    await step(`update snapshot row "${row.key}"`, () =>
+      snap.query("UPDATE encrypted_secrets SET encrypted_value = ?, iv = ? WHERE key = ?").run(
+        reenc.encrypted,
+        reenc.iv,
+        row.key,
+      ),
     );
   }
-  log("snapshot", `Re-encrypted ${rows.length} secret(s) with new JWT_SECRET`);
 
   // Clear user-account state. The hosted instance is NOT in bootstrap mode,
   // so its setup wizard will run on first visit and create the real admin.
-  // Cascade clears TOTP backup codes and per-user permissions.
-  snap.query("DELETE FROM users").run();
-  log("snapshot", "Cleared users table — hosted setup wizard will create admin");
+  await step("clear users table", () => snap.query("DELETE FROM users").run());
 
-  snap.close();
+  await step("close snapshot DB", () => snap.close());
   return snapshotPath;
 }
 
