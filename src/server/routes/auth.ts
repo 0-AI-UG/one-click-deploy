@@ -48,8 +48,10 @@ export async function handleLogin(request: Request): Promise<Response> {
         );
       }
 
-      // 2FA not set up but required (admins always require 2FA)
-      if (user.is_admin) {
+      // 2FA not set up but required (admins always require 2FA;
+      // others only when the global require_2fa setting is on)
+      const require2fa = (db.getSettings().require_2fa ?? "1") === "1";
+      if (user.is_admin || require2fa) {
         const tempToken = await createTempToken(user.id);
         return Response.json(
           { requires2FASetup: true, tempToken },
@@ -60,8 +62,18 @@ export async function handleLogin(request: Request): Promise<Response> {
 
     // No 2FA required — issue full token
     const token = await createToken({ userId: user.id, email: user.email });
+    const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(user.id);
     return Response.json(
-      { token, user: { id: user.id, email: user.email, isAdmin: false } },
+      {
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          isAdmin: user.is_admin === 1,
+          totpEnabled: user.totp_enabled === 1,
+          permissions,
+        },
+      },
       { headers: corsHeaders },
     );
   } catch (error) {

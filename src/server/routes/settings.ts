@@ -18,6 +18,7 @@ export async function handleGetSettings(request: Request): Promise<Response> {
         dns_zone_id: s.dns_zone_id ?? "",
         default_server_type: s.default_server_type ?? "",
         default_location: s.default_location ?? "",
+        require_2fa: (s.require_2fa ?? "1") === "1",
       },
       { headers: corsHeaders },
     );
@@ -54,9 +55,14 @@ export async function handleGetServerTypes(request: Request): Promise<Response> 
 export async function handleSaveSettings(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "settings.manage");
-    const settings = await request.json() as Record<string, string>;
+    const settings = await request.json() as Record<string, unknown>;
 
-    for (const [key, value] of Object.entries(settings)) {
+    for (const [key, rawValue] of Object.entries(settings)) {
+      if (key === "require_2fa") {
+        db.saveSetting(key, rawValue ? "1" : "0");
+        continue;
+      }
+      const value = String(rawValue ?? "");
       if (key === "hetzner_api_token") {
         if (value.includes("...") || value === "****") continue;
         if (value) {

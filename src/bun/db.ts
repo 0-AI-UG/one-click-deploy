@@ -64,6 +64,7 @@ function initSchema(instance: Database) {
     dns_zone_id: "",
     default_server_type: "",
     default_location: "",
+    require_2fa: "1",
   };
 
   const insertSetting = instance.prepare(
