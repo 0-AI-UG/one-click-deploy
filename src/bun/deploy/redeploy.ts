@@ -82,20 +82,13 @@ export async function redeployApp(
       }
 
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-      // After a successful rebuild, append a synthetic entry to the
-      // webhook history JSONL so the deployment shows up in the panel
-      // history (the lazy webhook-history sync ingests this file).
-      const historyFile = `/opt/ocd/webhooks/${app.name}.history.jsonl`;
       const rebuildScript = [
         `set -e`,
         `cd ${appDir}`,
         `su - deploy -c "cd ${appDir} && git pull"`,
-        `COMMIT=$(su - deploy -c "cd ${appDir} && git rev-parse --short HEAD" 2>/dev/null || echo unknown)`,
         `su - deploy -c "cd ${appDir} && docker build -t ${app.name}:latest ."`,
         `docker rm -f ${app.name} 2>/dev/null || true`,
         `su - deploy -c "docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${app.host_port}:${app.container_port} --env-file ${envFilePath} ${volumeFlag} ${app.name}:latest"`,
-        `mkdir -p /opt/ocd/webhooks`,
-        `printf '{"ts":"%s","status":"deployed","git_commit":"%s","image_tag":"%s:latest","log":"self-redeploy via panel"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$COMMIT" "${app.name}" >> ${historyFile}`,
       ].join("\n");
 
       // Write the script to /tmp and launch it detached so it survives
@@ -120,11 +113,12 @@ export async function redeployApp(
         app_id: appId,
         image_tag: `${app.name}:latest`,
         git_commit: "self-redeploy",
+        source: "self-redeploy",
       });
-      // Optimistically flip status back to "running" — the dispatched
-      // rebuild will succeed before the user can interact with the new
-      // container, and the next reconciler tick / health check would
-      // correct it anyway.
+      // Optimistically flip status back to "running". Nothing else will
+      // ever correct it: the reconciler only updates replica rows, and
+      // self-deployed panels have no replica row (the snapshot is taken
+      // before insertReplica runs in deploy.ts).
       db.updateAppStatus(appId, "running");
       onProgress("done", "Self-redeploy dispatched; panel will restart shortly");
       return { ok: true };
