@@ -35,8 +35,8 @@ export const securityHeaders: Record<string, string> = {
 export const htmlCsp =
   "default-src 'self'; " +
   "img-src 'self' data: blob:; " +
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-  "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; " +
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://esm.sh; " +
+  "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh; " +
   "font-src 'self' data: https://fonts.gstatic.com; " +
   "connect-src 'self' ws: wss:; " +
   "frame-ancestors 'none'; " +

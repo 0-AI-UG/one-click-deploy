@@ -62,8 +62,15 @@ export function DeployProgressPage({ jobId }: { jobId: number | null }) {
     logRef.current?.scrollTo(0, logRef.current.scrollHeight);
   }, [progress.length]);
 
+  const reusingServer = progress.some(
+    (e) => e.step === "server" && e.detail?.startsWith("Using server"),
+  );
+  const visibleSteps = reusingServer
+    ? DEPLOY_STEPS.filter((s) => s.key !== "server" && s.key !== "provision")
+    : DEPLOY_STEPS;
+
   return (
-    <div className="max-w-3xl mx-auto px-4 py-8 animate-fade-in">
+    <div className="max-w-6xl mx-auto px-4 py-8 animate-fade-in">
       {/* Header bar */}
       <div className="bg-accent border-2 border-fg shadow-neo-lg p-4 mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -80,9 +87,10 @@ export function DeployProgressPage({ jobId }: { jobId: number | null }) {
         </div>
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-6">
       {/* Step list — chunky vertical blocks */}
-      <div className="space-y-2 mb-6">
-        {DEPLOY_STEPS.map((s, i) => {
+      <div className="space-y-2">
+        {visibleSteps.map((s, i) => {
           const status = stepStatus(s.key, progress, result);
           const lastDetail = [...progress].reverse().find((e) => e.step === s.key)?.detail;
           const bg =
@@ -129,7 +137,7 @@ export function DeployProgressPage({ jobId }: { jobId: number | null }) {
       </div>
 
       {/* Terminal-style log window */}
-      <div className="border-2 border-fg shadow-neo bg-fg">
+      <div className="border-2 border-fg shadow-neo bg-fg self-start">
         <div className="flex items-center justify-between bg-fg text-bg px-3 py-1.5 border-b-2 border-bg">
           <div className="flex items-center gap-2">
             <Terminal size={12} />
@@ -176,6 +184,7 @@ export function DeployProgressPage({ jobId }: { jobId: number | null }) {
             </div>
           )}
         </div>
+      </div>
       </div>
 
       {/* Actions */}

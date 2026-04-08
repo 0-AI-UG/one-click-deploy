@@ -173,6 +173,33 @@ function parseEnvExample(content: string): Array<{ key: string; value: string }>
   return out;
 }
 
+// Prefer an .env.example sibling of the Dockerfile, then walk up to repo root.
+// Falls back to any .env.example anywhere in the tree (shallowest first) so
+// single-Dockerfile-at-root repos still work.
+function pickEnvExample(paths: string[], dockerfilePath: string | null): string | null {
+  const isEnv = (p: string) => /(^|\/)\.env\.(example|sample|template)$/i.test(p);
+  const envPaths = paths.filter(isEnv);
+  if (envPaths.length === 0) return null;
+
+  if (dockerfilePath) {
+    const slash = dockerfilePath.lastIndexOf("/");
+    let dir = slash >= 0 ? dockerfilePath.slice(0, slash) : "";
+    while (true) {
+      const prefix = dir ? dir + "/" : "";
+      const match = envPaths.find((p) => {
+        if (!p.startsWith(prefix)) return false;
+        return p.slice(prefix.length).indexOf("/") === -1;
+      });
+      if (match) return match;
+      if (!dir) break;
+      const up = dir.lastIndexOf("/");
+      dir = up >= 0 ? dir.slice(0, up) : "";
+    }
+  }
+
+  return envPaths.sort((a, b) => a.split("/").length - b.split("/").length)[0] ?? null;
+}
+
 function pickWebService(
   services: Array<{ name: string; port: number | null; has_ports: boolean }>,
 ): string | null {
@@ -266,8 +293,7 @@ export async function introspectRepo(url: string): Promise<IntrospectResult> {
   const composeCandidate =
     paths.find((p) => /^(docker-compose|compose)\.ya?ml$/.test(p)) || null;
 
-  const envExampleCandidate =
-    paths.find((p) => /(^|\/)\.env\.(example|sample|template)$/i.test(p)) || null;
+  const envExampleCandidate = pickEnvExample(paths, dockerfiles[0] ?? null);
 
   // 4. Read the chosen files in parallel
   const [composeContent, dockerfileContent, envContent] = await Promise.all([
