@@ -158,6 +158,7 @@ export function Btn({
   disabled = false,
   loading = false,
   className = "",
+  title,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -167,6 +168,7 @@ export function Btn({
   disabled?: boolean;
   loading?: boolean;
   className?: string;
+  title?: string;
 }) {
   const base = "inline-flex items-center gap-1.5 font-mono font-bold uppercase tracking-wider border-2 border-fg cursor-pointer transition-all disabled:opacity-35 disabled:cursor-not-allowed disabled:shadow-neo-sm disabled:translate-x-0 disabled:translate-y-0";
   const sizes = size === "xs" ? "px-2 py-1 text-[9px]" : "px-3 py-1.5 text-[10px]";
@@ -179,7 +181,7 @@ export function Btn({
   };
 
   return (
-    <button type={type} onClick={onClick} disabled={disabled || loading} className={`${base} ${sizes} ${variants[variant]} ${className}`}>
+    <button type={type} onClick={onClick} disabled={disabled || loading} title={title} className={`${base} ${sizes} ${variants[variant]} ${className}`}>
       {loading && <Spinner />}
       {children}
     </button>
