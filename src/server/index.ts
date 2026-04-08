@@ -34,6 +34,12 @@ import { handleGetResources, handleDeleteResource } from "./routes/resources.ts"
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory } from "./routes/scaling.ts";
 import { handleEnableWebhook, handleDisableWebhook } from "./routes/webhooks.ts";
+import {
+  handleGetPanel,
+  handleRedeployPanel,
+  handleGetPanelLogs,
+  handleGetPanelDeployments,
+} from "./routes/panel.ts";
 import { startReconciler } from "../bun/reconciler.ts";
 import { tryTerminalUpgrade, terminalWsHandlers } from "./routes/terminal.ts";
 
@@ -186,6 +192,12 @@ export const server = Bun.serve({
     // Webhooks
     "/api/apps/:appId/webhook/enable": { POST: (req: Request) => handleEnableWebhook(req, appIdFrom(req)) },
     "/api/apps/:appId/webhook/disable": { POST: (req: Request) => handleDisableWebhook(req, appIdFrom(req)) },
+
+    // --- Panel (hosted self) ---
+    "/api/panel": { GET: (req: Request) => handleGetPanel(req) },
+    "/api/panel/redeploy": { POST: (req: Request) => handleRedeployPanel(req) },
+    "/api/panel/logs": { GET: (req: Request) => handleGetPanelLogs(req) },
+    "/api/panel/deployments": { GET: (req: Request) => handleGetPanelDeployments(req) },
 
     // --- Settings ---
     "/api/settings": {

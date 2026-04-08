@@ -2,19 +2,63 @@ import { useState, useEffect, useRef } from "react";
 import { get, post } from "../api/client.ts";
 import { Card, Btn, Spinner, showToast, Checkbox } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Rocket, Plus, Minus, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Rocket, Plus, Minus, CheckCircle2, XCircle, Loader2, Circle } from "lucide-react";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 
 type ServerOption = { id: number; name: string; ipv4: string; type: string; location: string };
+
+type ProgressEvent = { step: string; detail: string; ts: number };
+
+const DEPLOY_STEPS: { key: string; label: string }[] = [
+  { key: "server", label: "Server" },
+  { key: "provision", label: "Provision" },
+  { key: "dns", label: "DNS" },
+  { key: "build", label: "Build" },
+  { key: "caddy", label: "TLS / Proxy" },
+  { key: "health", label: "Health" },
+  { key: "done", label: "Done" },
+];
+
+function stepStatus(
+  stepKey: string,
+  events: ProgressEvent[],
+  result: { ok: boolean; error?: string } | null,
+): "pending" | "active" | "done" | "error" {
+  const idx = DEPLOY_STEPS.findIndex((s) => s.key === stepKey);
+  const seenKeys = new Set(events.map((e) => e.step));
+  const hasError = events.some((e) => e.step === "error") || result?.ok === false;
+  const lastIdx = Math.max(
+    -1,
+    ...events.map((e) => DEPLOY_STEPS.findIndex((s) => s.key === e.step)).filter((i) => i >= 0),
+  );
+  if (stepKey === "done") {
+    return result?.ok ? "done" : hasError ? "error" : "pending";
+  }
+  if (!seenKeys.has(stepKey)) {
+    if (hasError && idx === lastIdx + 1) return "error";
+    return "pending";
+  }
+  if (idx < lastIdx) return "done";
+  // idx === lastIdx
+  if (hasError) return "error";
+  if (result?.ok) return "done";
+  return "active";
+}
 
 export function DeployPage() {
   const { serverTypes } = useServerTypes();
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([]);
   const [deploying, setDeploying] = useState(false);
-  const [progress, setProgress] = useState<Array<{ step: string; detail: string }>>([]);
+  const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [deployResult, setDeployResult] = useState<{ ok: boolean; error?: string } | null>(null);
   const progressRef = useRef<HTMLDivElement>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
+
+  // Auto-scroll log to bottom when new events arrive
+  useEffect(() => {
+    progressRef.current?.scrollTo(0, progressRef.current.scrollHeight);
+  }, [progress.length]);
 
   const [form, setForm] = useState({
     app_name: "", git_repo: "", domain: "", container_port: "3000",
@@ -73,18 +117,54 @@ export function DeployPage() {
       compose_web_service: form.compose_web_service || undefined,
     };
 
+    // Open the SSE stream BEFORE posting so the server's progress listener is
+    // registered in time to catch the very first emit. EventSource can't send
+    // auth headers, so we use fetch + manual SSE parsing instead.
+    const token = localStorage.getItem("ocd-auth");
+    const authToken = token ? JSON.parse(token).token : "";
+    const abort = new AbortController();
+    streamAbortRef.current = abort;
+
+    const streamUrl = `/api/apps/${encodeURIComponent(form.app_name)}/deploy/stream`;
+    let streamReady: Promise<void>;
     try {
-      const token = localStorage.getItem("ocd-auth");
-      const authToken = token ? JSON.parse(token).token : "";
+      const streamRes = await fetch(streamUrl, {
+        headers: { Authorization: `Bearer ${authToken}` },
+        signal: abort.signal,
+      });
+      if (!streamRes.ok || !streamRes.body) {
+        throw new Error(`stream failed (${streamRes.status})`);
+      }
 
-      const deployPromise = post("/api/apps/deploy", body);
+      // Consume the SSE body in the background
+      streamReady = (async () => {
+        const reader = streamRes.body!.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          // SSE frames are separated by double-newline
+          const frames = buf.split("\n\n");
+          buf = frames.pop() ?? "";
+          for (const frame of frames) {
+            const line = frame.split("\n").find((l) => l.startsWith("data:"));
+            if (!line) continue;
+            try {
+              const data = JSON.parse(line.slice(5).trim());
+              setProgress((p) => [...p, { step: data.step, detail: data.detail, ts: Date.now() }]);
+            } catch {}
+          }
+        }
+      })().catch(() => {}); // ignore aborts
+    } catch (err) {
+      // Stream setup failed — continue with the deploy anyway, no live updates
+      streamReady = Promise.resolve();
+    }
 
-      const interval = setInterval(() => {
-        progressRef.current?.scrollTo(0, progressRef.current.scrollHeight);
-      }, 500);
-
-      const result = await deployPromise;
-      clearInterval(interval);
+    try {
+      const result = await post("/api/apps/deploy", body);
       setDeployResult(result);
 
       if (result.ok) {
@@ -96,9 +176,17 @@ export function DeployPage() {
       setDeployResult({ ok: false, error: err.message });
       showToast(err.message, "error");
     } finally {
+      abort.abort();
+      streamAbortRef.current = null;
       setDeploying(false);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      streamAbortRef.current?.abort();
+    };
+  }, []);
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
@@ -258,20 +346,73 @@ export function DeployPage() {
       {(deploying || deployResult) && (
         <Card className="mt-6 p-4">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">Deploy Progress</h3>
-          <div ref={progressRef} className="bg-alt border-2 border-fg p-3 max-h-64 overflow-y-auto font-mono text-[10px] space-y-1">
-            {deploying && !deployResult && (
+
+          {/* Stepper */}
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-2 mb-3">
+            {DEPLOY_STEPS.map((s, i) => {
+              const status = stepStatus(s.key, progress, deployResult);
+              const icon =
+                status === "done" ? (
+                  <CheckCircle2 size={12} className="text-accent-green" />
+                ) : status === "active" ? (
+                  <Loader2 size={12} className="animate-spin text-accent-amber" />
+                ) : status === "error" ? (
+                  <XCircle size={12} className="text-accent-red" />
+                ) : (
+                  <Circle size={12} className="text-muted" />
+                );
+              const textColor =
+                status === "done"
+                  ? "text-fg"
+                  : status === "active"
+                  ? "text-accent-amber"
+                  : status === "error"
+                  ? "text-accent-red"
+                  : "text-muted";
+              return (
+                <div key={s.key} className="flex items-center">
+                  <div className={`flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider font-bold ${textColor}`}>
+                    {icon}
+                    <span>{s.label}</span>
+                  </div>
+                  {i < DEPLOY_STEPS.length - 1 && (
+                    <span className="mx-1 text-muted font-mono text-[9px]">›</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Live log */}
+          <div
+            ref={progressRef}
+            className="bg-alt border-2 border-fg p-3 h-64 overflow-y-auto font-mono text-[10px] space-y-0.5"
+          >
+            {progress.length === 0 && deploying && !deployResult && (
               <div className="flex items-center gap-2 text-accent-amber">
                 <Loader2 size={12} className="animate-spin" />
-                <span>Deploying... This may take a few minutes.</span>
+                <span>Waiting for first event...</span>
               </div>
             )}
+            {progress.map((ev, i) => {
+              const isError = ev.step === "error";
+              return (
+                <div key={i} className={`flex gap-2 ${isError ? "text-accent-red" : "text-fg"}`}>
+                  <span className="text-muted shrink-0 w-16 uppercase">[{ev.step}]</span>
+                  <span className="whitespace-pre-wrap break-all">{ev.detail}</span>
+                </div>
+              );
+            })}
             {deployResult && (
-              <div className={`flex items-center gap-2 ${deployResult.ok ? "text-fg" : "text-accent-red"}`}>
+              <div className={`flex items-center gap-2 mt-2 pt-2 border-t border-fg ${deployResult.ok ? "text-accent-green" : "text-accent-red"}`}>
                 {deployResult.ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                <span className="font-bold">{deployResult.ok ? "Deploy completed successfully" : `Deploy failed: ${deployResult.error}`}</span>
+                <span className="font-bold">
+                  {deployResult.ok ? "Deploy completed successfully" : `Deploy failed: ${deployResult.error}`}
+                </span>
               </div>
             )}
           </div>
+
           {deployResult?.ok && (
             <Btn variant="primary" className="mt-3" onClick={() => { window.location.hash = "#/"; }}>
               Go to Dashboard

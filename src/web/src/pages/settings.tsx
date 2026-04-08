@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
-import { get, put } from "../api/client.ts";
+import { get, post, put } from "../api/client.ts";
 import { Card, Btn, Spinner, showToast } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Settings as SettingsIcon, Save } from "lucide-react";
+import { Settings as SettingsIcon, Save, RefreshCw, Server as ServerIcon } from "lucide-react";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 
 export function SettingsPage() {
@@ -14,10 +14,28 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const { serverTypes } = useServerTypes();
 
+  const [panel, setPanel] = useState<any>(null);
+  const [panelServer, setPanelServer] = useState<any>(null);
+  const [panelDeployments, setPanelDeployments] = useState<any[]>([]);
+  const [panelBusy, setPanelBusy] = useState(false);
+
+  const refreshPanel = () => {
+    get("/api/panel")
+      .then((data) => {
+        setPanel(data.panel);
+        setPanelServer(data.server);
+      })
+      .catch(() => {});
+    get("/api/panel/deployments")
+      .then((data) => setPanelDeployments(data || []))
+      .catch(() => {});
+  };
+
   useEffect(() => {
     get("/api/settings").then((data) => {
       setForm(data);
     }).catch((err: any) => showToast(err.message, "error")).finally(() => setLoading(false));
+    refreshPanel();
   }, []);
 
   // Auto-select first available type/location if none saved
@@ -30,6 +48,26 @@ export function SettingsPage() {
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const redeployPanelNow = async () => {
+    if (!confirm(
+      "Redeploy the panel?\n\nThe panel will become unavailable for ~30–60s while it rebuilds from the latest commit on main. You will need to reload this page once it comes back.",
+    )) return;
+    setPanelBusy(true);
+    try {
+      const result = await post("/api/panel/redeploy");
+      if (result?.ok) {
+        showToast("Panel rebuild dispatched. It will be unavailable briefly.", "success");
+        setTimeout(refreshPanel, 2000);
+      } else {
+        showToast(result?.error || "Failed to dispatch redeploy", "error");
+      }
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setPanelBusy(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -99,6 +137,72 @@ export function SettingsPage() {
           <Btn variant="primary" loading={saving} onClick={save}><Save size={13} /> Save Settings</Btn>
         </div>
       </Card>
+
+      {panel && (
+        <Card className="p-5 space-y-4 mt-6">
+          <div className="flex items-center justify-between">
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-2">
+              <ServerIcon size={12} /> Panel (self-hosted)
+            </h3>
+            <span
+              className={`font-mono text-[9px] font-bold uppercase px-2 py-0.5 border-2 border-fg ${
+                panel.status === "running"
+                  ? "bg-green-200"
+                  : panel.status === "error"
+                  ? "bg-red-200"
+                  : "bg-yellow-200"
+              }`}
+            >
+              {panel.status}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs font-mono">
+            <div className="text-muted">Domain</div>
+            <div className="text-fg break-all">
+              <a href={`https://${panel.domain}`} target="_blank" rel="noreferrer" className="underline">
+                {panel.domain}
+              </a>
+            </div>
+            <div className="text-muted">Container</div>
+            <div className="text-fg">{panel.name}</div>
+            <div className="text-muted">Server</div>
+            <div className="text-fg">{panelServer ? `${panelServer.name} (${panelServer.ipv4})` : "—"}</div>
+            <div className="text-muted">Branch</div>
+            <div className="text-fg">{panel.git_branch}</div>
+            <div className="text-muted">Volume</div>
+            <div className="text-fg break-all">{panel.volume_mount || "—"}</div>
+          </div>
+
+          <div className="pt-1">
+            <Btn variant="primary" loading={panelBusy} onClick={redeployPanelNow}>
+              <RefreshCw size={13} /> Redeploy panel
+            </Btn>
+            <p className="mt-2 text-[10px] text-muted font-mono">
+              Pulls the latest commit on <span className="text-fg">{panel.git_branch}</span>, rebuilds the image, and replaces this container. The page will be unavailable for ~30–60s.
+            </p>
+          </div>
+
+          {panelDeployments.length > 0 && (
+            <div className="border-t-2 border-fg pt-3">
+              <h4 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-2">Recent deployments</h4>
+              <div className="space-y-1 text-[11px] font-mono max-h-48 overflow-y-auto">
+                {panelDeployments.slice(0, 10).map((d) => (
+                  <div key={d.id} className="flex justify-between gap-2">
+                    <span className="text-muted truncate">
+                      {new Date(d.created_at).toLocaleString()}
+                    </span>
+                    <span className="text-fg">{d.source}</span>
+                    <span className="text-muted truncate" title={d.git_commit}>
+                      {d.git_commit?.slice(0, 12) || "—"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

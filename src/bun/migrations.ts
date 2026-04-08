@@ -187,6 +187,93 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE replicas ADD COLUMN unhealthy_ticks INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 12,
+    description: "Add panel + panel_deployments tables; migrate any existing ocd-panel apps row out of the apps table",
+    up: (db) => {
+      db.run(`CREATE TABLE IF NOT EXISTS panel (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        git_repo TEXT NOT NULL,
+        git_branch TEXT NOT NULL DEFAULT 'main',
+        container_port INTEGER NOT NULL,
+        host_port INTEGER NOT NULL,
+        volume_id TEXT NOT NULL DEFAULT '',
+        volume_mount TEXT NOT NULL DEFAULT '',
+        env_vars TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'running',
+        deploy_log TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      db.run(`CREATE TABLE IF NOT EXISTS panel_deployments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        image_tag TEXT NOT NULL,
+        git_commit TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'deployed',
+        source TEXT NOT NULL DEFAULT 'manual',
+        deploy_log TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      // Migrate any existing panel-like apps row (hosted instances that were
+      // deployed before this split) out of the apps table. Match heuristic:
+      // git_repo mentioning "one-click-deploy". If multiple match, take the
+      // oldest.
+      const panelApp = db
+        .query(
+          "SELECT * FROM apps WHERE git_repo LIKE '%one-click-deploy%' ORDER BY id ASC LIMIT 1",
+        )
+        .get() as any;
+
+      if (panelApp) {
+        db.query(
+          "INSERT INTO panel (id, server_id, name, domain, git_repo, git_branch, container_port, host_port, volume_id, volume_mount, env_vars, status, deploy_log, created_at) " +
+            "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).run(
+          panelApp.server_id,
+          panelApp.name,
+          panelApp.domain,
+          panelApp.git_repo,
+          panelApp.webhook_branch || "main",
+          panelApp.container_port,
+          panelApp.host_port,
+          panelApp.volume_id || "",
+          panelApp.volume_mount || "",
+          panelApp.env_vars || "{}",
+          panelApp.status || "running",
+          panelApp.deploy_log || "",
+          panelApp.created_at,
+        );
+
+        // Carry forward the existing deployment history for the panel.
+        const oldDeploys = db
+          .query(
+            "SELECT image_tag, git_commit, status, source, deploy_log, created_at FROM deployment_history WHERE app_id = ? ORDER BY id ASC",
+          )
+          .all(panelApp.id) as any[];
+        const insertPd = db.prepare(
+          "INSERT INTO panel_deployments (image_tag, git_commit, status, source, deploy_log, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        );
+        for (const d of oldDeploys) {
+          insertPd.run(
+            d.image_tag,
+            d.git_commit,
+            d.status,
+            d.source,
+            d.deploy_log,
+            d.created_at,
+          );
+        }
+
+        // Cascade-deletes via FK: deployment_history, dns_records, replicas,
+        // metrics_samples, scaling_events.
+        db.query("DELETE FROM apps WHERE id = ?").run(panelApp.id);
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

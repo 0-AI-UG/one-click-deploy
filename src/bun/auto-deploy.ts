@@ -1,12 +1,11 @@
-// Headless self-deploy: when OCD_AUTO_DEPLOY is set, load a config (inline
-// JSON or file path), run the full self-deploy pipeline, stream progress to
-// stdout, and exit. Used by the Docker one-liner bootstrap so the user
-// never has to open a browser on the local instance.
+// Headless panel bootstrap: when OCD_AUTO_DEPLOY is set, read a config,
+// run bootstrapPanel, stream progress to stdout, and exit. Used by the
+// Docker one-liner so the operator never has to open a browser on the
+// local (bootstrap) instance.
 import { readFileSync } from "fs";
-import type { DeployRequest } from "../shared/rpc.ts";
 import * as db from "./db.ts";
 import { secretStore } from "./secret-store.ts";
-import { deploy } from "./deploy/deploy.ts";
+import { bootstrapPanel } from "./deploy/panel.ts";
 
 export type AutoDeployConfig = {
   hetzner_token: string;
@@ -21,23 +20,18 @@ export type AutoDeployConfig = {
 };
 
 function log(...args: any[]) {
-  console.log(`[auto-deploy]`, ...args);
+  console.log("[auto-deploy]", ...args);
 }
 
 /**
- * Parse the OCD_AUTO_DEPLOY env value. Accepts either:
- *   - inline JSON (value starts with "{")
- *   - a file path to a JSON file
+ * Parse OCD_AUTO_DEPLOY. Accepts either inline JSON (value starts with "{")
+ * or a path to a JSON file.
  */
 export function loadAutoDeployConfig(raw: string): AutoDeployConfig {
   const trimmed = raw.trim();
-  let jsonText: string;
-  if (trimmed.startsWith("{")) {
-    jsonText = trimmed;
-  } else {
-    log(`Reading config from file: ${trimmed}`);
-    jsonText = readFileSync(trimmed, "utf-8");
-  }
+  const jsonText = trimmed.startsWith("{")
+    ? trimmed
+    : (log(`Reading config from file: ${trimmed}`), readFileSync(trimmed, "utf-8"));
 
   let parsed: any;
   try {
@@ -55,12 +49,20 @@ export function loadAutoDeployConfig(raw: string): AutoDeployConfig {
   return parsed as AutoDeployConfig;
 }
 
-export async function runAutoDeploy(config: AutoDeployConfig): Promise<{ ok: boolean; error?: string }> {
-  log(`Starting headless self-deploy for ${config.domain}`);
+export async function runAutoDeploy(
+  config: AutoDeployConfig,
+): Promise<{ ok: boolean; error?: string }> {
+  log(`Starting headless panel bootstrap for ${config.domain}`);
 
-  // Seed secrets into the local (bootstrap) DB so the deploy pipeline can
-  // read them via the usual getTokens() path, and so the re-encryption
-  // handoff picks them up into the hosted instance's snapshot.
+  // Generate the JWT secret FIRST, then export it into the environment
+  // BEFORE touching secretStore. secret-store derives its AES-GCM key from
+  // process.env.JWT_SECRET via HKDF, so this guarantees the Hetzner token
+  // we're about to encrypt can be decrypted by the hosted instance (which
+  // will run with the same JWT_SECRET). No re-encryption dance required.
+  const jwtSecret =
+    crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+  process.env.JWT_SECRET = jwtSecret;
+
   await secretStore.set("hetzner_api_token", config.hetzner_token);
   if (config.github_pat) {
     await secretStore.set("github_pat", config.github_pat);
@@ -69,38 +71,33 @@ export async function runAutoDeploy(config: AutoDeployConfig): Promise<{ ok: boo
     db.saveSetting("dns_zone_id", config.dns_zone_id);
   }
 
-  const jwtSecret = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-
-  const req: DeployRequest = {
-    app_name: config.app_name || "ocd-panel",
-    domain: config.domain,
-    git_repo: "https://github.com/0-AI-UG/one-click-deploy.git",
-    container_port: 3001,
-    env_vars: {
-      NODE_ENV: "production",
-      OCD_DATA_DIR: "/app/data",
-      PORT: "3001",
-      JWT_SECRET: jwtSecret,
+  const result = await bootstrapPanel(
+    {
+      appName: config.app_name || "ocd-panel",
+      domain: config.domain,
+      gitRepo: "https://github.com/0-AI-UG/one-click-deploy.git",
+      containerPort: 3001,
+      envVars: {
+        NODE_ENV: "production",
+        OCD_DATA_DIR: "/app/data",
+        PORT: "3001",
+        JWT_SECRET: jwtSecret,
+      },
+      serverType: config.server_type || "cx23",
+      serverLocation: config.server_location || "nbg1",
+      volumeSize: config.volume_size ?? 10,
+      volumePath: "/app/data",
+      dnsZoneId: config.dns_zone_id,
+      webhookBranch: config.webhook_branch || "main",
     },
-    server_type: config.server_type || "cx23",
-    server_location: config.server_location || "nbg1",
-    volume_size: config.volume_size ?? 10,
-    volume_path: "/app/data",
-    webhook_enabled: !!config.github_pat,
-    webhook_branch: config.webhook_branch || "main",
-    replicas: 1,
-    self_deploy: true,
-  };
-
-  const result = await deploy(req, (step, detail) => {
-    console.log(`[${step}] ${detail}`);
-  });
+    (step, detail) => console.log(`[${step}] ${detail}`),
+  );
 
   if (result.ok) {
-    log(`✓ Panel deployed to https://${config.domain}`);
-    log(`  Open the domain and finish setup to create your admin account.`);
+    log(`✓ Panel deployed to https://${result.domain}`);
+    log("  Open the domain and finish setup to create your admin account.");
   } else {
-    log(`✗ Deploy failed: ${result.error}`);
+    log(`✗ Bootstrap failed: ${result.error}`);
   }
   return result;
 }

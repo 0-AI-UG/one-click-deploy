@@ -6,7 +6,21 @@ import { validateDeployRequest } from "../validate.ts";
 import { createMasker } from "../mask.ts";
 import { getTokens } from "../secret-store.ts";
 import { scaleApp } from "../scale.ts";
-import { performSelfDeployHandoff } from "./self-deploy.ts";
+import { resolve4 } from "node:dns/promises";
+
+// Resolve a hostname to IPv4 addresses with a short timeout.
+// Returns [] on failure (NXDOMAIN, timeout, etc.) so callers can treat
+// "unknown" and "mismatch" distinctly.
+async function resolveDomainIps(domain: string, timeoutMs = 3000): Promise<string[]> {
+  try {
+    return await Promise.race([
+      resolve4(domain),
+      new Promise<string[]>((_, rej) => setTimeout(() => rej(new Error("dns timeout")), timeoutMs)),
+    ]);
+  } catch {
+    return [];
+  }
+}
 
 type ProgressFn = (step: string, detail: string) => void;
 
@@ -125,17 +139,6 @@ export async function deploy(
   if (!validation.valid) {
     log("validation", `Failed: ${validation.error}`);
     return { ok: false, error: validation.error };
-  }
-
-  // Self-deploy needs a persistent volume (so the handed-off DB survives
-  // restarts) and a JWT_SECRET env var (used to re-encrypt the token).
-  if (req.self_deploy) {
-    if (!req.volume_size || req.volume_size <= 0) {
-      return { ok: false, error: "Self-deploy requires a persistent volume" };
-    }
-    if (!req.env_vars.JWT_SECRET) {
-      return { ok: false, error: "Self-deploy requires JWT_SECRET in env vars" };
-    }
   }
 
   // Set up log masking for secrets
@@ -301,7 +304,6 @@ export async function deploy(
 
     // Step 3: Create volume if requested
     let volumeMount: string | undefined;
-    let volumeHostMountPath: string | undefined;
     if (req.volume_size && req.volume_size > 0) {
       // Get the Hetzner server ID (either from new server or existing)
       let hetznerServerId: number;
@@ -321,7 +323,6 @@ export async function deploy(
       });
       state.volumeId = String(vol.id);
       const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
-      volumeHostMountPath = hostMountPath;
       const containerPath = req.volume_path || "/data";
       await hetzner.sshExec(serverIp, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, serverHostKey || undefined);
       volumeMount = `${hostMountPath}:${containerPath}`;
@@ -361,23 +362,6 @@ export async function deploy(
     // Persist volume association
     if (state.volumeId && volumeMount) {
       db.updateAppVolume(app.id, state.volumeId, volumeMount);
-    }
-
-    // Self-deploy handoff: at this point the local bootstrap DB contains
-    // everything the hosted instance needs (server, apps, dns_records,
-    // volume association, encrypted Hetzner token). Snapshot the DB and
-    // scp it onto the mounted volume BEFORE the container starts, so the
-    // hosted panel boots with full awareness of itself. Must run before
-    // cloneAndBuild (which is when docker run starts the container).
-    if (req.self_deploy && volumeHostMountPath) {
-      onProgress("build", "Handing off panel database to hosted instance...");
-      await performSelfDeployHandoff({
-        serverIp,
-        hostKey: serverHostKey || undefined,
-        hostMountPath: volumeHostMountPath,
-        newJwtSecret: req.env_vars.JWT_SECRET!,
-      });
-      onProgress("build", "Panel database handed off");
     }
 
     const buildStart = Date.now();
@@ -474,6 +458,26 @@ export async function deploy(
     }
 
     // Step 5: Configure Caddy reverse proxy
+    // DNS preflight: if user supplied a custom domain and we didn't manage the
+    // record ourselves, verify it resolves to this server. Otherwise Caddy's
+    // ACME challenge will fail and visitors hit whatever else owns that IP
+    // (e.g. the old hoster's placeholder page).
+    if (req.domain && !useInternalTls && !state.dnsRecord) {
+      onProgress("caddy", `Verifying DNS for ${req.domain}...`);
+      const resolved = await resolveDomainIps(req.domain);
+      if (resolved.length === 0) {
+        throw new Error(
+          `DNS lookup for ${req.domain} returned no A records. Create an A record pointing to ${serverIp} and retry (DNS can take a few minutes to propagate).`
+        );
+      }
+      if (!resolved.includes(serverIp)) {
+        throw new Error(
+          `Domain ${req.domain} resolves to ${resolved.join(", ")} but this server is ${serverIp}. Update the A record to ${serverIp} (Let's Encrypt will fail to issue a certificate otherwise) and retry.`
+        );
+      }
+      onProgress("caddy", `DNS OK: ${req.domain} -> ${serverIp}`);
+    }
+
     onProgress("caddy", `Configuring TLS + reverse proxy for ${useDomain}...`);
     await hetzner.deployCaddySite(serverIp, useDomain, caddyPort, useInternalTls, serverHostKey || undefined);
     state.caddyConfigured = true;
