@@ -1,11 +1,39 @@
 import { TOTP, Secret } from "otpauth";
 import QRCode from "qrcode";
 import { corsHeaders } from "../lib/cors.ts";
-import { authenticateRequest, createToken, verifyTempToken } from "../lib/auth.ts";
+import { authenticateRequest, createToken, createTempToken, verifyTempToken } from "../lib/auth.ts";
 import { AuthError } from "../lib/errors.ts";
 import { handleError, getClientIP } from "../lib/utils.ts";
 import { authRateLimiter } from "../lib/rate-limit.ts";
 import * as db from "../../bun/db.ts";
+
+/**
+ * Verifies a 6-digit TOTP code OR an 8-char backup code for the given user.
+ * Consumes the backup code on match. Returns true if accepted.
+ */
+export async function verifyTotpOrBackupCode(
+  user: { id: string; email: string },
+  code: string,
+): Promise<boolean> {
+  const secret = db.getTotpSecret(user.id);
+  if (!secret) return false;
+
+  const totp = createTOTP(secret, user.email);
+  const delta = totp.validate({ token: code, window: 1 });
+  if (delta !== null) return true;
+
+  const normalized = code.replace(/-/g, "").trim().toUpperCase();
+  if (!normalized) return false;
+  const unused = db.getUnusedBackupCodes(user.id);
+  for (const bc of unused) {
+    const match = await Bun.password.verify(normalized, bc.code_hash);
+    if (match) {
+      db.markBackupCodeUsed(bc.id);
+      return true;
+    }
+  }
+  return false;
+}
 
 export function createTOTP(secret: string, email: string): TOTP {
   return new TOTP({
@@ -336,6 +364,69 @@ export async function handleTotpDisable(request: Request): Promise<Response> {
 
     db.disableTotp(userId);
     return Response.json({ disabled: true }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/**
+ * POST /api/auth/totp/reset-from-login
+ * "Lost your device" flow: consume a backup code to disable TOTP, then
+ * require the user to immediately re-enroll. Returns a fresh temp token
+ * that drives the /totp-setup screen.
+ */
+export async function handleTotpResetFromLogin(request: Request): Promise<Response> {
+  const rateLimitResponse = checkRateLimit(request);
+  if (rateLimitResponse) return rateLimitResponse;
+
+  try {
+    const body = await request.json() as { tempToken?: string; backupCode?: string };
+    if (!body.tempToken || !body.backupCode) {
+      return Response.json(
+        { error: "tempToken and backupCode are required" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    const userId = await verifyTempToken(body.tempToken);
+    const user = db.getUserById(userId);
+    if (!user) throw new AuthError("Unauthorized");
+    if (!user.totp_enabled) {
+      return Response.json(
+        { error: "TOTP is not enabled on this account" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    // Require a backup code specifically (not a TOTP code) — the whole point
+    // of this flow is that the user has lost their authenticator.
+    const normalized = body.backupCode.replace(/-/g, "").trim().toUpperCase();
+    const unused = db.getUnusedBackupCodes(userId);
+    let matched = false;
+    for (const bc of unused) {
+      const ok = await Bun.password.verify(normalized, bc.code_hash);
+      if (ok) {
+        db.markBackupCodeUsed(bc.id);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      return Response.json(
+        { error: "Invalid backup code" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    // Disable TOTP (clears secret + remaining backup codes) and mint a fresh
+    // temp token so the client is forced through /totp-setup before it ever
+    // gets a real session token.
+    db.disableTotp(userId);
+    const tempToken = await createTempToken(userId);
+    return Response.json(
+      { requires2FASetup: true, tempToken },
+      { headers: corsHeaders },
+    );
   } catch (error) {
     return handleError(error);
   }

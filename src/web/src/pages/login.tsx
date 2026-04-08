@@ -57,6 +57,14 @@ export function LoginPage() {
               {loading ? <Spinner /> : <><span>Sign In</span><ArrowRight size={14} /></>}
             </button>
           </form>
+          <div className="mt-4 text-center">
+            <a
+              href="#/password-reset"
+              className="font-mono text-[9px] uppercase tracking-wider text-muted hover:text-fg"
+            >
+              Forgot password?
+            </a>
+          </div>
         </div>
       </div>
     </div>

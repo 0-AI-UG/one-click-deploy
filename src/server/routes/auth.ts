@@ -3,7 +3,7 @@ import { authenticateRequest, createToken, createTempToken } from "../lib/auth.t
 import { AuthError } from "../lib/errors.ts";
 import { handleError, getClientIP } from "../lib/utils.ts";
 import { authRateLimiter } from "../lib/rate-limit.ts";
-import { createTOTP } from "./totp.ts";
+import { verifyTotpOrBackupCode } from "./totp.ts";
 import * as db from "../../bun/db.ts";
 
 function checkRateLimit(request: Request): Response | null {
@@ -69,6 +69,56 @@ export async function handleLogin(request: Request): Promise<Response> {
   }
 }
 
+/**
+ * POST /api/auth/password-reset
+ * Self-serve password reset gated by TOTP / backup code.
+ * Body: { email, totpCode, newPassword }
+ * Only works for users with TOTP enabled (no email delivery in this system).
+ */
+export async function handlePasswordReset(request: Request): Promise<Response> {
+  const rateLimitResponse = checkRateLimit(request);
+  if (rateLimitResponse) return rateLimitResponse;
+
+  try {
+    const body = await request.json() as {
+      email?: string;
+      totpCode?: string;
+      newPassword?: string;
+    };
+    if (!body.email || !body.totpCode || !body.newPassword) {
+      return Response.json(
+        { error: "Email, 2FA code, and new password are required" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    if (body.newPassword.length < 8) {
+      return Response.json(
+        { error: "New password must be at least 8 characters" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    const user = db.getUserByEmail(body.email);
+    // Return the same error for unknown user / no TOTP / bad code so we
+    // don't leak which emails exist or which accounts have 2FA.
+    const genericError = Response.json(
+      { error: "Unable to reset password. Check your email and 2FA code." },
+      { status: 400, headers: corsHeaders },
+    );
+    if (!user || !user.totp_enabled) return genericError;
+
+    const ok = await verifyTotpOrBackupCode(user, body.totpCode);
+    if (!ok) return genericError;
+
+    const hash = await Bun.password.hash(body.newPassword, "bcrypt");
+    db.updateUserPassword(user.id, hash);
+
+    return Response.json({ ok: true }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleMe(request: Request): Promise<Response> {
   try {
     const { userId } = await authenticateRequest(request);
@@ -124,31 +174,12 @@ export async function handleUpdateMe(request: Request): Promise<Response> {
             { status: 400, headers: corsHeaders },
           );
         }
-        const secret = db.getTotpSecret(userId);
-        if (!secret) throw new AuthError("TOTP not configured");
-
-        const totp = createTOTP(secret, user.email);
-        const delta = totp.validate({ token: body.totpCode, window: 1 });
-
-        if (delta === null) {
-          // Try backup codes
-          const normalizedCode = body.totpCode.replace(/-/g, "");
-          const unusedCodes = db.getUnusedBackupCodes(userId);
-          let backupMatch = false;
-          for (const bc of unusedCodes) {
-            const match = await Bun.password.verify(normalizedCode, bc.code_hash);
-            if (match) {
-              db.markBackupCodeUsed(bc.id);
-              backupMatch = true;
-              break;
-            }
-          }
-          if (!backupMatch) {
-            return Response.json(
-              { error: "Invalid 2FA code" },
-              { status: 400, headers: corsHeaders },
-            );
-          }
+        const ok = await verifyTotpOrBackupCode(user, body.totpCode);
+        if (!ok) {
+          return Response.json(
+            { error: "Invalid 2FA code" },
+            { status: 400, headers: corsHeaders },
+          );
         }
       }
 

@@ -7,6 +7,7 @@ import { ProtectedRoute } from "./components/protected-route.tsx";
 import { LoginPage } from "./pages/login.tsx";
 import { TotpVerifyPage } from "./pages/totp-verify.tsx";
 import { TotpSetupPage } from "./pages/totp-setup.tsx";
+import { PasswordResetPage } from "./pages/password-reset.tsx";
 import { SetupPage } from "./pages/setup.tsx";
 import { DashboardPage } from "./pages/dashboard.tsx";
 import { DeployPage } from "./pages/deploy.tsx";
@@ -89,6 +90,7 @@ export function App() {
     return <><SetupPage /><Toasts /><ConfirmDialog /></>;
   }
   if (hash === "#/login") return <><LoginPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/password-reset") return <><PasswordResetPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/totp-verify") return <><TotpVerifyPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/totp-setup") return <><TotpSetupPage /><Toasts /><ConfirmDialog /></>;
 
@@ -108,8 +110,10 @@ export function App() {
     content = <DashboardPage />;
   } else if (hash === "#/deploy") {
     content = <DeployPage />;
-  } else if (hash === "#/deploy/progress") {
-    content = <DeployProgressPage />;
+  } else if (hash.startsWith("#/deploy/progress")) {
+    const parts = hash.split("/");
+    const jobId = parts[3] ? parseInt(parts[3], 10) : null;
+    content = <DeployProgressPage jobId={jobId && !Number.isNaN(jobId) ? jobId : null} />;
   } else if (hash.startsWith("#/apps/")) {
     const appId = parseInt(hash.split("/")[2], 10);
     content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;
