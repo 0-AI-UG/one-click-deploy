@@ -111,6 +111,21 @@ function resourcePartsFrom(req: Request): { type: string; id: string } {
   return { type: parts[3], id: parts[4] };
 }
 
+// ── Headless auto-deploy mode ──
+// When OCD_AUTO_DEPLOY is set, run the self-deploy pipeline and exit
+// without ever binding the HTTP server. Used by the Docker one-liner.
+if (process.env.OCD_AUTO_DEPLOY) {
+  const { loadAutoDeployConfig, runAutoDeploy } = await import("../bun/auto-deploy.ts");
+  try {
+    const config = loadAutoDeployConfig(process.env.OCD_AUTO_DEPLOY);
+    const result = await runAutoDeploy(config);
+    process.exit(result.ok ? 0 : 1);
+  } catch (err) {
+    console.error("[auto-deploy] Fatal:", err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+}
+
 // ── Server ──
 export const server = Bun.serve({
   port: PORT,

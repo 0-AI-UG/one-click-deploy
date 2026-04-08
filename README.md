@@ -21,7 +21,42 @@ A self-hosted web panel that automates server provisioning, DNS configuration, T
 
 ## Quick start
 
-The panel is distributed as a Docker image. Getting a permanent, self-hosted copy takes two steps.
+The panel is distributed as a Docker image. There are two ways to bootstrap a permanent, self-hosted copy.
+
+### Option A — one-liner headless install (fastest)
+
+Deploy the panel to Hetzner without ever opening a browser. Put your config in a JSON string (or file), and the container runs the full self-deploy pipeline and exits:
+
+```bash
+docker run --rm \
+  -e OCD_AUTO_DEPLOY='{
+    "hetzner_token": "your_hetzner_token",
+    "domain": "panel.example.com",
+    "server_type": "cx22",
+    "server_location": "nbg1",
+    "github_pat": "optional_github_pat_for_auto_redeploy",
+    "dns_zone_id": "optional_hetzner_dns_zone_id"
+  }' \
+  ghcr.io/0-ai-ug/one-click-deploy:latest
+```
+
+Or load the config from a file:
+
+```bash
+docker run --rm \
+  -v $(pwd)/panel.json:/config.json:ro \
+  -e OCD_AUTO_DEPLOY=/config.json \
+  ghcr.io/0-ai-ug/one-click-deploy:latest
+```
+
+**Required fields:** `hetzner_token`, `domain`.
+**Optional fields:** `server_type` (default `cx22`), `server_location` (default `nbg1`), `github_pat` (enables webhook auto-redeploy), `dns_zone_id` (auto-creates the A record), `volume_size` (default `10` GB), `app_name` (default `ocd-panel`).
+
+Progress streams to docker logs. On success, the container exits and your panel is live at `https://<domain>`. Open it, create your admin account on the one-time setup page, and you're done.
+
+### Option B — interactive bootstrap
+
+Prefer clicking through the UI? Run the panel locally in bootstrap mode (no login, no setup wizard), then use its **Deploy this panel** button.
 
 ### 1. Bootstrap locally
 
