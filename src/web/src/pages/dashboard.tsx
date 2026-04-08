@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { Server, Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText } from "lucide-react";
+import { Server, Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Terminal } from "lucide-react";
 
 type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
@@ -82,7 +82,14 @@ export function DashboardPage() {
                 <span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{server.type}</span>
                 <span className="font-mono text-[9px] text-muted">{server.location}</span>
               </div>
-              <StatusBadge status={server.status} />
+              <div className="flex items-center gap-2">
+                <PermissionGate permission="terminal.access">
+                  <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/server/${server.id}`; }}>
+                    <Terminal size={12} /> Shell
+                  </Btn>
+                </PermissionGate>
+                <StatusBadge status={server.status} />
+              </div>
             </div>
             {server.apps.length === 0 ? (
               <div className="px-4 py-6 text-center text-[10px] text-muted font-mono uppercase tracking-wider">No apps on this server</div>

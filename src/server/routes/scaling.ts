@@ -107,3 +107,15 @@ export async function handleGetAppMetrics(request: Request, appId: number): Prom
     return handleError(error);
   }
 }
+
+export async function handleGetAppMetricsHistory(request: Request, appId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "servers.view");
+    const url = new URL(request.url);
+    const sinceSec = Math.max(60, Math.min(86400, parseInt(url.searchParams.get("since") || "3600", 10)));
+    const samples = db.getRecentAppMetrics(appId, sinceSec);
+    return Response.json({ samples, since: sinceSec }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}

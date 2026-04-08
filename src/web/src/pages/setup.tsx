@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { post } from "../api/client.ts";
+import { get, post } from "../api/client.ts";
 import { setTempToken } from "../stores/auth.ts";
 import { showToast, Spinner, Card } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
@@ -11,6 +11,16 @@ export function SetupPage() {
   const [loading, setLoading] = useState(false);
   const [serverTypes, setServerTypes] = useState<HetznerServerType[]>([]);
   const [typesLoading, setTypesLoading] = useState(false);
+  // When the panel was handed off from a bootstrap instance, the Hetzner
+  // token is already present — skip the API-keys step and only ask for the
+  // admin account.
+  const [hasHetznerToken, setHasHetznerToken] = useState(false);
+
+  useEffect(() => {
+    get("/api/setup/status").then((res) => {
+      setHasHetznerToken(!!res.hasHetznerToken);
+    }).catch(() => {});
+  }, []);
   const [form, setForm] = useState({
     email: "", password: "", confirmPassword: "",
     hetzner_api_token: "", github_pat: "",
@@ -48,17 +58,20 @@ export function SetupPage() {
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
+  const validateStep1 = () => {
+    if (!form.email || !form.password) { showToast("Email and password are required", "error"); return false; }
+    if (form.password.length < 8) { showToast("Password must be at least 8 characters", "error"); return false; }
+    if (form.password !== form.confirmPassword) { showToast("Passwords don't match", "error"); return false; }
+    return true;
+  };
+
   const nextStep = () => {
-    if (step === 1) {
-      if (!form.email || !form.password) return showToast("Email and password are required", "error");
-      if (form.password.length < 8) return showToast("Password must be at least 8 characters", "error");
-      if (form.password !== form.confirmPassword) return showToast("Passwords don't match", "error");
-    }
+    if (step === 1 && !validateStep1()) return;
     setStep(step + 1);
   };
 
   const handleSubmit = async () => {
-    if (!form.hetzner_api_token) return showToast("Hetzner API token is required", "error");
+    if (!hasHetznerToken && !form.hetzner_api_token) return showToast("Hetzner API token is required", "error");
     setLoading(true);
     try {
       const res = await post("/api/setup/complete", form);
@@ -68,6 +81,16 @@ export function SetupPage() {
       showToast(err.message || "Setup failed", "error");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // In handoff mode, step 1 is the only step — finish setup right from there.
+  const handleStep1Submit = async () => {
+    if (!validateStep1()) return;
+    if (hasHetznerToken) {
+      await handleSubmit();
+    } else {
+      setStep(2);
     }
   };
 
@@ -81,16 +104,18 @@ export function SetupPage() {
         </div>
 
         {/* Progress */}
-        <div className="flex items-center gap-2 justify-center mb-6">
-          {[1, 2].map((s) => (
-            <div key={s} className="flex items-center gap-2">
-              <div className={`w-7 h-7 flex items-center justify-center text-[10px] font-mono font-bold border-2 border-fg ${
-                step >= s ? "bg-accent text-fg" : "bg-alt text-muted"
-              }`}>{s}</div>
-              {s < 2 && <div className={`w-12 h-0.5 ${step > s ? "bg-fg" : "bg-alt"}`} />}
-            </div>
-          ))}
-        </div>
+        {!hasHetznerToken && (
+          <div className="flex items-center gap-2 justify-center mb-6">
+            {[1, 2].map((s) => (
+              <div key={s} className="flex items-center gap-2">
+                <div className={`w-7 h-7 flex items-center justify-center text-[10px] font-mono font-bold border-2 border-fg ${
+                  step >= s ? "bg-accent text-fg" : "bg-alt text-muted"
+                }`}>{s}</div>
+                {s < 2 && <div className={`w-12 h-0.5 ${step > s ? "bg-fg" : "bg-alt"}`} />}
+              </div>
+            ))}
+          </div>
+        )}
 
         <Card className="p-6">
           {step === 1 && (
@@ -111,8 +136,12 @@ export function SetupPage() {
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Confirm Password</label>
                 <input type="password" value={form.confirmPassword} onChange={set("confirmPassword")} placeholder="Confirm password" />
               </div>
-              <button onClick={nextStep} className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all">
-                <span>Next</span><ArrowRight size={14} />
+              <button onClick={handleStep1Submit} disabled={loading} className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35">
+                {loading ? <Spinner /> : (
+                  hasHetznerToken
+                    ? <><span>Complete Setup</span><ArrowRight size={14} /></>
+                    : <><span>Next</span><ArrowRight size={14} /></>
+                )}
               </button>
             </div>
           )}

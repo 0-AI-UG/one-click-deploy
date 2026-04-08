@@ -110,8 +110,7 @@ async function poll() {
       if ((avgCpu > app.cpu_threshold || avgMem > app.mem_threshold) && app.replicas.length < app.max_replicas) {
         appendLog("SCALE UP " + app.app_name + ": CPU=" + avgCpu.toFixed(1) + "% MEM=" + avgMem.toFixed(1) + "%");
         app._lastScale = Date.now();
-        // Notify desktop app or handle directly — for now just log
-        // Actual scaling is triggered by the desktop app polling this daemon's log
+        // For now just log — actual scaling is triggered by the panel polling this daemon's log
       }
 
       // Scale down

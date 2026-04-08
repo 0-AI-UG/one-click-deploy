@@ -1,12 +1,13 @@
 import { writeFileSync, unlinkSync, existsSync, readFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
+import { SSH_DIR } from "../paths.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
-const sshDir = path.join(process.cwd(), "data", "ssh");
+const sshDir = SSH_DIR;
 
 async function getOrCreateLocalKeyPair(): Promise<{ publicKey: string; privateKeyPath: string }> {
   mkdirSync(sshDir, { recursive: true });
@@ -62,40 +63,66 @@ export async function ensureSshKey(name: string) {
   return { ...data.ssh_key, privateKeyPath };
 }
 
+/**
+ * Write host key to a temp known_hosts file (caller must unlink on cleanup).
+ * Returns the known_hosts path + StrictHostKeyChecking value.
+ */
+export function writeKnownHostsTmp(ip: string, hostKey?: string): { knownHostsFile: string; strictHostKeyChecking: string; tmpPath: string | null } {
+  if (!hostKey) {
+    return { knownHostsFile: "/dev/null", strictHostKeyChecking: "no", tmpPath: null };
+  }
+  const tmpPath = `${tmpdir()}/ocd-known-hosts-${ip.replace(/\./g, "-")}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  writeFileSync(tmpPath, hostKey);
+  return { knownHostsFile: tmpPath, strictHostKeyChecking: "yes", tmpPath };
+}
+
+/**
+ * Build the ssh CLI args list. If `interactive` is true, use -tt (force PTY)
+ * and drop BatchMode. If `command` is undefined, an interactive login shell
+ * is opened.
+ */
+export function buildSshArgs(opts: {
+  ip: string;
+  command?: string;
+  hostKey?: string;
+  interactive?: boolean;
+  user?: string;
+}): { args: string[]; tmpKnownHostsPath: string | null } {
+  const keyPath = getSshKeyPath();
+  const { knownHostsFile, strictHostKeyChecking, tmpPath } = writeKnownHostsTmp(opts.ip, opts.hostKey);
+  const user = opts.user || "root";
+
+  const args: string[] = [
+    "ssh",
+    "-i", keyPath,
+    "-o", `StrictHostKeyChecking=${strictHostKeyChecking}`,
+    "-o", `UserKnownHostsFile=${knownHostsFile}`,
+    "-o", "ConnectTimeout=10",
+  ];
+  if (opts.interactive) {
+    args.push("-tt");
+  } else {
+    args.push("-o", "BatchMode=yes");
+  }
+  args.push(`${user}@${opts.ip}`);
+  if (opts.command !== undefined) args.push(opts.command);
+  return { args, tmpKnownHostsPath: tmpPath };
+}
+
 export async function sshExec(
   ip: string,
   command: string,
   hostKey?: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const keyPath = getSshKeyPath();
   const shortCmd = command.length > 120 ? command.slice(0, 120) + "..." : command;
   log("ssh", `Exec on ${ip}: ${shortCmd}`);
   const start = Date.now();
 
-  let knownHostsFile = "/dev/null";
-  let strictHostKeyChecking = "no";
-  let tmpKnownHostsPath: string | null = null;
-
-  if (hostKey) {
-    // Write host key to temp file for verification
-    tmpKnownHostsPath = `${tmpdir()}/ocd-known-hosts-${ip.replace(/\./g, "-")}-${Date.now()}`;
-    writeFileSync(tmpKnownHostsPath, hostKey);
-    knownHostsFile = tmpKnownHostsPath;
-    strictHostKeyChecking = "yes";
-  }
+  const { args, tmpKnownHostsPath } = buildSshArgs({ ip, command, hostKey, interactive: false });
 
   try {
     const proc = Bun.spawn(
-      [
-        "ssh",
-        "-i", keyPath,
-        "-o", "BatchMode=yes",
-        "-o", `StrictHostKeyChecking=${strictHostKeyChecking}`,
-        "-o", `UserKnownHostsFile=${knownHostsFile}`,
-        "-o", "ConnectTimeout=10",
-        `root@${ip}`,
-        command,
-      ],
+      args,
       { stdout: "pipe", stderr: "pipe" }
     );
     const [stdout, stderr] = await Promise.all([

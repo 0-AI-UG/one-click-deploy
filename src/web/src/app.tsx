@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "./stores/auth.ts";
+import { useAuth, login as storeLogin } from "./stores/auth.ts";
 import { get } from "./api/client.ts";
 import { Toasts, ConfirmDialog, Spinner } from "./components/ui.tsx";
 import { Nav } from "./components/nav.tsx";
@@ -15,6 +15,7 @@ import { ResourcesPage } from "./pages/resources.tsx";
 import { SettingsPage } from "./pages/settings.tsx";
 import { UsersPage } from "./pages/admin/users.tsx";
 import { UserDetailPage } from "./pages/admin/user-detail.tsx";
+import { TerminalPage } from "./pages/terminal.tsx";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -37,6 +38,20 @@ export function App() {
       const incomplete = !res.setupComplete;
       setNeedsSetup(incomplete);
       setSetupChecked(true);
+      // Bootstrap mode: server skips auth entirely. Synthesize a logged-in
+      // session so the rest of the app works without a login round-trip.
+      if (res.bootstrap && !token) {
+        storeLogin("bootstrap", {
+          id: "bootstrap",
+          email: "bootstrap@localhost",
+          isAdmin: true,
+          permissions: [],
+        });
+        if (!window.location.hash || window.location.hash === "#/login" || window.location.hash === "#/setup") {
+          window.location.hash = "#/";
+        }
+        return;
+      }
       if (incomplete && !token) {
         if (window.location.hash !== "#/setup") {
           window.location.hash = "#/setup";
@@ -115,6 +130,13 @@ export function App() {
     content = <SettingsPage />;
   } else if (hash === "#/admin/users") {
     content = <UsersPage />;
+  } else if (hash.startsWith("#/terminal/")) {
+    const parts = hash.split("/");
+    const kind = parts[2] as "server" | "replica";
+    const id = parseInt(parts[3], 10);
+    content = (kind === "server" || kind === "replica") && id
+      ? <TerminalPage kind={kind} id={id} />
+      : <DashboardPage />;
   } else if (hash.startsWith("#/admin/users/")) {
     const userId = hash.split("/")[3];
     content = userId ? <UserDetailPage userId={userId} /> : <UsersPage />;

@@ -23,7 +23,7 @@ export { createVolume, detachVolume, attachVolume, resizeVolume, deleteVolume } 
 export { deployCaddySite, removeCaddySite, cloneAndBuild, removeContainer, detectComposeFile, detectWebService, cloneAndComposeBuild, restartCompose, pauseCompose, unpauseCompose, removeCompose, getComposeLogs, composeHealthCheck, healthCheck, getContainerLogs, restartContainer, pauseContainer, unpauseContainer, transferImage } from "./containers.ts";
 
 // Webhooks
-export { deployWebhookReceiver, ensureWebhookCaddyRoute, setupAppWebhook, removeAppWebhook } from "./webhooks.ts";
+export { deployWebhookReceiver, ensureWebhookCaddyRoute, setupAppWebhook, removeAppWebhook, fetchWebhookHistory } from "./webhooks.ts";
 
 // Auth proxy
 export { authProxyPort, deployAuthProxy, removeAuthProxy } from "./auth-proxy.ts";

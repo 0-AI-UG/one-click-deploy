@@ -4,8 +4,12 @@ function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
+// Bump when webhookReceiverScript() changes so deployWebhookReceiver re-uploads.
+const WEBHOOK_RECEIVER_VERSION = 2;
+
 function webhookReceiverScript(): string {
   return `#!/usr/bin/env bun
+// OCD_WEBHOOK_RECEIVER_VERSION=${WEBHOOK_RECEIVER_VERSION}
 import { appendFileSync } from "node:fs";
 const WEBHOOKS_DIR = "/opt/ocd/webhooks";
 const LOCK_COOLDOWN = 30_000; // 30s between rebuilds per app
@@ -24,8 +28,29 @@ async function verifySignature(secret, body, signature) {
 
 async function rebuild(appName, meta) {
   const logFile = WEBHOOKS_DIR + "/" + appName + ".log";
+  const historyFile = WEBHOOKS_DIR + "/" + appName + ".history.jsonl";
   const ts = new Date().toISOString();
-  const appendLog = (msg) => { try { appendFileSync(logFile, ts + " " + msg + "\\n"); } catch {} };
+  const logBuf = [];
+  const appendLog = (msg) => {
+    const line = ts + " " + msg;
+    logBuf.push(line);
+    try { appendFileSync(logFile, line + "\\n"); } catch {}
+  };
+  const getCommit = async () => {
+    try {
+      const proc = Bun.spawn(["su", "-", "deploy", "-c", "cd /home/deploy/apps/" + appName + " && git rev-parse --short HEAD 2>/dev/null || echo unknown"], { stdout: "pipe", stderr: "pipe" });
+      await proc.exited;
+      return (await new Response(proc.stdout).text()).trim();
+    } catch { return "unknown"; }
+  };
+  const writeHistory = (status) => {
+    try {
+      // keep last ~2KB of log buffer
+      const tail = logBuf.join("\\n").slice(-2048);
+      const entry = JSON.stringify({ ts: new Date().toISOString(), status, git_commit: lastCommit, image_tag: appName + ":latest", log: tail });
+      appendFileSync(historyFile, entry + "\\n");
+    } catch {}
+  };
 
   appendLog("Starting rebuild for " + appName);
   const appDir = "/home/deploy/apps/" + appName;
@@ -49,16 +74,21 @@ async function rebuild(appName, meta) {
         appName + ":latest"
     ];
   }
+  let lastCommit = "unknown";
   for (const cmd of cmds) {
     const proc = Bun.spawn(["su", "-", "deploy", "-c", cmd], { stdout: "pipe", stderr: "pipe" });
     const exit = await proc.exited;
     if (exit !== 0) {
       const stderr = await new Response(proc.stderr).text();
       appendLog("FAILED: " + cmd + " -> " + stderr.slice(0, 200));
+      lastCommit = await getCommit();
+      writeHistory("failed");
       return false;
     }
   }
-  appendLog("Rebuild complete for " + appName);
+  lastCommit = await getCommit();
+  appendLog("Rebuild complete for " + appName + " @ " + lastCommit);
+  writeHistory("deployed");
   return true;
 }
 
@@ -113,12 +143,18 @@ console.log("OCD webhook receiver listening on " + server.hostname + ":" + serve
 export async function deployWebhookReceiver(ip: string, hostKey?: string): Promise<void> {
   log("webhook", `Deploying webhook receiver to ${ip}`);
 
-  // Check if already deployed
-  const check = await sshExec(ip, "test -f /opt/ocd/webhook-receiver.ts && echo ok", hostKey);
+  // Check if already deployed AND at current version
+  const versionMarker = `OCD_WEBHOOK_RECEIVER_VERSION=${WEBHOOK_RECEIVER_VERSION}`;
+  const check = await sshExec(
+    ip,
+    `grep -q '${versionMarker}' /opt/ocd/webhook-receiver.ts 2>/dev/null && echo ok || echo stale`,
+    hostKey
+  );
   if (check.stdout.trim() === "ok") {
-    log("webhook", "Webhook receiver already deployed");
+    log("webhook", "Webhook receiver already deployed (current version)");
     return;
   }
+  log("webhook", "Webhook receiver missing or stale — (re)deploying");
 
   // Ensure Bun is installed on the server
   const bunCheck = await sshExec(ip, "test -x /usr/local/bin/bun && echo ok || echo missing", hostKey);
@@ -147,9 +183,42 @@ RestartSec=5
 WantedBy=multi-user.target`;
   const unitEscaped = unit.replace(/'/g, "'\\''");
   await sshExec(ip, `echo '${unitEscaped}' > /etc/systemd/system/ocd-webhook.service`, hostKey);
-  await sshExec(ip, "systemctl daemon-reload && systemctl enable ocd-webhook && systemctl start ocd-webhook", hostKey);
+  await sshExec(ip, "systemctl daemon-reload && systemctl enable ocd-webhook && systemctl restart ocd-webhook", hostKey);
 
   log("webhook", "Webhook receiver deployed and started");
+}
+
+export async function fetchWebhookHistory(
+  ip: string,
+  appName: string,
+  sinceTs: string | null,
+  hostKey?: string
+): Promise<Array<{ ts: string; status: string; git_commit: string; image_tag: string; log: string }>> {
+  const res = await sshExec(
+    ip,
+    `tail -n 200 /opt/ocd/webhooks/${appName}.history.jsonl 2>/dev/null || true`,
+    hostKey
+  );
+  const out: Array<{ ts: string; status: string; git_commit: string; image_tag: string; log: string }> = [];
+  for (const line of res.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const entry = JSON.parse(trimmed);
+      if (!entry?.ts) continue;
+      if (sinceTs && entry.ts <= sinceTs) continue;
+      out.push({
+        ts: entry.ts,
+        status: entry.status || "deployed",
+        git_commit: entry.git_commit || "",
+        image_tag: entry.image_tag || `${appName}:latest`,
+        log: entry.log || "",
+      });
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return out;
 }
 
 export async function ensureWebhookCaddyRoute(ip: string, hostKey?: string): Promise<void> {
@@ -254,7 +323,7 @@ export async function setupAppWebhook(
 
 export async function removeAppWebhook(ip: string, appName: string, hostKey?: string): Promise<void> {
   log("webhook", `Removing webhook config for ${appName} on ${ip}`);
-  await sshExec(ip, `rm -f /opt/ocd/webhooks/${appName}.secret /opt/ocd/webhooks/${appName}.json /opt/ocd/webhooks/${appName}.log`, hostKey);
+  await sshExec(ip, `rm -f /opt/ocd/webhooks/${appName}.secret /opt/ocd/webhooks/${appName}.json /opt/ocd/webhooks/${appName}.log /opt/ocd/webhooks/${appName}.history.jsonl`, hostKey);
   // Remove git credentials
   await sshExec(ip, `rm -f /home/deploy/apps/${appName}/.git-credentials`, hostKey);
   log("webhook", `Webhook config removed for ${appName}`);

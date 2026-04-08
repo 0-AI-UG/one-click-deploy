@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import path from "path";
 import { mkdirSync } from "fs";
 import { runMigrations } from "./migrations.ts";
+import { DATA_DIR } from "./paths.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [db:${context}]`, ...args);
@@ -74,7 +75,7 @@ function initSchema(instance: Database) {
   }
 }
 
-const dataDir = process.env.OCD_DATA_DIR || path.join(process.cwd(), "data");
+const dataDir = DATA_DIR;
 mkdirSync(dataDir, { recursive: true });
 
 const dbPath = path.join(dataDir, "deploy.db");
@@ -271,17 +272,48 @@ export function insertDeployment(deployment: {
   image_tag: string;
   git_commit: string;
   deploy_log?: string;
+  status?: string;
+  source?: string;
+  created_at?: string;
 }) {
+  const status = deployment.status ?? "deployed";
+  const source = deployment.source ?? "manual";
+  if (deployment.created_at) {
+    return db
+      .query(
+        "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log, status, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      )
+      .get(
+        deployment.app_id,
+        deployment.image_tag,
+        deployment.git_commit,
+        deployment.deploy_log ?? "",
+        status,
+        source,
+        deployment.created_at
+      ) as any;
+  }
   return db
     .query(
-      "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log) VALUES (?, ?, ?, ?) RETURNING *"
+      "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log, status, source) VALUES (?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       deployment.app_id,
       deployment.image_tag,
       deployment.git_commit,
-      deployment.deploy_log ?? ""
+      deployment.deploy_log ?? "",
+      status,
+      source
     ) as any;
+}
+
+export function getLatestWebhookDeploymentTs(appId: number): string | null {
+  const row = db
+    .query(
+      "SELECT created_at FROM deployment_history WHERE app_id = ? AND source = 'webhook' ORDER BY created_at DESC LIMIT 1"
+    )
+    .get(appId) as { created_at: string } | null;
+  return row?.created_at ?? null;
 }
 
 export function getDeployments(appId: number) {
@@ -397,6 +429,54 @@ export function updateReplicaMetrics(id: number, cpuPercent: number, memoryPerce
 
 export function deleteReplica(id: number) {
   db.query("DELETE FROM replicas WHERE id = ?").run(id);
+}
+
+export function getAllReplicas() {
+  return db.query("SELECT * FROM replicas").all() as any[];
+}
+
+export function touchReplicaHealth(id: number) {
+  db.query("UPDATE replicas SET last_health_at = datetime('now') WHERE id = ?").run(id);
+}
+
+export function incrementUnhealthyTicks(id: number): number {
+  db.query("UPDATE replicas SET unhealthy_ticks = unhealthy_ticks + 1 WHERE id = ?").run(id);
+  const row = db.query("SELECT unhealthy_ticks FROM replicas WHERE id = ?").get(id) as any;
+  return row?.unhealthy_ticks ?? 0;
+}
+
+export function resetUnhealthyTicks(id: number) {
+  db.query("UPDATE replicas SET unhealthy_ticks = 0 WHERE id = ?").run(id);
+}
+
+// --- Metrics samples ---
+
+export function insertMetricSample(sample: {
+  replica_id: number;
+  app_id: number;
+  cpu_percent: number;
+  memory_percent: number;
+}) {
+  db.query(
+    "INSERT INTO metrics_samples (replica_id, app_id, cpu_percent, memory_percent) VALUES (?, ?, ?, ?)"
+  ).run(sample.replica_id, sample.app_id, sample.cpu_percent, sample.memory_percent);
+}
+
+export function getRecentAppMetrics(appId: number, sinceSeconds: number) {
+  return db
+    .query(
+      `SELECT replica_id, cpu_percent, memory_percent, sampled_at
+       FROM metrics_samples
+       WHERE app_id = ? AND sampled_at >= datetime('now', ?)
+       ORDER BY sampled_at ASC`
+    )
+    .all(appId, `-${sinceSeconds} seconds`) as any[];
+}
+
+export function pruneOldMetrics(olderThanSeconds: number) {
+  db.query(
+    "DELETE FROM metrics_samples WHERE sampled_at < datetime('now', ?)"
+  ).run(`-${olderThanSeconds} seconds`);
 }
 
 // --- Scaling Events ---
@@ -574,6 +654,7 @@ export const ALL_PERMISSIONS = [
   "webhooks.manage",
   "resources.view",
   "resources.delete",
+  "terminal.access",
 ] as const;
 
 export type Permission = typeof ALL_PERMISSIONS[number];

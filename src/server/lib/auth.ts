@@ -14,14 +14,12 @@ const JWT_SECRET = new Uint8Array(
   await crypto.subtle.digest("SHA-256", rawSecret),
 );
 
-const IS_DESKTOP = process.env.OCD_MODE === "desktop";
+export const IS_BOOTSTRAP = process.env.OCD_BOOTSTRAP === "1";
+
+const BOOTSTRAP_IDENTITY: TokenPayload = { userId: "bootstrap", email: "bootstrap@localhost" };
 
 export async function authenticateRequest(request: Request): Promise<TokenPayload> {
-  // Desktop mode: skip auth, return synthetic admin identity
-  if (IS_DESKTOP) {
-    return { userId: "desktop", email: "desktop@localhost" };
-  }
-
+  if (IS_BOOTSTRAP) return BOOTSTRAP_IDENTITY;
   const header = request.headers.get("Authorization");
   if (!header?.startsWith("Bearer ")) {
     throw new AuthError("Unauthorized");
@@ -66,7 +64,7 @@ export async function verifyTempToken(token: string): Promise<string> {
 
 export async function requireAdmin(request: Request): Promise<TokenPayload> {
   const payload = await authenticateRequest(request);
-  if (IS_DESKTOP) return payload; // desktop mode is always admin
+  if (IS_BOOTSTRAP) return payload;
   const user = getUserById(payload.userId);
   if (!user?.is_admin) {
     throw new ForbiddenError("Admin access required");

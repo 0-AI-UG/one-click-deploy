@@ -1,6 +1,6 @@
 # Database Schema
 
-The desktop app uses SQLite in WAL mode via Bun's native `bun:sqlite` driver. Schema is defined in `src/bun/db.ts` with migrations in `src/bun/migrations.ts`.
+The panel uses SQLite in WAL mode via Bun's native `bun:sqlite` driver. Schema is defined in `src/bun/db.ts` with migrations in `src/bun/migrations.ts`.
 
 ## Tables
 

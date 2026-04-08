@@ -108,6 +108,13 @@ export type DeployRequest = {
   compose_file?: string; // Path to compose file, auto-detected if omitted
   compose_web_service?: string; // Which compose service Caddy proxies to (default: auto-detect)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
+
+  // Self-deploy handoff: when the local bootstrap panel deploys a hosted
+  // copy of itself, it hands off a snapshot of its SQLite DB so the hosted
+  // instance boots already knowing about itself (and the Hetzner token).
+  // The hosted instance's users table is cleared, so its setup wizard will
+  // prompt for an admin account on first visit.
+  self_deploy?: boolean;
 };
 
 export type Settings = {

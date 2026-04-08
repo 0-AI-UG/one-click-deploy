@@ -4,8 +4,9 @@ import * as hetzner from "../hetzner/index.ts";
 import * as github from "../github.ts";
 import { validateDeployRequest } from "../validate.ts";
 import { createMasker } from "../mask.ts";
-import { getTokens } from "../keychain.ts";
+import { getTokens } from "../secret-store.ts";
 import { scaleApp } from "../scale.ts";
+import { performSelfDeployHandoff } from "./self-deploy.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
 
@@ -124,6 +125,17 @@ export async function deploy(
   if (!validation.valid) {
     log("validation", `Failed: ${validation.error}`);
     return { ok: false, error: validation.error };
+  }
+
+  // Self-deploy needs a persistent volume (so the handed-off DB survives
+  // restarts) and a JWT_SECRET env var (used to re-encrypt the token).
+  if (req.self_deploy) {
+    if (!req.volume_size || req.volume_size <= 0) {
+      return { ok: false, error: "Self-deploy requires a persistent volume" };
+    }
+    if (!req.env_vars.JWT_SECRET) {
+      return { ok: false, error: "Self-deploy requires JWT_SECRET in env vars" };
+    }
   }
 
   // Set up log masking for secrets
@@ -313,6 +325,20 @@ export async function deploy(
       volumeMount = `${hostMountPath}:${containerPath}`;
       log("build", `Volume mounted: ${volumeMount}`);
       onProgress("build", `Volume ready (${req.volume_size}GB at /data)`);
+
+      // Self-deploy: copy the local bootstrap DB onto the mounted volume
+      // *before* the container starts, so the hosted instance boots with
+      // full knowledge of itself, its server, and the Hetzner token.
+      if (req.self_deploy) {
+        onProgress("build", "Handing off panel database to hosted instance...");
+        await performSelfDeployHandoff({
+          serverIp,
+          hostKey: serverHostKey || undefined,
+          hostMountPath,
+          newJwtSecret: req.env_vars.JWT_SECRET!,
+        });
+        onProgress("build", "Panel database handed off");
+      }
     }
 
     // Step 4: Create app record, then clone & build

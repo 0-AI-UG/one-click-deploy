@@ -2,7 +2,7 @@ import type { ServerWithApps } from "../../shared/rpc.ts";
 import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
 import { validateEnvVars } from "../validate.ts";
-import { getTokens } from "../keychain.ts";
+import { getTokens } from "../secret-store.ts";
 import { rollingRedeploy } from "../scale.ts";
 
 type ProgressFn = (step: string, detail: string) => void;

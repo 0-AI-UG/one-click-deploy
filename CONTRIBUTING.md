@@ -7,8 +7,7 @@ Thanks for your interest in contributing! Here's how to get started.
 ### Prerequisites
 
 - [Bun](https://bun.sh) (latest)
-- [Electrobun](https://electrobun.dev) v1.16+
-- Node.js 20+ (for some tooling)
+- Docker (for building/testing the container image)
 
 ### Getting Started
 
@@ -28,10 +27,11 @@ bun run dev
 
 | Command | Description |
 | --- | --- |
-| `bun run dev` | Start dev server with hot reload |
-| `bun run start` | Start dev server |
-| `bun run build` | Build the application |
+| `bun run dev` | Start the panel on :3001 with hot reload and `SKIP_2FA=1` |
+| `bun run start` | Start the panel in production mode |
+| `bun run build` | Build the web bundle into `src/web/dist` |
 | `bun run typecheck` | Run TypeScript type checking |
+| `bun test` | Run backend tests |
 
 ## Making Changes
 
@@ -55,7 +55,7 @@ Use [GitHub Issues](https://github.com/0-AI-UG/one-click-deploy/issues) to repor
 
 - Steps to reproduce (for bugs)
 - Expected vs actual behavior
-- Your OS and app version
+- Your browser and panel version
 
 ## License
 

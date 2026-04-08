@@ -5,13 +5,24 @@ import * as db from "../../bun/db.ts";
 import { secretStore } from "../../bun/secret-store.ts";
 import { validateHetznerToken, validateGitHubPat } from "../../bun/validate.ts";
 
+const IS_BOOTSTRAP = process.env.OCD_BOOTSTRAP === "1";
+
 export function isSetupComplete(): boolean {
+  if (IS_BOOTSTRAP) return true;
   return db.getUserCount() > 0;
 }
 
 export async function handleSetupStatus(_request: Request): Promise<Response> {
+  // If the panel was handed off from a bootstrap instance, the Hetzner
+  // token is already present — the wizard should skip the token step and
+  // only prompt for the admin account.
+  const hetznerToken = await secretStore.get("hetzner_api_token").catch(() => null);
   return Response.json(
-    { setupComplete: isSetupComplete() },
+    {
+      setupComplete: isSetupComplete(),
+      bootstrap: IS_BOOTSTRAP,
+      hasHetznerToken: !!hetznerToken,
+    },
     { headers: corsHeaders },
   );
 }
@@ -84,20 +95,24 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
       );
     }
 
-    if (!hetzner_api_token) {
+    // Allow skipping the Hetzner token if one is already present (e.g. after
+    // a self-deploy handoff from a bootstrap instance).
+    const existingToken = await secretStore.get("hetzner_api_token").catch(() => null);
+    if (!hetzner_api_token && !existingToken) {
       return Response.json(
         { error: "Hetzner API token is required" },
         { status: 400, headers: corsHeaders },
       );
     }
 
-    // Validate tokens
-    const hetznerValidation = validateHetznerToken(hetzner_api_token);
-    if (!hetznerValidation.valid) {
-      return Response.json(
-        { error: `Hetzner API token: ${hetznerValidation.error}` },
-        { status: 400, headers: corsHeaders },
-      );
+    if (hetzner_api_token) {
+      const hetznerValidation = validateHetznerToken(hetzner_api_token);
+      if (!hetznerValidation.valid) {
+        return Response.json(
+          { error: `Hetzner API token: ${hetznerValidation.error}` },
+          { status: 400, headers: corsHeaders },
+        );
+      }
     }
 
     if (github_pat) {
@@ -115,8 +130,8 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     const passwordHash = await Bun.password.hash(password, "bcrypt");
     db.insertUser({ id: userId, email, password_hash: passwordHash, is_admin: true });
 
-    // Store secrets
-    await secretStore.set("hetzner_api_token", hetzner_api_token);
+    // Store secrets (only overwrite Hetzner token if a new one was given)
+    if (hetzner_api_token) await secretStore.set("hetzner_api_token", hetzner_api_token);
     if (github_pat) await secretStore.set("github_pat", github_pat);
 
     // Store non-secret settings

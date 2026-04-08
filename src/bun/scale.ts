@@ -1,6 +1,6 @@
 import * as db from "./db.ts";
 import * as hetzner from "./hetzner/index.ts";
-import { getTokens } from "./keychain.ts";
+import { getTokens } from "./secret-store.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
 

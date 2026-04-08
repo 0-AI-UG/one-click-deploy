@@ -1,5 +1,3 @@
-import * as keychain from "./keychain.ts";
-
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [secrets:${context}]`, ...args);
 }
@@ -14,23 +12,7 @@ export interface SecretStore {
   }>;
 }
 
-// Desktop mode: macOS Keychain
-class KeychainStore implements SecretStore {
-  async get(key: string): Promise<string | null> {
-    return keychain.getSecret(key);
-  }
-  async set(key: string, value: string): Promise<void> {
-    return keychain.setSecret(key, value);
-  }
-  async delete(key: string): Promise<void> {
-    return keychain.deleteSecret(key);
-  }
-  async getTokens() {
-    return keychain.getTokens();
-  }
-}
-
-// Server mode: encrypted SQLite storage
+// Encrypted SQLite storage (AES-GCM, key derived from JWT_SECRET via HKDF)
 class DbSecretStore implements SecretStore {
   private encryptionKey: CryptoKey | null = null;
 
@@ -50,7 +32,6 @@ class DbSecretStore implements SecretStore {
   }
 
   async get(key: string): Promise<string | null> {
-    // Lazy import to avoid circular dep at module load time
     const { default: db } = await import("./db.ts");
     const row = db.query("SELECT encrypted_value, iv FROM encrypted_secrets WHERE key = ?").get(key) as any;
     if (!row) return null;
@@ -97,8 +78,13 @@ class DbSecretStore implements SecretStore {
   }
 }
 
-export const isServerMode = process.env.OCD_MODE === "server";
+export const secretStore: SecretStore = new DbSecretStore();
 
-export const secretStore: SecretStore = isServerMode ? new DbSecretStore() : new KeychainStore();
+export function getTokens() {
+  return secretStore.getTokens();
+}
 
-export { maskToken } from "./keychain.ts";
+export function maskToken(token: string): string {
+  if (!token || token.length < 8) return token ? "****" : "";
+  return token.slice(0, 4) + "..." + token.slice(-4);
+}

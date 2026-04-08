@@ -3,18 +3,15 @@
   "version": "0.5.0",
   "type": "module",
   "scripts": {
-    "start": "electrobun dev",
-    "dev": "electrobun dev --watch",
-    "build": "electrobun build",
+    "start": "OCD_MODE=server bun run src/server/index.ts",
+    "dev": "OCD_MODE=server SKIP_2FA=1 bun --watch run src/server/index.ts",
+    "build": "bun build src/web/index.html --outdir=src/web/dist",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src/bun/",
-    "server": "OCD_MODE=server bun run src/server/index.ts",
-    "server:dev": "OCD_MODE=server SKIP_2FA=1 bun --watch run src/server/index.ts"
+    "test": "bun test src/bun/"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "electrobun": "1.16.0",
     "jose": "^6.2.2",
     "lucide-react": "^1.7.0",
     "otpauth": "^9.5.0",

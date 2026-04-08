@@ -41,7 +41,7 @@ Returns the full deploy log for the most recent deployment.
 ## Write Methods
 
 ### `saveSettings(settings: Settings)`
-Persists settings to the database. Tokens are stored in keychain separately.
+Persists settings to the database. Tokens are stored encrypted in the `encrypted_secrets` table.
 
 ### `deploy(request: DeployRequest)`
 Triggers a full deploy pipeline. Streams progress via callback.

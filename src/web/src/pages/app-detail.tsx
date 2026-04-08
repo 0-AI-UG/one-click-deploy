@@ -3,7 +3,20 @@ import { get, post, put, del } from "../api/client.ts";
 import { Card, Btn, StatusBadge, Spinner, showToast, confirm, Table } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu } from "lucide-react";
+import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu, Terminal } from "lucide-react";
+
+function Sparkline({ values, color = "#3b82f6" }: { values: number[]; color?: string }) {
+  if (values.length < 2) return <span className="text-[9px] text-muted font-mono">no data</span>;
+  const w = 120, h = 24;
+  const max = Math.max(100, ...values);
+  const step = w / (values.length - 1);
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - (v / max) * h).toFixed(1)}`).join(" ");
+  return (
+    <svg width={w} height={h} className="inline-block">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" />
+    </svg>
+  );
+}
 
 export function AppDetailPage({ appId }: { appId: number }) {
   const [app, setApp] = useState<any>(null);
@@ -12,6 +25,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<any[]>([]);
   const [replicas, setReplicas] = useState<any[]>([]);
+  const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [tail, setTail] = useState(100);
@@ -50,6 +64,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const loadReplicas = async () => {
     try {
       setReplicas(await get(`/api/apps/${appId}/replicas`));
+      const hist = await get(`/api/apps/${appId}/metrics/history?since=3600`);
+      setMetricsHistory(hist.samples || []);
     } catch {}
   };
 
@@ -212,25 +228,28 @@ export function AppDetailPage({ appId }: { appId: number }) {
           {deployments.length === 0 ? (
             <p className="text-[10px] text-muted font-mono py-4 text-center uppercase tracking-wider">No deployments yet</p>
           ) : (
-            <Table headers={["ID", "Image", "Commit", "Status", "Date", ""]}>
+            <Table headers={["ID", "Image", "Commit", "Source", "Status", "Date", ""]}>
               {deployments.map((d: any) => (
                 <tr key={d.id} className="hover:bg-alt/50">
                   <td className="py-2 px-3 text-fg font-bold">#{d.id}</td>
                   <td className="py-2 px-3 text-fg-dim">{d.image_tag}</td>
                   <td className="py-2 px-3 text-fg-dim">{d.git_commit?.slice(0, 7) || "—"}</td>
+                  <td className="py-2 px-3 text-fg-dim uppercase tracking-wider text-[9px]">{d.source || "manual"}</td>
                   <td className="py-2 px-3"><StatusBadge status={d.status} /></td>
                   <td className="py-2 px-3 text-muted">{new Date(d.created_at).toLocaleString()}</td>
                   <td className="py-2 px-3">
-                    <PermissionGate permission="apps.rollback">
-                      <Btn
-                        size="xs" variant="ghost"
-                        onClick={async () => {
-                          if (await confirm("Rollback", `Rollback to deployment #${d.id}?`)) {
-                            action("rollback", () => post(`/api/apps/${appId}/rollback`, { deployment_id: d.id }));
-                          }
-                        }}
-                      >Rollback</Btn>
-                    </PermissionGate>
+                    {d.status !== "failed" && (
+                      <PermissionGate permission="apps.rollback">
+                        <Btn
+                          size="xs" variant="ghost"
+                          onClick={async () => {
+                            if (await confirm("Rollback", `Rollback to deployment #${d.id}?`)) {
+                              action("rollback", () => post(`/api/apps/${appId}/rollback`, { deployment_id: d.id }));
+                            }
+                          }}
+                        >Rollback</Btn>
+                      </PermissionGate>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -257,17 +276,31 @@ export function AppDetailPage({ appId }: { appId: number }) {
             )}
           </div>
           {replicas.length > 0 && (
-            <Table headers={["ID", "Container", "Port", "Status", "CPU", "Memory"]}>
-              {replicas.map((r: any) => (
-                <tr key={r.id}>
-                  <td className="py-2 px-3 text-fg font-bold">#{r.id}</td>
-                  <td className="py-2 px-3 text-fg-dim">{r.container_name}</td>
-                  <td className="py-2 px-3 text-fg-dim">{r.host_port}</td>
-                  <td className="py-2 px-3"><StatusBadge status={r.status} /></td>
-                  <td className="py-2 px-3 text-fg-dim">{r.cpu_percent?.toFixed(1)}%</td>
-                  <td className="py-2 px-3 text-fg-dim">{r.memory_percent?.toFixed(1)}%</td>
-                </tr>
-              ))}
+            <Table headers={["ID", "Container", "Port", "Status", "CPU", "Memory", "Last Health", "CPU (1h)", ""]}>
+              {replicas.map((r: any) => {
+                const series = metricsHistory
+                  .filter((s: any) => s.replica_id === r.id)
+                  .map((s: any) => s.cpu_percent);
+                return (
+                  <tr key={r.id}>
+                    <td className="py-2 px-3 text-fg font-bold">#{r.id}</td>
+                    <td className="py-2 px-3 text-fg-dim">{r.container_name}</td>
+                    <td className="py-2 px-3 text-fg-dim">{r.host_port}</td>
+                    <td className="py-2 px-3"><StatusBadge status={r.status} /></td>
+                    <td className="py-2 px-3 text-fg-dim">{r.cpu_percent?.toFixed(1)}%</td>
+                    <td className="py-2 px-3 text-fg-dim">{r.memory_percent?.toFixed(1)}%</td>
+                    <td className="py-2 px-3 text-muted text-[9px]">{r.last_health_at ? new Date(r.last_health_at + "Z").toLocaleTimeString() : "—"}</td>
+                    <td className="py-2 px-3"><Sparkline values={series} /></td>
+                    <td className="py-2 px-3">
+                      <PermissionGate permission="terminal.access">
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/replica/${r.id}`; }}>
+                          <Terminal size={12} /> Shell
+                        </Btn>
+                      </PermissionGate>
+                    </td>
+                  </tr>
+                );
+              })}
             </Table>
           )}
           <div className="flex gap-2 mt-3">

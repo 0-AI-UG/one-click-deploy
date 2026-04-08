@@ -6,7 +6,7 @@
 2. **Hetzner DNS token** (optional) — needed only for custom domains. Create at [dns.hetzner.com/settings/api-token](https://dns.hetzner.com/settings/api-token).
 3. **GitHub Personal Access Token** (optional) — needed for private repos and auto-redeploy webhooks. Create at GitHub Settings > Developer settings > Personal access tokens.
 
-All tokens are stored in the macOS Keychain.
+All tokens are stored encrypted in the panel's SQLite database (AES-GCM, key derived from `JWT_SECRET`).
 
 ## Deploying an App
 

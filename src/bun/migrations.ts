@@ -163,6 +163,30 @@ export const migrations: Migration[] = [
       )`);
     },
   },
+  {
+    version: 10,
+    description: "Add source column to deployment_history",
+    up: (db) => {
+      db.run("ALTER TABLE deployment_history ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
+    },
+  },
+  {
+    version: 11,
+    description: "Add metrics_samples table and unhealthy_ticks counter on replicas",
+    up: (db) => {
+      db.run(`CREATE TABLE IF NOT EXISTS metrics_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        replica_id INTEGER NOT NULL REFERENCES replicas(id) ON DELETE CASCADE,
+        app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        cpu_percent REAL NOT NULL,
+        memory_percent REAL NOT NULL,
+        sampled_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run("CREATE INDEX IF NOT EXISTS idx_metrics_samples_app_time ON metrics_samples(app_id, sampled_at)");
+      db.run("CREATE INDEX IF NOT EXISTS idx_metrics_samples_replica_time ON metrics_samples(replica_id, sampled_at)");
+      db.run("ALTER TABLE replicas ADD COLUMN unhealthy_ticks INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {
