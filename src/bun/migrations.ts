@@ -116,13 +116,22 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN last_scale_at TEXT");
       db.run("ALTER TABLE apps ADD COLUMN hetzner_lb_id TEXT NOT NULL DEFAULT ''");
 
-      // Data migration: create a replica row for each existing app
-      const apps = db.query("SELECT id, name, server_id, host_port, status FROM apps").all() as any[];
-      const insertReplica = db.prepare(
-        "INSERT INTO replicas (app_id, server_id, host_port, container_name, status) VALUES (?, ?, ?, ?, ?)"
-      );
-      for (const app of apps) {
-        insertReplica.run(app.id, app.server_id, app.host_port, app.name, app.status);
+      // Data migration: create a replica row for each existing app. Guarded
+      // because on fresh installs the apps table is created by initSchema()
+      // without server_id/host_port (those columns were dropped in
+      // migration 14), so the SELECT below would fail with "no such column".
+      // On a fresh DB there are no apps to backfill anyway.
+      const cols = db.query("PRAGMA table_info(apps)").all() as { name: string }[];
+      const hasLegacyCols = cols.some((c) => c.name === "server_id") &&
+                            cols.some((c) => c.name === "host_port");
+      if (hasLegacyCols) {
+        const apps = db.query("SELECT id, name, server_id, host_port, status FROM apps").all() as any[];
+        const insertReplica = db.prepare(
+          "INSERT INTO replicas (app_id, server_id, host_port, container_name, status) VALUES (?, ?, ?, ?, ?)"
+        );
+        for (const app of apps) {
+          insertReplica.run(app.id, app.server_id, app.host_port, app.name, app.status);
+        }
       }
     },
   },

@@ -7,7 +7,8 @@
     "dev": "OCD_MODE=server SKIP_2FA=1 bun --watch run src/server/index.ts",
     "build": "bun build src/web/index.html --outdir=src/web/dist",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src/bun/"
+    "test": "bun test src/bun/",
+    "bootstrap": "bun run scripts/bootstrap.ts"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
