@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Btn } from "../components/ui.tsx";
 import { CheckCircle2, XCircle, Loader2, Circle, Rocket, Terminal } from "lucide-react";
-import { useDeployProgress, clearDeploy, type ProgressEvent, type DeployResult } from "../stores/deploy-progress.ts";
+import { useDeployProgress, clearDeploy, resumeDeploy, type ProgressEvent, type DeployResult } from "../stores/deploy-progress.ts";
 
 const DEPLOY_STEPS: { key: string; label: string }[] = [
   { key: "server", label: "Server" },
@@ -38,16 +38,25 @@ function stepStatus(
   return "active";
 }
 
-export function DeployProgressPage() {
-  const { active, appName, progress, result } = useDeployProgress();
+export function DeployProgressPage({ jobId }: { jobId: number | null }) {
+  const { active, appName, progress, result, jobId: storeJobId } = useDeployProgress();
   const logRef = useRef<HTMLDivElement>(null);
 
-  // If we landed here with no active deploy and no result, send the user back.
+  // Resume polling if the URL points at a job we're not already watching
+  // (e.g. after a page reload).
   useEffect(() => {
-    if (!active && !result && progress.length === 0) {
+    if (jobId && jobId !== storeJobId) {
+      resumeDeploy(jobId);
+    }
+  }, [jobId, storeJobId]);
+
+  // If we landed here with no jobId in the URL and nothing in the store,
+  // send the user back to the deploy form.
+  useEffect(() => {
+    if (!jobId && !active && !result && progress.length === 0) {
       window.location.hash = "#/deploy";
     }
-  }, [active, result, progress.length]);
+  }, [jobId, active, result, progress.length]);
 
   useEffect(() => {
     logRef.current?.scrollTo(0, logRef.current.scrollHeight);

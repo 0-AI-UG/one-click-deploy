@@ -1,7 +1,46 @@
-const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "*";
+// Same-origin by default. Set CORS_ORIGIN to an explicit origin (or "*" only
+// if you really need it) to enable cross-origin API access.
+const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "";
+const IS_PROD = process.env.NODE_ENV === "production";
+
+const corsOriginHeaders: Record<string, string> = CORS_ORIGIN
+  ? {
+      "Access-Control-Allow-Origin": CORS_ORIGIN,
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      Vary: "Origin",
+    }
+  : {};
+
+// Baseline security headers applied to every response. These are safe on both
+// API (JSON) and HTML responses; browsers only enforce the HTML-relevant ones
+// on document responses.
+export const securityHeaders: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  ...(IS_PROD
+    ? { "Strict-Transport-Security": "max-age=31536000; includeSubDomains" }
+    : {}),
+};
+
+// Content-Security-Policy only makes sense on HTML document responses, and a
+// strict policy would break Bun's dev HMR client. Applied separately in the
+// static-serving path (see src/server/index.ts).
+export const htmlCsp =
+  "default-src 'self'; " +
+  "img-src 'self' data: blob:; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "script-src 'self'; " +
+  "font-src 'self' data:; " +
+  "connect-src 'self' ws: wss:; " +
+  "frame-ancestors 'none'; " +
+  "base-uri 'self'; " +
+  "object-src 'none'; " +
+  "form-action 'self'";
 
 export const corsHeaders: Record<string, string> = {
-  "Access-Control-Allow-Origin": CORS_ORIGIN,
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  ...corsOriginHeaders,
+  ...securityHeaders,
 };

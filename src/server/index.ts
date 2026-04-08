@@ -1,7 +1,7 @@
 import path from "path";
-import { corsHeaders } from "./lib/cors.ts";
+import { corsHeaders, securityHeaders, htmlCsp } from "./lib/cors.ts";
 import { handleSetupStatus, handleSetupComplete, handleSetupServerTypes } from "./routes/setup.ts";
-import { handleLogin, handleMe, handleUpdateMe } from "./routes/auth.ts";
+import { handleLogin, handleMe, handleUpdateMe, handlePasswordReset } from "./routes/auth.ts";
 import {
   handleTotpSetup,
   handleTotpConfirm,
@@ -10,13 +10,14 @@ import {
   handleTotpConfirmFromLogin,
   handleTotpDisable,
   handleTotpStatus,
+  handleTotpResetFromLogin,
 } from "./routes/totp.ts";
 import { handleListUsers, handleCreateUser, handleUpdateUser, handleDeleteUser, handleGetUserPermissions } from "./routes/admin.ts";
 import {
   handleGetServers,
   handleGetApps,
   handleDeploy,
-  handleDeployStream,
+  handleDeployJobPoll,
   handleDestroyApp,
   handleRestartApp,
   handlePauseApp,
@@ -75,7 +76,14 @@ async function serveStatic(filePath: string): Promise<Response | null> {
   if (!(await file.exists())) return null;
   const ext = path.extname(filePath);
   const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-  const headers: Record<string, string> = { "Content-Type": contentType };
+  const headers: Record<string, string> = {
+    "Content-Type": contentType,
+    ...securityHeaders,
+  };
+  // CSP only on HTML documents, and only in prod — dev HMR needs looser rules.
+  if (ext === ".html" && IS_PROD) {
+    headers["Content-Security-Policy"] = htmlCsp;
+  }
   if (/[-\.][a-z0-9]{8,}\.\w+$/.test(filePath)) {
     headers["Cache-Control"] = "public, max-age=31536000, immutable";
   }
@@ -137,6 +145,7 @@ export const server = Bun.serve({
 
     // --- Auth ---
     "/api/auth/login": { POST: (req: Request) => handleLogin(req) },
+    "/api/auth/password-reset": { POST: (req: Request) => handlePasswordReset(req) },
     "/api/me": {
       GET: (req: Request) => handleMe(req),
       PUT: (req: Request) => handleUpdateMe(req),
@@ -149,6 +158,7 @@ export const server = Bun.serve({
     "/api/auth/totp/setup-from-login": { POST: (req: Request) => handleTotpSetupFromLogin(req) },
     "/api/auth/totp/confirm-from-login": { POST: (req: Request) => handleTotpConfirmFromLogin(req) },
     "/api/auth/totp/disable": { POST: (req: Request) => handleTotpDisable(req) },
+    "/api/auth/totp/reset-from-login": { POST: (req: Request) => handleTotpResetFromLogin(req) },
     "/api/auth/totp/status": { GET: (req: Request) => handleTotpStatus(req) },
 
     // --- Admin ---
@@ -185,9 +195,9 @@ export const server = Bun.serve({
     "/api/apps/:appId/deploy-log": { GET: (req: Request) => handleGetDeployLog(req, appIdFrom(req)) },
     "/api/apps/:appId/deployments": { GET: (req: Request) => handleGetDeployments(req, appIdFrom(req)) },
     "/api/apps/:appId/rollback": { POST: (req: Request) => handleRollbackApp(req, appIdFrom(req)) },
-    "/api/apps/:appId/deploy/stream": { GET: (req: Request) => {
-      const name = new URL(req.url).pathname.split("/")[3];
-      return handleDeployStream(req, name);
+    "/api/deploy-jobs/:jobId": { GET: (req: Request) => {
+      const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
+      return handleDeployJobPoll(req, id);
     }},
 
     // Scaling

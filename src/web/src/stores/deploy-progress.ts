@@ -1,19 +1,26 @@
 import { useEffect, useState } from "react";
-import { post } from "../api/client.ts";
+import { post, get } from "../api/client.ts";
 
 export type ProgressEvent = { step: string; detail: string; ts: number };
 export type DeployResult = { ok: boolean; error?: string } | null;
 
 export type DeployState = {
   active: boolean;
+  jobId: number | null;
   appName: string;
   progress: ProgressEvent[];
   result: DeployResult;
 };
 
-let state: DeployState = { active: false, appName: "", progress: [], result: null };
+let state: DeployState = {
+  active: false,
+  jobId: null,
+  appName: "",
+  progress: [],
+  result: null,
+};
 const listeners = new Set<() => void>();
-let abortCtrl: AbortController | null = null;
+let pollGen = 0; // bumped on clearDeploy/startDeploy/resumeDeploy to cancel in-flight loops
 
 function setState(next: DeployState) {
   state = next;
@@ -37,67 +44,94 @@ export function useDeployProgress(): DeployState {
 }
 
 export function clearDeploy() {
-  abortCtrl?.abort();
-  abortCtrl = null;
-  setState({ active: false, appName: "", progress: [], result: null });
+  pollGen++;
+  setState({ active: false, jobId: null, appName: "", progress: [], result: null });
+}
+
+type PollResponse = {
+  status: "running" | "done" | "error";
+  events: Array<{ seq: number; ts: string; step: string; detail: string }>;
+  last_seq: number;
+  result: { ok: boolean; error?: string } | null;
+};
+
+async function pollLoop(jobId: number, myGen: number): Promise<void> {
+  let since = 0;
+  while (myGen === pollGen) {
+    let resp: PollResponse;
+    try {
+      resp = (await get(`/api/deploy-jobs/${jobId}?since=${since}`)) as PollResponse;
+    } catch (err: any) {
+      if (myGen !== pollGen) return;
+      // 404 → job no longer exists; surface as error and stop.
+      if (/not found/i.test(err?.message || "")) {
+        setState({ ...state, result: { ok: false, error: "Deploy job not found" }, active: false });
+        return;
+      }
+      // Transient network error — back off briefly and retry.
+      await new Promise((r) => setTimeout(r, 1500));
+      continue;
+    }
+    if (myGen !== pollGen) return;
+
+    if (resp.events.length > 0) {
+      const newEvents: ProgressEvent[] = resp.events.map((e) => ({
+        step: e.step,
+        detail: e.detail,
+        ts: Date.parse(e.ts + "Z") || Date.now(),
+      }));
+      setState({ ...state, progress: [...state.progress, ...newEvents] });
+      since = resp.last_seq;
+    }
+
+    if (resp.status !== "running") {
+      setState({ ...state, result: resp.result, active: false });
+      return;
+    }
+  }
 }
 
 export async function startDeploy(body: any): Promise<void> {
-  abortCtrl?.abort();
-  const ctrl = new AbortController();
-  abortCtrl = ctrl;
+  const myGen = ++pollGen;
+  setState({
+    active: true,
+    jobId: null,
+    appName: body.app_name,
+    progress: [],
+    result: null,
+  });
 
-  setState({ active: true, appName: body.app_name, progress: [], result: null });
-
-  // Open SSE first so the server's progress listener is registered before
-  // the deploy POST kicks off and starts emitting.
-  const tokenRaw = localStorage.getItem("ocd-auth");
-  const authToken = tokenRaw ? JSON.parse(tokenRaw).token : "";
-  const streamUrl = `/api/apps/${encodeURIComponent(body.app_name)}/deploy/stream`;
-
+  let jobId: number;
   try {
-    const streamRes = await fetch(streamUrl, {
-      headers: { Authorization: `Bearer ${authToken}` },
-      signal: ctrl.signal,
-    });
-    if (streamRes.ok && streamRes.body) {
-      (async () => {
-        const reader = streamRes.body!.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const frames = buf.split("\n\n");
-          buf = frames.pop() ?? "";
-          for (const frame of frames) {
-            const line = frame.split("\n").find((l) => l.startsWith("data:"));
-            if (!line) continue;
-            try {
-              const data = JSON.parse(line.slice(5).trim());
-              setState({
-                ...state,
-                progress: [...state.progress, { step: data.step, detail: data.detail, ts: Date.now() }],
-              });
-            } catch {}
-          }
-        }
-      })().catch(() => {});
-    }
-  } catch {
-    // stream setup failed — continue without live updates
-  }
-
-  try {
-    const result = await post("/api/apps/deploy", body);
-    setState({ ...state, result, active: false });
+    const res = (await post("/api/apps/deploy", body)) as { deployment_id: number };
+    jobId = res.deployment_id;
   } catch (err: any) {
+    if (myGen !== pollGen) return;
     setState({ ...state, result: { ok: false, error: err.message }, active: false });
-  } finally {
-    if (abortCtrl === ctrl) {
-      ctrl.abort();
-      abortCtrl = null;
-    }
+    return;
   }
+  if (myGen !== pollGen) return;
+
+  setState({ ...state, jobId });
+  // Replace URL so reload resumes the same job.
+  history.replaceState(null, "", `#/deploy/progress/${jobId}`);
+
+  await pollLoop(jobId, myGen);
+}
+
+// Resume watching an existing deploy job (e.g. after a page reload).
+export function resumeDeploy(jobId: number): void {
+  if (state.jobId === jobId && (state.active || state.result)) {
+    // Already watching (or have a final result for) this job — nothing to do.
+    return;
+  }
+  const myGen = ++pollGen;
+  setState({
+    active: true,
+    jobId,
+    appName: "",
+    progress: [],
+    result: null,
+  });
+  void pollLoop(jobId, myGen);
 }

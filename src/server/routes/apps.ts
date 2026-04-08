@@ -16,21 +16,32 @@ import {
 import * as hetzner from "../../bun/hetzner/index.ts";
 import { introspectRepo } from "../../bun/github-introspect.ts";
 
-// In-memory SSE connections for deploy progress
-const progressListeners = new Map<string, Set<(step: string, detail: string) => void>>();
+// In-process notifier for long-poll waiters. Keyed by deploy job id; each
+// waiter is a no-arg callback that resolves the long-poll Promise.
+const jobWaiters = new Map<number, Set<() => void>>();
 
-function addProgressListener(key: string, listener: (step: string, detail: string) => void) {
-  if (!progressListeners.has(key)) progressListeners.set(key, new Set());
-  progressListeners.get(key)!.add(listener);
+function notifyJob(jobId: number) {
+  const set = jobWaiters.get(jobId);
+  if (!set) return;
+  for (const w of set) w();
 }
 
-function removeProgressListener(key: string, listener: (step: string, detail: string) => void) {
-  progressListeners.get(key)?.delete(listener);
-  if (progressListeners.get(key)?.size === 0) progressListeners.delete(key);
-}
-
-export function notifyProgress(key: string, step: string, detail: string) {
-  progressListeners.get(key)?.forEach((l) => l(step, detail));
+function waitForJob(jobId: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      jobWaiters.get(jobId)?.delete(wake);
+      if (jobWaiters.get(jobId)?.size === 0) jobWaiters.delete(jobId);
+      clearTimeout(timer);
+      resolve();
+    };
+    const wake = () => finish();
+    if (!jobWaiters.has(jobId)) jobWaiters.set(jobId, new Set());
+    jobWaiters.get(jobId)!.add(wake);
+    const timer = setTimeout(finish, timeoutMs);
+  });
 }
 
 export async function handleIntrospectRepo(request: Request): Promise<Response> {
@@ -80,47 +91,72 @@ export async function handleDeploy(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "apps.deploy");
     const req = await request.json();
-    const progressKey = `deploy-${req.app_name}`;
 
-    const result = await deploy(req, (step, detail) => {
-      notifyProgress(progressKey, step, detail);
-    });
+    // Create a durable job row before kicking off the deploy. The client
+    // long-polls /api/deploy-jobs/:id to watch progress.
+    const job = db.createDeployJob(req.app_name);
 
-    return Response.json(result, { headers: corsHeaders });
+    // Run the deploy in the background. Each progress callback persists an
+    // event row and wakes any long-poll waiters.
+    (async () => {
+      try {
+        const result = await deploy(req, (step, detail) => {
+          db.appendDeployJobEvent(job.id, step, detail);
+          notifyJob(job.id);
+        });
+        db.finishDeployJob(job.id, result);
+      } catch (err: any) {
+        db.appendDeployJobEvent(job.id, "error", err?.message || String(err));
+        db.finishDeployJob(job.id, { ok: false, error: err?.message || String(err) });
+      } finally {
+        notifyJob(job.id);
+      }
+    })();
+
+    return Response.json({ deployment_id: job.id }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
 }
 
-export async function handleDeployStream(request: Request, appName: string): Promise<Response> {
+const LONG_POLL_TIMEOUT_MS = 25_000;
+
+export async function handleDeployJobPoll(request: Request, jobId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.deploy");
-    const progressKey = `deploy-${appName}`;
+    const url = new URL(request.url);
+    const since = parseInt(url.searchParams.get("since") || "0", 10) || 0;
 
-    const stream = new ReadableStream({
-      start(controller) {
-        const encoder = new TextEncoder();
-        const listener = (step: string, detail: string) => {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ step, detail })}\n\n`));
-        };
-        addProgressListener(progressKey, listener);
+    const job = db.getDeployJob(jobId);
+    if (!job) {
+      return Response.json({ error: "Deploy job not found" }, { status: 404, headers: corsHeaders });
+    }
 
-        // Cleanup on abort
-        request.signal.addEventListener("abort", () => {
-          removeProgressListener(progressKey, listener);
-          controller.close();
-        });
+    let events = db.getDeployJobEvents(jobId, since);
+
+    // If there's nothing new and the job is still running, block until either
+    // a new event arrives, the job finishes, or the long-poll times out.
+    if (events.length === 0 && job.status === "running") {
+      await Promise.race([
+        waitForJob(jobId, LONG_POLL_TIMEOUT_MS),
+        new Promise<void>((resolve) => request.signal.addEventListener("abort", () => resolve())),
+      ]);
+      events = db.getDeployJobEvents(jobId, since);
+    }
+
+    const fresh = db.getDeployJob(jobId)!;
+    const result = fresh.result_json ? JSON.parse(fresh.result_json) : null;
+    const lastSeq = events.length > 0 ? events[events.length - 1].seq : since;
+
+    return Response.json(
+      {
+        status: fresh.status, // 'running' | 'done' | 'error'
+        events,
+        last_seq: lastSeq,
+        result, // null while running, {ok, error?} once finished
       },
-    });
-
-    return new Response(stream, {
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    });
+      { headers: corsHeaders },
+    );
   } catch (error) {
     return handleError(error);
   }
@@ -170,11 +206,8 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
   try {
     await requirePermission(request, "apps.redeploy");
     const body = (await request.json().catch(() => ({}))) as { env_vars?: Record<string, string>; auth_password?: string | null };
-    const progressKey = `redeploy-${appId}`;
 
-    const result = await redeployApp(appId, (step, detail) => {
-      notifyProgress(progressKey, step, detail);
-    }, body.env_vars, body.auth_password);
+    const result = await redeployApp(appId, () => {}, body.env_vars, body.auth_password);
 
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {

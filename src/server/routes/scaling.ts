@@ -9,13 +9,12 @@ import { secretStore } from "../../bun/secret-store.ts";
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "scaling.manage");
-    const body = await request.json() as { replicas: number; target_server_id?: number };
+    const body = await request.json() as { replicas: number };
     const replicas = Number(body.replicas);
     if (!Number.isFinite(replicas) || replicas < 1) {
       return Response.json({ error: "replicas must be an integer >= 1" }, { status: 400, headers: corsHeaders });
     }
-    const targetServerId = body.target_server_id ? Number(body.target_server_id) : undefined;
-    const result = await scaleApp(appId, replicas, () => {}, targetServerId);
+    const result = await scaleApp(appId, replicas, () => {});
     if (!result.ok) {
       return Response.json({ error: result.error || "Scaling failed" }, { status: 400, headers: corsHeaders });
     }
