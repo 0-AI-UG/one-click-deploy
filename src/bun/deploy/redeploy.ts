@@ -121,6 +121,11 @@ export async function redeployApp(
         image_tag: `${app.name}:latest`,
         git_commit: "self-redeploy",
       });
+      // Optimistically flip status back to "running" — the dispatched
+      // rebuild will succeed before the user can interact with the new
+      // container, and the next reconciler tick / health check would
+      // correct it anyway.
+      db.updateAppStatus(appId, "running");
       onProgress("done", "Self-redeploy dispatched; panel will restart shortly");
       return { ok: true };
     }
