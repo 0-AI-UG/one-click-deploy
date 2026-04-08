@@ -43,9 +43,26 @@ export async function redeployApp(
     // the rebuild as a detached host process via SSH and return immediately.
     // (Webhook redeploys already work because the webhook receiver runs as
     // a separate systemd service on the host.)
-    const selfHost = process.env.HOSTNAME;
-    if (selfHost && selfHost === app.name) {
-      log("redeployApp", `Self-redeploy detected for "${app.name}" — dispatching out-of-band`);
+    // Docker sets $HOSTNAME inside the container to the short container ID
+    // (NOT the --name). To know whether `app` is *us*, ask the host to
+    // resolve our container ID to a container name and compare.
+    const ourContainerId = process.env.HOSTNAME || "";
+    let isSelf = false;
+    if (ourContainerId) {
+      try {
+        const inspect = await hetzner.sshExec(
+          server.ipv4,
+          `docker inspect --format '{{.Id}}' ${app.name} 2>/dev/null || true`,
+          hostKey,
+        );
+        const fullId = inspect.stdout.trim();
+        if (fullId && fullId.startsWith(ourContainerId)) isSelf = true;
+      } catch {
+        // best effort
+      }
+    }
+    if (isSelf) {
+      log("redeployApp", `Self-redeploy detected for "${app.name}" (container=${ourContainerId}) — dispatching out-of-band`);
       onProgress("build", "Self-redeploy: dispatching detached host rebuild...");
       db.updateAppStatus(appId, "deploying");
 
