@@ -15,7 +15,8 @@ export async function redeployApp(
   appId: number,
   onProgress: ProgressFn,
   newEnvVars?: Record<string, string>,
-  newAuthPassword?: string | null
+  newAuthPassword?: string | null,
+  newContainerPort?: number,
 ): Promise<{ ok: boolean; error?: string }> {
   log("redeployApp", `Redeploying app id=${appId}`);
   let previousStatus = "running"; // fallback if app lookup fails
@@ -36,6 +37,7 @@ export async function redeployApp(
     const authPassword = newAuthPassword !== undefined ? (newAuthPassword || "") : app.auth_password;
 
     const envVars = newEnvVars ?? JSON.parse(app.env_vars || "{}");
+    const containerPort = newContainerPort ?? app.container_port;
     const hostKey = server.ssh_host_key || undefined;
 
     const tokens = await getTokens();
@@ -52,7 +54,7 @@ export async function redeployApp(
         {
           name: app.name,
           gitRepo: app.git_repo,
-          port: app.container_port,
+          port: containerPort,
           hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
@@ -71,7 +73,7 @@ export async function redeployApp(
         {
           name: app.name,
           gitRepo: app.git_repo,
-          port: app.container_port,
+          port: containerPort,
           hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
@@ -126,6 +128,9 @@ export async function redeployApp(
     if (newAuthPassword !== undefined) {
       db.updateAppAuthPassword(appId, newAuthPassword || "");
     }
+    if (newContainerPort !== undefined && newContainerPort !== app.container_port) {
+      db.updateAppContainerPort(appId, newContainerPort);
+    }
 
     // Record deployment
     const gitCommitResult = await hetzner.sshExec(
@@ -153,7 +158,7 @@ export async function redeployApp(
 
 export async function updateAppEnv(
   appId: number,
-  envVars: Record<string, string>
+  envVars: Record<string, string>,
 ): Promise<{ ok: boolean; error?: string }> {
   log("updateAppEnv", `Updating env vars for app id=${appId}`);
   try {
@@ -168,6 +173,7 @@ export async function updateAppEnv(
     const server = db.getServer(firstReplica.server_id);
     if (!server) throw new Error("Server not found");
     const hostPort = firstReplica.host_port;
+    const containerPort = app.container_port;
 
     // Defer DB write — only persist after successful rebuild
     // Recreate container with new env vars
@@ -182,7 +188,7 @@ export async function updateAppEnv(
         {
           name: app.name,
           gitRepo: app.git_repo,
-          port: app.container_port,
+          port: containerPort,
           hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
@@ -199,7 +205,7 @@ export async function updateAppEnv(
         {
           name: app.name,
           gitRepo: app.git_repo,
-          port: app.container_port,
+          port: containerPort,
           hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,

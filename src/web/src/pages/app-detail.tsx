@@ -33,6 +33,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [server, setServer] = useState<any>(null);
   const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
   const [authPassword, setAuthPassword] = useState("");
+  const [portEdit, setPortEdit] = useState<number>(0);
   const [envEdit, setEnvEdit] = useState<{ key: string; value: string }[]>([]);
   const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
   const [logs, setLogs] = useState("");
@@ -121,6 +122,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
     if (tab === "scaling") loadReplicas();
     if (tab === "settings" && app) {
       setAuthPassword(app.auth_password || "");
+      setPortEdit(app.container_port || 0);
       const ev = app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {};
       setEnvEdit(Object.entries(ev).map(([k, v]) => ({ key: k, value: String(v) })));
       if (app.volume_mount) {
@@ -612,18 +614,25 @@ export function AppDetailPage({ appId }: { appId: number }) {
               onChange={(e) => setAuthPassword(e.target.value)}
               placeholder="(none)"
             />
-            <PermissionGate permission="apps.redeploy">
-              <div className="flex justify-end mt-3">
-                <Btn
-                  size="sm"
-                  variant="primary"
-                  loading={actionLoading === "save-auth"}
-                  onClick={() => action("save-auth", async () => {
-                    await post(`/api/apps/${appId}/redeploy`, { auth_password: authPassword || null });
-                  })}
-                >Save & Redeploy</Btn>
-              </div>
-            </PermissionGate>
+          </Card>
+
+          {/* Container port */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <SettingsIcon size={14} className="text-fg" />
+              <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Container Port</h3>
+            </div>
+            <p className="text-[10px] text-muted font-mono mb-3">
+              The port your app listens on inside the container. Saving triggers a rebuild and redeploy.
+            </p>
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              value={portEdit || ""}
+              onChange={(e) => setPortEdit(parseInt(e.target.value) || 0)}
+              placeholder="3000"
+            />
           </Card>
 
           {/* Env vars */}
@@ -673,23 +682,30 @@ export function AppDetailPage({ appId }: { appId: number }) {
                 </div>
               ))
             )}
-            <PermissionGate permission="apps.env">
-              <div className="flex justify-end mt-3">
-                <Btn
-                  size="sm"
-                  variant="primary"
-                  loading={actionLoading === "save-env"}
-                  onClick={() => action("save-env", async () => {
-                    const obj: Record<string, string> = {};
-                    for (const { key, value } of envEdit) {
-                      if (key.trim()) obj[key.trim()] = value;
-                    }
-                    await put(`/api/apps/${appId}/env`, { env_vars: obj });
-                  })}
-                >Save Env Vars</Btn>
-              </div>
-            </PermissionGate>
           </Card>
+
+          {/* Combined save */}
+          <PermissionGate permission="apps.redeploy">
+            <div className="flex justify-end">
+              <Btn
+                size="sm"
+                variant="primary"
+                loading={actionLoading === "save-settings"}
+                disabled={!portEdit}
+                onClick={() => action("save-settings", async () => {
+                  const env_vars: Record<string, string> = {};
+                  for (const { key, value } of envEdit) {
+                    if (key.trim()) env_vars[key.trim()] = value;
+                  }
+                  await post(`/api/apps/${appId}/redeploy`, {
+                    env_vars,
+                    auth_password: authPassword || null,
+                    container_port: portEdit,
+                  });
+                })}
+              >Save & Redeploy</Btn>
+            </div>
+          </PermissionGate>
 
           {/* Volume */}
           <Card className="p-4">

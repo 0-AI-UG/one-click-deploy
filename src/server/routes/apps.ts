@@ -205,9 +205,17 @@ export async function handleUnpauseApp(request: Request, appId: number): Promise
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.redeploy");
-    const body = (await request.json().catch(() => ({}))) as { env_vars?: Record<string, string>; auth_password?: string | null };
+    const body = (await request.json().catch(() => ({}))) as { env_vars?: Record<string, string>; auth_password?: string | null; container_port?: number };
 
-    const result = await redeployApp(appId, () => {}, body.env_vars, body.auth_password);
+    if (body.container_port !== undefined) {
+      const p = Number(body.container_port);
+      if (!Number.isInteger(p) || p < 1 || p > 65535) {
+        return Response.json({ ok: false, error: "Port must be an integer between 1 and 65535" }, { headers: corsHeaders });
+      }
+      body.container_port = p;
+    }
+
+    const result = await redeployApp(appId, () => {}, body.env_vars, body.auth_password, body.container_port);
 
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
@@ -225,7 +233,6 @@ export async function handleUpdateAppEnv(request: Request, appId: number): Promi
     return handleError(error);
   }
 }
-
 export async function handleGetContainerLogs(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.logs");

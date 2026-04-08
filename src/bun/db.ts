@@ -447,6 +447,10 @@ export function updateAppEnvVars(id: number, envVars: string) {
   db.query("UPDATE apps SET env_vars = ? WHERE id = ?").run(envVars, id);
 }
 
+export function updateAppContainerPort(id: number, port: number) {
+  db.query("UPDATE apps SET container_port = ? WHERE id = ?").run(port, id);
+}
+
 export function updateAppDomain(id: number, domain: string) {
   db.query("UPDATE apps SET domain = ? WHERE id = ?").run(domain, id);
 }
