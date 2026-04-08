@@ -6,7 +6,7 @@
 // hosted container starts for the first time.
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
-import { unlinkSync, copyFileSync } from "fs";
+import { unlinkSync, writeFileSync } from "fs";
 import path from "path";
 import localDb from "../db.ts";
 import { DATA_DIR } from "../paths.ts";
@@ -60,18 +60,13 @@ async function buildSnapshot(opts: { newJwtSecret: string }): Promise<string> {
   const snapshotPath = path.join(tmpdir(), `ocd-handoff-${Date.now()}.sqlite`);
   try { unlinkSync(snapshotPath); } catch {}
 
-  // Checkpoint the WAL so the on-disk deploy.db file contains every
-  // committed change, then plain-copy it. VACUUM INTO would be nicer but
-  // fails generically ("operation-specific reason") inside the slim
-  // container — the file-copy approach is more robust.
-  const sourcePath = path.join(DATA_DIR, "deploy.db");
-  log("snapshot", `Checkpointing WAL and copying ${sourcePath} -> ${snapshotPath}`);
-  try {
-    localDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  } catch (err) {
-    log("snapshot", `wal_checkpoint warning (continuing): ${(err as Error).message}`);
-  }
-  copyFileSync(sourcePath, snapshotPath);
+  // Dump the live DB to a byte buffer via Bun's Database.serialize(). This
+  // sidesteps both VACUUM INTO (fails generically in the slim container)
+  // and plain file copy (races with WAL). Write the buffer to disk and
+  // open it as an independent file-backed snapshot we can mutate.
+  log("snapshot", `Serializing live DB to ${snapshotPath}`);
+  const bytes = localDb.serialize();
+  writeFileSync(snapshotPath, bytes);
 
   const snap = new Database(snapshotPath);
 
