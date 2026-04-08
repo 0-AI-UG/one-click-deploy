@@ -5,7 +5,7 @@ export { hetznerApi, hetznerApiPublic } from "./api.ts";
 export { pollAction } from "./actions.ts";
 
 // SSH & server access
-export { sshExec, getSshKeyPath, captureHostKey, waitForServer, ensureSshKey, readSshKeyPair, writeSshKeyPair } from "./ssh.ts";
+export { sshExec, getSshKeyPath, captureHostKey, waitForServer, ensureSshKey } from "./ssh.ts";
 
 // DNS
 export { createDnsRecord, deleteDnsRecord, listDnsZones } from "./dns.ts";

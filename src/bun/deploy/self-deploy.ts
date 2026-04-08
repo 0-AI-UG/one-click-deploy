@@ -104,44 +104,71 @@ export async function performSelfDeployHandoff(opts: {
   log("start", `Handoff to ${opts.serverIp}:${opts.hostMountPath}`);
 
   const snapshotPath = await buildSnapshot({ newJwtSecret: opts.newJwtSecret });
+  const keyPath = getSshKeyPath();
+  const pubKeyPath = keyPath + ".pub";
 
-  try {
-    // scp the snapshot to the host volume mount. The hosted container's
-    // DATA_DIR is /app/data, which is bind-mounted from the host path, so
-    // writing ${hostMountPath}/deploy.db puts the DB exactly where the
-    // hosted Bun server will open it on first boot.
-    const keyPath = getSshKeyPath();
-    const tmpRemote = `/tmp/ocd-handoff-${Date.now()}.sqlite`;
-    log("scp", `Uploading snapshot to ${opts.serverIp}:${tmpRemote}`);
+  async function scpTo(localPath: string, remotePath: string) {
     const scpProc = Bun.spawn(
       [
         "scp",
         "-i", keyPath,
         "-o", "StrictHostKeyChecking=no",
         "-o", "ConnectTimeout=30",
-        snapshotPath,
-        `root@${opts.serverIp}:${tmpRemote}`,
+        localPath,
+        `root@${opts.serverIp}:${remotePath}`,
       ],
       { stdout: "pipe", stderr: "pipe" },
     );
-    const scpExit = await scpProc.exited;
-    if (scpExit !== 0) {
+    const exit = await scpProc.exited;
+    if (exit !== 0) {
       const stderr = await new Response(scpProc.stderr).text();
-      throw new Error(`scp failed (exit ${scpExit}): ${stderr}`);
+      throw new Error(`scp ${localPath} failed (exit ${exit}): ${stderr}`);
     }
+  }
 
-    // Move into place on the mounted volume and chown to uid 1000 (the
-    // default `bun` user inside oven/bun:1-slim).
-    const destPath = `${opts.hostMountPath}/deploy.db`;
-    const mv = await sshExec(
-      opts.serverIp,
-      `mkdir -p ${opts.hostMountPath} && mv ${tmpRemote} ${destPath} && chown 1000:1000 ${destPath} && chmod 600 ${destPath}`,
-      opts.hostKey,
-    );
+  try {
+    // 1) Upload the DB snapshot to /tmp on the target, then move it into
+    //    the mounted volume. The hosted container's DATA_DIR is /app/data,
+    //    which is bind-mounted from the host path, so writing
+    //    ${hostMountPath}/deploy.db puts the DB exactly where the hosted
+    //    Bun server will open it on first boot.
+    const ts = Date.now();
+    const tmpDb = `/tmp/ocd-handoff-${ts}.sqlite`;
+    const tmpKey = `/tmp/ocd-handoff-${ts}-id_ed25519`;
+    const tmpPub = `${tmpKey}.pub`;
+    log("scp", `Uploading DB snapshot + SSH keypair to ${opts.serverIp}`);
+    await scpTo(snapshotPath, tmpDb);
+
+    // 2) Upload the local SSH keypair. The hosted panel needs the same
+    //    key to SSH back into the server it's running on (and into any
+    //    other existing fleet servers). Without this, every SSH-dependent
+    //    action (redeploy, terminal, logs, reconciler) fails on first boot.
+    await scpTo(keyPath, tmpKey);
+    await scpTo(pubKeyPath, tmpPub);
+
+    // 3) Move everything into the mounted volume with correct ownership
+    //    (uid 1000 = the `bun` user inside oven/bun:1-slim) and perms.
+    const dbDest = `${opts.hostMountPath}/deploy.db`;
+    const sshDir = `${opts.hostMountPath}/ssh`;
+    const keyDest = `${sshDir}/id_ed25519`;
+    const pubDest = `${sshDir}/id_ed25519.pub`;
+
+    const placeCmd = [
+      `mkdir -p ${opts.hostMountPath} ${sshDir}`,
+      `mv ${tmpDb} ${dbDest}`,
+      `mv ${tmpKey} ${keyDest}`,
+      `mv ${tmpPub} ${pubDest}`,
+      `chown -R 1000:1000 ${opts.hostMountPath}`,
+      `chmod 600 ${dbDest} ${keyDest}`,
+      `chmod 644 ${pubDest}`,
+      `chmod 700 ${sshDir}`,
+    ].join(" && ");
+
+    const mv = await sshExec(opts.serverIp, placeCmd, opts.hostKey);
     if (mv.exitCode !== 0) {
-      throw new Error(`Failed to place handoff DB on remote volume: ${mv.stderr}`);
+      throw new Error(`Failed to place handoff files on remote volume: ${mv.stderr}`);
     }
-    log("done", `Handoff DB placed at ${destPath}`);
+    log("done", `Handoff complete: DB + SSH keypair placed under ${opts.hostMountPath}`);
   } finally {
     try { unlinkSync(snapshotPath); } catch {}
   }

@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from "react";
-import { get, post, put } from "../api/client.ts";
-import { Card, Btn, Spinner, showToast, confirm } from "../components/ui.tsx";
+import { useState, useEffect } from "react";
+import { get, put } from "../api/client.ts";
+import { Card, Btn, Spinner, showToast } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Settings as SettingsIcon, Save, Download, Upload, Key } from "lucide-react";
+import { Settings as SettingsIcon, Save } from "lucide-react";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 
 export function SettingsPage() {
@@ -30,37 +30,6 @@ export function SettingsPage() {
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const exportSshKey = async () => {
-    try {
-      const data = await get("/api/settings/ssh-key/export");
-      const bundle = JSON.stringify(data, null, 2);
-      const blob = new Blob([bundle], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `ocd-ssh-key-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast("SSH key exported — keep this file safe", "success");
-    } catch (err: any) {
-      showToast(err.message, "error");
-    }
-  };
-
-  const importSshKey = async (file: File) => {
-    if (!await confirm("Import SSH Key", "This overwrites the current SSH key. Servers provisioned with the old key will be unreachable without a backup.", true)) return;
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
-      await post("/api/settings/ssh-key/import", parsed);
-      showToast("SSH key imported — you can now operate servers from the source instance", "success");
-    } catch (err: any) {
-      showToast(err.message || "Invalid key file", "error");
-    }
-  };
 
   const save = async () => {
     setSaving(true);
@@ -129,34 +98,6 @@ export function SettingsPage() {
         <div className="pt-2">
           <Btn variant="primary" loading={saving} onClick={save}><Save size={13} /> Save Settings</Btn>
         </div>
-      </Card>
-
-      <Card className="p-5 space-y-4 mt-4">
-        <div className="flex items-center gap-2">
-          <Key size={14} className="text-fg" />
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">SSH Key</h3>
-        </div>
-        <p className="font-mono text-[9px] text-fg/70 leading-snug">
-          Share this instance's SSH key with another OCD instance to manage the same fleet.
-        </p>
-        <div className="flex gap-2">
-          <Btn onClick={exportSshKey}><Download size={13} /> Export SSH Key</Btn>
-          <Btn onClick={() => fileInputRef.current?.click()}><Upload size={13} /> Import SSH Key</Btn>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) importSshKey(f);
-              e.target.value = "";
-            }}
-          />
-        </div>
-        <p className="font-mono text-[9px] text-red-600 leading-snug">
-          The export contains a private key that can root every provisioned server. Handle like a password.
-        </p>
       </Card>
     </div>
   );

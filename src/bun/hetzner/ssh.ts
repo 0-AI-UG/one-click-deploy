@@ -144,34 +144,6 @@ export async function sshExec(
   }
 }
 
-// Read the local SSH keypair as strings for export to another OCD instance.
-export function readSshKeyPair(): { privateKey: string; publicKey: string } {
-  const keyPath = getSshKeyPath();
-  if (!existsSync(keyPath)) {
-    throw new Error("No SSH key exists yet — deploy something first to generate one");
-  }
-  return {
-    privateKey: readFileSync(keyPath, "utf-8"),
-    publicKey: readFileSync(keyPath + ".pub", "utf-8"),
-  };
-}
-
-// Overwrite the local SSH keypair with an imported one. Used when taking over
-// operation of another OCD instance's Hetzner fleet.
-export function writeSshKeyPair(privateKey: string, publicKey: string): void {
-  if (!privateKey.includes("PRIVATE KEY")) {
-    throw new Error("Invalid private key format");
-  }
-  if (!publicKey.startsWith("ssh-")) {
-    throw new Error("Invalid public key format");
-  }
-  mkdirSync(sshDir, { recursive: true });
-  const keyPath = getSshKeyPath();
-  writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : privateKey + "\n", { mode: 0o600 });
-  writeFileSync(keyPath + ".pub", publicKey.endsWith("\n") ? publicKey : publicKey + "\n", { mode: 0o644 });
-  log("ssh-key", `Imported SSH keypair to ${keyPath}`);
-}
-
 export async function captureHostKey(ip: string): Promise<string> {
   log("ssh", `Capturing host key for ${ip}`);
   const proc = Bun.spawn(
