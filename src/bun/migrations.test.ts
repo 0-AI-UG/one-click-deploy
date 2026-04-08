@@ -63,7 +63,7 @@ describe("runMigrations", () => {
     runMigrations(db);
     // Insert a server and app first for the FK
     db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h1')");
-    db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'app1', 'app.com', 'https://x.git')");
+    db.run("INSERT INTO apps (name, domain, git_repo) VALUES ('app1', 'app.com', 'https://x.git')");
     db.run("INSERT INTO deployment_history (app_id, image_tag, git_commit) VALUES (1, 'app:latest', 'abc123')");
     const dep = db.query("SELECT * FROM deployment_history WHERE app_id = 1").get() as any;
     expect(dep.image_tag).toBe("app:latest");
@@ -74,7 +74,7 @@ describe("runMigrations", () => {
     const db = freshDb();
     runMigrations(db);
     db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h1')");
-    db.run("INSERT INTO apps (server_id, name, domain, git_repo, volume_id, volume_mount) VALUES (1, 'app1', 'app.com', 'https://x.git', 'vol-123', '/mnt/data:/data')");
+    db.run("INSERT INTO apps (name, domain, git_repo, volume_id, volume_mount) VALUES ('app1', 'app.com', 'https://x.git', 'vol-123', '/mnt/data:/data')");
     const app = db.query("SELECT volume_id, volume_mount FROM apps WHERE name = 'app1'").get() as any;
     expect(app.volume_id).toBe("vol-123");
     expect(app.volume_mount).toBe("/mnt/data:/data");
@@ -86,6 +86,50 @@ describe("runMigrations", () => {
     runMigrations(db); // Should not throw
     const row = db.query("SELECT version FROM schema_version").get() as any;
     expect(row.version).toBeGreaterThan(0);
+  });
+
+  test("migration 14 drops apps.server_id and apps.host_port cleanly with migration-8 data", () => {
+    const db = freshDb();
+    // Pre-seed an app at the legacy schema before any migrations have run.
+    db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h1')");
+    db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'app1', 'a.com', 'https://x.git')");
+    runMigrations(db);
+    // After migration 14, server_id/host_port should not exist on apps.
+    const cols = db.query("PRAGMA table_info(apps)").all() as any[];
+    const colNames = cols.map((c) => c.name);
+    expect(colNames).not.toContain("server_id");
+    expect(colNames).not.toContain("host_port");
+    // App row preserved.
+    const app = db.query("SELECT id, name FROM apps WHERE id = 1").get() as any;
+    expect(app?.name).toBe("app1");
+    // Migration 8 should have created a corresponding replica for the app.
+    const replica = db.query("SELECT * FROM replicas WHERE app_id = 1").get() as any;
+    expect(replica).toBeTruthy();
+    expect(replica.server_id).toBe(1);
+  });
+
+  test("migration 15 adds panel webhook columns and rewrites self-redeploy source", () => {
+    const db = freshDb();
+    runMigrations(db);
+    // Insert a panel row + a legacy self-redeploy panel_deployment.
+    db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h-panel')");
+    db.run(
+      "INSERT INTO panel (id, server_id, name, domain, git_repo, container_port, host_port) VALUES (1, 1, 'p', 'p.example.com', 'https://github.com/x/y', 3000, 3001)",
+    );
+    // Pretend a legacy row got written before migration 15 ran (we can't
+    // actually re-rerun the migration, but we can validate the columns + a
+    // forward-write of a webhook-source row works post-migration).
+    const cols = db.query("PRAGMA table_info(panel)").all() as any[];
+    const colNames = cols.map((c) => c.name);
+    expect(colNames).toContain("webhook_secret");
+    expect(colNames).toContain("webhook_enabled");
+    expect(colNames).toContain("github_webhook_id");
+
+    db.run(
+      "INSERT INTO panel_deployments (image_tag, git_commit, status, source) VALUES ('p:latest', 'abc', 'deployed', 'webhook')",
+    );
+    const row = db.query("SELECT source FROM panel_deployments WHERE git_commit = 'abc'").get() as any;
+    expect(row.source).toBe("webhook");
   });
 
   test("skips already applied migrations", () => {

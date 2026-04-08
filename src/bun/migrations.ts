@@ -284,6 +284,80 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE panel ADD COLUMN dns_value TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 14,
+    description: "Drop server_id and host_port from apps; replicas table is now the sole source of truth",
+    up: (db) => {
+      // SQLite >=3.35 supports DROP COLUMN. Try the simple path first; if it
+      // fails (older SQLite or column-with-FK quirks), fall back to the
+      // recreate-table dance.
+      try {
+        db.run("ALTER TABLE apps DROP COLUMN server_id");
+        db.run("ALTER TABLE apps DROP COLUMN host_port");
+      } catch {
+        // Recreate table without server_id/host_port. We need to preserve
+        // every other column added through migrations 1-13.
+        db.run(`CREATE TABLE apps_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          domain TEXT NOT NULL,
+          git_repo TEXT NOT NULL,
+          dockerfile_path TEXT NOT NULL DEFAULT 'Dockerfile',
+          container_port INTEGER NOT NULL DEFAULT 3000,
+          env_vars TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'deploying',
+          deploy_log TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          volume_id TEXT NOT NULL DEFAULT '',
+          volume_mount TEXT NOT NULL DEFAULT '',
+          webhook_enabled INTEGER NOT NULL DEFAULT 0,
+          webhook_secret TEXT NOT NULL DEFAULT '',
+          webhook_branch TEXT NOT NULL DEFAULT 'main',
+          github_webhook_id TEXT NOT NULL DEFAULT '',
+          auth_password TEXT NOT NULL DEFAULT '',
+          deploy_mode TEXT NOT NULL DEFAULT 'dockerfile',
+          compose_file TEXT NOT NULL DEFAULT '',
+          compose_web_service TEXT NOT NULL DEFAULT '',
+          desired_replicas INTEGER NOT NULL DEFAULT 1,
+          min_replicas INTEGER NOT NULL DEFAULT 1,
+          max_replicas INTEGER NOT NULL DEFAULT 1,
+          autoscale_enabled INTEGER NOT NULL DEFAULT 0,
+          autoscale_cpu_threshold INTEGER NOT NULL DEFAULT 80,
+          autoscale_mem_threshold INTEGER NOT NULL DEFAULT 85,
+          autoscale_cooldown INTEGER NOT NULL DEFAULT 300,
+          last_scale_at TEXT,
+          hetzner_lb_id TEXT NOT NULL DEFAULT ''
+        )`);
+        db.run(`INSERT INTO apps_new (
+          id, name, domain, git_repo, dockerfile_path, container_port, env_vars,
+          status, deploy_log, created_at, volume_id, volume_mount, webhook_enabled,
+          webhook_secret, webhook_branch, github_webhook_id, auth_password,
+          deploy_mode, compose_file, compose_web_service, desired_replicas,
+          min_replicas, max_replicas, autoscale_enabled, autoscale_cpu_threshold,
+          autoscale_mem_threshold, autoscale_cooldown, last_scale_at, hetzner_lb_id
+        ) SELECT
+          id, name, domain, git_repo, dockerfile_path, container_port, env_vars,
+          status, deploy_log, created_at, volume_id, volume_mount, webhook_enabled,
+          webhook_secret, webhook_branch, github_webhook_id, auth_password,
+          deploy_mode, compose_file, compose_web_service, desired_replicas,
+          min_replicas, max_replicas, autoscale_enabled, autoscale_cpu_threshold,
+          autoscale_mem_threshold, autoscale_cooldown, last_scale_at, hetzner_lb_id
+        FROM apps`);
+        db.run("DROP TABLE apps");
+        db.run("ALTER TABLE apps_new RENAME TO apps");
+      }
+    },
+  },
+  {
+    version: 15,
+    description: "Add webhook fields to panel; collapse self-redeploy source into webhook",
+    up: (db) => {
+      db.run("ALTER TABLE panel ADD COLUMN webhook_secret TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE panel ADD COLUMN webhook_enabled INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE panel ADD COLUMN github_webhook_id TEXT NOT NULL DEFAULT ''");
+      db.run("UPDATE panel_deployments SET source = 'webhook' WHERE source = 'self-redeploy'");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

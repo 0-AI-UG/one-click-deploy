@@ -33,7 +33,6 @@ function initSchema(instance: Database) {
 
   instance.run(`CREATE TABLE IF NOT EXISTS apps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     domain TEXT NOT NULL,
     git_repo TEXT NOT NULL,
@@ -154,7 +153,9 @@ export function deleteServer(id: number) {
 export function getApps(serverId?: number) {
   if (serverId) {
     return db
-      .query("SELECT * FROM apps WHERE server_id = ? ORDER BY created_at DESC")
+      .query(
+        "SELECT DISTINCT a.* FROM apps a JOIN replicas r ON r.app_id = a.id WHERE r.server_id = ? ORDER BY a.created_at DESC"
+      )
       .all(serverId) as any[];
   }
   return db
@@ -167,7 +168,6 @@ export function getApp(id: number) {
 }
 
 export function insertApp(app: {
-  server_id: number;
   name: string;
   domain: string;
   git_repo: string;
@@ -176,22 +176,94 @@ export function insertApp(app: {
   env_vars: string;
   auth_password?: string;
 }) {
-  const hostPort = nextHostPort(app.server_id);
   return db
     .query(
-      "INSERT INTO apps (server_id, name, domain, git_repo, dockerfile_path, container_port, host_port, env_vars, auth_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO apps (name, domain, git_repo, dockerfile_path, container_port, env_vars, auth_password) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
-      app.server_id,
       app.name,
       app.domain,
       app.git_repo,
       app.dockerfile_path,
       app.container_port,
-      hostPort,
       app.env_vars,
       app.auth_password || ""
     ) as any;
+}
+
+/**
+ * Insert an app and its first replica in one transaction. Used by deploy.ts
+ * so the invariant "every app has >=1 replica" holds throughout the build.
+ */
+export function insertAppWithFirstReplica(
+  app: {
+    name: string;
+    domain: string;
+    git_repo: string;
+    dockerfile_path: string;
+    container_port: number;
+    env_vars: string;
+    auth_password?: string;
+  },
+  serverId: number,
+): { app: any; replica: any } {
+  const tx = db.transaction(() => {
+    const appRow = db
+      .query(
+        "INSERT INTO apps (name, domain, git_repo, dockerfile_path, container_port, env_vars, auth_password) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      )
+      .get(
+        app.name,
+        app.domain,
+        app.git_repo,
+        app.dockerfile_path,
+        app.container_port,
+        app.env_vars,
+        app.auth_password || "",
+      ) as any;
+    const hostPort = nextReplicaHostPort(serverId);
+    const replicaRow = db
+      .query(
+        "INSERT INTO replicas (app_id, server_id, host_port, container_name, status) VALUES (?, ?, ?, ?, ?) RETURNING *",
+      )
+      .get(appRow.id, serverId, hostPort, app.name, "deploying") as any;
+    return { app: appRow, replica: replicaRow };
+  });
+  return tx();
+}
+
+/**
+ * Distinct servers across an app's replicas. Replaces any code that used to
+ * read app.server_id.
+ */
+export function getServersForApp(appId: number): any[] {
+  return db
+    .query(
+      "SELECT DISTINCT s.* FROM servers s JOIN replicas r ON r.server_id = s.id WHERE r.app_id = ? ORDER BY s.id ASC",
+    )
+    .all(appId) as any[];
+}
+
+/**
+ * Garbage-collect a server if it has zero replicas, zero apps, and is not
+ * the panel's host. Single source of truth for the deletion rule.
+ */
+export async function gcServerIfEmpty(serverId: number): Promise<void> {
+  if (getReplicasByServer(serverId).length > 0) return;
+  if (getApps(serverId).length > 0) return;
+  if (getPanel()?.server_id === serverId) return;
+  const server = getServer(serverId);
+  if (!server) return;
+  // Lazy import to avoid circular dependency between db.ts and hetzner/index.ts.
+  const hetzner = await import("./hetzner/index.ts");
+  if (server.hetzner_id) {
+    try {
+      await hetzner.deleteHetznerServer(server.hetzner_id);
+    } catch (err) {
+      console.error(`[db:gcServerIfEmpty] failed to delete hetzner server ${server.hetzner_id}:`, err);
+    }
+  }
+  deleteServer(serverId);
 }
 
 export function updateAppStatus(id: number, status: string) {
@@ -307,13 +379,18 @@ export function insertDeployment(deployment: {
     ) as any;
 }
 
-export function getLatestWebhookDeploymentTs(appId: number): string | null {
-  const row = db
-    .query(
-      "SELECT created_at FROM deployment_history WHERE app_id = ? AND source = 'webhook' ORDER BY created_at DESC LIMIT 1"
-    )
-    .get(appId) as { created_at: string } | null;
-  return row?.created_at ?? null;
+export function updateDeploymentStatus(id: number, status: string) {
+  db.query("UPDATE deployment_history SET status = ? WHERE id = ?").run(status, id);
+}
+
+export function appendDeploymentLog(id: number, line: string) {
+  db.query(
+    "UPDATE deployment_history SET deploy_log = deploy_log || ? WHERE id = ?"
+  ).run(line + "\n", id);
+}
+
+export function updateDeploymentGitCommit(id: number, gitCommit: string) {
+  db.query("UPDATE deployment_history SET git_commit = ? WHERE id = ?").run(gitCommit, id);
 }
 
 export function getDeployments(appId: number) {
@@ -341,15 +418,6 @@ export function updateAppDomain(id: number, domain: string) {
 
 export function updateAppVolume(id: number, volumeId: string, volumeMount: string) {
   db.query("UPDATE apps SET volume_id = ?, volume_mount = ? WHERE id = ?").run(volumeId, volumeMount, id);
-}
-
-export function nextHostPort(serverId: number): number {
-  const BASE_PORT = 10000;
-  const row = db
-    .query("SELECT MAX(host_port) as max_port FROM apps WHERE server_id = ?")
-    .get(serverId) as any;
-  const maxPort = row?.max_port;
-  return (maxPort && maxPort >= BASE_PORT) ? maxPort + 1 : BASE_PORT;
 }
 
 export function updateAppAuthPassword(id: number, authPassword: string) {
@@ -400,7 +468,20 @@ export type PanelRow = {
   dns_name: string;
   dns_type: string;
   dns_value: string;
+  webhook_secret: string;
+  webhook_enabled: number;
+  github_webhook_id: string;
 };
+
+export function updatePanelWebhook(
+  enabled: boolean,
+  secret: string,
+  githubWebhookId: string,
+) {
+  db.query(
+    "UPDATE panel SET webhook_enabled = ?, webhook_secret = ?, github_webhook_id = ? WHERE id = 1",
+  ).run(enabled ? 1 : 0, secret, githubWebhookId);
+}
 
 export function updatePanelDnsRecord(rec: {
   zone_id: string;
@@ -656,14 +737,10 @@ export function updateAppScaling(id: number, fields: {
 
 export function nextReplicaHostPort(serverId: number): number {
   const BASE_PORT = 10000;
-  // Check both apps and replicas tables for max port on this server
-  const appRow = db
-    .query("SELECT MAX(host_port) as max_port FROM apps WHERE server_id = ?")
-    .get(serverId) as any;
-  const replicaRow = db
+  const row = db
     .query("SELECT MAX(host_port) as max_port FROM replicas WHERE server_id = ?")
     .get(serverId) as any;
-  const maxPort = Math.max(appRow?.max_port || 0, replicaRow?.max_port || 0);
+  const maxPort = row?.max_port;
   return (maxPort && maxPort >= BASE_PORT) ? maxPort + 1 : BASE_PORT;
 }
 

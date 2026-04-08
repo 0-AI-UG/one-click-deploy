@@ -183,6 +183,45 @@ export function SettingsPage() {
             </p>
           </div>
 
+          <div className="border-t-2 border-fg pt-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-mono text-[11px] text-fg font-bold">
+                  Auto-update from {panel.git_branch}
+                </div>
+                <div className="font-mono text-[10px] text-muted mt-0.5">
+                  Register a GitHub webhook on {panel.git_repo} so each push to{" "}
+                  <span className="text-fg">{panel.git_branch}</span> triggers a redeploy.
+                </div>
+              </div>
+              <Btn
+                variant={panel.webhook_enabled ? "default" : "primary"}
+                loading={panelBusy}
+                onClick={async () => {
+                  setPanelBusy(true);
+                  try {
+                    const path = panel.webhook_enabled
+                      ? "/api/panel/webhook/disable"
+                      : "/api/panel/webhook/enable";
+                    const r = await post(path);
+                    if (r?.ok) {
+                      showToast(panel.webhook_enabled ? "Webhook disabled" : "Webhook enabled", "success");
+                      refreshPanel();
+                    } else {
+                      showToast(r?.error || "Failed", "error");
+                    }
+                  } catch (err: any) {
+                    showToast(err.message, "error");
+                  } finally {
+                    setPanelBusy(false);
+                  }
+                }}
+              >
+                {panel.webhook_enabled ? "Disable" : "Enable"}
+              </Btn>
+            </div>
+          </div>
+
           {panelDeployments.length > 0 && (
             <div className="border-t-2 border-fg pt-3">
               <h4 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-2">Recent deployments</h4>

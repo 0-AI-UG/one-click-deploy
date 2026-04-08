@@ -13,12 +13,14 @@ export type Server = {
 
 export type App = {
   id: number;
-  server_id: number;
+  /** Servers this app currently has replicas on (derived). */
+  servers: number[];
   name: string;
   domain: string;
   git_repo: string;
   dockerfile_path: string;
   container_port: number;
+  /** Host port of the first replica (derived for display continuity). */
   host_port: number;
   env_vars: string;
   status: string;

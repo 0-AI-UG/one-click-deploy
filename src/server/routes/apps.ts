@@ -14,6 +14,7 @@ import {
   rollbackApp,
 } from "../../bun/deploy/index.ts";
 import * as hetzner from "../../bun/hetzner/index.ts";
+import { introspectRepo } from "../../bun/github-introspect.ts";
 
 // In-memory SSE connections for deploy progress
 const progressListeners = new Map<string, Set<(step: string, detail: string) => void>>();
@@ -32,6 +33,23 @@ export function notifyProgress(key: string, step: string, detail: string) {
   progressListeners.get(key)?.forEach((l) => l(step, detail));
 }
 
+export async function handleIntrospectRepo(request: Request): Promise<Response> {
+  try {
+    await requirePermission(request, "apps.deploy");
+    const url = new URL(request.url).searchParams.get("url") || "";
+    if (!url) {
+      return Response.json(
+        { ok: false, error: "Missing repo URL" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const result = await introspectRepo(url);
+    return Response.json(result, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");
@@ -45,7 +63,13 @@ export async function handleGetServers(request: Request): Promise<Response> {
 export async function handleGetApps(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");
-    const result = db.getApps();
+    const apps = db.getApps();
+    const result = apps.map((a: any) => {
+      const reps = db.getReplicas(a.id);
+      const first = reps[0];
+      const servers = db.getServersForApp(a.id).map((s: any) => s.id);
+      return { ...a, host_port: first?.host_port ?? 0, servers };
+    });
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -177,7 +201,9 @@ export async function handleGetContainerLogs(request: Request, appId: number): P
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ logs: "", error: "App not found" }, { headers: corsHeaders });
-    const server = db.getServer(app.server_id);
+    const replicas = db.getReplicas(appId);
+    if (replicas.length === 0) return Response.json({ logs: "", error: "App has no replicas" }, { headers: corsHeaders });
+    const server = db.getServer(replicas[0].server_id);
     if (!server) return Response.json({ logs: "", error: "Server not found" }, { headers: corsHeaders });
 
     const logs = app.deploy_mode === "compose"
@@ -203,37 +229,6 @@ export async function handleGetDeployLog(request: Request, appId: number): Promi
 export async function handleGetDeployments(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.logs");
-    // Lazily ingest any webhook-triggered deployments that ran on the server
-    // since the last time we synced, so they show up in history alongside
-    // manual redeploys.
-    try {
-      const app = db.getApp(appId);
-      if (app?.webhook_enabled) {
-        const server = db.getServer(app.server_id);
-        if (server?.ipv4) {
-          const sinceTs = db.getLatestWebhookDeploymentTs(appId);
-          const entries = await hetzner.fetchWebhookHistory(
-            server.ipv4,
-            app.name,
-            sinceTs,
-            server.ssh_host_key || undefined
-          );
-          for (const entry of entries) {
-            db.insertDeployment({
-              app_id: appId,
-              image_tag: entry.image_tag,
-              git_commit: entry.git_commit,
-              deploy_log: entry.log,
-              status: entry.status,
-              source: "webhook",
-              created_at: entry.ts,
-            });
-          }
-        }
-      }
-    } catch (syncErr) {
-      console.error(`[deployments] webhook history sync failed for app ${appId}:`, syncErr);
-    }
     const deployments = db.getDeployments(appId);
     return Response.json(deployments, { headers: corsHeaders });
   } catch (error) {

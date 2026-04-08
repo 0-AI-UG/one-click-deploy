@@ -1,12 +1,38 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { get } from "../api/client.ts";
 import { Card, Btn, showToast, Checkbox } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Rocket, Plus, Minus, ChevronDown, ChevronRight } from "lucide-react";
+import {
+  Rocket,
+  Plus,
+  Minus,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Check,
+  AlertTriangle,
+} from "lucide-react";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 import { startDeploy } from "../stores/deploy-progress.ts";
 
 type ServerOption = { id: number; name: string; ipv4: string; type: string; location: string };
+
+type IntrospectResult =
+  | {
+      ok: true;
+      owner: string;
+      repo: string;
+      default_branch: string;
+      suggested_app_name: string;
+      dockerfiles: string[];
+      compose_file: string | null;
+      compose_services: Array<{ name: string; port: number | null; has_ports: boolean }>;
+      suggested_web_service: string | null;
+      detected_port: number | null;
+      env_vars: Array<{ key: string; value: string }>;
+      notes: string[];
+    }
+  | { ok: false; error: string; suggested_app_name?: string };
 
 const Label = ({ children }: { children: React.ReactNode }) => (
   <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">
@@ -41,42 +67,187 @@ function Section({
   );
 }
 
+// A row in the "deployment receipt" — mono label on the left, an input/select
+// on the right, separated by a hard divider. All fields are pre-filled when
+// possible so the happy path is "paste a URL → click DEPLOY".
+function ReceiptRow({
+  label,
+  children,
+  detected,
+}: {
+  label: string;
+  children: React.ReactNode;
+  detected?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[120px_1fr] gap-4 items-start py-3 border-b-2 border-fg/15 last:border-b-0">
+      <div className="pt-2.5 flex items-center gap-1.5">
+        <span className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg">
+          {label}
+        </span>
+        {detected && (
+          <span title="Auto-detected" className="text-accent-green">
+            <Check size={11} strokeWidth={3} />
+          </span>
+        )}
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
 export function DeployPage() {
   const { serverTypes } = useServerTypes();
   const [servers, setServers] = useState<ServerOption[]>([]);
-  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([]);
+  const [envValues, setEnvValues] = useState<Record<string, string>>({});
+  const [extraEnv, setExtraEnv] = useState<Array<{ key: string; value: string }>>([]);
+
+  // Introspection state
+  const [introspect, setIntrospect] = useState<IntrospectResult | null>(null);
+  const [introspecting, setIntrospecting] = useState(false);
+  const [revealed, setRevealed] = useState(false); // shows the receipt
+  const introspectSeq = useRef(0);
 
   const [form, setForm] = useState({
-    app_name: "", git_repo: "", domain: "", container_port: "3000",
-    server_id: "", server_type: "", server_location: "",
-    volume_size: "", volume_path: "/data", dockerfile_path: "",
-    webhook_enabled: false, webhook_branch: "main",
-    auth_password: "", replicas: "1",
-    compose_file: "", compose_web_service: "",
+    app_name: "",
+    git_repo: "",
+    domain: "",
+    container_port: "3000",
+    server_id: "",
+    server_type: "",
+    server_location: "",
+    volume_size: "",
+    volume_path: "/data",
+    dockerfile_path: "",
+    webhook_enabled: false,
+    webhook_branch: "main",
+    auth_password: "",
+    replicas: "1",
+    compose_file: "",
+    compose_web_service: "",
   });
 
   useEffect(() => {
-    get("/api/servers").then((data: any[]) => {
-      setServers(data.map((s: any) => ({ id: s.id, name: s.name, ipv4: s.ipv4, type: s.type, location: s.location })));
-    }).catch(() => {});
+    get("/api/servers")
+      .then((data: any[]) => {
+        setServers(
+          data.map((s: any) => ({
+            id: s.id,
+            name: s.name,
+            ipv4: s.ipv4,
+            type: s.type,
+            location: s.location,
+          })),
+        );
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
     if (serverTypes.length > 0 && !form.server_type) {
       const first = serverTypes[0];
-      setForm((f) => ({ ...f, server_type: first.name, server_location: first.locations[0] ?? "" }));
+      setForm((f) => ({
+        ...f,
+        server_type: first.name,
+        server_location: first.locations[0] ?? "",
+      }));
     }
   }, [serverTypes]);
 
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value }));
+  // Debounced auto-introspect when the user pastes/types a URL that looks
+  // like a GitHub repo. Each call increments a seq so out-of-order responses
+  // never overwrite a fresher one.
+  useEffect(() => {
+    const url = form.git_repo.trim();
+    if (!url) {
+      setIntrospect(null);
+      setRevealed(false);
+      return;
+    }
+    // Non-GitHub URL: clear any stale introspect, but reveal the receipt so
+    // the user can fill the rest in by hand.
+    if (!/github\.com[/:][^/]+\/[^/]+/.test(url)) {
+      setIntrospect(null);
+      setIntrospecting(false);
+      setRevealed(true);
+      return;
+    }
+
+    const mySeq = ++introspectSeq.current;
+    const timer = setTimeout(async () => {
+      setIntrospecting(true);
+      try {
+        const result: IntrospectResult = await get(
+          `/api/repos/introspect?url=${encodeURIComponent(url)}`,
+        );
+        if (mySeq !== introspectSeq.current) return;
+        setIntrospect(result);
+        setRevealed(true);
+        if (result.ok) {
+          // Hydrate the form with detected values, but don't clobber anything
+          // the user has already typed by hand.
+          setForm((f) => ({
+            ...f,
+            app_name: f.app_name || result.suggested_app_name,
+            container_port:
+              f.container_port === "3000" && result.detected_port
+                ? String(result.detected_port)
+                : f.container_port,
+            dockerfile_path: f.dockerfile_path || (result.dockerfiles[0] ?? ""),
+            compose_file: f.compose_file || (result.compose_file ?? ""),
+            compose_web_service:
+              f.compose_web_service || (result.suggested_web_service ?? ""),
+            webhook_branch:
+              f.webhook_branch === "main" ? result.default_branch : f.webhook_branch,
+          }));
+          if (result.env_vars.length > 0) {
+            setEnvValues((prev) => {
+              const next = { ...prev };
+              for (const { key, value } of result.env_vars) {
+                if (!(key in next)) next[key] = value;
+              }
+              return next;
+            });
+          }
+        } else if (result.suggested_app_name) {
+          setForm((f) => ({ ...f, app_name: f.app_name || result.suggested_app_name! }));
+        }
+      } catch (err: any) {
+        if (mySeq !== introspectSeq.current) return;
+        setIntrospect({
+          ok: false,
+          error: err?.message || "We couldn't read that repo. Fill it in manually below.",
+        });
+        setRevealed(true);
+      } finally {
+        if (mySeq === introspectSeq.current) setIntrospecting(false);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [form.git_repo]);
+
+  const set =
+    (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+      setForm((f) => ({
+        ...f,
+        [k]:
+          e.target.type === "checkbox"
+            ? (e.target as HTMLInputElement).checked
+            : e.target.value,
+      }));
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.app_name || !form.git_repo) return showToast("App name and git repo are required", "error");
+    if (introspecting)
+      return showToast("Hold on — still peeking at the repo", "info");
+    if (!form.app_name || !form.git_repo)
+      return showToast("App name and git repo are required", "error");
 
-    const env: Record<string, string> = {};
-    envVars.forEach((v) => { if (v.key) env[v.key] = v.value; });
+    const env: Record<string, string> = { ...envValues };
+    extraEnv.forEach((v) => {
+      if (v.key) env[v.key] = v.value;
+    });
 
     const body: any = {
       app_name: form.app_name,
@@ -98,14 +269,17 @@ export function DeployPage() {
       compose_web_service: form.compose_web_service || undefined,
     };
 
-    // Kick off the deploy in the background store and navigate away from the
-    // form so the user sees a focused progress view.
     void startDeploy(body);
     window.location.hash = "#/deploy/progress";
   };
 
+  const detected = introspect?.ok === true ? introspect : null;
+  const hasMultipleDockerfiles = !!detected && detected.dockerfiles.length > 1;
+  const hasMultipleServices = !!detected && detected.compose_services.length > 1;
+  const envKeys = Object.keys(envValues);
+
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8 animate-fade-in">
+    <div className="max-w-2xl mx-auto px-4 py-10 animate-fade-in">
       {/* Hero */}
       <div className="mb-8">
         <div className="flex items-center gap-2 mb-2">
@@ -113,174 +287,332 @@ export function DeployPage() {
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>
         </div>
         <p className="text-fg-dim text-[12px]">
-          Point us at a Git repo. We handle the server, build, TLS and routing.
+          Paste a GitHub repo. We'll figure out the rest.
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* The essentials — always visible */}
-        <Card className="p-5 space-y-4">
-          <div>
-            <Label>App Name *</Label>
-            <input type="text" value={form.app_name} onChange={set("app_name")} placeholder="my-app" required />
-          </div>
-          <div>
-            <Label>Git Repository *</Label>
-            <input type="text" value={form.git_repo} onChange={set("git_repo")} placeholder="https://github.com/user/repo" required />
-          </div>
-          <div>
-            <Label>Domain</Label>
-            <input type="text" value={form.domain} onChange={set("domain")} placeholder="app.example.com (optional)" />
-          </div>
-          <div>
-            <Label>Server</Label>
-            <NeoSelect
-              value={form.server_id}
-              onChange={(v) => setForm((f) => ({ ...f, server_id: v }))}
-              placeholder="Create new server"
-              options={[
-                { value: "", label: "Create new server" },
-                ...servers.map((s) => ({
-                  value: String(s.id),
-                  label: `${s.name} (${s.ipv4}) — ${s.type} @ ${s.location}`,
-                })),
-              ]}
-            />
-            {!form.server_id && (
-              <div className="grid grid-cols-2 gap-3 mt-3">
-                <div>
-                  <Label>Type</Label>
-                  <NeoSelect
-                    value={form.server_type}
-                    onChange={(v) => {
-                      setForm((f) => {
-                        const locs = locationOptions(serverTypes, v);
-                        const locValid = locs.some((l) => l.value === f.server_location);
-                        return { ...f, server_type: v, ...(!locValid && locs.length ? { server_location: locs[0].value } : {}) };
-                      });
-                    }}
-                    options={typeOptions(serverTypes)}
-                  />
-                </div>
-                <div>
-                  <Label>Location</Label>
-                  <NeoSelect
-                    value={form.server_location}
-                    onChange={(v) => setForm((f) => ({ ...f, server_location: v }))}
-                    options={locationOptions(serverTypes, form.server_type)}
-                  />
-                </div>
-              </div>
+      <form onSubmit={handleSubmit} className="space-y-5">
+        {/* The paste bar — the only thing the user needs to fill in */}
+        <div className="bg-bg-raised border-2 border-fg shadow-neo p-5">
+          <Label>Git Repository</Label>
+          <input
+            type="text"
+            value={form.git_repo}
+            onChange={set("git_repo")}
+            placeholder="https://github.com/user/repo"
+            required
+            autoFocus
+            className="!text-[12px] !py-3"
+          />
+
+          {/* Status line under the paste bar */}
+          <div className="mt-3 min-h-[18px] flex items-center gap-2 font-mono text-[10px]">
+            {introspecting && (
+              <>
+                <Loader2 size={12} className="animate-spin text-fg" />
+                <span className="text-fg-dim">Peeking at the repo…</span>
+              </>
+            )}
+            {!introspecting && detected && (
+              <>
+                <Check size={12} strokeWidth={3} className="text-fg bg-accent border-2 border-fg" />
+                <span className="text-fg">
+                  Found {detected.dockerfiles.length > 0 ? "Dockerfile" : detected.compose_file ? "compose" : "repo"}
+                  {detected.detected_port ? ` · port ${detected.detected_port}` : ""}
+                  {detected.env_vars.length > 0
+                    ? ` · ${detected.env_vars.length} env var${detected.env_vars.length === 1 ? "" : "s"}`
+                    : ""}
+                </span>
+              </>
+            )}
+            {!introspecting && introspect && !introspect.ok && (
+              <>
+                <AlertTriangle size={12} className="text-accent-red" />
+                <span className="text-fg-dim">{introspect.error}</span>
+              </>
             )}
           </div>
-        </Card>
+        </div>
 
-        {/* Everything else — collapsed by default */}
-        <Section title="Environment Variables">
-          <div className="flex justify-end">
-            <Btn
-              size="xs"
-              variant="ghost"
-              onClick={() => setEnvVars([...envVars, { key: "", value: "" }])}
-            >
-              <Plus size={12} /> Add
-            </Btn>
-          </div>
-          {envVars.length === 0 && (
-            <div className="font-mono text-[10px] text-muted">No variables.</div>
-          )}
-          {envVars.map((v, i) => (
-            <div key={i} className="flex gap-2 items-center">
-              <input
-                type="text"
-                value={v.key}
-                placeholder="KEY"
-                onChange={(e) => {
-                  const next = [...envVars]; next[i].key = e.target.value; setEnvVars(next);
-                }}
-                className="!w-1/3"
-              />
-              <input
-                type="text"
-                value={v.value}
-                placeholder="value"
-                onChange={(e) => {
-                  const next = [...envVars]; next[i].value = e.target.value; setEnvVars(next);
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => setEnvVars(envVars.filter((_, j) => j !== i))}
-                className="text-muted hover:text-accent-red transition-colors flex-shrink-0"
+        {/* The receipt — appears once we've peeked (or once user starts typing
+            something we couldn't peek at). Pre-filled, click DEPLOY. */}
+        {revealed && (
+          <Card className="p-5 animate-fade-in">
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
+                Deployment Receipt
+              </span>
+              {detected && (
+                <span className="font-mono text-[9px] uppercase tracking-wider text-fg-dim">
+                  {detected.owner}/{detected.repo}
+                </span>
+              )}
+            </div>
+
+            <div className="border-t-2 border-fg pt-1">
+              <ReceiptRow label="App Name" detected={!!detected}>
+                <input type="text" value={form.app_name} onChange={set("app_name")} required />
+              </ReceiptRow>
+
+              {/* Build source: Dockerfile, or a picker if multiple */}
+              <ReceiptRow
+                label={detected?.compose_file ? "Compose" : "Dockerfile"}
+                detected={!!detected && (detected.dockerfiles.length > 0 || !!detected.compose_file)}
               >
-                <Minus size={14} />
-              </button>
-            </div>
-          ))}
-        </Section>
+                {hasMultipleDockerfiles ? (
+                  <NeoSelect
+                    value={form.dockerfile_path}
+                    onChange={(v) => setForm((f) => ({ ...f, dockerfile_path: v }))}
+                    options={detected!.dockerfiles.map((d) => ({ value: d, label: d }))}
+                  />
+                ) : detected?.compose_file ? (
+                  <input
+                    type="text"
+                    value={form.compose_file}
+                    onChange={set("compose_file")}
+                    placeholder={detected.compose_file}
+                  />
+                ) : (
+                  <input
+                    type="text"
+                    value={form.dockerfile_path}
+                    onChange={set("dockerfile_path")}
+                    placeholder="Auto-detect at deploy time"
+                  />
+                )}
+              </ReceiptRow>
 
-        <Section title="Build & Runtime">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Container Port</Label>
-              <input type="number" value={form.container_port} onChange={set("container_port")} />
-            </div>
-            <div>
-              <Label>Replicas</Label>
-              <input type="number" value={form.replicas} onChange={set("replicas")} min="1" />
-            </div>
-          </div>
-          <div>
-            <Label>Dockerfile Path</Label>
-            <input type="text" value={form.dockerfile_path} onChange={set("dockerfile_path")} placeholder="Auto-detect" />
-          </div>
-          <div>
-            <Label>Auth Password</Label>
-            <input type="password" value={form.auth_password} onChange={set("auth_password")} placeholder="Optional login gate" />
-          </div>
-        </Section>
+              {/* Compose service picker, only if multiple services */}
+              {hasMultipleServices && (
+                <ReceiptRow label="Web Service" detected>
+                  <NeoSelect
+                    value={form.compose_web_service}
+                    onChange={(v) => setForm((f) => ({ ...f, compose_web_service: v }))}
+                    options={detected!.compose_services.map((s) => ({
+                      value: s.name,
+                      label: s.has_ports ? `${s.name}  ·  exposes port` : s.name,
+                    }))}
+                  />
+                </ReceiptRow>
+              )}
 
-        <Section title="Storage">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Volume Size (GB)</Label>
-              <input type="number" value={form.volume_size} onChange={set("volume_size")} placeholder="0" min="0" />
+              <ReceiptRow label="Listens On" detected={!!detected?.detected_port}>
+                <input type="number" value={form.container_port} onChange={set("container_port")} />
+              </ReceiptRow>
+
+              <ReceiptRow label="Server">
+                <NeoSelect
+                  value={form.server_id}
+                  onChange={(v) => setForm((f) => ({ ...f, server_id: v }))}
+                  placeholder="Create new server"
+                  options={[
+                    { value: "", label: "✦  Spin up a new server" },
+                    ...servers.map((s) => ({
+                      value: String(s.id),
+                      label: `${s.name} (${s.ipv4}) — ${s.type} @ ${s.location}`,
+                    })),
+                  ]}
+                />
+                {!form.server_id && (
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <NeoSelect
+                      value={form.server_type}
+                      onChange={(v) => {
+                        setForm((f) => {
+                          const locs = locationOptions(serverTypes, v);
+                          const locValid = locs.some((l) => l.value === f.server_location);
+                          return {
+                            ...f,
+                            server_type: v,
+                            ...(!locValid && locs.length
+                              ? { server_location: locs[0].value }
+                              : {}),
+                          };
+                        });
+                      }}
+                      options={typeOptions(serverTypes)}
+                    />
+                    <NeoSelect
+                      value={form.server_location}
+                      onChange={(v) => setForm((f) => ({ ...f, server_location: v }))}
+                      options={locationOptions(serverTypes, form.server_type)}
+                    />
+                  </div>
+                )}
+              </ReceiptRow>
+
+              <ReceiptRow label="Domain">
+                <input
+                  type="text"
+                  value={form.domain}
+                  onChange={set("domain")}
+                  placeholder="app.example.com (we'll give you a temporary one if blank)"
+                />
+              </ReceiptRow>
+            </div>
+
+            {/* Notes from introspect */}
+            {detected && detected.notes.length > 0 && (
+              <div className="mt-3 pt-3 border-t-2 border-fg/15 space-y-1">
+                {detected.notes.map((n, i) => (
+                  <div key={i} className="font-mono text-[10px] text-fg-dim flex items-start gap-2">
+                    <AlertTriangle size={11} className="text-accent-amber mt-0.5 flex-shrink-0" />
+                    <span>{n}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        )}
+
+        {/* Secrets card — only if we found env keys */}
+        {revealed && envKeys.length > 0 && (
+          <Card className="p-5 animate-fade-in">
+            <div className="flex items-center justify-between mb-3">
+              <span className="font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
+                Secrets
+              </span>
+              <span className="font-mono text-[9px] uppercase tracking-wider text-fg-dim">
+                Detected from .env.example
+              </span>
+            </div>
+            <div className="space-y-2">
+              {envKeys.map((key) => (
+                <div key={key} className="grid grid-cols-[40%_1fr] gap-2 items-center">
+                  <div className="font-mono text-[10px] font-bold text-fg truncate" title={key}>
+                    {key}
+                  </div>
+                  <input
+                    type="text"
+                    value={envValues[key]}
+                    placeholder="value"
+                    onChange={(e) =>
+                      setEnvValues((p) => ({ ...p, [key]: e.target.value }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {/* Advanced — everything else, collapsed by default */}
+        {revealed && (
+          <Section title="Advanced">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Replicas</Label>
+                <input
+                  type="number"
+                  value={form.replicas}
+                  onChange={set("replicas")}
+                  min="1"
+                />
+              </div>
+              <div>
+                <Label>Auth Password</Label>
+                <input
+                  type="password"
+                  value={form.auth_password}
+                  onChange={set("auth_password")}
+                  placeholder="Optional login gate"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Volume Size (GB)</Label>
+                <input
+                  type="number"
+                  value={form.volume_size}
+                  onChange={set("volume_size")}
+                  placeholder="0"
+                  min="0"
+                />
+              </div>
+              <div>
+                <Label>Volume Path</Label>
+                <input
+                  type="text"
+                  value={form.volume_path}
+                  onChange={set("volume_path")}
+                />
+              </div>
             </div>
             <div>
-              <Label>Volume Path</Label>
-              <input type="text" value={form.volume_path} onChange={set("volume_path")} />
+              <Checkbox
+                checked={!!form.webhook_enabled}
+                onChange={(v) => setForm((f: any) => ({ ...f, webhook_enabled: v }))}
+                label="Auto-deploy on git push"
+              />
+              {form.webhook_enabled && (
+                <div className="mt-2">
+                  <Label>Branch</Label>
+                  <input
+                    type="text"
+                    value={form.webhook_branch}
+                    onChange={set("webhook_branch")}
+                  />
+                </div>
+              )}
             </div>
-          </div>
-        </Section>
-
-        <Section title="Webhook">
-          <Checkbox
-            checked={!!form.webhook_enabled}
-            onChange={(v) => setForm((f: any) => ({ ...f, webhook_enabled: v }))}
-            label="Auto-deploy on git push"
-          />
-          {form.webhook_enabled && (
             <div>
-              <Label>Branch</Label>
-              <input type="text" value={form.webhook_branch} onChange={set("webhook_branch")} />
+              <div className="flex items-center justify-between mb-1">
+                <Label>Extra Environment Variables</Label>
+                <Btn
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => setExtraEnv([...extraEnv, { key: "", value: "" }])}
+                >
+                  <Plus size={12} /> Add
+                </Btn>
+              </div>
+              {extraEnv.map((v, i) => (
+                <div key={i} className="flex gap-2 items-center mt-2">
+                  <input
+                    type="text"
+                    value={v.key}
+                    placeholder="KEY"
+                    onChange={(e) => {
+                      const next = [...extraEnv];
+                      next[i].key = e.target.value;
+                      setExtraEnv(next);
+                    }}
+                    className="!w-1/3"
+                  />
+                  <input
+                    type="text"
+                    value={v.value}
+                    placeholder="value"
+                    onChange={(e) => {
+                      const next = [...extraEnv];
+                      next[i].value = e.target.value;
+                      setExtraEnv(next);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setExtraEnv(extraEnv.filter((_, j) => j !== i))}
+                    className="text-muted hover:text-accent-red transition-colors flex-shrink-0"
+                  >
+                    <Minus size={14} />
+                  </button>
+                </div>
+              ))}
             </div>
-          )}
-        </Section>
+          </Section>
+        )}
 
-        <Section title="Docker Compose">
-          <div>
-            <Label>Compose File</Label>
-            <input type="text" value={form.compose_file} onChange={set("compose_file")} placeholder="Auto-detect" />
-          </div>
-          <div>
-            <Label>Web Service</Label>
-            <input type="text" value={form.compose_web_service} onChange={set("compose_web_service")} placeholder="Auto-detect" />
-          </div>
-        </Section>
-
-        <Btn type="submit" variant="primary" className="w-full !py-3 !text-[12px]">
-          Deploy
-        </Btn>
+        {revealed && (
+          <Btn
+            type="submit"
+            variant="primary"
+            disabled={introspecting}
+            className="w-full !py-4 !text-[13px] animate-fade-in"
+          >
+            <Rocket size={14} /> Deploy
+          </Btn>
+        )}
       </form>
     </div>
   );

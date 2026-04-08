@@ -205,7 +205,9 @@ export function AppDetailPage({ appId }: { appId: number }) {
               <div className="flex justify-between"><span className="text-muted">Git Repo</span><span className="text-fg font-bold">{app.git_repo}</span></div>
               <div className="flex justify-between"><span className="text-muted">Deploy Mode</span><span className="text-fg">{app.deploy_mode}</span></div>
               <div className="flex justify-between"><span className="text-muted">Container Port</span><span className="text-fg">{app.container_port}</span></div>
-              <div className="flex justify-between"><span className="text-muted">Host Port</span><span className="text-fg">{app.host_port}</span></div>
+              {replicas[0]?.host_port != null && (
+                <div className="flex justify-between"><span className="text-muted">Host Port</span><span className="text-fg">{replicas[0].host_port}</span></div>
+              )}
               {app.volume_id && <div className="flex justify-between"><span className="text-muted">Volume</span><span className="text-fg">{app.volume_mount}</span></div>}
               {app.auth_password && <div className="flex justify-between"><span className="text-muted">Auth</span><span className="text-accent-amber font-bold">Password protected</span></div>}
             </div>
@@ -324,10 +326,10 @@ export function AppDetailPage({ appId }: { appId: number }) {
                         .filter((s: any) => s.status === "ready")
                         .map((s: any) => {
                           const count = replicas.filter((r: any) => r.server_id === s.id).length;
-                          const isPrimary = s.id === app.server_id;
+                          const inUse = count > 0;
                           return {
                             value: String(s.id),
-                            label: `${s.name} · ${s.location} · ${s.type} · ${count} replica${count === 1 ? "" : "s"}${isPrimary ? " · primary" : ""}`,
+                            label: `${s.name} · ${s.location} · ${s.type} · ${count} replica${count === 1 ? "" : "s"}${inUse ? " · in-use" : ""}`,
                           };
                         }),
                     ]}

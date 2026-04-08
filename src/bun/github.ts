@@ -81,6 +81,32 @@ export async function createWebhook(opts: {
   return { id: data.id };
 }
 
+export async function createWebhookAtUrl(opts: {
+  gitRepo: string;
+  url: string;
+  webhookSecret: string;
+  token: string;
+}): Promise<{ id: number }> {
+  const { owner, repo } = parseGitHubRepo(opts.gitRepo);
+  log("webhook", `Creating webhook for ${owner}/${repo} -> ${opts.url}`);
+  const data = await githubApi(`/repos/${owner}/${repo}/hooks`, opts.token, {
+    method: "POST",
+    body: JSON.stringify({
+      name: "web",
+      active: true,
+      events: ["push"],
+      config: {
+        url: opts.url,
+        content_type: "json",
+        secret: opts.webhookSecret,
+        insecure_ssl: "0",
+      },
+    }),
+  });
+  log("webhook", `Webhook created: id=${data.id}`);
+  return { id: data.id };
+}
+
 export async function deleteWebhook(opts: {
   gitRepo: string;
   webhookId: string;

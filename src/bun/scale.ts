@@ -36,20 +36,17 @@ export async function scaleApp(
       return { ok: false, error: "Must have at least 1 replica" };
     }
 
-    const primaryServer = db.getServer(app.server_id);
-    if (!primaryServer) throw new Error("Primary server not found");
-
     if (targetReplicas > currentCount) {
       try {
-        await scaleUp(app, primaryServer, currentReplicas, currentCount, targetReplicas, emit, targetServerId);
+        await scaleUp(app, currentReplicas, currentCount, targetReplicas, emit, targetServerId);
       } catch (err) {
         // Rollback: clean up any resources created during failed scale-up
         emit("scale", "Scale-up failed, rolling back...");
-        await rollbackScaleUp(app, primaryServer, currentReplicas, emit);
+        await rollbackScaleUp(app, currentReplicas, emit);
         throw err;
       }
     } else {
-      await scaleDown(app, primaryServer, currentReplicas, currentCount, targetReplicas, emit);
+      await scaleDown(app, currentReplicas, currentCount, targetReplicas, emit);
     }
 
     db.updateAppScaling(appId, {
@@ -76,7 +73,6 @@ export async function scaleApp(
 
 async function scaleUp(
   app: any,
-  primaryServer: any,
   currentReplicas: any[],
   currentCount: number,
   targetCount: number,
@@ -86,6 +82,11 @@ async function scaleUp(
   const settings = db.getSettings();
   const tokens = await getTokens();
   const githubPat = tokens.github_pat || undefined;
+  // The "primary" is just whichever server hosts the first (oldest) replica.
+  const firstReplica = currentReplicas[0];
+  const primaryServer = db.getServer(firstReplica.server_id);
+  if (!primaryServer) throw new Error("First replica's server not found");
+  const primaryHostPort = firstReplica.host_port;
 
   // Validate that stored LB still exists (may have been deleted externally)
   if (app.hetzner_lb_id) {
@@ -121,8 +122,8 @@ async function scaleUp(
 
     // Add LB service — uses HTTPS if cert available, HTTP otherwise
     const destPort = app.auth_password
-      ? hetzner.authProxyPort(app.host_port)
-      : app.host_port;
+      ? hetzner.authProxyPort(primaryHostPort)
+      : primaryHostPort;
     await hetzner.addLBService(
       String(lb.id),
       destPort,
@@ -174,7 +175,7 @@ async function scaleUp(
       // Update compose override to bind to 0.0.0.0
       const overrideServices: any = {
         [app.compose_web_service]: {
-          ports: [`0.0.0.0:${app.host_port}:${app.container_port}`],
+          ports: [`0.0.0.0:${primaryHostPort}:${app.container_port}`],
         },
       };
       const override = JSON.stringify({ services: overrideServices });
@@ -194,7 +195,7 @@ async function scaleUp(
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
       const tempName = `${app.name}-rebind`;
       // Start new container with temp name on 0.0.0.0
-      const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p 0.0.0.0:${app.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+      const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p 0.0.0.0:${primaryHostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
       const startResult = await hetzner.sshExec(primaryServer.ipv4, asUser(cmd), primaryHostKey);
       if (startResult.exitCode !== 0) {
         // Clean up temp container and rethrow
@@ -229,7 +230,7 @@ async function scaleUp(
     emit("scale", `Provisioning replica ${replicaNum}/${targetCount}...`);
 
     // Pick target server: user-specified, least-loaded existing, or newly provisioned
-    let targetServer = await pickTargetServer(app, primaryServer, settings, emit, targetServerId);
+    let targetServer = await pickTargetServer(app, settings, emit, targetServerId);
     const targetHostKey = targetServer.ssh_host_key || undefined;
 
     // Transfer image to target server
@@ -327,7 +328,6 @@ async function scaleUp(
 
 async function scaleDown(
   app: any,
-  primaryServer: any,
   currentReplicas: any[],
   currentCount: number,
   targetCount: number,
@@ -398,10 +398,17 @@ async function scaleDown(
     throw new Error(`Scale-down incomplete — only removed ${removedCount} of ${toRemove.length} replicas. Some servers may need manual cleanup.`);
   }
 
-  // If going from 2→1, tear down LB and revert to Caddy
+  // If going from 2→1, tear down LB and revert to Caddy.
+  // The "primary" here is the surviving replica's server.
   if (targetCount === 1 && lbId) {
     emit("scale", "Removing load balancer, reverting to direct access...");
 
+    const survivors = db.getReplicas(app.id);
+    const survivor = survivors[0];
+    if (!survivor) throw new Error("No surviving replica after scale-down");
+    const primaryServer = db.getServer(survivor.server_id);
+    if (!primaryServer) throw new Error("Surviving replica's server not found");
+    const primaryHostPort = survivor.host_port;
     const primaryHostKey = primaryServer.ssh_host_key || undefined;
 
     // Re-bind container back to 127.0.0.1
@@ -410,7 +417,7 @@ async function scaleDown(
     if (app.deploy_mode === "compose") {
       const overrideServices: any = {
         [app.compose_web_service]: {
-          ports: [`127.0.0.1:${app.host_port}:${app.container_port}`],
+          ports: [`127.0.0.1:${primaryHostPort}:${app.container_port}`],
         },
       };
       const override = JSON.stringify({ services: overrideServices });
@@ -428,7 +435,7 @@ async function scaleDown(
       }
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
       const tempName = `${app.name}-rebind`;
-      const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p 127.0.0.1:${app.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+      const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p 127.0.0.1:${primaryHostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
       const startResult = await hetzner.sshExec(primaryServer.ipv4, asUser(cmd), primaryHostKey);
       if (startResult.exitCode !== 0) {
         await hetzner.sshExec(primaryServer.ipv4, asUser(`docker rm -f ${tempName} 2>/dev/null || true`), primaryHostKey);
@@ -440,7 +447,7 @@ async function scaleDown(
 
     // Restore Caddy
     const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-    const caddyPort = app.auth_password ? hetzner.authProxyPort(app.host_port) : app.host_port;
+    const caddyPort = app.auth_password ? hetzner.authProxyPort(primaryHostPort) : primaryHostPort;
     await hetzner.deployCaddySite(primaryServer.ipv4, app.domain, caddyPort, useInternalTls, primaryHostKey);
 
     // Atomic DNS swap: create new record first, then delete old (overlap, not gap)
@@ -485,7 +492,7 @@ async function scaleDown(
       // Remove LB firewall rules
       try {
         const firewallId = await hetzner.ensureFirewall();
-        const destPort = app.auth_password ? hetzner.authProxyPort(app.host_port) : app.host_port;
+        const destPort = app.auth_password ? hetzner.authProxyPort(primaryHostPort) : primaryHostPort;
         await hetzner.removeLBFirewallRule(firewallId, destPort, lb.public_net.ipv4.ip);
       } catch {}
     }
@@ -494,29 +501,20 @@ async function scaleDown(
     emit("scale", "Load balancer removed, direct access restored");
   }
 
-  // Clean up non-primary servers that have zero remaining replicas and no apps
+  // GC every affected server uniformly — gcServerIfEmpty handles the
+  // empty/panel checks. No primary exemption.
   const candidateServerIds = new Set<number>();
   for (const replica of toRemove) {
-    if (replica.server_id !== primaryServer.id) {
-      candidateServerIds.add(replica.server_id);
-    }
+    candidateServerIds.add(replica.server_id);
   }
-
   for (const serverId of candidateServerIds) {
-    const server = db.getServer(serverId);
-    if (!server) continue;
-
-    const remaining = db.getReplicasByServer(serverId);
-    const serverApps = db.getApps(serverId);
-    if (remaining.length > 0 || serverApps.length > 0) continue;
-
-    emit("scale", `Deleting unused server ${server.name}...`);
     try {
-      await hetzner.deleteHetznerServer(server.hetzner_id);
-      db.deleteServer(server.id);
-      emit("scale", `Server ${server.name} deleted`);
+      const before = db.getServer(serverId);
+      await db.gcServerIfEmpty(serverId);
+      const after = db.getServer(serverId);
+      if (before && !after) emit("scale", `Server ${before.name} deleted`);
     } catch (err) {
-      log("scale", `Failed to delete server ${server.id}: ${err}`);
+      log("scale", `Failed to gc server ${serverId}: ${err}`);
     }
   }
 }
@@ -528,12 +526,15 @@ async function scaleDown(
  */
 async function rollbackScaleUp(
   app: any,
-  primaryServer: any,
   originalReplicas: any[],
   emit: ProgressFn
 ): Promise<void> {
   const freshApp = db.getApp(app.id);
   if (!freshApp) return;
+  // Determine the "primary" (where the original first replica lived).
+  const firstReplica = originalReplicas[0];
+  const primaryServer = firstReplica ? db.getServer(firstReplica.server_id) : null;
+  const primaryHostPort = firstReplica?.host_port ?? 0;
 
   // Find replicas that were added (not in the original set)
   const originalIds = new Set(originalReplicas.map(r => r.id));
@@ -557,7 +558,7 @@ async function rollbackScaleUp(
 
   // If LB was just created (wasn't there before), tear it down
   const lbId = freshApp.hetzner_lb_id;
-  if (lbId && !app.hetzner_lb_id) {
+  if (lbId && !app.hetzner_lb_id && primaryServer) {
     emit("scale", "Removing load balancer...");
     try { await hetzner.deleteLoadBalancer(lbId); } catch (e) {
       log("rollback", `Failed to delete LB ${lbId}: ${e}`);
@@ -571,7 +572,7 @@ async function rollbackScaleUp(
       if (app.deploy_mode === "compose") {
         const overrideServices: any = {
           [app.compose_web_service]: {
-            ports: [`127.0.0.1:${app.host_port}:${app.container_port}`],
+            ports: [`127.0.0.1:${primaryHostPort}:${app.container_port}`],
           },
         };
         const override = JSON.stringify({ services: overrideServices });
@@ -589,7 +590,7 @@ async function rollbackScaleUp(
         }
         const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
         const tempName = `${app.name}-rebind`;
-        const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p 127.0.0.1:${app.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+        const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p 127.0.0.1:${primaryHostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
         const startResult = await hetzner.sshExec(primaryServer.ipv4, asUser(cmd), primaryHostKey);
         if (startResult.exitCode !== 0) {
           await hetzner.sshExec(primaryServer.ipv4, asUser(`docker rm -f ${tempName} 2>/dev/null || true`), primaryHostKey);
@@ -605,29 +606,22 @@ async function rollbackScaleUp(
     // Restore Caddy
     try {
       const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-      const caddyPort = app.auth_password ? hetzner.authProxyPort(app.host_port) : app.host_port;
+      const caddyPort = app.auth_password ? hetzner.authProxyPort(primaryHostPort) : primaryHostPort;
       await hetzner.deployCaddySite(primaryServer.ipv4, app.domain, caddyPort, useInternalTls, primaryHostKey);
     } catch (e) {
       log("rollback", `Failed to restore Caddy: ${e}`);
     }
   }
 
-  // Delete any newly provisioned servers that have no other apps/replicas
-  for (const replica of newReplicas) {
-    if (replica.server_id === primaryServer.id) continue;
-    const remaining = db.getReplicasByServer(replica.server_id);
-    const serverApps = db.getApps(replica.server_id);
-    if (remaining.length === 0 && serverApps.length === 0) {
-      const server = db.getServer(replica.server_id);
-      if (server) {
-        emit("scale", `Deleting unused server ${server.name}...`);
-        try {
-          await hetzner.deleteHetznerServer(server.hetzner_id);
-          db.deleteServer(server.id);
-        } catch (e) {
-          log("rollback", `Failed to delete server ${server.id}: ${e}`);
-        }
-      }
+  // GC any servers touched by the failed scale-up. gcServerIfEmpty handles
+  // the empty/panel checks (the panel and any server still in use is exempt).
+  const touched = new Set<number>();
+  for (const r of newReplicas) touched.add(r.server_id);
+  for (const serverId of touched) {
+    try {
+      await db.gcServerIfEmpty(serverId);
+    } catch (e) {
+      log("rollback", `Failed to gc server ${serverId}: ${e}`);
     }
   }
 
@@ -637,7 +631,6 @@ async function rollbackScaleUp(
 
 async function pickTargetServer(
   app: any,
-  primaryServer: any,
   settings: Record<string, string>,
   emit: ProgressFn,
   preferredServerId?: number
@@ -682,7 +675,10 @@ async function pickTargetServer(
 
     const serverType = settings.default_server_type;
     if (!serverType) throw new Error("No default server type configured — set one in Settings");
-    const location = primaryServer.location || settings.default_location;
+    // Default location: any existing replica's server, else configured default.
+    const replicas = db.getReplicas(app.id);
+    const anyReplicaServer = replicas[0] ? db.getServer(replicas[0].server_id) : null;
+    const location = anyReplicaServer?.location || settings.default_location;
     const serverName = `ocd-${app.name}-r${Date.now()}`;
 
     const hServer = await hetzner.createServer({
@@ -832,8 +828,9 @@ export async function rollingRedeploy(
       return { ok: true }; // Single replica handled by normal redeploy
     }
 
-    const primaryServer = db.getServer(app.server_id);
-    if (!primaryServer) throw new Error("Primary server not found");
+    // Use the first replica's server as the image source for transferImage.
+    const primaryServer = db.getServer(replicas[0].server_id);
+    if (!primaryServer) throw new Error("First replica's server not found");
 
     const lbId = app.hetzner_lb_id;
     if (!lbId) throw new Error("No load balancer found for rolling deploy");

@@ -22,8 +22,12 @@ export async function redeployApp(
   try {
     const app = db.getApp(appId);
     if (!app) throw new Error("App not found");
-    const server = db.getServer(app.server_id);
+    const replicasInit = db.getReplicas(appId);
+    if (replicasInit.length === 0) throw new Error("App has no replicas");
+    const firstReplica = replicasInit[0];
+    const server = db.getServer(firstReplica.server_id);
     if (!server) throw new Error("Server not found");
+    const hostPort = firstReplica.host_port;
 
     // Capture previous state for rollback
     previousStatus = app.status;
@@ -49,7 +53,7 @@ export async function redeployApp(
           name: app.name,
           gitRepo: app.git_repo,
           port: app.container_port,
-          hostPort: app.host_port,
+          hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
           composeFile: app.compose_file,
@@ -68,7 +72,7 @@ export async function redeployApp(
           name: app.name,
           gitRepo: app.git_repo,
           port: app.container_port,
-          hostPort: app.host_port,
+          hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
           dockerfilePath: app.dockerfile_path || undefined,
@@ -95,9 +99,9 @@ export async function redeployApp(
     }
 
     // Handle auth proxy: deploy, update, or remove (primary server)
-    let caddyPort = app.host_port;
+    let caddyPort = hostPort;
     if (authPassword) {
-      caddyPort = await hetzner.deployAuthProxy(server.ipv4, app.name, authPassword, app.host_port, hostKey);
+      caddyPort = await hetzner.deployAuthProxy(server.ipv4, app.name, authPassword, hostPort, hostKey);
     } else if (app.auth_password && !authPassword) {
       await hetzner.removeAuthProxy(server.ipv4, app.name, hostKey);
     }
@@ -111,8 +115,8 @@ export async function redeployApp(
 
     onProgress("health", "Checking app health...");
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, app.host_port, 5, hostKey)
-      : await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
+      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await hetzner.healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Success — now persist env/auth changes to DB
@@ -158,8 +162,12 @@ export async function updateAppEnv(
 
     const app = db.getApp(appId);
     if (!app) throw new Error("App not found");
-    const server = db.getServer(app.server_id);
+    const replicas = db.getReplicas(appId);
+    if (replicas.length === 0) throw new Error("App has no replicas");
+    const firstReplica = replicas[0];
+    const server = db.getServer(firstReplica.server_id);
     if (!server) throw new Error("Server not found");
+    const hostPort = firstReplica.host_port;
 
     // Defer DB write — only persist after successful rebuild
     // Recreate container with new env vars
@@ -175,7 +183,7 @@ export async function updateAppEnv(
           name: app.name,
           gitRepo: app.git_repo,
           port: app.container_port,
-          hostPort: app.host_port,
+          hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
           composeFile: app.compose_file,
@@ -192,7 +200,7 @@ export async function updateAppEnv(
           name: app.name,
           gitRepo: app.git_repo,
           port: app.container_port,
-          hostPort: app.host_port,
+          hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
           dockerfilePath: app.dockerfile_path || undefined,
@@ -203,8 +211,8 @@ export async function updateAppEnv(
     }
 
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, app.host_port, 5, hostKey)
-      : await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
+      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await hetzner.healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Success — now persist env vars to DB
@@ -227,8 +235,12 @@ export async function rollbackApp(
   try {
     const app = db.getApp(appId);
     if (!app) throw new Error("App not found");
-    const server = db.getServer(app.server_id);
+    const replicas = db.getReplicas(appId);
+    if (replicas.length === 0) throw new Error("App has no replicas");
+    const firstReplica = replicas[0];
+    const server = db.getServer(firstReplica.server_id);
     if (!server) throw new Error("Server not found");
+    const hostPort = firstReplica.host_port;
     const deployment = db.getDeployment(deploymentId);
     if (!deployment) throw new Error("Deployment not found");
     if (deployment.app_id !== appId) throw new Error("Deployment does not belong to this app");
@@ -272,7 +284,7 @@ export async function rollbackApp(
       }
 
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${app.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${deployment.image_tag}`;
+      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${deployment.image_tag}`;
       const result = await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to rollback — the previous image may no longer be available on this server");
@@ -281,8 +293,8 @@ export async function rollbackApp(
 
     // Health check
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, app.host_port, 5, hostKey)
-      : await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
+      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await hetzner.healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Record rollback as new deployment
@@ -302,10 +314,186 @@ export async function rollbackApp(
   }
 }
 
+// ── Webhook-triggered rolling redeploy ──
+//
+// In-process per-app queue: pushes for the same app are serialized;
+// pushes for different apps run in parallel. Single-instance panel only.
+const webhookQueues = new Map<number, Promise<void>>();
+
+export function enqueueWebhookRedeploy(
+  appId: number,
+  gitSha: string,
+  runner: (appId: number, gitSha: string) => Promise<void> = webhookRedeployApp,
+): Promise<void> {
+  const prev = webhookQueues.get(appId) ?? Promise.resolve();
+  const next = prev.catch(() => {}).then(() => runner(appId, gitSha));
+  webhookQueues.set(
+    appId,
+    next.finally(() => {
+      if (webhookQueues.get(appId) === next) webhookQueues.delete(appId);
+    }),
+  );
+  return next;
+}
+
+// exported for tests
+export function _resetWebhookQueues() {
+  webhookQueues.clear();
+}
+
+export async function webhookRedeployApp(appId: number, gitSha: string): Promise<void> {
+  const app = db.getApp(appId);
+  if (!app) {
+    log("webhookRedeploy", `App ${appId} not found`);
+    return;
+  }
+  const replicas = db.getReplicas(appId);
+  if (replicas.length === 0) {
+    log("webhookRedeploy", `App ${appId} has no replicas`);
+    return;
+  }
+
+  const dep = db.insertDeployment({
+    app_id: appId,
+    image_tag: `${app.name}:latest`,
+    git_commit: gitSha || "unknown",
+    status: "in_progress",
+    source: "webhook",
+    deploy_log: "",
+  });
+  const depId = dep.id;
+  const append = (line: string) => db.appendDeploymentLog(depId, line);
+
+  const tokens = await getTokens();
+  const githubPat = tokens.github_pat || undefined;
+  const lbId = app.hetzner_lb_id;
+  const multi = replicas.length > 1 && !!lbId;
+
+  append(`[webhook] Starting rolling redeploy across ${replicas.length} replica(s)`);
+
+  try {
+    db.updateAppStatus(appId, "deploying");
+
+    for (let i = 0; i < replicas.length; i++) {
+      const replica = replicas[i];
+      const server = db.getServer(replica.server_id);
+      if (!server) {
+        throw new Error(`Replica ${replica.id} server not found`);
+      }
+      const hostKey = server.ssh_host_key || undefined;
+      append(`[webhook] (${i + 1}/${replicas.length}) ${replica.container_name} on ${server.name}`);
+
+      if (multi) {
+        try {
+          await hetzner.removeLBTarget(lbId!, server.hetzner_id);
+        } catch {}
+        append(`[webhook] Drained ${replica.container_name}, waiting 10s`);
+        await Bun.sleep(10_000);
+      }
+
+      if (app.deploy_mode === "compose") {
+        await hetzner.cloneAndComposeBuild(
+          server.ipv4,
+          {
+            name: app.name,
+            gitRepo: app.git_repo,
+            port: app.container_port,
+            hostPort: replica.host_port,
+            envVars: JSON.parse(app.env_vars || "{}"),
+            volumeMount: app.volume_mount || undefined,
+            composeFile: app.compose_file,
+            webService: app.compose_web_service,
+            gitToken: githubPat,
+          },
+          (line) => append(`[build] ${line}`),
+        );
+      } else {
+        await hetzner.cloneAndBuild(
+          server.ipv4,
+          {
+            name: app.name,
+            gitRepo: app.git_repo,
+            port: app.container_port,
+            hostPort: replica.host_port,
+            envVars: JSON.parse(app.env_vars || "{}"),
+            volumeMount: app.volume_mount || undefined,
+            dockerfilePath: app.dockerfile_path || undefined,
+            gitToken: githubPat,
+          },
+          (line) => append(`[build] ${line}`),
+        );
+        if (multi) {
+          // Multi-replica: rebind to 0.0.0.0 so the LB can reach it.
+          const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+          await hetzner.sshExec(
+            server.ipv4,
+            asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`),
+            hostKey,
+          );
+          const envVars = JSON.parse(app.env_vars || "{}");
+          let envFileFlag = "";
+          if (Object.keys(envVars).length > 0) {
+            envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
+          }
+          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p 0.0.0.0:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
+          await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+        }
+      }
+
+      const health = app.deploy_mode === "compose"
+        ? await hetzner.composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
+        : await hetzner.healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
+
+      db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
+
+      if (!health.healthy) {
+        throw new Error(`Replica ${replica.container_name} failed health check after rebuild`);
+      }
+
+      if (multi) {
+        await hetzner.addLBTarget(lbId!, server.hetzner_id);
+        append(`[webhook] Re-added ${replica.container_name} to LB`);
+      }
+
+      // Capture commit hash from this replica (first one wins).
+      if (i === 0) {
+        try {
+          const r = await hetzner.sshExec(
+            server.ipv4,
+            `su - deploy -c "cd /home/deploy/apps/${app.name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
+            hostKey,
+          );
+          const sha = r.stdout.trim();
+          if (sha && sha !== "unknown") db.updateDeploymentGitCommit(depId, sha);
+        } catch {}
+      }
+    }
+
+    append(`[webhook] Rolling redeploy complete`);
+    db.updateDeploymentStatus(depId, "deployed");
+    db.updateAppStatus(appId, "running");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    append(`[webhook] FAILED: ${msg}`);
+    log("webhookRedeploy", `App ${appId} failed:`, msg);
+    db.updateDeploymentStatus(depId, "failed");
+    db.updateAppStatus(appId, "unhealthy");
+  }
+}
+
 export function getServersWithApps(): ServerWithApps[] {
   const servers = db.getServers();
   return servers.map((s) => ({
     ...s,
-    apps: db.getApps(s.id),
+    apps: db.getApps(s.id).map((a: any) => {
+      const reps = db.getReplicas(a.id);
+      const first = reps[0];
+      const serverIds = Array.from(new Set(reps.map((r: any) => r.server_id)));
+      return {
+        ...a,
+        host_port: first?.host_port ?? 0,
+        servers: serverIds,
+      };
+    }),
   }));
 }

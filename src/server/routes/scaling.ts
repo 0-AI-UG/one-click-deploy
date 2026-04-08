@@ -53,9 +53,9 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
     // Update scale daemon config if app is scaled
     const app = db.getApp(appId);
     if (app && app.hetzner_lb_id) {
-      const primaryServer = db.getServer(app.server_id);
+      const replicas = db.getReplicas(appId);
+      const primaryServer = replicas[0] ? db.getServer(replicas[0].server_id) : null;
       if (primaryServer) {
-        const replicas = db.getReplicas(appId);
         const tokens = await secretStore.getTokens();
         await hetzner.updateScaleDaemonConfig(
           primaryServer.ipv4,

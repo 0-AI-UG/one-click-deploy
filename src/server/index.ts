@@ -27,13 +27,21 @@ import {
   handleGetDeployLog,
   handleGetDeployments,
   handleRollbackApp,
+  handleIntrospectRepo,
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleDeleteResource } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory } from "./routes/scaling.ts";
-import { handleEnableWebhook, handleDisableWebhook } from "./routes/webhooks.ts";
+import {
+  handleEnableWebhook,
+  handleDisableWebhook,
+  handleGithubWebhook,
+  handlePanelGithubWebhook,
+  handleEnablePanelWebhook,
+  handleDisablePanelWebhook,
+} from "./routes/webhooks.ts";
 import {
   handleGetPanel,
   handleRedeployPanel,
@@ -164,6 +172,7 @@ export const server = Bun.serve({
     // --- Apps ---
     "/api/apps": { GET: (req: Request) => handleGetApps(req) },
     "/api/apps/deploy": { POST: (req: Request) => handleDeploy(req) },
+    "/api/repos/introspect": { GET: (req: Request) => handleIntrospectRepo(req) },
 
     // App-specific
     "/api/apps/:appId": { DELETE: (req: Request) => handleDestroyApp(req, appIdFrom(req)) },
@@ -193,9 +202,24 @@ export const server = Bun.serve({
     "/api/apps/:appId/webhook/enable": { POST: (req: Request) => handleEnableWebhook(req, appIdFrom(req)) },
     "/api/apps/:appId/webhook/disable": { POST: (req: Request) => handleDisableWebhook(req, appIdFrom(req)) },
 
+    // Public GitHub webhook receiver for the panel itself (HMAC verified)
+    "/webhooks/github/panel": {
+      POST: (req: Request) => handlePanelGithubWebhook(req),
+    },
+
+    // Public GitHub webhook receiver (no auth — HMAC verified per app)
+    "/webhooks/github/:appId": {
+      POST: (req: Request) => {
+        const m = new URL(req.url).pathname.match(/\/webhooks\/github\/(\d+)/);
+        return handleGithubWebhook(req, m ? parseInt(m[1], 10) : 0);
+      },
+    },
+
     // --- Panel (hosted self) ---
     "/api/panel": { GET: (req: Request) => handleGetPanel(req) },
     "/api/panel/redeploy": { POST: (req: Request) => handleRedeployPanel(req) },
+    "/api/panel/webhook/enable": { POST: (req: Request) => handleEnablePanelWebhook(req) },
+    "/api/panel/webhook/disable": { POST: (req: Request) => handleDisablePanelWebhook(req) },
     "/api/panel/logs": { GET: (req: Request) => handleGetPanelLogs(req) },
     "/api/panel/deployments": { GET: (req: Request) => handleGetPanelDeployments(req) },
 

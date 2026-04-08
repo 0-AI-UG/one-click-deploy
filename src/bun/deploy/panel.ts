@@ -303,8 +303,10 @@ export async function bootstrapPanel(
  */
 export async function redeployPanel(
   onProgress: ProgressFn,
+  opts: { source?: string; gitCommit?: string } = {},
 ): Promise<{ ok: boolean; error?: string }> {
-  log("redeploy", "Self-redeploy requested");
+  const source = opts.source ?? "manual";
+  log("redeploy", `Redeploy requested (source=${source})`);
 
   const panel = db.getPanel();
   if (!panel) {
@@ -317,35 +319,16 @@ export async function redeployPanel(
   const hostKey = server.ssh_host_key || undefined;
 
   try {
-    // Sanity check: confirm `panel.name` on the host really is our running
-    // container. `$HOSTNAME` inside a container is the short container ID,
-    // not the --name. Ask the host to resolve the name → ID and compare.
-    const ourContainerId = process.env.HOSTNAME || "";
-    if (ourContainerId) {
-      const inspect = await hetzner.sshExec(
-        server.ipv4,
-        `docker inspect --format '{{.Id}}' ${panel.name} 2>/dev/null || true`,
-        hostKey,
-      );
-      const fullId = inspect.stdout.trim();
-      if (!fullId || !fullId.startsWith(ourContainerId)) {
-        log(
-          "redeploy",
-          `Warning: this process (container ${ourContainerId}) does not match ${panel.name} on host (${fullId || "not found"}) — continuing anyway`,
-        );
-      }
-    }
-
     // === All persistent state updates FIRST, before the dispatch SSH call ===
     onProgress("build", "Recording redeploy in DB...");
     db.appendPanelDeployLog(
-      `[redeploy ${new Date().toISOString()}] Self-redeploy dispatched`,
+      `[redeploy ${new Date().toISOString()}] ${source} redeploy dispatched`,
     );
     db.insertPanelDeployment({
       image_tag: `${panel.name}:latest`,
-      git_commit: "self-redeploy",
+      git_commit: opts.gitCommit || source,
       status: "deployed",
-      source: "self-redeploy",
+      source,
     });
     // Optimistic: the new container will reach running state via the
     // detached rebuild below. Nothing else updates panel.status, so write

@@ -47,8 +47,8 @@ type DeployState = {
   deployMode?: "dockerfile" | "compose";
   caddyConfigured?: boolean;
   caddyDomain?: string;
-  serverIsNew?: boolean;
   volumeId?: string;
+  replicaId?: number;
 };
 
 async function rollback(state: DeployState, serverIp: string, hostKey?: string): Promise<void> {
@@ -98,6 +98,13 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
     }
   }
 
+  // Delete replica row first (so gcServerIfEmpty can run)
+  if (state.replicaId) {
+    try { db.deleteReplica(state.replicaId); } catch (err) {
+      log("rollback", `Failed to delete replica record: ${err}`);
+    }
+  }
+
   // Delete app record from DB
   if (state.dbAppId) {
     try {
@@ -108,19 +115,14 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
     }
   }
 
-  // Delete newly created server (only if we created it and no other apps exist)
-  if (state.serverIsNew && state.dbServerId) {
-    const remainingApps = db.getApps(state.dbServerId);
-    if (remainingApps.length === 0) {
-      try {
-        if (state.hetznerServerId) {
-          await hetzner.deleteHetznerServer(state.hetznerServerId);
-        }
-        db.deleteServer(state.dbServerId);
-        log("rollback", `Deleted server ${state.dbServerId}`);
-      } catch (err) {
-        log("rollback", `Failed to delete server: ${err}`);
-      }
+  // GC the server: deletes only if it has zero replicas, zero apps, and is
+  // not the panel's host. Handles both "we created this server" and "the
+  // user reused an existing server" cases uniformly.
+  if (state.dbServerId) {
+    try {
+      await db.gcServerIfEmpty(state.dbServerId);
+    } catch (err) {
+      log("rollback", `gcServerIfEmpty(${state.dbServerId}) failed: ${err}`);
     }
   }
 
@@ -176,6 +178,7 @@ export async function deploy(
       }
       serverIp = server.ipv4;
       serverHostKey = server.ssh_host_key || "";
+      state.dbServerId = server.id;
       log("server", `Using existing server: ${server.name} ip=${serverIp} status=${server.status}`);
       onProgress("server", `Using server ${server.name} (${serverIp})`);
     } else {
@@ -207,7 +210,6 @@ export async function deploy(
       });
       serverId = dbServer.id;
       state.dbServerId = dbServer.id;
-      state.serverIsNew = true;
 
       log("server", `Creating Hetzner server: name=${serverName} type=${serverType} location=${location}`);
       const createStart = Date.now();
@@ -334,19 +336,22 @@ export async function deploy(
     onProgress("build", `Cloning ${req.git_repo} and building...`);
 
     let dockerfilePath = req.dockerfile_path || "Dockerfile";
-    const app = db.insertApp({
-      server_id: serverId!,
-      name: req.app_name,
-      domain: useDomain,
-      git_repo: req.git_repo,
-      dockerfile_path: dockerfilePath,
-      container_port: req.container_port,
-      env_vars: JSON.stringify(req.env_vars),
-      auth_password: req.auth_password,
-    });
+    const { app, replica } = db.insertAppWithFirstReplica(
+      {
+        name: req.app_name,
+        domain: useDomain,
+        git_repo: req.git_repo,
+        dockerfile_path: dockerfilePath,
+        container_port: req.container_port,
+        env_vars: JSON.stringify(req.env_vars),
+        auth_password: req.auth_password,
+      },
+      serverId!,
+    );
     state.dbAppId = app.id;
+    state.replicaId = replica.id;
     state.containerName = req.app_name;
-    log("build", `App record created: id=${app.id}`);
+    log("build", `App + first replica created: app=${app.id} replica=${replica.id} host_port=${replica.host_port}`);
 
     if (state.dnsRecord) {
       db.insertDnsRecord({
@@ -410,7 +415,7 @@ export async function deploy(
           name: req.app_name,
           gitRepo: req.git_repo,
           port: req.container_port,
-          hostPort: app.host_port,
+          hostPort: replica.host_port,
           envVars: req.env_vars,
           volumeMount,
           composeFile,
@@ -430,7 +435,7 @@ export async function deploy(
           name: req.app_name,
           gitRepo: req.git_repo,
           port: req.container_port,
-          hostPort: app.host_port,
+          hostPort: replica.host_port,
           envVars: req.env_vars,
           volumeMount,
           dockerfilePath: req.dockerfile_path,
@@ -450,10 +455,10 @@ export async function deploy(
     onProgress("build", "Container running");
 
     // Step 4b: Deploy auth proxy if password protection is enabled
-    let caddyPort = app.host_port;
+    let caddyPort = replica.host_port;
     if (req.auth_password) {
       onProgress("build", "Deploying auth proxy...");
-      caddyPort = await hetzner.deployAuthProxy(serverIp, req.app_name, req.auth_password, app.host_port, serverHostKey || undefined);
+      caddyPort = await hetzner.deployAuthProxy(serverIp, req.app_name, req.auth_password, replica.host_port, serverHostKey || undefined);
       maskedLog(app.id, `[auth] Auth proxy deployed on port ${caddyPort}`);
     }
 
@@ -488,8 +493,8 @@ export async function deploy(
     // Step 5: Health check
     onProgress("health", "Checking app health...");
     const health = deployMode === "compose"
-      ? await hetzner.composeHealthCheck(serverIp, req.app_name, app.host_port, 5, serverHostKey || undefined)
-      : await hetzner.healthCheck(serverIp, req.app_name, app.host_port, 5, serverHostKey || undefined);
+      ? await hetzner.composeHealthCheck(serverIp, req.app_name, replica.host_port, 5, serverHostKey || undefined)
+      : await hetzner.healthCheck(serverIp, req.app_name, replica.host_port, 5, serverHostKey || undefined);
     if (health.healthy) {
       maskedLog(app.id, `[health] Health check passed (HTTP ${health.statusCode})`);
       onProgress("health", `Health check passed (HTTP ${health.statusCode})`);
@@ -513,31 +518,25 @@ export async function deploy(
       git_commit: gitCommit,
     });
 
-    // Set up webhook for auto-redeploy if requested
+    // Set up webhook for auto-redeploy if requested.
+    // Phase 2: panel-routed webhooks. DB + GitHub API only — no SSH, no
+    // tenant Caddy route. Hard error if panel.domain is missing.
     if (req.webhook_enabled && githubPat) {
       try {
+        const panel = db.getPanel();
+        if (!panel?.domain) {
+          throw new Error("Panel domain is not set; cannot register webhook URL");
+        }
         const webhookBranch = req.webhook_branch || "main";
         const webhookSecret = crypto.randomUUID();
-        const hostKey = serverHostKey || undefined;
-
-        await hetzner.deployWebhookReceiver(serverIp, hostKey);
-        await hetzner.ensureWebhookCaddyRoute(serverIp, hostKey);
-        await hetzner.setupAppWebhook(
-          serverIp, req.app_name, webhookSecret,
-          app.host_port, webhookBranch, githubPat, hostKey,
-          deployMode, composeFile || undefined,
-          req.container_port, volumeMount
-        );
-
-        const webhook = await github.createWebhook({
+        const url = `https://${panel.domain}/webhooks/github/${app.id}`;
+        const created = await github.createWebhookAtUrl({
           gitRepo: req.git_repo,
-          appName: req.app_name,
-          serverDomain: useDomain,
+          url,
           webhookSecret,
           token: githubPat,
         });
-
-        db.updateAppWebhook(app.id, true, webhookSecret, webhookBranch, String(webhook.id));
+        db.updateAppWebhook(app.id, true, webhookSecret, webhookBranch, String(created.id));
         maskedLog(app.id, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}`);
         onProgress("health", `Webhook configured for auto-redeploy on ${webhookBranch}`);
       } catch (err) {
@@ -547,14 +546,8 @@ export async function deploy(
       }
     }
 
-    // Create initial replica record
-    db.insertReplica({
-      app_id: app.id,
-      server_id: serverId!,
-      host_port: app.host_port,
-      container_name: req.app_name,
-      status: health.healthy ? "running" : "unhealthy",
-    });
+    // Mark the (already-created) first replica as healthy/unhealthy.
+    db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 
     // Scale up if replicas > 1 requested
     if (req.replicas && req.replicas > 1) {

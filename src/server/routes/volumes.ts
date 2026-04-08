@@ -13,7 +13,9 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
     const app = db.getApp(app_id);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
     if (app.volume_id) return Response.json({ ok: false, error: "App already has a volume attached" }, { headers: corsHeaders });
-    const server = db.getServer(app.server_id);
+    const reps = db.getReplicas(app_id);
+    if (reps.length === 0) return Response.json({ ok: false, error: "App has no replicas" }, { headers: corsHeaders });
+    const server = db.getServer(reps[0].server_id);
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
 
@@ -49,7 +51,9 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
     const app = db.getApp(app_id);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
     if (app.volume_id) return Response.json({ ok: false, error: "App already has a volume attached" }, { headers: corsHeaders });
-    const server = db.getServer(app.server_id);
+    const reps = db.getReplicas(app_id);
+    if (reps.length === 0) return Response.json({ ok: false, error: "App has no replicas" }, { headers: corsHeaders });
+    const server = db.getServer(reps[0].server_id);
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
 
@@ -108,8 +112,10 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
     if (!toApp) return Response.json({ ok: false, error: "Target app not found" }, { headers: corsHeaders });
     if (toApp.volume_id) return Response.json({ ok: false, error: "Target app already has a volume" }, { headers: corsHeaders });
 
-    const fromServer = db.getServer(fromApp.server_id);
-    const toServer = db.getServer(toApp.server_id);
+    const fromReps = db.getReplicas(from_app_id);
+    const toReps = db.getReplicas(to_app_id);
+    const fromServer = fromReps[0] ? db.getServer(fromReps[0].server_id) : null;
+    const toServer = toReps[0] ? db.getServer(toReps[0].server_id) : null;
     if (!fromServer || !toServer) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     if (fromServer.location !== toServer.location) {
       return Response.json({ ok: false, error: `Cannot reattach: volume in ${fromServer.location}, target in ${toServer.location}` }, { headers: corsHeaders });

@@ -15,7 +15,6 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       throw new Error("App not found");
     }
 
-    const server = db.getServer(app.server_id);
     let cleanupFailed = false;
 
     // Clean up GitHub webhook if enabled
@@ -34,9 +33,11 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       }
     }
 
-    // Destroy all replicas across all servers
+    // Destroy all replicas across all servers, tracking which servers we touched
     const replicas = db.getReplicas(appId);
+    const affectedServerIds = new Set<number>();
     for (const replica of replicas) {
+      affectedServerIds.add(replica.server_id);
       const replicaServer = db.getServer(replica.server_id);
       if (replicaServer) {
         const hostKey = replicaServer.ssh_host_key || undefined;
@@ -56,6 +57,17 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
             await hetzner.removeAuthProxy(replicaServer.ipv4, replica.container_name, hostKey);
           } catch {}
         }
+        // Remove Caddy site + app dir from each server hosting a replica
+        try {
+          await hetzner.removeCaddySite(replicaServer.ipv4, app.domain, hostKey);
+        } catch (err) {
+          log("destroyApp", `Failed to remove Caddy site: ${err}`);
+        }
+        try {
+          await hetzner.sshExec(replicaServer.ipv4, `rm -rf /home/deploy/apps/${app.name}`, hostKey);
+        } catch (err) {
+          log("destroyApp", `Failed to remove app directory: ${err}`);
+        }
       }
       db.deleteReplica(replica.id);
     }
@@ -68,46 +80,6 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       } catch (err) {
         log("destroyApp", `Failed to delete LB: ${err instanceof Error ? err.message : err}`);
         cleanupFailed = true;
-      }
-    }
-
-    if (server) {
-      const hostKey = server.ssh_host_key || undefined;
-      // Remove webhook config from server
-      if (app.webhook_enabled) {
-        try {
-          await hetzner.removeAppWebhook(server.ipv4, app.name, hostKey);
-        } catch (err) {
-          log("destroyApp", `Failed to remove webhook config: ${err}`);
-        }
-      }
-      // Remove primary container (if not already removed as replica)
-      if (replicas.length === 0) {
-        if (app.auth_password) {
-          try {
-            await hetzner.removeAuthProxy(server.ipv4, app.name, hostKey);
-          } catch {}
-        }
-        try {
-          if (app.deploy_mode === "compose") {
-            await hetzner.removeCompose(server.ipv4, app.name, true, hostKey);
-          } else {
-            await hetzner.removeContainer(server.ipv4, app.name, hostKey);
-          }
-        } catch (err) {
-          log("destroyApp", `Failed to remove primary container: ${err}`);
-          cleanupFailed = true;
-        }
-      }
-      try {
-        await hetzner.removeCaddySite(server.ipv4, app.domain, hostKey);
-      } catch (err) {
-        log("destroyApp", `Failed to remove Caddy site: ${err}`);
-      }
-      try {
-        await hetzner.sshExec(server.ipv4, `rm -rf /home/deploy/apps/${app.name}`, hostKey);
-      } catch (err) {
-        log("destroyApp", `Failed to remove app directory: ${err}`);
       }
     }
 
@@ -144,6 +116,14 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     }
 
     db.deleteApp(appId);
+
+    // GC any servers that became empty as a result.
+    for (const sid of affectedServerIds) {
+      try { await db.gcServerIfEmpty(sid); } catch (err) {
+        log("destroyApp", `gcServerIfEmpty(${sid}) failed: ${err}`);
+      }
+    }
+
     log("destroyApp", `App id=${appId} destroyed successfully`);
     return { ok: true };
   } catch (err) {
@@ -156,6 +136,9 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
 export async function destroyServer(serverId: number): Promise<{ ok: boolean; error?: string }> {
   log("destroyServer", `Destroying server id=${serverId}`);
   try {
+    if (db.getPanel()?.server_id === serverId) {
+      throw new Error("Cannot destroy the panel's server");
+    }
     const server = db.getServer(serverId);
     if (!server) throw new Error("Server not found");
 
@@ -215,11 +198,12 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
     if (!app) throw new Error("App not found");
 
     const replicas = db.getReplicas(appId);
+    if (replicas.length === 0) throw new Error("App has no replicas");
 
-    // Restart all replicas
+    let allHealthy = true;
     for (const replica of replicas) {
       const server = db.getServer(replica.server_id);
-      if (!server) continue;
+      if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
       if (app.deploy_mode === "compose" && replica.container_name === app.name) {
@@ -232,28 +216,9 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
         ? await hetzner.composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
         : await hetzner.healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
+      if (!health.healthy) allHealthy = false;
     }
-
-    // Also restart on primary if no replicas found (legacy)
-    if (replicas.length === 0) {
-      const server = db.getServer(app.server_id);
-      if (!server) throw new Error("Server not found");
-      const hostKey = server.ssh_host_key || undefined;
-      if (app.deploy_mode === "compose") {
-        await hetzner.restartCompose(server.ipv4, app.name, hostKey);
-      } else {
-        await hetzner.restartContainer(server.ipv4, app.name, hostKey);
-      }
-    }
-
-    const server = db.getServer(app.server_id);
-    if (server) {
-      const hostKey = server.ssh_host_key || undefined;
-      const health = app.deploy_mode === "compose"
-        ? await hetzner.composeHealthCheck(server.ipv4, app.name, app.host_port, 5, hostKey)
-        : await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
-      db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
-    }
+    db.updateAppStatus(appId, allHealthy ? "running" : "unhealthy");
 
     log("restartApp", `App id=${appId} restarted`);
     return { ok: true };
@@ -272,17 +237,21 @@ export async function recreateAppContainer(
   try {
     const app = db.getApp(appId);
     if (!app) throw new Error("App not found");
-    const server = db.getServer(app.server_id);
+    const replicas = db.getReplicas(appId);
+    if (replicas.length === 0) throw new Error("App has no replicas");
+    const firstReplica = replicas[0];
+    const server = db.getServer(firstReplica.server_id);
     if (!server) throw new Error("Server not found");
     const hostKey = server.ssh_host_key || undefined;
     const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+    const hostPort = firstReplica.host_port;
 
     if (app.deploy_mode === "compose") {
       // Rewrite the compose override to update volume mount
       const appDir = `/home/deploy/apps/${app.name}`;
       const overrideServices: any = {
         [app.compose_web_service]: {
-          ports: [`127.0.0.1:${app.host_port}:${app.container_port}`],
+          ports: [`127.0.0.1:${hostPort}:${app.container_port}`],
         },
       };
       if (volumeMount) {
@@ -310,7 +279,7 @@ export async function recreateAppContainer(
       }
 
       const volumeFlag = volumeMount ? `-v ${volumeMount}` : "";
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${app.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
       const result = await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to start container — check your port configuration and environment variables");
@@ -319,9 +288,10 @@ export async function recreateAppContainer(
 
     // Health check
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, app.host_port, 5, hostKey)
-      : await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
+      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await hetzner.healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
+    db.updateReplicaStatus(firstReplica.id, health.healthy ? "running" : "unhealthy");
 
     log("recreateContainer", `App id=${appId} recreated successfully`);
     return { ok: true };
@@ -339,6 +309,7 @@ export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: st
     if (!app) throw new Error("App not found");
 
     const replicas = db.getReplicas(appId);
+    if (replicas.length === 0) throw new Error("App has no replicas");
 
     for (const replica of replicas) {
       const server = db.getServer(replica.server_id);
@@ -351,18 +322,6 @@ export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: st
         await hetzner.pauseContainer(server.ipv4, replica.container_name, hostKey);
       }
       db.updateReplicaStatus(replica.id, "paused");
-    }
-
-    // Legacy fallback
-    if (replicas.length === 0) {
-      const server = db.getServer(app.server_id);
-      if (!server) throw new Error("Server not found");
-      const hostKey = server.ssh_host_key || undefined;
-      if (app.deploy_mode === "compose") {
-        await hetzner.pauseCompose(server.ipv4, app.name, hostKey);
-      } else {
-        await hetzner.pauseContainer(server.ipv4, app.name, hostKey);
-      }
     }
 
     db.updateAppStatus(appId, "paused");
@@ -382,10 +341,12 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
     if (!app) throw new Error("App not found");
 
     const replicas = db.getReplicas(appId);
+    if (replicas.length === 0) throw new Error("App has no replicas");
 
+    let allHealthy = true;
     for (const replica of replicas) {
       const server = db.getServer(replica.server_id);
-      if (!server) continue;
+      if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
       if (app.deploy_mode === "compose" && replica.container_name === app.name) {
@@ -398,28 +359,9 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
         ? await hetzner.composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
         : await hetzner.healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
+      if (!health.healthy) allHealthy = false;
     }
-
-    // Legacy fallback
-    if (replicas.length === 0) {
-      const server = db.getServer(app.server_id);
-      if (!server) throw new Error("Server not found");
-      const hostKey = server.ssh_host_key || undefined;
-      if (app.deploy_mode === "compose") {
-        await hetzner.unpauseCompose(server.ipv4, app.name, hostKey);
-      } else {
-        await hetzner.unpauseContainer(server.ipv4, app.name, hostKey);
-      }
-    }
-
-    const server = db.getServer(app.server_id);
-    if (server) {
-      const hostKey = server.ssh_host_key || undefined;
-      const health = app.deploy_mode === "compose"
-        ? await hetzner.composeHealthCheck(server.ipv4, app.name, app.host_port, 5, hostKey)
-        : await hetzner.healthCheck(server.ipv4, app.name, app.host_port, 5, hostKey);
-      db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
-    }
+    db.updateAppStatus(appId, allHealthy ? "running" : "unhealthy");
 
     log("unpauseApp", `App id=${appId} unpaused`);
     return { ok: true };
