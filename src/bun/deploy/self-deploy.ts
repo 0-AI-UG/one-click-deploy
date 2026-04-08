@@ -6,7 +6,7 @@
 // hosted container starts for the first time.
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
-import { unlinkSync } from "fs";
+import { unlinkSync, copyFileSync } from "fs";
 import path from "path";
 import localDb from "../db.ts";
 import { DATA_DIR } from "../paths.ts";
@@ -60,8 +60,18 @@ async function buildSnapshot(opts: { newJwtSecret: string }): Promise<string> {
   const snapshotPath = path.join(tmpdir(), `ocd-handoff-${Date.now()}.sqlite`);
   try { unlinkSync(snapshotPath); } catch {}
 
-  log("snapshot", `Creating VACUUM INTO snapshot at ${snapshotPath}`);
-  localDb.exec(`VACUUM INTO '${snapshotPath.replace(/'/g, "''")}'`);
+  // Checkpoint the WAL so the on-disk deploy.db file contains every
+  // committed change, then plain-copy it. VACUUM INTO would be nicer but
+  // fails generically ("operation-specific reason") inside the slim
+  // container — the file-copy approach is more robust.
+  const sourcePath = path.join(DATA_DIR, "deploy.db");
+  log("snapshot", `Checkpointing WAL and copying ${sourcePath} -> ${snapshotPath}`);
+  try {
+    localDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch (err) {
+    log("snapshot", `wal_checkpoint warning (continuing): ${(err as Error).message}`);
+  }
+  copyFileSync(sourcePath, snapshotPath);
 
   const snap = new Database(snapshotPath);
 
