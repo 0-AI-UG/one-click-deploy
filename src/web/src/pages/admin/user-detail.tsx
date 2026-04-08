@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { get, put } from "../../api/client.ts";
 import { Card, Btn, Spinner, showToast } from "../../components/ui.tsx";
 import { ArrowLeft, Save, Key, ShieldCheck } from "lucide-react";
+import { useAuth } from "../../stores/auth.ts";
 
 const PERMISSION_GROUPS = [
   {
@@ -54,6 +55,8 @@ const PERMISSION_GROUPS = [
 ];
 
 export function UserDetailPage({ userId }: { userId: string }) {
+  const auth = useAuth();
+  const isSelf = auth.user?.id === userId;
   const [user, setUser] = useState<any>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [allPermissions, setAllPermissions] = useState<string[]>([]);
@@ -193,16 +196,18 @@ export function UserDetailPage({ userId }: { userId: string }) {
         </Card>
       )}
 
-      {/* Reset Password */}
-      <Card className="p-5">
-        <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">Reset Password</h3>
-        <div className="flex gap-3 items-end">
-          <div className="flex-1">
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password (min 8 chars)" />
+      {/* Reset Password — hidden when viewing yourself; use the change-password card on the user list page instead. */}
+      {!isSelf && (
+        <Card className="p-5">
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">Reset Password</h3>
+          <div className="flex gap-3 items-end">
+            <div className="flex-1">
+              <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password (min 8 chars)" />
+            </div>
+            <Btn variant="default" loading={savingPassword} onClick={resetPassword}>Update Password</Btn>
           </div>
-          <Btn variant="default" loading={savingPassword} onClick={resetPassword}>Update Password</Btn>
-        </div>
-      </Card>
+        </Card>
+      )}
     </div>
   );
 }
