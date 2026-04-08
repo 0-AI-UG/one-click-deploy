@@ -73,6 +73,11 @@ export function App() {
 
   // Public routes (no auth required)
   if (hash === "#/setup") {
+    // Setup just completed and we have a temp token — go finish 2FA setup.
+    if (tempToken) {
+      window.location.hash = "#/totp-setup";
+      return null;
+    }
     // Once setup is complete, the setup page is no longer reachable —
     // bounce to the dashboard (if authenticated) or login page.
     if (!needsSetup) {

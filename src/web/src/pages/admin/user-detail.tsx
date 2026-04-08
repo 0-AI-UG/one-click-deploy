@@ -172,10 +172,12 @@ export function UserDetailPage({ userId }: { userId: string }) {
                               : "bg-bg-raised hover:bg-alt shadow-neo-sm hover:-translate-x-px hover:-translate-y-px hover:shadow-neo"
                           } active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none`}
                         >
-                          <input type="checkbox" checked={checked} onChange={() => togglePermission(perm.key)} className="hidden" />
-                          <span className={`w-4 h-4 border-2 border-fg flex-shrink-0 flex items-center justify-center ${checked ? "bg-accent" : "bg-bg-raised"}`}>
-                            {checked && <span className="block w-2 h-2 bg-fg" />}
-                          </span>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => togglePermission(perm.key)}
+                            className="flex-shrink-0"
+                          />
                           <div>
                             <span className="font-mono text-[9px] text-fg font-bold uppercase">{perm.key}</span>
                             <span className="block font-mono text-[8px] text-muted">{perm.label}</span>
