@@ -28,12 +28,16 @@ export const securityHeaders: Record<string, string> = {
 // Content-Security-Policy only makes sense on HTML document responses, and a
 // strict policy would break Bun's dev HMR client. Applied separately in the
 // static-serving path (see src/server/index.ts).
+// NOTE: src/web/index.html currently pulls Tailwind from cdn.tailwindcss.com
+// and Google Fonts, and has an inline <script> for tailwind.config. Until we
+// self-host both, the CSP must allow those origins and 'unsafe-inline' on
+// scripts. Tighten this when we move to a built CSS pipeline.
 export const htmlCsp =
   "default-src 'self'; " +
   "img-src 'self' data: blob:; " +
-  "style-src 'self' 'unsafe-inline'; " +
-  "script-src 'self'; " +
-  "font-src 'self' data:; " +
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+  "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; " +
+  "font-src 'self' data: https://fonts.gstatic.com; " +
   "connect-src 'self' ws: wss:; " +
   "frame-ancestors 'none'; " +
   "base-uri 'self'; " +
