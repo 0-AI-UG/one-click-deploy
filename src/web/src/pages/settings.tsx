@@ -9,7 +9,6 @@ export function SettingsPage() {
   const [form, setForm] = useState({
     hetzner_api_token: "", github_pat: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
-    require_2fa: true,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -132,24 +131,6 @@ export function SettingsPage() {
               />
             </div>
           </div>
-        </div>
-
-        <div className="border-t-2 border-fg pt-4">
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">Security</h3>
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={form.require_2fa}
-              onChange={(e) => setForm((f) => ({ ...f, require_2fa: e.target.checked }))}
-              className="mt-0.5"
-            />
-            <span>
-              <span className="font-mono text-[11px] text-fg font-bold block">Require 2FA for all users</span>
-              <span className="font-mono text-[10px] text-muted block mt-0.5">
-                When on, new users must set up an authenticator app on first login. Admins always require 2FA regardless. Existing users without 2FA are not affected.
-              </span>
-            </span>
-          </label>
         </div>
 
         <div className="pt-2">

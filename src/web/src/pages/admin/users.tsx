@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { get, post, del, put } from "../../api/client.ts";
 import { Card, Btn, Table, Spinner, showToast, confirm } from "../../components/ui.tsx";
-import { Users, Plus, Trash2, Shield, ShieldCheck, Key, Lock } from "lucide-react";
+import { Users, Plus, Trash2, Shield, ShieldCheck, Key, Lock, ShieldAlert } from "lucide-react";
 
 type User = {
   id: string; email: string; isAdmin: boolean; totpEnabled: boolean;
@@ -18,6 +18,8 @@ export function UsersPage() {
   const [newPassword, setNewPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [savingPassword, setSavingPassword] = useState(false);
+  const [require2fa, setRequire2fa] = useState(true);
+  const [savingRequire2fa, setSavingRequire2fa] = useState(false);
 
   const load = async () => {
     try {
@@ -30,7 +32,26 @@ export function UsersPage() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    get("/api/settings")
+      .then((s) => setRequire2fa(s.require_2fa !== false))
+      .catch(() => {});
+  }, []);
+
+  const toggleRequire2fa = async (next: boolean) => {
+    setSavingRequire2fa(true);
+    setRequire2fa(next);
+    try {
+      await put("/api/settings", { require_2fa: next });
+      showToast(next ? "2FA now required for new users" : "2FA no longer required", "success");
+    } catch (err: any) {
+      setRequire2fa(!next);
+      showToast(err.message, "error");
+    } finally {
+      setSavingRequire2fa(false);
+    }
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,6 +132,39 @@ export function UsersPage() {
           </form>
         </Card>
       )}
+
+      <Card className="p-4 mb-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-2">
+            <ShieldAlert size={14} className="text-fg mt-0.5" title="Global authentication policy" />
+            <div>
+              <div
+                className="font-mono text-[11px] text-fg font-bold"
+                title="When on, every new non-admin user must set up an authenticator app the first time they log in. Admins always require 2FA regardless of this setting."
+              >
+                Require 2FA for new users
+              </div>
+              <div
+                className="font-mono text-[10px] text-muted mt-0.5"
+                title="Existing users who already logged in without 2FA are not affected by this toggle. They keep their current login flow until they enable 2FA themselves."
+              >
+                Existing users without 2FA are not affected.
+              </div>
+            </div>
+          </div>
+          <label
+            className="inline-flex items-center cursor-pointer"
+            title={require2fa ? "Click to allow new non-admin users to log in without 2FA" : "Click to force new non-admin users to set up 2FA on first login"}
+          >
+            <input
+              type="checkbox"
+              checked={require2fa}
+              disabled={savingRequire2fa}
+              onChange={(e) => toggleRequire2fa(e.target.checked)}
+            />
+          </label>
+        </div>
+      </Card>
 
       <Card className="overflow-hidden">
         <Table headers={["Email", "Role", "2FA", "Permissions", "Created", ""]}>

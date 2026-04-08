@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requirePermission, requireAdmin } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { secretStore, maskToken } from "../../bun/secret-store.ts";
@@ -59,6 +59,8 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
 
     for (const [key, rawValue] of Object.entries(settings)) {
       if (key === "require_2fa") {
+        // Admin-only: changing the global 2FA policy.
+        await requireAdmin(request);
         db.saveSetting(key, rawValue ? "1" : "0");
         continue;
       }
