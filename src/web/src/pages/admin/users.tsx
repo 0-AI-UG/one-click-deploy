@@ -136,7 +136,7 @@ export function UsersPage() {
       <Card className="p-4 mb-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-2">
-            <ShieldAlert size={14} className="text-fg mt-0.5" title="Global authentication policy" />
+            <span title="Global authentication policy"><ShieldAlert size={14} className="text-fg mt-0.5" /></span>
             <div>
               <div
                 className="font-mono text-[11px] text-fg font-bold"
