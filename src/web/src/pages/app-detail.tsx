@@ -3,7 +3,7 @@ import { get, post, put, del } from "../api/client.ts";
 import { Card, Btn, StatusBadge, Spinner, showToast, confirm, Table, Checkbox } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu, Terminal, Gauge, Server as ServerIcon, Zap, History, Info } from "lucide-react";
+import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu, Terminal, Gauge, Server as ServerIcon, Zap, History, Info, Plus, Minus, Lock, Settings as SettingsIcon } from "lucide-react";
 
 // Small icon-only tooltip — uses native browser title for zero-dependency
 // hover help text. Sits inline next to labels so the visible UI stays terse.
@@ -31,7 +31,10 @@ function Sparkline({ values, color = "#3b82f6" }: { values: number[]; color?: st
 export function AppDetailPage({ appId }: { appId: number }) {
   const [app, setApp] = useState<any>(null);
   const [server, setServer] = useState<any>(null);
-  const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks">("overview");
+  const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
+  const [authPassword, setAuthPassword] = useState("");
+  const [envEdit, setEnvEdit] = useState<{ key: string; value: string }[]>([]);
+  const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<any[]>([]);
   const [replicas, setReplicas] = useState<any[]>([]);
@@ -116,7 +119,16 @@ export function AppDetailPage({ appId }: { appId: number }) {
     if (tab === "logs") loadLogs();
     if (tab === "deployments") loadDeployments();
     if (tab === "scaling") loadReplicas();
-  }, [tab]);
+    if (tab === "settings" && app) {
+      setAuthPassword(app.auth_password || "");
+      const ev = app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {};
+      setEnvEdit(Object.entries(ev).map(([k, v]) => ({ key: k, value: String(v) })));
+      if (app.volume_mount) {
+        const parts = String(app.volume_mount).split(":");
+        setVolumeForm((f) => ({ ...f, mount_path: parts[1] || "/data" }));
+      }
+    }
+  }, [tab, app]);
 
   const action = async (name: string, fn: () => Promise<any>) => {
     setActionLoading(name);
@@ -140,6 +152,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
     { key: "deployments", label: "Deployments" },
     { key: "scaling", label: "Scaling" },
     { key: "webhooks", label: "Webhooks" },
+    { key: "settings", label: "Settings" },
   ];
 
   const envVars = app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {};
@@ -580,6 +593,177 @@ export function AppDetailPage({ appId }: { appId: number }) {
             )}
           </PermissionGate>
         </Card>
+      )}
+
+      {tab === "settings" && (
+        <div className="space-y-4">
+          {/* Auth password */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Lock size={14} className="text-fg" />
+              <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Password Protection</h3>
+            </div>
+            <p className="text-[10px] text-muted font-mono mb-3">
+              Set a password to gate access to this app. Leave blank to remove. Saving triggers a redeploy.
+            </p>
+            <input
+              type="password"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              placeholder="(none)"
+            />
+            <PermissionGate permission="apps.redeploy">
+              <div className="flex justify-end mt-3">
+                <Btn
+                  size="sm"
+                  variant="primary"
+                  loading={actionLoading === "save-auth"}
+                  onClick={() => action("save-auth", async () => {
+                    await post(`/api/apps/${appId}/redeploy`, { auth_password: authPassword || null });
+                  })}
+                >Save & Redeploy</Btn>
+              </div>
+            </PermissionGate>
+          </Card>
+
+          {/* Env vars */}
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <SettingsIcon size={14} className="text-fg" />
+                <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Environment Variables</h3>
+              </div>
+              <Btn size="xs" variant="ghost" onClick={() => setEnvEdit([...envEdit, { key: "", value: "" }])}>
+                <Plus size={12} /> Add
+              </Btn>
+            </div>
+            {envEdit.length === 0 ? (
+              <p className="text-[10px] text-muted font-mono mb-2">No environment variables.</p>
+            ) : (
+              envEdit.map((v, i) => (
+                <div key={i} className="flex gap-2 items-center mt-2">
+                  <input
+                    type="text"
+                    value={v.key}
+                    placeholder="KEY"
+                    onChange={(e) => {
+                      const next = [...envEdit];
+                      next[i].key = e.target.value;
+                      setEnvEdit(next);
+                    }}
+                    className="!w-1/3"
+                  />
+                  <input
+                    type="text"
+                    value={v.value}
+                    placeholder="value"
+                    onChange={(e) => {
+                      const next = [...envEdit];
+                      next[i].value = e.target.value;
+                      setEnvEdit(next);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setEnvEdit(envEdit.filter((_, j) => j !== i))}
+                    className="text-muted hover:text-accent-red transition-colors flex-shrink-0"
+                  >
+                    <Minus size={14} />
+                  </button>
+                </div>
+              ))
+            )}
+            <PermissionGate permission="apps.env">
+              <div className="flex justify-end mt-3">
+                <Btn
+                  size="sm"
+                  variant="primary"
+                  loading={actionLoading === "save-env"}
+                  onClick={() => action("save-env", async () => {
+                    const obj: Record<string, string> = {};
+                    for (const { key, value } of envEdit) {
+                      if (key.trim()) obj[key.trim()] = value;
+                    }
+                    await put(`/api/apps/${appId}/env`, { env_vars: obj });
+                  })}
+                >Save Env Vars</Btn>
+              </div>
+            </PermissionGate>
+          </Card>
+
+          {/* Volume */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <HardDrive size={14} className="text-fg" />
+              <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Persistent Volume</h3>
+            </div>
+            {app.volume_id ? (
+              <>
+                <div className="space-y-1 text-[10px] font-mono mb-3">
+                  <div className="flex justify-between"><span className="text-muted">Volume ID</span><span className="text-fg">{app.volume_id}</span></div>
+                  <div className="flex justify-between"><span className="text-muted">Mount</span><span className="text-fg">{app.volume_mount}</span></div>
+                </div>
+                <p className="text-[10px] text-muted font-mono mb-3">
+                  Detaching keeps the volume in Hetzner but unmounts it from this app. The container will be recreated.
+                </p>
+                <PermissionGate permission="volumes.manage">
+                  <div className="flex justify-end">
+                    <Btn
+                      size="sm"
+                      variant="danger"
+                      loading={actionLoading === "detach-vol"}
+                      onClick={async () => {
+                        if (await confirm("Detach Volume", "Detach this volume? Data is preserved on the volume itself.", true)) {
+                          await action("detach-vol", () => post(`/api/volumes/detach`, { app_id: appId }));
+                        }
+                      }}
+                    >Detach Volume</Btn>
+                  </div>
+                </PermissionGate>
+              </>
+            ) : (
+              <>
+                <p className="text-[10px] text-muted font-mono mb-3">
+                  Attach a new persistent volume. The container will be recreated with the volume mounted.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Size (GB)</label>
+                    <input
+                      type="number"
+                      min={10}
+                      value={volumeForm.size}
+                      onChange={(e) => setVolumeForm({ ...volumeForm, size: parseInt(e.target.value) || 10 })}
+                    />
+                  </div>
+                  <div>
+                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Mount Path</label>
+                    <input
+                      type="text"
+                      value={volumeForm.mount_path}
+                      onChange={(e) => setVolumeForm({ ...volumeForm, mount_path: e.target.value })}
+                      placeholder="/data"
+                    />
+                  </div>
+                </div>
+                <PermissionGate permission="volumes.create">
+                  <div className="flex justify-end mt-3">
+                    <Btn
+                      size="sm"
+                      variant="primary"
+                      loading={actionLoading === "attach-vol"}
+                      onClick={() => action("attach-vol", () => post(`/api/volumes/attach`, {
+                        app_id: appId,
+                        size: volumeForm.size,
+                        mount_path: volumeForm.mount_path || "/data",
+                      }))}
+                    >Attach Volume</Btn>
+                  </div>
+                </PermissionGate>
+              </>
+            )}
+          </Card>
+        </div>
       )}
     </div>
   );

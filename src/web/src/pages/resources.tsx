@@ -40,6 +40,11 @@ export function ResourcesPage() {
     }
   };
 
+  const fmtPrice = (eur: number | null | undefined) => {
+    if (eur == null) return "—";
+    return `€${eur.toFixed(2)}`;
+  };
+
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
 
   return (
@@ -52,6 +57,39 @@ export function ResourcesPage() {
         <Btn variant="ghost" onClick={() => { setLoading(true); load(); }}><RefreshCw size={13} /> Refresh</Btn>
       </div>
 
+      {/* Cost estimate */}
+      {data?.totals && (
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Estimated Monthly Cost</h3>
+            <span className="font-mono text-[9px] text-muted uppercase tracking-wider">
+              gross · {data.totals.currency || "EUR"}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="border-2 border-fg p-3 bg-alt">
+              <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Servers</div>
+              <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.servers)}</div>
+            </div>
+            <div className="border-2 border-fg p-3 bg-alt">
+              <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Load Balancers</div>
+              <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.load_balancers)}</div>
+            </div>
+            <div className="border-2 border-fg p-3 bg-alt">
+              <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Volumes</div>
+              <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.volumes)}</div>
+            </div>
+            <div className="border-2 border-fg p-3 bg-accent">
+              <div className="font-mono text-[9px] text-fg uppercase tracking-wider mb-1 font-bold">Total / month</div>
+              <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.total)}</div>
+            </div>
+          </div>
+          <p className="font-mono text-[9px] text-muted mt-3">
+            Estimates based on Hetzner list prices. Excludes traffic overage and snapshots.
+          </p>
+        </Card>
+      )}
+
       {/* Servers */}
       <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">
@@ -59,7 +97,7 @@ export function ResourcesPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Servers ({data?.servers?.length || 0})</h3>
         </div>
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
-          <Table headers={["Name", "IP", "Type", "Location", "Apps", "Replicas", ""]}>
+          <Table headers={["Name", "IP", "Type", "Location", "Apps", "Replicas", "€/mo", ""]}>
             {data.servers.map((s: any) => (
               <tr key={s.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3 text-fg font-bold">{s.name}</td>
@@ -68,6 +106,7 @@ export function ResourcesPage() {
                 <td className="py-2 px-3 text-fg-dim">{s.location}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.app_count}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
+                <td className="py-2 px-3 text-fg font-bold">{fmtPrice(s.monthly_eur)}</td>
                 <td className="py-2 px-3">
                   <div className="flex items-center gap-1">
                     <PermissionGate permission="terminal.access">
@@ -95,7 +134,7 @@ export function ResourcesPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Load Balancers ({data?.load_balancers?.length || 0})</h3>
         </div>
         {!data?.load_balancers?.length ? <EmptyState message="No load balancers" /> : (
-          <Table headers={["Name", "IP", "Type", "Location", "App", "Targets", ""]}>
+          <Table headers={["Name", "IP", "Type", "Location", "App", "Targets", "€/mo", ""]}>
             {data.load_balancers.map((lb: any) => (
               <tr key={lb.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3 text-fg font-bold">{lb.name}</td>
@@ -104,6 +143,7 @@ export function ResourcesPage() {
                 <td className="py-2 px-3 text-fg-dim">{lb.location}</td>
                 <td className="py-2 px-3 text-accent-blue font-bold">{lb.app_name || "—"}</td>
                 <td className="py-2 px-3 text-fg-dim">{lb.targets}</td>
+                <td className="py-2 px-3 text-fg font-bold">{fmtPrice(lb.monthly_eur)}</td>
                 <td className="py-2 px-3">
                   <PermissionGate permission="resources.delete">
                     <Btn size="xs" variant="danger" disabled={!!lb.app_name} title={lb.app_name ? `In use by ${lb.app_name}` : undefined} loading={deleting === `load_balancer-${lb.id}`} onClick={() => handleDelete("load_balancer", lb.id, lb.name)}>
@@ -124,7 +164,7 @@ export function ResourcesPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Volumes ({data?.volumes?.length || 0})</h3>
         </div>
         {!data?.volumes?.length ? <EmptyState message="No volumes" /> : (
-          <Table headers={["Name", "Size", "Location", "Server", "App", ""]}>
+          <Table headers={["Name", "Size", "Location", "Server", "App", "€/mo", ""]}>
             {data.volumes.map((v: any) => (
               <tr key={v.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3 text-fg font-bold">{v.name}</td>
@@ -132,6 +172,7 @@ export function ResourcesPage() {
                 <td className="py-2 px-3 text-fg-dim">{v.location}</td>
                 <td className="py-2 px-3 text-fg-dim">{v.server_name || "—"}</td>
                 <td className="py-2 px-3 text-accent-blue font-bold">{v.app_name || "—"}</td>
+                <td className="py-2 px-3 text-fg font-bold">{fmtPrice(v.monthly_eur)}</td>
                 <td className="py-2 px-3">
                   <PermissionGate permission="resources.delete">
                     <Btn size="xs" variant="danger" disabled={!!v.app_name} title={v.app_name ? `In use by ${v.app_name}` : undefined} loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>

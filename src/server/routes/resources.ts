@@ -9,6 +9,38 @@ export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
 
+    // Fetch Hetzner pricing once and build lookup maps. Hetzner returns gross
+    // prices as strings; we coerce to number and round to cents for display.
+    // If pricing fetch fails (no token, network), monthly_eur falls back to null.
+    let serverPriceMap = new Map<string, number>(); // `${type}|${location}` -> EUR/mo
+    let lbPriceMap = new Map<string, number>();
+    let volumePerGbMonth: number | null = null;
+    let currency = "EUR";
+    try {
+      const pricing = await hetzner.hetznerApi("/pricing");
+      const p = pricing.pricing || {};
+      currency = p.currency || "EUR";
+      for (const st of p.server_types || []) {
+        for (const pr of st.prices || []) {
+          const eur = parseFloat(pr.price_monthly?.gross ?? "0");
+          if (!isNaN(eur)) serverPriceMap.set(`${st.name}|${pr.location}`, eur);
+        }
+      }
+      for (const lt of p.load_balancer_types || []) {
+        for (const pr of lt.prices || []) {
+          const eur = parseFloat(pr.price_monthly?.gross ?? "0");
+          if (!isNaN(eur)) lbPriceMap.set(`${lt.name}|${pr.location}`, eur);
+        }
+      }
+      const v = parseFloat(p.volume?.price_per_gb_month?.gross ?? "");
+      if (!isNaN(v)) volumePerGbMonth = v;
+    } catch {}
+
+    const priceForServer = (type: string, location: string): number | null =>
+      serverPriceMap.get(`${type}|${location}`) ?? null;
+    const priceForLb = (type: string, location: string): number | null =>
+      lbPriceMap.get(`${type}|${location}`) ?? null;
+
     let dbServers = db.getServers();
     try {
       const remote = await hetzner.hetznerApiPublic("/servers?label_selector=managed_by%3Done-click-deploy&per_page=50");
@@ -37,20 +69,26 @@ export async function handleGetResources(request: Request): Promise<Response> {
       status: s.status,
       app_count: db.getApps(s.id).length,
       replica_count: db.getReplicasByServer(s.id).length,
+      monthly_eur: priceForServer(s.type, s.location),
     }));
 
     let load_balancers: any[] = [];
     try {
       const lbs = await hetzner.hetznerApiPublic("/load_balancers?label_selector=managed_by%3Done-click-deploy&per_page=50");
-      load_balancers = (lbs.load_balancers || []).map((lb: any) => ({
-        id: String(lb.id),
-        name: lb.name,
-        ipv4: lb.public_net?.ipv4?.ip || "",
-        type: lb.load_balancer_type?.name || "lb11",
-        location: lb.location?.name || "",
-        app_name: lb.labels?.app || "",
-        targets: lb.targets?.length || 0,
-      }));
+      load_balancers = (lbs.load_balancers || []).map((lb: any) => {
+        const type = lb.load_balancer_type?.name || "lb11";
+        const location = lb.location?.name || "";
+        return {
+          id: String(lb.id),
+          name: lb.name,
+          ipv4: lb.public_net?.ipv4?.ip || "",
+          type,
+          location,
+          app_name: lb.labels?.app || "",
+          targets: lb.targets?.length || 0,
+          monthly_eur: priceForLb(type, location),
+        };
+      });
     } catch {}
 
     let volumes: any[] = [];
@@ -68,11 +106,22 @@ export async function handleGetResources(request: Request): Promise<Response> {
           app_name: app?.name || "",
           location: v.location?.name || "",
           app_id: app?.id || 0,
+          monthly_eur: volumePerGbMonth != null ? volumePerGbMonth * v.size : null,
         };
       });
     } catch {}
 
-    return Response.json({ servers, load_balancers, volumes }, { headers: corsHeaders });
+    const sum = (arr: any[]) =>
+      arr.reduce((acc, x) => acc + (typeof x.monthly_eur === "number" ? x.monthly_eur : 0), 0);
+    const totals = {
+      currency,
+      servers: sum(servers),
+      load_balancers: sum(load_balancers),
+      volumes: sum(volumes),
+      total: sum(servers) + sum(load_balancers) + sum(volumes),
+    };
+
+    return Response.json({ servers, load_balancers, volumes, totals }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
