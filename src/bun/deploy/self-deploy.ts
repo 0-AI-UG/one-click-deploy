@@ -10,6 +10,7 @@ import { unlinkSync, writeFileSync } from "fs";
 import path from "path";
 import localDb from "../db.ts";
 import { DATA_DIR } from "../paths.ts";
+import { getJwtSecret } from "../secret-store.ts";
 import { sshExec } from "../hetzner/ssh.ts";
 import { getSshKeyPath } from "../hetzner/ssh.ts";
 
@@ -84,8 +85,7 @@ async function buildSnapshot(opts: { newJwtSecret: string }): Promise<string> {
   const snap = await step("open snapshot DB", () => new Database(snapshotPath));
 
   // Re-encrypt every row in encrypted_secrets with the hosted JWT_SECRET.
-  const oldSecret = process.env.JWT_SECRET || "one-click-deploy-dev-secret";
-  const oldKey = await step("derive old encryption key", () => deriveEncryptionKey(oldSecret));
+  const oldKey = await step("derive old encryption key", () => deriveEncryptionKey(getJwtSecret()));
   const newKey = await step("derive new encryption key", () => deriveEncryptionKey(opts.newJwtSecret));
 
   const rows = await step("read encrypted_secrets rows", () =>

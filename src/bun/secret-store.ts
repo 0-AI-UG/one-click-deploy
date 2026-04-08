@@ -2,6 +2,15 @@ function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [secrets:${context}]`, ...args);
 }
 
+// Default JWT secret used when the env var is absent. Must stay identical
+// across all call sites so that encrypted_secrets rows remain decryptable
+// during the self-deploy handoff.
+export const DEFAULT_JWT_SECRET = "ocd-dev-default-secret-change-in-production";
+
+export function getJwtSecret(): string {
+  return process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+}
+
 export interface SecretStore {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
@@ -18,7 +27,7 @@ class DbSecretStore implements SecretStore {
 
   private async getKey(): Promise<CryptoKey> {
     if (this.encryptionKey) return this.encryptionKey;
-    const secret = process.env.JWT_SECRET || "ocd-dev-default-secret-change-in-production";
+    const secret = getJwtSecret();
     const rawKey = new TextEncoder().encode(secret);
     const keyMaterial = await crypto.subtle.importKey("raw", rawKey, "HKDF", false, ["deriveKey"]);
     this.encryptionKey = await crypto.subtle.deriveKey(
