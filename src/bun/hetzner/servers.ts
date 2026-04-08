@@ -284,7 +284,7 @@ export async function waitForServerRunning(
   serverId: string | number,
   onStatus?: (msg: string) => void,
 ) {
-  const maxAttempts = 30;
+  const maxAttempts = 90;
   const interval = 2_000; // 2s — Hetzner status transitions are fast
   log("wait-running", `Waiting for server ${serverId} to reach "running" status...`);
   for (let i = 0; i < maxAttempts; i++) {
