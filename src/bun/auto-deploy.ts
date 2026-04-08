@@ -82,7 +82,7 @@ export async function runAutoDeploy(config: AutoDeployConfig): Promise<{ ok: boo
       PORT: "3001",
       JWT_SECRET: jwtSecret,
     },
-    server_type: config.server_type || "cx22",
+    server_type: config.server_type || "cx23",
     server_location: config.server_location || "nbg1",
     volume_size: config.volume_size ?? 10,
     volume_path: "/app/data",
