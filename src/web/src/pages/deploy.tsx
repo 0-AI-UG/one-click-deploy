@@ -24,7 +24,6 @@ export function DeployPage() {
     auth_password: "", replicas: "1",
     compose_file: "", compose_web_service: "",
   });
-  const [selfDeploy, setSelfDeploy] = useState(false);
 
   useEffect(() => {
     get("/api/servers").then((data: any[]) => {
@@ -39,28 +38,6 @@ export function DeployPage() {
       setForm((f) => ({ ...f, server_type: first.name, server_location: first.locations[0] ?? "" }));
     }
   }, [serverTypes]);
-
-  const presetSelfDeploy = () => {
-    const jwt = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-    setForm((f) => ({
-      ...f,
-      app_name: "ocd-panel",
-      git_repo: "https://github.com/0-AI-UG/one-click-deploy.git",
-      container_port: "3001",
-      volume_size: "10",
-      volume_path: "/app/data",
-      webhook_enabled: true,
-      webhook_branch: "main",
-    }));
-    setEnvVars([
-      { key: "NODE_ENV", value: "production" },
-      { key: "OCD_DATA_DIR", value: "/app/data" },
-      { key: "PORT", value: "3001" },
-      { key: "JWT_SECRET", value: jwt },
-    ]);
-    setSelfDeploy(true);
-    showToast("Preset loaded — set a domain and server, then deploy", "success");
-  };
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value }));
@@ -94,7 +71,6 @@ export function DeployPage() {
       replicas: parseInt(form.replicas, 10) || 1,
       compose_file: form.compose_file || undefined,
       compose_web_service: form.compose_web_service || undefined,
-      self_deploy: selfDeploy || undefined,
     };
 
     try {
@@ -126,14 +102,9 @@ export function DeployPage() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
-      <div className="flex items-center justify-between mb-6 gap-2">
-        <div className="flex items-center gap-2">
-          <Rocket size={18} className="text-fg" />
-          <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>
-        </div>
-        <Btn size="xs" variant="ghost" onClick={presetSelfDeploy} type="button">
-          Deploy this panel
-        </Btn>
+      <div className="flex items-center gap-2 mb-6">
+        <Rocket size={18} className="text-fg" />
+        <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>
       </div>
 
       <form onSubmit={handleSubmit}>

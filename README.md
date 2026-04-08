@@ -21,11 +21,7 @@ A self-hosted web panel that automates server provisioning, DNS configuration, T
 
 ## Quick start
 
-The panel is distributed as a Docker image. There are two ways to bootstrap a permanent, self-hosted copy.
-
-### Option A — one-liner headless install (fastest)
-
-Deploy the panel to Hetzner without ever opening a browser. Put your config in a JSON string (or file), and the container runs the full self-deploy pipeline and exits:
+The panel is distributed as a Docker image. One `docker run` provisions a Hetzner server, deploys a permanent copy of the panel to it, wires up TLS and auto-redeploy webhooks, and exits. No browser involved.
 
 ```bash
 docker run --rm \
@@ -52,37 +48,7 @@ docker run --rm \
 **Required fields:** `hetzner_token`, `domain`.
 **Optional fields:** `server_type` (default `cx22`), `server_location` (default `nbg1`), `github_pat` (enables webhook auto-redeploy), `dns_zone_id` (auto-creates the A record), `volume_size` (default `10` GB), `app_name` (default `ocd-panel`).
 
-Progress streams to docker logs. On success, the container exits and your panel is live at `https://<domain>`. Open it, create your admin account on the one-time setup page, and you're done.
-
-### Option B — interactive bootstrap
-
-Prefer clicking through the UI? Run the panel locally in bootstrap mode (no login, no setup wizard), then use its **Deploy this panel** button.
-
-### 1. Bootstrap locally
-
-Run the panel on your laptop. This instance is temporary — it exists only long enough to deploy a permanent copy to a real server. `OCD_BOOTSTRAP=1` skips the login and setup wizard, and `HETZNER_TOKEN` seeds your API token so there's nothing to click through.
-
-```bash
-docker run --rm -p 3001:3001 \
-  -e OCD_BOOTSTRAP=1 \
-  -e HETZNER_TOKEN=your_hetzner_token_here \
-  -v ocd-bootstrap:/app/data \
-  ghcr.io/0-ai-ug/one-click-deploy:latest
-```
-
-Open <http://localhost:3001> — you land straight on the dashboard, no login.
-
-### 2. Deploy the panel to a real server
-
-On the **Deploy New App** page, click **Deploy this panel** at the top. The form is pre-filled with the correct repo, env vars, volume, webhook, and a fresh `JWT_SECRET`. Pick a server type, set a domain, click **Deploy**.
-
-During the deploy, the local panel hands off a snapshot of its SQLite database to the hosted server's mounted volume (re-encrypting the Hetzner token with the hosted instance's new `JWT_SECRET`). The hosted container boots with full knowledge of itself, its server, and its token.
-
-### 3. Finish on the hosted instance
-
-Once the deploy completes, stop the local bootstrap container (`Ctrl-C`) and delete its `ocd-bootstrap` volume. Open `https://<your-domain>`. You'll see a short setup page — create your real admin account. That's the only account you'll keep, and the dashboard already shows `ocd-panel` and the Hetzner server running it.
-
-From here on, the panel manages itself: redeploy, roll back, edit env vars, and view logs from its own app-detail page. GitHub pushes trigger auto-redeploys via the webhook.
+Progress streams to docker logs. When the container exits with code 0, open `https://<domain>`, create your admin account on the one-time setup page, and you're done. From that point on, the panel manages itself: redeploy, roll back, edit env vars, and view logs from its own app-detail page. GitHub pushes trigger auto-redeploys via the webhook.
 
 ## Development
 

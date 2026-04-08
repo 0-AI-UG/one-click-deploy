@@ -36,20 +36,6 @@ import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGet
 import { handleEnableWebhook, handleDisableWebhook } from "./routes/webhooks.ts";
 import { startReconciler } from "../bun/reconciler.ts";
 import { tryTerminalUpgrade, terminalWsHandlers } from "./routes/terminal.ts";
-import { secretStore } from "../bun/secret-store.ts";
-
-// Seed Hetzner token from env on first boot (used by the bootstrap container
-// and by self-deploy handoff, where the token is already in the handed-off DB
-// but we accept an env-var override).
-async function seedHetznerTokenFromEnv() {
-  const envToken = process.env.HETZNER_TOKEN;
-  if (!envToken) return;
-  const existing = await secretStore.get("hetzner_api_token");
-  if (existing) return;
-  await secretStore.set("hetzner_api_token", envToken);
-  console.log("[server] Seeded Hetzner API token from HETZNER_TOKEN env var");
-}
-await seedHetznerTokenFromEnv();
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const IS_PROD = process.env.NODE_ENV === "production";

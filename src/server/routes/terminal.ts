@@ -23,7 +23,6 @@ export type TerminalWsData = {
 };
 
 async function authFromQuery(req: Request): Promise<{ userId: string } | null> {
-  if (process.env.OCD_BOOTSTRAP === "1") return { userId: "bootstrap" };
   const url = new URL(req.url);
   const token = url.searchParams.get("token");
   if (!token) return null;
@@ -37,7 +36,6 @@ async function authFromQuery(req: Request): Promise<{ userId: string } | null> {
 }
 
 function checkPermission(userId: string): boolean {
-  if (userId === "bootstrap") return true;
   const user = db.getUserById(userId);
   if (!user) return false;
   if (user.is_admin) return true;

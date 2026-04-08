@@ -5,22 +5,18 @@ import * as db from "../../bun/db.ts";
 import { secretStore } from "../../bun/secret-store.ts";
 import { validateHetznerToken, validateGitHubPat } from "../../bun/validate.ts";
 
-const IS_BOOTSTRAP = process.env.OCD_BOOTSTRAP === "1";
-
 export function isSetupComplete(): boolean {
-  if (IS_BOOTSTRAP) return true;
   return db.getUserCount() > 0;
 }
 
 export async function handleSetupStatus(_request: Request): Promise<Response> {
-  // If the panel was handed off from a bootstrap instance, the Hetzner
-  // token is already present — the wizard should skip the token step and
-  // only prompt for the admin account.
+  // If the panel was handed off from an auto-deploy run, the Hetzner token
+  // is already present — the wizard should skip the token step and only
+  // prompt for the admin account.
   const hetznerToken = await secretStore.get("hetzner_api_token").catch(() => null);
   return Response.json(
     {
       setupComplete: isSetupComplete(),
-      bootstrap: IS_BOOTSTRAP,
       hasHetznerToken: !!hetznerToken,
     },
     { headers: corsHeaders },

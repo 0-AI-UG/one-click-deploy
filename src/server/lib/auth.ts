@@ -14,12 +14,7 @@ const JWT_SECRET = new Uint8Array(
   await crypto.subtle.digest("SHA-256", rawSecret),
 );
 
-export const IS_BOOTSTRAP = process.env.OCD_BOOTSTRAP === "1";
-
-const BOOTSTRAP_IDENTITY: TokenPayload = { userId: "bootstrap", email: "bootstrap@localhost" };
-
 export async function authenticateRequest(request: Request): Promise<TokenPayload> {
-  if (IS_BOOTSTRAP) return BOOTSTRAP_IDENTITY;
   const header = request.headers.get("Authorization");
   if (!header?.startsWith("Bearer ")) {
     throw new AuthError("Unauthorized");
@@ -64,7 +59,6 @@ export async function verifyTempToken(token: string): Promise<string> {
 
 export async function requireAdmin(request: Request): Promise<TokenPayload> {
   const payload = await authenticateRequest(request);
-  if (IS_BOOTSTRAP) return payload;
   const user = getUserById(payload.userId);
   if (!user?.is_admin) {
     throw new ForbiddenError("Admin access required");

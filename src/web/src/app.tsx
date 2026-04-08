@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAuth, login as storeLogin } from "./stores/auth.ts";
+import { useAuth } from "./stores/auth.ts";
 import { get } from "./api/client.ts";
 import { Toasts, ConfirmDialog, Spinner } from "./components/ui.tsx";
 import { Nav } from "./components/nav.tsx";
@@ -38,20 +38,6 @@ export function App() {
       const incomplete = !res.setupComplete;
       setNeedsSetup(incomplete);
       setSetupChecked(true);
-      // Bootstrap mode: server skips auth entirely. Synthesize a logged-in
-      // session so the rest of the app works without a login round-trip.
-      if (res.bootstrap && !token) {
-        storeLogin("bootstrap", {
-          id: "bootstrap",
-          email: "bootstrap@localhost",
-          isAdmin: true,
-          permissions: [],
-        });
-        if (!window.location.hash || window.location.hash === "#/login" || window.location.hash === "#/setup") {
-          window.location.hash = "#/";
-        }
-        return;
-      }
       if (incomplete && !token) {
         if (window.location.hash !== "#/setup") {
           window.location.hash = "#/setup";
