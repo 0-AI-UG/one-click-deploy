@@ -396,6 +396,25 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN webhook_path TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 18,
+    description: "Add WebAuthn credentials table and webauthn_enabled flag on users",
+    up: (db) => {
+      db.run(`CREATE TABLE webauthn_credentials (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        public_key BLOB NOT NULL,
+        counter INTEGER NOT NULL DEFAULT 0,
+        device_type TEXT NOT NULL DEFAULT '',
+        backed_up INTEGER NOT NULL DEFAULT 0,
+        transports TEXT NOT NULL DEFAULT '[]',
+        name TEXT NOT NULL DEFAULT 'Passkey',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run("CREATE INDEX idx_webauthn_user ON webauthn_credentials(user_id)");
+      db.run("ALTER TABLE users ADD COLUMN webauthn_enabled INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

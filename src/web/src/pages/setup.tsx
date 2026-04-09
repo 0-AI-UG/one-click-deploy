@@ -76,7 +76,7 @@ export function SetupPage() {
     try {
       const res = await post("/api/setup/complete", form);
       setTempToken(res.tempToken);
-      window.location.hash = "#/totp-setup";
+      window.location.hash = "#/2fa-setup";
     } catch (err: any) {
       showToast(err.message || "Setup failed", "error");
     } finally {

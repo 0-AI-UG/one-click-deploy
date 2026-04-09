@@ -803,6 +803,7 @@ export type UserRow = {
   is_admin: number;
   totp_secret: string | null;
   totp_enabled: number;
+  webauthn_enabled: number;
   created_at: string;
 };
 
@@ -875,6 +876,74 @@ export function markBackupCodeUsed(codeId: string): void {
 
 export function getUnusedBackupCodeCount(userId: string): number {
   const row = db.query("SELECT COUNT(*) as count FROM totp_backup_codes WHERE user_id = ? AND used = 0").get(userId) as any;
+  return row?.count ?? 0;
+}
+
+// --- WebAuthn ---
+
+export type WebAuthnCredential = {
+  id: string;
+  user_id: string;
+  public_key: Buffer;
+  counter: number;
+  device_type: string;
+  backed_up: number;
+  transports: string;
+  name: string;
+  created_at: string;
+};
+
+export function insertWebAuthnCredential(data: {
+  id: string;
+  userId: string;
+  publicKey: Uint8Array;
+  counter: number;
+  deviceType: string;
+  backedUp: boolean;
+  transports: string[];
+  name: string;
+}): void {
+  db.query(
+    "INSERT INTO webauthn_credentials (id, user_id, public_key, counter, device_type, backed_up, transports, name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    data.id,
+    data.userId,
+    Buffer.from(data.publicKey),
+    data.counter,
+    data.deviceType,
+    data.backedUp ? 1 : 0,
+    JSON.stringify(data.transports),
+    data.name,
+  );
+}
+
+export function getWebAuthnCredentials(userId: string): WebAuthnCredential[] {
+  return db.query("SELECT * FROM webauthn_credentials WHERE user_id = ?").all(userId) as WebAuthnCredential[];
+}
+
+export function getWebAuthnCredentialById(credentialId: string): WebAuthnCredential | null {
+  return (db.query("SELECT * FROM webauthn_credentials WHERE id = ?").get(credentialId) as WebAuthnCredential) ?? null;
+}
+
+export function updateWebAuthnCounter(credentialId: string, counter: number): void {
+  db.query("UPDATE webauthn_credentials SET counter = ? WHERE id = ?").run(counter, credentialId);
+}
+
+export function deleteWebAuthnCredential(credentialId: string): void {
+  db.query("DELETE FROM webauthn_credentials WHERE id = ?").run(credentialId);
+}
+
+export function enableWebAuthn(userId: string): void {
+  db.query("UPDATE users SET webauthn_enabled = 1 WHERE id = ?").run(userId);
+}
+
+export function disableWebAuthn(userId: string): void {
+  db.query("UPDATE users SET webauthn_enabled = 0 WHERE id = ?").run(userId);
+  db.query("DELETE FROM webauthn_credentials WHERE user_id = ?").run(userId);
+}
+
+export function getWebAuthnCredentialCount(userId: string): number {
+  const row = db.query("SELECT COUNT(*) as count FROM webauthn_credentials WHERE user_id = ?").get(userId) as any;
   return row?.count ?? 0;
 }
 

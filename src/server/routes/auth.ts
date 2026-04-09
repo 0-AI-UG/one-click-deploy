@@ -39,11 +39,19 @@ export async function handleLogin(request: Request): Promise<Response> {
 
     // Skip 2FA in dev mode
     if (process.env.SKIP_2FA !== "1") {
-      // 2FA enabled: require TOTP
-      if (user.totp_enabled) {
+      // 2FA enabled: require verification
+      const has2FA = user.totp_enabled || user.webauthn_enabled;
+      if (has2FA) {
         const tempToken = await createTempToken(user.id);
         return Response.json(
-          { requires2FA: true, tempToken },
+          {
+            requires2FA: true,
+            tempToken,
+            methods: {
+              totp: !!user.totp_enabled,
+              webauthn: !!user.webauthn_enabled,
+            },
+          },
           { headers: corsHeaders },
         );
       }
@@ -71,6 +79,7 @@ export async function handleLogin(request: Request): Promise<Response> {
           email: user.email,
           isAdmin: user.is_admin === 1,
           totpEnabled: user.totp_enabled === 1,
+          webauthnEnabled: user.webauthn_enabled === 1,
           permissions,
         },
       },
@@ -146,6 +155,7 @@ export async function handleMe(request: Request): Promise<Response> {
           email: user.email,
           isAdmin: user.is_admin === 1,
           totpEnabled: user.totp_enabled === 1,
+          webauthnEnabled: user.webauthn_enabled === 1,
           permissions,
         },
       },
@@ -178,8 +188,8 @@ export async function handleUpdateMe(request: Request): Promise<Response> {
         );
       }
 
-      // Require TOTP verification if enabled
-      if (user.totp_enabled) {
+      // Require 2FA verification if enabled
+      if (user.totp_enabled || user.webauthn_enabled) {
         if (!body.totpCode) {
           return Response.json(
             { error: "A 2FA code is required to change your password" },
@@ -216,6 +226,7 @@ export async function handleUpdateMe(request: Request): Promise<Response> {
           email: user.email,
           isAdmin: user.is_admin === 1,
           totpEnabled: user.totp_enabled === 1,
+          webauthnEnabled: user.webauthn_enabled === 1,
           permissions,
         },
       },

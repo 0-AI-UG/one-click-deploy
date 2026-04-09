@@ -7,6 +7,8 @@ import { ProtectedRoute } from "./components/protected-route.tsx";
 import { LoginPage } from "./pages/login.tsx";
 import { TotpVerifyPage } from "./pages/totp-verify.tsx";
 import { TotpSetupPage } from "./pages/totp-setup.tsx";
+import { TwoFactorVerifyPage } from "./pages/two-factor-verify.tsx";
+import { TwoFactorSetupPage } from "./pages/two-factor-setup.tsx";
 import { PasswordResetPage } from "./pages/password-reset.tsx";
 import { SetupPage } from "./pages/setup.tsx";
 import { DashboardPage } from "./pages/dashboard.tsx";
@@ -78,7 +80,7 @@ export function App() {
   if (hash === "#/setup") {
     // Setup just completed and we have a temp token — go finish 2FA setup.
     if (tempToken) {
-      window.location.hash = "#/totp-setup";
+      window.location.hash = "#/2fa-setup";
       return null;
     }
     // Once setup is complete, the setup page is no longer reachable —
@@ -91,8 +93,10 @@ export function App() {
   }
   if (hash === "#/login") return <><LoginPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/password-reset") return <><PasswordResetPage /><Toasts /><ConfirmDialog /></>;
-  if (hash === "#/totp-verify") return <><TotpVerifyPage /><Toasts /><ConfirmDialog /></>;
-  if (hash === "#/totp-setup") return <><TotpSetupPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/2fa-verify") return <><TwoFactorVerifyPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/2fa-setup") return <><TwoFactorSetupPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/totp-verify") return <><TwoFactorVerifyPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/totp-setup") return <><TwoFactorSetupPage /><Toasts /><ConfirmDialog /></>;
 
   // Redirect to login if not authenticated
   if (!token) {

@@ -15,6 +15,7 @@ export async function handleListUsers(request: Request): Promise<Response> {
           email: u.email,
           isAdmin: u.is_admin === 1,
           totpEnabled: u.totp_enabled === 1,
+          webauthnEnabled: u.webauthn_enabled === 1,
           permissions: u.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(u.id),
           createdAt: u.created_at,
         })),

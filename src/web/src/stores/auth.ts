@@ -5,13 +5,20 @@ export type User = {
   email: string;
   isAdmin: boolean;
   totpEnabled?: boolean;
+  webauthnEnabled?: boolean;
   permissions: string[];
+};
+
+export type TwoFactorMethods = {
+  totp: boolean;
+  webauthn: boolean;
 };
 
 type AuthState = {
   token: string | null;
   user: User | null;
   tempToken: string | null;
+  twoFactorMethods: TwoFactorMethods | null;
 };
 
 let state: AuthState = loadFromStorage();
@@ -27,10 +34,10 @@ function loadFromStorage(): AuthState {
     const stored = localStorage.getItem("ocd-auth");
     if (stored) {
       const parsed = JSON.parse(stored);
-      return { token: parsed.token || null, user: parsed.user || null, tempToken: null };
+      return { token: parsed.token || null, user: parsed.user || null, tempToken: null, twoFactorMethods: null };
     }
   } catch {}
-  return { token: null, user: null, tempToken: null };
+  return { token: null, user: null, tempToken: null, twoFactorMethods: null };
 }
 
 function saveToStorage() {
@@ -48,13 +55,13 @@ export function login(token: string, user: User) {
 }
 
 export function logout() {
-  state = { token: null, user: null, tempToken: null };
+  state = { token: null, user: null, tempToken: null, twoFactorMethods: null };
   saveToStorage();
   notify();
 }
 
-export function setTempToken(tempToken: string) {
-  state = { ...state, tempToken };
+export function setTempToken(tempToken: string, twoFactorMethods?: TwoFactorMethods) {
+  state = { ...state, tempToken, twoFactorMethods: twoFactorMethods ?? state.twoFactorMethods };
   notify();
 }
 

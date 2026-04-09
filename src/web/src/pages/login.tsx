@@ -15,11 +15,11 @@ export function LoginPage() {
     try {
       const res = await post("/api/auth/login", { email, password });
       if (res.requires2FA) {
-        setTempToken(res.tempToken);
-        window.location.hash = "#/totp-verify";
+        setTempToken(res.tempToken, res.methods);
+        window.location.hash = "#/2fa-verify";
       } else if (res.requires2FASetup) {
         setTempToken(res.tempToken);
-        window.location.hash = "#/totp-setup";
+        window.location.hash = "#/2fa-setup";
       } else {
         login(res.token, res.user);
         window.location.hash = "#/";

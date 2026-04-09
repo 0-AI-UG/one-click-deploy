@@ -46,7 +46,7 @@ export function createTOTP(secret: string, email: string): TOTP {
   });
 }
 
-function generateBackupCodes(count = 8): string[] {
+export function generateBackupCodes(count = 8): string[] {
   const codes: string[] = [];
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   for (let i = 0; i < count; i++) {
@@ -186,7 +186,7 @@ export async function handleTotpLogin(request: Request): Promise<Response> {
       const token = await createToken({ userId: user.id, email: user.email });
       const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
       return Response.json(
-        { token, user: { id: user.id, email: user.email, isAdmin: user.is_admin === 1, totpEnabled: true, permissions } },
+        { token, user: { id: user.id, email: user.email, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions } },
         { headers: corsHeaders },
       );
     }
@@ -201,7 +201,7 @@ export async function handleTotpLogin(request: Request): Promise<Response> {
         const token = await createToken({ userId: user.id, email: user.email });
         const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
         return Response.json(
-          { token, user: { id: user.id, email: user.email, isAdmin: user.is_admin === 1, totpEnabled: true, permissions } },
+          { token, user: { id: user.id, email: user.email, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions } },
           { headers: corsHeaders },
         );
       }
@@ -312,7 +312,7 @@ export async function handleTotpConfirmFromLogin(request: Request): Promise<Resp
     const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
 
     return Response.json(
-      { token, user: { id: user.id, email: user.email, isAdmin: user.is_admin === 1, totpEnabled: true, permissions }, backupCodes },
+      { token, user: { id: user.id, email: user.email, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions }, backupCodes },
       { headers: corsHeaders },
     );
   } catch (error) {
@@ -327,10 +327,11 @@ export async function handleTotpDisable(request: Request): Promise<Response> {
     const user = db.getUserById(userId);
     if (!user) throw new AuthError("Unauthorized");
 
-    // Admins cannot disable 2FA
-    if (user.is_admin) {
+    // Block if disabling would leave user with no 2FA when required
+    const require2fa = (db.getSettings().require_2fa ?? "1") === "1";
+    if (!user.webauthn_enabled && (user.is_admin || require2fa)) {
       return Response.json(
-        { error: "Two-factor authentication is required for admin accounts" },
+        { error: "Cannot disable authenticator app: at least one 2FA method is required" },
         { status: 403, headers: corsHeaders },
       );
     }
@@ -418,10 +419,29 @@ export async function handleTotpResetFromLogin(request: Request): Promise<Respon
       );
     }
 
-    // Disable TOTP (clears secret + remaining backup codes) and mint a fresh
-    // temp token so the client is forced through /totp-setup before it ever
-    // gets a real session token.
     db.disableTotp(userId);
+
+    // If user still has webauthn, they still have 2FA — issue real JWT
+    if (user.webauthn_enabled) {
+      const token = await createToken({ userId: user.id, email: user.email });
+      const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
+      return Response.json(
+        {
+          token,
+          user: {
+            id: user.id,
+            email: user.email,
+            isAdmin: user.is_admin === 1,
+            totpEnabled: false,
+            webauthnEnabled: true,
+            permissions,
+          },
+        },
+        { headers: corsHeaders },
+      );
+    }
+
+    // No 2FA left — force re-enrollment
     const tempToken = await createTempToken(userId);
     return Response.json(
       { requires2FASetup: true, tempToken },
@@ -440,11 +460,14 @@ export async function handleTotpStatus(request: Request): Promise<Response> {
     if (!user) throw new AuthError("Unauthorized");
 
     const enabled = user.totp_enabled === 1;
+    const webauthnEnabled = user.webauthn_enabled === 1;
     const required = user.is_admin === 1;
-    const backupCodesRemaining = enabled ? db.getUnusedBackupCodeCount(userId) : 0;
+    const has2FA = enabled || webauthnEnabled;
+    const backupCodesRemaining = has2FA ? db.getUnusedBackupCodeCount(userId) : 0;
+    const webauthnCredentialCount = webauthnEnabled ? db.getWebAuthnCredentialCount(userId) : 0;
 
     return Response.json(
-      { enabled, required, backupCodesRemaining },
+      { enabled, webauthnEnabled, webauthnCredentialCount, required, backupCodesRemaining },
       { headers: corsHeaders },
     );
   } catch (error) {

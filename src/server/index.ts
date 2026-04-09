@@ -12,6 +12,16 @@ import {
   handleTotpStatus,
   handleTotpResetFromLogin,
 } from "./routes/totp.ts";
+import {
+  handleWebAuthnRegisterOptions,
+  handleWebAuthnRegisterVerify,
+  handleWebAuthnRegisterOptionsFromLogin,
+  handleWebAuthnRegisterVerifyFromLogin,
+  handleWebAuthnLoginOptions,
+  handleWebAuthnLoginVerify,
+  handleWebAuthnList,
+  handleWebAuthnDelete,
+} from "./routes/webauthn.ts";
 import { handleListUsers, handleCreateUser, handleUpdateUser, handleDeleteUser, handleGetUserPermissions } from "./routes/admin.ts";
 import {
   handleGetServers,
@@ -161,6 +171,16 @@ export const server = Bun.serve({
     "/api/auth/totp/disable": { POST: (req: Request) => handleTotpDisable(req) },
     "/api/auth/totp/reset-from-login": { POST: (req: Request) => handleTotpResetFromLogin(req) },
     "/api/auth/totp/status": { GET: (req: Request) => handleTotpStatus(req) },
+
+    // --- WebAuthn ---
+    "/api/auth/webauthn/register-options": { POST: (req: Request) => handleWebAuthnRegisterOptions(req) },
+    "/api/auth/webauthn/register-verify": { POST: (req: Request) => handleWebAuthnRegisterVerify(req) },
+    "/api/auth/webauthn/register-options-from-login": { POST: (req: Request) => handleWebAuthnRegisterOptionsFromLogin(req) },
+    "/api/auth/webauthn/register-verify-from-login": { POST: (req: Request) => handleWebAuthnRegisterVerifyFromLogin(req) },
+    "/api/auth/webauthn/login-options": { POST: (req: Request) => handleWebAuthnLoginOptions(req) },
+    "/api/auth/webauthn/login-verify": { POST: (req: Request) => handleWebAuthnLoginVerify(req) },
+    "/api/auth/webauthn/credentials": { GET: (req: Request) => handleWebAuthnList(req) },
+    "/api/auth/webauthn/delete": { POST: (req: Request) => handleWebAuthnDelete(req) },
 
     // --- Admin ---
     "/api/admin/users": {

@@ -5,7 +5,7 @@ import { Users, Plus, Trash2, Shield, ShieldCheck, Key, Lock, ShieldAlert } from
 
 type User = {
   id: string; email: string; isAdmin: boolean; totpEnabled: boolean;
-  permissions: string[]; createdAt: string;
+  webauthnEnabled: boolean; permissions: string[]; createdAt: string;
 };
 
 export function UsersPage() {
@@ -185,10 +185,14 @@ export function UsersPage() {
                 )}
               </td>
               <td className="py-2.5 px-3">
-                {u.totpEnabled ? (
-                  <span className="text-fg text-[9px] font-mono font-bold uppercase">Enabled</span>
+                {u.totpEnabled && u.webauthnEnabled ? (
+                  <span className="text-fg text-[9px] font-mono font-bold uppercase">Both</span>
+                ) : u.totpEnabled ? (
+                  <span className="text-fg text-[9px] font-mono font-bold uppercase">TOTP</span>
+                ) : u.webauthnEnabled ? (
+                  <span className="text-fg text-[9px] font-mono font-bold uppercase">Passkey</span>
                 ) : (
-                  <span className="text-muted text-[9px] font-mono uppercase">Disabled</span>
+                  <span className="text-muted text-[9px] font-mono uppercase">None</span>
                 )}
               </td>
               <td className="py-2.5 px-3">
