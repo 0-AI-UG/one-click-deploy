@@ -143,6 +143,13 @@ export async function deploy(
     return { ok: false, error: validation.error };
   }
 
+  // Reject duplicate app names — same name means same container name and
+  // app directory, so deploying would destroy the existing app.
+  const existing = db.getAppByName(req.app_name);
+  if (existing) {
+    return { ok: false, error: `An app named "${req.app_name}" already exists. Choose a different name.` };
+  }
+
   // Set up log masking for secrets
   const tokens = await getTokens();
   const githubPat = tokens.github_pat || undefined;

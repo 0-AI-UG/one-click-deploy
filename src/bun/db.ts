@@ -168,6 +168,15 @@ export function getApp(id: number) {
   return db.query("SELECT * FROM apps WHERE id = ?").get(id) as any;
 }
 
+export function getAppByName(name: string) {
+  return db.query("SELECT * FROM apps WHERE name = ?").get(name) as any;
+}
+
+export function renameApp(id: number, newName: string) {
+  db.query("UPDATE apps SET name = ? WHERE id = ?").run(newName, id);
+  db.query("UPDATE replicas SET container_name = ? WHERE app_id = ?").run(newName, id);
+}
+
 export function insertApp(app: {
   name: string;
   domain: string;

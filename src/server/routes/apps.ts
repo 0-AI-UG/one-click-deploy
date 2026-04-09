@@ -14,6 +14,7 @@ import {
   rollbackApp,
 } from "../../bun/deploy/index.ts";
 import * as hetzner from "../../bun/hetzner/index.ts";
+import { validateAppName } from "../../bun/validate.ts";
 import { introspectRepo } from "../../bun/github-introspect.ts";
 
 // In-process notifier for long-poll waiters. Keyed by deploy job id; each
@@ -233,6 +234,66 @@ export async function handleUpdateAppEnv(request: Request, appId: number): Promi
     return handleError(error);
   }
 }
+export async function handleRenameApp(request: Request, appId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "apps.deploy");
+    const { name } = await request.json() as { name: string };
+
+    const nameResult = validateAppName(name);
+    if (!nameResult.valid) {
+      return Response.json({ error: nameResult.error }, { status: 400, headers: corsHeaders });
+    }
+    const newName = nameResult.value;
+
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+
+    if (newName === app.name) {
+      return Response.json({ ok: true }, { headers: corsHeaders });
+    }
+
+    const existing = db.getAppByName(newName);
+    if (existing) {
+      return Response.json({ error: `An app named "${newName}" already exists` }, { status: 409, headers: corsHeaders });
+    }
+
+    // Rename container and directory on each server hosting a replica
+    const replicas = db.getReplicas(appId);
+    for (const replica of replicas) {
+      const server = db.getServer(replica.server_id);
+      if (!server) continue;
+      const hostKey = server.ssh_host_key || undefined;
+
+      if (app.deploy_mode === "compose") {
+        // Compose projects can't be renamed in-place — just rename the directory
+        await hetzner.sshExec(
+          server.ipv4,
+          `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
+          hostKey
+        );
+      } else {
+        await hetzner.sshExec(
+          server.ipv4,
+          `su - deploy -c "docker rename ${app.name} ${newName} 2>/dev/null || true"`,
+          hostKey
+        );
+        await hetzner.sshExec(
+          server.ipv4,
+          `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
+          hostKey
+        );
+      }
+    }
+
+    // Update database records
+    db.renameApp(appId, newName);
+
+    return Response.json({ ok: true, name: newName }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleGetContainerLogs(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.logs");

@@ -3,7 +3,7 @@ import { get, post, put, del } from "../api/client.ts";
 import { Card, Btn, StatusBadge, Spinner, showToast, confirm, Table, Checkbox } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu, Terminal, Gauge, Server as ServerIcon, Zap, History, Info, Plus, Minus, Lock, Settings as SettingsIcon } from "lucide-react";
+import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu, Terminal, Gauge, Server as ServerIcon, Zap, History, Info, Plus, Minus, Lock, Settings as SettingsIcon, Pencil } from "lucide-react";
 
 // Small icon-only tooltip — uses native browser title for zero-dependency
 // hover help text. Sits inline next to labels so the visible UI stays terse.
@@ -32,6 +32,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [app, setApp] = useState<any>(null);
   const [server, setServer] = useState<any>(null);
   const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
+  const [nameEdit, setNameEdit] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [portEdit, setPortEdit] = useState<number>(0);
   const [envEdit, setEnvEdit] = useState<{ key: string; value: string }[]>([]);
@@ -120,6 +121,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
     if (tab === "deployments") loadDeployments();
     if (tab === "overview" || tab === "scaling") loadReplicas();
     if (tab === "settings" && app) {
+      setNameEdit(app.name || "");
       setAuthPassword(app.auth_password || "");
       setPortEdit(app.container_port || 0);
       const ev = app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {};
@@ -583,6 +585,36 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
       {tab === "settings" && (
         <div className="space-y-4">
+          {/* Rename */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Pencil size={14} className="text-fg" />
+              <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">App Name</h3>
+            </div>
+            <p className="text-[10px] text-muted font-mono mb-3">
+              Rename this app. This changes the container name and app directory on the server.
+            </p>
+            <div className="flex gap-2 items-center">
+              <input
+                type="text"
+                value={nameEdit}
+                onChange={(e) => setNameEdit(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+                placeholder={app.name}
+              />
+              <PermissionGate permission="apps.deploy">
+                <Btn
+                  size="sm"
+                  variant="primary"
+                  loading={actionLoading === "rename"}
+                  disabled={!nameEdit || nameEdit === app.name}
+                  onClick={() => action("rename", async () => {
+                    await put(`/api/apps/${appId}/rename`, { name: nameEdit });
+                  })}
+                >Rename</Btn>
+              </PermissionGate>
+            </div>
+          </Card>
+
           {/* Auth password */}
           <Card className="p-4">
             <div className="flex items-center gap-2 mb-3">
