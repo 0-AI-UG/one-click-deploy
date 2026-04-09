@@ -36,10 +36,18 @@ function getAndDeleteChallenge(userId: string): string | null {
 
 function getRpConfig(request: Request) {
   const url = new URL(request.url);
+  const hostname = url.hostname;
+  // Behind a TLS-terminating reverse proxy (Caddy), request.url is http://
+  // but the browser's actual origin is https://. Use the Origin header when
+  // available, otherwise infer from X-Forwarded-Proto or default to https.
+  const browserOrigin =
+    process.env.WEBAUTHN_ORIGIN ||
+    request.headers.get("Origin") ||
+    `${request.headers.get("X-Forwarded-Proto") || "https"}://${hostname}`;
   return {
     rpName: "OneClickDeploy",
-    rpID: process.env.WEBAUTHN_RP_ID || url.hostname,
-    origin: process.env.WEBAUTHN_ORIGIN || url.origin,
+    rpID: process.env.WEBAUTHN_RP_ID || hostname,
+    origin: browserOrigin,
   };
 }
 
