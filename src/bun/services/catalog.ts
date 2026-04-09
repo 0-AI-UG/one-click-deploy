@@ -90,7 +90,7 @@ export const SERVICE_CATALOG: Record<string, ServiceDefinition> = {
       { key: "POSTGRES_DB", label: "Database", default: "app" },
     ],
     volumePath: "/var/lib/postgresql/data",
-    healthCmd: "pg_isready -U $POSTGRES_USER",
+    healthCmd: "pg_isready",
     defaultVolumeSize: 10,
     connectionUrlTemplate:
       "postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{host}:{port}/{POSTGRES_DB}",
@@ -138,7 +138,7 @@ export const SERVICE_CATALOG: Record<string, ServiceDefinition> = {
       { key: "MYSQL_PASSWORD", label: "Password", generate: "password" },
     ],
     volumePath: "/var/lib/mysql",
-    healthCmd: "mysqladmin ping -h localhost -u root -p$MYSQL_ROOT_PASSWORD",
+    healthCmd: "mysqladmin ping -h localhost",
     defaultVolumeSize: 10,
     connectionUrlTemplate:
       "mysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{host}:{port}/{MYSQL_DATABASE}",
@@ -170,7 +170,7 @@ export const SERVICE_CATALOG: Record<string, ServiceDefinition> = {
           `wait $MYSQLD_PID`,
         ].join("\n"),
       ],
-      replicaHealthCmd: "mysqladmin ping -h localhost -u root -p$MYSQL_ROOT_PASSWORD",
+      replicaHealthCmd: "mysqladmin ping -h localhost",
     },
   },
 
@@ -213,7 +213,7 @@ export const SERVICE_CATALOG: Record<string, ServiceDefinition> = {
           `wait $MYSQLD_PID`,
         ].join("\n"),
       ],
-      replicaHealthCmd: "mariadb-admin ping -h localhost -u root -p$MARIADB_ROOT_PASSWORD",
+      replicaHealthCmd: "mariadb-admin ping -h localhost",
     },
   },
 
@@ -227,7 +227,7 @@ export const SERVICE_CATALOG: Record<string, ServiceDefinition> = {
       { key: "REDIS_PASSWORD", label: "Password", generate: "password" },
     ],
     volumePath: "/data",
-    healthCmd: "redis-cli -a $REDIS_PASSWORD ping",
+    healthCmd: "redis-cli ping",
     defaultVolumeSize: 5,
     connectionUrlTemplate: "redis://:{REDIS_PASSWORD}@{host}:{port}",
     replication: {
@@ -248,7 +248,7 @@ export const SERVICE_CATALOG: Record<string, ServiceDefinition> = {
         }
         return args;
       },
-      replicaHealthCmd: "redis-cli -a $REDIS_PASSWORD ping",
+      replicaHealthCmd: "redis-cli ping",
     },
   },
 
@@ -263,7 +263,7 @@ export const SERVICE_CATALOG: Record<string, ServiceDefinition> = {
       { key: "MONGO_INITDB_ROOT_PASSWORD", label: "Root Password", generate: "password" },
     ],
     volumePath: "/data/db",
-    healthCmd: "mongosh --quiet --eval \"db.runCommand('ping').ok\" -u $MONGO_INITDB_ROOT_USERNAME -p $MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin",
+    healthCmd: "mongosh --quiet --eval \"db.runCommand('ping').ok\"",
     defaultVolumeSize: 10,
     connectionUrlTemplate:
       "mongodb://{MONGO_INITDB_ROOT_USERNAME}:{MONGO_INITDB_ROOT_PASSWORD}@{host}:{port}/?authSource=admin",
@@ -279,7 +279,7 @@ export const SERVICE_CATALOG: Record<string, ServiceDefinition> = {
       makeReplicaCmd: () => [
         "mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/etc/mongo-keyfile",
       ],
-      replicaHealthCmd: "mongosh --quiet --eval \"rs.status().ok\" -u $MONGO_INITDB_ROOT_USERNAME -p $MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin",
+      replicaHealthCmd: "mongosh --quiet --eval \"rs.status().ok\"",
     },
   },
 };

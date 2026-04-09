@@ -143,9 +143,9 @@ export function App() {
     content = userId ? <UserDetailPage userId={userId} /> : <UsersPage />;
   } else if (hash.startsWith("#/terminal/")) {
     const parts = hash.split("/");
-    const kind = parts[2] as "server" | "replica";
+    const kind = parts[2] as "server" | "replica" | "service-instance";
     const id = parseInt(parts[3], 10);
-    content = (kind === "server" || kind === "replica") && id
+    content = (kind === "server" || kind === "replica" || kind === "service-instance") && id
       ? <TerminalPage kind={kind} id={id} />
       : <DashboardPage />;
   } else {

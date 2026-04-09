@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { get } from "../api/client.ts";
-import { Card, Btn, Spinner } from "../components/ui.tsx";
-import { Database, CheckCircle2, XCircle, Loader2, Circle } from "lucide-react";
+import { Btn } from "../components/ui.tsx";
+import { Database, CheckCircle2, XCircle, Loader2, Circle, Terminal } from "lucide-react";
 
 type ProgressEvent = { seq: number; ts: string; step: string; detail: string };
 
-const STEPS = [
+const DEPLOY_STEPS: { key: string; label: string }[] = [
   { key: "server", label: "Server" },
   { key: "provision", label: "Provision" },
   { key: "volume", label: "Volume" },
@@ -20,14 +20,16 @@ function stepStatus(
   events: ProgressEvent[],
   result: any,
 ): "pending" | "active" | "done" | "error" {
-  const idx = STEPS.findIndex((s) => s.key === stepKey);
+  const idx = DEPLOY_STEPS.findIndex((s) => s.key === stepKey);
   const seenKeys = new Set(events.map((e) => e.step));
   const hasError = events.some((e) => e.step === "error") || result?.ok === false;
   const lastIdx = Math.max(
     -1,
-    ...events.map((e) => STEPS.findIndex((s) => s.key === e.step)).filter((i) => i >= 0),
+    ...events.map((e) => DEPLOY_STEPS.findIndex((s) => s.key === e.step)).filter((i) => i >= 0),
   );
-  if (stepKey === "done") return result?.ok ? "done" : hasError ? "error" : "pending";
+  if (stepKey === "done") {
+    return result?.ok ? "done" : hasError ? "error" : "pending";
+  }
   if (!seenKeys.has(stepKey)) {
     if (hasError && idx === lastIdx + 1) return "error";
     return "pending";
@@ -41,7 +43,8 @@ function stepStatus(
 export function ServiceDeployProgressPage({ jobId }: { jobId: number | null }) {
   const [events, setEvents] = useState<ProgressEvent[]>([]);
   const [result, setResult] = useState<any>(null);
-  const [status, setStatus] = useState<string>("running");
+  const [active, setActive] = useState(true);
+  const [serviceName, setServiceName] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
   const sinceRef = useRef(0);
 
@@ -64,9 +67,13 @@ export function ServiceDeployProgressPage({ jobId }: { jobId: number | null }) {
             sinceRef.current = resp.last_seq;
           }
 
+          if (!serviceName && resp.service_name) {
+            setServiceName(resp.service_name);
+          }
+
           if (resp.status !== "running") {
             setResult(resp.result);
-            setStatus(resp.status);
+            setActive(false);
             return;
           }
         } catch {
@@ -88,84 +95,164 @@ export function ServiceDeployProgressPage({ jobId }: { jobId: number | null }) {
     (e) => e.step === "server" && e.detail?.startsWith("Using server"),
   );
   const visibleSteps = reusingServer
-    ? STEPS.filter((s) => s.key !== "server" && s.key !== "provision")
-    : STEPS;
+    ? DEPLOY_STEPS.filter((s) => s.key !== "server" && s.key !== "provision")
+    : DEPLOY_STEPS;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8 animate-fade-in">
-      <div className="bg-accent border-2 border-fg p-4 mb-6 flex items-center justify-between">
+    <div className="max-w-6xl mx-auto px-4 py-8 animate-fade-in">
+      {/* Header bar */}
+      <div className="bg-accent border-2 border-fg shadow-neo-lg p-4 mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="bg-bg border-2 border-fg w-10 h-10 flex items-center justify-center">
+          <div className="bg-bg-raised border-2 border-fg w-10 h-10 flex items-center justify-center">
             <Database size={18} className="text-fg" />
           </div>
           <div>
-            <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploying Service</h1>
-            <p className="font-mono text-[10px] text-muted">{status === "running" ? "In progress..." : status === "done" ? "Complete" : "Failed"}</p>
+            <div className="font-mono text-[9px] uppercase tracking-wider text-fg/70">Deploying Service</div>
+            <div className="font-mono font-bold text-sm text-fg">{serviceName || "—"}</div>
           </div>
+        </div>
+        <div className="font-mono text-[9px] uppercase tracking-wider text-fg font-bold">
+          {result?.ok ? "● LIVE" : result ? "● FAILED" : active ? "● RUNNING" : "● IDLE"}
         </div>
       </div>
 
-      {/* Steps */}
-      <div className="flex gap-2 mb-6 flex-wrap">
-        {visibleSteps.map((step) => {
-          const s = stepStatus(step.key, events, result);
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-6">
+      {/* Step list — chunky vertical blocks */}
+      <div className="space-y-2">
+        {visibleSteps.map((s, i) => {
+          const status = stepStatus(s.key, events, result);
+          const lastDetail = [...events].reverse().find((e) => e.step === s.key)?.detail;
+          const bg =
+            status === "done"
+              ? "bg-accent-green"
+              : status === "active"
+              ? "bg-accent-amber"
+              : status === "error"
+              ? "bg-accent-red"
+              : "bg-bg-raised";
+          const shadow = status === "active" ? "shadow-neo" : "shadow-neo-sm";
+          const icon =
+            status === "done" ? (
+              <CheckCircle2 size={16} className="text-fg" />
+            ) : status === "active" ? (
+              <Loader2 size={16} className="animate-spin text-fg" />
+            ) : status === "error" ? (
+              <XCircle size={16} className="text-fg" />
+            ) : (
+              <Circle size={16} className="text-muted" />
+            );
           return (
-            <div key={step.key} className="flex items-center gap-1.5">
-              {s === "done" && <CheckCircle2 size={14} className="text-green-500" />}
-              {s === "active" && <Loader2 size={14} className="text-accent-blue animate-spin" />}
-              {s === "error" && <XCircle size={14} className="text-accent-red" />}
-              {s === "pending" && <Circle size={14} className="text-muted" />}
-              <span className={`font-mono text-[9px] font-bold uppercase ${
-                s === "active" ? "text-accent-blue" : s === "done" ? "text-fg" : s === "error" ? "text-accent-red" : "text-muted"
-              }`}>
-                {step.label}
-              </span>
+            <div
+              key={s.key}
+              className={`${bg} border-2 border-fg ${shadow} flex items-center gap-3 p-3 transition-all`}
+            >
+              <div className="bg-bg-raised border-2 border-fg w-7 h-7 flex items-center justify-center font-mono text-[10px] font-bold">
+                {String(i + 1).padStart(2, "0")}
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {icon}
+                <span className="font-mono text-[11px] uppercase tracking-wider font-bold text-fg">
+                  {s.label}
+                </span>
+              </div>
+              {lastDetail && (
+                <span className="font-mono text-[10px] text-fg/70 truncate ml-auto">
+                  {lastDetail}
+                </span>
+              )}
             </div>
           );
         })}
       </div>
 
-      {/* Log */}
-      <Card>
-        <div className="px-4 py-2 border-b-2 border-fg bg-alt">
-          <span className="font-mono text-[10px] font-bold text-fg uppercase">Deploy Log</span>
+      {/* Terminal-style log window */}
+      <div className="border-2 border-fg shadow-neo bg-fg self-start">
+        <div className="flex items-center justify-between bg-fg text-bg px-3 py-1.5 border-b-2 border-bg">
+          <div className="flex items-center gap-2">
+            <Terminal size={12} />
+            <span className="font-mono text-[10px] uppercase tracking-wider font-bold">
+              deploy.log
+            </span>
+          </div>
+          <div className="flex gap-1">
+            <span className="w-2 h-2 bg-accent-red border border-bg" />
+            <span className="w-2 h-2 bg-accent-amber border border-bg" />
+            <span className="w-2 h-2 bg-accent-green border border-bg" />
+          </div>
         </div>
-        <div ref={logRef} className="p-4 max-h-80 overflow-auto font-mono text-[10px] space-y-0.5">
-          {events.map((e, i) => (
-            <div key={i} className="flex gap-2">
-              <span className="text-muted shrink-0">[{e.step}]</span>
-              <span className="text-fg">{e.detail}</span>
+        <div
+          ref={logRef}
+          className="bg-fg text-bg p-3 h-72 overflow-y-auto font-mono text-[10px] leading-relaxed"
+        >
+          {events.length === 0 && active && (
+            <div className="flex items-center gap-2 text-accent-amber">
+              <Loader2 size={12} className="animate-spin" />
+              <span>$ awaiting first event…</span>
             </div>
-          ))}
-          {events.length === 0 && status === "running" && (
-            <div className="text-muted">Waiting for events...</div>
+          )}
+          {events.map((ev, i) => {
+            const isError = ev.step === "error";
+            return (
+              <div key={i} className={`flex gap-2 ${isError ? "text-accent-red" : "text-bg"}`}>
+                <span className="text-accent-amber shrink-0">›</span>
+                <span className="text-muted shrink-0 w-20 uppercase">[{ev.step}]</span>
+                <span className="whitespace-pre-wrap break-all">{ev.detail}</span>
+              </div>
+            );
+          })}
+          {result && (
+            <div
+              className={`flex items-center gap-2 mt-3 pt-2 border-t-2 border-bg ${
+                result.ok ? "text-accent-green" : "text-accent-red"
+              }`}
+            >
+              {result.ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+              <span className="font-bold">
+                {result.ok ? "Service deployed successfully" : `Deploy failed: ${result.error}`}
+              </span>
+            </div>
           )}
         </div>
-      </Card>
+      </div>
+      </div>
 
-      {/* Result */}
+      {/* Actions */}
       {result && (
-        <div className="mt-4 flex gap-2">
+        <div className="flex gap-3 mt-6">
           {result.ok ? (
             <>
-              <Btn variant="primary" onClick={() => {
-                const svcId = result.serviceId;
-                if (svcId) window.location.hash = `#/services/${svcId}`;
-                else window.location.hash = "#/";
-              }}>
+              <Btn
+                variant="primary"
+                className="flex-1 !py-2.5"
+                onClick={() => {
+                  const svcId = result.serviceId;
+                  if (svcId) window.location.hash = `#/services/${svcId}`;
+                  else window.location.hash = "#/";
+                }}
+              >
                 View Service
               </Btn>
-              <Btn variant="ghost" onClick={() => { window.location.hash = "#/"; }}>
-                Dashboard
+              <Btn
+                variant="ghost"
+                onClick={() => { window.location.hash = "#/"; }}
+              >
+                Go to Dashboard
+              </Btn>
+              <Btn
+                variant="ghost"
+                onClick={() => { window.location.hash = "#/deploy-service"; }}
+              >
+                Deploy another
               </Btn>
             </>
           ) : (
-            <>
-              <div className="font-mono text-[10px] text-accent-red py-2">{result.error}</div>
-              <Btn variant="ghost" onClick={() => { window.location.hash = "#/deploy-service"; }}>
-                Try Again
-              </Btn>
-            </>
+            <Btn
+              variant="primary"
+              className="flex-1 !py-2.5"
+              onClick={() => { window.location.hash = "#/deploy-service"; }}
+            >
+              Back to form
+            </Btn>
           )}
         </div>
       )}

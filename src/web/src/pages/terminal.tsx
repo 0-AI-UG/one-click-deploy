@@ -4,7 +4,7 @@ import { Btn } from "../components/ui.tsx";
 import { ArrowLeft } from "lucide-react";
 
 type Props = {
-  kind: "server" | "replica";
+  kind: "server" | "replica" | "service-instance";
   id: number;
 };
 
