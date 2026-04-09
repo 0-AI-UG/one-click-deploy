@@ -68,6 +68,24 @@ export function DashboardPage() {
     }
   };
 
+  const svcAction = async (action: string, svcId: number, label: string) => {
+    const key = `svc-${action}-${svcId}`;
+    setActionLoading(key);
+    try {
+      if (action === "delete") {
+        await del(`/api/services/${svcId}`);
+      } else {
+        await post(`/api/services/${svcId}/${action}`);
+      }
+      showToast(`${label} successful`, "success");
+      load();
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
 
   const allApps = servers.flatMap((s) => s.apps);
@@ -129,9 +147,53 @@ export function DashboardPage() {
                       </span>
                     )}
                   </div>
-                  <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/services/${svc.id}`; }}>
-                    <ScrollText size={12} />
-                  </Btn>
+                  <div className="flex items-center gap-1">
+                    <PermissionGate permission="apps.logs">
+                      <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/services/${svc.id}`; }}><ScrollText size={12} /></Btn>
+                    </PermissionGate>
+                    <PermissionGate permission="apps.restart">
+                      {(() => {
+                        const k = `svc-restart-${svc.id}`;
+                        const armed = confirmKey === k;
+                        return (
+                          <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("restart", svc.id, "Restart"))}>
+                            {armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />}
+                          </Btn>
+                        );
+                      })()}
+                    </PermissionGate>
+                    <PermissionGate permission="apps.pause">
+                      {svc.status === "paused" ? (() => {
+                        const k = `svc-unpause-${svc.id}`;
+                        const armed = confirmKey === k;
+                        return (
+                          <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("unpause", svc.id, "Unpause"))}>
+                            {armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />}
+                          </Btn>
+                        );
+                      })() : (() => {
+                        const k = `svc-pause-${svc.id}`;
+                        const armed = confirmKey === k;
+                        return (
+                          <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("pause", svc.id, "Pause"))}>
+                            {armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />}
+                          </Btn>
+                        );
+                      })()}
+                    </PermissionGate>
+                    <PermissionGate permission="apps.destroy">
+                      <Btn
+                        size="xs"
+                        variant="ghost"
+                        loading={actionLoading === `svc-delete-${svc.id}`}
+                        onClick={async () => {
+                          if (await confirm("Destroy Service", `Permanently destroy "${svc.name}"? This removes all containers, volumes, and data.`, true)) {
+                            svcAction("delete", svc.id, "Destroy");
+                          }
+                        }}
+                      ><Trash2 size={12} className="text-accent-red" /></Btn>
+                    </PermissionGate>
+                  </div>
                 </div>
               ))}
               {server.apps.map((app) => (
