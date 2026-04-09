@@ -113,7 +113,10 @@ export function DashboardPage() {
               {(server.services || []).map((svc) => (
                 <div key={`svc-${svc.id}`} className="px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors">
                   <div className="flex items-center gap-4 min-w-0">
-                    <a href={`#/services/${svc.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{svc.name}</a>
+                    <div className="flex items-center gap-1.5">
+                      <Database size={10} className="text-muted" />
+                      <a href={`#/services/${svc.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{svc.name}</a>
+                    </div>
                     <span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{svc.service_type}</span>
                     <span className="font-mono text-[9px] text-muted">{svc.version}</span>
                     <StatusBadge status={svc.status} />
