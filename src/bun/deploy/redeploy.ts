@@ -487,7 +487,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
   }
 }
 
-export function getServersWithApps(): ServerWithApps[] {
+export function getServersWithApps(): any[] {
   const servers = db.getServers();
   return servers.map((s) => ({
     ...s,
@@ -499,6 +499,15 @@ export function getServersWithApps(): ServerWithApps[] {
         ...a,
         host_port: first?.host_port ?? 0,
         servers: serverIds,
+      };
+    }),
+    services: db.getServicesOnServer(s.id).map((svc: any) => {
+      const instances = db.getServiceInstances(svc.id);
+      const links = db.getServiceLinks(svc.id);
+      return {
+        ...svc,
+        instance_count: instances.length,
+        linked_apps: links.map((l: any) => ({ id: l.app_id, name: l.app_name })),
       };
     }),
   }));

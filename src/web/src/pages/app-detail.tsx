@@ -209,15 +209,15 @@ export function AppDetailPage({ appId }: { appId: number }) {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-0 mb-4 border-b-2 border-fg">
+      <div className="flex border-b-2 border-fg mb-4">
         {tabs.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key as any)}
-            className={`px-4 py-2 font-mono text-[10px] font-bold uppercase tracking-wider transition-all border-2 border-fg -mb-0.5 ${
+            className={`px-4 py-2 font-mono text-[10px] font-bold uppercase tracking-wider border-b-2 -mb-[2px] transition-all ${
               tab === t.key
-                ? "bg-accent text-fg border-b-accent"
-                : "text-muted hover:text-fg bg-alt border-b-fg"
+                ? "border-fg text-fg bg-accent"
+                : "border-transparent text-muted hover:text-fg"
             }`}
           >{t.label}</button>
         ))}
