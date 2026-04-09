@@ -82,6 +82,18 @@ export async function transferImage(
 
 // --- Caddy Sites ---
 
+/** Persist the live Caddy config to disk so it survives restarts. */
+async function persistCaddyConfig(ip: string, hostKey?: string) {
+  const result = await sshExec(
+    ip,
+    `curl -sf http://localhost:2019/config/ | tee /etc/caddy/caddy.json > /dev/null`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    log("caddy", "Warning: failed to persist Caddy config to disk");
+  }
+}
+
 export async function deployCaddySite(
   ip: string,
   domain: string,
@@ -140,16 +152,21 @@ export async function deployCaddySite(
   );
 
   if (addResult.exitCode !== 0) {
-    log("caddy", `Admin API route add failed: ${addResult.stderr}. Falling back to config file.`);
-    // Fallback: write config file and reload
-    const siteConfig = internalTls
-      ? `${domain} {\n  tls internal\n  reverse_proxy localhost:${containerPort}\n}\n`
-      : `${domain} {\n  reverse_proxy localhost:${containerPort}\n}\n`;
-    const fileEscaped = siteConfig.replace(/'/g, "'\\''");
-    await sshExec(ip, `echo '${fileEscaped}' > /etc/caddy/sites/${domain}.caddy`, hostKey);
-    await sshExec(ip, "caddy reload --config /etc/caddy/Caddyfile", hostKey);
-    log("caddy", "Fallback: config file written and reloaded");
-    return;
+    log("caddy", `Admin API route add failed: ${addResult.stderr}. Restarting Caddy and retrying...`);
+    // Restart Caddy (loads persisted caddy.json from disk) and retry
+    await sshExec(ip, "systemctl restart caddy", hostKey);
+    await Bun.sleep(1000);
+    // Re-delete in case the route survived the restart
+    await sshExec(ip, `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`, hostKey);
+    const retry = await sshExec(
+      ip,
+      `curl -sf -X POST -H 'Content-Type: application/json' -d '${escaped}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
+      hostKey
+    );
+    if (retry.exitCode !== 0) {
+      log("caddy", `Admin API retry also failed: ${retry.stderr}`);
+      throw new Error("Failed to configure Caddy reverse proxy for " + domain);
+    }
   }
 
   // If using internal TLS, set the TLS automation policy
@@ -163,7 +180,9 @@ export async function deployCaddySite(
     );
   }
 
-  log("caddy", "Site configured via admin API");
+  // Persist live config to disk so routes survive Caddy restarts
+  await persistCaddyConfig(ip, hostKey);
+  log("caddy", "Site configured via admin API (persisted to disk)");
 }
 
 export async function removeCaddySite(ip: string, domain: string, hostKey?: string) {
@@ -178,12 +197,26 @@ export async function removeCaddySite(ip: string, domain: string, hostKey?: stri
   );
 
   if (result.exitCode !== 0) {
-    // Fallback: remove config file
-    await sshExec(ip, `rm -f /etc/caddy/sites/${domain}.caddy`, hostKey);
-    await sshExec(ip, "caddy reload --config /etc/caddy/Caddyfile", hostKey);
+    log("caddy", `Admin API delete failed for ${domain}, restarting Caddy and retrying...`);
+    await sshExec(ip, "systemctl restart caddy", hostKey);
+    await Bun.sleep(1000);
+    await sshExec(ip, `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`, hostKey);
   }
 
-  log("caddy", `Site ${domain} removed`);
+  // Persist live config to disk so routes survive Caddy restarts
+  await persistCaddyConfig(ip, hostKey);
+  log("caddy", `Site ${domain} removed (persisted to disk)`);
+}
+
+/** Check whether a Caddy route exists for the given domain. */
+export async function checkCaddyRoute(ip: string, domain: string, hostKey?: string): Promise<boolean> {
+  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
+  const result = await sshExec(
+    ip,
+    `curl -sf http://localhost:2019/id/${routeId} > /dev/null`,
+    hostKey
+  );
+  return result.exitCode === 0;
 }
 
 // --- Clone & Build ---

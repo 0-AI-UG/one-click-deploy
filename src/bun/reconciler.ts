@@ -146,6 +146,46 @@ async function reconcileLB(app: any): Promise<void> {
   }
 }
 
+async function reconcileCaddyRoutes(byApp: Map<number, any[]>): Promise<void> {
+  // Group apps by server to batch checks
+  const serverApps = new Map<number, { app: any; replica: any }[]>();
+  for (const [appId, list] of byApp) {
+    const app = db.getApp(appId);
+    if (!app || !app.domain) continue;
+    // Only reconcile single-replica apps not behind a LB (LB handles TLS)
+    if (app.hetzner_lb_id) continue;
+    if (app.status !== "running" && app.status !== "unhealthy") continue;
+    const firstReplica = list[0];
+    if (!firstReplica) continue;
+    const items = serverApps.get(firstReplica.server_id) ?? [];
+    items.push({ app, replica: firstReplica });
+    serverApps.set(firstReplica.server_id, items);
+  }
+
+  for (const [serverId, items] of serverApps) {
+    const server = db.getServer(serverId);
+    if (!server) continue;
+    const hostKey = server.ssh_host_key || undefined;
+
+    for (const { app, replica } of items) {
+      try {
+        const exists = await hetzner.checkCaddyRoute(server.ipv4, app.domain, hostKey);
+        if (!exists) {
+          log("caddy", `Route missing for ${app.domain} — re-adding`);
+          let caddyPort = replica.host_port;
+          if (app.auth_password) {
+            caddyPort = hetzner.authProxyPort(replica.host_port);
+          }
+          const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
+          await hetzner.deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
+        }
+      } catch (err) {
+        log("caddy", `Route check failed for ${app.domain}: ${err}`);
+      }
+    }
+  }
+}
+
 async function tick(): Promise<void> {
   if (running) {
     log("tick", "skip (previous tick still running)");
@@ -194,6 +234,9 @@ async function tick(): Promise<void> {
         await reconcileLB(app);
       }
     }
+
+    // Ensure Caddy routes exist for all live apps (restores routes lost by Caddy restarts)
+    await reconcileCaddyRoutes(byApp);
 
     db.pruneOldMetrics(METRICS_RETENTION_SEC);
     log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps)`);
