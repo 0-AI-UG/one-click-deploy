@@ -42,7 +42,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
   const [scalingEvents, setScalingEvents] = useState<any[]>([]);
   const [allServers, setAllServers] = useState<any[]>([]);
-  const [showScaleControls, setShowScaleControls] = useState(false);
   const [policy, setPolicy] = useState<{
     autoscale_enabled: boolean;
     min_replicas: number;
@@ -119,7 +118,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   useEffect(() => {
     if (tab === "logs") loadLogs();
     if (tab === "deployments") loadDeployments();
-    if (tab === "scaling") loadReplicas();
+    if (tab === "overview" || tab === "scaling") loadReplicas();
     if (tab === "settings" && app) {
       setAuthPassword(app.auth_password || "");
       setPortEdit(app.container_port || 0);
@@ -224,7 +223,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
       {/* Tab content */}
       {tab === "overview" && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card className="p-4 space-y-3">
             <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Configuration</h3>
             <div className="space-y-2 text-[10px] font-mono">
@@ -253,6 +253,74 @@ export function AppDetailPage({ appId }: { appId: number }) {
               </div>
             )}
           </Card>
+          </div>
+
+          {/* Active Replicas */}
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <ServerIcon size={14} className="text-fg" />
+                <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Active Replicas</h3>
+              </div>
+              <Btn size="xs" variant="ghost" onClick={async () => {
+                try {
+                  setReplicas(await get(`/api/apps/${appId}/metrics`));
+                  showToast("Metrics refreshed", "info");
+                } catch {}
+              }}><RefreshCw size={12} /> Refresh Metrics</Btn>
+            </div>
+            {replicas.length === 0 ? (
+              <p className="text-[10px] text-muted font-mono py-4 text-center uppercase tracking-wider">No replicas yet</p>
+            ) : (
+              <Table headers={["ID", "Container", "Server", "Port", "Status", "CPU", "Memory", "CPU (1h)", ""]}>
+                {replicas.map((r: any) => {
+                  const series = metricsHistory
+                    .filter((s: any) => s.replica_id === r.id)
+                    .map((s: any) => s.cpu_percent);
+                  const srv = allServers.find((s: any) => s.id === r.server_id);
+                  return (
+                    <tr key={r.id}>
+                      <td className="py-2 px-3 text-fg font-bold">#{r.id}</td>
+                      <td className="py-2 px-3 text-fg-dim">{r.container_name}</td>
+                      <td className="py-2 px-3 text-fg-dim text-[9px]">{srv?.name || `srv#${r.server_id}`}</td>
+                      <td className="py-2 px-3 text-fg-dim">{r.host_port}</td>
+                      <td className="py-2 px-3"><StatusBadge status={r.status} /></td>
+                      <td className="py-2 px-3 text-fg-dim">{r.cpu_percent?.toFixed(1)}%</td>
+                      <td className="py-2 px-3 text-fg-dim">{r.memory_percent?.toFixed(1)}%</td>
+                      <td className="py-2 px-3"><Sparkline values={series} /></td>
+                      <td className="py-2 px-3">
+                        <PermissionGate permission="terminal.access">
+                          <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/replica/${r.id}`; }}>
+                            <Terminal size={12} /> Shell
+                          </Btn>
+                        </PermissionGate>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </Table>
+            )}
+          </Card>
+
+          {/* Recent scaling events */}
+          {scalingEvents.length > 0 && (
+            <Card className="p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <History size={14} className="text-fg" />
+                <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Recent Scaling Events</h3>
+              </div>
+              <Table headers={["When", "Event", "From → To", "Reason"]}>
+                {scalingEvents.slice(0, 20).map((e: any) => (
+                  <tr key={e.id}>
+                    <td className="py-2 px-3 text-muted text-[9px]">{new Date(e.created_at).toLocaleString()}</td>
+                    <td className="py-2 px-3 text-fg font-bold text-[9px] uppercase tracking-wider">{e.event_type}</td>
+                    <td className="py-2 px-3 text-fg-dim">{e.from_count} → {e.to_count}</td>
+                    <td className="py-2 px-3 text-fg-dim text-[9px]">{e.reason || "—"}</td>
+                  </tr>
+                ))}
+              </Table>
+            </Card>
+          )}
         </div>
       )}
 
@@ -320,21 +388,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
       {tab === "scaling" && (
         <div className="space-y-4">
-          <PermissionGate permission="scaling.manage">
-            <div className="flex justify-end">
-              <Btn
-                size="sm"
-                variant={showScaleControls ? "primary" : "ghost"}
-                onClick={() => setShowScaleControls((v) => !v)}
-                title="Show or hide manual scaling and autoscale policy controls"
-              >
-                {showScaleControls ? "Hide controls" : "Configure scaling"}
-              </Btn>
-            </div>
-          </PermissionGate>
-
-          {showScaleControls && (
-          <>
           {/* Manual scale: WHERE to place the next replica */}
           <Card className="p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -476,75 +529,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
               </div>
             )}
           </Card>
-          </>
-          )}
-
-          {/* Replicas table */}
-          <Card className="p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <ServerIcon size={14} className="text-fg" />
-                <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Active Replicas</h3>
-              </div>
-              <Btn size="xs" variant="ghost" onClick={async () => {
-                try {
-                  setReplicas(await get(`/api/apps/${appId}/metrics`));
-                  showToast("Metrics refreshed", "info");
-                } catch {}
-              }}><RefreshCw size={12} /> Refresh Metrics</Btn>
-            </div>
-            {replicas.length === 0 ? (
-              <p className="text-[10px] text-muted font-mono py-4 text-center uppercase tracking-wider">No replicas yet</p>
-            ) : (
-              <Table headers={["ID", "Container", "Server", "Port", "Status", "CPU", "Memory", "CPU (1h)", ""]}>
-                {replicas.map((r: any) => {
-                  const series = metricsHistory
-                    .filter((s: any) => s.replica_id === r.id)
-                    .map((s: any) => s.cpu_percent);
-                  const srv = allServers.find((s: any) => s.id === r.server_id);
-                  return (
-                    <tr key={r.id}>
-                      <td className="py-2 px-3 text-fg font-bold">#{r.id}</td>
-                      <td className="py-2 px-3 text-fg-dim">{r.container_name}</td>
-                      <td className="py-2 px-3 text-fg-dim text-[9px]">{srv?.name || `srv#${r.server_id}`}</td>
-                      <td className="py-2 px-3 text-fg-dim">{r.host_port}</td>
-                      <td className="py-2 px-3"><StatusBadge status={r.status} /></td>
-                      <td className="py-2 px-3 text-fg-dim">{r.cpu_percent?.toFixed(1)}%</td>
-                      <td className="py-2 px-3 text-fg-dim">{r.memory_percent?.toFixed(1)}%</td>
-                      <td className="py-2 px-3"><Sparkline values={series} /></td>
-                      <td className="py-2 px-3">
-                        <PermissionGate permission="terminal.access">
-                          <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/replica/${r.id}`; }}>
-                            <Terminal size={12} /> Shell
-                          </Btn>
-                        </PermissionGate>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </Table>
-            )}
-          </Card>
-
-          {/* Recent scaling events */}
-          {scalingEvents.length > 0 && (
-            <Card className="p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <History size={14} className="text-fg" />
-                <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Recent Scaling Events</h3>
-              </div>
-              <Table headers={["When", "Event", "From → To", "Reason"]}>
-                {scalingEvents.slice(0, 20).map((e: any) => (
-                  <tr key={e.id}>
-                    <td className="py-2 px-3 text-muted text-[9px]">{new Date(e.created_at).toLocaleString()}</td>
-                    <td className="py-2 px-3 text-fg font-bold text-[9px] uppercase tracking-wider">{e.event_type}</td>
-                    <td className="py-2 px-3 text-fg-dim">{e.from_count} → {e.to_count}</td>
-                    <td className="py-2 px-3 text-fg-dim text-[9px]">{e.reason || "—"}</td>
-                  </tr>
-                ))}
-              </Table>
-            </Card>
-          )}
         </div>
       )}
 

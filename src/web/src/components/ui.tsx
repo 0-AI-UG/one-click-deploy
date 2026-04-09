@@ -128,6 +128,7 @@ export function StatusBadge({ status }: { status: string }) {
     s === "running" ? "bg-accent" :
     s === "deploying" ? "bg-accent-amber" :
     s === "paused" ? "bg-alt" :
+    s === "unhealthy" ? "bg-accent-amber" :
     s === "error" || s === "failed" ? "bg-accent-red" :
     "bg-alt";
 

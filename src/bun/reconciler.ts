@@ -170,6 +170,18 @@ async function tick(): Promise<void> {
         await collectReplica(replica, app);
       }
 
+      // Propagate replica health to app status
+      // Only touch apps that are in a "live" state (running/unhealthy), not deploying/paused
+      if (app.status === "running" || app.status === "unhealthy") {
+        const freshReplicas = list.map((r) => db.getReplica(r.id)).filter(Boolean);
+        const allHealthy = freshReplicas.length > 0 && freshReplicas.every((r: any) => r.status === "running");
+        const newStatus = allHealthy ? "running" : "unhealthy";
+        if (newStatus !== app.status) {
+          log("status", `app ${appId}: ${app.status} -> ${newStatus}`);
+          db.updateAppStatus(appId, newStatus);
+        }
+      }
+
       if (app.autoscale_enabled) {
         try {
           await evaluateAutoScale(appId);
