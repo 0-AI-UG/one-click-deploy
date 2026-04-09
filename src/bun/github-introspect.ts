@@ -8,6 +8,8 @@
 // just falls back to the manual fields.
 
 import { parseGitHubRepo, getGitHubPat } from "./github.ts";
+import { validateDeployManifest } from "./validate.ts";
+import type { ParsedManifest } from "../shared/rpc.ts";
 
 export type IntrospectResult = {
   ok: true;
@@ -21,6 +23,7 @@ export type IntrospectResult = {
   suggested_web_service: string | null;
   detected_port: number | null;
   env_vars: Array<{ key: string; value: string }>;
+  manifests: ParsedManifest[];
   notes: string[];
 } | {
   ok: false;
@@ -276,6 +279,7 @@ export async function introspectRepo(url: string): Promise<IntrospectResult> {
       suggested_web_service: null,
       detected_port: null,
       env_vars: [],
+      manifests: [],
       notes: ["We couldn't read the repo tree, so you'll need to fill in the rest manually."],
     };
   }
@@ -285,7 +289,48 @@ export async function introspectRepo(url: string): Promise<IntrospectResult> {
     .map((e: any) => e.path as string);
   if (tree.truncated) notes.push("Repo is large — some files may have been skipped.");
 
-  // 3. Find candidate files
+  // 3. Discover .ocd-deploy.json manifests
+  const manifestPaths = paths
+    .filter((p) => /(^|\/)\.ocd-deploy\.json$/.test(p))
+    .sort((a, b) => a.split("/").length - b.split("/").length); // shallowest first
+
+  if (manifestPaths.length > 10) {
+    notes.push(`Found ${manifestPaths.length} deploy manifests — only the first 10 will be loaded.`);
+  }
+
+  const manifests: ParsedManifest[] = [];
+  const manifestContents = await Promise.all(
+    manifestPaths.slice(0, 10).map((p) => fetchRawFile(owner, repo, default_branch, p, token)),
+  );
+  for (let i = 0; i < manifestContents.length; i++) {
+    const content = manifestContents[i];
+    const mPath = manifestPaths[i];
+    if (!content) {
+      notes.push(`Could not read ${mPath} — skipping.`);
+      continue;
+    }
+    try {
+      const raw = JSON.parse(content);
+      const result = validateDeployManifest(raw);
+      if (!result.ok) {
+        notes.push(`${mPath}: ${result.error} — skipping.`);
+        continue;
+      }
+      const slash = mPath.lastIndexOf("/");
+      const dir = slash >= 0 ? mPath.slice(0, slash) : "";
+      // Resolve relative paths in build
+      const m = result.manifest;
+      if (m.build && dir) {
+        if (m.build.dockerfile) m.build.dockerfile = `${dir}/${m.build.dockerfile}`;
+        if (m.build.compose_file) m.build.compose_file = `${dir}/${m.build.compose_file}`;
+      }
+      manifests.push({ path: mPath, dir, manifest: m });
+    } catch {
+      notes.push(`${mPath} is not valid JSON — skipping.`);
+    }
+  }
+
+  // 4. Find candidate files
   const dockerfiles = paths
     .filter((p) => /(^|\/)Dockerfile(\.[A-Za-z0-9_-]+)?$/.test(p))
     .sort((a, b) => a.split("/").length - b.split("/").length); // shallowest first
@@ -339,6 +384,7 @@ export async function introspectRepo(url: string): Promise<IntrospectResult> {
     suggested_web_service,
     detected_port,
     env_vars,
+    manifests,
     notes,
   };
 }

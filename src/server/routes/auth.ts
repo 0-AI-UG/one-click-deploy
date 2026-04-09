@@ -23,19 +23,19 @@ export async function handleLogin(request: Request): Promise<Response> {
   if (rateLimitResponse) return rateLimitResponse;
 
   try {
-    const body = await request.json() as { email?: string; password?: string };
-    if (!body.email || !body.password) {
+    const body = await request.json() as { username?: string; password?: string };
+    if (!body.username || !body.password) {
       return Response.json(
-        { error: "Email and password are required" },
+        { error: "Username and password are required" },
         { status: 400, headers: corsHeaders },
       );
     }
 
-    const user = db.getUserByEmail(body.email);
-    if (!user) throw new AuthError("Invalid email or password");
+    const user = db.getUserByUsername(body.username);
+    if (!user) throw new AuthError("Invalid username or password");
 
     const valid = await Bun.password.verify(body.password, user.password_hash);
-    if (!valid) throw new AuthError("Invalid email or password");
+    if (!valid) throw new AuthError("Invalid username or password");
 
     // Skip 2FA in dev mode
     if (process.env.SKIP_2FA !== "1") {
@@ -69,14 +69,14 @@ export async function handleLogin(request: Request): Promise<Response> {
     }
 
     // No 2FA required — issue full token
-    const token = await createToken({ userId: user.id, email: user.email });
+    const token = await createToken({ userId: user.id, username: user.username });
     const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(user.id);
     return Response.json(
       {
         token,
         user: {
           id: user.id,
-          email: user.email,
+          username: user.username,
           isAdmin: user.is_admin === 1,
           totpEnabled: user.totp_enabled === 1,
           webauthnEnabled: user.webauthn_enabled === 1,
@@ -93,7 +93,7 @@ export async function handleLogin(request: Request): Promise<Response> {
 /**
  * POST /api/auth/password-reset
  * Self-serve password reset gated by TOTP / backup code.
- * Body: { email, totpCode, newPassword }
+ * Body: { username, totpCode, newPassword }
  * Only works for users with TOTP enabled (no email delivery in this system).
  */
 export async function handlePasswordReset(request: Request): Promise<Response> {
@@ -102,13 +102,13 @@ export async function handlePasswordReset(request: Request): Promise<Response> {
 
   try {
     const body = await request.json() as {
-      email?: string;
+      username?: string;
       totpCode?: string;
       newPassword?: string;
     };
-    if (!body.email || !body.totpCode || !body.newPassword) {
+    if (!body.username || !body.totpCode || !body.newPassword) {
       return Response.json(
-        { error: "Email, 2FA code, and new password are required" },
+        { error: "Username, 2FA code, and new password are required" },
         { status: 400, headers: corsHeaders },
       );
     }
@@ -119,11 +119,11 @@ export async function handlePasswordReset(request: Request): Promise<Response> {
       );
     }
 
-    const user = db.getUserByEmail(body.email);
+    const user = db.getUserByUsername(body.username);
     // Return the same error for unknown user / no TOTP / bad code so we
-    // don't leak which emails exist or which accounts have 2FA.
+    // don't leak which usernames exist or which accounts have 2FA.
     const genericError = Response.json(
-      { error: "Unable to reset password. Check your email and 2FA code." },
+      { error: "Unable to reset password. Check your username and 2FA code." },
       { status: 400, headers: corsHeaders },
     );
     if (!user || !user.totp_enabled) return genericError;
@@ -152,7 +152,7 @@ export async function handleMe(request: Request): Promise<Response> {
       {
         user: {
           id: user.id,
-          email: user.email,
+          username: user.username,
           isAdmin: user.is_admin === 1,
           totpEnabled: user.totp_enabled === 1,
           webauthnEnabled: user.webauthn_enabled === 1,
@@ -223,7 +223,7 @@ export async function handleUpdateMe(request: Request): Promise<Response> {
       {
         user: {
           id: user.id,
-          email: user.email,
+          username: user.username,
           isAdmin: user.is_admin === 1,
           totpEnabled: user.totp_enabled === 1,
           webauthnEnabled: user.webauthn_enabled === 1,

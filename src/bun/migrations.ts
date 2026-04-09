@@ -415,6 +415,41 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE users ADD COLUMN webauthn_enabled INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 19,
+    description: "Rename email to username and strip @domain from existing values",
+    up: (db) => {
+      // SQLite doesn't support RENAME COLUMN on older versions, so use the
+      // recreate-table approach for maximum compatibility.
+      db.run(`CREATE TABLE users_new (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        totp_secret TEXT,
+        totp_enabled INTEGER NOT NULL DEFAULT 0,
+        webauthn_enabled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      // Copy data, stripping @domain from email to produce username.
+      // If two emails would collapse to the same username (unlikely but
+      // possible), the UNIQUE constraint will cause a failure — admin must
+      // resolve manually.
+      db.run(`INSERT INTO users_new (id, username, password_hash, is_admin, totp_secret, totp_enabled, webauthn_enabled, created_at)
+        SELECT id,
+               CASE WHEN INSTR(email, '@') > 0 THEN SUBSTR(email, 1, INSTR(email, '@') - 1) ELSE email END,
+               password_hash, is_admin, totp_secret, totp_enabled, webauthn_enabled, created_at
+        FROM users`);
+
+      db.run("DROP TABLE users");
+      db.run("ALTER TABLE users_new RENAME TO users");
+
+      // Recreate the webauthn FK index (points at users.id — unchanged, but
+      // dropping the old table removed it).
+      db.run("CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id)");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

@@ -22,7 +22,7 @@ export function SetupPage() {
     }).catch(() => {});
   }, []);
   const [form, setForm] = useState({
-    email: "", password: "", confirmPassword: "",
+    username: "", password: "", confirmPassword: "",
     hetzner_api_token: "", github_pat: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
@@ -59,7 +59,7 @@ export function SetupPage() {
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const validateStep1 = () => {
-    if (!form.email || !form.password) { showToast("Email and password are required", "error"); return false; }
+    if (!form.username || !form.password) { showToast("Username and password are required", "error"); return false; }
     if (form.password.length < 8) { showToast("Password must be at least 8 characters", "error"); return false; }
     if (form.password !== form.confirmPassword) { showToast("Passwords don't match", "error"); return false; }
     return true;
@@ -125,8 +125,8 @@ export function SetupPage() {
                 <h3 className="font-mono font-bold text-sm text-fg uppercase">Admin Account</h3>
               </div>
               <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Email</label>
-                <input type="email" value={form.email} onChange={set("email")} placeholder="admin@example.com" autoFocus />
+                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Username</label>
+                <input type="text" value={form.username} onChange={set("username")} placeholder="admin" autoFocus />
               </div>
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Password</label>

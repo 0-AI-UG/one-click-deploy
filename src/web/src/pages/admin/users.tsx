@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { get, post, del, put } from "../../api/client.ts";
 import { Card, Btn, Table, Spinner, showToast, confirm } from "../../components/ui.tsx";
-import { Users, Plus, Trash2, Shield, ShieldCheck, Key, Lock, ShieldAlert } from "lucide-react";
+import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert } from "lucide-react";
 
 type User = {
-  id: string; email: string; isAdmin: boolean; totpEnabled: boolean;
+  id: string; username: string; isAdmin: boolean; totpEnabled: boolean;
   webauthnEnabled: boolean; permissions: string[]; createdAt: string;
 };
 
@@ -13,11 +13,7 @@ export function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ email: "", password: "" });
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [totpCode, setTotpCode] = useState("");
-  const [savingPassword, setSavingPassword] = useState(false);
+  const [form, setForm] = useState({ username: "", password: "" });
   const [require2fa, setRequire2fa] = useState(true);
   const [savingRequire2fa, setSavingRequire2fa] = useState(false);
 
@@ -55,13 +51,13 @@ export function UsersPage() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.email || !form.password) return showToast("Email and password required", "error");
+    if (!form.username || !form.password) return showToast("Username and password required", "error");
     setCreating(true);
     try {
       await post("/api/admin/users", form);
       showToast("User created", "success");
       setShowCreate(false);
-      setForm({ email: "", password: "" });
+      setForm({ username: "", password: "" });
       load();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -70,26 +66,8 @@ export function UsersPage() {
     }
   };
 
-  const changeMyPassword = async () => {
-    if (!currentPassword) return showToast("Current password is required", "error");
-    if (!newPassword || newPassword.length < 8) return showToast("New password must be at least 8 characters", "error");
-    if (!totpCode) return showToast("2FA code is required", "error");
-    setSavingPassword(true);
-    try {
-      await put("/api/me", { currentPassword, newPassword, totpCode });
-      showToast("Password changed", "success");
-      setCurrentPassword("");
-      setNewPassword("");
-      setTotpCode("");
-    } catch (err: any) {
-      showToast(err.message, "error");
-    } finally {
-      setSavingPassword(false);
-    }
-  };
-
   const handleDelete = async (user: User) => {
-    if (!await confirm("Delete User", `Delete user "${user.email}"? This cannot be undone.`, true)) return;
+    if (!await confirm("Delete User", `Delete user "${user.username}"? This cannot be undone.`, true)) return;
     try {
       await del(`/api/admin/users/${user.id}`);
       showToast("User deleted", "success");
@@ -119,8 +97,8 @@ export function UsersPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">New User</h3>
           <form onSubmit={handleCreate} className="flex gap-3 items-end">
             <div className="flex-1">
-              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Email</label>
-              <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user@example.com" required />
+              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Username</label>
+              <input type="text" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="username" required />
             </div>
             <div className="flex-1">
               <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Password</label>
@@ -167,11 +145,11 @@ export function UsersPage() {
       </Card>
 
       <Card className="overflow-hidden">
-        <Table headers={["Email", "Role", "2FA", "Permissions", "Created", ""]}>
+        <Table headers={["Username", "Role", "2FA", "Permissions", "Created", ""]}>
           {users.map((u) => (
             <tr key={u.id} className="hover:bg-alt/50 cursor-pointer" onClick={() => { window.location.hash = `#/admin/users/${u.id}`; }}>
               <td className="py-2.5 px-3">
-                <span className="text-fg font-bold">{u.email}</span>
+                <span className="text-fg font-bold">{u.username}</span>
               </td>
               <td className="py-2.5 px-3">
                 {u.isAdmin ? (
@@ -213,30 +191,6 @@ export function UsersPage() {
         </Table>
       </Card>
 
-      {/* Change My Password */}
-      <Card className="p-5 mt-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Lock size={14} className="text-fg" />
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Change My Password</h3>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div>
-            <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Current Password</label>
-            <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="••••••••" />
-          </div>
-          <div>
-            <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">New Password</label>
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Min 8 characters" />
-          </div>
-          <div>
-            <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">2FA Code</label>
-            <input type="text" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} placeholder="6-digit code" maxLength={6} inputMode="numeric" />
-          </div>
-        </div>
-        <div className="mt-3">
-          <Btn variant="default" loading={savingPassword} onClick={changeMyPassword}>Change Password</Btn>
-        </div>
-      </Card>
     </div>
   );
 }

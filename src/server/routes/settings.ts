@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission, requireAdmin } from "../lib/permissions.ts";
+import { requireAdmin } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { secretStore, maskToken } from "../../bun/secret-store.ts";
@@ -8,7 +8,7 @@ import { hetznerApi } from "../../bun/hetzner/api.ts";
 
 export async function handleGetSettings(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "settings.manage");
+    await requireAdmin(request);
     const s = db.getSettings();
     const tokens = await secretStore.getTokens();
     return Response.json(
@@ -29,7 +29,7 @@ export async function handleGetSettings(request: Request): Promise<Response> {
 
 export async function handleGetServerTypes(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "settings.manage");
+    await requireAdmin(request);
     const data = await hetznerApi("/server_types?per_page=50");
     const types: Array<{ name: string; description: string; cores: number; memory: number; disk: number; locations: string[] }> = [];
     for (const t of data.server_types ?? []) {
@@ -54,13 +54,11 @@ export async function handleGetServerTypes(request: Request): Promise<Response> 
 
 export async function handleSaveSettings(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "settings.manage");
+    await requireAdmin(request);
     const settings = await request.json() as Record<string, unknown>;
 
     for (const [key, rawValue] of Object.entries(settings)) {
       if (key === "require_2fa") {
-        // Admin-only: changing the global 2FA policy.
-        await requireAdmin(request);
         db.saveSetting(key, rawValue ? "1" : "0");
         continue;
       }

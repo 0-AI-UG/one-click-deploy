@@ -135,6 +135,36 @@ export type PanelDeployment = {
   created_at: string;
 };
 
+export type DeployManifest = {
+  $schema?: number;
+  name: string;
+  description?: string;
+  icon?: string;
+  build?: {
+    dockerfile?: string;
+    container_port?: number;
+    compose_file?: string;
+    compose_web_service?: string;
+  };
+  env?: Array<{
+    key: string;
+    description?: string;
+    default?: string;
+    required?: boolean;
+    secret?: boolean;
+  }>;
+  volume?: { size?: number; path?: string };
+  webhook?: { enabled?: boolean; branch?: string; path?: string };
+  suggested_app_name?: string;
+  replicas?: number;
+};
+
+export type ParsedManifest = {
+  path: string;
+  dir: string;
+  manifest: DeployManifest;
+};
+
 export type Settings = {
   hetzner_api_token: string;
   github_pat: string;

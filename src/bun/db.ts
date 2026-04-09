@@ -798,7 +798,7 @@ export function nextReplicaHostPort(serverId: number): number {
 
 export type UserRow = {
   id: string;
-  email: string;
+  username: string;
   password_hash: string;
   is_admin: number;
   totp_secret: string | null;
@@ -812,8 +812,8 @@ export function getUserCount(): number {
   return row?.count ?? 0;
 }
 
-export function getUserByEmail(email: string): UserRow | null {
-  return db.query("SELECT * FROM users WHERE email = ?").get(email) as UserRow | null;
+export function getUserByUsername(username: string): UserRow | null {
+  return db.query("SELECT * FROM users WHERE username = ?").get(username) as UserRow | null;
 }
 
 export function getUserById(id: string): UserRow | null {
@@ -821,12 +821,12 @@ export function getUserById(id: string): UserRow | null {
 }
 
 export function getUsers(): UserRow[] {
-  return db.query("SELECT id, email, is_admin, totp_enabled, created_at FROM users ORDER BY created_at").all() as UserRow[];
+  return db.query("SELECT id, username, is_admin, totp_enabled, webauthn_enabled, created_at FROM users ORDER BY created_at").all() as UserRow[];
 }
 
-export function insertUser(user: { id: string; email: string; password_hash: string; is_admin?: boolean }): void {
-  db.query("INSERT INTO users (id, email, password_hash, is_admin) VALUES (?, ?, ?, ?)").run(
-    user.id, user.email, user.password_hash, user.is_admin ? 1 : 0,
+export function insertUser(user: { id: string; username: string; password_hash: string; is_admin?: boolean }): void {
+  db.query("INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)").run(
+    user.id, user.username, user.password_hash, user.is_admin ? 1 : 0,
   );
 }
 

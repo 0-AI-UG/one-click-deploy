@@ -5,7 +5,7 @@ import { showToast, Spinner } from "../components/ui.tsx";
 import { Terminal, ArrowRight } from "lucide-react";
 
 export function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -13,7 +13,7 @@ export function LoginPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await post("/api/auth/login", { email, password });
+      const res = await post("/api/auth/login", { username, password });
       if (res.requires2FA) {
         setTempToken(res.tempToken, res.methods);
         window.location.hash = "#/2fa-verify";
@@ -42,8 +42,8 @@ export function LoginPage() {
           <h2 className="font-mono text-sm font-bold text-fg uppercase mb-4">Sign In</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Email</label>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@example.com" required autoFocus />
+              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Username</label>
+              <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" required autoFocus />
             </div>
             <div>
               <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Password</label>

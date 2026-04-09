@@ -12,7 +12,7 @@ export async function handleListUsers(request: Request): Promise<Response> {
       {
         users: users.map((u) => ({
           id: u.id,
-          email: u.email,
+          username: u.username,
           isAdmin: u.is_admin === 1,
           totpEnabled: u.totp_enabled === 1,
           webauthnEnabled: u.webauthn_enabled === 1,
@@ -30,11 +30,11 @@ export async function handleListUsers(request: Request): Promise<Response> {
 export async function handleCreateUser(request: Request): Promise<Response> {
   try {
     await requireAdmin(request);
-    const body = await request.json() as { email?: string; password?: string; permissions?: string[] };
+    const body = await request.json() as { username?: string; password?: string; permissions?: string[] };
 
-    if (!body.email || !body.password) {
+    if (!body.username || !body.password) {
       return Response.json(
-        { error: "Email and password are required" },
+        { error: "Username and password are required" },
         { status: 400, headers: corsHeaders },
       );
     }
@@ -46,17 +46,17 @@ export async function handleCreateUser(request: Request): Promise<Response> {
       );
     }
 
-    const existing = db.getUserByEmail(body.email);
+    const existing = db.getUserByUsername(body.username);
     if (existing) {
       return Response.json(
-        { error: "Email already registered" },
+        { error: "Username already taken" },
         { status: 409, headers: corsHeaders },
       );
     }
 
     const id = crypto.randomUUID();
     const passwordHash = await Bun.password.hash(body.password, "bcrypt");
-    db.insertUser({ id, email: body.email, password_hash: passwordHash });
+    db.insertUser({ id, username: body.username, password_hash: passwordHash });
 
     if (body.permissions?.length) {
       const validPerms = body.permissions.filter((p) =>
@@ -68,7 +68,7 @@ export async function handleCreateUser(request: Request): Promise<Response> {
     return Response.json(
       {
         id,
-        email: body.email,
+        username: body.username,
         isAdmin: false,
         permissions: body.permissions || [],
         createdAt: new Date().toISOString(),

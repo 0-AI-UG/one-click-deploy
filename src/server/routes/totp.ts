@@ -12,13 +12,13 @@ import * as db from "../../bun/db.ts";
  * Consumes the backup code on match. Returns true if accepted.
  */
 export async function verifyTotpOrBackupCode(
-  user: { id: string; email: string },
+  user: { id: string; username: string },
   code: string,
 ): Promise<boolean> {
   const secret = db.getTotpSecret(user.id);
   if (!secret) return false;
 
-  const totp = createTOTP(secret, user.email);
+  const totp = createTOTP(secret, user.username);
   const delta = totp.validate({ token: code, window: 1 });
   if (delta !== null) return true;
 
@@ -35,10 +35,10 @@ export async function verifyTotpOrBackupCode(
   return false;
 }
 
-export function createTOTP(secret: string, email: string): TOTP {
+export function createTOTP(secret: string, username: string): TOTP {
   return new TOTP({
     issuer: "OneClickDeploy",
-    label: email,
+    label: username,
     algorithm: "SHA1",
     digits: 6,
     period: 30,
@@ -88,7 +88,7 @@ export async function handleTotpSetup(request: Request): Promise<Response> {
     const secret = new Secret({ size: 20 });
     const totp = new TOTP({
       issuer: "OneClickDeploy",
-      label: user.email,
+      label: user.username,
       algorithm: "SHA1",
       digits: 6,
       period: 30,
@@ -131,7 +131,7 @@ export async function handleTotpConfirm(request: Request): Promise<Response> {
       );
     }
 
-    const totp = createTOTP(secret, user.email);
+    const totp = createTOTP(secret, user.username);
     const delta = totp.validate({ token: body.code, window: 1 });
     if (delta === null) {
       return Response.json(
@@ -179,14 +179,14 @@ export async function handleTotpLogin(request: Request): Promise<Response> {
     if (!secret) throw new AuthError("TOTP not configured");
 
     // Try TOTP code
-    const totp = createTOTP(secret, user.email);
+    const totp = createTOTP(secret, user.username);
     const delta = totp.validate({ token: body.code, window: 1 });
 
     if (delta !== null) {
-      const token = await createToken({ userId: user.id, email: user.email });
+      const token = await createToken({ userId: user.id, username: user.username });
       const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
       return Response.json(
-        { token, user: { id: user.id, email: user.email, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions } },
+        { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions } },
         { headers: corsHeaders },
       );
     }
@@ -198,10 +198,10 @@ export async function handleTotpLogin(request: Request): Promise<Response> {
       const match = await Bun.password.verify(normalizedCode, bc.code_hash);
       if (match) {
         db.markBackupCodeUsed(bc.id);
-        const token = await createToken({ userId: user.id, email: user.email });
+        const token = await createToken({ userId: user.id, username: user.username });
         const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
         return Response.json(
-          { token, user: { id: user.id, email: user.email, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions } },
+          { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions } },
           { headers: corsHeaders },
         );
       }
@@ -244,7 +244,7 @@ export async function handleTotpSetupFromLogin(request: Request): Promise<Respon
     const secret = new Secret({ size: 20 });
     const totp = new TOTP({
       issuer: "OneClickDeploy",
-      label: user.email,
+      label: user.username,
       algorithm: "SHA1",
       digits: 6,
       period: 30,
@@ -290,7 +290,7 @@ export async function handleTotpConfirmFromLogin(request: Request): Promise<Resp
       );
     }
 
-    const totp = createTOTP(secret, user.email);
+    const totp = createTOTP(secret, user.username);
     const delta = totp.validate({ token: body.code, window: 1 });
     if (delta === null) {
       return Response.json(
@@ -308,11 +308,11 @@ export async function handleTotpConfirmFromLogin(request: Request): Promise<Resp
     db.insertBackupCodes(userId, codeHashes);
 
     // Issue real JWT since setup is complete
-    const token = await createToken({ userId: user.id, email: user.email });
+    const token = await createToken({ userId: user.id, username: user.username });
     const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
 
     return Response.json(
-      { token, user: { id: user.id, email: user.email, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions }, backupCodes },
+      { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions }, backupCodes },
       { headers: corsHeaders },
     );
   } catch (error) {
@@ -354,7 +354,7 @@ export async function handleTotpDisable(request: Request): Promise<Response> {
     const secret = db.getTotpSecret(userId);
     if (!secret) throw new AuthError("TOTP not configured");
 
-    const totp = createTOTP(secret, user.email);
+    const totp = createTOTP(secret, user.username);
     const delta = totp.validate({ token: body.code, window: 1 });
     if (delta === null) {
       return Response.json(
@@ -423,14 +423,14 @@ export async function handleTotpResetFromLogin(request: Request): Promise<Respon
 
     // If user still has webauthn, they still have 2FA — issue real JWT
     if (user.webauthn_enabled) {
-      const token = await createToken({ userId: user.id, email: user.email });
+      const token = await createToken({ userId: user.id, username: user.username });
       const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
       return Response.json(
         {
           token,
           user: {
             id: user.id,
-            email: user.email,
+            username: user.username,
             isAdmin: user.is_admin === 1,
             totpEnabled: false,
             webauthnEnabled: true,

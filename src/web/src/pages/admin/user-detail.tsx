@@ -127,7 +127,7 @@ export function UserDetailPage({ userId }: { userId: string }) {
       <div className="flex items-center gap-3 mb-6">
         <Btn variant="ghost" onClick={() => { window.location.hash = "#/admin/users"; }}><ArrowLeft size={14} /></Btn>
         <div>
-          <h1 className="font-mono font-bold text-sm text-fg uppercase">{user.email}</h1>
+          <h1 className="font-mono font-bold text-sm text-fg uppercase">{user.username}</h1>
           <p className="text-[9px] text-muted font-mono mt-0.5 uppercase tracking-wider">
             {user.isAdmin ? "Admin — has all permissions" : "User — permissions managed below"}
           </p>

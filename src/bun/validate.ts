@@ -145,6 +145,91 @@ export function validateComposeWebService(name: string): ValidationResult<string
   return { valid: true, value: trimmed };
 }
 
+export function validateDeployManifest(
+  raw: unknown,
+): { ok: true; manifest: import("../shared/rpc.ts").DeployManifest } | { ok: false; error: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    return { ok: false, error: "Manifest must be a JSON object" };
+
+  const obj = raw as Record<string, unknown>;
+
+  if ("$schema" in obj && obj.$schema !== 1)
+    return { ok: false, error: "Unsupported $schema version (expected 1)" };
+
+  if (typeof obj.name !== "string" || !obj.name.trim())
+    return { ok: false, error: '"name" is required and must be a non-empty string' };
+
+  if ("description" in obj && typeof obj.description !== "string")
+    return { ok: false, error: '"description" must be a string' };
+
+  if ("icon" in obj && typeof obj.icon !== "string")
+    return { ok: false, error: '"icon" must be a string' };
+
+  // build
+  if ("build" in obj && obj.build != null) {
+    if (typeof obj.build !== "object" || Array.isArray(obj.build))
+      return { ok: false, error: '"build" must be an object' };
+    const b = obj.build as Record<string, unknown>;
+    if ("dockerfile" in b && typeof b.dockerfile !== "string")
+      return { ok: false, error: '"build.dockerfile" must be a string' };
+    if ("compose_file" in b && typeof b.compose_file !== "string")
+      return { ok: false, error: '"build.compose_file" must be a string' };
+    if ("compose_web_service" in b && typeof b.compose_web_service !== "string")
+      return { ok: false, error: '"build.compose_web_service" must be a string' };
+    if ("container_port" in b) {
+      if (typeof b.container_port !== "number" || !Number.isInteger(b.container_port) || b.container_port < 1 || b.container_port > 65535)
+        return { ok: false, error: '"build.container_port" must be an integer 1–65535' };
+    }
+    // Reject .. in paths
+    for (const key of ["dockerfile", "compose_file"] as const) {
+      if (typeof b[key] === "string" && (b[key] as string).includes(".."))
+        return { ok: false, error: `"build.${key}" must not contain ".."` };
+    }
+  }
+
+  // env
+  if ("env" in obj && obj.env != null) {
+    if (!Array.isArray(obj.env))
+      return { ok: false, error: '"env" must be an array' };
+    for (let i = 0; i < obj.env.length; i++) {
+      const e = obj.env[i];
+      if (!e || typeof e !== "object")
+        return { ok: false, error: `env[${i}] must be an object` };
+      if (typeof e.key !== "string" || !ENV_KEY_PATTERN.test(e.key))
+        return { ok: false, error: `env[${i}].key "${e.key ?? ""}" is invalid` };
+      if ("description" in e && typeof e.description !== "string")
+        return { ok: false, error: `env[${i}].description must be a string` };
+      if ("default" in e && typeof e.default !== "string")
+        return { ok: false, error: `env[${i}].default must be a string` };
+    }
+  }
+
+  // volume
+  if ("volume" in obj && obj.volume != null) {
+    if (typeof obj.volume !== "object" || Array.isArray(obj.volume))
+      return { ok: false, error: '"volume" must be an object' };
+    const v = obj.volume as Record<string, unknown>;
+    if ("size" in v && (typeof v.size !== "number" || v.size < 1))
+      return { ok: false, error: '"volume.size" must be a positive number' };
+    if ("path" in v && (typeof v.path !== "string" || !v.path.startsWith("/")))
+      return { ok: false, error: '"volume.path" must start with "/"' };
+  }
+
+  // webhook
+  if ("webhook" in obj && obj.webhook != null) {
+    if (typeof obj.webhook !== "object" || Array.isArray(obj.webhook))
+      return { ok: false, error: '"webhook" must be an object' };
+  }
+
+  if ("suggested_app_name" in obj && typeof obj.suggested_app_name !== "string")
+    return { ok: false, error: '"suggested_app_name" must be a string' };
+
+  if ("replicas" in obj && (typeof obj.replicas !== "number" || obj.replicas < 1))
+    return { ok: false, error: '"replicas" must be a positive number' };
+
+  return { ok: true, manifest: raw as import("../shared/rpc.ts").DeployManifest };
+}
+
 export function validateDeployRequest(req: {
   app_name: string;
   domain?: string;

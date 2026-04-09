@@ -19,6 +19,7 @@ import { ResourcesPage } from "./pages/resources.tsx";
 import { SettingsPage } from "./pages/settings.tsx";
 import { UsersPage } from "./pages/admin/users.tsx";
 import { UserDetailPage } from "./pages/admin/user-detail.tsx";
+import { AdminSettingsPage } from "./pages/admin/settings.tsx";
 import { TerminalPage } from "./pages/terminal.tsx";
 
 function useHash() {
@@ -127,6 +128,8 @@ export function App() {
     content = <SettingsPage />;
   } else if (hash === "#/admin/users") {
     content = <UsersPage />;
+  } else if (hash === "#/admin/settings") {
+    content = <AdminSettingsPage />;
   } else if (hash.startsWith("#/terminal/")) {
     const parts = hash.split("/");
     const kind = parts[2] as "server" | "replica";

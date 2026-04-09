@@ -1,11 +1,11 @@
 import { useAuth, logout } from "../stores/auth.ts";
-import { Server, Rocket, HardDrive, Settings, Users, LogOut, Terminal } from "lucide-react";
+import { Server, Rocket, HardDrive, User, Users, LogOut, Terminal } from "lucide-react";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
   { hash: "#/deploy", label: "Deploy", icon: Rocket, match: /^#\/deploy/ },
   { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
-  { hash: "#/settings", label: "Settings", icon: Settings, match: /^#\/settings/, permission: "settings.manage" },
+  { hash: "#/settings", label: "Account", icon: User, match: /^#\/settings/ },
 ];
 
 export function Nav() {
@@ -58,7 +58,7 @@ export function Nav() {
         </div>
         <div className="flex items-center gap-3">
           <span className="font-mono text-[10px] text-fg/70">
-            {user?.email}
+            {user?.username}
             {user?.isAdmin && (
               <span className="ml-1.5 font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5 bg-fg text-accent">
                 admin

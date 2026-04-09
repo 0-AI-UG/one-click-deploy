@@ -60,6 +60,7 @@ import {
   handleGetPanelLogs,
   handleGetPanelDeployments,
 } from "./routes/panel.ts";
+import { handleLlmTxt } from "./routes/llm-txt.ts";
 import { startReconciler } from "../bun/reconciler.ts";
 import { tryTerminalUpgrade, terminalWsHandlers } from "./routes/terminal.ts";
 
@@ -149,6 +150,9 @@ if (process.env.OCD_AUTO_DEPLOY) {
 export const server = Bun.serve({
   port: PORT,
   routes: {
+    // --- LLM-readable manifest docs (public) ---
+    "/llm.txt": { GET: () => handleLlmTxt() },
+
     // --- Setup ---
     "/api/setup/status": { GET: (req: Request) => handleSetupStatus(req) },
     "/api/setup/complete": { POST: (req: Request) => handleSetupComplete(req) },

@@ -4,7 +4,7 @@ import { getUserById } from "../../bun/db.ts";
 
 export interface TokenPayload {
   userId: string;
-  email: string;
+  username: string;
 }
 
 const rawSecret = new TextEncoder().encode(

@@ -76,7 +76,7 @@ function userResponse(user: any) {
   const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(user.id);
   return {
     id: user.id,
-    email: user.email,
+    username: user.username,
     isAdmin: user.is_admin === 1,
     totpEnabled: user.totp_enabled === 1,
     webauthnEnabled: user.webauthn_enabled === 1,
@@ -101,8 +101,8 @@ export async function handleWebAuthnRegisterOptions(request: Request): Promise<R
     const options = await generateRegistrationOptions({
       rpName: rp.rpName,
       rpID: rp.rpID,
-      userName: user.email,
-      userDisplayName: user.email,
+      userName: user.username,
+      userDisplayName: user.username,
       attestationType: "none",
       authenticatorSelection: {
         residentKey: "preferred",
@@ -206,8 +206,8 @@ export async function handleWebAuthnRegisterOptionsFromLogin(request: Request): 
     const options = await generateRegistrationOptions({
       rpName: rp.rpName,
       rpID: rp.rpID,
-      userName: user.email,
-      userDisplayName: user.email,
+      userName: user.username,
+      userDisplayName: user.username,
       attestationType: "none",
       authenticatorSelection: {
         residentKey: "preferred",
@@ -280,7 +280,7 @@ export async function handleWebAuthnRegisterVerifyFromLogin(request: Request): P
     db.insertBackupCodes(userId, codeHashes);
 
     // Issue real JWT
-    const token = await createToken({ userId: user.id, email: user.email });
+    const token = await createToken({ userId: user.id, username: user.username });
 
     return Response.json(
       { token, user: userResponse(db.getUserById(userId)!), backupCodes },
@@ -374,7 +374,7 @@ export async function handleWebAuthnLoginVerify(request: Request): Promise<Respo
 
     db.updateWebAuthnCounter(storedCredential.id, verification.authenticationInfo.newCounter);
 
-    const token = await createToken({ userId: user.id, email: user.email });
+    const token = await createToken({ userId: user.id, username: user.username });
     return Response.json(
       { token, user: userResponse(user) },
       { headers: corsHeaders },

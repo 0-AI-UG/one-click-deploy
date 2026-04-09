@@ -11,8 +11,42 @@ import {
   Loader2,
   Check,
   AlertTriangle,
+  Package,
+  Settings2,
 } from "lucide-react";
 import { startDeploy } from "../stores/deploy-progress.ts";
+
+type ManifestEnvDef = {
+  key: string;
+  description?: string;
+  default?: string;
+  required?: boolean;
+  secret?: boolean;
+};
+
+type DeployManifest = {
+  $schema?: number;
+  name: string;
+  description?: string;
+  icon?: string;
+  build?: {
+    dockerfile?: string;
+    container_port?: number;
+    compose_file?: string;
+    compose_web_service?: string;
+  };
+  env?: ManifestEnvDef[];
+  volume?: { size?: number; path?: string };
+  webhook?: { enabled?: boolean; branch?: string; path?: string };
+  suggested_app_name?: string;
+  replicas?: number;
+};
+
+type ParsedManifest = {
+  path: string;
+  dir: string;
+  manifest: DeployManifest;
+};
 
 type IntrospectResult =
   | {
@@ -27,6 +61,7 @@ type IntrospectResult =
       suggested_web_service: string | null;
       detected_port: number | null;
       env_vars: Array<{ key: string; value: string }>;
+      manifests: ParsedManifest[];
       notes: string[];
     }
   | { ok: false; error: string; suggested_app_name?: string };
@@ -103,6 +138,11 @@ export function DeployPage() {
   const [revealed, setRevealed] = useState(false); // shows the receipt
   const introspectSeq = useRef(0);
 
+  // Manifest state: index into introspect.manifests, null = manual config
+  const [selectedManifest, setSelectedManifest] = useState<number | null>(null);
+  // Manifest env metadata (descriptions, required, secret flags)
+  const [manifestEnvDefs, setManifestEnvDefs] = useState<ManifestEnvDef[]>([]);
+
   const [form, setForm] = useState({
     app_name: "",
     git_repo: "",
@@ -119,6 +159,80 @@ export function DeployPage() {
     compose_file: "",
     compose_web_service: "",
   });
+
+  // Apply a manifest's values onto the form, layering on top of base introspect.
+  function applyManifest(idx: number, result: IntrospectResult & { ok: true }) {
+    const pm = result.manifests[idx];
+    if (!pm) return;
+    const m = pm.manifest;
+
+    setSelectedManifest(idx);
+    setForm((f) => ({
+      ...f,
+      app_name: m.suggested_app_name || f.app_name || result.suggested_app_name,
+      container_port: m.build?.container_port
+        ? String(m.build.container_port)
+        : result.detected_port
+          ? String(result.detected_port)
+          : f.container_port,
+      dockerfile_path: m.build?.dockerfile || f.dockerfile_path,
+      compose_file: m.build?.compose_file || f.compose_file,
+      compose_web_service: m.build?.compose_web_service || f.compose_web_service,
+      volume_size: m.volume?.size ? String(m.volume.size) : f.volume_size,
+      volume_path: m.volume?.path || f.volume_path,
+      webhook_enabled: m.webhook?.enabled ?? f.webhook_enabled,
+      webhook_branch: m.webhook?.branch || result.default_branch,
+      webhook_path: m.webhook?.path || f.webhook_path,
+      replicas: m.replicas ? String(m.replicas) : f.replicas,
+    }));
+
+    // Hydrate env from manifest definitions
+    if (m.env && m.env.length > 0) {
+      setManifestEnvDefs(m.env);
+      setEnvValues(() => {
+        const next: Record<string, string> = {};
+        for (const e of m.env!) next[e.key] = e.default ?? "";
+        return next;
+      });
+    } else {
+      setManifestEnvDefs([]);
+      // Fall back to .env.example vars
+      if (result.env_vars.length > 0) {
+        const next: Record<string, string> = {};
+        for (const { key, value } of result.env_vars) next[key] = value;
+        setEnvValues(next);
+      } else {
+        setEnvValues({});
+      }
+    }
+  }
+
+  // Switch to manual mode — reset to base introspect values.
+  function clearManifest(result: IntrospectResult & { ok: true }) {
+    setSelectedManifest(null);
+    setManifestEnvDefs([]);
+    setForm((f) => ({
+      ...f,
+      app_name: f.app_name || result.suggested_app_name,
+      container_port: result.detected_port ? String(result.detected_port) : "3000",
+      dockerfile_path: result.dockerfiles[0] ?? "",
+      compose_file: result.compose_file ?? "",
+      compose_web_service: result.suggested_web_service ?? "",
+      webhook_branch: result.default_branch,
+      volume_size: "",
+      volume_path: "/data",
+      webhook_enabled: false,
+      webhook_path: "",
+      replicas: "1",
+    }));
+    if (result.env_vars.length > 0) {
+      const next: Record<string, string> = {};
+      for (const { key, value } of result.env_vars) next[key] = value;
+      setEnvValues(next);
+    } else {
+      setEnvValues({});
+    }
+  }
 
   // Debounced auto-introspect when the user pastes/types a URL that looks
   // like a GitHub repo. Each call increments a seq so out-of-order responses
@@ -150,31 +264,38 @@ export function DeployPage() {
         setIntrospect(result);
         setRevealed(true);
         if (result.ok) {
-          // Hydrate the form with detected values, but don't clobber anything
-          // the user has already typed by hand.
-          setForm((f) => ({
-            ...f,
-            app_name: f.app_name || result.suggested_app_name,
-            container_port:
-              f.container_port === "3000" && result.detected_port
-                ? String(result.detected_port)
-                : f.container_port,
-            dockerfile_path: f.dockerfile_path || (result.dockerfiles[0] ?? ""),
-            compose_file: f.compose_file || (result.compose_file ?? ""),
-            compose_web_service:
-              f.compose_web_service || (result.suggested_web_service ?? ""),
-            webhook_branch:
-              f.webhook_branch === "main" ? result.default_branch : f.webhook_branch,
-          }));
-          if (result.env_vars.length > 0) {
-            setEnvValues((prev) => {
-              const next = { ...prev };
-              for (const { key, value } of result.env_vars) {
-                if (!(key in next)) next[key] = value;
-              }
-              return next;
-            });
+          // If manifests found, auto-select the first one (or show picker for multiple)
+          if (result.manifests.length === 1) {
+            applyManifest(0, result);
+          } else if (result.manifests.length === 0) {
+            // No manifests — hydrate form with detected values (existing behavior)
+            setSelectedManifest(null);
+            setManifestEnvDefs([]);
+            setForm((f) => ({
+              ...f,
+              app_name: f.app_name || result.suggested_app_name,
+              container_port:
+                f.container_port === "3000" && result.detected_port
+                  ? String(result.detected_port)
+                  : f.container_port,
+              dockerfile_path: f.dockerfile_path || (result.dockerfiles[0] ?? ""),
+              compose_file: f.compose_file || (result.compose_file ?? ""),
+              compose_web_service:
+                f.compose_web_service || (result.suggested_web_service ?? ""),
+              webhook_branch:
+                f.webhook_branch === "main" ? result.default_branch : f.webhook_branch,
+            }));
+            if (result.env_vars.length > 0) {
+              setEnvValues((prev) => {
+                const next = { ...prev };
+                for (const { key, value } of result.env_vars) {
+                  if (!(key in next)) next[key] = value;
+                }
+                return next;
+              });
+            }
           }
+          // Multiple manifests: don't auto-select, show picker
         } else if (result.suggested_app_name) {
           setForm((f) => ({ ...f, app_name: f.app_name || result.suggested_app_name! }));
         }
@@ -209,6 +330,13 @@ export function DeployPage() {
       return showToast("Hold on — still peeking at the repo", "info");
     if (!form.app_name || !form.git_repo)
       return showToast("App name and git repo are required", "error");
+
+    // Validate required manifest env vars
+    if (manifestEnvDefs.length > 0) {
+      const missing = manifestEnvDefs.filter((e) => e.required && !envValues[e.key]?.trim());
+      if (missing.length > 0)
+        return showToast(`Required: ${missing.map((e) => e.key).join(", ")}`, "error");
+    }
 
     const env: Record<string, string> = { ...envValues };
     extraEnv.forEach((v) => {
@@ -251,7 +379,16 @@ export function DeployPage() {
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>
         </div>
         <p className="text-fg-dim text-[12px]">
-          Paste a GitHub repo. We'll figure out the rest.
+          Paste a GitHub repo. We'll figure out the rest.{" "}
+          <a
+            href="/llm.txt"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-fg transition-colors"
+          >
+            Add a deploy manifest
+          </a>{" "}
+          for one-click setup.
         </p>
       </div>
 
@@ -281,11 +418,17 @@ export function DeployPage() {
               <>
                 <Check size={12} strokeWidth={3} className="text-fg bg-accent border-2 border-fg" />
                 <span className="text-fg">
-                  Found {detected.dockerfiles.length > 0 ? "Dockerfile" : detected.compose_file ? "compose" : "repo"}
-                  {detected.detected_port ? ` · port ${detected.detected_port}` : ""}
-                  {detected.env_vars.length > 0
-                    ? ` · ${detected.env_vars.length} env var${detected.env_vars.length === 1 ? "" : "s"}`
-                    : ""}
+                  {detected.manifests.length > 0
+                    ? detected.manifests.length === 1
+                      ? `Deploy manifest found`
+                      : `${detected.manifests.length} deploy manifests found`
+                    : <>
+                        Found {detected.dockerfiles.length > 0 ? "Dockerfile" : detected.compose_file ? "compose" : "repo"}
+                        {detected.detected_port ? ` · port ${detected.detected_port}` : ""}
+                        {detected.env_vars.length > 0
+                          ? ` · ${detected.env_vars.length} env var${detected.env_vars.length === 1 ? "" : "s"}`
+                          : ""}
+                      </>}
                 </span>
               </>
             )}
@@ -298,9 +441,92 @@ export function DeployPage() {
           </div>
         </div>
 
+        {/* Manifest picker — shown when multiple manifests found */}
+        {revealed && detected && detected.manifests.length > 1 && (
+          <Card className="p-5 animate-fade-in">
+            <div className="mb-3">
+              <span className="font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
+                Pick a service to deploy
+              </span>
+              <p className="text-fg-dim text-[11px] mt-1">
+                This repo has {detected.manifests.length} deploy manifests.
+              </p>
+            </div>
+            <div className="space-y-2">
+              {detected.manifests.map((pm, idx) => (
+                <button
+                  key={pm.path}
+                  type="button"
+                  onClick={() => applyManifest(idx, detected)}
+                  className={`w-full text-left border-2 px-4 py-3 transition-colors flex items-center gap-3 ${
+                    selectedManifest === idx
+                      ? "border-fg bg-accent/20 shadow-neo-sm"
+                      : "border-fg/30 hover:border-fg hover:bg-alt"
+                  }`}
+                >
+                  {pm.manifest.icon ? (
+                    <img src={pm.manifest.icon} alt="" className="w-6 h-6 flex-shrink-0" />
+                  ) : (
+                    <Package size={16} className="text-fg flex-shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="font-mono text-[11px] font-bold text-fg truncate">
+                      {pm.manifest.name}
+                    </div>
+                    {pm.manifest.description && (
+                      <div className="font-mono text-[10px] text-fg-dim truncate">
+                        {pm.manifest.description}
+                      </div>
+                    )}
+                  </div>
+                  {selectedManifest === idx && (
+                    <Check size={14} strokeWidth={3} className="ml-auto text-fg flex-shrink-0" />
+                  )}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => clearManifest(detected)}
+                className={`w-full text-left border-2 px-4 py-3 transition-colors flex items-center gap-3 ${
+                  selectedManifest === null
+                    ? "border-fg bg-alt shadow-neo-sm"
+                    : "border-fg/30 hover:border-fg hover:bg-alt"
+                }`}
+              >
+                <Settings2 size={16} className="text-fg-dim flex-shrink-0" />
+                <span className="font-mono text-[11px] text-fg-dim">Configure manually</span>
+              </button>
+            </div>
+          </Card>
+        )}
+
+        {/* Single manifest banner */}
+        {revealed && detected && detected.manifests.length === 1 && selectedManifest === 0 && (
+          <div className="flex items-center justify-between bg-accent/10 border-2 border-fg px-4 py-2.5 animate-fade-in">
+            <div className="flex items-center gap-2">
+              <Package size={14} className="text-fg" />
+              <span className="font-mono text-[10px] font-bold text-fg">
+                {detected.manifests[0].manifest.name}
+              </span>
+              {detected.manifests[0].manifest.description && (
+                <span className="font-mono text-[10px] text-fg-dim">
+                  — {detected.manifests[0].manifest.description}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => clearManifest(detected)}
+              className="font-mono text-[9px] uppercase tracking-wider text-fg-dim hover:text-fg transition-colors"
+            >
+              Configure manually
+            </button>
+          </div>
+        )}
+
         {/* The receipt — appears once we've peeked (or once user starts typing
             something we couldn't peek at). Pre-filled, click DEPLOY. */}
-        {revealed && (
+        {revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1) && (
           <Card className="p-5 animate-fade-in">
             <div className="flex items-center justify-between mb-2">
               <span className="font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
@@ -389,38 +615,51 @@ export function DeployPage() {
         )}
 
         {/* Secrets card — only if we found env keys */}
-        {revealed && envKeys.length > 0 && (
+        {revealed && envKeys.length > 0 && (selectedManifest !== null || !detected || detected.manifests.length <= 1) && (
           <Card className="p-5 animate-fade-in">
             <div className="flex items-center justify-between mb-3">
               <span className="font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
-                Secrets
+                {manifestEnvDefs.length > 0 ? "Configuration" : "Secrets"}
               </span>
               <span className="font-mono text-[9px] uppercase tracking-wider text-fg-dim">
-                Detected from .env.example
+                {manifestEnvDefs.length > 0 ? "From deploy manifest" : "Detected from .env.example"}
               </span>
             </div>
-            <div className="space-y-2">
-              {envKeys.map((key) => (
-                <div key={key} className="grid grid-cols-[40%_1fr] gap-2 items-center">
-                  <div className="font-mono text-[10px] font-bold text-fg truncate" title={key}>
-                    {key}
+            <div className="space-y-3">
+              {envKeys.map((key) => {
+                const def = manifestEnvDefs.find((e) => e.key === key);
+                return (
+                  <div key={key}>
+                    <div className="grid grid-cols-[40%_1fr] gap-2 items-center">
+                      <div className="font-mono text-[10px] font-bold text-fg truncate flex items-center gap-1.5" title={key}>
+                        {key}
+                        {def?.required && !envValues[key]?.trim() && (
+                          <span className="text-accent-red text-[9px] font-bold">required</span>
+                        )}
+                      </div>
+                      <input
+                        type={def?.secret ? "password" : "text"}
+                        value={envValues[key]}
+                        placeholder={def?.secret ? "••••••" : "value"}
+                        onChange={(e) =>
+                          setEnvValues((p) => ({ ...p, [key]: e.target.value }))
+                        }
+                      />
+                    </div>
+                    {def?.description && (
+                      <div className="font-mono text-[9px] text-fg-dim mt-0.5 ml-[40%] pl-2">
+                        {def.description}
+                      </div>
+                    )}
                   </div>
-                  <input
-                    type="text"
-                    value={envValues[key]}
-                    placeholder="value"
-                    onChange={(e) =>
-                      setEnvValues((p) => ({ ...p, [key]: e.target.value }))
-                    }
-                  />
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Card>
         )}
 
         {/* Advanced — everything else, collapsed by default */}
-        {revealed && (
+        {revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1) && (
           <Section title="Advanced">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -537,7 +776,7 @@ export function DeployPage() {
           </Section>
         )}
 
-        {revealed && (
+        {revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1) && (
           <Btn
             type="submit"
             variant="primary"

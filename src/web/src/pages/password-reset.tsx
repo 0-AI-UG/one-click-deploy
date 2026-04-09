@@ -4,7 +4,7 @@ import { showToast, Spinner } from "../components/ui.tsx";
 import { KeyRound, ArrowRight } from "lucide-react";
 
 export function PasswordResetPage() {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [totpCode, setTotpCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -23,7 +23,7 @@ export function PasswordResetPage() {
     setLoading(true);
     try {
       await post("/api/auth/password-reset", {
-        email,
+        username,
         totpCode: totpCode.trim(),
         newPassword,
       });
@@ -45,12 +45,12 @@ export function PasswordResetPage() {
         </div>
         <div className="bg-bg-raised border-2 border-fg shadow-neo p-6">
           <p className="text-[10px] text-muted font-mono mb-4 uppercase tracking-wider">
-            Enter your email, a current 2FA code (or backup code), and a new password.
+            Enter your username, a current 2FA code (or backup code), and a new password.
           </p>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Email</label>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required autoFocus />
+              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Username</label>
+              <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" required autoFocus />
             </div>
             <div>
               <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">2FA code or backup code</label>

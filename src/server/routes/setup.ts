@@ -82,11 +82,11 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     }
 
     const body = await request.json() as Record<string, string>;
-    const { email, password, hetzner_api_token, github_pat, dns_zone_id, default_server_type, default_location } = body;
+    const { username, password, hetzner_api_token, github_pat, dns_zone_id, default_server_type, default_location } = body;
 
-    if (!email || !password) {
+    if (!username || !password) {
       return Response.json(
-        { error: "Email and password are required" },
+        { error: "Username and password are required" },
         { status: 400, headers: corsHeaders },
       );
     }
@@ -124,7 +124,7 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     // Create admin user
     const userId = crypto.randomUUID();
     const passwordHash = await Bun.password.hash(password, "bcrypt");
-    db.insertUser({ id: userId, email, password_hash: passwordHash, is_admin: true });
+    db.insertUser({ id: userId, username, password_hash: passwordHash, is_admin: true });
 
     // Store secrets (only overwrite Hetzner token if a new one was given)
     if (hetzner_api_token) await secretStore.set("hetzner_api_token", hetzner_api_token);
@@ -139,7 +139,7 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     const tempToken = await createTempToken(userId);
 
     return Response.json(
-      { tempToken, requires2FASetup: true, user: { id: userId, email } },
+      { tempToken, requires2FASetup: true, user: { id: userId, username } },
       { status: 201, headers: corsHeaders },
     );
   } catch (error) {
