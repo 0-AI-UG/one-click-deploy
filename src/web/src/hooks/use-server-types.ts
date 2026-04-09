@@ -22,7 +22,7 @@ export function useServerTypes() {
       setLoading(false);
       return;
     }
-    get("/api/settings/server-types")
+    get("/api/admin/settings/server-types")
       .then((data: any) => setServerTypes(data.server_types ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));

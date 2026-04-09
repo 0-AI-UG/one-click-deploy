@@ -450,6 +450,70 @@ export const migrations: Migration[] = [
       db.run("CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id)");
     },
   },
+  {
+    version: 20,
+    description: "Add infrastructure services tables",
+    up: (db) => {
+      db.run(`CREATE TABLE services (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        service_type TEXT NOT NULL,
+        version TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'deploying',
+        port INTEGER NOT NULL,
+        env_vars TEXT NOT NULL DEFAULT '{}',
+        credentials TEXT NOT NULL DEFAULT '{}',
+        desired_instances INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      db.run(`CREATE TABLE service_instances (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_id INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+        server_id INTEGER NOT NULL REFERENCES servers(id),
+        role TEXT NOT NULL DEFAULT 'primary',
+        container_name TEXT NOT NULL,
+        host_port INTEGER NOT NULL,
+        volume_id TEXT NOT NULL DEFAULT '',
+        volume_mount TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'deploying',
+        cpu_percent REAL NOT NULL DEFAULT 0,
+        memory_percent REAL NOT NULL DEFAULT 0,
+        unhealthy_ticks INTEGER NOT NULL DEFAULT 0,
+        last_health_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run("CREATE INDEX idx_si_service ON service_instances(service_id)");
+      db.run("CREATE INDEX idx_si_server ON service_instances(server_id)");
+
+      db.run(`CREATE TABLE service_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_id INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+        app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        env_prefix TEXT NOT NULL DEFAULT 'DATABASE',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(service_id, app_id)
+      )`);
+
+      db.run(`CREATE TABLE service_deploy_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        result_json TEXT NOT NULL DEFAULT '',
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT
+      )`);
+
+      db.run(`CREATE TABLE service_deploy_job_events (
+        job_id INTEGER NOT NULL REFERENCES service_deploy_jobs(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        ts TEXT NOT NULL DEFAULT (datetime('now')),
+        step TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (job_id, seq)
+      )`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

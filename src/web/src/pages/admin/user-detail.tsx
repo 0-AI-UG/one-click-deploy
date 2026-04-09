@@ -6,10 +6,6 @@ import { useAuth } from "../../stores/auth.ts";
 
 const PERMISSION_GROUPS = [
   {
-    label: "Settings",
-    permissions: [{ key: "settings.manage", label: "Manage API keys, DNS, defaults" }],
-  },
-  {
     label: "Apps",
     permissions: [
       { key: "apps.deploy", label: "Deploy new apps" },
@@ -125,7 +121,7 @@ export function UserDetailPage({ userId }: { userId: string }) {
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 animate-fade-in">
       <div className="flex items-center gap-3 mb-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = "#/admin/users"; }}><ArrowLeft size={14} /></Btn>
+        <Btn variant="ghost" onClick={() => { window.location.hash = "#/admin"; }}><ArrowLeft size={14} /></Btn>
         <div>
           <h1 className="font-mono font-bold text-sm text-fg uppercase">{user.username}</h1>
           <p className="text-[9px] text-muted font-mono mt-0.5 uppercase tracking-wider">

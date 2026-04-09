@@ -360,8 +360,10 @@ export async function cloneAndBuild(
 
   // Run container
   emit("Starting container...");
+  // Ensure ocd-net exists so apps can reach infrastructure services by container name
+  await ensureOcdNetwork(ip);
   const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
-  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped -p 127.0.0.1:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
+  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p 127.0.0.1:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
   log("build", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
@@ -763,4 +765,153 @@ export async function unpauseContainer(
   if (result.exitCode !== 0) {
     throw new Error("Failed to unpause container");
   }
+}
+
+// --- Docker Network for Services ---
+
+export async function ensureOcdNetwork(ip: string, hostKey?: string): Promise<void> {
+  await sshExec(
+    ip,
+    `su - deploy -c "docker network inspect ocd-net >/dev/null 2>&1 || docker network create ocd-net"`,
+    hostKey
+  );
+}
+
+// --- Infrastructure Service Containers ---
+
+export async function pullAndRunService(
+  ip: string,
+  opts: {
+    name: string;
+    image: string;           // e.g. "postgres:17-alpine"
+    port: number;            // container port
+    hostPort: number;        // host-side port
+    envVars: Record<string, string>;
+    volumeMount?: string;    // e.g. "/mnt/ocd-my-postgres-data:/var/lib/postgresql/data"
+    cmd?: string[];          // custom entrypoint/cmd args
+    bindAddress?: string;    // "127.0.0.1" (default) or "0.0.0.0"
+    extraVolumes?: string[]; // additional -v mounts (e.g. config files)
+  },
+  hostKey?: string
+): Promise<{ containerId: string }> {
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  const bindAddr = opts.bindAddress || "127.0.0.1";
+
+  log("service", `Pulling image ${opts.image}...`);
+  const pullResult = await sshExec(ip, asUser(`docker pull ${opts.image}`), hostKey);
+  if (pullResult.exitCode !== 0) {
+    throw new Error(`Failed to pull image ${opts.image}: ${pullResult.stderr}`);
+  }
+
+  // Ensure ocd-net exists
+  await ensureOcdNetwork(ip, hostKey);
+
+  // Write env file
+  const envEntries = Object.entries(opts.envVars);
+  let envFileFlag = "";
+  if (envEntries.length > 0) {
+    const svcDir = `/home/deploy/services/${opts.name}`;
+    await sshExec(ip, `mkdir -p ${svcDir} && chown deploy:deploy ${svcDir}`, hostKey);
+    const envFilePath = `${svcDir}/.env.deploy`;
+    const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
+    const escapedContent = envFileContent.replace(/'/g, "'\\''");
+    await sshExec(
+      ip,
+      `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`,
+      hostKey
+    );
+    envFileFlag = `--env-file ${envFilePath}`;
+  }
+
+  // Remove existing container if any
+  await sshExec(ip, asUser(`docker rm -f ${opts.name} 2>/dev/null || true`), hostKey);
+
+  // Build run command
+  const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
+  const extraVolFlags = (opts.extraVolumes || []).map((v) => `-v ${v}`).join(" ");
+  const cmdStr = opts.cmd ? opts.cmd.map((c) => `'${c.replace(/'/g, "'\\''")}'`).join(" ") : "";
+
+  const runCmd = [
+    `docker run -d`,
+    `--name ${opts.name}`,
+    `--restart unless-stopped`,
+    `--network ocd-net`,
+    `-p ${bindAddr}:${opts.hostPort}:${opts.port}`,
+    envFileFlag,
+    volumeFlag,
+    extraVolFlags,
+    opts.image,
+    cmdStr,
+  ].filter(Boolean).join(" ");
+
+  log("service", `Docker run: ${runCmd}`);
+  const result = await sshExec(ip, asUser(runCmd), hostKey);
+  if (result.exitCode !== 0) {
+    log("service", `Docker run stderr: ${result.stderr}`);
+    throw new Error(`Failed to start service container ${opts.name}: ${result.stderr}`);
+  }
+
+  const containerId = result.stdout.trim().slice(0, 12);
+  log("service", `Service container started: ${containerId}`);
+  return { containerId };
+}
+
+export async function serviceHealthCheck(
+  ip: string,
+  containerName: string,
+  healthCmd: string,
+  maxAttempts = 5,
+  hostKey?: string
+): Promise<{ healthy: boolean; error?: string }> {
+  log("health", `Service health check for ${containerName}: ${healthCmd}`);
+
+  for (let i = 0; i < maxAttempts; i++) {
+    // Check container is running
+    const inspect = await sshExec(
+      ip,
+      `su - deploy -c "docker inspect --format='{{.State.Running}}' ${containerName} 2>/dev/null"`,
+      hostKey
+    );
+    if (inspect.stdout.trim() !== "true") {
+      if (i < maxAttempts - 1) {
+        log("health", `Service container not running yet (attempt ${i + 1}/${maxAttempts})`);
+        await Bun.sleep(3000);
+        continue;
+      }
+      return { healthy: false, error: "Container is not running" };
+    }
+
+    // Run health check command inside container
+    const result = await sshExec(
+      ip,
+      `su - deploy -c "docker exec ${containerName} sh -c '${healthCmd.replace(/'/g, "'\\''")}'  2>&1"`,
+      hostKey
+    );
+
+    if (result.exitCode === 0) {
+      log("health", `Service health check passed for ${containerName}`);
+      return { healthy: true };
+    }
+
+    if (i < maxAttempts - 1) {
+      log("health", `Service health check failed (attempt ${i + 1}/${maxAttempts}): ${result.stdout.trim()}`);
+      await Bun.sleep(3000);
+    } else {
+      return { healthy: false, error: `Health check failed: ${result.stdout.trim() || result.stderr.trim()}` };
+    }
+  }
+
+  return { healthy: false, error: "Health check timed out" };
+}
+
+export async function deployConfigFile(
+  ip: string,
+  remotePath: string,
+  content: string,
+  hostKey?: string
+): Promise<void> {
+  const dir = remotePath.substring(0, remotePath.lastIndexOf("/"));
+  await sshExec(ip, `mkdir -p ${dir}`, hostKey);
+  const escaped = content.replace(/'/g, "'\\''");
+  await sshExec(ip, `echo '${escaped}' > ${remotePath} && chmod 644 ${remotePath}`, hostKey);
 }

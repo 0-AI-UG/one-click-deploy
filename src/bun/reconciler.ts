@@ -1,6 +1,7 @@
 import * as db from "./db.ts";
 import * as hetzner from "./hetzner/index.ts";
 import { evaluateAutoScale } from "./scale.ts";
+import { getCatalogEntry } from "./services/catalog.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -186,6 +187,64 @@ async function reconcileCaddyRoutes(byApp: Map<number, any[]>): Promise<void> {
   }
 }
 
+async function collectServiceInstance(instance: any, service: any): Promise<void> {
+  const server = db.getServer(instance.server_id);
+  if (!server) return;
+  const hostKey = server.ssh_host_key || undefined;
+
+  const catalog = getCatalogEntry(service.service_type);
+  if (!catalog) return;
+
+  // Metrics (same as app replicas — docker stats works for any container)
+  try {
+    const result = await hetzner.sshExec(
+      server.ipv4,
+      `su - deploy -c "docker stats --no-stream --format '{{json .}}' ${instance.container_name} 2>/dev/null"`,
+      hostKey
+    );
+    if (result.exitCode === 0 && result.stdout.trim()) {
+      const stats = JSON.parse(result.stdout.trim());
+      const cpu = parseFloat(stats.CPUPerc?.replace("%", "") || "0");
+      const mem = parseFloat(stats.MemPerc?.replace("%", "") || "0");
+      db.updateServiceInstanceMetrics(instance.id, cpu, mem);
+    }
+  } catch (err) {
+    log("metrics", `service instance ${instance.container_name}: ${err}`);
+  }
+
+  // Health check via docker exec
+  try {
+    const healthCmd = instance.role === "replica" && catalog.replication.replicaHealthCmd
+      ? catalog.replication.replicaHealthCmd
+      : catalog.healthCmd;
+
+    const check = await hetzner.serviceHealthCheck(
+      server.ipv4, instance.container_name, healthCmd, 1, hostKey
+    );
+
+    if (check.healthy) {
+      db.updateServiceInstanceStatus(instance.id, "running");
+      db.touchServiceInstanceHealth(instance.id);
+      db.resetServiceInstanceUnhealthyTicks(instance.id);
+    } else {
+      db.updateServiceInstanceStatus(instance.id, "unhealthy");
+      const ticks = db.incrementServiceInstanceUnhealthyTicks(instance.id);
+      log("health", `service instance ${instance.container_name} unhealthy (${ticks} ticks): ${check.error ?? ""}`);
+      if (ticks >= UNHEALTHY_RESTART_THRESHOLD) {
+        log("health", `auto-restarting service ${instance.container_name}`);
+        try {
+          await hetzner.restartContainer(server.ipv4, instance.container_name, hostKey);
+          db.resetServiceInstanceUnhealthyTicks(instance.id);
+        } catch (err) {
+          log("health", `restart failed: ${err}`);
+        }
+      }
+    }
+  } catch (err) {
+    log("health", `check failed for service instance ${instance.container_name}: ${err}`);
+  }
+}
+
 async function tick(): Promise<void> {
   if (running) {
     log("tick", "skip (previous tick still running)");
@@ -194,6 +253,7 @@ async function tick(): Promise<void> {
   running = true;
   const start = Date.now();
   try {
+    // --- App replicas ---
     const replicas = db.getAllReplicas();
     const byApp = new Map<number, any[]>();
     for (const r of replicas) {
@@ -238,8 +298,32 @@ async function tick(): Promise<void> {
     // Ensure Caddy routes exist for all live apps (restores routes lost by Caddy restarts)
     await reconcileCaddyRoutes(byApp);
 
+    // --- Infrastructure services ---
+    const services = db.getServices();
+    let serviceCount = 0;
+    for (const service of services) {
+      if (service.status === "paused" || service.status === "deploying") continue;
+
+      const instances = db.getServiceInstances(service.id);
+      for (const instance of instances) {
+        await collectServiceInstance(instance, service);
+      }
+
+      // Propagate instance health to service status
+      if (service.status === "running" || service.status === "unhealthy") {
+        const freshInstances = instances.map((i: any) => db.getServiceInstance(i.id)).filter(Boolean);
+        const allHealthy = freshInstances.length > 0 && freshInstances.every((i: any) => i.status === "running");
+        const newStatus = allHealthy ? "running" : "unhealthy";
+        if (newStatus !== service.status) {
+          log("status", `service ${service.id}: ${service.status} -> ${newStatus}`);
+          db.updateServiceStatus(service.id, newStatus);
+        }
+      }
+      serviceCount++;
+    }
+
     db.pruneOldMetrics(METRICS_RETENTION_SEC);
-    log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps)`);
+    log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps, ${serviceCount} services)`);
   } catch (err) {
     log("tick", `error: ${err}`);
   } finally {

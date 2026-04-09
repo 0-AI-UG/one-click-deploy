@@ -385,6 +385,116 @@ export async function handleWebAuthnLoginVerify(request: Request): Promise<Respo
 }
 
 // ────────────────────────────────────────────────────
+// Password reset via passkey (unauthenticated)
+// ────────────────────────────────────────────────────
+
+/** POST /api/auth/password-reset/webauthn-options */
+export async function handlePasswordResetWebAuthnOptions(request: Request): Promise<Response> {
+  const rateLimitResponse = checkRateLimit(request);
+  if (rateLimitResponse) return rateLimitResponse;
+
+  try {
+    const body = await request.json() as { username?: string };
+    // Return generic error for all failure cases to avoid leaking info
+    const genericError = Response.json(
+      { error: "Unable to initiate passkey verification. Check your username." },
+      { status: 400, headers: corsHeaders },
+    );
+    if (!body.username) return genericError;
+
+    const user = db.getUserByUsername(body.username);
+    if (!user || !user.webauthn_enabled) return genericError;
+
+    const credentials = db.getWebAuthnCredentials(user.id);
+    if (credentials.length === 0) return genericError;
+
+    const rp = getRpConfig(request);
+    const options = await generateAuthenticationOptions({
+      rpID: rp.rpID,
+      userVerification: "preferred",
+      allowCredentials: credentials.map((c) => ({
+        id: c.id,
+        transports: credentialTransports(c),
+      })),
+    });
+
+    setChallenge(user.id, options.challenge);
+    return Response.json(options, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/** POST /api/auth/password-reset/webauthn-verify */
+export async function handlePasswordResetWebAuthnVerify(request: Request): Promise<Response> {
+  const rateLimitResponse = checkRateLimit(request);
+  if (rateLimitResponse) return rateLimitResponse;
+
+  try {
+    const body = await request.json() as {
+      username?: string;
+      credential?: AuthenticationResponseJSON;
+      newPassword?: string;
+    };
+    const genericError = Response.json(
+      { error: "Unable to reset password. Passkey verification failed." },
+      { status: 400, headers: corsHeaders },
+    );
+    if (!body.username || !body.credential || !body.newPassword) {
+      return Response.json(
+        { error: "Username, passkey credential, and new password are required" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    if (body.newPassword.length < 8) {
+      return Response.json(
+        { error: "New password must be at least 8 characters" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    const user = db.getUserByUsername(body.username);
+    if (!user || !user.webauthn_enabled) return genericError;
+
+    const challenge = getAndDeleteChallenge(user.id);
+    if (!challenge) {
+      return Response.json(
+        { error: "Challenge expired. Please try again." },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    const storedCredential = db.getWebAuthnCredentialById(body.credential.id);
+    if (!storedCredential || storedCredential.user_id !== user.id) return genericError;
+
+    const rp = getRpConfig(request);
+    const verification = await verifyAuthenticationResponse({
+      response: body.credential,
+      expectedChallenge: challenge,
+      expectedOrigin: rp.origin,
+      expectedRPID: rp.rpID,
+      credential: {
+        id: storedCredential.id,
+        publicKey: new Uint8Array(storedCredential.public_key),
+        counter: storedCredential.counter,
+        transports: credentialTransports(storedCredential),
+      },
+    });
+
+    if (!verification.verified) return genericError;
+
+    db.updateWebAuthnCounter(storedCredential.id, verification.authenticationInfo.newCounter);
+
+    const hash = await Bun.password.hash(body.newPassword, "bcrypt");
+    db.updateUserPassword(user.id, hash);
+
+    return Response.json({ ok: true }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+// ────────────────────────────────────────────────────
 // Credential management
 // ────────────────────────────────────────────────────
 

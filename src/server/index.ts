@@ -21,6 +21,8 @@ import {
   handleWebAuthnLoginVerify,
   handleWebAuthnList,
   handleWebAuthnDelete,
+  handlePasswordResetWebAuthnOptions,
+  handlePasswordResetWebAuthnVerify,
 } from "./routes/webauthn.ts";
 import { handleListUsers, handleCreateUser, handleUpdateUser, handleDeleteUser, handleGetUserPermissions } from "./routes/admin.ts";
 import {
@@ -61,6 +63,21 @@ import {
   handleGetPanelDeployments,
 } from "./routes/panel.ts";
 import { handleLlmTxt } from "./routes/llm-txt.ts";
+import {
+  handleGetCatalog,
+  handleGetServices,
+  handleGetService,
+  handleDeployService,
+  handleServiceDeployJobPoll,
+  handleDestroyService,
+  handleRestartService,
+  handlePauseService,
+  handleUnpauseService,
+  handleScaleService,
+  handleGetServiceLogs,
+  handleLinkService,
+  handleUnlinkService,
+} from "./routes/services.ts";
 import { startReconciler } from "../bun/reconciler.ts";
 import { tryTerminalUpgrade, terminalWsHandlers } from "./routes/terminal.ts";
 
@@ -131,6 +148,18 @@ function resourcePartsFrom(req: Request): { type: string; id: string } {
   return { type: parts[3], id: parts[4] };
 }
 
+function serviceIdFrom(req: Request): number {
+  const url = new URL(req.url);
+  const match = url.pathname.match(/\/api\/services\/(\d+)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function serviceLinkPartsFrom(req: Request): { serviceId: number; appId: number } {
+  const url = new URL(req.url);
+  const match = url.pathname.match(/\/api\/services\/(\d+)\/link\/(\d+)/);
+  return match ? { serviceId: parseInt(match[1], 10), appId: parseInt(match[2], 10) } : { serviceId: 0, appId: 0 };
+}
+
 // ── Headless auto-deploy mode ──
 // When OCD_AUTO_DEPLOY is set, run the self-deploy pipeline and exit
 // without ever binding the HTTP server. Used by the Docker one-liner.
@@ -161,6 +190,8 @@ export const server = Bun.serve({
     // --- Auth ---
     "/api/auth/login": { POST: (req: Request) => handleLogin(req) },
     "/api/auth/password-reset": { POST: (req: Request) => handlePasswordReset(req) },
+    "/api/auth/password-reset/webauthn-options": { POST: (req: Request) => handlePasswordResetWebAuthnOptions(req) },
+    "/api/auth/password-reset/webauthn-verify": { POST: (req: Request) => handlePasswordResetWebAuthnVerify(req) },
     "/api/me": {
       GET: (req: Request) => handleMe(req),
       PUT: (req: Request) => handleUpdateMe(req),
@@ -251,20 +282,20 @@ export const server = Bun.serve({
       },
     },
 
-    // --- Panel (hosted self) ---
-    "/api/panel": { GET: (req: Request) => handleGetPanel(req) },
-    "/api/panel/redeploy": { POST: (req: Request) => handleRedeployPanel(req) },
-    "/api/panel/webhook/enable": { POST: (req: Request) => handleEnablePanelWebhook(req) },
-    "/api/panel/webhook/disable": { POST: (req: Request) => handleDisablePanelWebhook(req) },
-    "/api/panel/logs": { GET: (req: Request) => handleGetPanelLogs(req) },
-    "/api/panel/deployments": { GET: (req: Request) => handleGetPanelDeployments(req) },
-
-    // --- Settings ---
-    "/api/settings": {
+    // --- Admin: Settings ---
+    "/api/admin/settings": {
       GET: (req: Request) => handleGetSettings(req),
       PUT: (req: Request) => handleSaveSettings(req),
     },
-    "/api/settings/server-types": { GET: (req: Request) => handleGetServerTypes(req) },
+    "/api/admin/settings/server-types": { GET: (req: Request) => handleGetServerTypes(req) },
+
+    // --- Admin: Panel (hosted self) ---
+    "/api/admin/panel": { GET: (req: Request) => handleGetPanel(req) },
+    "/api/admin/panel/redeploy": { POST: (req: Request) => handleRedeployPanel(req) },
+    "/api/admin/panel/webhook/enable": { POST: (req: Request) => handleEnablePanelWebhook(req) },
+    "/api/admin/panel/webhook/disable": { POST: (req: Request) => handleDisablePanelWebhook(req) },
+    "/api/admin/panel/logs": { GET: (req: Request) => handleGetPanelLogs(req) },
+    "/api/admin/panel/deployments": { GET: (req: Request) => handleGetPanelDeployments(req) },
 
     // --- Resources ---
     "/api/resources": { GET: (req: Request) => handleGetResources(req) },
@@ -272,6 +303,34 @@ export const server = Bun.serve({
       DELETE: (req: Request) => {
         const { type, id } = resourcePartsFrom(req);
         return handleDeleteResource(req, type, id);
+      },
+    },
+
+    // --- Infrastructure Services ---
+    "/api/services": { GET: (req: Request) => handleGetServices(req) },
+    "/api/services/catalog": { GET: (req: Request) => handleGetCatalog(req) },
+    "/api/services/deploy": { POST: (req: Request) => handleDeployService(req) },
+    "/api/services/deploy-jobs/:jobId": { GET: (req: Request) => {
+      const id = parseInt(new URL(req.url).pathname.split("/")[4], 10);
+      return handleServiceDeployJobPoll(req, id);
+    }},
+    "/api/services/:id": {
+      GET: (req: Request) => handleGetService(req, serviceIdFrom(req)),
+      DELETE: (req: Request) => handleDestroyService(req, serviceIdFrom(req)),
+    },
+    "/api/services/:id/restart": { POST: (req: Request) => handleRestartService(req, serviceIdFrom(req)) },
+    "/api/services/:id/pause": { POST: (req: Request) => handlePauseService(req, serviceIdFrom(req)) },
+    "/api/services/:id/unpause": { POST: (req: Request) => handleUnpauseService(req, serviceIdFrom(req)) },
+    "/api/services/:id/scale": { POST: (req: Request) => handleScaleService(req, serviceIdFrom(req)) },
+    "/api/services/:id/logs": { GET: (req: Request) => handleGetServiceLogs(req, serviceIdFrom(req)) },
+    "/api/services/:id/link/:appId": {
+      POST: (req: Request) => {
+        const { serviceId, appId } = serviceLinkPartsFrom(req);
+        return handleLinkService(req, serviceId, appId);
+      },
+      DELETE: (req: Request) => {
+        const { serviceId, appId } = serviceLinkPartsFrom(req);
+        return handleUnlinkService(req, serviceId, appId);
       },
     },
 

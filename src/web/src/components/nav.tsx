@@ -1,11 +1,12 @@
 import { useAuth, logout } from "../stores/auth.ts";
-import { Server, Rocket, HardDrive, User, Users, LogOut, Terminal } from "lucide-react";
+import { Server, Rocket, HardDrive, User, Users, LogOut, Terminal, Database } from "lucide-react";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
-  { hash: "#/deploy", label: "Deploy", icon: Rocket, match: /^#\/deploy/ },
+  { hash: "#/deploy", label: "Deploy", icon: Rocket, match: /^#\/deploy(?!-service)/ },
+  { hash: "#/deploy-service", label: "Services", icon: Database, match: /^#\/(deploy-service|services)/ },
   { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
-  { hash: "#/settings", label: "Account", icon: User, match: /^#\/settings/ },
+  { hash: "#/account", label: "Account", icon: User, match: /^#\/account/ },
 ];
 
 export function Nav() {
@@ -43,7 +44,7 @@ export function Nav() {
             })}
             {user?.isAdmin && (
               <a
-                href="#/admin/users"
+                href="#/admin"
                 className={`flex items-center gap-1.5 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider transition-all ${
                   hash.startsWith("#/admin")
                     ? "bg-fg text-accent"

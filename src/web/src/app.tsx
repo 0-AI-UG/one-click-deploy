@@ -16,11 +16,13 @@ import { DeployPage } from "./pages/deploy.tsx";
 import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
-import { SettingsPage } from "./pages/settings.tsx";
+import { AccountPage } from "./pages/account.tsx";
 import { UsersPage } from "./pages/admin/users.tsx";
 import { UserDetailPage } from "./pages/admin/user-detail.tsx";
-import { AdminSettingsPage } from "./pages/admin/settings.tsx";
 import { TerminalPage } from "./pages/terminal.tsx";
+import { DeployServicePage } from "./pages/deploy-service.tsx";
+import { ServiceDeployProgressPage } from "./pages/service-deploy-progress.tsx";
+import { ServiceDetailPage } from "./pages/service-detail.tsx";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -122,14 +124,23 @@ export function App() {
   } else if (hash.startsWith("#/apps/")) {
     const appId = parseInt(hash.split("/")[2], 10);
     content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;
+  } else if (hash === "#/deploy-service") {
+    content = <DeployServicePage />;
+  } else if (hash.startsWith("#/deploy/service-progress/")) {
+    const jobId = parseInt(hash.split("/")[3], 10);
+    content = <ServiceDeployProgressPage jobId={jobId && !Number.isNaN(jobId) ? jobId : null} />;
+  } else if (hash.startsWith("#/services/")) {
+    const serviceId = parseInt(hash.split("/")[2], 10);
+    content = serviceId ? <ServiceDetailPage serviceId={serviceId} /> : <DashboardPage />;
   } else if (hash === "#/resources") {
     content = <ResourcesPage />;
-  } else if (hash === "#/settings") {
-    content = <SettingsPage />;
-  } else if (hash === "#/admin/users") {
+  } else if (hash === "#/account") {
+    content = <AccountPage />;
+  } else if (hash === "#/admin") {
     content = <UsersPage />;
-  } else if (hash === "#/admin/settings") {
-    content = <AdminSettingsPage />;
+  } else if (hash.startsWith("#/admin/")) {
+    const userId = hash.split("/")[2];
+    content = userId ? <UserDetailPage userId={userId} /> : <UsersPage />;
   } else if (hash.startsWith("#/terminal/")) {
     const parts = hash.split("/");
     const kind = parts[2] as "server" | "replica";
@@ -137,9 +148,6 @@ export function App() {
     content = (kind === "server" || kind === "replica") && id
       ? <TerminalPage kind={kind} id={id} />
       : <DashboardPage />;
-  } else if (hash.startsWith("#/admin/users/")) {
-    const userId = hash.split("/")[3];
-    content = userId ? <UserDetailPage userId={userId} /> : <UsersPage />;
   } else {
     content = <DashboardPage />;
   }
