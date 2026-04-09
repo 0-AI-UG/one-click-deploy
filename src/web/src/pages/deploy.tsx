@@ -379,16 +379,7 @@ export function DeployPage() {
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>
         </div>
         <p className="text-fg-dim text-[12px]">
-          Paste a GitHub repo. We'll figure out the rest.{" "}
-          <a
-            href="/llm.txt"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-fg transition-colors"
-          >
-            Add a deploy manifest
-          </a>{" "}
-          for one-click setup.
+          Paste a GitHub repo. We'll figure out the rest.
         </p>
       </div>
 
@@ -407,7 +398,8 @@ export function DeployPage() {
           />
 
           {/* Status line under the paste bar */}
-          <div className="mt-3 min-h-[18px] flex items-center gap-2 font-mono text-[10px]">
+          <div className="mt-3 min-h-[18px] flex items-center justify-between font-mono text-[10px]">
+            <div className="flex items-center gap-2">
             {introspecting && (
               <>
                 <Loader2 size={12} className="animate-spin text-fg" />
@@ -438,6 +430,10 @@ export function DeployPage() {
                 <span className="text-fg-dim">{introspect.error}</span>
               </>
             )}
+            </div>
+            <a href="/llm.txt" target="_blank" rel="noopener noreferrer" className="text-[9px] text-fg-dim hover:text-fg transition-colors uppercase tracking-wider">
+              Manifest docs
+            </a>
           </div>
         </div>
 
