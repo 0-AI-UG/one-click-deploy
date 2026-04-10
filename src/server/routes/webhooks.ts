@@ -15,7 +15,17 @@ export function normalizeWebhookPath(p: string): string {
 
 // Returns true if any file mentioned in the push payload's commits sits under
 // `prefix`. An empty prefix matches everything.
-export function pushTouchesPath(payload: any, prefix: string): boolean {
+interface GitHubPushPayload {
+  ref?: string;
+  after?: string;
+  commits?: Array<{
+    added?: string[];
+    modified?: string[];
+    removed?: string[];
+  }>;
+}
+
+export function pushTouchesPath(payload: GitHubPushPayload, prefix: string): boolean {
   if (!prefix) return true;
   const needle = prefix + "/";
   const commits = Array.isArray(payload?.commits) ? payload.commits : [];
@@ -142,9 +152,9 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
       return new Response("Invalid signature", { status: 401 });
     }
 
-    let payload: any;
+    let payload: GitHubPushPayload;
     try {
-      payload = JSON.parse(rawBody);
+      payload = JSON.parse(rawBody) as GitHubPushPayload;
     } catch {
       return new Response("Bad payload", { status: 400 });
     }
@@ -154,7 +164,7 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
       return new Response("Branch mismatch", { status: 204 });
     }
 
-    const pathFilter = (app as any).webhook_path || "";
+    const pathFilter = app.webhook_path || "";
     if (!pushTouchesPath(payload, pathFilter)) {
       return new Response("Path filter: no matching files", { status: 204 });
     }
@@ -189,9 +199,9 @@ export async function handlePanelGithubWebhook(request: Request): Promise<Respon
       return new Response("Invalid signature", { status: 401 });
     }
 
-    let payload: any;
+    let payload: GitHubPushPayload;
     try {
-      payload = JSON.parse(rawBody);
+      payload = JSON.parse(rawBody) as GitHubPushPayload;
     } catch {
       return new Response("Bad payload", { status: 400 });
     }

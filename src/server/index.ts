@@ -43,7 +43,7 @@ async function serveStatic(filePath: string): Promise<Response | null> {
 }
 
 // In dev, use Bun's HTML import for HMR
-let devIndex: any = null;
+let devIndex: Bun.HTMLBundle | null = null;
 if (!IS_PROD) {
   devIndex = (await import("../web/index.html")).default;
 }

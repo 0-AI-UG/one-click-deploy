@@ -43,7 +43,7 @@ export async function handleGetServerTypes(request: Request): Promise<Response> 
         cores: t.cores,
         memory: t.memory,
         disk: t.disk,
-        locations: (t.prices ?? []).map((p: any) => p.location),
+        locations: (t.prices ?? []).map((p: { location: string }) => p.location),
       });
     }
     // Sort by memory then cores

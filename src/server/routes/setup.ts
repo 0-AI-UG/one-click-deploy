@@ -52,7 +52,19 @@ export async function handleSetupServerTypes(request: Request): Promise<Response
         { status: 400, headers: corsHeaders },
       );
     }
-    const data = await res.json() as any;
+    interface HetznerServerType {
+      name: string;
+      description: string;
+      cores: number;
+      memory: number;
+      disk: number;
+      deprecation?: { announced?: string } | null;
+      prices?: Array<{ location: string }>;
+    }
+    interface HetznerServerTypesResponse {
+      server_types?: HetznerServerType[];
+    }
+    const data = await res.json() as HetznerServerTypesResponse;
     const types: Array<{ name: string; description: string; cores: number; memory: number; disk: number; locations: string[] }> = [];
     for (const t of data.server_types ?? []) {
       if (t.deprecation?.announced) continue;
@@ -62,7 +74,7 @@ export async function handleSetupServerTypes(request: Request): Promise<Response
         cores: t.cores,
         memory: t.memory,
         disk: t.disk,
-        locations: (t.prices ?? []).map((p: any) => p.location),
+        locations: (t.prices ?? []).map((p) => p.location),
       });
     }
     types.sort((a, b) => a.memory - b.memory || a.cores - b.cores);

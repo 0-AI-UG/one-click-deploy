@@ -82,7 +82,7 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
               cpu_threshold,
               mem_threshold,
               cooldown_seconds: app.autoscale_cooldown,
-              replicas: replicas.map((r: any) => {
+              replicas: replicas.map((r) => {
                 const s = db.getServer(r.server_id);
                 return {
                   server_ip: s?.ipv4 || "",
