@@ -712,10 +712,13 @@ export function DeployPage() {
                 <Label>Replicas</Label>
                 <input
                   type="number"
-                  value={form.replicas}
+                  value={form.domain ? form.replicas : "1"}
                   onChange={set("replicas")}
                   min="1"
+                  disabled={!form.domain}
+                  title={!form.domain ? "Add a custom domain to enable scaling" : undefined}
                 />
+                {!form.domain && <p className="text-[9px] text-muted mt-1">Requires a custom domain</p>}
               </div>
               <div>
                 <Label>Auth Password</Label>

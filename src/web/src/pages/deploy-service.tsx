@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
-import { Card, Btn, showToast, Spinner } from "../components/ui.tsx";
-import { Database, ChevronRight, Copy, Check, Loader2 } from "lucide-react";
+import { Card, Btn, showToast, Spinner, CopyButton } from "../components/ui.tsx";
+import { Database, ChevronRight, Loader2 } from "lucide-react";
 
 type CatalogEntry = {
   type: string;
@@ -33,22 +33,6 @@ function randomPassword(len = 24): string {
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const bytes = crypto.getRandomValues(new Uint8Array(len));
   return Array.from(bytes, (b) => chars[b % chars.length]).join("");
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      className="p-1 text-muted hover:text-fg transition-colors"
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}
-    >
-      {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-    </button>
-  );
 }
 
 export function DeployServicePage() {

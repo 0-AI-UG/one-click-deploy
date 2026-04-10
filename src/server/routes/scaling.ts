@@ -2,7 +2,7 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
-import { scaleApp, collectMetrics } from "../../bun/scale.ts";
+import { scaleApp, wakeApp, collectMetrics } from "../../bun/scale.ts";
 import * as hetzner from "../../bun/hetzner/index.ts";
 import { secretStore } from "../../bun/secret-store.ts";
 
@@ -11,8 +11,12 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
     await requirePermission(request, "scaling.manage");
     const body = await request.json() as { replicas: number };
     const replicas = Number(body.replicas);
-    if (!Number.isFinite(replicas) || replicas < 1) {
-      return Response.json({ error: "replicas must be an integer >= 1" }, { status: 400, headers: corsHeaders });
+    if (!Number.isFinite(replicas) || replicas < 0) {
+      return Response.json({ error: "replicas must be an integer >= 0" }, { status: 400, headers: corsHeaders });
+    }
+    const app = db.getApp(appId);
+    if (app && replicas > 1 && (!app.domain || app.domain.endsWith(".nip.io"))) {
+      return Response.json({ error: "Scaling requires a custom domain. Add a domain in app settings first." }, { status: 400, headers: corsHeaders });
     }
     const result = await scaleApp(appId, replicas, () => {});
     if (!result.ok) {
@@ -27,17 +31,25 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
 export async function handleUpdateScalingPolicy(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "scaling.manage");
-    const { min_replicas, max_replicas, autoscale_enabled, cpu_threshold, mem_threshold, cooldown } = await request.json() as {
+    const { min_replicas, max_replicas, autoscale_enabled, cpu_threshold, mem_threshold, cooldown, scale_to_zero_after } = await request.json() as {
       min_replicas: number;
       max_replicas: number;
       autoscale_enabled: boolean;
       cpu_threshold: number;
       mem_threshold: number;
       cooldown?: number;
+      scale_to_zero_after?: number;
     };
 
-    if (min_replicas < 1 || max_replicas < min_replicas) {
-      return Response.json({ error: "Require 1 <= min_replicas <= max_replicas" }, { status: 400, headers: corsHeaders });
+    if (min_replicas < 0 || max_replicas < min_replicas) {
+      return Response.json({ error: "Require 0 <= min_replicas <= max_replicas" }, { status: 400, headers: corsHeaders });
+    }
+
+    if (max_replicas > 1) {
+      const app = db.getApp(appId);
+      if (app && (!app.domain || app.domain.endsWith(".nip.io"))) {
+        return Response.json({ error: "Scaling requires a custom domain. Add a domain in app settings first." }, { status: 400, headers: corsHeaders });
+      }
     }
 
     db.updateAppScaling(appId, {
@@ -47,6 +59,7 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
       autoscale_cpu_threshold: cpu_threshold,
       autoscale_mem_threshold: mem_threshold,
       ...(typeof cooldown === "number" ? { autoscale_cooldown: cooldown } : {}),
+      ...(typeof scale_to_zero_after === "number" ? { scale_to_zero_after } : {}),
     });
 
     // Update scale daemon config if app is scaled
@@ -131,4 +144,40 @@ export async function handleGetAppMetricsHistory(request: Request, appId: number
   } catch (error) {
     return handleError(error);
   }
+}
+
+const wakeCorsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+/** Token-authenticated — called by the wake page served from the app's domain. */
+export async function handleWakeApp(request: Request, appId: number): Promise<Response> {
+  try {
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ error: "Not found" }, { status: 404, headers: wakeCorsHeaders });
+    const token = new URL(request.url).searchParams.get("token");
+    if (!token || token !== app.wake_token) {
+      return Response.json({ error: "Forbidden" }, { status: 403, headers: wakeCorsHeaders });
+    }
+    if (app.status === "waking") return Response.json({ ok: true, status: "waking" }, { headers: wakeCorsHeaders });
+    if (app.status !== "sleeping") return Response.json({ ok: true, status: app.status }, { headers: wakeCorsHeaders });
+    // Fire-and-forget: wake in the background so the response returns immediately
+    wakeApp(appId).catch(err => console.error(`[wake] Failed to wake app ${appId}:`, err));
+    return Response.json({ ok: true, status: "waking" }, { headers: wakeCorsHeaders });
+  } catch (error) {
+    return Response.json({ error: "Internal error" }, { status: 500, headers: wakeCorsHeaders });
+  }
+}
+
+/** Token-authenticated — polled by the wake page to check when the app is ready. */
+export async function handleWakeStatus(request: Request, appId: number): Promise<Response> {
+  const app = db.getApp(appId);
+  if (!app) return Response.json({ error: "Not found" }, { status: 404, headers: wakeCorsHeaders });
+  const token = new URL(request.url).searchParams.get("token");
+  if (!token || token !== app.wake_token) {
+    return Response.json({ error: "Forbidden" }, { status: 403, headers: wakeCorsHeaders });
+  }
+  return Response.json({ status: app.status }, { headers: wakeCorsHeaders });
 }

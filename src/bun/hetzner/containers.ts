@@ -185,6 +185,132 @@ export async function deployCaddySite(
   log("caddy", "Site configured via admin API (persisted to disk)");
 }
 
+/**
+ * Deploy a Caddy route that serves a "Waking up" HTML page for a sleeping app.
+ * The page auto-triggers a wake request to the panel and polls until ready.
+ */
+export async function deployCaddyWakePage(
+  ip: string,
+  domain: string,
+  panelDomain: string,
+  appId: number,
+  wakeToken: string,
+  internalTls: boolean = false,
+  hostKey?: string
+) {
+  log("caddy", `Deploying wake page: domain=${domain} appId=${appId}`);
+
+  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
+  const panelOrigin = panelDomain ? `https://${panelDomain}` : "";
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Waking up...</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0a0a;color:#e5e5e5;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.c{text-align:center}
+.spinner{width:24px;height:24px;border:3px solid #333;border-top-color:#e5e5e5;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}
+h1{font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px}
+p{font-size:11px;color:#888}
+a{color:#888}
+</style>
+</head>
+<body>
+<div class="c">
+<div class="spinner"></div>
+<h1>Waking up</h1>
+<p>This app is sleeping. Starting a container...</p>
+<noscript><p style="margin-top:12px"><a href="${panelOrigin}">Open dashboard</a></p></noscript>
+</div>
+<script>
+(function(){
+  var P="${panelOrigin}",ID=${appId},T="${wakeToken}",n=0;
+  if(!P)return;
+  var h=document.querySelector("h1"),p=document.querySelector("p"),sp=document.querySelector(".spinner");
+  function fail(msg){clearInterval(iv);if(sp)sp.style.display="none";h.textContent="Error";p.innerHTML=msg+' <a href="'+P+'">Open dashboard</a>';}
+  fetch(P+"/api/apps/"+ID+"/wake?token="+T,{method:"POST",mode:"cors"}).catch(function(){});
+  var iv=setInterval(function(){
+    if(++n>60){clearInterval(iv);if(sp)sp.style.display="none";h.textContent="Timeout";p.innerHTML='App did not wake within 2 minutes. <a href="'+P+'">Open dashboard</a>';return}
+    fetch(P+"/api/apps/"+ID+"/wake-status?token="+T,{mode:"cors"})
+      .then(function(r){return r.json()})
+      .then(function(d){
+        if(d.status==="running"){clearInterval(iv);location.reload()}
+        if(d.status==="error"){fail("App failed to start. ")}
+      })
+      .catch(function(){});
+  },2000);
+})();
+</script>
+</body>
+</html>`;
+
+  const route: any = {
+    "@id": routeId,
+    match: [{ host: [domain] }],
+    handle: [
+      {
+        handler: "static_response",
+        status_code: "503",
+        headers: {
+          "Content-Type": ["text/html; charset=utf-8"],
+          "Retry-After": ["30"],
+        },
+        body: html,
+      },
+    ],
+    terminal: true,
+  };
+
+  const tlsPolicy: any = internalTls
+    ? { automation: { policies: [{ subjects: [domain], issuers: [{ module: "internal" }] }] } }
+    : {};
+
+  // Delete existing route first
+  await sshExec(ip, `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`, hostKey);
+
+  // Add the wake page route
+  const routeJson = JSON.stringify(route);
+  const escaped = routeJson.replace(/'/g, "'\\''");
+  const addResult = await sshExec(
+    ip,
+    `curl -sf -X POST -H 'Content-Type: application/json' -d '${escaped}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
+    hostKey
+  );
+
+  if (addResult.exitCode !== 0) {
+    log("caddy", `Wake page route add failed: ${addResult.stderr}. Restarting Caddy and retrying...`);
+    await sshExec(ip, "systemctl restart caddy", hostKey);
+    await Bun.sleep(1000);
+    await sshExec(ip, `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`, hostKey);
+    const retry = await sshExec(
+      ip,
+      `curl -sf -X POST -H 'Content-Type: application/json' -d '${escaped}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
+      hostKey
+    );
+    if (retry.exitCode !== 0) {
+      throw new Error("Failed to configure Caddy wake page for " + domain);
+    }
+  }
+
+  if (internalTls) {
+    const tlsJson = JSON.stringify(tlsPolicy);
+    const tlsEscaped = tlsJson.replace(/'/g, "'\\''");
+    await sshExec(
+      ip,
+      `curl -sf -X PATCH -H 'Content-Type: application/json' -d '${tlsEscaped}' http://localhost:2019/config/apps/tls`,
+      hostKey
+    );
+  }
+
+  await persistCaddyConfig(ip, hostKey);
+  log("caddy", "Wake page configured via admin API (persisted to disk)");
+}
+
 export async function removeCaddySite(ip: string, domain: string, hostKey?: string) {
   log("caddy", `Removing site: ${domain}`);
   const routeId = `ocd-${domain.replace(/\./g, "-")}`;

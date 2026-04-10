@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { get, post, put, del } from "../api/client.ts";
-import { Card, Btn, StatusBadge, Spinner, showToast, confirm, Table, Checkbox } from "../components/ui.tsx";
+import { Card, Btn, StatusBadge, Spinner, showToast, confirm, Table, Checkbox, CopyButton } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu, Terminal, Gauge, Server as ServerIcon, Zap, History, Info, Plus, Minus, Lock, Settings as SettingsIcon, Pencil } from "lucide-react";
+import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDrive, ScrollText, Clock, Cpu, Terminal, Gauge, Server as ServerIcon, Zap, History, Info, Plus, Minus, Lock, Settings as SettingsIcon, Pencil, ExternalLink } from "lucide-react";
 
 // Small icon-only tooltip — uses native browser title for zero-dependency
 // hover help text. Sits inline next to labels so the visible UI stays terse.
@@ -50,6 +50,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
     cpu_threshold: number;
     mem_threshold: number;
     cooldown: number;
+    scale_to_zero_after: number;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -112,6 +113,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
         cpu_threshold: app.autoscale_cpu_threshold ?? 70,
         mem_threshold: app.autoscale_mem_threshold ?? 80,
         cooldown: app.autoscale_cooldown ?? 300,
+        scale_to_zero_after: app.scale_to_zero_after ?? 300,
       });
     }
   }, [tab, app]);
@@ -169,7 +171,16 @@ export function AppDetailPage({ appId }: { appId: number }) {
             <h1 className="font-mono font-bold text-sm text-fg uppercase">{app.name}</h1>
             <StatusBadge status={app.status} />
           </div>
-          {app.domain && <p className="font-mono text-[9px] text-muted mt-0.5">{app.domain} — {server?.name} ({server?.ipv4})</p>}
+          {app.domain && (
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="font-mono text-[9px] text-accent-blue font-bold">https://{app.domain}</span>
+              <CopyButton text={`https://${app.domain}`} />
+              <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="p-1 text-muted hover:text-fg transition-colors">
+                <ExternalLink size={12} />
+              </a>
+              <span className="font-mono text-[9px] text-muted ml-1">— {server?.name} ({server?.ipv4})</span>
+            </div>
+          )}
         </div>
         <div className="flex gap-1">
           <PermissionGate permission="apps.restart">
@@ -230,6 +241,9 @@ export function AppDetailPage({ appId }: { appId: number }) {
           <Card className="p-4 space-y-3">
             <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Configuration</h3>
             <div className="space-y-2 text-[10px] font-mono">
+              {app.domain && (
+                <div className="flex justify-between items-center"><span className="text-muted">URL</span><span className="flex items-center gap-1"><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="text-accent-blue font-bold hover:underline">https://{app.domain}</a><CopyButton text={`https://${app.domain}`} /><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="p-1 text-muted hover:text-fg"><ExternalLink size={10} /></a></span></div>
+              )}
               <div className="flex justify-between"><span className="text-muted">Git Repo</span><span className="text-fg font-bold">{app.git_repo}</span></div>
               <div className="flex justify-between"><span className="text-muted">Deploy Mode</span><span className="text-fg">{app.deploy_mode}</span></div>
               <div className="flex justify-between"><span className="text-muted">Container Port</span><span className="text-fg">{app.container_port}</span></div>
@@ -285,7 +299,9 @@ export function AppDetailPage({ appId }: { appId: number }) {
                     <tr key={r.id}>
                       <td className="py-2 px-3 text-fg font-bold">#{r.id}</td>
                       <td className="py-2 px-3 text-fg-dim">{r.container_name}</td>
-                      <td className="py-2 px-3 text-fg-dim text-[9px]">{srv?.name || `srv#${r.server_id}`}</td>
+                      <td className="py-2 px-3 text-[9px]">
+                        <div className="text-fg-dim">{srv?.name || `srv#${r.server_id}`}</div>
+                      </td>
                       <td className="py-2 px-3 text-fg-dim">{r.host_port}</td>
                       <td className="py-2 px-3"><StatusBadge status={r.status} /></td>
                       <td className="py-2 px-3 text-fg-dim">{r.cpu_percent?.toFixed(1)}%</td>
@@ -391,6 +407,11 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
       {tab === "scaling" && (
         <div className="space-y-4">
+          {(!app.domain || app.domain.endsWith(".nip.io")) && (
+            <Card className="p-4">
+              <p className="font-mono text-[10px] text-accent-amber font-bold">Scaling requires a custom domain. Add a domain in Settings first — nip.io URLs are tied to a single server IP and cannot be load-balanced.</p>
+            </Card>
+          )}
           {/* Manual scale: WHERE to place the next replica */}
           <Card className="p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -401,32 +422,54 @@ export function AppDetailPage({ appId }: { appId: number }) {
               </span>
             </div>
 
-            {/* Replica count bar — one block per current replica + ghost block for target */}
-            <div className="flex gap-1 mb-4">
-              {Array.from({ length: Math.max(replicas.length, 1) }).map((_, i) => (
-                <div key={i} className="flex-1 h-8 border-2 border-fg bg-accent shadow-neo-sm" />
-              ))}
-            </div>
+            {/* Replica count bar — one block per current replica */}
+            {replicas.length > 0 ? (
+              <div className="flex gap-1 mb-4">
+                {Array.from({ length: replicas.length }).map((_, i) => (
+                  <div key={i} className="flex-1 h-8 border-2 border-fg bg-accent shadow-neo-sm" />
+                ))}
+              </div>
+            ) : (
+              <p className="text-[10px] text-muted font-mono py-4 text-center uppercase tracking-wider mb-4">
+                {app.status === "sleeping" ? "No replicas — app is sleeping. Wakes automatically on HTTP request." : "No replicas"}
+              </p>
+            )}
 
             <PermissionGate permission="scaling.manage">
               <div className="flex justify-end gap-2">
+                {app.status === "sleeping" && (
+                  <Btn
+                    size="sm"
+                    loading={actionLoading === "wake"}
+                    onClick={() => action("wake", async () => {
+                      await post(`/api/apps/${appId}/scale`, { replicas: 1 });
+                      await loadReplicas();
+                      await load();
+                    })}
+                  >Wake</Btn>
+                )}
                 <Btn
                   size="sm"
                   variant="ghost"
-                  disabled={replicas.length <= 1}
+                  disabled={replicas.length < 1}
                   loading={actionLoading === "scale-down"}
                   title="Remove one replica"
                   onClick={() => action("scale-down", async () => {
                     const current = replicas.length || app.desired_replicas || 1;
-                    if (current <= 1) return;
+                    if (current < 1) return;
+                    if (current === 1) {
+                      if (!await confirm("Scale to Zero", "This will sleep the app. It wakes automatically when it receives an HTTP request.")) return;
+                    }
                     await post(`/api/apps/${appId}/scale`, { replicas: current - 1 });
                     await loadReplicas();
+                    await load();
                   })}
                 >–</Btn>
                 <Btn
                   size="sm"
                   loading={actionLoading === "scale-up"}
-                  title="Add one replica. Placement is automatic: reuse a ready server with no replica of this app, or provision a new one."
+                  disabled={!app.domain || app.domain.endsWith(".nip.io")}
+                  title={!app.domain || app.domain.endsWith(".nip.io") ? "Add a custom domain to enable scaling" : "Add one replica. Placement is automatic: reuse a ready server with no replica of this app, or provision a new one."}
                   onClick={() => action("scale-up", async () => {
                     const current = replicas.length || app.desired_replicas || 1;
                     await post(`/api/apps/${appId}/scale`, { replicas: current + 1 });
@@ -451,8 +494,11 @@ export function AppDetailPage({ appId }: { appId: number }) {
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
                   <Checkbox
-                    checked={policy.autoscale_enabled}
-                    onChange={(v) => setPolicy({ ...policy, autoscale_enabled: v })}
+                    checked={policy.autoscale_enabled && !(!app.domain || app.domain.endsWith(".nip.io"))}
+                    onChange={(v) => {
+                      if (!app.domain || app.domain.endsWith(".nip.io")) return;
+                      setPolicy({ ...policy, autoscale_enabled: v });
+                    }}
                     label="Enable autoscaling"
                   />
                   <InfoTip text="Reconciler checks CPU/memory every 30s and scales between min and max replicas." />
@@ -460,13 +506,13 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div>
-                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Min <InfoTip text="Lowest replica count the autoscaler is allowed to scale down to." /></label>
+                    <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Min <InfoTip text="Lowest replica count the autoscaler is allowed to scale down to. Set to 0 to enable scale-to-zero (app sleeps when idle, wakes on HTTP request)." /></label>
                     <input
                       type="number"
-                      min={1}
+                      min={0}
                       value={policy.min_replicas}
                       disabled={!policy.autoscale_enabled}
-                      onChange={(e) => setPolicy({ ...policy, min_replicas: parseInt(e.target.value) || 1 })}
+                      onChange={(e) => setPolicy({ ...policy, min_replicas: parseInt(e.target.value) || 0 })}
                     />
                   </div>
                   <div>
@@ -514,6 +560,18 @@ export function AppDetailPage({ appId }: { appId: number }) {
                       onChange={(e) => setPolicy({ ...policy, cooldown: parseInt(e.target.value) || 30 })}
                     />
                   </div>
+                  {policy.min_replicas === 0 && (
+                    <div>
+                      <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Idle timeout s <InfoTip text="Seconds of sustained low CPU/memory before the app sleeps. The app wakes automatically on the next HTTP request." /></label>
+                      <input
+                        type="number"
+                        min={60}
+                        value={policy.scale_to_zero_after}
+                        disabled={!policy.autoscale_enabled}
+                        onChange={(e) => setPolicy({ ...policy, scale_to_zero_after: parseInt(e.target.value) || 300 })}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <PermissionGate permission="scaling.manage">

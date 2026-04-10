@@ -262,6 +262,9 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
   if (getReplicasByServer(serverId).length > 0) return;
   if (getApps(serverId).length > 0) return;
   if (getPanel()?.server_id === serverId) return;
+  // Don't GC servers that host sleeping apps (scale-to-zero)
+  const sleepingCount = (db.query("SELECT COUNT(*) as c FROM apps WHERE sleeping_server_id = ?").get(serverId) as any)?.c ?? 0;
+  if (sleepingCount > 0) return;
   const server = getServer(serverId);
   if (!server) return;
   // Lazy import to avoid circular dependency between db.ts and hetzner/index.ts.
@@ -278,6 +281,14 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
 
 export function updateAppStatus(id: number, status: string) {
   db.query("UPDATE apps SET status = ? WHERE id = ?").run(status, id);
+}
+
+export function updateAppSleepingState(id: number, serverId: number, hostPort: number, wakeToken: string) {
+  db.query("UPDATE apps SET sleeping_server_id = ?, sleeping_host_port = ?, wake_token = ? WHERE id = ?").run(serverId, hostPort, wakeToken, id);
+}
+
+export function clearAppSleepingState(id: number) {
+  db.query("UPDATE apps SET sleeping_server_id = NULL, sleeping_host_port = NULL, wake_token = NULL WHERE id = ?").run(id);
 }
 
 export function updateAppDeployedBy(id: number, userId: string) {
@@ -770,6 +781,7 @@ export function updateAppScaling(id: number, fields: {
   autoscale_cpu_threshold?: number;
   autoscale_mem_threshold?: number;
   autoscale_cooldown?: number;
+  scale_to_zero_after?: number;
   last_scale_at?: string;
   hetzner_lb_id?: string;
 }) {
@@ -782,6 +794,7 @@ export function updateAppScaling(id: number, fields: {
   if (fields.autoscale_cpu_threshold !== undefined) { sets.push("autoscale_cpu_threshold = ?"); values.push(fields.autoscale_cpu_threshold); }
   if (fields.autoscale_mem_threshold !== undefined) { sets.push("autoscale_mem_threshold = ?"); values.push(fields.autoscale_mem_threshold); }
   if (fields.autoscale_cooldown !== undefined) { sets.push("autoscale_cooldown = ?"); values.push(fields.autoscale_cooldown); }
+  if (fields.scale_to_zero_after !== undefined) { sets.push("scale_to_zero_after = ?"); values.push(fields.scale_to_zero_after); }
   if (fields.last_scale_at !== undefined) { sets.push("last_scale_at = ?"); values.push(fields.last_scale_at); }
   if (fields.hetzner_lb_id !== undefined) { sets.push("hetzner_lb_id = ?"); values.push(fields.hetzner_lb_id); }
   if (sets.length === 0) return;

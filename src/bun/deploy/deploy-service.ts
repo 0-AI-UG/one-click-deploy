@@ -239,7 +239,6 @@ export async function deployService(
     const hostPort = db.nextServiceHostPort(serverId);
     const containerName = req.name;
 
-    // Build connection URL using server IP and host port
     const connectionUrl = buildConnectionUrl(catalog, envVars, serverIp, hostPort);
     const credentials = {
       host: serverIp,

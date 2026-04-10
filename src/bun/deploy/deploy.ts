@@ -561,8 +561,8 @@ export async function deploy(
     // Mark the (already-created) first replica as healthy/unhealthy.
     db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 
-    // Scale up if replicas > 1 requested
-    if (req.replicas && req.replicas > 1) {
+    // Scale up if replicas > 1 requested (only with a custom domain)
+    if (req.replicas && req.replicas > 1 && req.domain) {
       onProgress("health", `Scaling to ${req.replicas} replicas...`);
       db.updateAppScaling(app.id, {
         desired_replicas: req.replicas,

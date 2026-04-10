@@ -1,28 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { get, post, del } from "../api/client.ts";
-import { Card, StatusBadge, Btn, Spinner, showToast, confirm } from "../components/ui.tsx";
+import { Card, StatusBadge, Btn, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import {
-  Database, Copy, Check, RotateCcw, Pause, Play, Trash2, Plus, Minus,
+  Database, RotateCcw, Pause, Play, Trash2, Plus, Minus,
   Link2, Unlink, ScrollText, ArrowLeft, RefreshCw, Terminal,
 } from "lucide-react";
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      className="p-1 text-muted hover:text-fg transition-colors"
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}
-    >
-      {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-    </button>
-  );
-}
 
 export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const [service, setService] = useState<any>(null);

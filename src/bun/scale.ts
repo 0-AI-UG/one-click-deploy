@@ -8,6 +8,10 @@ function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [scale:${context}]`, ...args);
 }
 
+// In-memory tracker: when each app first entered sustained idle state.
+// Cleared when metrics rise above idle thresholds or app scales.
+const idleSince = new Map<number, number>();
+
 /**
  * Core scaling function: adjusts an app to the target replica count.
  * Handles LB creation/deletion, image transfer, container lifecycle.
@@ -32,8 +36,8 @@ export async function scaleApp(
       return { ok: true };
     }
 
-    if (targetReplicas < 1) {
-      return { ok: false, error: "Must have at least 1 replica" };
+    if (targetReplicas < 0) {
+      return { ok: false, error: "Replicas cannot be negative" };
     }
 
     if (targetReplicas > currentCount) {
@@ -165,16 +169,17 @@ async function scaleUp(
       }
     }
 
-    // Re-bind existing container from 127.0.0.1 to 0.0.0.0
-    emit("scale", "Re-binding container for LB access...");
+    // Re-bind existing container to 0.0.0.0
+    const bindAddr = "0.0.0.0";
+    emit("scale", `Re-binding container to ${bindAddr}...`);
     const primaryHostKey = primaryServer.ssh_host_key || undefined;
     const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
     if (app.deploy_mode === "compose") {
-      // Update compose override to bind to 0.0.0.0
+      // Update compose override to bind to bindAddr
       const overrideServices: any = {
         [app.compose_web_service]: {
-          ports: [`0.0.0.0:${primaryHostPort}:${app.container_port}`],
+          ports: [`${bindAddr}:${primaryHostPort}:${app.container_port}`],
         },
       };
       const override = JSON.stringify({ services: overrideServices });
@@ -193,8 +198,8 @@ async function scaleUp(
       }
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
       const tempName = `${app.name}-rebind`;
-      // Start new container with temp name on 0.0.0.0
-      const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p 0.0.0.0:${primaryHostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+      // Start new container with temp name on bindAddr
+      const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p ${bindAddr}:${primaryHostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
       const startResult = await hetzner.sshExec(primaryServer.ipv4, asUser(cmd), primaryHostKey);
       if (startResult.exitCode !== 0) {
         // Clean up temp container and rethrow
@@ -280,7 +285,8 @@ async function scaleUp(
         await hetzner.sshExec(targetServer.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, targetHostKey);
         envFileFlag = `--env-file ${envFilePath}`;
       }
-      const cmd = `docker run -d --name ${containerName} --restart unless-stopped -p 0.0.0.0:${hostPort}:${app.container_port} ${envFileFlag} ${imageName}`;
+      const replicaBindAddr = "0.0.0.0";
+      const cmd = `docker run -d --name ${containerName} --restart unless-stopped -p ${replicaBindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${imageName}`;
       const result = await hetzner.sshExec(targetServer.ipv4, asUser(cmd), targetHostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to start replica on target server — check that Docker is running and the image was transferred");
@@ -397,90 +403,148 @@ async function scaleDown(
     throw new Error(`Scale-down incomplete — only removed ${removedCount} of ${toRemove.length} replicas. Some servers may need manual cleanup.`);
   }
 
-  // If going from 2→1, tear down LB and revert to Caddy.
-  // The "primary" here is the surviving replica's server.
-  if (targetCount === 1 && lbId) {
-    emit("scale", "Removing load balancer, reverting to direct access...");
+  // If going to 0, deploy wake page so HTTP requests auto-wake the app.
+  if (targetCount === 0) {
+    const lastRemoved = toRemove[toRemove.length - 1];
+    const lastServer = db.getServer(lastRemoved.server_id);
+    if (lastServer) {
+      const wakeToken = crypto.randomUUID();
+      db.updateAppSleepingState(app.id, lastServer.id, lastRemoved.host_port, wakeToken);
+      const panel = db.getPanel();
+      const panelDomain = panel?.domain || "";
+      const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
+      await hetzner.deployCaddyWakePage(
+        lastServer.ipv4, app.domain, panelDomain, app.id, wakeToken, useInternalTls,
+        lastServer.ssh_host_key || undefined
+      );
+    }
+    db.updateAppStatus(app.id, "sleeping");
+    emit("scale", "App scaled to zero — sleeping");
+  }
 
-    const survivors = db.getReplicas(app.id);
-    const survivor = survivors[0];
-    if (!survivor) throw new Error("No surviving replica after scale-down");
-    const primaryServer = db.getServer(survivor.server_id);
-    if (!primaryServer) throw new Error("Surviving replica's server not found");
-    const primaryHostPort = survivor.host_port;
-    const primaryHostKey = primaryServer.ssh_host_key || undefined;
+  // Tear down LB when going to 1 or 0 replicas.
+  if (targetCount <= 1 && lbId) {
+    emit("scale", "Removing load balancer...");
 
-    // Re-bind container back to 127.0.0.1
-    const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+    // When going to 1, rebind the surviving container back to localhost + Caddy
+    if (targetCount === 1) {
+      const survivors = db.getReplicas(app.id);
+      const survivor = survivors[0];
+      if (!survivor) throw new Error("No surviving replica after scale-down");
+      const primaryServer = db.getServer(survivor.server_id);
+      if (!primaryServer) throw new Error("Surviving replica's server not found");
+      const primaryHostPort = survivor.host_port;
+      const primaryHostKey = primaryServer.ssh_host_key || undefined;
 
-    if (app.deploy_mode === "compose") {
-      const overrideServices: any = {
-        [app.compose_web_service]: {
-          ports: [`127.0.0.1:${primaryHostPort}:${app.container_port}`],
-        },
-      };
-      const override = JSON.stringify({ services: overrideServices });
-      const overridePath = `/home/deploy/apps/${app.name}/docker-compose.ocd.yml`;
-      const escapedOverride = override.replace(/'/g, "'\\''");
-      await hetzner.sshExec(primaryServer.ipv4, `echo '${escapedOverride}' > ${overridePath} && chown deploy:deploy ${overridePath}`, primaryHostKey);
-      await hetzner.sshExec(primaryServer.ipv4, asUser(`cd /home/deploy/apps/${app.name} && docker compose -p ${app.name} up -d`), primaryHostKey);
-    } else {
-      // Safe rebind: start temp container on 127.0.0.1, verify, then swap
-      const envVars = JSON.parse(app.env_vars || "{}");
-      const envEntries = Object.entries(envVars);
-      let envFileFlag = "";
-      if (envEntries.length > 0) {
-        envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
+      // Re-bind container back to 127.0.0.1
+      const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+      if (app.deploy_mode === "compose") {
+        const overrideServices: any = {
+          [app.compose_web_service]: {
+            ports: [`127.0.0.1:${primaryHostPort}:${app.container_port}`],
+          },
+        };
+        const override = JSON.stringify({ services: overrideServices });
+        const overridePath = `/home/deploy/apps/${app.name}/docker-compose.ocd.yml`;
+        const escapedOverride = override.replace(/'/g, "'\\''");
+        await hetzner.sshExec(primaryServer.ipv4, `echo '${escapedOverride}' > ${overridePath} && chown deploy:deploy ${overridePath}`, primaryHostKey);
+        await hetzner.sshExec(primaryServer.ipv4, asUser(`cd /home/deploy/apps/${app.name} && docker compose -p ${app.name} up -d`), primaryHostKey);
+      } else {
+        // Safe rebind: start temp container on 127.0.0.1, verify, then swap
+        const envVars = JSON.parse(app.env_vars || "{}");
+        const envEntries = Object.entries(envVars);
+        let envFileFlag = "";
+        if (envEntries.length > 0) {
+          envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
+        }
+        const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
+        const tempName = `${app.name}-rebind`;
+        const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p 127.0.0.1:${primaryHostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+        const startResult = await hetzner.sshExec(primaryServer.ipv4, asUser(cmd), primaryHostKey);
+        if (startResult.exitCode !== 0) {
+          await hetzner.sshExec(primaryServer.ipv4, asUser(`docker rm -f ${tempName} 2>/dev/null || true`), primaryHostKey);
+          throw new Error(`Failed to restart container during scaling — check container logs for details`);
+        }
+        await hetzner.sshExec(primaryServer.ipv4, asUser(`docker rm -f ${app.name} 2>/dev/null || true`), primaryHostKey);
+        await hetzner.sshExec(primaryServer.ipv4, asUser(`docker rename ${tempName} ${app.name}`), primaryHostKey);
       }
-      const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-      const tempName = `${app.name}-rebind`;
-      const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p 127.0.0.1:${primaryHostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
-      const startResult = await hetzner.sshExec(primaryServer.ipv4, asUser(cmd), primaryHostKey);
-      if (startResult.exitCode !== 0) {
-        await hetzner.sshExec(primaryServer.ipv4, asUser(`docker rm -f ${tempName} 2>/dev/null || true`), primaryHostKey);
-        throw new Error(`Failed to restart container during scaling — check container logs for details`);
+
+      // Restore Caddy
+      const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
+      const caddyPort = app.auth_password ? hetzner.authProxyPort(primaryHostPort) : primaryHostPort;
+      await hetzner.deployCaddySite(primaryServer.ipv4, app.domain, caddyPort, useInternalTls, primaryHostKey);
+
+      // Atomic DNS swap: create new record first, then delete old (overlap, not gap)
+      const dnsRecords = db.getDnsRecords(app.id);
+      const settings = db.getSettings();
+      if (dnsRecords.length > 0 && settings.dns_zone_id) {
+        const parts = app.domain.split(".");
+        const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
+        const newRecord = await hetzner.createDnsRecord({
+          zone_id: settings.dns_zone_id,
+          name: subdomain,
+          type: "A",
+          value: primaryServer.ipv4,
+        });
+        db.insertDnsRecord({
+          app_id: app.id,
+          zone_id: settings.dns_zone_id,
+          record_id: newRecord.id,
+          name: subdomain,
+          type: "A",
+          value: primaryServer.ipv4,
+        });
+        for (const record of dnsRecords) {
+          try {
+            await hetzner.deleteDnsRecord({
+              zone_id: record.zone_id,
+              name: record.name,
+              type: record.type,
+              value: record.value,
+            });
+            db.deleteDnsRecord(record.record_id);
+          } catch {}
+        }
       }
-      await hetzner.sshExec(primaryServer.ipv4, asUser(`docker rm -f ${app.name} 2>/dev/null || true`), primaryHostKey);
-      await hetzner.sshExec(primaryServer.ipv4, asUser(`docker rename ${tempName} ${app.name}`), primaryHostKey);
     }
 
-    // Restore Caddy
-    const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-    const caddyPort = app.auth_password ? hetzner.authProxyPort(primaryHostPort) : primaryHostPort;
-    await hetzner.deployCaddySite(primaryServer.ipv4, app.domain, caddyPort, useInternalTls, primaryHostKey);
-
-    // Atomic DNS swap: create new record first, then delete old (overlap, not gap)
-    const dnsRecords = db.getDnsRecords(app.id);
-    const settings = db.getSettings();
-    if (dnsRecords.length > 0 && settings.dns_zone_id) {
-      const parts = app.domain.split(".");
-      const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
-      // Create new record pointing to server first
-      const newRecord = await hetzner.createDnsRecord({
-        zone_id: settings.dns_zone_id,
-        name: subdomain,
-        type: "A",
-        value: primaryServer.ipv4,
-      });
-      db.insertDnsRecord({
-        app_id: app.id,
-        zone_id: settings.dns_zone_id,
-        record_id: newRecord.id,
-        name: subdomain,
-        type: "A",
-        value: primaryServer.ipv4,
-      });
-      // Now safe to delete old records
-      for (const record of dnsRecords) {
-        try {
-          await hetzner.deleteDnsRecord({
-            zone_id: record.zone_id,
-            name: record.name,
-            type: record.type,
-            value: record.value,
+    // When going to 0, DNS should point to the sleeping server (wake page is already deployed)
+    if (targetCount === 0) {
+      const sleepingApp = db.getApp(app.id);
+      const sleepingServer = sleepingApp?.sleeping_server_id ? db.getServer(sleepingApp.sleeping_server_id) : null;
+      if (sleepingServer) {
+        const dnsRecords = db.getDnsRecords(app.id);
+        const settings = db.getSettings();
+        if (dnsRecords.length > 0 && settings.dns_zone_id) {
+          const parts = app.domain.split(".");
+          const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
+          const newRecord = await hetzner.createDnsRecord({
+            zone_id: settings.dns_zone_id,
+            name: subdomain,
+            type: "A",
+            value: sleepingServer.ipv4,
           });
-          db.deleteDnsRecord(record.record_id);
-        } catch {}
+          db.insertDnsRecord({
+            app_id: app.id,
+            zone_id: settings.dns_zone_id,
+            record_id: newRecord.id,
+            name: subdomain,
+            type: "A",
+            value: sleepingServer.ipv4,
+          });
+          for (const record of dnsRecords) {
+            try {
+              await hetzner.deleteDnsRecord({
+                zone_id: record.zone_id,
+                name: record.name,
+                type: record.type,
+                value: record.value,
+              });
+              db.deleteDnsRecord(record.record_id);
+            } catch {}
+          }
+        }
       }
     }
 
@@ -488,16 +552,19 @@ async function scaleDown(
     const lb = await hetzner.getLoadBalancer(lbId).catch(() => null);
     if (lb) {
       await hetzner.deleteLoadBalancer(lbId);
-      // Remove LB firewall rules
+      // Remove LB firewall rules — use any known host port for the firewall rule
       try {
         const firewallId = await hetzner.ensureFirewall();
-        const destPort = app.auth_password ? hetzner.authProxyPort(primaryHostPort) : primaryHostPort;
-        await hetzner.removeLBFirewallRule(firewallId, destPort, lb.public_net.ipv4.ip);
+        const anyHostPort = toRemove[0]?.host_port || 0;
+        const destPort = app.auth_password ? hetzner.authProxyPort(anyHostPort) : anyHostPort;
+        if (destPort) {
+          await hetzner.removeLBFirewallRule(firewallId, destPort, lb.public_net.ipv4.ip);
+        }
       } catch {}
     }
     db.updateAppScaling(app.id, { hetzner_lb_id: "" });
 
-    emit("scale", "Load balancer removed, direct access restored");
+    emit("scale", "Load balancer removed");
   }
 
   // GC every affected server uniformly — gcServerIfEmpty handles the
@@ -789,23 +856,138 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
   }
 
   // Scale down
-  if (
-    avgCpu < app.autoscale_cpu_threshold * 0.5 &&
-    avgMem < app.autoscale_mem_threshold * 0.5 &&
-    replicas.length > app.min_replicas
-  ) {
-    log("autoscale", `Scaling down app ${appId}: CPU=${avgCpu.toFixed(1)}% < ${app.autoscale_cpu_threshold * 0.5}% and MEM=${avgMem.toFixed(1)}% < ${app.autoscale_mem_threshold * 0.5}%`);
-    const result = await scaleApp(appId, replicas.length - 1);
-    if (result.ok) {
-      db.insertScalingEvent({
-        app_id: appId,
-        event_type: "autoscale_down",
-        from_count: replicas.length,
-        to_count: replicas.length - 1,
-        reason: `CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}% below thresholds`,
-      });
-    }
+  const isIdle = avgCpu < app.autoscale_cpu_threshold * 0.5 &&
+    avgMem < app.autoscale_mem_threshold * 0.5;
+
+  if (!isIdle) {
+    // Metrics are not idle — clear any tracked idle start
+    idleSince.delete(appId);
     return;
+  }
+
+  if (replicas.length > app.min_replicas) {
+    // Scale-to-zero requires sustained idle for scale_to_zero_after seconds
+    if (replicas.length === 1 && app.min_replicas === 0) {
+      const idleTimeout = app.scale_to_zero_after ?? 300;
+      const now = Date.now();
+      if (!idleSince.has(appId)) {
+        idleSince.set(appId, now);
+        log("autoscale", `App ${appId}: idle detected, will sleep after ${idleTimeout}s of sustained idle`);
+        return;
+      }
+      const idleDuration = (now - idleSince.get(appId)!) / 1000;
+      if (idleDuration < idleTimeout) {
+        log("autoscale", `App ${appId}: idle for ${Math.round(idleDuration)}s / ${idleTimeout}s before sleep`);
+        return;
+      }
+      // Sustained idle confirmed — scale to zero
+      idleSince.delete(appId);
+      log("autoscale", `Scaling to zero app ${appId}: idle for ${Math.round(idleDuration)}s (threshold: ${idleTimeout}s)`);
+      const result = await scaleApp(appId, 0);
+      if (result.ok) {
+        db.insertScalingEvent({
+          app_id: appId,
+          event_type: "autoscale_sleep",
+          from_count: 1,
+          to_count: 0,
+          reason: `Idle for ${Math.round(idleDuration)}s — CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}%`,
+        });
+      }
+    } else {
+      // Normal scale-down (N → N-1, where N-1 >= 1)
+      log("autoscale", `Scaling down app ${appId}: CPU=${avgCpu.toFixed(1)}% < ${app.autoscale_cpu_threshold * 0.5}% and MEM=${avgMem.toFixed(1)}% < ${app.autoscale_mem_threshold * 0.5}%`);
+      const result = await scaleApp(appId, replicas.length - 1);
+      if (result.ok) {
+        db.insertScalingEvent({
+          app_id: appId,
+          event_type: "autoscale_down",
+          from_count: replicas.length,
+          to_count: replicas.length - 1,
+          reason: `CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}% below thresholds`,
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Wake a sleeping app (scale-to-zero → 1 replica).
+ * Restarts the container on the server where it was last running.
+ */
+export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: string }> {
+  log("wake", `Waking app ${appId}`);
+
+  try {
+    const app = db.getApp(appId);
+    if (!app) return { ok: false, error: "App not found" };
+    if (app.status !== "sleeping") return { ok: true }; // already awake or waking
+
+    const serverId = app.sleeping_server_id;
+    const hostPort = app.sleeping_host_port;
+    if (!serverId || !hostPort) return { ok: false, error: "Missing sleeping state" };
+
+    const server = db.getServer(serverId);
+    if (!server) return { ok: false, error: "Server not found" };
+
+    db.updateAppStatus(appId, "waking");
+    const hostKey = server.ssh_host_key || undefined;
+    const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+    const containerName = app.name;
+
+    // Start container
+    if (app.deploy_mode === "compose") {
+      await hetzner.sshExec(server.ipv4, asUser(
+        `cd /home/deploy/apps/${app.name} && docker compose -p ${app.name} up -d`
+      ), hostKey);
+    } else {
+      const envVars = JSON.parse(app.env_vars || "{}");
+      let envFileFlag = "";
+      if (Object.keys(envVars).length > 0) {
+        envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
+      }
+      const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
+      const cmd = `docker run -d --name ${containerName} --restart unless-stopped ` +
+        `-p 127.0.0.1:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+      await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+    }
+
+    // Health check
+    const health = app.deploy_mode === "compose"
+      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await hetzner.healthCheck(server.ipv4, containerName, hostPort, 5, hostKey);
+
+    // Re-deploy auth proxy if needed
+    if (app.auth_password) {
+      await hetzner.deployAuthProxy(server.ipv4, containerName, app.auth_password, hostPort, hostKey);
+    }
+
+    // Restore Caddy reverse proxy route
+    const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
+    const caddyPort = app.auth_password ? hetzner.authProxyPort(hostPort) : hostPort;
+    await hetzner.deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
+
+    // Insert replica record
+    db.insertReplica({
+      app_id: appId,
+      server_id: serverId,
+      host_port: hostPort,
+      container_name: containerName,
+      status: health.healthy ? "running" : "unhealthy",
+    });
+
+    // Clear sleeping state
+    db.clearAppSleepingState(appId);
+    db.updateAppScaling(appId, { desired_replicas: 1, last_scale_at: new Date().toISOString() });
+    db.updateAppStatus(appId, "running");
+    db.insertScalingEvent({ app_id: appId, event_type: "wake", from_count: 0, to_count: 1, reason: "wake request" });
+
+    log("wake", `App ${appId} woken successfully`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log("wake", `Failed to wake app ${appId}: ${msg}`);
+    db.updateAppStatus(appId, "error");
+    return { ok: false, error: msg };
   }
 }
 

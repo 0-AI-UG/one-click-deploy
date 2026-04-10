@@ -527,6 +527,23 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN deployed_by TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 22,
+    description: "Add scale-to-zero support: sleeping state and idle timeout",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN sleeping_server_id INTEGER");
+      db.run("ALTER TABLE apps ADD COLUMN sleeping_host_port INTEGER");
+      // Seconds of sustained idle before autoscaler sleeps the app (0 = use normal scale-down rules)
+      db.run("ALTER TABLE apps ADD COLUMN scale_to_zero_after INTEGER NOT NULL DEFAULT 300");
+    },
+  },
+  {
+    version: 23,
+    description: "Add wake_token to apps for authenticated wake endpoints",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN wake_token TEXT");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { get, post, del } from "../api/client.ts";
-import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
+import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box } from "lucide-react";
 
@@ -122,9 +122,12 @@ export function DashboardPage() {
                     <div className="flex items-center gap-4 min-w-0">
                       <a href={`#/apps/${app.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{app.name}</a>
                       {app.domain && (
-                        <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="flex items-center gap-1 text-[9px] font-mono text-muted hover:text-fg transition-colors">
-                          <Globe size={10} />{app.domain}<ExternalLink size={8} />
-                        </a>
+                        <span className="flex items-center gap-1 text-[9px] font-mono text-muted">
+                          <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="flex items-center gap-1 hover:text-fg transition-colors">
+                            <Globe size={10} />{app.domain}<ExternalLink size={8} />
+                          </a>
+                          <CopyButton text={`https://${app.domain}`} size={10} />
+                        </span>
                       )}
                       <StatusBadge status={app.status} />
                       {app.webhook_enabled ? <span title="Webhook active"><GitBranch size={10} className="text-accent" /></span> : null}

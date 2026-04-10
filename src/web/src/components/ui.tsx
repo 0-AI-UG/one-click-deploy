@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
-import { X, AlertTriangle, Loader2 } from "lucide-react";
+import { X, AlertTriangle, Loader2, Copy, Check } from "lucide-react";
 
 // --- Toast system ---
 type Toast = { id: number; message: string; type: "success" | "error" | "info" };
@@ -121,20 +121,38 @@ export function Spinner({ className = "" }: { className?: string }) {
   return <Loader2 size={16} className={`animate-spin text-fg ${className}`} />;
 }
 
+// --- Copy Button ---
+export function CopyButton({ text, size = 12 }: { text: string; size?: number }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="p-1 text-muted hover:text-fg transition-colors"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? <Check size={size} className="text-green-500" /> : <Copy size={size} />}
+    </button>
+  );
+}
+
 // --- Status Badge ---
 export function StatusBadge({ status }: { status: string }) {
   const s = status?.toLowerCase() || "unknown";
   const dotColor =
     s === "running" ? "bg-accent" :
-    s === "deploying" ? "bg-accent-amber" :
-    s === "paused" ? "bg-alt" :
+    s === "deploying" || s === "waking" ? "bg-accent-amber" :
+    s === "paused" || s === "sleeping" ? "bg-alt" :
     s === "unhealthy" ? "bg-accent-amber" :
     s === "error" || s === "failed" ? "bg-accent-red" :
     "bg-alt";
 
   return (
     <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-fg">
-      <span className={`w-[7px] h-[7px] border-[1.5px] border-fg flex-shrink-0 ${dotColor} ${s === "deploying" ? "pulse" : ""}`} />
+      <span className={`w-[7px] h-[7px] border-[1.5px] border-fg flex-shrink-0 ${dotColor} ${s === "deploying" || s === "waking" ? "pulse" : ""}`} />
       {status}
     </span>
   );

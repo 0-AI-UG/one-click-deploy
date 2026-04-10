@@ -48,7 +48,7 @@ import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleDeleteResource } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
-import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory } from "./routes/scaling.ts";
+import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus } from "./routes/scaling.ts";
 import {
   handleEnableWebhook,
   handleDisableWebhook,
@@ -296,6 +296,16 @@ export const server = Bun.serve({
         const m = new URL(req.url).pathname.match(/\/webhooks\/github\/(\d+)/);
         return handleGithubWebhook(req, m ? parseInt(m[1], 10) : 0);
       },
+    },
+
+    // Public wake endpoints (no auth — called from the wake page on the app's domain)
+    "/api/apps/:appId/wake": {
+      POST: (req: Request) => handleWakeApp(req, appIdFrom(req)),
+      OPTIONS: () => new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } }),
+    },
+    "/api/apps/:appId/wake-status": {
+      GET: (req: Request) => handleWakeStatus(req, appIdFrom(req)),
+      OPTIONS: () => new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } }),
     },
 
     // --- Admin: Settings ---

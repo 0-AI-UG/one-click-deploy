@@ -187,12 +187,31 @@ export NEEDRESTART_MODE=a
 # docker-ce image already includes Docker, curl, git
 # Firewall is handled by Hetzner Cloud Firewall (not UFW)
 apt-get update -qq || { sleep 10; wait_for_apt; apt-get update -qq; }
-apt-get install -y -qq unattended-upgrades hc-utils || { sleep 10; wait_for_apt; apt-get install -y -qq unattended-upgrades hc-utils; }
+apt-get install -y -qq unattended-upgrades hc-utils fail2ban || { sleep 10; wait_for_apt; apt-get install -y -qq unattended-upgrades hc-utils fail2ban; }
 systemctl enable hc-agent && systemctl start hc-agent
 
 # Create deploy user for running containers
 useradd -m -s /bin/bash deploy
 usermod -aG docker deploy
+
+# SSH hardening: disable root password login, only allow key-based auth
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/^#\?MaxAuthTries.*/MaxAuthTries 3/' /etc/ssh/sshd_config
+systemctl reload sshd || systemctl reload ssh || true
+
+# fail2ban: protect SSH against brute-force
+cat > /etc/fail2ban/jail.local <<'F2B'
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+maxretry = 5
+bantime = 3600
+findtime = 600
+F2B
+systemctl enable fail2ban
+systemctl restart fail2ban
 
 # Enable automatic security updates
 cat > /etc/apt/apt.conf.d/20auto-upgrades <<'AUTOUPGRADE'

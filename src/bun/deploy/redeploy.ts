@@ -492,16 +492,24 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
 
 export function getServersWithApps(): any[] {
   const servers = db.getServers();
-  return servers.map((s) => ({
+  const allAppsGlobal = db.getApps();
+  return servers.map((s) => {
+    const activeApps = db.getApps(s.id);
+    // Include sleeping apps (scale-to-zero) associated with this server
+    const sleepingApps = allAppsGlobal.filter(
+      (a: any) => a.sleeping_server_id === s.id && !activeApps.some((aa: any) => aa.id === a.id)
+    );
+    const allApps = [...activeApps, ...sleepingApps];
+    return {
     ...s,
-    apps: db.getApps(s.id).map((a: any) => {
+    apps: allApps.map((a: any) => {
       const reps = db.getReplicas(a.id);
       const first = reps[0];
       const serverIds = Array.from(new Set(reps.map((r: any) => r.server_id)));
       const deployedByUser = a.deployed_by ? db.getUserById(a.deployed_by) : null;
       return {
         ...a,
-        host_port: first?.host_port ?? 0,
+        host_port: first?.host_port ?? a.sleeping_host_port ?? 0,
         servers: serverIds,
         deployed_by_username: deployedByUser?.username || null,
       };
@@ -515,5 +523,6 @@ export function getServersWithApps(): any[] {
         linked_apps: links.map((l: any) => ({ id: l.app_id, name: l.app_name })),
       };
     }),
-  }));
+  };
+  });
 }
