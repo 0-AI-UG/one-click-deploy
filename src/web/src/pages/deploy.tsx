@@ -366,7 +366,11 @@ export function DeployPage() {
   };
 
   const detected = introspect?.ok === true ? introspect : null;
-  const hasMultipleDockerfiles = !!detected && detected.dockerfiles.length > 1;
+  // Build mode: compose vs dockerfile. Manifest or form value takes priority,
+  // then fall back to what was detected in the repo.
+  const hasBothModes = !!detected && detected.dockerfiles.length > 0 && !!detected.compose_file;
+  const isCompose = !!(form.compose_file || detected?.compose_file);
+  const hasMultipleDockerfiles = !isCompose && !!detected && detected.dockerfiles.length > 1;
   const hasMultipleServices = !!detected && detected.compose_services.length > 1;
   const envKeys = Object.keys(envValues);
 
@@ -540,23 +544,53 @@ export function DeployPage() {
                 <input type="text" value={form.app_name} onChange={set("app_name")} required />
               </ReceiptRow>
 
-              {/* Build source: Dockerfile, or a picker if multiple */}
-              <ReceiptRow
-                label={detected?.compose_file ? "Compose" : "Dockerfile"}
-                detected={!!detected && (detected.dockerfiles.length > 0 || !!detected.compose_file)}
-              >
-                {hasMultipleDockerfiles ? (
+              {/* Build mode: allow switching between Compose and Dockerfile when both exist */}
+              {hasBothModes && selectedManifest == null && (
+                <ReceiptRow label="Build Mode" detected>
                   <NeoSelect
-                    value={form.dockerfile_path}
-                    onChange={(v) => setForm((f) => ({ ...f, dockerfile_path: v }))}
-                    options={detected!.dockerfiles.map((d) => ({ value: d, label: d }))}
+                    value={isCompose ? "compose" : "dockerfile"}
+                    onChange={(v) => {
+                      if (v === "compose") {
+                        setForm((f) => ({
+                          ...f,
+                          compose_file: detected?.compose_file || "docker-compose.yml",
+                          compose_web_service: detected?.suggested_web_service || "",
+                          dockerfile_path: "",
+                        }));
+                      } else {
+                        setForm((f) => ({
+                          ...f,
+                          compose_file: "",
+                          compose_web_service: "",
+                          dockerfile_path: detected?.dockerfiles[0] || "",
+                        }));
+                      }
+                    }}
+                    options={[
+                      { value: "compose", label: "Docker Compose" },
+                      { value: "dockerfile", label: "Dockerfile" },
+                    ]}
                   />
-                ) : detected?.compose_file ? (
+                </ReceiptRow>
+              )}
+
+              {/* Build source: Compose or Dockerfile */}
+              <ReceiptRow
+                label={isCompose ? "Compose" : "Dockerfile"}
+                detected={!!detected && (detected.dockerfiles.length > 0 || isCompose)}
+              >
+                {isCompose ? (
                   <input
                     type="text"
                     value={form.compose_file}
                     onChange={set("compose_file")}
-                    placeholder={detected.compose_file}
+                    placeholder={detected?.compose_file || "docker-compose.yml"}
+                  />
+                ) : hasMultipleDockerfiles ? (
+                  <NeoSelect
+                    value={form.dockerfile_path}
+                    onChange={(v) => setForm((f) => ({ ...f, dockerfile_path: v }))}
+                    options={detected!.dockerfiles.map((d) => ({ value: d, label: d }))}
                   />
                 ) : (
                   <input
@@ -568,17 +602,26 @@ export function DeployPage() {
                 )}
               </ReceiptRow>
 
-              {/* Compose service picker, only if multiple services */}
-              {hasMultipleServices && (
-                <ReceiptRow label="Web Service" detected>
-                  <NeoSelect
-                    value={form.compose_web_service}
-                    onChange={(v) => setForm((f) => ({ ...f, compose_web_service: v }))}
-                    options={detected!.compose_services.map((s) => ({
-                      value: s.name,
-                      label: s.has_ports ? `${s.name}  ·  exposes port` : s.name,
-                    }))}
-                  />
+              {/* Compose web service picker */}
+              {isCompose && (
+                <ReceiptRow label="Web Service" detected={!!form.compose_web_service}>
+                  {hasMultipleServices ? (
+                    <NeoSelect
+                      value={form.compose_web_service}
+                      onChange={(v) => setForm((f) => ({ ...f, compose_web_service: v }))}
+                      options={detected!.compose_services.map((s) => ({
+                        value: s.name,
+                        label: s.has_ports ? `${s.name}  ·  exposes port` : s.name,
+                      }))}
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      value={form.compose_web_service}
+                      onChange={set("compose_web_service")}
+                      placeholder="Service name to route traffic to"
+                    />
+                  )}
                 </ReceiptRow>
               )}
 

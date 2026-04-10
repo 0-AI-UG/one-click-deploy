@@ -30,7 +30,6 @@ docker run --rm \
     "domain": "panel.example.com",
     "server_type": "cx22",
     "server_location": "nbg1",
-    "github_pat": "optional_github_pat_for_auto_redeploy",
     "dns_zone_id": "optional_hetzner_dns_zone_id"
   }' \
   ghcr.io/0-ai-ug/one-click-deploy:latest
@@ -46,7 +45,7 @@ docker run --rm \
 ```
 
 **Required fields:** `hetzner_token`, `domain`.
-**Optional fields:** `server_type` (default `cx23`), `server_location` (default `nbg1`), `github_pat` (enables webhook auto-redeploy), `dns_zone_id` (auto-creates the A record), `volume_size` (default `10` GB), `app_name` (default `ocd-panel`).
+**Optional fields:** `server_type` (default `cx23`), `server_location` (default `nbg1`), `dns_zone_id` (auto-creates the A record), `volume_size` (default `10` GB), `app_name` (default `ocd-panel`).
 
 Progress streams to docker logs. When the container exits with code 0, open `https://<domain>`, create your admin account on the one-time setup page, and you're done. From that point on, the panel manages itself: redeploy, roll back, edit env vars, and view logs from its own app-detail page. GitHub pushes trigger auto-redeploys via the webhook.
 

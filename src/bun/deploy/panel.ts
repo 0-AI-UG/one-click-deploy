@@ -16,7 +16,6 @@
 //     if the panel container is destroyed seconds later.
 import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
-import { resolveGitHubToken } from "../github-token.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
@@ -63,8 +62,6 @@ export async function bootstrapPanel(
   if (db.getPanel()) {
     return { ok: false, error: "Panel already bootstrapped in this DB" };
   }
-
-  const githubPat = (await resolveGitHubToken()) || undefined;
 
   // Rollback state
   let hetznerServerId: string | undefined;
@@ -219,7 +216,6 @@ export async function bootstrapPanel(
         hostPort,
         envVars: opts.envVars,
         volumeMount,
-        gitToken: githubPat,
       },
       (line) => onProgress("build", line),
     );

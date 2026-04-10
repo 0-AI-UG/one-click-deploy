@@ -1,7 +1,6 @@
 {
   "hetzner_token": "your_hetzner_api_token",
   "domain": "panel.example.com",
-  "github_pat": "ghp_optional_for_webhook_autoredeploy",
   "dns_zone_id": "optional_hetzner_dns_zone_id",
   "server_type": "cx23",
   "server_location": "nbg1"
