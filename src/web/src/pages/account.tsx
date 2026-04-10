@@ -231,14 +231,9 @@ function GitHubSection() {
 
       {linked ? (
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {avatar && (
-              <img src={avatar} alt={username} className="w-8 h-8 border-2 border-fg" />
-            )}
-            <div>
-              <span className="font-mono text-[11px] text-fg font-bold">@{username}</span>
-              <span className="font-mono text-[9px] font-bold uppercase px-2 py-0.5 border-2 border-fg bg-green-200 ml-2">Linked</span>
-            </div>
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[11px] text-fg font-bold">@{username}</span>
+            <span className="font-mono text-[9px] font-bold uppercase px-2 py-0.5 border-2 border-fg bg-green-200">Linked</span>
           </div>
           <Btn size="xs" loading={busy} onClick={unlinkGitHub}>
             <Unlink size={11} /> Unlink
