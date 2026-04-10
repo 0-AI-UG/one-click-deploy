@@ -234,12 +234,19 @@ a{color:#888}
   var h=document.querySelector("h1"),p=document.querySelector("p"),sp=document.querySelector(".spinner");
   function fail(msg){clearInterval(iv);if(sp)sp.style.display="none";h.textContent="Error";p.innerHTML=msg+' <a href="'+P+'">Open dashboard</a>';}
   fetch(P+"/api/apps/"+ID+"/wake?token="+T,{method:"POST",mode:"cors"}).catch(function(){});
+  function tryReload(attempts){
+    fetch(location.href,{method:"HEAD",cache:"no-store",redirect:"follow"}).then(function(r){
+      if(r.status!==503){location.reload()}
+      else if(attempts>0){setTimeout(function(){tryReload(attempts-1)},1000)}
+      else{location.reload()}
+    }).catch(function(){if(attempts>0){setTimeout(function(){tryReload(attempts-1)},1000)}else{location.reload()}});
+  }
   var iv=setInterval(function(){
     if(++n>60){clearInterval(iv);if(sp)sp.style.display="none";h.textContent="Timeout";p.innerHTML='App did not wake within 2 minutes. <a href="'+P+'">Open dashboard</a>';return}
     fetch(P+"/api/apps/"+ID+"/wake-status?token="+T,{mode:"cors"})
       .then(function(r){return r.json()})
       .then(function(d){
-        if(d.status==="running"){clearInterval(iv);location.reload()}
+        if(d.status==="running"){clearInterval(iv);p.textContent="Ready! Reloading...";tryReload(10)}
         if(d.status==="error"){fail("App failed to start. ")}
       })
       .catch(function(){});
