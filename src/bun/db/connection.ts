@@ -4,7 +4,7 @@ import { mkdirSync } from "fs";
 import { runMigrations } from "../migrations.ts";
 import { DATA_DIR } from "../paths.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [db:${context}]`, ...args);
 }
 

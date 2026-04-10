@@ -45,7 +45,7 @@ type DeployState = {
   dbAppId?: number;
   dnsRecord?: { zone_id: string; name: string; type: string; value: string };
   containerName?: string;
-  deployMode?: "dockerfile" | "compose" | "railpack";
+  deployMode?: "dockerfile" | "compose";
   caddyConfigured?: boolean;
   caddyDomain?: string;
   volumeId?: string;
@@ -321,7 +321,7 @@ export async function deploy(
       if (state.hetznerServerId) {
         hetznerServerId = parseInt(state.hetznerServerId, 10);
       } else {
-        const existingServer = db.getServer(serverId!);
+        const existingServer = db.getServer(serverId!)!;
         hetznerServerId = parseInt(existingServer.hetzner_id, 10);
       }
 
@@ -380,27 +380,30 @@ export async function deploy(
     }
 
     const buildStart = Date.now();
-    let deployMode: "dockerfile" | "compose" | "railpack" = "dockerfile";
+    let deployMode: "dockerfile" | "compose" = "dockerfile";
     let composeFile = "";
     let composeWebService = "";
 
     // Determine deploy mode: compose auto-detection only if no explicit dockerfile_path
     if (!req.dockerfile_path) {
-      // Clone first to detect compose file and Dockerfile presence
-      await hetzner.sshExec(serverIp, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps`);
-      const appDir = `/home/deploy/apps/${req.app_name}`;
-      const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-      let cloneUrl = req.git_repo;
-      if (githubPat && cloneUrl.match(/^https:\/\/github\.com\//)) {
-        cloneUrl = cloneUrl.replace(/^https:\/\/github\.com\//, `https://x-access-token:${githubPat}@github.com/`);
-      }
-      const gitEnv = githubPat ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
-      await sshExecForDetection(serverIp, asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git pull; else rm -rf ${appDir} && git clone ${cloneUrl} ${appDir}; fi`));
-      if (githubPat && cloneUrl !== req.git_repo) {
-        await sshExecForDetection(serverIp, asUser(`cd ${appDir} && git remote set-url origin ${req.git_repo}`));
-      }
-
-      const detected = req.compose_file || await hetzner.detectComposeFile(serverIp, req.app_name, serverHostKey || undefined);
+      // Clone first to detect compose file
+      const detected = req.compose_file || await (async () => {
+        // Need to clone before we can detect — cloneAndBuild/cloneAndComposeBuild handle this
+        // Do a preliminary clone to check for compose files
+        await hetzner.sshExec(serverIp, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps`);
+        const appDir = `/home/deploy/apps/${req.app_name}`;
+        const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+        let cloneUrl = req.git_repo;
+        if (githubPat && cloneUrl.match(/^https:\/\/github\.com\//)) {
+          cloneUrl = cloneUrl.replace(/^https:\/\/github\.com\//, `https://x-access-token:${githubPat}@github.com/`);
+        }
+        const gitEnv = githubPat ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
+        await sshExecForDetection(serverIp, asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git pull; else rm -rf ${appDir} && git clone ${cloneUrl} ${appDir}; fi`));
+        if (githubPat && cloneUrl !== req.git_repo) {
+          await sshExecForDetection(serverIp, asUser(`cd ${appDir} && git remote set-url origin ${req.git_repo}`));
+        }
+        return await hetzner.detectComposeFile(serverIp, req.app_name, serverHostKey || undefined);
+      })();
 
       if (detected) {
         deployMode = "compose";
@@ -409,20 +412,11 @@ export async function deploy(
           await hetzner.detectWebService(serverIp, req.app_name, detected, serverHostKey || undefined) ||
           "web";
         log("build", `Compose mode detected: file=${composeFile} service=${composeWebService}`);
-      } else {
-        // Check if a Dockerfile exists — if not, use Railpack
-        const dockerfileCheck = await sshExecForDetection(serverIp, asUser(
-          `cd ${appDir} && if [ -f Dockerfile ]; then echo Dockerfile; elif [ -f docker/Dockerfile ]; then echo docker/Dockerfile; else find . -maxdepth 3 -name Dockerfile -type f | head -1 | sed 's|^\\./||'; fi`
-        ));
-        if (!dockerfileCheck.stdout.trim()) {
-          deployMode = "railpack";
-          log("build", "No Dockerfile or compose file found — using Railpack");
-        }
       }
     }
 
     state.deployMode = deployMode;
-    let buildImageTag = `${req.app_name}:latest`; // default, overridden by builds
+    let buildImageTag = `${req.app_name}:latest`; // default, overridden by Dockerfile builds
 
     if (deployMode === "compose") {
       const result = await hetzner.cloneAndComposeBuild(
@@ -444,27 +438,6 @@ export async function deploy(
         }
       );
       db.updateAppDeployMode(app.id, "compose", result.composeFile, result.webService);
-    } else if (deployMode === "railpack") {
-      const result = await hetzner.cloneAndRailpackBuild(
-        serverIp,
-        {
-          name: req.app_name,
-          gitRepo: req.git_repo,
-          port: req.container_port,
-          hostPort: replica.host_port,
-          envVars: req.env_vars,
-          volumeMount,
-          gitToken: githubPat,
-        },
-        (line) => {
-          maskedLog(app.id, `[build] ${line}`);
-          onProgress("build", mask(line));
-        }
-      );
-      db.updateAppDeployMode(app.id, "railpack", "", "");
-      if (result.imageTag) {
-        buildImageTag = result.imageTag;
-      }
     } else {
       const result = await hetzner.cloneAndBuild(
         serverIp,

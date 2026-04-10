@@ -1,13 +1,13 @@
 import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
 import { resolveGitHubToken } from "../github-token.ts";
-import { type ProgressFn, log } from "./types.ts";
+import { type ProgressFn, log, type App, type Replica } from "./types.ts";
 import { pickTargetServer } from "./server-picker.ts";
 import { rebindContainer } from "./rebind.ts";
 
 export async function scaleUp(
-  app: any,
-  currentReplicas: any[],
+  app: App,
+  currentReplicas: Replica[],
   currentCount: number,
   targetCount: number,
   emit: ProgressFn,
@@ -227,8 +227,8 @@ export async function scaleUp(
 }
 
 export async function rollbackScaleUp(
-  app: any,
-  originalReplicas: any[],
+  app: App,
+  originalReplicas: Replica[],
   emit: ProgressFn
 ): Promise<void> {
   const freshApp = db.getApp(app.id);

@@ -1,8 +1,9 @@
 import * as hetzner from "../hetzner/index.ts";
+import { type App } from "./types.ts";
 
 export async function rebindContainer(
   serverIpv4: string,
-  app: any,
+  app: App,
   bindAddr: string,
   hostPort: number,
   hostKey: string | undefined
@@ -10,7 +11,7 @@ export async function rebindContainer(
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
   if (app.deploy_mode === "compose") {
-    const overrideServices: any = {
+    const overrideServices: Record<string, { ports: string[] }> = {
       [app.compose_web_service]: {
         ports: [`${bindAddr}:${hostPort}:${app.container_port}`],
       },

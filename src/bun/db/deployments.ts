@@ -1,5 +1,33 @@
 import db from "./connection.ts";
 
+export type DeploymentRow = {
+  id: number;
+  app_id: number;
+  image_tag: string;
+  git_commit: string;
+  status: string;
+  source: string;
+  deploy_log: string;
+  created_at: string;
+};
+
+export type DeployJobRow = {
+  id: number;
+  app_name: string;
+  status: string;
+  result_json: string;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type DeployJobEventRow = {
+  job_id: number;
+  seq: number;
+  ts: string;
+  step: string;
+  detail: string;
+};
+
 export function insertDeployment(deployment: {
   app_id: number;
   image_tag: string;
@@ -8,7 +36,7 @@ export function insertDeployment(deployment: {
   status?: string;
   source?: string;
   created_at?: string;
-}) {
+}): DeploymentRow {
   const status = deployment.status ?? "deployed";
   const source = deployment.source ?? "manual";
   if (deployment.created_at) {
@@ -24,7 +52,7 @@ export function insertDeployment(deployment: {
         status,
         source,
         deployment.created_at
-      ) as any;
+      ) as DeploymentRow;
   }
   return db
     .query(
@@ -37,35 +65,35 @@ export function insertDeployment(deployment: {
       deployment.deploy_log ?? "",
       status,
       source
-    ) as any;
+    ) as DeploymentRow;
 }
 
-export function updateDeploymentStatus(id: number, status: string) {
+export function updateDeploymentStatus(id: number, status: string): void {
   db.query("UPDATE deployment_history SET status = ? WHERE id = ?").run(status, id);
 }
 
-export function appendDeploymentLog(id: number, line: string) {
+export function appendDeploymentLog(id: number, line: string): void {
   db.query(
     "UPDATE deployment_history SET deploy_log = deploy_log || ? WHERE id = ?"
   ).run(line + "\n", id);
 }
 
-export function updateDeploymentGitCommit(id: number, gitCommit: string) {
+export function updateDeploymentGitCommit(id: number, gitCommit: string): void {
   db.query("UPDATE deployment_history SET git_commit = ? WHERE id = ?").run(gitCommit, id);
 }
 
-export function getDeployments(appId: number) {
+export function getDeployments(appId: number): DeploymentRow[] {
   return db
     .query(
       "SELECT * FROM deployment_history WHERE app_id = ? ORDER BY created_at DESC"
     )
-    .all(appId) as any[];
+    .all(appId) as DeploymentRow[];
 }
 
-export function getDeployment(id: number) {
+export function getDeployment(id: number): DeploymentRow | null {
   return db
     .query("SELECT * FROM deployment_history WHERE id = ?")
-    .get(id) as any;
+    .get(id) as DeploymentRow | null;
 }
 
 export function createDeployJob(appName: string): { id: number } {
@@ -84,20 +112,20 @@ export function appendDeployJobEvent(jobId: number, step: string, detail: string
   return row.next;
 }
 
-export function finishDeployJob(jobId: number, result: { ok: boolean; error?: string }) {
+export function finishDeployJob(jobId: number, result: { ok: boolean; error?: string }): void {
   db.query(
     "UPDATE deploy_jobs SET status = ?, result_json = ?, finished_at = datetime('now') WHERE id = ?"
   ).run(result.ok ? "done" : "error", JSON.stringify(result), jobId);
 }
 
-export function getDeployJob(id: number): { id: number; app_name: string; status: string; result_json: string; started_at: string; finished_at: string | null } | null {
-  return db.query("SELECT * FROM deploy_jobs WHERE id = ?").get(id) as any;
+export function getDeployJob(id: number): DeployJobRow | null {
+  return db.query("SELECT * FROM deploy_jobs WHERE id = ?").get(id) as DeployJobRow | null;
 }
 
-export function getDeployJobEvents(jobId: number, sinceSeq: number): Array<{ seq: number; ts: string; step: string; detail: string }> {
+export function getDeployJobEvents(jobId: number, sinceSeq: number): Pick<DeployJobEventRow, "seq" | "ts" | "step" | "detail">[] {
   return db
     .query(
       "SELECT seq, ts, step, detail FROM deploy_job_events WHERE job_id = ? AND seq > ? ORDER BY seq ASC"
     )
-    .all(jobId, sinceSeq) as any[];
+    .all(jobId, sinceSeq) as Pick<DeployJobEventRow, "seq" | "ts" | "step" | "detail">[];
 }

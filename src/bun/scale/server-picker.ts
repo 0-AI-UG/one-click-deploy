@@ -1,16 +1,16 @@
 import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
-import { type ProgressFn } from "./types.ts";
+import { type ProgressFn, type App, type Server } from "./types.ts";
 
 export async function pickTargetServer(
-  app: any,
+  app: App,
   settings: Record<string, string>,
   emit: ProgressFn,
   preferredServerId?: number
-): Promise<any> {
+): Promise<Server> {
   // Explicit placement: caller chose a specific server
   if (preferredServerId) {
-    const preferred = db.getServer(preferredServerId);
+    const preferred = db.getServer(preferredServerId) as Server | null;
     if (!preferred) throw new Error(`Target server ${preferredServerId} not found`);
     if (preferred.status !== "ready") throw new Error(`Target server ${preferred.name} is not ready (status: ${preferred.status})`);
     emit("scale", `Placing replica on ${preferred.name} (user-selected)`);
@@ -18,15 +18,15 @@ export async function pickTargetServer(
   }
 
   // Find servers with fewest replicas of this app
-  const allServers = db.getServers();
-  const appReplicas = db.getReplicas(app.id);
+  const allServers = db.getServers() as Server[];
+  const appReplicas = db.getReplicas(app.id) as { server_id: number }[];
   const replicasByServer = new Map<number, number>();
   for (const r of appReplicas) {
     replicasByServer.set(r.server_id, (replicasByServer.get(r.server_id) || 0) + 1);
   }
 
   // Find server with fewest replicas (prefer existing servers with 0 replicas of this app)
-  let bestServer: any = null;
+  let bestServer: Server | null = null;
   let bestCount = Infinity;
   for (const server of allServers) {
     if (server.status !== "ready") continue;
@@ -83,7 +83,7 @@ export async function pickTargetServer(
 
     db.updateServerStatus(dbServer.id, "ready");
     emit("scale", `Server ${serverName} ready`);
-    return db.getServer(dbServer.id);
+    return db.getServer(dbServer.id) as Server;
   }
 
   return bestServer;

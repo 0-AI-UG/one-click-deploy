@@ -15,8 +15,43 @@ export type UserRow = {
   created_at: string;
 };
 
+export type WebAuthnCredential = {
+  id: string;
+  user_id: string;
+  public_key: Buffer;
+  counter: number;
+  device_type: string;
+  backed_up: number;
+  transports: string;
+  name: string;
+  created_at: string;
+};
+
+export const ALL_PERMISSIONS = [
+  "apps.deploy",
+  "apps.redeploy",
+  "apps.rollback",
+  "apps.restart",
+  "apps.pause",
+  "apps.destroy",
+  "apps.logs",
+  "apps.env",
+  "servers.view",
+  "servers.delete",
+  "volumes.create",
+  "volumes.manage",
+  "volumes.delete",
+  "scaling.manage",
+  "webhooks.manage",
+  "resources.view",
+  "resources.delete",
+  "terminal.access",
+] as const;
+
+export type Permission = typeof ALL_PERMISSIONS[number];
+
 export function getUserCount(): number {
-  const row = db.query("SELECT COUNT(*) as count FROM users").get() as any;
+  const row = db.query("SELECT COUNT(*) as count FROM users").get() as { count: number } | null;
   return row?.count ?? 0;
 }
 
@@ -77,7 +112,7 @@ export function disableTotp(userId: string): void {
 }
 
 export function getTotpSecret(userId: string): string | null {
-  const row = db.query("SELECT totp_secret FROM users WHERE id = ?").get(userId) as any;
+  const row = db.query("SELECT totp_secret FROM users WHERE id = ?").get(userId) as { totp_secret: string | null } | null;
   return row?.totp_secret ?? null;
 }
 
@@ -90,7 +125,7 @@ export function insertBackupCodes(userId: string, codeHashes: string[]): void {
 }
 
 export function getUnusedBackupCodes(userId: string): Array<{ id: string; code_hash: string }> {
-  return db.query("SELECT id, code_hash FROM totp_backup_codes WHERE user_id = ? AND used = 0").all(userId) as any[];
+  return db.query("SELECT id, code_hash FROM totp_backup_codes WHERE user_id = ? AND used = 0").all(userId) as Array<{ id: string; code_hash: string }>;
 }
 
 export function markBackupCodeUsed(codeId: string): void {
@@ -98,21 +133,9 @@ export function markBackupCodeUsed(codeId: string): void {
 }
 
 export function getUnusedBackupCodeCount(userId: string): number {
-  const row = db.query("SELECT COUNT(*) as count FROM totp_backup_codes WHERE user_id = ? AND used = 0").get(userId) as any;
+  const row = db.query("SELECT COUNT(*) as count FROM totp_backup_codes WHERE user_id = ? AND used = 0").get(userId) as { count: number } | null;
   return row?.count ?? 0;
 }
-
-export type WebAuthnCredential = {
-  id: string;
-  user_id: string;
-  public_key: Buffer;
-  counter: number;
-  device_type: string;
-  backed_up: number;
-  transports: string;
-  name: string;
-  created_at: string;
-};
 
 export function insertWebAuthnCredential(data: {
   id: string;
@@ -164,36 +187,13 @@ export function disableWebAuthn(userId: string): void {
 }
 
 export function getWebAuthnCredentialCount(userId: string): number {
-  const row = db.query("SELECT COUNT(*) as count FROM webauthn_credentials WHERE user_id = ?").get(userId) as any;
+  const row = db.query("SELECT COUNT(*) as count FROM webauthn_credentials WHERE user_id = ?").get(userId) as { count: number } | null;
   return row?.count ?? 0;
 }
 
-export const ALL_PERMISSIONS = [
-  "apps.deploy",
-  "apps.redeploy",
-  "apps.rollback",
-  "apps.restart",
-  "apps.pause",
-  "apps.destroy",
-  "apps.logs",
-  "apps.env",
-  "servers.view",
-  "servers.delete",
-  "volumes.create",
-  "volumes.manage",
-  "volumes.delete",
-  "scaling.manage",
-  "webhooks.manage",
-  "resources.view",
-  "resources.delete",
-  "terminal.access",
-] as const;
-
-export type Permission = typeof ALL_PERMISSIONS[number];
-
 export function getUserPermissions(userId: string): string[] {
-  const rows = db.query("SELECT permission FROM user_permissions WHERE user_id = ?").all(userId) as any[];
-  return rows.map((r: any) => r.permission);
+  const rows = db.query("SELECT permission FROM user_permissions WHERE user_id = ?").all(userId) as Array<{ permission: string }>;
+  return rows.map((r) => r.permission);
 }
 
 export function hasPermission(userId: string, permission: string): boolean {

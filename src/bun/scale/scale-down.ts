@@ -1,11 +1,11 @@
 import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
-import { type ProgressFn, log } from "./types.ts";
+import { type ProgressFn, log, type App, type Replica } from "./types.ts";
 import { rebindContainer } from "./rebind.ts";
 
 export async function scaleDown(
-  app: any,
-  currentReplicas: any[],
+  app: App,
+  currentReplicas: Replica[],
   currentCount: number,
   targetCount: number,
   emit: ProgressFn
