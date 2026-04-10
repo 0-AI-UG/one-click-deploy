@@ -3,7 +3,43 @@ import { get, post, del, put } from "../../api/client.ts";
 import { Card, Btn, Table, Spinner, showToast, confirm } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-server-types.ts";
-import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings } from "lucide-react";
+import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check } from "lucide-react";
+
+function GitHubOAuthSettings({ form, setS }: { form: Record<string, string>; setS: (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => void }) {
+  const [copied, setCopied] = useState(false);
+  const callbackUrl = `${window.location.origin}/api/auth/github/callback`;
+
+  const copyUrl = () => {
+    navigator.clipboard.writeText(callbackUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="border-t-2 border-fg pt-4 space-y-3">
+      <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">GitHub OAuth</h3>
+      <div>
+        <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Callback URL</label>
+        <div className="flex items-center gap-2 bg-alt border-2 border-fg px-3 py-2">
+          <code className="font-mono text-[10px] text-fg flex-1 select-all truncate">{callbackUrl}</code>
+          <button onClick={copyUrl} className="text-muted hover:text-fg transition-colors shrink-0">
+            {copied ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Client ID</label>
+          <input type="text" value={form.github_oauth_client_id} onChange={setS("github_oauth_client_id")} placeholder="Ov23li..." />
+        </div>
+        <div>
+          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Client Secret</label>
+          <input type="password" value={form.github_oauth_client_secret} onChange={setS("github_oauth_client_secret")} placeholder="Client secret" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 type User = {
   id: string; username: string; isAdmin: boolean; totpEnabled: boolean;
@@ -177,23 +213,7 @@ export function UsersPage() {
           <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner API Token</label>
           <input type="password" value={settingsForm.hetzner_api_token} onChange={setS("hetzner_api_token")} placeholder="Enter token" />
         </div>
-        <div className="border-t-2 border-fg pt-4">
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">GitHub OAuth (Per-User Linking)</h3>
-          <p className="font-mono text-[9px] text-muted mb-3">
-            Register a GitHub OAuth App at github.com/settings/developers to let users link their GitHub accounts.
-            Set the callback URL to <span className="text-fg">{window.location.origin}/api/auth/github/callback</span>
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Client ID</label>
-              <input type="text" value={settingsForm.github_oauth_client_id} onChange={setS("github_oauth_client_id")} placeholder="Ov23li..." />
-            </div>
-            <div>
-              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Client Secret</label>
-              <input type="password" value={settingsForm.github_oauth_client_secret} onChange={setS("github_oauth_client_secret")} placeholder="Client secret" />
-            </div>
-          </div>
-        </div>
+        <GitHubOAuthSettings form={settingsForm} setS={setS} />
 
         <div className="border-t-2 border-fg pt-4">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">Defaults</h3>
