@@ -72,7 +72,7 @@ function credentialTransports(c: db.WebAuthnCredential): AuthenticatorTransportF
 }
 
 /** Build the user response object consistently */
-function userResponse(user: any) {
+function userResponse(user: db.UserRow) {
   const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(user.id);
   return {
     id: user.id,
@@ -162,7 +162,7 @@ export async function handleWebAuthnRegisterVerify(request: Request): Promise<Re
       counter: credential.counter,
       deviceType: credentialDeviceType,
       backedUp: credentialBackedUp,
-      transports: (body.credential.response as any).transports ?? [],
+      transports: body.credential.response.transports ?? [],
       name: body.name || "Passkey",
     });
     db.enableWebAuthn(userId);
@@ -270,7 +270,7 @@ export async function handleWebAuthnRegisterVerifyFromLogin(request: Request): P
       counter: credential.counter,
       deviceType: credentialDeviceType,
       backedUp: credentialBackedUp,
-      transports: (body.credential.response as any).transports ?? [],
+      transports: body.credential.response.transports ?? [],
       name: body.name || "Passkey",
     });
     db.enableWebAuthn(userId);

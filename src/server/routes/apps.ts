@@ -75,17 +75,17 @@ export async function handleGetServers(request: Request): Promise<Response> {
 export async function handleGetDashboard(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");
-    const apps = db.getApps().map((a: any) => {
+    const apps = db.getApps().map((a) => {
       const reps = db.getReplicas(a.id);
       return { ...a, desired_replicas: a.desired_replicas ?? reps.length };
     });
-    const services = db.getServices().map((svc: any) => {
+    const services = db.getServices().map((svc) => {
       const instances = db.getServiceInstances(svc.id);
       const links = db.getServiceLinks(svc.id);
       return {
         ...svc,
         instance_count: instances.length,
-        linked_apps: links.map((l: any) => ({ id: l.app_id, name: l.app_name })),
+        linked_apps: links.map((l) => ({ id: l.app_id, name: l.app_name })),
       };
     });
     return Response.json({ apps, services }, { headers: corsHeaders });
@@ -98,10 +98,10 @@ export async function handleGetApps(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");
     const apps = db.getApps();
-    const result = apps.map((a: any) => {
+    const result = apps.map((a) => {
       const reps = db.getReplicas(a.id);
       const first = reps[0];
-      const servers = db.getServersForApp(a.id).map((s: any) => s.id);
+      const servers = db.getServersForApp(a.id).map((s) => s.id);
       return { ...a, host_port: first?.host_port ?? 0, servers };
     });
     return Response.json(result, { headers: corsHeaders });
@@ -128,9 +128,10 @@ export async function handleDeploy(request: Request): Promise<Response> {
           notifyJob(job.id);
         }, payload.userId);
         db.finishDeployJob(job.id, result);
-      } catch (err: any) {
-        db.appendDeployJobEvent(job.id, "error", err?.message || String(err));
-        db.finishDeployJob(job.id, { ok: false, error: err?.message || String(err) });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        db.appendDeployJobEvent(job.id, "error", msg);
+        db.finishDeployJob(job.id, { ok: false, error: msg });
       } finally {
         notifyJob(job.id);
       }

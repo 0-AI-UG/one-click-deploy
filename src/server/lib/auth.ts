@@ -22,7 +22,7 @@ export async function authenticateRequest(request: Request): Promise<TokenPayloa
   const token = header.slice(7);
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    if ((payload as any).purpose) throw new AuthError("Unauthorized");
+    if ((payload as Record<string, unknown>).purpose) throw new AuthError("Unauthorized");
     return payload as unknown as TokenPayload;
   } catch (err) {
     if (err instanceof AuthError) throw err;
@@ -49,8 +49,9 @@ export async function createTempToken(userId: string): Promise<string> {
 export async function verifyTempToken(token: string): Promise<string> {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    if ((payload as any).purpose !== "2fa") throw new AuthError("Invalid token");
-    return (payload as any).userId;
+    const p = payload as Record<string, unknown>;
+    if (p.purpose !== "2fa") throw new AuthError("Invalid token");
+    return p.userId as string;
   } catch (err) {
     if (err instanceof AuthError) throw err;
     throw new AuthError("Invalid or expired token");

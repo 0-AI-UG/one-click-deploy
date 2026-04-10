@@ -26,8 +26,9 @@ async function createStateToken(userId: string): Promise<string> {
 
 async function verifyStateToken(token: string): Promise<string> {
   const { payload } = await jwtVerify(token, OAUTH_STATE_SECRET);
-  if ((payload as any).purpose !== "github-oauth") throw new Error("Invalid state");
-  return (payload as any).userId;
+  const p = payload as Record<string, unknown>;
+  if (p.purpose !== "github-oauth") throw new Error("Invalid state");
+  return p.userId as string;
 }
 
 function getPanelOrigin(request: Request): string {
@@ -103,13 +104,23 @@ export async function handleGitHubCallback(request: Request): Promise<Response> 
       }),
     });
 
-    const tokenData = await tokenRes.json() as any;
+    interface GitHubTokenResponse {
+      access_token?: string;
+      error?: string;
+      error_description?: string;
+    }
+    interface GitHubUserResponse {
+      id: number;
+      login: string;
+      avatar_url: string;
+    }
+    const tokenData = await tokenRes.json() as GitHubTokenResponse;
     if (tokenData.error || !tokenData.access_token) {
       log("callback", `Token exchange failed: ${tokenData.error_description || tokenData.error}`);
       return Response.redirect(`${origin}/#/account?github=error&reason=token_exchange`);
     }
 
-    const accessToken = tokenData.access_token as string;
+    const accessToken = tokenData.access_token;
 
     // Fetch GitHub user info
     const userRes = await fetch("https://api.github.com/user", {
@@ -124,10 +135,10 @@ export async function handleGitHubCallback(request: Request): Promise<Response> 
       return Response.redirect(`${origin}/#/account?github=error&reason=user_fetch`);
     }
 
-    const ghUser = await userRes.json() as any;
-    const githubId = ghUser.id as number;
-    const githubUsername = ghUser.login as string;
-    const avatarUrl = ghUser.avatar_url as string;
+    const ghUser = await userRes.json() as GitHubUserResponse;
+    const githubId = ghUser.id;
+    const githubUsername = ghUser.login;
+    const avatarUrl = ghUser.avatar_url;
 
     // Store encrypted token and update user
     await secretStore.set(`github_oauth:${userId}`, accessToken);

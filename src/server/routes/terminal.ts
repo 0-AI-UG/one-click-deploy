@@ -28,8 +28,9 @@ async function authFromQuery(req: Request): Promise<{ userId: string } | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    if ((payload as any).purpose) return null;
-    return { userId: (payload as any).userId };
+    const p = payload as Record<string, unknown>;
+    if (p.purpose) return null;
+    return { userId: p.userId as string };
   } catch {
     return null;
   }
@@ -59,7 +60,7 @@ function parseTarget(req: Request): { kind: "server" | "replica" | "service-inst
  *   - null if the upgrade succeeded (caller should return undefined)
  *   - null if the path is not the terminal path (caller continues routing)
  */
-export async function tryTerminalUpgrade(req: Request, server: any): Promise<Response | null | "not-matched"> {
+export async function tryTerminalUpgrade(req: Request, server: Bun.Server<TerminalWsData>): Promise<Response | null | "not-matched"> {
   const url = new URL(req.url);
   if (url.pathname !== "/api/terminal/ws") return "not-matched";
 
@@ -85,7 +86,7 @@ export async function tryTerminalUpgrade(req: Request, server: any): Promise<Res
 }
 
 export const terminalWsHandlers = {
-  open(ws: any) {
+  open(ws: Bun.ServerWebSocket<TerminalWsData>) {
     const data = ws.data as TerminalWsData;
     sessionsByUser.set(data.userId, (sessionsByUser.get(data.userId) ?? 0) + 1);
 
@@ -156,7 +157,7 @@ export const terminalWsHandlers = {
     data.pty = pty;
   },
 
-  message(ws: any, message: string | Uint8Array) {
+  message(ws: Bun.ServerWebSocket<TerminalWsData>, message: string | Uint8Array) {
     const data = ws.data as TerminalWsData;
     if (!data.pty) return;
     if (typeof message === "string") {
@@ -169,7 +170,7 @@ export const terminalWsHandlers = {
     }
   },
 
-  close(ws: any) {
+  close(ws: Bun.ServerWebSocket<TerminalWsData>) {
     const data = ws.data as TerminalWsData;
     if (data.pty) {
       try { data.pty.kill(); } catch {}

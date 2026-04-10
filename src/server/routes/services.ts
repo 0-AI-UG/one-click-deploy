@@ -67,14 +67,14 @@ export async function handleGetServices(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");
     const services = db.getServices();
-    const result = services.map((s: any) => {
+    const result = services.map((s) => {
       const instances = db.getServiceInstances(s.id);
       const links = db.getServiceLinks(s.id);
       return {
         ...s,
         instance_count: instances.length,
-        primary_instance: instances.find((i: any) => i.role === "primary") || null,
-        linked_apps: links.map((l: any) => ({ id: l.app_id, name: l.app_name })),
+        primary_instance: instances.find((i) => i.role === "primary") || null,
+        linked_apps: links.map((l) => ({ id: l.app_id, name: l.app_name })),
       };
     });
     return Response.json(result, { headers: corsHeaders });
@@ -98,7 +98,7 @@ export async function handleGetService(request: Request, serviceId: number): Pro
       ...service,
       credentials: JSON.parse(service.credentials || "{}"),
       instances,
-      linked_apps: links.map((l: any) => ({ id: l.app_id, name: l.app_name, env_prefix: l.env_prefix })),
+      linked_apps: links.map((l) => ({ id: l.app_id, name: l.app_name, env_prefix: l.env_prefix })),
     }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -121,9 +121,10 @@ export async function handleDeployService(request: Request): Promise<Response> {
           notifyJob(job.id);
         });
         db.finishServiceDeployJob(job.id, result);
-      } catch (err: any) {
-        db.appendServiceDeployJobEvent(job.id, "error", err?.message || String(err));
-        db.finishServiceDeployJob(job.id, { ok: false, error: err?.message || String(err) });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        db.appendServiceDeployJobEvent(job.id, "error", msg);
+        db.finishServiceDeployJob(job.id, { ok: false, error: msg });
       } finally {
         notifyJob(job.id);
       }
@@ -284,7 +285,7 @@ export async function handleLinkService(request: Request, serviceId: number, app
     // Add replica URLs if replicas exist
     const replicas = db.getReplicaInstances(serviceId);
     if (replicas.length > 0) {
-      const replicaUrls = replicas.map((r: any) => {
+      const replicaUrls = replicas.map((r) => {
         const server = db.getServer(r.server_id);
         if (!server) return "";
         return buildConnectionUrl(catalog, serviceEnv, server.ipv4, r.host_port);
@@ -340,7 +341,7 @@ export async function handleUnlinkService(request: Request, serviceId: number, a
 
     // Get the link to find env prefix
     const links = db.getServiceLinks(serviceId);
-    const link = links.find((l: any) => l.app_id === appId);
+    const link = links.find((l) => l.app_id === appId);
     if (!link) {
       return Response.json({ error: "Link not found" }, { status: 404, headers: corsHeaders });
     }
