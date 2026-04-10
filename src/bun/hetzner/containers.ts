@@ -236,9 +236,9 @@ a{color:#888}
   fetch(P+"/api/apps/"+ID+"/wake?token="+T,{method:"POST",mode:"cors"}).catch(function(){});
   function tryReload(attempts){
     fetch(location.href,{method:"HEAD",cache:"no-store",redirect:"follow"}).then(function(r){
-      if(r.status!==503){location.reload()}
+      if(r.status!==503){window.location.replace(location.href.split("?")[0]+"?_t="+Date.now())}
       else if(attempts>0){setTimeout(function(){tryReload(attempts-1)},1000)}
-      else{location.reload()}
+      else{window.location.replace(location.href.split("?")[0]+"?_t="+Date.now())}
     }).catch(function(){if(attempts>0){setTimeout(function(){tryReload(attempts-1)},1000)}else{location.reload()}});
   }
   var iv=setInterval(function(){
@@ -265,6 +265,7 @@ a{color:#888}
         status_code: "503",
         headers: {
           "Content-Type": ["text/html; charset=utf-8"],
+          "Cache-Control": ["no-store, no-cache, must-revalidate"],
           "Retry-After": ["30"],
         },
         body: html,
