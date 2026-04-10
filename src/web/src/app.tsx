@@ -14,7 +14,7 @@ import { SetupPage } from "./pages/setup.tsx";
 import { DashboardPage } from "./pages/dashboard.tsx";
 import { DeployPage } from "./pages/deploy/index.tsx";
 import { DeployProgressPage } from "./pages/deploy-progress.tsx";
-import { AppDetailPage } from "./pages/app-detail.tsx";
+import { AppDetailPage } from "./pages/app-detail/index.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
 import { AccountPage } from "./pages/account.tsx";
 import { UsersPage } from "./pages/admin/users.tsx";
