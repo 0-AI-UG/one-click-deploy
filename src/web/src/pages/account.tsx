@@ -4,11 +4,12 @@ import { Card, Btn, Spinner, showToast } from "../components/ui.tsx";
 import { User, Shield, Fingerprint, KeyRound, Trash2, LogOut, GitBranch, LinkIcon, Unlink } from "lucide-react";
 import { startRegistration, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { logout, useAuth, updateUser } from "../stores/auth.ts";
+import type { TotpStatus } from "../types.ts";
 
 type PasskeyInfo = { id: string; name: string; deviceType: string; backedUp: boolean; createdAt: string };
 
 function SecuritySection() {
-  const [status, setStatus] = useState<any>(null);
+  const [status, setStatus] = useState<TotpStatus | null>(null);
   const [passkeys, setPasskeys] = useState<PasskeyInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -172,7 +173,7 @@ function GitHubSection() {
     if (params.get("github") === "linked") {
       showToast("GitHub account linked", "success");
       // Refresh user data so the auth store is up to date
-      get("/api/me").then((data: any) => { if (data.user) updateUser(data.user); }).catch(() => {});
+      get("/api/me").then((data: { user?: Parameters<typeof updateUser>[0] }) => { if (data.user) updateUser(data.user); }).catch(() => {});
       // Clean URL
       window.location.hash = "#/account";
     } else if (params.get("github") === "error") {
@@ -193,7 +194,7 @@ function GitHubSection() {
   const linkGitHub = async () => {
     setBusy(true);
     try {
-      const { url } = await get("/api/auth/github/authorize");
+      const { url } = await get("/api/auth/github/authorize") as { url: string };
       window.location.href = url;
     } catch (err: any) {
       showToast(err.message || "Failed to start GitHub OAuth", "error");
@@ -208,7 +209,7 @@ function GitHubSection() {
       showToast("GitHub account unlinked", "success");
       setStatus({ linked: false, githubUsername: "", avatarUrl: "" });
       // Refresh user data
-      get("/api/me").then((data: any) => { if (data.user) updateUser(data.user); }).catch(() => {});
+      get("/api/me").then((data: { user?: Parameters<typeof updateUser>[0] }) => { if (data.user) updateUser(data.user); }).catch(() => {});
     } catch (err: any) {
       showToast(err.message || "Failed to unlink", "error");
     } finally {

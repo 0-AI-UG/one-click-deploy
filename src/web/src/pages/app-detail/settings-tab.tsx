@@ -2,9 +2,10 @@ import { post, put } from "../../api/client.ts";
 import { Card, Btn, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Plus, Minus } from "lucide-react";
+import type { AppData } from "../../types.ts";
 
 interface SettingsTabProps {
-  app: any;
+  app: AppData;
   appId: number;
   nameEdit: string;
   setNameEdit: (v: string) => void;
@@ -17,7 +18,7 @@ interface SettingsTabProps {
   volumeForm: { size: number; mount_path: string };
   setVolumeForm: (f: { size: number; mount_path: string }) => void;
   actionLoading: string | null;
-  action: (name: string, fn: () => Promise<any>) => Promise<void>;
+  action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
 }
 
 export function SettingsTab({

@@ -215,12 +215,8 @@ export async function deployService(
     if (state.hetznerServerId) {
       hetznerServerId = parseInt(state.hetznerServerId, 10);
     } else {
-<<<<<<< HEAD
-      const srv = db.getServer(serverId)!;
-=======
       const srv = db.getServer(serverId);
       if (!srv) throw new Error(`Server ${serverId} not found`);
->>>>>>> worktree-agent-a8d64196
       hetznerServerId = parseInt(srv.hetzner_id, 10);
     }
 

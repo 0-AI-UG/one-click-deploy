@@ -9,10 +9,11 @@ import { DeploymentsTab } from "./deployments-tab.tsx";
 import { ScalingTab } from "./scaling-tab.tsx";
 import { WebhooksTab } from "./webhooks-tab.tsx";
 import { SettingsTab } from "./settings-tab.tsx";
+import type { AppData, ServerData, ReplicaData, MetricSample, ScalingEvent, DeploymentRecord } from "../../types.ts";
 
 export function AppDetailPage({ appId }: { appId: number }) {
-  const [app, setApp] = useState<any>(null);
-  const [server, setServer] = useState<any>(null);
+  const [app, setApp] = useState<AppData | null>(null);
+  const [server, setServer] = useState<ServerData | null>(null);
   const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
   const [nameEdit, setNameEdit] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -20,11 +21,11 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [envEdit, setEnvEdit] = useState<{ key: string; value: string }[]>([]);
   const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
   const [logs, setLogs] = useState("");
-  const [deployments, setDeployments] = useState<any[]>([]);
-  const [replicas, setReplicas] = useState<any[]>([]);
-  const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
-  const [scalingEvents, setScalingEvents] = useState<any[]>([]);
-  const [allServers, setAllServers] = useState<any[]>([]);
+  const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
+  const [replicas, setReplicas] = useState<ReplicaData[]>([]);
+  const [metricsHistory, setMetricsHistory] = useState<MetricSample[]>([]);
+  const [scalingEvents, setScalingEvents] = useState<ScalingEvent[]>([]);
+  const [allServers, setAllServers] = useState<ServerData[]>([]);
   const [policy, setPolicy] = useState<{
     autoscale_enabled: boolean;
     min_replicas: number;
@@ -116,7 +117,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
     }
   }, [tab, app]);
 
-  const action = async (name: string, fn: () => Promise<any>) => {
+  const action = async (name: string, fn: () => Promise<unknown>) => {
     setActionLoading(name);
     try {
       await fn();
@@ -202,7 +203,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
         {tabs.map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key as any)}
+            onClick={() => setTab(t.key as typeof tab)}
             className={`px-4 py-2 font-mono text-[10px] font-bold uppercase tracking-wider border-b-2 -mb-[2px] transition-all ${
               tab === t.key
                 ? "border-fg text-fg bg-accent"

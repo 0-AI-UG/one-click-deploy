@@ -2,14 +2,15 @@ import { post } from "../../api/client.ts";
 import { Card, Btn } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { GitBranch } from "lucide-react";
+import type { AppData } from "../../types.ts";
 
 interface WebhooksTabProps {
-  app: any;
+  app: AppData;
   appId: number;
   webhookForm: { branch: string; path: string };
   setWebhookForm: (f: { branch: string; path: string }) => void;
   actionLoading: string | null;
-  action: (name: string, fn: () => Promise<any>) => Promise<void>;
+  action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
 }
 
 export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoading, action }: WebhooksTabProps) {

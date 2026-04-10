@@ -15,8 +15,18 @@ export function TerminalPage({ kind, id }: Props) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    let term: any;
-    let fitAddon: any;
+    interface XTerm {
+      cols: number; rows: number;
+      loadAddon(addon: unknown): void;
+      open(el: HTMLElement): void;
+      focus(): void;
+      write(data: string | Uint8Array): void;
+      onData(cb: (data: string) => void): void;
+      dispose(): void;
+    }
+    interface FitAddon { fit(): void; }
+    let term: XTerm | undefined;
+    let fitAddon: FitAddon | undefined;
     let ws: WebSocket | null = null;
     let disposed = false;
 
@@ -24,8 +34,11 @@ export function TerminalPage({ kind, id }: Props) {
       try {
         setStatus("loading");
         // Dynamic import from esm.sh to avoid adding a build-time dep.
-        const xterm: any = await import(/* @vite-ignore */ /* @ts-ignore */ "https://esm.sh/xterm@5.3.0" as any);
-        const fit: any = await import(/* @vite-ignore */ /* @ts-ignore */ "https://esm.sh/xterm-addon-fit@0.8.0" as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // @ts-ignore - CDN import
+        const xterm = await import(/* @vite-ignore */ "https://esm.sh/xterm@5.3.0") as { Terminal: new (opts: Record<string, unknown>) => XTerm };
+        // @ts-ignore - CDN import
+        const fit = await import(/* @vite-ignore */ "https://esm.sh/xterm-addon-fit@0.8.0") as { FitAddon: new () => FitAddon };
         // Style (inject once)
         if (!document.getElementById("xterm-css")) {
           const link = document.createElement("link");
@@ -55,17 +68,17 @@ export function TerminalPage({ kind, id }: Props) {
 
         ws.onopen = () => {
           setStatus("open");
-          term.focus();
+          term!.focus();
           // Send initial size
           try {
-            ws!.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+            ws!.send(JSON.stringify({ type: "resize", cols: term!.cols, rows: term!.rows }));
           } catch {}
         };
         ws.onmessage = (ev) => {
           if (ev.data instanceof ArrayBuffer) {
-            term.write(new Uint8Array(ev.data));
+            term!.write(new Uint8Array(ev.data));
           } else {
-            term.write(ev.data);
+            term!.write(ev.data);
           }
         };
         ws.onclose = () => { setStatus("closed"); };
@@ -77,9 +90,9 @@ export function TerminalPage({ kind, id }: Props) {
 
         const onResize = () => {
           try {
-            fitAddon.fit();
+            fitAddon!.fit();
             if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+              ws.send(JSON.stringify({ type: "resize", cols: term!.cols, rows: term!.rows }));
             }
           } catch {}
         };

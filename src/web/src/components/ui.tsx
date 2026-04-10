@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import React, { useState, useEffect, useCallback, type ReactNode } from "react";
 import { X, AlertTriangle, Loader2, Copy, Check } from "lucide-react";
 
 // --- Toast system ---
@@ -243,7 +243,7 @@ export function Checkbox({ checked, onChange, label }: { checked: boolean; onCha
 }
 
 // --- Empty State ---
-export function EmptyState({ message, icon: Icon }: { message: string; icon?: any }) {
+export function EmptyState({ message, icon: Icon }: { message: string; icon?: React.ComponentType<{ size?: number; className?: string }> }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-muted">
       {Icon && <Icon size={32} className="mb-3 opacity-30" />}

@@ -7,12 +7,13 @@ import {
   Database, RotateCcw, Pause, Play, Trash2, Plus, Minus,
   Link2, Unlink, ScrollText, ArrowLeft, RefreshCw, Terminal,
 } from "lucide-react";
+import type { ServiceData, AppData, ServiceInstance, LinkedApp } from "../types.ts";
 
 export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
-  const [service, setService] = useState<any>(null);
+  const [service, setService] = useState<ServiceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [apps, setApps] = useState<any[]>([]);
+  const [apps, setApps] = useState<AppData[]>([]);
   const [linkAppId, setLinkAppId] = useState("");
   const [linkPrefix, setLinkPrefix] = useState("DATABASE");
   const [tab, setTab] = useState<"overview" | "logs">("overview");
@@ -117,7 +118,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const credentials = service.credentials || {};
   const instances = service.instances || [];
   const linkedApps = service.linked_apps || [];
-  const unlinkedApps = apps.filter((a: any) => !linkedApps.some((l: any) => l.id === a.id));
+  const unlinkedApps = apps.filter((a: AppData) => !linkedApps.some((l: LinkedApp) => l.id === a.id));
 
   const tabs = [
     { key: "overview", label: "Overview" },
@@ -176,7 +177,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
         {tabs.map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key as any)}
+            onClick={() => setTab(t.key as typeof tab)}
             className={`px-4 py-2 font-mono text-[10px] font-bold uppercase tracking-wider border-b-2 -mb-[2px] transition-all ${
               tab === t.key
                 ? "border-fg text-fg bg-accent"
@@ -271,7 +272,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
               </PermissionGate>
             </div>
             <div className="divide-y divide-fg/10">
-              {instances.map((inst: any) => (
+              {instances.map((inst: ServiceInstance) => (
                 <div key={inst.id} className="px-4 py-2 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-[10px] font-bold text-fg">{inst.container_name}</span>
@@ -310,7 +311,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
             <div className="p-4 space-y-3">
               {linkedApps.length > 0 ? (
                 <div className="divide-y divide-fg/10 border-2 border-fg/20">
-                  {linkedApps.map((link: any) => (
+                  {linkedApps.map((link: LinkedApp) => (
                     <div key={link.id} className="px-3 py-2 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Link2 size={12} className="text-accent-blue" />
@@ -342,7 +343,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                     <NeoSelect
                       value={linkAppId}
                       onChange={setLinkAppId}
-                      options={unlinkedApps.map((a: any) => ({ value: String(a.id), label: a.name }))}
+                      options={unlinkedApps.map((a) => ({ value: String(a.id), label: a.name }))}
                       placeholder="Select an app to link..."
                     />
                   </div>
@@ -387,7 +388,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                     onChange={setLogInstanceId}
                     options={[
                       { value: "", label: "Primary" },
-                      ...instances.map((inst: any) => ({
+                      ...instances.map((inst: ServiceInstance) => ({
                         value: String(inst.id),
                         label: `${inst.container_name} (${inst.role})`,
                       })),

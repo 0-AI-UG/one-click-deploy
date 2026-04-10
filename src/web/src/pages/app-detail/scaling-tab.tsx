@@ -3,6 +3,7 @@ import { Card, Btn, Checkbox, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { Zap, Gauge } from "lucide-react";
 import { InfoTip } from "./shared.tsx";
+import type { AppData, ReplicaData } from "../../types.ts";
 
 interface ScalingPolicy {
   autoscale_enabled: boolean;
@@ -15,13 +16,13 @@ interface ScalingPolicy {
 }
 
 interface ScalingTabProps {
-  app: any;
+  app: AppData;
   appId: number;
-  replicas: any[];
+  replicas: ReplicaData[];
   policy: ScalingPolicy | null;
   setPolicy: (p: ScalingPolicy) => void;
   actionLoading: string | null;
-  action: (name: string, fn: () => Promise<any>) => Promise<void>;
+  action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
   loadReplicas: () => Promise<void>;
   load: () => Promise<void>;
 }

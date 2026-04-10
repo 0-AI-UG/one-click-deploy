@@ -131,6 +131,7 @@ export async function createVolume(
     resolvedHetznerServerId = parseInt(hetznerServerId, 10);
   } else {
     const existingServer = db.getServer(serverId);
+    if (!existingServer) throw new Error(`Server ${serverId} not found`);
     resolvedHetznerServerId = parseInt(existingServer.hetzner_id, 10);
   }
 

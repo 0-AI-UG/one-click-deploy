@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { post, get } from "../api/client.ts";
+import type { DeployBody } from "../types.ts";
 
 export type ProgressEvent = { step: string; detail: string; ts: number };
 export type DeployResult = { ok: boolean; error?: string } | null;
@@ -91,7 +92,7 @@ async function pollLoop(jobId: number, myGen: number): Promise<void> {
   }
 }
 
-export async function startDeploy(body: any): Promise<void> {
+export async function startDeploy(body: DeployBody): Promise<void> {
   const myGen = ++pollGen;
   setState({
     active: true,

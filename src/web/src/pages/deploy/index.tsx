@@ -9,6 +9,7 @@ import { ReceiptSection } from "./receipt-section.tsx";
 import { EnvSection } from "./env-section.tsx";
 import { AdvancedSection } from "./advanced-section.tsx";
 import type { IntrospectResult, ManifestEnvDef, FormState } from "./types.ts";
+import type { DeployBody } from "../../types.ts";
 
 export function DeployPage() {
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
@@ -209,7 +210,7 @@ export function DeployPage() {
       if (v.key) env[v.key] = v.value;
     });
 
-    const body: any = {
+    const body: DeployBody = {
       app_name: form.app_name,
       git_repo: form.git_repo,
       domain: form.domain || undefined,

@@ -2,11 +2,12 @@ import { post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, Table, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { Clock } from "lucide-react";
+import type { DeploymentRecord } from "../../types.ts";
 
 interface DeploymentsTabProps {
   appId: number;
-  deployments: any[];
-  action: (name: string, fn: () => Promise<any>) => Promise<void>;
+  deployments: DeploymentRecord[];
+  action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
 }
 
 export function DeploymentsTab({ appId, deployments, action }: DeploymentsTabProps) {
@@ -20,7 +21,7 @@ export function DeploymentsTab({ appId, deployments, action }: DeploymentsTabPro
         <p className="text-[10px] text-muted font-mono py-4 text-center uppercase tracking-wider">No deployments yet</p>
       ) : (
         <Table headers={["ID", "Image", "Commit", "Source", "Status", "Date", ""]}>
-          {deployments.map((d: any) => (
+          {deployments.map((d) => (
             <tr key={d.id} className="hover:bg-alt/50">
               <td className="py-2 px-3 text-fg font-bold">#{d.id}</td>
               <td className="py-2 px-3 text-fg-dim">{d.image_tag}</td>

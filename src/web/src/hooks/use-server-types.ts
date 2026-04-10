@@ -23,7 +23,7 @@ export function useServerTypes() {
       return;
     }
     get("/api/admin/settings/server-types")
-      .then((data: any) => setServerTypes(data.server_types ?? []))
+      .then((data) => setServerTypes((data as { server_types?: HetznerServerType[] }).server_types ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);

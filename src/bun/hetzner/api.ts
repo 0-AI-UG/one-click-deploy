@@ -40,7 +40,8 @@ function friendlyHetznerError(status: number, body: string, method: string, apiP
 export async function hetznerApi(
   apiPath: string,
   options: RequestInit = {}
-): Promise<Record<string, unknown>> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<Record<string, any>> {
   const token = await apiToken();
   if (!token) throw new Error("Hetzner API token not configured");
   return withRetry(async () => {
@@ -67,6 +68,7 @@ export async function hetznerApi(
 }
 
 // Public wrapper for hetznerApi (used by RPC handlers for resource listing)
-export async function hetznerApiPublic(apiPath: string, options: RequestInit = {}): Promise<Record<string, unknown>> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function hetznerApiPublic(apiPath: string, options: RequestInit = {}): Promise<Record<string, any>> {
   return hetznerApi(apiPath, options);
 }

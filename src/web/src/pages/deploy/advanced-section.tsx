@@ -60,7 +60,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
       <div>
         <Checkbox
           checked={!!form.webhook_enabled}
-          onChange={(v) => setForm((f: any) => ({ ...f, webhook_enabled: v }))}
+          onChange={(v) => setForm((f) => ({ ...f, webhook_enabled: v }))}
           label="Auto-deploy on git push"
         />
         {form.webhook_enabled && (

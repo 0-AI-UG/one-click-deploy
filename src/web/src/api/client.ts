@@ -46,7 +46,8 @@ export async function apiFetch<T = any>(
   return res.json();
 }
 
-export function api(method: string, path: string, body?: any): Promise<any> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function api(method: string, path: string, body?: unknown): Promise<any> {
   return apiFetch(path, {
     method,
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -54,6 +55,6 @@ export function api(method: string, path: string, body?: any): Promise<any> {
 }
 
 export const get = (path: string) => api("GET", path);
-export const post = (path: string, body?: any) => api("POST", path, body);
-export const put = (path: string, body?: any) => api("PUT", path, body);
+export const post = (path: string, body?: unknown) => api("POST", path, body);
+export const put = (path: string, body?: unknown) => api("PUT", path, body);
 export const del = (path: string) => api("DELETE", path);

@@ -3,6 +3,7 @@ import { get, put } from "../../api/client.ts";
 import { Card, Btn, Spinner, showToast } from "../../components/ui.tsx";
 import { ArrowLeft, Save, Key, ShieldCheck } from "lucide-react";
 import { useAuth } from "../../stores/auth.ts";
+import type { AdminUser } from "../../types.ts";
 
 const PERMISSION_GROUPS = [
   {
@@ -53,7 +54,7 @@ const PERMISSION_GROUPS = [
 export function UserDetailPage({ userId }: { userId: string }) {
   const auth = useAuth();
   const isSelf = auth.user?.id === userId;
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<AdminUser | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [allPermissions, setAllPermissions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,7 +67,7 @@ export function UserDetailPage({ userId }: { userId: string }) {
       get("/api/admin/users"),
       get(`/api/admin/users/${userId}/permissions`),
     ]).then(([usersRes, permRes]) => {
-      const u = usersRes.users.find((u: any) => u.id === userId);
+      const u = usersRes.users.find((u: AdminUser) => u.id === userId);
       setUser(u);
       setPermissions(permRes.permissions);
       setAllPermissions(permRes.allPermissions);

@@ -46,7 +46,7 @@ export function DashboardPage() {
 
   useEffect(() => { load(); }, []);
 
-  const appAction = async (action: string, appId: number, label: string, body?: any) => {
+  const appAction = async (action: string, appId: number, label: string, body?: Record<string, unknown>) => {
     const key = `${action}-${appId}`;
     setActionLoading(key);
     try {

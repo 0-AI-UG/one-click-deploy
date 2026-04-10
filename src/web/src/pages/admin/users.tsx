@@ -4,6 +4,7 @@ import { Card, Btn, Table, Spinner, showToast, confirm } from "../../components/
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-server-types.ts";
 import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check } from "lucide-react";
+import type { PanelApp, DeploymentRecord } from "../../types.ts";
 
 function GitHubOAuthSettings({ form, setS }: { form: Record<string, string>; setS: (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => void }) {
   const [copied, setCopied] = useState(false);
@@ -67,9 +68,9 @@ export function UsersPage() {
   const { serverTypes } = useServerTypes();
 
   // --- Panel ---
-  const [panel, setPanel] = useState<any>(null);
-  const [panelServer, setPanelServer] = useState<any>(null);
-  const [panelDeployments, setPanelDeployments] = useState<any[]>([]);
+  const [panel, setPanel] = useState<PanelApp | null>(null);
+  const [panelServer, setPanelServer] = useState<{ name: string; ipv4: string } | null>(null);
+  const [panelDeployments, setPanelDeployments] = useState<DeploymentRecord[]>([]);
   const [panelBusy, setPanelBusy] = useState(false);
 
   const loadUsers = async () => {
@@ -327,7 +328,7 @@ export function UsersPage() {
             <div className="border-t-2 border-fg pt-3">
               <h4 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-2">Recent deployments</h4>
               <div className="space-y-1 text-[11px] font-mono max-h-48 overflow-y-auto">
-                {panelDeployments.slice(0, 10).map((d: any) => (
+                {panelDeployments.slice(0, 10).map((d) => (
                   <div key={d.id} className="flex justify-between gap-2">
                     <span className="text-muted truncate">{new Date(d.created_at).toLocaleString()}</span>
                     <span className="text-fg">{d.source}</span>

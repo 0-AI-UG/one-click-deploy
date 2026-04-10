@@ -3,9 +3,10 @@ import { get, del } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { HardDrive, Server, Network, Database, Trash2, RefreshCw, Terminal } from "lucide-react";
+import type { ResourcesData } from "../types.ts";
 
 export function ResourcesPage() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<ResourcesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -98,7 +99,7 @@ export function ResourcesPage() {
         </div>
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
           <Table headers={["Name", "IP", "Type", "Location", "Replicas", "€/mo", ""]}>
-            {data.servers.map((s: any) => (
+            {data.servers.map((s) => (
               <tr key={s.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3 text-fg font-bold">{s.name}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.ipv4}</td>
@@ -134,7 +135,7 @@ export function ResourcesPage() {
         </div>
         {!data?.load_balancers?.length ? <EmptyState message="No load balancers" /> : (
           <Table headers={["Name", "IP", "Type", "Location", "App", "Targets", "€/mo", ""]}>
-            {data.load_balancers.map((lb: any) => (
+            {data.load_balancers.map((lb) => (
               <tr key={lb.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3 text-fg font-bold">{lb.name}</td>
                 <td className="py-2 px-3 text-fg-dim">{lb.ipv4}</td>
@@ -164,7 +165,7 @@ export function ResourcesPage() {
         </div>
         {!data?.volumes?.length ? <EmptyState message="No volumes" /> : (
           <Table headers={["Name", "Size", "Location", "Server", "App", "€/mo", ""]}>
-            {data.volumes.map((v: any) => (
+            {data.volumes.map((v) => (
               <tr key={v.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3 text-fg font-bold">{v.name}</td>
                 <td className="py-2 px-3 text-fg-dim">{v.size} GB</td>

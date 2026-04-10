@@ -3,15 +3,16 @@ import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../comp
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { RefreshCw, ExternalLink, Server as ServerIcon, History, Terminal } from "lucide-react";
 import { Sparkline } from "./shared.tsx";
+import type { AppData, ReplicaData, MetricSample, ScalingEvent, ServerData } from "../../types.ts";
 
 interface OverviewTabProps {
-  app: any;
+  app: AppData;
   appId: number;
-  replicas: any[];
-  metricsHistory: any[];
-  scalingEvents: any[];
-  allServers: any[];
-  setReplicas: (r: any[]) => void;
+  replicas: ReplicaData[];
+  metricsHistory: MetricSample[];
+  scalingEvents: ScalingEvent[];
+  allServers: ServerData[];
+  setReplicas: (r: ReplicaData[]) => void;
 }
 
 export function OverviewTab({ app, appId, replicas, metricsHistory, scalingEvents, allServers, setReplicas }: OverviewTabProps) {
@@ -71,11 +72,11 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, scalingEvent
           <p className="text-[10px] text-muted font-mono py-4 text-center uppercase tracking-wider">No replicas yet</p>
         ) : (
           <Table headers={["ID", "Container", "Server", "Port", "Status", "CPU", "Memory", "CPU (1h)", ""]}>
-            {replicas.map((r: any) => {
+            {replicas.map((r) => {
               const series = metricsHistory
-                .filter((s: any) => s.replica_id === r.id)
-                .map((s: any) => s.cpu_percent);
-              const srv = allServers.find((s: any) => s.id === r.server_id);
+                .filter((s) => s.replica_id === r.id)
+                .map((s) => s.cpu_percent);
+              const srv = allServers.find((s) => s.id === r.server_id);
               return (
                 <tr key={r.id}>
                   <td className="py-2 px-3 text-fg font-bold">#{r.id}</td>
@@ -109,7 +110,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, scalingEvent
             <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Recent Scaling Events</h3>
           </div>
           <Table headers={["When", "Event", "From → To", "Reason"]}>
-            {scalingEvents.slice(0, 20).map((e: any) => (
+            {scalingEvents.slice(0, 20).map((e) => (
               <tr key={e.id}>
                 <td className="py-2 px-3 text-muted text-[9px]">{new Date(e.created_at).toLocaleString()}</td>
                 <td className="py-2 px-3 text-fg font-bold text-[9px] uppercase tracking-wider">{e.event_type}</td>

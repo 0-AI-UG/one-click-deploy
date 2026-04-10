@@ -4,6 +4,7 @@ import { Btn } from "../components/ui.tsx";
 import { Database, CheckCircle2, XCircle, Loader2, Circle, Terminal } from "lucide-react";
 
 type ProgressEvent = { seq: number; ts: string; step: string; detail: string };
+type DeployJobResult = { ok: boolean; error?: string; serviceId?: number } | null;
 
 const DEPLOY_STEPS: { key: string; label: string }[] = [
   { key: "server", label: "Server" },
@@ -18,7 +19,7 @@ const DEPLOY_STEPS: { key: string; label: string }[] = [
 function stepStatus(
   stepKey: string,
   events: ProgressEvent[],
-  result: any,
+  result: DeployJobResult,
 ): "pending" | "active" | "done" | "error" {
   const idx = DEPLOY_STEPS.findIndex((s) => s.key === stepKey);
   const seenKeys = new Set(events.map((e) => e.step));
@@ -42,7 +43,7 @@ function stepStatus(
 
 export function ServiceDeployProgressPage({ jobId }: { jobId: number | null }) {
   const [events, setEvents] = useState<ProgressEvent[]>([]);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<DeployJobResult>(null);
   const [active, setActive] = useState(true);
   const [serviceName, setServiceName] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
