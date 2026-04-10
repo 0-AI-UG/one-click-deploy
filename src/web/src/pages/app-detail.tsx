@@ -9,8 +9,11 @@ import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, GitBranch, HardDr
 // hover help text. Sits inline next to labels so the visible UI stays terse.
 function InfoTip({ text }: { text: string }) {
   return (
-    <span title={text} className="inline-flex items-center text-muted hover:text-fg cursor-help">
+    <span className="relative inline-flex items-center text-muted hover:text-fg cursor-help group">
       <Info size={11} />
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-[9px] font-mono text-fg bg-bg border-2 border-fg shadow-neo-sm whitespace-normal max-w-[220px] w-max opacity-0 group-hover:opacity-100 transition-opacity z-50">
+        {text}
+      </span>
     </span>
   );
 }
