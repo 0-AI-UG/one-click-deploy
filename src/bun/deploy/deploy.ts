@@ -7,9 +7,21 @@ import { createMasker } from "../mask.ts";
 import { getTokens } from "../secret-store.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { scaleApp } from "../scale.ts";
-import { type DeployState, rollback } from "./rollback.ts";
-import { setupDns, verifyDnsForCaddy, persistDnsRecord } from "./dns.ts";
-import { provisionOrReuseServer, createVolume } from "./provision.ts";
+import { resolve4 } from "node:dns/promises";
+
+// Resolve a hostname to IPv4 addresses with a short timeout.
+// Returns [] on failure (NXDOMAIN, timeout, etc.) so callers can treat
+// "unknown" and "mismatch" distinctly.
+async function resolveDomainIps(domain: string, timeoutMs = 3000): Promise<string[]> {
+  try {
+    return await Promise.race([
+      resolve4(domain),
+      new Promise<string[]>((_, rej) => setTimeout(() => rej(new Error("dns timeout")), timeoutMs)),
+    ]);
+  } catch {
+    return [];
+  }
+}
 
 type ProgressFn = (step: string, detail: string) => void;
 
@@ -17,6 +29,7 @@ function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [deploy:${context}]`, ...args);
 }
 
+// Silent SSH exec for compose detection (swallows errors)
 async function sshExecForDetection(ip: string, cmd: string) {
   try {
     return await hetzner.sshExec(ip, cmd);
@@ -25,140 +38,96 @@ async function sshExecForDetection(ip: string, cmd: string) {
   }
 }
 
-async function detectDeployMode(
-  req: DeployRequest,
-  serverIp: string,
-  serverHostKey: string,
-  githubPat: string | undefined,
-): Promise<{ deployMode: "dockerfile" | "compose"; composeFile: string; composeWebService: string }> {
-  if (req.dockerfile_path) {
-    return { deployMode: "dockerfile", composeFile: "", composeWebService: "" };
+// Tracks resources created during deploy for rollback on failure
+type DeployState = {
+  hetznerServerId?: string;
+  dbServerId?: number;
+  dbAppId?: number;
+  dnsRecord?: { zone_id: string; name: string; type: string; value: string };
+  containerName?: string;
+  deployMode?: "dockerfile" | "compose" | "railpack";
+  caddyConfigured?: boolean;
+  caddyDomain?: string;
+  volumeId?: string;
+  replicaId?: number;
+};
+
+async function rollback(state: DeployState, serverIp: string, hostKey?: string): Promise<void> {
+  log("rollback", "Rolling back deploy state:", state);
+
+  // Remove Caddy site
+  if (state.caddyConfigured && state.caddyDomain && serverIp) {
+    try {
+      await hetzner.removeCaddySite(serverIp, state.caddyDomain, hostKey);
+      log("rollback", "Removed Caddy site");
+    } catch (err) {
+      log("rollback", `Failed to remove Caddy site: ${err}`);
+    }
   }
 
-  const detected = req.compose_file || await (async () => {
-    await hetzner.sshExec(serverIp, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps`);
-    const appDir = `/home/deploy/apps/${req.app_name}`;
-    const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-    let cloneUrl = req.git_repo;
-    if (githubPat && cloneUrl.match(/^https:\/\/github\.com\//)) {
-      cloneUrl = cloneUrl.replace(/^https:\/\/github\.com\//, `https://x-access-token:${githubPat}@github.com/`);
-    }
-    const gitEnv = githubPat ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
-    await sshExecForDetection(serverIp, asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git pull; else rm -rf ${appDir} && git clone ${cloneUrl} ${appDir}; fi`));
-    if (githubPat && cloneUrl !== req.git_repo) {
-      await sshExecForDetection(serverIp, asUser(`cd ${appDir} && git remote set-url origin ${req.git_repo}`));
-    }
-    return await hetzner.detectComposeFile(serverIp, req.app_name, serverHostKey || undefined);
-  })();
-
-  if (detected) {
-    const composeFile = detected;
-    const composeWebService = req.compose_web_service ||
-      await hetzner.detectWebService(serverIp, req.app_name, detected, serverHostKey || undefined) ||
-      "web";
-    log("build", `Compose mode detected: file=${composeFile} service=${composeWebService}`);
-    return { deployMode: "compose", composeFile, composeWebService };
-  }
-
-  return { deployMode: "dockerfile", composeFile: "", composeWebService: "" };
-}
-
-async function buildAndRun(
-  req: DeployRequest,
-  serverIp: string,
-  serverHostKey: string,
-  replica: { host_port: number },
-  appId: number,
-  deployMode: "dockerfile" | "compose",
-  composeFile: string,
-  composeWebService: string,
-  volumeMount: string | undefined,
-  githubPat: string | undefined,
-  maskedLog: (appId: number, line: string) => void,
-  mask: (s: string) => string,
-  onProgress: ProgressFn,
-): Promise<{ dockerfilePath: string; buildImageTag: string }> {
-  let dockerfilePath = req.dockerfile_path || "Dockerfile";
-  let buildImageTag = `${req.app_name}:latest`;
-
-  if (deployMode === "compose") {
-    const result = await hetzner.cloneAndComposeBuild(
-      serverIp,
-      {
-        name: req.app_name,
-        gitRepo: req.git_repo,
-        port: req.container_port,
-        hostPort: replica.host_port,
-        envVars: req.env_vars,
-        volumeMount,
-        composeFile,
-        webService: composeWebService,
-        gitToken: githubPat,
-      },
-      (line) => {
-        maskedLog(appId, `[build] ${line}`);
-        onProgress("build", mask(line));
+  // Remove container(s)
+  if (state.containerName && serverIp) {
+    try {
+      if (state.deployMode === "compose") {
+        await hetzner.removeCompose(serverIp, state.containerName, false, hostKey);
+      } else {
+        await hetzner.removeContainer(serverIp, state.containerName, hostKey);
       }
-    );
-    db.updateAppDeployMode(appId, "compose", result.composeFile, result.webService);
-  } else {
-    const result = await hetzner.cloneAndBuild(
-      serverIp,
-      {
-        name: req.app_name,
-        gitRepo: req.git_repo,
-        port: req.container_port,
-        hostPort: replica.host_port,
-        envVars: req.env_vars,
-        volumeMount,
-        dockerfilePath: req.dockerfile_path,
-        gitToken: githubPat,
-      },
-      (line) => {
-        maskedLog(appId, `[build] ${line}`);
-        onProgress("build", mask(line));
-      }
-    );
-    dockerfilePath = result.dockerfilePath;
-    if (result.imageTag) {
-      buildImageTag = result.imageTag;
+      log("rollback", `Removed container ${state.containerName}`);
+    } catch (err) {
+      log("rollback", `Failed to remove container: ${err}`);
     }
   }
 
-  return { dockerfilePath, buildImageTag };
-}
-
-async function setupWebhook(
-  req: DeployRequest,
-  appId: number,
-  githubPat: string,
-  maskedLog: (appId: number, line: string) => void,
-  onProgress: ProgressFn,
-): Promise<void> {
-  try {
-    const panel = db.getPanel();
-    if (!panel?.domain) {
-      throw new Error("Panel domain is not set; cannot register webhook URL");
+  // Delete volume
+  if (state.volumeId) {
+    try {
+      await hetzner.deleteVolume(state.volumeId);
+      log("rollback", `Deleted volume ${state.volumeId}`);
+    } catch (err) {
+      log("rollback", `Failed to delete volume: ${err}`);
     }
-    const webhookBranch = req.webhook_branch || "main";
-    const webhookPath = (req.webhook_path || "").trim().replace(/^\/+/, "").replace(/\/+$/, "");
-    const webhookSecret = crypto.randomUUID();
-    const url = `https://${panel.domain}/webhooks/github/${appId}`;
-    const created = await github.createWebhookAtUrl({
-      gitRepo: req.git_repo,
-      url,
-      webhookSecret,
-      token: githubPat,
-    });
-    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath);
-    const filterDesc = webhookPath ? ` (path: ${webhookPath})` : "";
-    maskedLog(appId, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}${filterDesc}`);
-    onProgress("health", `Webhook configured for auto-redeploy on ${webhookBranch}${filterDesc}`);
-  } catch (err) {
-    const webhookErr = err instanceof Error ? err.message : String(err);
-    maskedLog(appId, `[webhook] Warning: failed to set up webhook: ${webhookErr}`);
-    log("webhook", `Webhook setup failed (non-fatal): ${webhookErr}`);
   }
+
+  // Delete DNS record
+  if (state.dnsRecord) {
+    try {
+      await hetzner.deleteDnsRecord(state.dnsRecord);
+      log("rollback", `Deleted DNS record ${state.dnsRecord.name}/${state.dnsRecord.type}`);
+    } catch (err) {
+      log("rollback", `Failed to delete DNS record: ${err}`);
+    }
+  }
+
+  // Delete replica row first (so gcServerIfEmpty can run)
+  if (state.replicaId) {
+    try { db.deleteReplica(state.replicaId); } catch (err) {
+      log("rollback", `Failed to delete replica record: ${err}`);
+    }
+  }
+
+  // Delete app record from DB
+  if (state.dbAppId) {
+    try {
+      db.deleteApp(state.dbAppId);
+      log("rollback", `Deleted app record ${state.dbAppId}`);
+    } catch (err) {
+      log("rollback", `Failed to delete app record: ${err}`);
+    }
+  }
+
+  // GC the server: deletes only if it has zero replicas, zero apps, and is
+  // not the panel's host. Handles both "we created this server" and "the
+  // user reused an existing server" cases uniformly.
+  if (state.dbServerId) {
+    try {
+      await db.gcServerIfEmpty(state.dbServerId);
+    } catch (err) {
+      log("rollback", `gcServerIfEmpty(${state.dbServerId}) failed: ${err}`);
+    }
+  }
+
+  log("rollback", "Rollback complete");
 }
 
 export async function deploy(
@@ -169,17 +138,21 @@ export async function deploy(
   const deployStart = Date.now();
   log("start", "Deploy request:", { app_name: req.app_name, git_repo: req.git_repo, domain: req.domain, container_port: req.container_port });
 
+  // Validate all inputs before any side effects
   const validation = validateDeployRequest(req);
   if (!validation.valid) {
     log("validation", `Failed: ${validation.error}`);
     return { ok: false, error: validation.error };
   }
 
+  // Reject duplicate app names — same name means same container name and
+  // app directory, so deploying would destroy the existing app.
   const existing = db.getAppByName(req.app_name);
   if (existing) {
     return { ok: false, error: `An app named "${req.app_name}" already exists. Choose a different name.` };
   }
 
+  // Set up log masking for secrets
   const tokens = await getTokens();
   const resolvedGitToken = await resolveGitHubToken(userId);
   const githubPat = resolvedGitToken || undefined;
@@ -202,31 +175,170 @@ export async function deploy(
   try {
     const settings = db.getSettings();
     log("settings", "Loaded settings");
+    let serverId: number | undefined;
 
-    // Step 1: Provision or reuse server
-    const serverInfo = await provisionOrReuseServer(req.app_name, settings, state, onProgress);
-    serverIp = serverInfo.serverIp;
-    serverHostKey = serverInfo.serverHostKey;
-    const serverId = serverInfo.serverId;
+    // Step 1: Reuse an existing ready server if one exists, otherwise
+    // provision a new Hetzner box. Replicas table is the source of truth
+    // for placement, so we don't need an explicit server selection — the
+    // first ready server is fine for a brand-new app, and scale-up uses
+    // pickTargetServer to spread further replicas.
+    const existingReady = db.getServers().find((s: any) => s.status === "ready");
+    if (existingReady) {
+      serverIp = existingReady.ipv4;
+      serverHostKey = existingReady.ssh_host_key || "";
+      serverId = existingReady.id;
+      state.dbServerId = existingReady.id;
+      log("server", `Reusing existing ready server: ${existingReady.name} ip=${serverIp}`);
+      onProgress("server", `Using server ${existingReady.name} (${serverIp})`);
+    } else {
+      onProgress("server", "Creating new Hetzner server...");
+
+      log("ssh", "Ensuring SSH key and firewall exist...");
+      const [sshKey, firewallId] = await Promise.all([
+        hetzner.ensureSshKey("one-click-deploy"),
+        hetzner.ensureFirewall(),
+      ]);
+      log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}`);
+      onProgress("server", `SSH key + firewall ready`);
+
+      const serverType = settings.default_server_type;
+      if (!serverType) throw new Error("No default server type configured — set one in Settings");
+      const location = settings.default_location;
+      if (!location) throw new Error("No default server location configured — set one in Settings");
+      const serverName = `ocd-${req.app_name}-${Date.now()}`;
+
+      // Insert placeholder DB record BEFORE Hetzner API call to prevent orphans
+      const dbServer = db.insertServer({
+        name: serverName,
+        hetzner_id: "",
+        ipv4: "",
+        ipv6: "",
+        type: serverType,
+        location,
+        status: "creating",
+      });
+      serverId = dbServer.id;
+      state.dbServerId = dbServer.id;
+
+      log("server", `Creating Hetzner server: name=${serverName} type=${serverType} location=${location}`);
+      const createStart = Date.now();
+      const hServer = await hetzner.createServer({
+        name: serverName,
+        server_type: serverType,
+        location,
+        ssh_key_name: sshKey.name,
+        firewall_id: firewallId,
+      });
+      state.hetznerServerId = String(hServer.id);
+      log("server", `Hetzner server created in ${Date.now() - createStart}ms: id=${hServer.id}`);
+
+      // Update placeholder with real data
+      serverIp = hServer.public_net.ipv4.ip;
+      db.updateServer(dbServer.id, {
+        hetzner_id: String(hServer.id),
+        ipv4: serverIp,
+        ipv6: hServer.public_net.ipv6.ip || "",
+        status: "provisioning",
+      });
+      log("server", `Server saved to DB: id=${dbServer.id}`);
+      onProgress("server", `Server created: ${serverName} (${serverIp})`);
+
+      // Wait for server VM to boot before attempting SSH
+      onProgress("provision", "Waiting for server to boot...");
+      await hetzner.waitForServerRunning(hServer.id, (msg) => {
+        onProgress("provision", msg);
+      });
+
+      // Wait for cloud-init provisioning
+      onProgress("provision", "Waiting for server to be ready...");
+      log("provision", `Waiting for server ${serverIp} to be provisioned...`);
+      const provisionStart = Date.now();
+      await hetzner.waitForServer(serverIp, 30, (msg) => {
+        onProgress("provision", msg);
+      });
+      log("provision", `Server provisioned in ${((Date.now() - provisionStart) / 1000).toFixed(1)}s`);
+
+      // Verify docker is actually installed
+      const dockerCheck = await hetzner.sshExec(serverIp, "docker --version");
+      if (dockerCheck.exitCode !== 0) {
+        const initLog = await hetzner.sshExec(serverIp, "tail -20 /var/log/cloud-init-deploy.log 2>/dev/null");
+        log("provision", `Docker not found. Cloud-init log:\n${initLog.stdout}`);
+        throw new Error("Server provisioned but Docker was not installed — server setup may have failed. Try deleting the server and deploying again.");
+      }
+      log("provision", `Docker verified: ${dockerCheck.stdout.trim()}`);
+
+      // Capture SSH host key for future verification
+      serverHostKey = await hetzner.captureHostKey(serverIp);
+      if (serverHostKey) {
+        db.updateServerHostKey(dbServer.id, serverHostKey);
+        log("provision", "SSH host key captured and stored");
+      }
+
+      db.updateServerStatus(dbServer.id, "ready");
+      onProgress("provision", "Server provisioned with Docker + Caddy");
+    }
 
     // Step 2: Determine domain + create DNS record
-    const { useDomain, useInternalTls } = await setupDns(req, serverIp, settings.dns_zone_id, state, onProgress);
+    const useDomain = req.domain || `${req.app_name}.${serverIp}.nip.io`;
+    const useInternalTls = !req.domain;
+    log("dns", `Domain: ${useDomain} (internal TLS: ${useInternalTls})`);
+
+    onProgress("dns", req.domain ? `Creating DNS record for ${req.domain}...` : `Using ${useDomain} (no custom domain)`);
+    const dnsZoneId = settings.dns_zone_id;
+
+    // Extract subdomain from full domain
+    const parts = useDomain.split(".");
+    const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
+
+    if (req.domain && dnsZoneId) {
+      try {
+        log("dns", `Creating DNS A record: ${subdomain} -> ${serverIp} in zone ${dnsZoneId}`);
+        const record = await hetzner.createDnsRecord({
+          zone_id: dnsZoneId,
+          name: subdomain,
+          type: "A",
+          value: serverIp,
+        });
+        state.dnsRecord = { zone_id: dnsZoneId, name: subdomain, type: "A", value: serverIp };
+        log("dns", `DNS record created: ${record.id}`);
+        onProgress("dns", `DNS A record created: ${req.domain} -> ${serverIp}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log("dns", `DNS record creation failed: ${msg}`);
+        onProgress("dns", `DNS failed (continuing): ${msg}`);
+      }
+    } else if (req.domain) {
+      onProgress("dns", "No DNS zone configured, skipping DNS record");
+    } else {
+      onProgress("dns", `Will use ${useDomain}`);
+    }
 
     // Step 3: Create volume if requested
     let volumeMount: string | undefined;
     if (req.volume_size && req.volume_size > 0) {
-      volumeMount = await createVolume(
-        req.app_name,
-        req.volume_size,
-        req.volume_path,
-        serverId,
-        state.hetznerServerId,
-        serverIp,
-        serverHostKey,
-        settings.default_location,
-        state,
-        onProgress,
-      );
+      // Get the Hetzner server ID (either from new server or existing)
+      let hetznerServerId: number;
+      if (state.hetznerServerId) {
+        hetznerServerId = parseInt(state.hetznerServerId, 10);
+      } else {
+        const existingServer = db.getServer(serverId!);
+        hetznerServerId = parseInt(existingServer.hetzner_id, 10);
+      }
+
+      onProgress("build", `Creating ${req.volume_size}GB persistent volume...`);
+      const vol = await hetzner.createVolume({
+        name: `ocd-${req.app_name}-data`,
+        size: req.volume_size,
+        server_id: hetznerServerId,
+        location: settings.default_location || "nbg1",
+      });
+      state.volumeId = String(vol.id);
+      const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
+      const containerPath = req.volume_path || "/data";
+      await hetzner.sshExec(serverIp, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, serverHostKey || undefined);
+      volumeMount = `${hostMountPath}:${containerPath}`;
+      log("build", `Volume mounted: ${volumeMount}`);
+      onProgress("build", `Volume ready (${req.volume_size}GB at /data)`);
     }
 
     // Step 4: Create app record, then clone & build
@@ -243,7 +355,7 @@ export async function deploy(
         env_vars: JSON.stringify(req.env_vars),
         auth_password: req.auth_password,
       },
-      serverId,
+      serverId!,
     );
     state.dbAppId = app.id;
     state.replicaId = replica.id;
@@ -252,25 +364,130 @@ export async function deploy(
     log("build", `App + first replica created: app=${app.id} replica=${replica.id} host_port=${replica.host_port}`);
 
     if (state.dnsRecord) {
-      persistDnsRecord(app.id, state.dnsRecord);
+      db.insertDnsRecord({
+        app_id: app.id,
+        zone_id: state.dnsRecord.zone_id,
+        record_id: `${state.dnsRecord.name}/${state.dnsRecord.type}/${state.dnsRecord.value}`,
+        name: state.dnsRecord.name,
+        type: state.dnsRecord.type,
+        value: state.dnsRecord.value,
+      });
     }
 
+    // Persist volume association
     if (state.volumeId && volumeMount) {
       db.updateAppVolume(app.id, state.volumeId, volumeMount);
     }
 
     const buildStart = Date.now();
-    const { deployMode, composeFile, composeWebService } = await detectDeployMode(req, serverIp, serverHostKey, githubPat);
+    let deployMode: "dockerfile" | "compose" | "railpack" = "dockerfile";
+    let composeFile = "";
+    let composeWebService = "";
+
+    // Determine deploy mode: compose auto-detection only if no explicit dockerfile_path
+    if (!req.dockerfile_path) {
+      // Clone first to detect compose file and Dockerfile presence
+      await hetzner.sshExec(serverIp, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps`);
+      const appDir = `/home/deploy/apps/${req.app_name}`;
+      const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+      let cloneUrl = req.git_repo;
+      if (githubPat && cloneUrl.match(/^https:\/\/github\.com\//)) {
+        cloneUrl = cloneUrl.replace(/^https:\/\/github\.com\//, `https://x-access-token:${githubPat}@github.com/`);
+      }
+      const gitEnv = githubPat ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
+      await sshExecForDetection(serverIp, asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git pull; else rm -rf ${appDir} && git clone ${cloneUrl} ${appDir}; fi`));
+      if (githubPat && cloneUrl !== req.git_repo) {
+        await sshExecForDetection(serverIp, asUser(`cd ${appDir} && git remote set-url origin ${req.git_repo}`));
+      }
+
+      const detected = req.compose_file || await hetzner.detectComposeFile(serverIp, req.app_name, serverHostKey || undefined);
+
+      if (detected) {
+        deployMode = "compose";
+        composeFile = detected;
+        composeWebService = req.compose_web_service ||
+          await hetzner.detectWebService(serverIp, req.app_name, detected, serverHostKey || undefined) ||
+          "web";
+        log("build", `Compose mode detected: file=${composeFile} service=${composeWebService}`);
+      } else {
+        // Check if a Dockerfile exists — if not, use Railpack
+        const dockerfileCheck = await sshExecForDetection(serverIp, asUser(
+          `cd ${appDir} && if [ -f Dockerfile ]; then echo Dockerfile; elif [ -f docker/Dockerfile ]; then echo docker/Dockerfile; else find . -maxdepth 3 -name Dockerfile -type f | head -1 | sed 's|^\\./||'; fi`
+        ));
+        if (!dockerfileCheck.stdout.trim()) {
+          deployMode = "railpack";
+          log("build", "No Dockerfile or compose file found — using Railpack");
+        }
+      }
+    }
+
     state.deployMode = deployMode;
+    let buildImageTag = `${req.app_name}:latest`; // default, overridden by builds
 
-    const buildResult = await buildAndRun(
-      req, serverIp, serverHostKey, replica, app.id,
-      deployMode, composeFile, composeWebService,
-      volumeMount, githubPat, maskedLog, mask, onProgress,
-    );
-    dockerfilePath = buildResult.dockerfilePath;
-    const buildImageTag = buildResult.buildImageTag;
-
+    if (deployMode === "compose") {
+      const result = await hetzner.cloneAndComposeBuild(
+        serverIp,
+        {
+          name: req.app_name,
+          gitRepo: req.git_repo,
+          port: req.container_port,
+          hostPort: replica.host_port,
+          envVars: req.env_vars,
+          volumeMount,
+          composeFile,
+          webService: composeWebService,
+          gitToken: githubPat,
+        },
+        (line) => {
+          maskedLog(app.id, `[build] ${line}`);
+          onProgress("build", mask(line));
+        }
+      );
+      db.updateAppDeployMode(app.id, "compose", result.composeFile, result.webService);
+    } else if (deployMode === "railpack") {
+      const result = await hetzner.cloneAndRailpackBuild(
+        serverIp,
+        {
+          name: req.app_name,
+          gitRepo: req.git_repo,
+          port: req.container_port,
+          hostPort: replica.host_port,
+          envVars: req.env_vars,
+          volumeMount,
+          gitToken: githubPat,
+        },
+        (line) => {
+          maskedLog(app.id, `[build] ${line}`);
+          onProgress("build", mask(line));
+        }
+      );
+      db.updateAppDeployMode(app.id, "railpack", "", "");
+      if (result.imageTag) {
+        buildImageTag = result.imageTag;
+      }
+    } else {
+      const result = await hetzner.cloneAndBuild(
+        serverIp,
+        {
+          name: req.app_name,
+          gitRepo: req.git_repo,
+          port: req.container_port,
+          hostPort: replica.host_port,
+          envVars: req.env_vars,
+          volumeMount,
+          dockerfilePath: req.dockerfile_path,
+          gitToken: githubPat,
+        },
+        (line) => {
+          maskedLog(app.id, `[build] ${line}`);
+          onProgress("build", mask(line));
+        }
+      );
+      dockerfilePath = result.dockerfilePath;
+      if (result.imageTag) {
+        buildImageTag = result.imageTag;
+      }
+    }
     log("build", `Clone & build completed in ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
     onProgress("build", "Container running");
 
@@ -283,8 +500,24 @@ export async function deploy(
     }
 
     // Step 5: Configure Caddy reverse proxy
+    // DNS preflight: if user supplied a custom domain and we didn't manage the
+    // record ourselves, verify it resolves to this server. Otherwise Caddy's
+    // ACME challenge will fail and visitors hit whatever else owns that IP
+    // (e.g. the old hoster's placeholder page).
     if (req.domain && !useInternalTls && !state.dnsRecord) {
-      await verifyDnsForCaddy(req.domain, serverIp, onProgress);
+      onProgress("caddy", `Verifying DNS for ${req.domain}...`);
+      const resolved = await resolveDomainIps(req.domain);
+      if (resolved.length === 0) {
+        throw new Error(
+          `DNS lookup for ${req.domain} returned no A records. Create an A record pointing to ${serverIp} and retry (DNS can take a few minutes to propagate).`
+        );
+      }
+      if (!resolved.includes(serverIp)) {
+        throw new Error(
+          `Domain ${req.domain} resolves to ${resolved.join(", ")} but this server is ${serverIp}. Update the A record to ${serverIp} (Let's Encrypt will fail to issue a certificate otherwise) and retry.`
+        );
+      }
+      onProgress("caddy", `DNS OK: ${req.domain} -> ${serverIp}`);
     }
 
     onProgress("caddy", `Configuring TLS + reverse proxy for ${useDomain}...`);
@@ -294,7 +527,7 @@ export async function deploy(
     maskedLog(app.id, `[caddy] Reverse proxy configured for ${useDomain}`);
     onProgress("caddy", useInternalTls ? "Caddy configured with self-signed TLS" : "Caddy configured with auto-TLS");
 
-    // Step 6: Health check
+    // Step 5: Health check
     onProgress("health", "Checking app health...");
     const health = deployMode === "compose"
       ? await hetzner.composeHealthCheck(serverIp, req.app_name, replica.host_port, 5, serverHostKey || undefined)
@@ -322,12 +555,37 @@ export async function deploy(
       git_commit: gitCommit,
     });
 
-    // Set up webhook for auto-redeploy if requested
+    // Set up webhook for auto-redeploy if requested.
+    // Phase 2: panel-routed webhooks. DB + GitHub API only — no SSH, no
+    // tenant Caddy route. Hard error if panel.domain is missing.
     if (req.webhook_enabled && githubPat) {
-      await setupWebhook(req, app.id, githubPat, maskedLog, onProgress);
+      try {
+        const panel = db.getPanel();
+        if (!panel?.domain) {
+          throw new Error("Panel domain is not set; cannot register webhook URL");
+        }
+        const webhookBranch = req.webhook_branch || "main";
+        const webhookPath = (req.webhook_path || "").trim().replace(/^\/+/, "").replace(/\/+$/, "");
+        const webhookSecret = crypto.randomUUID();
+        const url = `https://${panel.domain}/webhooks/github/${app.id}`;
+        const created = await github.createWebhookAtUrl({
+          gitRepo: req.git_repo,
+          url,
+          webhookSecret,
+          token: githubPat,
+        });
+        db.updateAppWebhook(app.id, true, webhookSecret, webhookBranch, String(created.id), webhookPath);
+        const filterDesc = webhookPath ? ` (path: ${webhookPath})` : "";
+        maskedLog(app.id, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}${filterDesc}`);
+        onProgress("health", `Webhook configured for auto-redeploy on ${webhookBranch}${filterDesc}`);
+      } catch (err) {
+        const webhookErr = err instanceof Error ? err.message : String(err);
+        maskedLog(app.id, `[webhook] Warning: failed to set up webhook: ${webhookErr}`);
+        log("webhook", `Webhook setup failed (non-fatal): ${webhookErr}`);
+      }
     }
 
-    // Mark the first replica as healthy/unhealthy
+    // Mark the (already-created) first replica as healthy/unhealthy.
     db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 
     // Scale up if replicas > 1 requested (only with a custom domain)
@@ -356,6 +614,7 @@ export async function deploy(
     log("error", `Deploy failed after ${((Date.now() - deployStart) / 1000).toFixed(1)}s:`, msg);
     if (err instanceof Error && err.stack) log("error", "Stack:", err.stack);
 
+    // Clean up any resources created during this deploy
     try {
       await rollback(state, serverIp, serverHostKey || undefined);
     } catch (rollbackErr) {

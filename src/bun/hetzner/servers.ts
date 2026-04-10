@@ -263,6 +263,10 @@ systemctl restart caddy
 curl -fsSL https://bun.sh/install | bash
 ln -sf /root/.bun/bin/bun /usr/local/bin/bun
 
+# Install Railpack + BuildKit for zero-config builds
+curl -sSL https://railpack.com/install.sh | sh
+docker run --rm --privileged -d --name buildkit moby/buildkit
+
 # Signal ready
 touch /root/.provisioned
 `;

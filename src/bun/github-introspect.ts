@@ -370,7 +370,7 @@ export async function introspectRepo(url: string, userId?: string): Promise<Intr
   const env_vars = envContent ? parseEnvExample(envContent) : [];
 
   if (dockerfiles.length === 0 && composeFiles.length === 0) {
-    notes.push("No Dockerfile or compose file found — you'll need to add one before deploying.");
+    notes.push("No Dockerfile or compose file found — Railpack will auto-detect your stack and build the image.");
   }
 
   return {

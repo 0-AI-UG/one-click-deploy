@@ -537,6 +537,98 @@ export async function cloneAndBuild(
   return { containerId: result.stdout.trim(), dockerfilePath, imageTag };
 }
 
+// --- Railpack (zero-config) builds ---
+
+/** Ensure the BuildKit container is running (needed by railpack). */
+async function ensureBuildkit(ip: string, hostKey?: string) {
+  const check = await sshExec(ip, `docker inspect -f '{{.State.Running}}' buildkit 2>/dev/null`, hostKey);
+  if (check.stdout.trim() === "true") return;
+  log("railpack", "Starting BuildKit container");
+  await sshExec(ip, `docker rm -f buildkit 2>/dev/null; docker run --rm --privileged -d --name buildkit moby/buildkit`, hostKey);
+  // Give BuildKit a moment to start its gRPC listener
+  await sshExec(ip, `sleep 2`, hostKey);
+}
+
+export async function cloneAndRailpackBuild(
+  ip: string,
+  opts: {
+    name: string;
+    gitRepo: string;
+    port: number;
+    hostPort: number;
+    envVars: Record<string, string>;
+    volumeMount?: string;
+    gitToken?: string;
+  },
+  onLog?: (line: string) => void
+) {
+  const appDir = `/home/deploy/apps/${opts.name}`;
+  const emit = (msg: string) => onLog?.(msg);
+  const buildStart = Date.now();
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+  // Clone or pull repo
+  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit);
+
+  // Ensure BuildKit is available
+  await ensureBuildkit(ip);
+
+  // Build image with Railpack
+  emit("Building with Railpack (zero-config)...");
+  const railpackCmd = `cd ${appDir} && BUILDKIT_HOST=docker-container://buildkit railpack build --name ${opts.name}:latest .`;
+  log("railpack", `Railpack build command: ${railpackCmd}`);
+  const dockerBuildStart = Date.now();
+  const buildResult = await sshExec(ip, asUser(railpackCmd));
+  if (buildResult.exitCode !== 0) {
+    log("railpack", `Railpack build stderr: ${buildResult.stderr.slice(0, 500)}`);
+    // Check if railpack is not installed
+    if (buildResult.stderr.includes("not found") || buildResult.stderr.includes("No such file")) {
+      throw new Error("Railpack is not installed on this server. It is available on newly provisioned servers — try deploying to a new server or install it manually (curl -sSL https://railpack.com/install.sh | sh).");
+    }
+    throw new Error("Railpack build failed — check the build logs for errors. You can also add a Dockerfile to your repo for more control.");
+  }
+  log("railpack", `Railpack build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
+  emit("Image built successfully with Railpack");
+
+  // Tag image with git commit hash for rollback support
+  const commitResult = await sshExec(ip, asUser(`cd ${appDir} && git rev-parse --short HEAD 2>/dev/null || echo unknown`));
+  const gitCommit = commitResult.stdout.trim() || "unknown";
+  const imageTag = `${opts.name}:${gitCommit}`;
+  if (gitCommit !== "unknown") {
+    await sshExec(ip, asUser(`docker tag ${opts.name}:latest ${imageTag}`));
+    log("railpack", `Image tagged as ${imageTag}`);
+  }
+
+  // Stop old container and swap
+  log("railpack", `Removing existing container ${opts.name} (if any)`);
+  await sshExec(ip, asUser(`docker rm -f ${opts.name} 2>/dev/null || true`));
+
+  // Write env file
+  const envFileEntries = Object.entries(opts.envVars);
+  let envFileFlag = "";
+  if (envFileEntries.length > 0) {
+    const envFilePath = `/home/deploy/apps/${opts.name}/.env.deploy`;
+    const envFileContent = envFileEntries.map(([k, v]) => `${k}=${v}`).join("\n");
+    const escapedContent = envFileContent.replace(/'/g, "'\\''");
+    await sshExec(ip, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`);
+    envFileFlag = `--env-file ${envFilePath}`;
+  }
+
+  // Run container
+  emit("Starting container...");
+  await ensureOcdNetwork(ip);
+  const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
+  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p 127.0.0.1:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
+  log("railpack", `Docker run: ${cmd}`);
+  const result = await sshExec(ip, asUser(cmd));
+  if (result.exitCode !== 0) {
+    log("railpack", `Docker run stderr: ${result.stderr}`);
+    throw new Error("Failed to start container — check your port configuration and environment variables");
+  }
+  log("railpack", `Container started: ${result.stdout.trim().slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
+  return { containerId: result.stdout.trim(), imageTag };
+}
+
 export async function removeContainer(ip: string, name: string, hostKey?: string) {
   await sshExec(ip, `su - deploy -c "docker rm -f ${name} 2>/dev/null || true"`, hostKey);
 }

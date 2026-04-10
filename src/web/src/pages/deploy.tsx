@@ -370,6 +370,7 @@ export function DeployPage() {
   // then fall back to what was detected in the repo.
   const hasBothModes = !!detected && detected.dockerfiles.length > 0 && !!detected.compose_files[0];
   const isCompose = !!(form.compose_file || detected?.compose_files[0]);
+  const isRailpack = !!detected && detected.dockerfiles.length === 0 && !isCompose && !form.dockerfile_path;
   const hasMultipleDockerfiles = !isCompose && !!detected && detected.dockerfiles.length > 1;
   const hasMultipleComposeFiles = isCompose && !!detected && detected.compose_files.length > 1;
   const hasMultipleServices = !!detected && detected.compose_services.length > 1;
@@ -420,7 +421,7 @@ export function DeployPage() {
                       ? `Deploy manifest found`
                       : `${detected.manifests.length} deploy manifests found`
                     : <>
-                        Found {detected.dockerfiles.length > 0 ? "Dockerfile" : detected.compose_files[0] ? "compose" : "repo"}
+                        {detected.dockerfiles.length > 0 ? "Found Dockerfile" : detected.compose_files[0] ? "Found compose" : "No Dockerfile — will use Railpack"}
                         {detected.detected_port ? ` · port ${detected.detected_port}` : ""}
                         {detected.env_vars.length > 0
                           ? ` · ${detected.env_vars.length} env var${detected.env_vars.length === 1 ? "" : "s"}`
@@ -575,12 +576,17 @@ export function DeployPage() {
                 </ReceiptRow>
               )}
 
-              {/* Build source: Compose or Dockerfile */}
+              {/* Build source: Compose, Dockerfile, or Railpack */}
               <ReceiptRow
-                label={isCompose ? "Compose" : "Dockerfile"}
-                detected={!!detected && (detected.dockerfiles.length > 0 || isCompose)}
+                label={isCompose ? "Compose" : isRailpack ? "Builder" : "Dockerfile"}
+                detected={!!detected && (detected.dockerfiles.length > 0 || isCompose || isRailpack)}
               >
-                {isCompose && hasMultipleComposeFiles ? (
+                {isRailpack ? (
+                  <div className="flex items-center gap-2 py-2">
+                    <span className="font-mono text-[11px] text-fg">Railpack (zero-config)</span>
+                    <span className="font-mono text-[9px] text-fg-dim">Auto-detects stack and builds optimized image</span>
+                  </div>
+                ) : isCompose && hasMultipleComposeFiles ? (
                   <NeoSelect
                     value={form.compose_file}
                     onChange={(v) => setForm((f) => ({ ...f, compose_file: v }))}

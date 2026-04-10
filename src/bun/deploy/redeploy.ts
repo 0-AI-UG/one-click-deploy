@@ -69,6 +69,26 @@ export async function redeployApp(
           onProgress("build", line);
         }
       );
+    } else if (app.deploy_mode === "railpack") {
+      const buildResult = await hetzner.cloneAndRailpackBuild(
+        server.ipv4,
+        {
+          name: app.name,
+          gitRepo: app.git_repo,
+          port: containerPort,
+          hostPort: hostPort,
+          envVars,
+          volumeMount: app.volume_mount || undefined,
+          gitToken: githubPat,
+        },
+        (line) => {
+          db.appendDeployLog(appId, `[redeploy] ${line}`);
+          onProgress("build", line);
+        }
+      );
+      if (buildResult.imageTag) {
+        buildImageTag = buildResult.imageTag;
+      }
     } else {
       const buildResult = await hetzner.cloneAndBuild(
         server.ipv4,
@@ -201,8 +221,21 @@ export async function updateAppEnv(
         },
         logLine
       );
+    } else if (app.deploy_mode === "railpack") {
+      await hetzner.cloneAndRailpackBuild(
+        server.ipv4,
+        {
+          name: app.name,
+          gitRepo: app.git_repo,
+          port: containerPort,
+          hostPort: hostPort,
+          envVars,
+          volumeMount: app.volume_mount || undefined,
+          gitToken: githubPat,
+        },
+        logLine
+      );
     } else {
-      // No explicit removeContainer — cloneAndBuild handles build-before-destroy internally
       await hetzner.cloneAndBuild(
         server.ipv4,
         {
@@ -416,6 +449,35 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
           },
           (line) => append(`[build] ${line}`),
         );
+      } else if (app.deploy_mode === "railpack") {
+        await hetzner.cloneAndRailpackBuild(
+          server.ipv4,
+          {
+            name: app.name,
+            gitRepo: app.git_repo,
+            port: app.container_port,
+            hostPort: replica.host_port,
+            envVars: JSON.parse(app.env_vars || "{}"),
+            volumeMount: app.volume_mount || undefined,
+            gitToken: githubPat,
+          },
+          (line) => append(`[build] ${line}`),
+        );
+        if (multi) {
+          const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+          await hetzner.sshExec(
+            server.ipv4,
+            asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`),
+            hostKey,
+          );
+          const envVars = JSON.parse(app.env_vars || "{}");
+          let envFileFlag = "";
+          if (Object.keys(envVars).length > 0) {
+            envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
+          }
+          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p 0.0.0.0:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
+          await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+        }
       } else {
         await hetzner.cloneAndBuild(
           server.ipv4,
