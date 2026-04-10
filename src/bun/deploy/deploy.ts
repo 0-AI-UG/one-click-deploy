@@ -1,4 +1,4 @@
-import type { DeployRequest } from "../../shared/rpc.ts";
+import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
 import * as github from "../github.ts";
@@ -182,7 +182,7 @@ export async function deploy(
     // for placement, so we don't need an explicit server selection — the
     // first ready server is fine for a brand-new app, and scale-up uses
     // pickTargetServer to spread further replicas.
-    const existingReady = db.getServers().find((s: any) => s.status === "ready");
+    const existingReady = db.getServers().find((s: Server) => s.status === "ready");
     if (existingReady) {
       serverIp = existingReady.ipv4;
       serverHostKey = existingReady.ssh_host_key || "";

@@ -1,9 +1,55 @@
-import type { ServerWithApps } from "../../shared/rpc.ts";
+import type { ServerWithApps, Server } from "../../shared/rpc.ts";
 import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
 import { validateEnvVars } from "../validate.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { rollingRedeploy } from "../scale.ts";
+
+type DbApp = {
+  id: number;
+  name: string;
+  domain: string;
+  git_repo: string;
+  container_port: number;
+  env_vars: string;
+  status: string;
+  deploy_mode: string;
+  compose_file: string;
+  compose_web_service: string;
+  dockerfile_path: string;
+  hetzner_lb_id: string;
+  volume_id: string;
+  volume_mount: string;
+  auth_password: string;
+  webhook_enabled: number;
+  github_webhook_id: string;
+  deployed_by: string | null;
+  sleeping_server_id: number | null;
+  sleeping_host_port: number | null;
+  created_at: string;
+};
+
+type DbReplica = {
+  id: number;
+  app_id: number;
+  server_id: number;
+  host_port: number;
+  container_name: string;
+  status: string;
+};
+
+type DbService = {
+  id: number;
+  name: string;
+  service_type: string;
+  version: string;
+  status: string;
+};
+
+type DbServiceLink = {
+  app_id: number;
+  app_name: string;
+};
 
 type ProgressFn = (step: string, detail: string) => void;
 
@@ -553,21 +599,21 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
 }
 
 export function getServersWithApps(): any[] {
-  const servers = db.getServers();
-  const allAppsGlobal = db.getApps();
+  const servers = db.getServers() as Server[];
+  const allAppsGlobal = db.getApps() as DbApp[];
   return servers.map((s) => {
-    const activeApps = db.getApps(s.id);
+    const activeApps = db.getApps(s.id) as DbApp[];
     // Include sleeping apps (scale-to-zero) associated with this server
     const sleepingApps = allAppsGlobal.filter(
-      (a: any) => a.sleeping_server_id === s.id && !activeApps.some((aa: any) => aa.id === a.id)
+      (a: DbApp) => a.sleeping_server_id === s.id && !activeApps.some((aa: DbApp) => aa.id === a.id)
     );
     const allApps = [...activeApps, ...sleepingApps];
     return {
     ...s,
-    apps: allApps.map((a: any) => {
-      const reps = db.getReplicas(a.id);
+    apps: allApps.map((a: DbApp) => {
+      const reps = db.getReplicas(a.id) as DbReplica[];
       const first = reps[0];
-      const serverIds = Array.from(new Set(reps.map((r: any) => r.server_id)));
+      const serverIds = Array.from(new Set(reps.map((r: DbReplica) => r.server_id)));
       const deployedByUser = a.deployed_by ? db.getUserById(a.deployed_by) : null;
       return {
         ...a,
@@ -576,13 +622,13 @@ export function getServersWithApps(): any[] {
         deployed_by_username: deployedByUser?.username || null,
       };
     }),
-    services: db.getServicesOnServer(s.id).map((svc: any) => {
+    services: (db.getServicesOnServer(s.id) as DbService[]).map((svc: DbService) => {
       const instances = db.getServiceInstances(svc.id);
-      const links = db.getServiceLinks(svc.id);
+      const links = db.getServiceLinks(svc.id) as DbServiceLink[];
       return {
         ...svc,
         instance_count: instances.length,
-        linked_apps: links.map((l: any) => ({ id: l.app_id, name: l.app_name })),
+        linked_apps: links.map((l: DbServiceLink) => ({ id: l.app_id, name: l.app_name })),
       };
     }),
   };

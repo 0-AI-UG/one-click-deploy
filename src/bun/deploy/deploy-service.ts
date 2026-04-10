@@ -1,3 +1,4 @@
+import type { Server } from "../../shared/rpc.ts";
 import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
 import { getTokens } from "../secret-store.ts";
@@ -134,7 +135,7 @@ export async function deployService(
 
     // Step 1: Select server
     onProgress("server", "Selecting server...");
-    const existingReady = db.getServers().find((s: any) => s.status === "ready");
+    const existingReady = db.getServers().find((s: Server) => s.status === "ready");
     if (existingReady) {
       serverIp = existingReady.ipv4;
       serverHostKey = existingReady.ssh_host_key || "";

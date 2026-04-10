@@ -2,6 +2,18 @@ import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
 import { getCatalogEntry } from "../services/catalog.ts";
 
+type ServiceInstance = {
+  id: number;
+  service_id: number;
+  server_id: number;
+  role: string;
+  container_name: string;
+  host_port: number;
+  volume_id: string;
+  volume_mount: string;
+  status: string;
+};
+
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [service-lifecycle:${context}]`, ...args);
 }
@@ -215,12 +227,12 @@ export async function getServiceLogs(
   const service = db.getService(serviceId);
   if (!service) throw new Error("Service not found");
 
-  let instance: any;
+  let instance: ServiceInstance;
   if (instanceId) {
-    instance = db.getServiceInstance(instanceId);
+    instance = db.getServiceInstance(instanceId) as ServiceInstance;
     if (!instance || instance.service_id !== serviceId) throw new Error("Instance not found");
   } else {
-    instance = db.getPrimaryInstance(serviceId);
+    instance = db.getPrimaryInstance(serviceId) as ServiceInstance;
     if (!instance) throw new Error("No primary instance");
   }
 
