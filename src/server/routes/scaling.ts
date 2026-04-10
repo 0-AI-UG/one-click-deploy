@@ -176,6 +176,10 @@ export async function handleWakeStatus(request: Request, appId: number): Promise
   const app = db.getApp(appId);
   if (!app) return Response.json({ error: "Not found" }, { status: 404, headers: wakeCorsHeaders });
   const token = new URL(request.url).searchParams.get("token");
+  // If wake_token was cleared, the app already woke — return current status
+  if (!app.wake_token) {
+    return Response.json({ status: app.status }, { headers: wakeCorsHeaders });
+  }
   if (!token || token !== app.wake_token) {
     return Response.json({ error: "Forbidden" }, { status: 403, headers: wakeCorsHeaders });
   }
