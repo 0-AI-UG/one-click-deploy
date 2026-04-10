@@ -549,9 +549,20 @@ export const migrations: Migration[] = [
     version: 24,
     description: "Generalize provider columns: hetzner_id -> provider_id, add provider column to servers, rename hetzner_lb_id",
     up: (db) => {
-      db.run("ALTER TABLE servers ADD COLUMN provider TEXT NOT NULL DEFAULT 'hetzner'");
-      db.run("ALTER TABLE servers RENAME COLUMN hetzner_id TO provider_id");
-      db.run("ALTER TABLE apps RENAME COLUMN hetzner_lb_id TO lb_provider_id");
+      // Check if columns already have new names (fresh DB created with latest schema)
+      const cols = db.query("PRAGMA table_info(servers)").all() as { name: string }[];
+      const colNames = new Set(cols.map((c) => c.name));
+      if (!colNames.has("provider")) {
+        db.run("ALTER TABLE servers ADD COLUMN provider TEXT NOT NULL DEFAULT 'hetzner'");
+      }
+      if (colNames.has("hetzner_id")) {
+        db.run("ALTER TABLE servers RENAME COLUMN hetzner_id TO provider_id");
+      }
+      const appCols = db.query("PRAGMA table_info(apps)").all() as { name: string }[];
+      const appColNames = new Set(appCols.map((c) => c.name));
+      if (appColNames.has("hetzner_lb_id")) {
+        db.run("ALTER TABLE apps RENAME COLUMN hetzner_lb_id TO lb_provider_id");
+      }
       // Settings table may not exist in test fixtures that only create servers + apps
       const hasSettings = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'").get();
       if (hasSettings) {
