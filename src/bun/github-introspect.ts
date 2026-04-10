@@ -223,7 +223,7 @@ function pickWebService(
   return services[0].name;
 }
 
-export async function introspectRepo(url: string): Promise<IntrospectResult> {
+export async function introspectRepo(url: string, userId?: string): Promise<IntrospectResult> {
   let parsed: { owner: string; repo: string };
   try {
     parsed = parseGitHubRepo(url);
@@ -236,14 +236,14 @@ export async function introspectRepo(url: string): Promise<IntrospectResult> {
 
   const { owner, repo } = parsed;
   const suggested_app_name = sanitizeAppName(repo);
-  const token = await getGitHubPat();
+  const token = await getGitHubPat(userId);
 
   // 1. Fetch repo info to get the default branch
   const repoRes = await ghFetch(`/repos/${owner}/${repo}`, token);
   if (repoRes.status === 404) {
     return {
       ok: false,
-      error: "Repository not found. If it's private, add a GitHub token in Settings.",
+      error: "Repository not found. If it's private, link your GitHub account in Account settings.",
       suggested_app_name,
     };
   }

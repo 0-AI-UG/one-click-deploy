@@ -6,6 +6,9 @@ export type User = {
   isAdmin: boolean;
   totpEnabled?: boolean;
   webauthnEnabled?: boolean;
+  githubLinked?: boolean;
+  githubUsername?: string;
+  githubAvatarUrl?: string;
   permissions: string[];
 };
 

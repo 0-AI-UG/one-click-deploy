@@ -22,7 +22,8 @@ export function UsersPage() {
 
   // --- Instance Settings ---
   const [settingsForm, setSettingsForm] = useState({
-    hetzner_api_token: "", github_pat: "",
+    hetzner_api_token: "",
+    github_oauth_client_id: "", github_oauth_client_secret: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
   const [settingsLoading, setSettingsLoading] = useState(true);
@@ -62,7 +63,8 @@ export function UsersPage() {
         setRequire2fa(s.require_2fa !== false);
         setSettingsForm({
           hetzner_api_token: s.hetzner_api_token ?? "",
-          github_pat: s.github_pat ?? "",
+          github_oauth_client_id: s.github_oauth_client_id ?? "",
+          github_oauth_client_secret: s.github_oauth_client_secret ?? "",
           dns_zone_id: s.dns_zone_id ?? "",
           default_server_type: s.default_server_type ?? "",
           default_location: s.default_location ?? "",
@@ -175,9 +177,22 @@ export function UsersPage() {
           <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner API Token</label>
           <input type="password" value={settingsForm.hetzner_api_token} onChange={setS("hetzner_api_token")} placeholder="Enter token" />
         </div>
-        <div>
-          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">GitHub Personal Access Token</label>
-          <input type="password" value={settingsForm.github_pat} onChange={setS("github_pat")} placeholder="Optional" />
+        <div className="border-t-2 border-fg pt-4">
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">GitHub OAuth (Per-User Linking)</h3>
+          <p className="font-mono text-[9px] text-muted mb-3">
+            Register a GitHub OAuth App at github.com/settings/developers to let users link their GitHub accounts.
+            Set the callback URL to <span className="text-fg">{window.location.origin}/api/auth/github/callback</span>
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Client ID</label>
+              <input type="text" value={settingsForm.github_oauth_client_id} onChange={setS("github_oauth_client_id")} placeholder="Ov23li..." />
+            </div>
+            <div>
+              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Client Secret</label>
+              <input type="password" value={settingsForm.github_oauth_client_secret} onChange={setS("github_oauth_client_secret")} placeholder="Client secret" />
+            </div>
+          </div>
         </div>
 
         <div className="border-t-2 border-fg pt-4">

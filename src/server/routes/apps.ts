@@ -47,7 +47,7 @@ function waitForJob(jobId: number, timeoutMs: number): Promise<void> {
 
 export async function handleIntrospectRepo(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "apps.deploy");
+    const payload = await requirePermission(request, "apps.deploy");
     const url = new URL(request.url).searchParams.get("url") || "";
     if (!url) {
       return Response.json(
@@ -55,7 +55,7 @@ export async function handleIntrospectRepo(request: Request): Promise<Response> 
         { status: 400, headers: corsHeaders },
       );
     }
-    const result = await introspectRepo(url);
+    const result = await introspectRepo(url, payload.userId);
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -67,6 +67,28 @@ export async function handleGetServers(request: Request): Promise<Response> {
     await requirePermission(request, "servers.view");
     const result = getServersWithApps();
     return Response.json(result, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleGetDashboard(request: Request): Promise<Response> {
+  try {
+    await requirePermission(request, "servers.view");
+    const apps = db.getApps().map((a: any) => {
+      const reps = db.getReplicas(a.id);
+      return { ...a, desired_replicas: a.desired_replicas ?? reps.length };
+    });
+    const services = db.getServices().map((svc: any) => {
+      const instances = db.getServiceInstances(svc.id);
+      const links = db.getServiceLinks(svc.id);
+      return {
+        ...svc,
+        instance_count: instances.length,
+        linked_apps: links.map((l: any) => ({ id: l.app_id, name: l.app_name })),
+      };
+    });
+    return Response.json({ apps, services }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -90,7 +112,7 @@ export async function handleGetApps(request: Request): Promise<Response> {
 
 export async function handleDeploy(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "apps.deploy");
+    const payload = await requirePermission(request, "apps.deploy");
     const req = await request.json();
 
     // Create a durable job row before kicking off the deploy. The client
@@ -104,7 +126,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
         const result = await deploy(req, (step, detail) => {
           db.appendDeployJobEvent(job.id, step, detail);
           notifyJob(job.id);
-        });
+        }, payload.userId);
         db.finishDeployJob(job.id, result);
       } catch (err: any) {
         db.appendDeployJobEvent(job.id, "error", err?.message || String(err));
@@ -205,7 +227,7 @@ export async function handleUnpauseApp(request: Request, appId: number): Promise
 
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.redeploy");
+    const payload = await requirePermission(request, "apps.redeploy");
     const body = (await request.json().catch(() => ({}))) as { env_vars?: Record<string, string>; auth_password?: string | null; container_port?: number };
 
     if (body.container_port !== undefined) {
@@ -216,7 +238,7 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       body.container_port = p;
     }
 
-    const result = await redeployApp(appId, () => {}, body.env_vars, body.auth_password, body.container_port);
+    const result = await redeployApp(appId, () => {}, body.env_vars, body.auth_password, body.container_port, payload.userId);
 
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
@@ -226,9 +248,9 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
 
 export async function handleUpdateAppEnv(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.env");
+    const payload = await requirePermission(request, "apps.env");
     const body = await request.json() as { env_vars: Record<string, string> };
-    const result = await updateAppEnv(appId, body.env_vars);
+    const result = await updateAppEnv(appId, body.env_vars, payload.userId);
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

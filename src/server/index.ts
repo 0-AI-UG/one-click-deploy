@@ -27,6 +27,7 @@ import {
 import { handleListUsers, handleCreateUser, handleUpdateUser, handleDeleteUser, handleGetUserPermissions } from "./routes/admin.ts";
 import {
   handleGetServers,
+  handleGetDashboard,
   handleGetApps,
   handleDeploy,
   handleDeployJobPoll,
@@ -62,6 +63,12 @@ import {
   handleGetPanelLogs,
   handleGetPanelDeployments,
 } from "./routes/panel.ts";
+import {
+  handleGitHubAuthorize,
+  handleGitHubCallback,
+  handleGitHubUnlink,
+  handleGitHubStatus,
+} from "./routes/github-oauth.ts";
 import { handleLlmTxt } from "./routes/llm-txt.ts";
 import {
   handleGetCatalog,
@@ -197,6 +204,12 @@ export const server = Bun.serve({
       PUT: (req: Request) => handleUpdateMe(req),
     },
 
+    // --- GitHub OAuth ---
+    "/api/auth/github/authorize": { GET: (req: Request) => handleGitHubAuthorize(req) },
+    "/api/auth/github/callback": { GET: (req: Request) => handleGitHubCallback(req) },
+    "/api/auth/github/unlink": { POST: (req: Request) => handleGitHubUnlink(req) },
+    "/api/auth/github/status": { GET: (req: Request) => handleGitHubStatus(req) },
+
     // --- TOTP ---
     "/api/auth/totp/setup": { POST: (req: Request) => handleTotpSetup(req) },
     "/api/auth/totp/confirm": { POST: (req: Request) => handleTotpConfirm(req) },
@@ -229,6 +242,9 @@ export const server = Bun.serve({
     "/api/admin/users/:userId/permissions": {
       GET: (req: Request) => handleGetUserPermissions(req, userIdFrom(req)),
     },
+
+    // --- Dashboard ---
+    "/api/dashboard": { GET: (req: Request) => handleGetDashboard(req) },
 
     // --- Servers ---
     "/api/servers": { GET: (req: Request) => handleGetServers(req) },

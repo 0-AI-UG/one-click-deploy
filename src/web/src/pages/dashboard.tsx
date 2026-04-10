@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { Server, Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database } from "lucide-react";
+import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box } from "lucide-react";
 
 type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
@@ -13,13 +13,10 @@ type ServiceData = {
   id: number; name: string; service_type: string; version: string; status: string;
   instance_count: number; linked_apps: Array<{ id: number; name: string }>;
 };
-type ServerData = {
-  id: number; name: string; ipv4: string; type: string; location: string; status: string;
-  ssh_host_key: string; apps: AppData[]; services: ServiceData[];
-};
+type DashboardData = { apps: AppData[]; services: ServiceData[] };
 
 export function DashboardPage() {
-  const [servers, setServers] = useState<ServerData[]>([]);
+  const [data, setData] = useState<DashboardData>({ apps: [], services: [] });
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
@@ -39,8 +36,7 @@ export function DashboardPage() {
 
   const load = async () => {
     try {
-      const data = await get("/api/servers");
-      setServers(data);
+      setData(await get("/api/dashboard"));
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
@@ -88,8 +84,7 @@ export function DashboardPage() {
 
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
 
-  const allApps = servers.flatMap((s) => s.apps);
-  const allServices = servers.flatMap((s) => s.services || []);
+  const { apps, services } = data;
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
@@ -97,8 +92,8 @@ export function DashboardPage() {
         <div>
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Dashboard</h1>
           <p className="text-[10px] text-muted font-mono mt-0.5">
-            {servers.length} server{servers.length !== 1 ? "s" : ""}, {allApps.length} app{allApps.length !== 1 ? "s" : ""}
-            {allServices.length > 0 && `, ${allServices.length} service${allServices.length !== 1 ? "s" : ""}`}
+            {apps.length} app{apps.length !== 1 ? "s" : ""}
+            {services.length > 0 && `, ${services.length} service${services.length !== 1 ? "s" : ""}`}
           </p>
         </div>
         <div className="flex gap-2">
@@ -110,93 +105,19 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {servers.length === 0 ? (
-        <EmptyState message="No servers yet. Deploy your first app to get started." icon={Server} />
+      {apps.length === 0 && services.length === 0 ? (
+        <EmptyState message="Nothing deployed yet. Deploy your first app or service to get started." icon={Box} />
       ) : (
-        servers.map((server) => (
-          <Card key={server.id} className="overflow-hidden">
-            <div className="px-4 py-3 border-b-2 border-fg flex items-center justify-between bg-alt">
-              <div className="flex items-center gap-3">
-                <Server size={14} className="text-fg" />
-                <span className="font-mono text-[10px] font-bold text-fg uppercase">{server.name}</span>
-                <span className="font-mono text-[9px] text-muted">{server.ipv4}</span>
-                <span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{server.type}</span>
-                <span className="font-mono text-[9px] text-muted">{server.location}</span>
+        <>
+          {/* Apps */}
+          {apps.length > 0 && (
+            <Card className="overflow-hidden">
+              <div className="px-4 py-3 border-b-2 border-fg flex items-center gap-2 bg-alt">
+                <Box size={14} className="text-fg" />
+                <span className="font-mono text-[10px] font-bold text-fg uppercase">Apps</span>
               </div>
-              <div className="flex items-center gap-2">
-                <StatusBadge status={server.status} />
-              </div>
-            </div>
-            <div className="divide-y divide-fg/10">
-              {(server.services || []).map((svc) => (
-                <div key={`svc-${svc.id}`} className="px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors">
-                  <div className="flex items-center gap-4 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <Database size={10} className="text-muted" />
-                      <a href={`#/services/${svc.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{svc.name}</a>
-                    </div>
-                    <span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{svc.service_type}</span>
-                    <span className="font-mono text-[9px] text-muted">{svc.version}</span>
-                    <StatusBadge status={svc.status} />
-                    {svc.instance_count > 1 && (
-                      <span className="font-mono text-[9px] font-bold border border-fg px-1">{svc.instance_count}x</span>
-                    )}
-                    {svc.linked_apps.length > 0 && (
-                      <span className="font-mono text-[8px] text-muted">
-                        linked to {svc.linked_apps.map((a) => a.name).join(", ")}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <PermissionGate permission="apps.logs">
-                      <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/services/${svc.id}`; }}><ScrollText size={12} /></Btn>
-                    </PermissionGate>
-                    <PermissionGate permission="apps.restart">
-                      {(() => {
-                        const k = `svc-restart-${svc.id}`;
-                        const armed = confirmKey === k;
-                        return (
-                          <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("restart", svc.id, "Restart"))}>
-                            {armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />}
-                          </Btn>
-                        );
-                      })()}
-                    </PermissionGate>
-                    <PermissionGate permission="apps.pause">
-                      {svc.status === "paused" ? (() => {
-                        const k = `svc-unpause-${svc.id}`;
-                        const armed = confirmKey === k;
-                        return (
-                          <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("unpause", svc.id, "Unpause"))}>
-                            {armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />}
-                          </Btn>
-                        );
-                      })() : (() => {
-                        const k = `svc-pause-${svc.id}`;
-                        const armed = confirmKey === k;
-                        return (
-                          <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("pause", svc.id, "Pause"))}>
-                            {armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />}
-                          </Btn>
-                        );
-                      })()}
-                    </PermissionGate>
-                    <PermissionGate permission="apps.destroy">
-                      <Btn
-                        size="xs"
-                        variant="ghost"
-                        loading={actionLoading === `svc-delete-${svc.id}`}
-                        onClick={async () => {
-                          if (await confirm("Destroy Service", `Permanently destroy "${svc.name}"? This removes all containers, volumes, and data.`, true)) {
-                            svcAction("delete", svc.id, "Destroy");
-                          }
-                        }}
-                      ><Trash2 size={12} className="text-accent-red" /></Btn>
-                    </PermissionGate>
-                  </div>
-                </div>
-              ))}
-              {server.apps.map((app) => (
+              <div className="divide-y divide-fg/10">
+                {apps.map((app) => (
                   <div key={app.id} className="px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors">
                     <div className="flex items-center gap-4 min-w-0">
                       <a href={`#/apps/${app.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{app.name}</a>
@@ -271,12 +192,90 @@ export function DashboardPage() {
                     </div>
                   </div>
                 ))}
-              {server.apps.length === 0 && (server.services || []).length === 0 && (
-                <div className="px-4 py-6 text-center text-[10px] text-muted font-mono uppercase tracking-wider">No apps on this server</div>
-              )}
-            </div>
-          </Card>
-        ))
+              </div>
+            </Card>
+          )}
+
+          {/* Services */}
+          {services.length > 0 && (
+            <Card className="overflow-hidden">
+              <div className="px-4 py-3 border-b-2 border-fg flex items-center gap-2 bg-alt">
+                <Database size={14} className="text-fg" />
+                <span className="font-mono text-[10px] font-bold text-fg uppercase">Services</span>
+              </div>
+              <div className="divide-y divide-fg/10">
+                {services.map((svc) => (
+                  <div key={svc.id} className="px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors">
+                    <div className="flex items-center gap-4 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <Database size={10} className="text-muted" />
+                        <a href={`#/services/${svc.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{svc.name}</a>
+                      </div>
+                      <span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{svc.service_type}</span>
+                      <span className="font-mono text-[9px] text-muted">{svc.version}</span>
+                      <StatusBadge status={svc.status} />
+                      {svc.instance_count > 1 && (
+                        <span className="font-mono text-[9px] font-bold border border-fg px-1">{svc.instance_count}x</span>
+                      )}
+                      {svc.linked_apps.length > 0 && (
+                        <span className="font-mono text-[8px] text-muted">
+                          linked to {svc.linked_apps.map((a) => a.name).join(", ")}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <PermissionGate permission="apps.logs">
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/services/${svc.id}`; }}><ScrollText size={12} /></Btn>
+                      </PermissionGate>
+                      <PermissionGate permission="apps.restart">
+                        {(() => {
+                          const k = `svc-restart-${svc.id}`;
+                          const armed = confirmKey === k;
+                          return (
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("restart", svc.id, "Restart"))}>
+                              {armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />}
+                            </Btn>
+                          );
+                        })()}
+                      </PermissionGate>
+                      <PermissionGate permission="apps.pause">
+                        {svc.status === "paused" ? (() => {
+                          const k = `svc-unpause-${svc.id}`;
+                          const armed = confirmKey === k;
+                          return (
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("unpause", svc.id, "Unpause"))}>
+                              {armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />}
+                            </Btn>
+                          );
+                        })() : (() => {
+                          const k = `svc-pause-${svc.id}`;
+                          const armed = confirmKey === k;
+                          return (
+                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("pause", svc.id, "Pause"))}>
+                              {armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />}
+                            </Btn>
+                          );
+                        })()}
+                      </PermissionGate>
+                      <PermissionGate permission="apps.destroy">
+                        <Btn
+                          size="xs"
+                          variant="ghost"
+                          loading={actionLoading === `svc-delete-${svc.id}`}
+                          onClick={async () => {
+                            if (await confirm("Destroy Service", `Permanently destroy "${svc.name}"? This removes all containers, volumes, and data.`, true)) {
+                              svcAction("delete", svc.id, "Destroy");
+                            }
+                          }}
+                        ><Trash2 size={12} className="text-accent-red" /></Btn>
+                      </PermissionGate>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </>
       )}
     </div>
   );

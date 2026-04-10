@@ -80,6 +80,9 @@ function userResponse(user: any) {
     isAdmin: user.is_admin === 1,
     totpEnabled: user.totp_enabled === 1,
     webauthnEnabled: user.webauthn_enabled === 1,
+    githubLinked: !!user.github_id,
+    githubUsername: user.github_username || "",
+    githubAvatarUrl: user.github_avatar_url || "",
     permissions,
   };
 }

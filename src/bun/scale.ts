@@ -1,6 +1,6 @@
 import * as db from "./db.ts";
 import * as hetzner from "./hetzner/index.ts";
-import { getTokens } from "./secret-store.ts";
+import { resolveGitHubToken } from "./github-token.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
 
@@ -80,8 +80,7 @@ async function scaleUp(
   targetServerId?: number
 ) {
   const settings = db.getSettings();
-  const tokens = await getTokens();
-  const githubPat = tokens.github_pat || undefined;
+  const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
   // The "primary" is just whichever server hosts the first (oldest) replica.
   const firstReplica = currentReplicas[0];
   const primaryServer = db.getServer(firstReplica.server_id);
@@ -836,8 +835,7 @@ export async function rollingRedeploy(
     if (!lbId) throw new Error("No load balancer found for rolling deploy");
 
     const imageName = `${app.name}:latest`;
-    const tokens = await getTokens();
-    const githubPat = tokens.github_pat || undefined;
+    const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
 
     for (let i = 0; i < replicas.length; i++) {
       const replica = replicas[i];

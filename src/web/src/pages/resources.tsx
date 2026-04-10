@@ -97,14 +97,13 @@ export function ResourcesPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Servers ({data?.servers?.length || 0})</h3>
         </div>
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
-          <Table headers={["Name", "IP", "Type", "Location", "Apps", "Replicas", "€/mo", ""]}>
+          <Table headers={["Name", "IP", "Type", "Location", "Replicas", "€/mo", ""]}>
             {data.servers.map((s: any) => (
               <tr key={s.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3 text-fg font-bold">{s.name}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.ipv4}</td>
                 <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.type}</span></td>
                 <td className="py-2 px-3 text-fg-dim">{s.location}</td>
-                <td className="py-2 px-3 text-fg-dim">{s.app_count}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
                 <td className="py-2 px-3 text-fg font-bold">{fmtPrice(s.monthly_eur)}</td>
                 <td className="py-2 px-3">
@@ -115,7 +114,7 @@ export function ResourcesPage() {
                       </Btn>
                     </PermissionGate>
                     <PermissionGate permission="resources.delete">
-                      <Btn size="xs" variant="danger" disabled={s.app_count > 0 || s.replica_count > 0} title={s.app_count > 0 || s.replica_count > 0 ? "In use by apps or replicas" : undefined} loading={deleting === `server-${s.hetzner_id}`} onClick={() => handleDelete("server", s.hetzner_id, s.name)}>
+                      <Btn size="xs" variant="danger" disabled={s.replica_count > 0} title={s.replica_count > 0 ? "In use by replicas" : undefined} loading={deleting === `server-${s.hetzner_id}`} onClick={() => handleDelete("server", s.hetzner_id, s.name)}>
                         <Trash2 size={11} />
                       </Btn>
                     </PermissionGate>

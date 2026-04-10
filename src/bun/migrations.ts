@@ -514,6 +514,19 @@ export const migrations: Migration[] = [
       )`);
     },
   },
+  {
+    version: 21,
+    description: "Add GitHub OAuth account linking columns to users and deployed_by to apps",
+    up: (db) => {
+      db.run("ALTER TABLE users ADD COLUMN github_id INTEGER");
+      db.run("ALTER TABLE users ADD COLUMN github_username TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE users ADD COLUMN github_avatar_url TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE users ADD COLUMN github_linked_at TEXT");
+      db.run("CREATE UNIQUE INDEX idx_users_github_id ON users(github_id) WHERE github_id IS NOT NULL");
+      // Track which user deployed the app so webhook redeploys can use their GitHub token
+      db.run("ALTER TABLE apps ADD COLUMN deployed_by TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

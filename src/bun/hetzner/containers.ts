@@ -219,6 +219,29 @@ export async function checkCaddyRoute(ip: string, domain: string, hostKey?: stri
   return result.exitCode === 0;
 }
 
+// --- Registry Auth ---
+
+async function dockerLoginGhcr(
+  ip: string,
+  token: string,
+  hostKey?: string,
+): Promise<void> {
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  const escaped = token.replace(/'/g, "'\\''");
+  const result = await sshExec(
+    ip,
+    asUser(`echo '${escaped}' | docker login ghcr.io -u x-access-token --password-stdin`),
+    hostKey,
+  );
+  if (result.exitCode !== 0) {
+    log("registry", `ghcr.io login failed: ${result.stderr}`);
+    throw new Error(
+      "Failed to authenticate with GitHub Container Registry (ghcr.io). Check your GitHub token has the read:packages scope.",
+    );
+  }
+  log("registry", "ghcr.io login succeeded");
+}
+
 // --- Clone & Build ---
 
 // Shared git clone/pull logic used by both cloneAndBuild and cloneAndComposeBuild
@@ -256,7 +279,7 @@ async function cloneRepo(
       throw new Error(`Git clone failed: repository not found. Check that the repo URL is correct and your GitHub token has access to it.`);
     }
     if ((isAuthError || notFound) && !gitToken) {
-      throw new Error(`Git clone failed: repository requires authentication. Add a GitHub Personal Access Token in Settings.`);
+      throw new Error(`Git clone failed: repository requires authentication. Link your GitHub account in Account settings.`);
     }
     if (isAuthError && gitToken) {
       throw new Error(`Git clone failed: authentication rejected. Check that your GitHub token is valid and has the "repo" scope.`);
@@ -314,6 +337,12 @@ export async function cloneAndBuild(
     }
     log("build", `Found Dockerfile: ${dockerfilePath}`);
     emit(`Found Dockerfile at: ${dockerfilePath}`);
+  }
+
+  // Authenticate with ghcr.io if a GitHub token is available (needed for
+  // private base images in FROM directives)
+  if (opts.gitToken) {
+    await dockerLoginGhcr(ip, opts.gitToken);
   }
 
   // Build image first (before stopping old container — build-before-destroy)
@@ -492,6 +521,13 @@ export async function cloneAndComposeBuild(
     const escapedContent = envFileContent.replace(/'/g, "'\\''");
     await sshExec(ip, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`);
     envFileFlag = `--env-file ${envFilePath}`;
+  }
+
+  // Authenticate with ghcr.io if a GitHub token is available (needed for
+  // private GitHub Container Registry images referenced in compose files)
+  if (opts.gitToken) {
+    emit("Authenticating with GitHub Container Registry...");
+    await dockerLoginGhcr(ip, opts.gitToken);
   }
 
   // Build and start compose project
@@ -791,11 +827,17 @@ export async function pullAndRunService(
     cmd?: string[];          // custom entrypoint/cmd args
     bindAddress?: string;    // "127.0.0.1" (default) or "0.0.0.0"
     extraVolumes?: string[]; // additional -v mounts (e.g. config files)
+    gitToken?: string;       // GitHub token for ghcr.io private images
   },
   hostKey?: string
 ): Promise<{ containerId: string }> {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
   const bindAddr = opts.bindAddress || "127.0.0.1";
+
+  // Authenticate with ghcr.io for private GitHub Container Registry images
+  if (opts.gitToken && opts.image.startsWith("ghcr.io/")) {
+    await dockerLoginGhcr(ip, opts.gitToken, hostKey);
+  }
 
   log("service", `Pulling image ${opts.image}...`);
   const pullResult = await sshExec(ip, asUser(`docker pull ${opts.image}`), hostKey);

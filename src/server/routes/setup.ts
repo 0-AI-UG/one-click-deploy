@@ -3,7 +3,7 @@ import { createTempToken } from "../lib/auth.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { secretStore } from "../../bun/secret-store.ts";
-import { validateHetznerToken, validateGitHubPat } from "../../bun/validate.ts";
+import { validateHetznerToken } from "../../bun/validate.ts";
 
 export function isSetupComplete(): boolean {
   return db.getUserCount() > 0;
@@ -82,7 +82,7 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     }
 
     const body = await request.json() as Record<string, string>;
-    const { username, password, hetzner_api_token, github_pat, dns_zone_id, default_server_type, default_location } = body;
+    const { username, password, hetzner_api_token, dns_zone_id, default_server_type, default_location } = body;
 
     if (!username || !password) {
       return Response.json(
@@ -111,16 +111,6 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
       }
     }
 
-    if (github_pat) {
-      const patValidation = validateGitHubPat(github_pat);
-      if (!patValidation.valid) {
-        return Response.json(
-          { error: `GitHub token: ${patValidation.error}` },
-          { status: 400, headers: corsHeaders },
-        );
-      }
-    }
-
     // Create admin user
     const userId = crypto.randomUUID();
     const passwordHash = await Bun.password.hash(password, "bcrypt");
@@ -128,7 +118,6 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
 
     // Store secrets (only overwrite Hetzner token if a new one was given)
     if (hetzner_api_token) await secretStore.set("hetzner_api_token", hetzner_api_token);
-    if (github_pat) await secretStore.set("github_pat", github_pat);
 
     // Store non-secret settings
     if (dns_zone_id) db.saveSetting("dns_zone_id", dns_zone_id);

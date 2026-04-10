@@ -20,7 +20,7 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     // Clean up GitHub webhook if enabled
     if (app.webhook_enabled && app.github_webhook_id) {
       try {
-        const pat = await github.getGitHubPat();
+        const pat = await github.getGitHubPat(app.deployed_by || undefined);
         if (pat) {
           await github.deleteWebhook({
             gitRepo: app.git_repo,

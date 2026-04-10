@@ -167,7 +167,6 @@ export type ParsedManifest = {
 
 export type Settings = {
   hetzner_api_token: string;
-  github_pat: string;
   dns_zone_id: string;
   default_server_type: string;
   default_location: string;

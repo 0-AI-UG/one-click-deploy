@@ -280,6 +280,10 @@ export function updateAppStatus(id: number, status: string) {
   db.query("UPDATE apps SET status = ? WHERE id = ?").run(status, id);
 }
 
+export function updateAppDeployedBy(id: number, userId: string) {
+  db.query("UPDATE apps SET deployed_by = ? WHERE id = ?").run(userId, id);
+}
+
 export function appendDeployLog(id: number, line: string) {
   db.query(
     "UPDATE apps SET deploy_log = deploy_log || ? WHERE id = ?"
@@ -804,6 +808,10 @@ export type UserRow = {
   totp_secret: string | null;
   totp_enabled: number;
   webauthn_enabled: number;
+  github_id: number | null;
+  github_username: string;
+  github_avatar_url: string;
+  github_linked_at: string | null;
   created_at: string;
 };
 
@@ -836,6 +844,25 @@ export function updateUserPassword(id: string, passwordHash: string): void {
 
 export function deleteUser(id: string): void {
   db.query("DELETE FROM users WHERE id = ?").run(id);
+}
+
+// --- GitHub OAuth ---
+
+export function updateUserGitHub(
+  userId: string,
+  githubId: number,
+  githubUsername: string,
+  avatarUrl: string,
+): void {
+  db.query(
+    "UPDATE users SET github_id = ?, github_username = ?, github_avatar_url = ?, github_linked_at = datetime('now') WHERE id = ?"
+  ).run(githubId, githubUsername, avatarUrl, userId);
+}
+
+export function clearUserGitHub(userId: string): void {
+  db.query(
+    "UPDATE users SET github_id = NULL, github_username = '', github_avatar_url = '', github_linked_at = NULL WHERE id = ?"
+  ).run(userId);
 }
 
 // --- TOTP ---

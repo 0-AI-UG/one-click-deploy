@@ -80,6 +80,27 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 }
 \`\`\`
 
+## Example: Compose-based app
+
+\`\`\`json
+{
+  "$schema": 1,
+  "name": "My Compose App",
+  "description": "Multi-container app using Docker Compose",
+  "build": {
+    "compose_file": "docker-compose.yml",
+    "compose_web_service": "server"
+  },
+  "env": [
+    { "key": "API_KEY", "description": "External API key", "required": true, "secret": true },
+    { "key": "LOG_LEVEL", "default": "info" }
+  ],
+  "volume": { "size": 10, "path": "/app/data" },
+  "webhook": { "enabled": true, "branch": "main" },
+  "suggested_app_name": "my-compose-app"
+}
+\`\`\`
+
 ## Example: Monorepo with two services
 
 \`services/api/.ocd-deploy.json\`:

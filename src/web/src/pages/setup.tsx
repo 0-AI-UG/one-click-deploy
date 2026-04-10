@@ -23,7 +23,7 @@ export function SetupPage() {
   }, []);
   const [form, setForm] = useState({
     username: "", password: "", confirmPassword: "",
-    hetzner_api_token: "", github_pat: "",
+    hetzner_api_token: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
 
@@ -155,10 +155,6 @@ export function SetupPage() {
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner API Token *</label>
                 <input type="password" value={form.hetzner_api_token} onChange={set("hetzner_api_token")} placeholder="Required" />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">GitHub PAT</label>
-                <input type="password" value={form.github_pat} onChange={set("github_pat")} placeholder="Optional — needed for webhooks" />
               </div>
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>

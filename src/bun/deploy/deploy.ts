@@ -5,6 +5,7 @@ import * as github from "../github.ts";
 import { validateDeployRequest } from "../validate.ts";
 import { createMasker } from "../mask.ts";
 import { getTokens } from "../secret-store.ts";
+import { resolveGitHubToken } from "../github-token.ts";
 import { scaleApp } from "../scale.ts";
 import { resolve4 } from "node:dns/promises";
 
@@ -131,7 +132,8 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
 
 export async function deploy(
   req: DeployRequest,
-  onProgress: ProgressFn
+  onProgress: ProgressFn,
+  userId?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const deployStart = Date.now();
   log("start", "Deploy request:", { app_name: req.app_name, git_repo: req.git_repo, domain: req.domain, container_port: req.container_port });
@@ -152,8 +154,9 @@ export async function deploy(
 
   // Set up log masking for secrets
   const tokens = await getTokens();
-  const githubPat = tokens.github_pat || undefined;
-  log("deploy", `GitHub PAT ${githubPat ? `present (${githubPat.length} chars)` : "not configured"}`);
+  const resolvedGitToken = await resolveGitHubToken(userId);
+  const githubPat = resolvedGitToken || undefined;
+  log("deploy", `GitHub token ${githubPat ? `present (${githubPat.length} chars)` : "not configured (user has no linked GitHub)"}`);
   const secretValues = [
     tokens.hetzner_api_token,
     ...(githubPat ? [githubPat] : []),
@@ -357,6 +360,7 @@ export async function deploy(
     state.dbAppId = app.id;
     state.replicaId = replica.id;
     state.containerName = req.app_name;
+    if (userId) db.updateAppDeployedBy(app.id, userId);
     log("build", `App + first replica created: app=${app.id} replica=${replica.id} host_port=${replica.host_port}`);
 
     if (state.dnsRecord) {

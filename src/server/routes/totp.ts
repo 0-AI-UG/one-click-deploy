@@ -186,7 +186,7 @@ export async function handleTotpLogin(request: Request): Promise<Response> {
       const token = await createToken({ userId: user.id, username: user.username });
       const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
       return Response.json(
-        { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions } },
+        { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, githubLinked: !!user.github_id, githubUsername: user.github_username || "", githubAvatarUrl: user.github_avatar_url || "", permissions } },
         { headers: corsHeaders },
       );
     }
@@ -201,7 +201,7 @@ export async function handleTotpLogin(request: Request): Promise<Response> {
         const token = await createToken({ userId: user.id, username: user.username });
         const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
         return Response.json(
-          { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions } },
+          { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, githubLinked: !!user.github_id, githubUsername: user.github_username || "", githubAvatarUrl: user.github_avatar_url || "", permissions } },
           { headers: corsHeaders },
         );
       }

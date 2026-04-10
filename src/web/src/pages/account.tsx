@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
 import { Card, Btn, Spinner, showToast } from "../components/ui.tsx";
-import { User, Shield, Fingerprint, KeyRound, Trash2, LogOut } from "lucide-react";
+import { User, Shield, Fingerprint, KeyRound, Trash2, LogOut, GitBranch, LinkIcon, Unlink } from "lucide-react";
 import { startRegistration, browserSupportsWebAuthn } from "@simplewebauthn/browser";
-import { logout } from "../stores/auth.ts";
+import { logout, useAuth, updateUser } from "../stores/auth.ts";
 
 type PasskeyInfo = { id: string; name: string; deviceType: string; backedUp: boolean; createdAt: string };
 
@@ -152,6 +152,113 @@ function SecuritySection() {
   );
 }
 
+function GitHubSection() {
+  const { user } = useAuth();
+  const [status, setStatus] = useState<{ linked: boolean; githubUsername: string; avatarUrl: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () => {
+    get("/api/auth/github/status")
+      .then(setStatus)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    refresh();
+    // Check for OAuth callback result in URL
+    const params = new URLSearchParams(window.location.hash.split("?")[1] || "");
+    if (params.get("github") === "linked") {
+      showToast("GitHub account linked", "success");
+      // Refresh user data so the auth store is up to date
+      get("/api/me").then((data: any) => { if (data.user) updateUser(data.user); }).catch(() => {});
+      // Clean URL
+      window.location.hash = "#/account";
+    } else if (params.get("github") === "error") {
+      const reason = params.get("reason") || "unknown";
+      const messages: Record<string, string> = {
+        missing_params: "GitHub did not return the expected parameters",
+        invalid_state: "Session expired. Please try again.",
+        not_configured: "GitHub OAuth is not configured by the admin",
+        token_exchange: "Failed to exchange code with GitHub",
+        user_fetch: "Failed to fetch your GitHub profile",
+        internal: "An internal error occurred",
+      };
+      showToast(messages[reason] || "Failed to link GitHub", "error");
+      window.location.hash = "#/account";
+    }
+  }, []);
+
+  const linkGitHub = async () => {
+    setBusy(true);
+    try {
+      const { url } = await get("/api/auth/github/authorize");
+      window.location.href = url;
+    } catch (err: any) {
+      showToast(err.message || "Failed to start GitHub OAuth", "error");
+      setBusy(false);
+    }
+  };
+
+  const unlinkGitHub = async () => {
+    setBusy(true);
+    try {
+      await post("/api/auth/github/unlink");
+      showToast("GitHub account unlinked", "success");
+      setStatus({ linked: false, githubUsername: "", avatarUrl: "" });
+      // Refresh user data
+      get("/api/me").then((data: any) => { if (data.user) updateUser(data.user); }).catch(() => {});
+    } catch (err: any) {
+      showToast(err.message || "Failed to unlink", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loading) return <Card className="p-5 mt-6"><div className="flex justify-center"><Spinner /></div></Card>;
+
+  const linked = status?.linked || user?.githubLinked;
+  const username = status?.githubUsername || user?.githubUsername || "";
+  const avatar = status?.avatarUrl || user?.githubAvatarUrl || "";
+
+  return (
+    <Card className="p-5 space-y-4">
+      <div className="flex items-center gap-2">
+        <GitBranch size={14} className="text-fg" />
+        <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">GitHub</h3>
+      </div>
+
+      {linked ? (
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {avatar && (
+              <img src={avatar} alt={username} className="w-8 h-8 border-2 border-fg" />
+            )}
+            <div>
+              <span className="font-mono text-[11px] text-fg font-bold">@{username}</span>
+              <span className="font-mono text-[9px] font-bold uppercase px-2 py-0.5 border-2 border-fg bg-green-200 ml-2">Linked</span>
+            </div>
+          </div>
+          <Btn size="xs" loading={busy} onClick={unlinkGitHub}>
+            <Unlink size={11} /> Unlink
+          </Btn>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="font-mono text-[11px] text-fg font-bold">Not linked</span>
+            <p className="font-mono text-[9px] text-muted mt-0.5">Link your GitHub to deploy private repos and pull private ghcr.io images.</p>
+          </div>
+          <Btn size="xs" loading={busy} onClick={linkGitHub}>
+            <LinkIcon size={11} /> Link GitHub
+          </Btn>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function AccountPage() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 animate-fade-in">
@@ -160,6 +267,7 @@ export function AccountPage() {
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Account</h1>
       </div>
 
+      <GitHubSection />
       <SecuritySection />
     </div>
   );

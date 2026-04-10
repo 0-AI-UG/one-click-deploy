@@ -12,7 +12,6 @@ export type AutoDeployConfig = {
   domain: string;
   server_type?: string;
   server_location?: string;
-  github_pat?: string;
   dns_zone_id?: string;
   app_name?: string;
   volume_size?: number;
@@ -64,9 +63,6 @@ export async function runAutoDeploy(
   process.env.JWT_SECRET = jwtSecret;
 
   await secretStore.set("hetzner_api_token", config.hetzner_token);
-  if (config.github_pat) {
-    await secretStore.set("github_pat", config.github_pat);
-  }
   if (config.dns_zone_id) {
     db.saveSetting("dns_zone_id", config.dns_zone_id);
   }

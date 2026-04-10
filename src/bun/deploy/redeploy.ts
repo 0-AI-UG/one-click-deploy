@@ -2,7 +2,7 @@ import type { ServerWithApps } from "../../shared/rpc.ts";
 import * as db from "../db.ts";
 import * as hetzner from "../hetzner/index.ts";
 import { validateEnvVars } from "../validate.ts";
-import { getTokens } from "../secret-store.ts";
+import { resolveGitHubToken } from "../github-token.ts";
 import { rollingRedeploy } from "../scale.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
@@ -17,6 +17,7 @@ export async function redeployApp(
   newEnvVars?: Record<string, string>,
   newAuthPassword?: string | null,
   newContainerPort?: number,
+  userId?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   log("redeployApp", `Redeploying app id=${appId}`);
   let previousStatus = "running"; // fallback if app lookup fails
@@ -40,8 +41,8 @@ export async function redeployApp(
     const containerPort = newContainerPort ?? app.container_port;
     const hostKey = server.ssh_host_key || undefined;
 
-    const tokens = await getTokens();
-    const githubPat = tokens.github_pat || undefined;
+    const resolvedGitToken = await resolveGitHubToken(userId);
+    const githubPat = resolvedGitToken || undefined;
 
     db.updateAppStatus(appId, "deploying");
     onProgress("build", "Pulling latest code and rebuilding...");
@@ -159,6 +160,7 @@ export async function redeployApp(
 export async function updateAppEnv(
   appId: number,
   envVars: Record<string, string>,
+  userId?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   log("updateAppEnv", `Updating env vars for app id=${appId}`);
   try {
@@ -178,8 +180,8 @@ export async function updateAppEnv(
     // Defer DB write — only persist after successful rebuild
     // Recreate container with new env vars
     const hostKey = server.ssh_host_key || undefined;
-    const tokens = await getTokens();
-    const githubPat = tokens.github_pat || undefined;
+    const resolvedGitToken = await resolveGitHubToken(userId);
+    const githubPat = resolvedGitToken || undefined;
     const logLine = (line: string) => db.appendDeployLog(appId, `[env-update] ${line}`);
 
     if (app.deploy_mode === "compose") {
@@ -370,8 +372,8 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
   const depId = dep.id;
   const append = (line: string) => db.appendDeploymentLog(depId, line);
 
-  const tokens = await getTokens();
-  const githubPat = tokens.github_pat || undefined;
+  // Use the token of the user who deployed this app
+  const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
   const lbId = app.hetzner_lb_id;
   const multi = replicas.length > 1 && !!lbId;
 

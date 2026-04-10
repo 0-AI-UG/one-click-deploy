@@ -1,4 +1,4 @@
-import { secretStore } from "./secret-store.ts";
+
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [github:${context}]`, ...args);
@@ -122,7 +122,8 @@ export async function deleteWebhook(opts: {
   log("webhook", `Webhook ${opts.webhookId} deleted`);
 }
 
-export async function getGitHubPat(): Promise<string | null> {
-  const pat = await secretStore.get("github_pat");
-  return pat || null;
+export async function getGitHubPat(userId?: string): Promise<string | null> {
+  const { resolveGitHubToken } = await import("./github-token.ts");
+  const token = await resolveGitHubToken(userId);
+  return token || null;
 }

@@ -67,7 +67,6 @@ export async function handleGetResources(request: Request): Promise<Response> {
       type: s.type,
       location: s.location,
       status: s.status,
-      app_count: db.getApps(s.id).length,
       replica_count: db.getReplicasByServer(s.id).length,
       monthly_eur: priceForServer(s.type, s.location),
     }));
@@ -134,13 +133,9 @@ export async function handleDeleteResource(request: Request, type: string, id: s
     if (type === "server") {
       const server = db.getServers().find((s: any) => s.hetzner_id === id || String(s.id) === id);
       if (server) {
-        const apps = db.getApps(server.id);
         const replicas = db.getReplicasByServer(server.id);
-        if (apps.length > 0 || replicas.length > 0) {
-          const users = [
-            ...apps.map((a: any) => a.name),
-            ...replicas.map((r: any) => `${r.container_name} (replica)`),
-          ];
+        if (replicas.length > 0) {
+          const users = replicas.map((r: any) => `${r.container_name} (replica)`);
           return Response.json({ ok: false, error: `Server is in use by: ${users.join(", ")}` }, { headers: corsHeaders });
         }
         const result = await destroyServer(server.id);

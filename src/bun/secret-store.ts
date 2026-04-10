@@ -17,7 +17,6 @@ export interface SecretStore {
   delete(key: string): Promise<void>;
   getTokens(): Promise<{
     hetzner_api_token: string;
-    github_pat: string;
   }>;
 }
 
@@ -76,13 +75,9 @@ class DbSecretStore implements SecretStore {
   }
 
   async getTokens() {
-    const [hetzner_api_token, github_pat] = await Promise.all([
-      this.get("hetzner_api_token"),
-      this.get("github_pat"),
-    ]);
+    const hetzner_api_token = await this.get("hetzner_api_token");
     return {
       hetzner_api_token: hetzner_api_token ?? "",
-      github_pat: github_pat ?? "",
     };
   }
 }

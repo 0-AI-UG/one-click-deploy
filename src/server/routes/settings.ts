@@ -3,7 +3,7 @@ import { requireAdmin } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { secretStore, maskToken } from "../../bun/secret-store.ts";
-import { validateHetznerToken, validateGitHubPat } from "../../bun/validate.ts";
+import { validateHetznerToken } from "../../bun/validate.ts";
 import { hetznerApi } from "../../bun/hetzner/api.ts";
 
 export async function handleGetSettings(request: Request): Promise<Response> {
@@ -11,10 +11,12 @@ export async function handleGetSettings(request: Request): Promise<Response> {
     await requireAdmin(request);
     const s = db.getSettings();
     const tokens = await secretStore.getTokens();
+    const githubOauthClientSecret = await secretStore.get("github_oauth_client_secret");
     return Response.json(
       {
         hetzner_api_token: maskToken(tokens.hetzner_api_token),
-        github_pat: maskToken(tokens.github_pat),
+        github_oauth_client_id: s.github_oauth_client_id ?? "",
+        github_oauth_client_secret: maskToken(githubOauthClientSecret ?? ""),
         dns_zone_id: s.dns_zone_id ?? "",
         default_server_type: s.default_server_type ?? "",
         default_location: s.default_location ?? "",
@@ -75,16 +77,11 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
           }
           await secretStore.set(key, value);
         }
-      } else if (key === "github_pat") {
+      } else if (key === "github_oauth_client_id") {
+        db.saveSetting(key, value);
+      } else if (key === "github_oauth_client_secret") {
         if (value.includes("...") || value === "****") continue;
         if (value) {
-          const validation = validateGitHubPat(value);
-          if (!validation.valid) {
-            return Response.json(
-              { error: `GitHub token: ${validation.error}` },
-              { status: 400, headers: corsHeaders },
-            );
-          }
           await secretStore.set(key, value);
         } else {
           await secretStore.delete(key);
