@@ -251,7 +251,7 @@ export const hetznerCompute: ComputeProvider = {
       const servers: Record<string, number> = {};
       for (const st of pricing?.server_types ?? []) {
         for (const price of st.prices ?? []) {
-          const key = `${st.server_type?.name}|${price.location}`;
+          const key = `${st.name}|${price.location}`;
           servers[key] = parseFloat(price.price_monthly?.gross ?? "0");
         }
       }
