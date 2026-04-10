@@ -57,7 +57,7 @@ export async function verifyGithubSignature(
 
 export async function handleEnableWebhook(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "webhooks.manage");
+    const payload = await requirePermission(request, "webhooks.manage");
     const body = await request.json() as { branch?: string; path?: string };
 
     const app = db.getApp(appId);
@@ -71,8 +71,8 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
       );
     }
 
-    const pat = await github.getGitHubPat(app.deployed_by || undefined);
-    if (!pat) return Response.json({ ok: false, error: "No GitHub token available. The deploying user must link their GitHub account." }, { headers: corsHeaders });
+    const pat = await github.getGitHubPat(payload.userId);
+    if (!pat) return Response.json({ ok: false, error: "No GitHub token available. Link your GitHub account in Settings first." }, { status: 400, headers: corsHeaders });
 
     const webhookBranch = body.branch || "main";
     const webhookPath = normalizeWebhookPath(body.path || "");
@@ -96,13 +96,13 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
 
 export async function handleDisableWebhook(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "webhooks.manage");
+    const payload = await requirePermission(request, "webhooks.manage");
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
 
     if (app.github_webhook_id) {
-      const pat = await github.getGitHubPat(app.deployed_by || undefined);
+      const pat = await github.getGitHubPat(payload.userId);
       if (pat) {
         try {
           await github.deleteWebhook({
