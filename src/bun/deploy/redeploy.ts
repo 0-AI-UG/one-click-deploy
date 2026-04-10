@@ -44,6 +44,7 @@ export async function redeployApp(
     const resolvedGitToken = await resolveGitHubToken(userId);
     const githubPat = resolvedGitToken || undefined;
 
+    if (userId) db.updateAppDeployedBy(appId, userId);
     db.updateAppStatus(appId, "deploying");
     onProgress("build", "Pulling latest code and rebuilding...");
 
@@ -497,10 +498,12 @@ export function getServersWithApps(): any[] {
       const reps = db.getReplicas(a.id);
       const first = reps[0];
       const serverIds = Array.from(new Set(reps.map((r: any) => r.server_id)));
+      const deployedByUser = a.deployed_by ? db.getUserById(a.deployed_by) : null;
       return {
         ...a,
         host_port: first?.host_port ?? 0,
         servers: serverIds,
+        deployed_by_username: deployedByUser?.username || null,
       };
     }),
     services: db.getServicesOnServer(s.id).map((svc: any) => {

@@ -56,7 +56,7 @@ type IntrospectResult =
       default_branch: string;
       suggested_app_name: string;
       dockerfiles: string[];
-      compose_file: string | null;
+      compose_files: string[];
       compose_services: Array<{ name: string; port: number | null; has_ports: boolean }>;
       suggested_web_service: string | null;
       detected_port: number | null;
@@ -216,7 +216,7 @@ export function DeployPage() {
       app_name: f.app_name || result.suggested_app_name,
       container_port: result.detected_port ? String(result.detected_port) : "3000",
       dockerfile_path: result.dockerfiles[0] ?? "",
-      compose_file: result.compose_file ?? "",
+      compose_file: result.compose_files[0] ?? "",
       compose_web_service: result.suggested_web_service ?? "",
       webhook_branch: result.default_branch,
       volume_size: "",
@@ -279,7 +279,7 @@ export function DeployPage() {
                   ? String(result.detected_port)
                   : f.container_port,
               dockerfile_path: f.dockerfile_path || (result.dockerfiles[0] ?? ""),
-              compose_file: f.compose_file || (result.compose_file ?? ""),
+              compose_file: f.compose_file || (result.compose_files[0] ?? ""),
               compose_web_service:
                 f.compose_web_service || (result.suggested_web_service ?? ""),
               webhook_branch:
@@ -368,9 +368,10 @@ export function DeployPage() {
   const detected = introspect?.ok === true ? introspect : null;
   // Build mode: compose vs dockerfile. Manifest or form value takes priority,
   // then fall back to what was detected in the repo.
-  const hasBothModes = !!detected && detected.dockerfiles.length > 0 && !!detected.compose_file;
-  const isCompose = !!(form.compose_file || detected?.compose_file);
+  const hasBothModes = !!detected && detected.dockerfiles.length > 0 && !!detected.compose_files[0];
+  const isCompose = !!(form.compose_file || detected?.compose_files[0]);
   const hasMultipleDockerfiles = !isCompose && !!detected && detected.dockerfiles.length > 1;
+  const hasMultipleComposeFiles = isCompose && !!detected && detected.compose_files.length > 1;
   const hasMultipleServices = !!detected && detected.compose_services.length > 1;
   const envKeys = Object.keys(envValues);
 
@@ -419,7 +420,7 @@ export function DeployPage() {
                       ? `Deploy manifest found`
                       : `${detected.manifests.length} deploy manifests found`
                     : <>
-                        Found {detected.dockerfiles.length > 0 ? "Dockerfile" : detected.compose_file ? "compose" : "repo"}
+                        Found {detected.dockerfiles.length > 0 ? "Dockerfile" : detected.compose_files[0] ? "compose" : "repo"}
                         {detected.detected_port ? ` · port ${detected.detected_port}` : ""}
                         {detected.env_vars.length > 0
                           ? ` · ${detected.env_vars.length} env var${detected.env_vars.length === 1 ? "" : "s"}`
@@ -553,7 +554,7 @@ export function DeployPage() {
                       if (v === "compose") {
                         setForm((f) => ({
                           ...f,
-                          compose_file: detected?.compose_file || "docker-compose.yml",
+                          compose_file: detected?.compose_files[0] || "docker-compose.yml",
                           compose_web_service: detected?.suggested_web_service || "",
                           dockerfile_path: "",
                         }));
@@ -579,12 +580,18 @@ export function DeployPage() {
                 label={isCompose ? "Compose" : "Dockerfile"}
                 detected={!!detected && (detected.dockerfiles.length > 0 || isCompose)}
               >
-                {isCompose ? (
+                {isCompose && hasMultipleComposeFiles ? (
+                  <NeoSelect
+                    value={form.compose_file}
+                    onChange={(v) => setForm((f) => ({ ...f, compose_file: v }))}
+                    options={detected!.compose_files.map((c) => ({ value: c, label: c }))}
+                  />
+                ) : isCompose ? (
                   <input
                     type="text"
                     value={form.compose_file}
                     onChange={set("compose_file")}
-                    placeholder={detected?.compose_file || "docker-compose.yml"}
+                    placeholder={detected?.compose_files[0] || "docker-compose.yml"}
                   />
                 ) : hasMultipleDockerfiles ? (
                   <NeoSelect

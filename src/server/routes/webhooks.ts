@@ -87,6 +87,7 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
     });
 
     db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath);
+    db.updateAppDeployedBy(appId, payload.userId);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {

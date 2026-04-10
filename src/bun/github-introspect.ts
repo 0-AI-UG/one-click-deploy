@@ -18,7 +18,7 @@ export type IntrospectResult = {
   default_branch: string;
   suggested_app_name: string;
   dockerfiles: string[];
-  compose_file: string | null;
+  compose_files: string[];
   compose_services: Array<{ name: string; port: number | null; has_ports: boolean }>;
   suggested_web_service: string | null;
   detected_port: number | null;
@@ -274,7 +274,7 @@ export async function introspectRepo(url: string, userId?: string): Promise<Intr
       default_branch,
       suggested_app_name,
       dockerfiles: [],
-      compose_file: null,
+      compose_files: [],
       compose_services: [],
       suggested_web_service: null,
       detected_port: null,
@@ -335,14 +335,15 @@ export async function introspectRepo(url: string, userId?: string): Promise<Intr
     .filter((p) => /(^|\/)Dockerfile(\.[A-Za-z0-9_-]+)?$/.test(p))
     .sort((a, b) => a.split("/").length - b.split("/").length); // shallowest first
 
-  const composeCandidate =
-    paths.find((p) => /^(docker-compose|compose)\.ya?ml$/.test(p)) || null;
+  const composeFiles = paths
+    .filter((p) => /(^|\/)(?:docker-compose|compose)\.ya?ml$/.test(p))
+    .sort((a, b) => a.split("/").length - b.split("/").length); // shallowest first
 
   const envExampleCandidate = pickEnvExample(paths, dockerfiles[0] ?? null);
 
   // 4. Read the chosen files in parallel
   const [composeContent, dockerfileContent, envContent] = await Promise.all([
-    composeCandidate ? fetchRawFile(owner, repo, default_branch, composeCandidate, token) : Promise.resolve(null),
+    composeFiles[0] ? fetchRawFile(owner, repo, default_branch, composeFiles[0], token) : Promise.resolve(null),
     dockerfiles[0] ? fetchRawFile(owner, repo, default_branch, dockerfiles[0], token) : Promise.resolve(null),
     envExampleCandidate ? fetchRawFile(owner, repo, default_branch, envExampleCandidate, token) : Promise.resolve(null),
   ]);
@@ -368,7 +369,7 @@ export async function introspectRepo(url: string, userId?: string): Promise<Intr
 
   const env_vars = envContent ? parseEnvExample(envContent) : [];
 
-  if (dockerfiles.length === 0 && !composeCandidate) {
+  if (dockerfiles.length === 0 && composeFiles.length === 0) {
     notes.push("No Dockerfile or compose file found — you'll need to add one before deploying.");
   }
 
@@ -379,7 +380,7 @@ export async function introspectRepo(url: string, userId?: string): Promise<Intr
     default_branch,
     suggested_app_name,
     dockerfiles,
-    compose_file: composeCandidate,
+    compose_files: composeFiles,
     compose_services,
     suggested_web_service,
     detected_port,
