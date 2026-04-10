@@ -1,10 +1,12 @@
 import * as db from "./db.ts";
+import type { ServiceRow, ServiceInstanceRow } from "./db.ts";
 import * as hetzner from "./hetzner/index.ts";
 import { getCatalogEntry, buildConnectionUrl } from "./services/catalog.ts";
+import type { ServiceDefinition } from "./services/catalog.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [scale-service:${context}]`, ...args);
 }
 
@@ -50,15 +52,15 @@ export async function scaleService(
 }
 
 async function scaleUp(
-  service: any,
-  catalog: any,
-  currentInstances: any[],
+  service: ServiceRow,
+  catalog: ServiceDefinition,
+  currentInstances: ServiceInstanceRow[],
   currentCount: number,
   targetCount: number,
   emit: ProgressFn
 ) {
   const envVars = JSON.parse(service.env_vars || "{}");
-  const primary = currentInstances.find((i: any) => i.role === "primary");
+  const primary = currentInstances.find((i) => i.role === "primary");
   if (!primary) throw new Error("No primary instance found");
 
   const primaryServer = db.getServer(primary.server_id);
@@ -144,7 +146,7 @@ async function scaleUp(
     );
 
     const instance = db.getServiceInstances(service.id).find(
-      (inst: any) => inst.container_name === containerName
+      (inst) => inst.container_name === containerName
     );
     if (instance) {
       db.updateServiceInstanceStatus(instance.id, health.healthy ? "running" : "unhealthy");
@@ -158,17 +160,17 @@ async function scaleUp(
 }
 
 async function scaleDown(
-  service: any,
-  catalog: any,
-  currentInstances: any[],
+  service: ServiceRow,
+  catalog: ServiceDefinition,
+  currentInstances: ServiceInstanceRow[],
   currentCount: number,
   targetCount: number,
   emit: ProgressFn
 ) {
   // Never remove primary — only remove replicas, newest first
   const replicas = currentInstances
-    .filter((i: any) => i.role === "replica")
-    .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    .filter((i) => i.role === "replica")
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   const toRemove = replicas.slice(0, currentCount - targetCount);
 
@@ -206,7 +208,7 @@ async function scaleDown(
 }
 
 /** Update DATABASE_REPLICA_URLS in all linked apps after scaling */
-async function updateLinkedAppsReplicaUrls(service: any): Promise<void> {
+async function updateLinkedAppsReplicaUrls(service: ServiceRow): Promise<void> {
   const catalog = getCatalogEntry(service.service_type);
   if (!catalog) return;
 
@@ -223,7 +225,7 @@ async function updateLinkedAppsReplicaUrls(service: any): Promise<void> {
       const prefix = link.env_prefix || "DATABASE";
 
       if (replicas.length > 0) {
-        const replicaUrls = replicas.map((r: any) => {
+        const replicaUrls = replicas.map((r) => {
           const server = db.getServer(r.server_id);
           if (!server) return "";
           return buildConnectionUrl(catalog, envVars, server.ipv4, r.host_port);

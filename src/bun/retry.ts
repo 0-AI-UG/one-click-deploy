@@ -1,4 +1,4 @@
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [retry:${context}]`, ...args);
 }
 

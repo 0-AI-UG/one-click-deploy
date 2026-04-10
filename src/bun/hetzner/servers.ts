@@ -1,8 +1,22 @@
 import { hetznerApi } from "./api.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
+
+type FirewallRule = {
+  direction: string;
+  protocol: string;
+  port?: string;
+  source_ips?: string[];
+  destination_ips?: string[];
+  description?: string;
+};
+
+type HetznerFirewall = { id: number; rules?: FirewallRule[] };
+type HetznerServer = { id: number; status: string; public_net: { ipv4: { ip: string }; ipv6: { ip: string } }; name: string };
+type WithFirewall = { firewall: HetznerFirewall };
+type WithServer = { server: HetznerServer };
 
 // --- Firewall ---
 
@@ -14,11 +28,11 @@ export async function addLBFirewallRule(
   lbIpv4: string
 ): Promise<void> {
   log("firewall", `Adding LB firewall rule: port=${port} from=${lbIpv4}`);
-  const fw = await hetznerApi(`/firewalls/${firewallId}`);
-  const existingRules = fw.firewall.rules || [];
+  const fwData = await hetznerApi(`/firewalls/${firewallId}`) as unknown as WithFirewall;
+  const existingRules = fwData.firewall.rules ?? [];
 
   // Check if rule already exists
-  const exists = existingRules.some((r: any) =>
+  const exists = existingRules.some((r) =>
     r.direction === "in" && r.protocol === "tcp" && r.port === String(port) &&
     r.source_ips?.includes(`${lbIpv4}/32`)
   );
@@ -28,7 +42,7 @@ export async function addLBFirewallRule(
   }
 
   const newRules = [
-    ...existingRules.map((r: any) => ({
+    ...existingRules.map((r) => ({
       direction: r.direction,
       protocol: r.protocol,
       port: r.port,
@@ -58,14 +72,14 @@ export async function removeLBFirewallRule(
   lbIpv4: string
 ): Promise<void> {
   log("firewall", `Removing LB firewall rule: port=${port} from=${lbIpv4}`);
-  const fw = await hetznerApi(`/firewalls/${firewallId}`);
-  const existingRules = fw.firewall.rules || [];
+  const fwData2 = await hetznerApi(`/firewalls/${firewallId}`) as unknown as WithFirewall;
+  const existingRules = fwData2.firewall.rules ?? [];
   const filteredRules = existingRules
-    .filter((r: any) => !(
+    .filter((r) => !(
       r.direction === "in" && r.protocol === "tcp" && r.port === String(port) &&
       r.source_ips?.includes(`${lbIpv4}/32`)
     ))
-    .map((r: any) => ({
+    .map((r) => ({
       direction: r.direction,
       protocol: r.protocol,
       port: r.port,
@@ -83,16 +97,17 @@ export async function removeLBFirewallRule(
 
 export async function ensureFirewall(): Promise<number> {
   // Check if our firewall already exists
-  const list = await hetznerApi(`/firewalls?name=${FIREWALL_NAME}`);
-  if (list.firewalls.length > 0) {
-    const fw = list.firewalls[0];
+  const list = await hetznerApi(`/firewalls?name=${FIREWALL_NAME}`) as unknown as { firewalls: HetznerFirewall[] };
+  const firewalls = list.firewalls;
+  if (firewalls.length > 0) {
+    const fw = firewalls[0];
     log("firewall", `Using existing firewall: id=${fw.id}`);
 
     // Verify required base rules exist (may have been wiped by a bug)
-    const rules: any[] = fw.rules || [];
-    const hasSSH = rules.some((r: any) => r.direction === "in" && r.protocol === "tcp" && r.port === "22");
-    const hasHTTP = rules.some((r: any) => r.direction === "in" && r.protocol === "tcp" && r.port === "80");
-    const hasHTTPS = rules.some((r: any) => r.direction === "in" && r.protocol === "tcp" && r.port === "443");
+    const rules: FirewallRule[] = fw.rules ?? [];
+    const hasSSH = rules.some((r) => r.direction === "in" && r.protocol === "tcp" && r.port === "22");
+    const hasHTTP = rules.some((r) => r.direction === "in" && r.protocol === "tcp" && r.port === "80");
+    const hasHTTPS = rules.some((r) => r.direction === "in" && r.protocol === "tcp" && r.port === "443");
 
     if (!hasSSH || !hasHTTP || !hasHTTPS) {
       log("firewall", `Repairing missing base rules (SSH=${hasSSH}, HTTP=${hasHTTP}, HTTPS=${hasHTTPS})`);
@@ -104,9 +119,9 @@ export async function ensureFirewall(): Promise<number> {
       ];
       // Merge: keep existing non-base rules, add missing base rules
       const existingExtra = rules
-        .filter((r: any) => !(r.direction === "in" && r.protocol === "tcp" && ["22", "80", "443"].includes(r.port)) &&
-                            !(r.direction === "in" && r.protocol === "icmp"))
-        .map((r: any) => ({ direction: r.direction, protocol: r.protocol, port: r.port, source_ips: r.source_ips, destination_ips: r.destination_ips, description: r.description }));
+        .filter((r) => !(r.direction === "in" && r.protocol === "tcp" && r.port !== undefined && ["22", "80", "443"].includes(r.port)) &&
+                       !(r.direction === "in" && r.protocol === "icmp"))
+        .map((r) => ({ direction: r.direction, protocol: r.protocol, port: r.port, source_ips: r.source_ips, destination_ips: r.destination_ips, description: r.description }));
       await hetznerApi(`/firewalls/${fw.id}/actions/set_rules`, {
         method: "POST",
         body: JSON.stringify({ rules: [...baseRules, ...existingExtra] }),
@@ -119,7 +134,7 @@ export async function ensureFirewall(): Promise<number> {
 
   // Create firewall with SSH, HTTP, HTTPS inbound rules
   log("firewall", "Creating Hetzner Cloud Firewall...");
-  const data = await hetznerApi("/firewalls", {
+  const fwCreateData = await hetznerApi("/firewalls", {
     method: "POST",
     body: JSON.stringify({
       name: FIREWALL_NAME,
@@ -154,9 +169,9 @@ export async function ensureFirewall(): Promise<number> {
         },
       ],
     }),
-  });
-  log("firewall", `Firewall created: id=${data.firewall.id}`);
-  return data.firewall.id;
+  }) as unknown as WithFirewall;
+  log("firewall", `Firewall created: id=${fwCreateData.firewall.id}`);
+  return fwCreateData.firewall.id;
 }
 
 // --- Cloud-Init ---
@@ -280,7 +295,7 @@ export async function createServer(opts: {
   location: string;
   ssh_key_name: string;
   firewall_id: number;
-}) {
+}): Promise<HetznerServer> {
   const data = await hetznerApi("/servers", {
     method: "POST",
     body: JSON.stringify({
@@ -293,12 +308,12 @@ export async function createServer(opts: {
       labels: { managed_by: "one-click-deploy" },
       user_data: cloudInitScript(),
     }),
-  });
+  }) as unknown as WithServer;
   return data.server;
 }
 
-export async function getHetznerServer(serverId: string) {
-  const data = await hetznerApi(`/servers/${serverId}`);
+export async function getHetznerServer(serverId: string): Promise<HetznerServer> {
+  const data = await hetznerApi(`/servers/${serverId}`) as unknown as WithServer;
   return data.server;
 }
 
@@ -328,9 +343,9 @@ export async function deleteHetznerServer(serverId: string) {
   await hetznerApi(`/servers/${serverId}`, { method: "DELETE" });
 }
 
-export async function listHetznerServers() {
+export async function listHetznerServers(): Promise<HetznerServer[]> {
   const data = await hetznerApi(
     "/servers?label_selector=managed_by%3Done-click-deploy&per_page=50"
-  );
+  ) as unknown as { servers: HetznerServer[] };
   return data.servers;
 }

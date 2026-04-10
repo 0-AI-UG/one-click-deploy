@@ -321,7 +321,8 @@ export async function deploy(
       if (state.hetznerServerId) {
         hetznerServerId = parseInt(state.hetznerServerId, 10);
       } else {
-        const existingServer = db.getServer(serverId!)!;
+        const existingServer = db.getServer(serverId!);
+        if (!existingServer) throw new Error(`Server ${serverId} not found`);
         hetznerServerId = parseInt(existingServer.hetzner_id, 10);
       }
 

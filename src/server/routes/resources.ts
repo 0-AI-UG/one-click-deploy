@@ -17,22 +17,22 @@ export async function handleGetResources(request: Request): Promise<Response> {
     let volumePerGbMonth: number | null = null;
     let currency = "EUR";
     try {
-      const pricing = await hetzner.hetznerApi("/pricing");
-      const p = pricing.pricing || {};
-      currency = p.currency || "EUR";
-      for (const st of p.server_types || []) {
+      const pricing = await hetzner.hetznerApi("/pricing") as Record<string, unknown>;
+      const p = (pricing.pricing as Record<string, unknown>) || {};
+      currency = (p.currency as string) || "EUR";
+      for (const st of (p.server_types as any[] || [])) {
         for (const pr of st.prices || []) {
           const eur = parseFloat(pr.price_monthly?.gross ?? "0");
           if (!isNaN(eur)) serverPriceMap.set(`${st.name}|${pr.location}`, eur);
         }
       }
-      for (const lt of p.load_balancer_types || []) {
+      for (const lt of (p.load_balancer_types as any[] || [])) {
         for (const pr of lt.prices || []) {
           const eur = parseFloat(pr.price_monthly?.gross ?? "0");
           if (!isNaN(eur)) lbPriceMap.set(`${lt.name}|${pr.location}`, eur);
         }
       }
-      const v = parseFloat(p.volume?.price_per_gb_month?.gross ?? "");
+      const v = parseFloat((p.volume as any)?.price_per_gb_month?.gross ?? "");
       if (!isNaN(v)) volumePerGbMonth = v;
     } catch {}
 
@@ -43,8 +43,8 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
     let dbServers = db.getServers();
     try {
-      const remote = await hetzner.hetznerApiPublic("/servers?label_selector=managed_by%3Done-click-deploy&per_page=50");
-      for (const rs of remote.servers || []) {
+      const remote = await hetzner.hetznerApiPublic("/servers?label_selector=managed_by%3Done-click-deploy&per_page=50") as Record<string, unknown>;
+      for (const rs of (remote.servers as any[]) || []) {
         const hetznerId = String(rs.id);
         if (dbServers.find((s: any) => s.hetzner_id === hetznerId)) continue;
         db.insertServer({
@@ -73,8 +73,8 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
     let load_balancers: any[] = [];
     try {
-      const lbs = await hetzner.hetznerApiPublic("/load_balancers?label_selector=managed_by%3Done-click-deploy&per_page=50");
-      load_balancers = (lbs.load_balancers || []).map((lb: any) => {
+      const lbs = await hetzner.hetznerApiPublic("/load_balancers?label_selector=managed_by%3Done-click-deploy&per_page=50") as Record<string, unknown>;
+      load_balancers = ((lbs.load_balancers as any[]) || []).map((lb: any) => {
         const type = lb.load_balancer_type?.name || "lb11";
         const location = lb.location?.name || "";
         return {
@@ -92,8 +92,8 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
     let volumes: any[] = [];
     try {
-      const vols = await hetzner.hetznerApiPublic("/volumes?label_selector=managed_by%3Done-click-deploy&per_page=50");
-      volumes = (vols.volumes || []).map((v: any) => {
+      const vols = await hetzner.hetznerApiPublic("/volumes?label_selector=managed_by%3Done-click-deploy&per_page=50") as Record<string, unknown>;
+      volumes = ((vols.volumes as any[]) || []).map((v: any) => {
         const serverName = v.server ? dbServers.find((s: any) => s.hetzner_id === String(v.server))?.name || `server-${v.server}` : "";
         const allApps = db.getApps();
         const app = allApps.find((a: any) => a.volume_id === String(v.id));

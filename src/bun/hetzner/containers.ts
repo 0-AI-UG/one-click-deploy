@@ -2,9 +2,41 @@ import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { sshExec, getSshKeyPath } from "./ssh.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
+
+type CaddyHandler = {
+  handler: string;
+  upstreams?: Array<{ dial: string }>;
+  status_code?: string;
+  headers?: Record<string, string[]>;
+  body?: string;
+};
+
+type CaddyRoute = {
+  "@id": string;
+  match: Array<{ host: string[] }>;
+  handle: CaddyHandler[];
+  terminal: boolean;
+};
+
+type CaddyTlsPolicy = {
+  automation?: {
+    policies: Array<{
+      subjects: string[];
+      issuers: Array<{ module: string }>;
+    }>;
+  };
+};
+
+type ComposeOverrideServices = {
+  [service: string]: {
+    ports?: string[];
+    volumes?: string[];
+    environment?: Record<string, string>;
+  };
+};
 
 // --- Image Transfer ---
 
@@ -105,12 +137,12 @@ export async function deployCaddySite(
 
   // Build the Caddy JSON config for this route
   const routeId = `ocd-${domain.replace(/\./g, "-")}`;
-  const handler: any = {
+  const handler: CaddyHandler = {
     handler: "reverse_proxy",
     upstreams: [{ dial: `localhost:${containerPort}` }],
   };
 
-  const route: any = {
+  const route: CaddyRoute = {
     "@id": routeId,
     match: [{ host: [domain] }],
     handle: [
@@ -125,13 +157,13 @@ export async function deployCaddySite(
           },
           deferred: true,
         },
-      },
+      } as CaddyHandler,
       handler,
     ],
     terminal: true,
   };
 
-  const tlsPolicy: any = internalTls
+  const tlsPolicy: CaddyTlsPolicy = internalTls
     ? { automation: { policies: [{ subjects: [domain], issuers: [{ module: "internal" }] }] } }
     : {};
 
@@ -256,7 +288,7 @@ a{color:#888}
 </body>
 </html>`;
 
-  const route: any = {
+  const route: CaddyRoute = {
     "@id": routeId,
     match: [{ host: [domain] }],
     handle: [
@@ -274,7 +306,7 @@ a{color:#888}
     terminal: true,
   };
 
-  const tlsPolicy: any = internalTls
+  const tlsPolicy: CaddyTlsPolicy = internalTls
     ? { automation: { policies: [{ subjects: [domain], issuers: [{ module: "internal" }] }] } }
     : {};
 
@@ -722,7 +754,7 @@ export async function cloneAndComposeBuild(
 
   // Generate override file for port mapping and volume
   emit("Generating compose override...");
-  const overrideServices: any = {
+  const overrideServices: ComposeOverrideServices = {
     [opts.webService]: {
       ports: [`127.0.0.1:${opts.hostPort}:${opts.port}`],
     },

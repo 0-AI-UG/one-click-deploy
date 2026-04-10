@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { SSH_DIR } from "../paths.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
@@ -39,7 +39,8 @@ export async function ensureSshKey(name: string) {
   log("ssh-key", `Ensuring SSH key "${name}" exists...`);
   const { publicKey, privateKeyPath } = await getOrCreateLocalKeyPair();
 
-  const existing = await hetznerApi(`/ssh_keys?name=${name}`);
+  type SshKey = { id: number; name: string; public_key: string; fingerprint: string };
+  const existing = await hetznerApi(`/ssh_keys?name=${name}`) as unknown as { ssh_keys: SshKey[] };
   if (existing.ssh_keys.length > 0) {
     const remote = existing.ssh_keys[0];
     const remoteFingerprint = remote.public_key?.trim().split(/\s+/).slice(0, 2).join(" ");
@@ -58,7 +59,7 @@ export async function ensureSshKey(name: string) {
   const data = await hetznerApi("/ssh_keys", {
     method: "POST",
     body: JSON.stringify({ name, public_key: publicKey }),
-  });
+  }) as unknown as { ssh_key: SshKey };
   log("ssh-key", `SSH key uploaded: id=${data.ssh_key.id}`);
   return { ...data.ssh_key, privateKeyPath };
 }

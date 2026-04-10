@@ -57,8 +57,8 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
 
-    const volInfo = await hetzner.hetznerApi(`/volumes/${volume_id}`);
-    const volLocation = volInfo.volume?.location?.name;
+    const volInfo = await hetzner.hetznerApi(`/volumes/${volume_id}`) as Record<string, unknown>;
+    const volLocation = (volInfo.volume as any)?.location?.name;
     if (volLocation && volLocation !== server.location) {
       return Response.json({ ok: false, error: `Cannot attach: volume is in ${volLocation} but server is in ${server.location}` }, { headers: corsHeaders });
     }

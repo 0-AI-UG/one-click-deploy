@@ -1,9 +1,15 @@
 import { hetznerApi } from "./api.ts";
 import { pollAction } from "./actions.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
+
+type HetznerAction = { id: number; status: string; command: string; started: string };
+type HetznerVolume = { id: number; linux_device: string; server: number | null };
+type WithAction = { action?: HetznerAction };
+type WithVolume = { volume: HetznerVolume };
+type WithActions = { actions?: HetznerAction[] };
 
 export async function createVolume(opts: {
   name: string;
@@ -22,7 +28,7 @@ export async function createVolume(opts: {
       automount: true,
       labels: { managed_by: "one-click-deploy" },
     }),
-  });
+  }) as unknown as WithAction & WithVolume;
   if (data.action?.id) {
     await pollAction(data.action.id);
   }
@@ -34,13 +40,13 @@ export async function detachVolume(volumeId: string) {
   log("volume", `Detaching volume ${volumeId}`);
 
   // Check if volume is actually attached before trying to detach
-  const volume = await hetznerApi(`/volumes/${volumeId}`);
-  if (!volume.volume?.server) {
+  const volumeData = await hetznerApi(`/volumes/${volumeId}`) as unknown as WithVolume;
+  if (!volumeData.volume?.server) {
     log("volume", `Volume ${volumeId} is not attached to any server, skipping detach`);
     return;
   }
 
-  const data = await hetznerApi(`/volumes/${volumeId}/actions/detach`, { method: "POST", body: "{}" });
+  const data = await hetznerApi(`/volumes/${volumeId}/actions/detach`, { method: "POST", body: "{}" }) as unknown as WithAction;
   if (data.action?.id) {
     await pollAction(data.action.id);
   }
@@ -51,9 +57,9 @@ export async function attachVolume(volumeId: string, serverId: number) {
   log("volume", `Attaching volume ${volumeId} to server ${serverId}`);
 
   // Check for stuck running actions on this volume
-  const actions = await hetznerApi(`/volumes/${volumeId}/actions?sort=id:desc&per_page=5`);
-  const running = actions.actions?.filter((a: any) => a.status === "running");
-  if (running?.length > 0) {
+  const actionsData = await hetznerApi(`/volumes/${volumeId}/actions?sort=id:desc&per_page=5`) as unknown as WithActions;
+  const running = actionsData.actions?.filter((a) => a.status === "running");
+  if (running && running.length > 0) {
     log("volume", `Found ${running.length} running action(s) on volume ${volumeId}, waiting for them to finish`);
     for (const a of running) {
       log("volume", `Waiting for action ${a.id} (${a.command}) started=${a.started}`);
@@ -64,7 +70,7 @@ export async function attachVolume(volumeId: string, serverId: number) {
   const data = await hetznerApi(`/volumes/${volumeId}/actions/attach`, {
     method: "POST",
     body: JSON.stringify({ server: serverId, automount: true }),
-  });
+  }) as unknown as WithAction;
   if (data.action?.id) {
     await pollAction(data.action.id);
   }
@@ -76,7 +82,7 @@ export async function resizeVolume(volumeId: string, size: number) {
   const data = await hetznerApi(`/volumes/${volumeId}/actions/resize`, {
     method: "POST",
     body: JSON.stringify({ size }),
-  });
+  }) as unknown as WithAction;
   if (data.action?.id) {
     await pollAction(data.action.id);
   }
@@ -85,11 +91,11 @@ export async function resizeVolume(volumeId: string, size: number) {
 
 export async function deleteVolume(volumeId: string) {
   // Try to detach first (required by Hetzner before delete)
-  const volume = await hetznerApi(`/volumes/${volumeId}`);
-  if (volume.volume?.server) {
-    log("volume", `Volume ${volumeId} is attached to server ${volume.volume.server}, detaching first`);
+  const volumeData = await hetznerApi(`/volumes/${volumeId}`) as unknown as WithVolume;
+  if (volumeData.volume?.server) {
+    log("volume", `Volume ${volumeId} is attached to server ${volumeData.volume.server}, detaching first`);
     try {
-      const data = await hetznerApi(`/volumes/${volumeId}/actions/detach`, { method: "POST", body: "{}" });
+      const data = await hetznerApi(`/volumes/${volumeId}/actions/detach`, { method: "POST", body: "{}" }) as unknown as WithAction;
       if (data.action?.id) {
         await pollAction(data.action.id, { timeoutMs: 30000 });
       }
