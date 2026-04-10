@@ -72,7 +72,7 @@ export function TerminalPage({ kind, id }: Props) {
           // Send initial size
           try {
             ws!.send(JSON.stringify({ type: "resize", cols: term!.cols, rows: term!.rows }));
-          } catch {}
+          } catch { /* ws may not be open yet */ }
         };
         ws.onmessage = (ev) => {
           if (ev.data instanceof ArrayBuffer) {
@@ -94,7 +94,7 @@ export function TerminalPage({ kind, id }: Props) {
             if (ws && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "resize", cols: term!.cols, rows: term!.rows }));
             }
-          } catch {}
+          } catch { /* terminal may be disposed during resize */ }
         };
         window.addEventListener("resize", onResize);
 
@@ -107,8 +107,8 @@ export function TerminalPage({ kind, id }: Props) {
 
     return () => {
       disposed = true;
-      try { ws?.close(); } catch {}
-      try { term?.dispose(); } catch {}
+      try { ws?.close(); } catch { /* cleanup, may already be closed */ }
+      try { term?.dispose(); } catch { /* cleanup, may already be disposed */ }
     };
   }, [kind, id, token]);
 

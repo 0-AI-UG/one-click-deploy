@@ -13,7 +13,7 @@ const POLL_INTERVAL = 30_000; // 30s
 
 function appendLog(msg) {
   const line = new Date().toISOString() + " " + msg + "\\n";
-  try { require("fs").appendFileSync(LOG_PATH, line); } catch {}
+  try { require("fs").appendFileSync(LOG_PATH, line); } catch { /* log file write failed — non-fatal, stdout still captures it */ }
   console.log(msg);
 }
 

@@ -39,7 +39,9 @@ function loadFromStorage(): AuthState {
       const parsed = JSON.parse(stored);
       return { token: parsed.token || null, user: parsed.user || null, tempToken: null, twoFactorMethods: null };
     }
-  } catch {}
+  } catch (err) {
+    console.error("Failed to load auth state from storage:", err);
+  }
   return { token: null, user: null, tempToken: null, twoFactorMethods: null };
 }
 

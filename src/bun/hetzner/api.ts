@@ -26,7 +26,7 @@ function friendlyHetznerError(status: number, body: string, method: string, apiP
     if (code === "server_limit_exceeded") return "Server limit reached — delete unused servers or request a limit increase from Hetzner";
     if (code === "placement_error") return "No capacity available in this location — try a different datacenter";
     if (msg) return msg;
-  } catch {}
+  } catch { /* body is not JSON — fall through to status-based fallbacks */ }
   if (status === 401) return "Invalid API token — update it in Settings";
   if (status === 403) return "Access denied — check your API token permissions";
   if (status === 404) return `API route not found (${method} ${apiPath})`;

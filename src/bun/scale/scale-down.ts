@@ -56,7 +56,9 @@ export async function scaleDown(
       if (app.auth_password) {
         try {
           await hetzner.removeAuthProxy(server.ipv4, replica.container_name, hostKey);
-        } catch {}
+        } catch (err) {
+          log("scale", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
+        }
       }
 
       db.deleteReplica(replica.id);
@@ -145,7 +147,9 @@ export async function scaleDown(
               value: record.value,
             });
             db.deleteDnsRecord(record.record_id);
-          } catch {}
+          } catch (err) {
+            log("scale", `Failed to delete old DNS record ${record.record_id}: ${err}`);
+          }
         }
       }
     }
@@ -183,7 +187,9 @@ export async function scaleDown(
                 value: record.value,
               });
               db.deleteDnsRecord(record.record_id);
-            } catch {}
+            } catch (err) {
+              log("scale", `Failed to delete old DNS record ${record.record_id}: ${err}`);
+            }
           }
         }
       }
@@ -201,7 +207,9 @@ export async function scaleDown(
         if (destPort) {
           await hetzner.removeLBFirewallRule(firewallId, destPort, lb.public_net.ipv4.ip);
         }
-      } catch {}
+      } catch (err) {
+        log("scale", `Failed to remove LB firewall rule: ${err}`);
+      }
     }
     db.updateAppScaling(app.id, { hetzner_lb_id: "" });
 

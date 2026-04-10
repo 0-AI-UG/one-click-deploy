@@ -65,7 +65,9 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, scalingEvent
             try {
               setReplicas(await get(`/api/apps/${appId}/metrics`));
               showToast("Metrics refreshed", "info");
-            } catch {}
+            } catch (err) {
+              console.error("Failed to refresh metrics:", err);
+            }
           }}><RefreshCw size={12} /> Refresh Metrics</Btn>
         </div>
         {replicas.length === 0 ? (

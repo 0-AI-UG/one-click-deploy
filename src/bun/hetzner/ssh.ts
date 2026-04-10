@@ -140,7 +140,7 @@ export async function sshExec(
     return { stdout, stderr, exitCode };
   } finally {
     if (tmpKnownHostsPath) {
-      try { unlinkSync(tmpKnownHostsPath); } catch {}
+      try { unlinkSync(tmpKnownHostsPath); } catch { /* cleanup, file may already be gone */ }
     }
   }
 }
@@ -194,6 +194,6 @@ export async function waitForServer(
   try {
     const diag = await sshExec(ip, "cat /var/log/cloud-init-deploy.log | tail -30 2>/dev/null; echo '---'; cloud-init status 2>/dev/null");
     log("wait", `Timeout diagnostics:\n${diag.stdout}\n${diag.stderr}`);
-  } catch {}
+  } catch { /* best-effort diagnostics — SSH may not be available yet */ }
   throw new Error("Server provisioning timed out — cloud-init may still be running. Check server logs and try again.");
 }

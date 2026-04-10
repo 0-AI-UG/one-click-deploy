@@ -80,12 +80,12 @@ export function spawnSshPty(opts: {
         if (done) break;
         if (value) opts.onStdout(value);
       }
-    } catch {}
+    } catch { /* stream closed, process exited */ }
   })();
 
   const exited = proc.exited.then((code) => {
     log("exit", `${opts.ip} code=${code}`);
-    if (tmpKnownHostsPath) { try { unlinkSync(tmpKnownHostsPath); } catch {} }
+    if (tmpKnownHostsPath) { try { unlinkSync(tmpKnownHostsPath); } catch { /* cleanup, file may already be gone */ } }
     opts.onExit(code);
     return code;
   });
@@ -103,7 +103,7 @@ export function spawnSshPty(opts: {
       }
     },
     kill() {
-      try { proc.kill(); } catch {}
+      try { proc.kill(); } catch { /* cleanup, process may already be dead */ }
     },
     exited,
   };

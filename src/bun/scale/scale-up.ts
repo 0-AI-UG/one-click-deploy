@@ -95,7 +95,9 @@ export async function scaleUp(
             value: record.value,
           });
           db.deleteDnsRecord(record.record_id);
-        } catch {}
+        } catch (err) {
+          log("scale", `Failed to delete DNS record during rollback: ${err}`);
+        }
       }
     }
 
@@ -250,9 +252,11 @@ export async function rollbackScaleUp(
       const hostKey = server.ssh_host_key || undefined;
       try {
         await hetzner.sshExec(server.ipv4, `su - deploy -c "docker rm -f ${replica.container_name} 2>/dev/null || true"`, hostKey);
-      } catch {}
+      } catch (err) {
+        log("scale", `Rollback: failed to remove container ${replica.container_name}: ${err}`);
+      }
       if (app.auth_password) {
-        try { await hetzner.removeAuthProxy(server.ipv4, replica.container_name, hostKey); } catch {}
+        try { await hetzner.removeAuthProxy(server.ipv4, replica.container_name, hostKey); } catch { /* cleanup, container may already be gone */ }
       }
     }
     db.deleteReplica(replica.id);

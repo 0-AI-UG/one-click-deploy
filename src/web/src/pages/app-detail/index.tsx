@@ -68,7 +68,9 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const loadDeployments = async () => {
     try {
       setDeployments(await get(`/api/apps/${appId}/deployments`));
-    } catch {}
+    } catch (err) {
+      console.error("Failed to load deployments:", err);
+    }
   };
 
   const loadReplicas = async () => {
@@ -83,7 +85,9 @@ export function AppDetailPage({ appId }: { appId: number }) {
       setMetricsHistory(hist.samples || []);
       setScalingEvents(events || []);
       setAllServers(servers || []);
-    } catch {}
+    } catch (err) {
+      console.error("Failed to load replicas/metrics:", err);
+    }
   };
 
   useEffect(() => {

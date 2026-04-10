@@ -50,7 +50,9 @@ export async function rollingRedeploy(
       // Remove from LB
       try {
         await hetzner.removeLBTarget(lbId, server.hetzner_id);
-      } catch {}
+      } catch (err) {
+        log("scale", `Failed to remove LB target during rolling redeploy: ${err}`);
+      }
 
       // Drain
       emit("scale", `Draining ${replica.container_name}...`);
