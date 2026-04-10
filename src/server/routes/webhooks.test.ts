@@ -49,7 +49,7 @@ function makeApp(secret: string, branch = "main") {
 
 function setupPanel(secret: string) {
   // Wipe any prior panel + server rows so each test starts clean.
-  try { (db as any).deletePanel?.(); } catch {}
+  try { (db as any).deletePanel?.(); } catch { /* deletePanel may not exist in all DB versions */ }
   // Insert a fresh server + panel pointing at it.
   const srv = db.insertServer({
     name: `panel-host-${Date.now()}`,

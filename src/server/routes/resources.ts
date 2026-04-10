@@ -34,7 +34,9 @@ export async function handleGetResources(request: Request): Promise<Response> {
       }
       const v = parseFloat(p.volume?.price_per_gb_month?.gross ?? "");
       if (!isNaN(v)) volumePerGbMonth = v;
-    } catch {}
+    } catch (e) {
+      console.error("resources: failed to fetch Hetzner pricing:", e);
+    }
 
     const priceForServer = (type: string, location: string): number | null =>
       serverPriceMap.get(`${type}|${location}`) ?? null;
@@ -58,7 +60,9 @@ export async function handleGetResources(request: Request): Promise<Response> {
         });
       }
       dbServers = db.getServers();
-    } catch {}
+    } catch (e) {
+      console.error("resources: failed to sync servers from Hetzner:", e);
+    }
     const servers = dbServers.map((s) => ({
       id: s.id,
       name: s.name,
@@ -113,7 +117,9 @@ export async function handleGetResources(request: Request): Promise<Response> {
           monthly_eur: priceForLb(type, location),
         };
       });
-    } catch {}
+    } catch (e) {
+      console.error("resources: failed to fetch load balancers from Hetzner:", e);
+    }
 
     let volumes: VolumeResource[] = [];
     try {
@@ -134,7 +140,9 @@ export async function handleGetResources(request: Request): Promise<Response> {
           monthly_eur: volumePerGbMonth != null ? volumePerGbMonth * (v.size as number) : null,
         };
       });
-    } catch {}
+    } catch (e) {
+      console.error("resources: failed to fetch volumes from Hetzner:", e);
+    }
 
     interface ResourceWithCost { monthly_eur: number | null }
     const sum = (arr: ResourceWithCost[]) =>

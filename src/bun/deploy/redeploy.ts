@@ -414,6 +414,7 @@ export function enqueueWebhookRedeploy(
   runner: (appId: number, gitSha: string) => Promise<void> = webhookRedeployApp,
 ): Promise<void> {
   const prev = webhookQueues.get(appId) ?? Promise.resolve();
+  // Swallow the previous job's error so the queue keeps running regardless of prior failures.
   const next = prev.catch(() => {}).then(() => runner(appId, gitSha));
   webhookQueues.set(
     appId,
@@ -474,7 +475,9 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
       if (multi) {
         try {
           await hetzner.removeLBTarget(lbId!, server.hetzner_id);
-        } catch {}
+        } catch (e) {
+          append(`[webhook] Warning: failed to remove LB target for ${replica.container_name}: ${e}`);
+        }
         append(`[webhook] Drained ${replica.container_name}, waiting 10s`);
         await Bun.sleep(10_000);
       }
@@ -582,7 +585,9 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
           );
           const sha = r.stdout.trim();
           if (sha && sha !== "unknown") db.updateDeploymentGitCommit(depId, sha);
-        } catch {}
+        } catch (e) {
+          append(`[webhook] Warning: failed to capture git commit hash: ${e}`);
+        }
       }
     }
 

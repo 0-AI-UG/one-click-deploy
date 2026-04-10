@@ -147,11 +147,11 @@ export const terminalWsHandlers = {
       hostKey,
       remoteCommand,
       onStdout: (chunk) => {
-        try { ws.send(chunk); } catch {}
+        try { ws.send(chunk); } catch { /* ws may be closed */ }
       },
       onExit: (code) => {
-        try { ws.send(`\r\n[session ended, exit ${code}]\r\n`); } catch {}
-        try { ws.close(); } catch {}
+        try { ws.send(`\r\n[session ended, exit ${code}]\r\n`); } catch { /* ws may be closed */ }
+        try { ws.close(); } catch { /* ws may already be closed */ }
       },
     });
     data.pty = pty;
@@ -173,7 +173,7 @@ export const terminalWsHandlers = {
   close(ws: Bun.ServerWebSocket<TerminalWsData>) {
     const data = ws.data as TerminalWsData;
     if (data.pty) {
-      try { data.pty.kill(); } catch {}
+      try { data.pty.kill(); } catch { /* process may already be dead */ }
     }
     const n = (sessionsByUser.get(data.userId) ?? 1) - 1;
     if (n <= 0) sessionsByUser.delete(data.userId);

@@ -317,7 +317,9 @@ export async function handleLinkService(request: Request, serviceId: number, app
           `su - deploy -c "docker network connect ocd-net ${replica.container_name} 2>/dev/null || true"`,
           hostKey
         );
-      } catch {}
+      } catch (e) {
+        console.error(`services: failed to connect ${replica.container_name} to ocd-net:`, e);
+      }
     }
 
     return Response.json({ ok: true }, { headers: corsHeaders });

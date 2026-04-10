@@ -26,7 +26,7 @@ function log(context: string, ...args: any[]) {
 
 async function buildSnapshot(): Promise<string> {
   const snapshotPath = path.join(tmpdir(), `ocd-handoff-${Date.now()}.sqlite`);
-  try { unlinkSync(snapshotPath); } catch {}
+  try { unlinkSync(snapshotPath); } catch { /* file may not exist yet */ }
 
   log("snapshot", "Serializing live DB...");
   const bytes = localDb.serialize();
@@ -115,6 +115,6 @@ export async function handoffDbToVolume(opts: {
     }
     log("done", `Handoff complete at ${opts.hostMountPath}`);
   } finally {
-    try { unlinkSync(snapshotPath); } catch {}
+    try { unlinkSync(snapshotPath); } catch { /* file may already be gone */ }
   }
 }

@@ -55,7 +55,9 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
         if (app.auth_password) {
           try {
             await hetzner.removeAuthProxy(replicaServer.ipv4, replica.container_name, hostKey);
-          } catch {}
+          } catch (e) {
+            log("destroyApp", `Failed to remove auth proxy for ${replica.container_name}: ${e}`);
+          }
         }
         // Remove Caddy site + app dir from each server hosting a replica
         try {
