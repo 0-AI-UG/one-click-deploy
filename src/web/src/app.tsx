@@ -12,7 +12,7 @@ import { TwoFactorSetupPage } from "./pages/two-factor-setup.tsx";
 import { PasswordResetPage } from "./pages/password-reset.tsx";
 import { SetupPage } from "./pages/setup.tsx";
 import { DashboardPage } from "./pages/dashboard.tsx";
-import { DeployPage } from "./pages/deploy.tsx";
+import { DeployPage } from "./pages/deploy/index.tsx";
 import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
