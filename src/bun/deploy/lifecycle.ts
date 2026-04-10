@@ -249,7 +249,7 @@ export async function recreateAppContainer(
     if (app.deploy_mode === "compose") {
       // Rewrite the compose override to update volume mount
       const appDir = `/home/deploy/apps/${app.name}`;
-      const overrideServices: any = {
+      const overrideServices: Record<string, { ports: string[]; volumes?: string[] }> = {
         [app.compose_web_service]: {
           ports: [`127.0.0.1:${hostPort}:${app.container_port}`],
         },
