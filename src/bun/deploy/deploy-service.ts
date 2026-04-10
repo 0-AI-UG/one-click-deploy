@@ -1,6 +1,10 @@
 import type { Server } from "../../shared/rpc.ts";
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider } from "../providers/index.ts";
+import {
+  sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
+  pullAndRunService, serviceHealthCheck,
+} from "../remote/index.ts";
 import { getTokens } from "../secret-store.ts";
 import { createMasker } from "../mask.ts";
 import {
@@ -25,7 +29,7 @@ export type ServiceDeployRequest = {
 };
 
 type DeployState = {
-  hetznerServerId?: string;
+  providerServerId?: string;
   dbServerId?: number;
   serviceId?: number;
   instanceId?: number;
@@ -38,7 +42,7 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
 
   if (state.containerName && serverIp) {
     try {
-      await hetzner.sshExec(
+      await sshExec(
         serverIp,
         `su - deploy -c "docker rm -f ${state.containerName} 2>/dev/null || true"`,
         hostKey
@@ -51,7 +55,8 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
 
   if (state.volumeId) {
     try {
-      await hetzner.deleteVolume(state.volumeId);
+      const compute = getComputeProvider();
+      await compute.volumes?.delete(state.volumeId);
       log("rollback", `Deleted volume ${state.volumeId}`);
     } catch (err) {
       log("rollback", `Failed to delete volume: ${err}`);
@@ -144,11 +149,13 @@ export async function deployService(
       log("server", `Reusing existing ready server: ${existingReady.name} ip=${serverIp}`);
       onProgress("server", `Using server ${existingReady.name} (${serverIp})`);
     } else {
-      onProgress("server", "Creating new Hetzner server...");
+      const compute = getComputeProvider();
+      onProgress("server", `Creating new ${compute.name} server...`);
 
+      const { publicKey } = await getOrCreateLocalKeyPair();
       const [sshKey, firewallId] = await Promise.all([
-        hetzner.ensureSshKey("one-click-deploy"),
-        hetzner.ensureFirewall(),
+        compute.ensureSshKey("one-click-deploy", publicKey),
+        compute.ensureFirewall(),
       ]);
       onProgress("server", "SSH key + firewall ready");
 
@@ -160,7 +167,8 @@ export async function deployService(
 
       const dbServer = db.insertServer({
         name: serverName,
-        hetzner_id: "",
+        provider_id: "",
+        provider: compute.id,
         ipv4: "",
         ipv6: "",
         type: serverType,
@@ -170,35 +178,36 @@ export async function deployService(
       serverId = dbServer.id;
       state.dbServerId = dbServer.id;
 
-      const hServer = await hetzner.createServer({
+      const providerServer = await compute.createServer({
         name: serverName,
-        server_type: serverType,
+        serverType,
         location,
-        ssh_key_name: sshKey.name,
-        firewall_id: firewallId,
+        sshKeyName: sshKey.name,
+        firewallId,
+        userData: "",
       });
-      state.hetznerServerId = String(hServer.id);
+      state.providerServerId = providerServer.providerId;
 
-      serverIp = hServer.public_net.ipv4.ip;
+      serverIp = providerServer.ipv4;
       db.updateServer(dbServer.id, {
-        hetzner_id: String(hServer.id),
+        provider_id: providerServer.providerId,
         ipv4: serverIp,
-        ipv6: hServer.public_net.ipv6.ip || "",
+        ipv6: providerServer.ipv6 || "",
         status: "provisioning",
       });
       onProgress("server", `Server created: ${serverName} (${serverIp})`);
 
-      await hetzner.waitForServerRunning(hServer.id, (msg) => onProgress("provision", msg));
+      await compute.waitForRunning(providerServer.providerId, (msg) => onProgress("provision", msg));
 
       onProgress("provision", "Waiting for server to be ready...");
-      await hetzner.waitForServer(serverIp, 30, (msg) => onProgress("provision", msg));
+      await waitForServer(serverIp, 30, (msg) => onProgress("provision", msg));
 
-      const dockerCheck = await hetzner.sshExec(serverIp, "docker --version");
+      const dockerCheck = await sshExec(serverIp, "docker --version");
       if (dockerCheck.exitCode !== 0) {
         throw new Error("Server provisioned but Docker was not installed");
       }
 
-      serverHostKey = await hetzner.captureHostKey(serverIp);
+      serverHostKey = await captureHostKey(serverIp);
       if (serverHostKey) {
         db.updateServerHostKey(dbServer.id, serverHostKey);
       }
@@ -211,24 +220,27 @@ export async function deployService(
     const volumeSize = req.volume_size || catalog.defaultVolumeSize;
     onProgress("volume", `Creating ${volumeSize}GB persistent volume...`);
 
-    let hetznerServerId: number;
-    if (state.hetznerServerId) {
-      hetznerServerId = parseInt(state.hetznerServerId, 10);
+    const compute = getComputeProvider();
+    if (!compute.volumes) throw new Error(`Provider "${compute.name}" does not support managed volumes`);
+
+    let providerServerId: string;
+    if (state.providerServerId) {
+      providerServerId = state.providerServerId;
     } else {
       const srv = db.getServer(serverId);
       if (!srv) throw new Error(`Server ${serverId} not found`);
-      hetznerServerId = parseInt(srv.hetzner_id, 10);
+      providerServerId = srv.provider_id;
     }
 
     const serverLocation = db.getServer(serverId)?.location || "nbg1";
-    const vol = await hetzner.createVolume({
+    const vol = await compute.volumes.create({
       name: `ocd-svc-${req.name}-data`,
-      size: volumeSize,
-      server_id: hetznerServerId,
+      sizeGb: volumeSize,
+      serverId: providerServerId,
       location: serverLocation,
     });
-    state.volumeId = String(vol.id);
-    log("volume", `Volume created: ${vol.id} (${volumeSize}GB)`);
+    state.volumeId = vol.providerId;
+    log("volume", `Volume created: ${vol.providerId} (${volumeSize}GB)`);
     onProgress("volume", `Volume created (${volumeSize}GB)`);
 
     // Wait for volume mount
@@ -267,7 +279,7 @@ export async function deployService(
       role: "primary",
       container_name: containerName,
       host_port: hostPort,
-      volume_id: String(vol.id),
+      volume_id: vol.providerId,
       volume_mount: volumeMount,
     });
     state.instanceId = instance.id;
@@ -281,7 +293,7 @@ export async function deployService(
       ? catalog.replication.primaryExtraCmd
       : undefined;
 
-    await hetzner.pullAndRunService(
+    await pullAndRunService(
       serverIp,
       {
         name: containerName,
@@ -298,7 +310,7 @@ export async function deployService(
 
     // Step 5: Health check
     onProgress("health", "Checking service health...");
-    const health = await hetzner.serviceHealthCheck(
+    const health = await serviceHealthCheck(
       serverIp,
       containerName,
       catalog.healthCmd,

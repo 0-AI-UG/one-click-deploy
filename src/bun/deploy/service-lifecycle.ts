@@ -1,5 +1,6 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { sshExec, restartContainer, serviceHealthCheck, pauseContainer, unpauseContainer, getContainerLogs } from "../remote/index.ts";
+import { getComputeProvider } from "../providers/index.ts";
 import { getCatalogEntry } from "../services/catalog.ts";
 
 type ServiceInstance = {
@@ -56,7 +57,7 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
       if (server) {
         const hostKey = server.ssh_host_key || undefined;
         try {
-          await hetzner.sshExec(
+          await sshExec(
             server.ipv4,
             `su - deploy -c "docker rm -f ${instance.container_name} 2>/dev/null || true"`,
             hostKey
@@ -67,7 +68,7 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
         }
         // Clean up service directory
         try {
-          await hetzner.sshExec(
+          await sshExec(
             server.ipv4,
             `rm -rf /home/deploy/services/${service.name}`,
             hostKey
@@ -80,7 +81,7 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
       // Delete Hetzner volume
       if (instance.volume_id) {
         try {
-          await hetzner.deleteVolume(instance.volume_id);
+          await getComputeProvider().volumes!.delete(instance.volume_id);
           log("destroy", `Deleted volume ${instance.volume_id}`);
         } catch (err) {
           log("destroy", `Failed to delete volume ${instance.volume_id}: ${err}`);
@@ -138,12 +139,12 @@ export async function restartService(serviceId: number): Promise<{ ok: boolean; 
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
-      await hetzner.restartContainer(server.ipv4, instance.container_name, hostKey);
+      await restartContainer(server.ipv4, instance.container_name, hostKey);
 
       const healthCmd = instance.role === "replica" && catalog.replication.replicaHealthCmd
         ? catalog.replication.replicaHealthCmd
         : catalog.healthCmd;
-      const health = await hetzner.serviceHealthCheck(
+      const health = await serviceHealthCheck(
         server.ipv4, instance.container_name, healthCmd, 5, hostKey
       );
       db.updateServiceInstanceStatus(instance.id, health.healthy ? "running" : "unhealthy");
@@ -170,7 +171,7 @@ export async function pauseService(serviceId: number): Promise<{ ok: boolean; er
     for (const instance of instances) {
       const server = db.getServer(instance.server_id);
       if (!server) continue;
-      await hetzner.pauseContainer(server.ipv4, instance.container_name, server.ssh_host_key || undefined);
+      await pauseContainer(server.ipv4, instance.container_name, server.ssh_host_key || undefined);
       db.updateServiceInstanceStatus(instance.id, "paused");
     }
 
@@ -199,12 +200,12 @@ export async function unpauseService(serviceId: number): Promise<{ ok: boolean; 
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
-      await hetzner.unpauseContainer(server.ipv4, instance.container_name, hostKey);
+      await unpauseContainer(server.ipv4, instance.container_name, hostKey);
 
       const healthCmd = instance.role === "replica" && catalog.replication.replicaHealthCmd
         ? catalog.replication.replicaHealthCmd
         : catalog.healthCmd;
-      const health = await hetzner.serviceHealthCheck(
+      const health = await serviceHealthCheck(
         server.ipv4, instance.container_name, healthCmd, 5, hostKey
       );
       db.updateServiceInstanceStatus(instance.id, health.healthy ? "running" : "unhealthy");
@@ -241,5 +242,5 @@ export async function getServiceLogs(
   const server = db.getServer(instance.server_id);
   if (!server) throw new Error("Server not found");
 
-  return hetzner.getContainerLogs(server.ipv4, instance.container_name, tail, server.ssh_host_key || undefined);
+  return getContainerLogs(server.ipv4, instance.container_name, tail, server.ssh_host_key || undefined);
 }

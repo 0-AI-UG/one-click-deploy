@@ -545,6 +545,21 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN wake_token TEXT");
     },
   },
+  {
+    version: 24,
+    description: "Generalize provider columns: hetzner_id -> provider_id, add provider column to servers, rename hetzner_lb_id",
+    up: (db) => {
+      db.run("ALTER TABLE servers ADD COLUMN provider TEXT NOT NULL DEFAULT 'hetzner'");
+      db.run("ALTER TABLE servers RENAME COLUMN hetzner_id TO provider_id");
+      db.run("ALTER TABLE apps RENAME COLUMN hetzner_lb_id TO lb_provider_id");
+      // Settings table may not exist in test fixtures that only create servers + apps
+      const hasSettings = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'").get();
+      if (hasSettings) {
+        db.run("INSERT OR IGNORE INTO settings (key, value) VALUES ('compute_provider', 'hetzner')");
+        db.run("INSERT OR IGNORE INTO settings (key, value) VALUES ('dns_provider', 'hetzner-dns')");
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

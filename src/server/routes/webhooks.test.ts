@@ -53,7 +53,7 @@ function setupPanel(secret: string) {
   // Insert a fresh server + panel pointing at it.
   const srv = db.insertServer({
     name: `panel-host-${Date.now()}`,
-    hetzner_id: `h-${Date.now()}-${Math.random()}`,
+    provider_id: `h-${Date.now()}-${Math.random()}`,
     ipv4: "1.2.3.4",
     ipv6: "",
     type: "cx23",

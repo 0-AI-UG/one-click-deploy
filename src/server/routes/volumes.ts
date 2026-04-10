@@ -2,7 +2,8 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
-import * as hetzner from "../../bun/hetzner/index.ts";
+import { getComputeProvider } from "../../bun/providers/index.ts";
+import { sshExec } from "../../bun/remote/index.ts";
 import { recreateAppContainer } from "../../bun/deploy/index.ts";
 
 export async function handleAttachVolume(request: Request): Promise<Response> {
@@ -19,21 +20,22 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
 
+    const compute = getComputeProvider();
     const suffix = Date.now().toString(36).slice(-4);
     const volName = `ocd-${app.name}-${suffix}`;
-    const vol = await hetzner.createVolume({
+    const vol = await compute.volumes!.create({
       name: volName,
-      size,
-      server_id: parseInt(server.hetzner_id, 10),
+      sizeGb: size,
+      serverId: server.provider_id,
       location: server.location,
     });
 
     const hostMountPath = `/mnt/${volName}`;
     const containerPath = mount_path || "/data";
-    await hetzner.sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
+    await sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
     const volumeMount = `${hostMountPath}:${containerPath}`;
 
-    db.updateAppVolume(app_id, String(vol.id), volumeMount);
+    db.updateAppVolume(app_id, String(vol.providerId), volumeMount);
     const result = await recreateAppContainer(app_id, volumeMount);
     if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
 
@@ -57,16 +59,16 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
 
-    const volInfo = await hetzner.hetznerApi(`/volumes/${volume_id}`) as Record<string, unknown>;
-    const volLocation = (volInfo.volume as any)?.location?.name;
-    if (volLocation && volLocation !== server.location) {
-      return Response.json({ ok: false, error: `Cannot attach: volume is in ${volLocation} but server is in ${server.location}` }, { headers: corsHeaders });
+    const compute = getComputeProvider();
+    const volInfo = await compute.volumes!.get(volume_id);
+    if (volInfo.location && volInfo.location !== server.location) {
+      return Response.json({ ok: false, error: `Cannot attach: volume is in ${volInfo.location} but server is in ${server.location}` }, { headers: corsHeaders });
     }
 
-    await hetzner.attachVolume(volume_id, parseInt(server.hetzner_id, 10));
+    await compute.volumes!.attach(volume_id, server.provider_id);
     const hostMountPath = `/mnt/vol-${volume_id}`;
     const containerPath = mount_path || "/data";
-    await hetzner.sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
+    await sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
     const volumeMount = `${hostMountPath}:${containerPath}`;
 
     db.updateAppVolume(app_id, volume_id, volumeMount);
@@ -88,7 +90,8 @@ export async function handleDetachVolume(request: Request): Promise<Response> {
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
     if (!app.volume_id) return Response.json({ ok: false, error: "App has no volume attached" }, { headers: corsHeaders });
 
-    await hetzner.detachVolume(app.volume_id);
+    const compute = getComputeProvider();
+    await compute.volumes!.detach(app.volume_id);
     db.updateAppVolume(app_id, "", "");
     const result = await recreateAppContainer(app_id, undefined);
     if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
@@ -121,15 +124,16 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
       return Response.json({ ok: false, error: `Cannot reattach: volume in ${fromServer.location}, target in ${toServer.location}` }, { headers: corsHeaders });
     }
 
-    await hetzner.detachVolume(volume_id);
+    const compute = getComputeProvider();
+    await compute.volumes!.detach(volume_id);
     db.updateAppVolume(from_app_id, "", "");
     await recreateAppContainer(from_app_id, undefined);
 
-    await hetzner.attachVolume(volume_id, parseInt(toServer.hetzner_id, 10));
+    await compute.volumes!.attach(volume_id, toServer.provider_id);
     const hostMountPath = `/mnt/ocd-${toApp.name}-data`;
     const containerPath = mount_path || "/data";
     const toHostKey = toServer.ssh_host_key || undefined;
-    await hetzner.sshExec(toServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, toHostKey);
+    await sshExec(toServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, toHostKey);
     const volumeMount = `${hostMountPath}:${containerPath}`;
     db.updateAppVolume(to_app_id, volume_id, volumeMount);
     await recreateAppContainer(to_app_id, volumeMount);
@@ -144,7 +148,8 @@ export async function handleResizeVolume(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "volumes.manage");
     const { volume_id, size } = await request.json() as { volume_id: string; size: number };
-    await hetzner.resizeVolume(volume_id, size);
+    const compute = getComputeProvider();
+    await compute.volumes!.resize(volume_id, size);
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

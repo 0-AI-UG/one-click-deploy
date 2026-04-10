@@ -9,7 +9,7 @@ function log(context: string, ...args: unknown[]) {
 
 const sshDir = SSH_DIR;
 
-async function getOrCreateLocalKeyPair(): Promise<{ publicKey: string; privateKeyPath: string }> {
+export async function getOrCreateLocalKeyPair(): Promise<{ publicKey: string; privateKeyPath: string }> {
   mkdirSync(sshDir, { recursive: true });
   const keyPath = path.join(sshDir, "id_ed25519");
   const pubPath = keyPath + ".pub";

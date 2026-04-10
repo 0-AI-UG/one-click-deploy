@@ -1,6 +1,13 @@
 import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
+import {
+  sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
+  deployCaddySite, removeCaddySite, cloneAndBuild, cloneAndComposeBuild,
+  cloneAndRailpackBuild, detectComposeFile, detectWebService, removeContainer,
+  removeCompose, healthCheck, composeHealthCheck,
+  deployAuthProxy,
+} from "../remote/index.ts";
 import * as github from "../github.ts";
 import { validateDeployRequest } from "../validate.ts";
 import { createMasker } from "../mask.ts";
@@ -32,7 +39,7 @@ function log(context: string, ...args: any[]) {
 // Silent SSH exec for compose detection (swallows errors)
 async function sshExecForDetection(ip: string, cmd: string) {
   try {
-    return await hetzner.sshExec(ip, cmd);
+    return await sshExec(ip, cmd);
   } catch {
     return { stdout: "", stderr: "", exitCode: 1 };
   }
@@ -40,7 +47,7 @@ async function sshExecForDetection(ip: string, cmd: string) {
 
 // Tracks resources created during deploy for rollback on failure
 type DeployState = {
-  hetznerServerId?: string;
+  providerServerId?: string;
   dbServerId?: number;
   dbAppId?: number;
   dnsRecord?: { zone_id: string; name: string; type: string; value: string };
@@ -58,7 +65,7 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
   // Remove Caddy site
   if (state.caddyConfigured && state.caddyDomain && serverIp) {
     try {
-      await hetzner.removeCaddySite(serverIp, state.caddyDomain, hostKey);
+      await removeCaddySite(serverIp, state.caddyDomain, hostKey);
       log("rollback", "Removed Caddy site");
     } catch (err) {
       log("rollback", `Failed to remove Caddy site: ${err}`);
@@ -69,9 +76,9 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
   if (state.containerName && serverIp) {
     try {
       if (state.deployMode === "compose") {
-        await hetzner.removeCompose(serverIp, state.containerName, false, hostKey);
+        await removeCompose(serverIp, state.containerName, false, hostKey);
       } else {
-        await hetzner.removeContainer(serverIp, state.containerName, hostKey);
+        await removeContainer(serverIp, state.containerName, hostKey);
       }
       log("rollback", `Removed container ${state.containerName}`);
     } catch (err) {
@@ -82,7 +89,8 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
   // Delete volume
   if (state.volumeId) {
     try {
-      await hetzner.deleteVolume(state.volumeId);
+      const compute = getComputeProvider();
+      await compute.volumes?.delete(state.volumeId);
       log("rollback", `Deleted volume ${state.volumeId}`);
     } catch (err) {
       log("rollback", `Failed to delete volume: ${err}`);
@@ -92,7 +100,13 @@ async function rollback(state: DeployState, serverIp: string, hostKey?: string):
   // Delete DNS record
   if (state.dnsRecord) {
     try {
-      await hetzner.deleteDnsRecord(state.dnsRecord);
+      const dns = getDnsProvider();
+      await dns.deleteRecord({
+        zoneId: state.dnsRecord.zone_id,
+        name: state.dnsRecord.name,
+        type: state.dnsRecord.type,
+        value: state.dnsRecord.value,
+      });
       log("rollback", `Deleted DNS record ${state.dnsRecord.name}/${state.dnsRecord.type}`);
     } catch (err) {
       log("rollback", `Failed to delete DNS record: ${err}`);
@@ -191,12 +205,14 @@ export async function deploy(
       log("server", `Reusing existing ready server: ${existingReady.name} ip=${serverIp}`);
       onProgress("server", `Using server ${existingReady.name} (${serverIp})`);
     } else {
-      onProgress("server", "Creating new Hetzner server...");
+      const compute = getComputeProvider();
+      onProgress("server", `Creating new ${compute.name} server...`);
 
       log("ssh", "Ensuring SSH key and firewall exist...");
+      const { publicKey } = await getOrCreateLocalKeyPair();
       const [sshKey, firewallId] = await Promise.all([
-        hetzner.ensureSshKey("one-click-deploy"),
-        hetzner.ensureFirewall(),
+        compute.ensureSshKey("one-click-deploy", publicKey),
+        compute.ensureFirewall(),
       ]);
       log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}`);
       onProgress("server", `SSH key + firewall ready`);
@@ -207,10 +223,11 @@ export async function deploy(
       if (!location) throw new Error("No default server location configured — set one in Settings");
       const serverName = `ocd-${req.app_name}-${Date.now()}`;
 
-      // Insert placeholder DB record BEFORE Hetzner API call to prevent orphans
+      // Insert placeholder DB record BEFORE provider API call to prevent orphans
       const dbServer = db.insertServer({
         name: serverName,
-        hetzner_id: "",
+        provider_id: "",
+        provider: compute.id,
         ipv4: "",
         ipv6: "",
         type: serverType,
@@ -220,24 +237,25 @@ export async function deploy(
       serverId = dbServer.id;
       state.dbServerId = dbServer.id;
 
-      log("server", `Creating Hetzner server: name=${serverName} type=${serverType} location=${location}`);
+      log("server", `Creating ${compute.name} server: name=${serverName} type=${serverType} location=${location}`);
       const createStart = Date.now();
-      const hServer = await hetzner.createServer({
+      const providerServer = await compute.createServer({
         name: serverName,
-        server_type: serverType,
+        serverType,
         location,
-        ssh_key_name: sshKey.name,
-        firewall_id: firewallId,
+        sshKeyName: sshKey.name,
+        firewallId,
+        userData: "",
       });
-      state.hetznerServerId = String(hServer.id);
-      log("server", `Hetzner server created in ${Date.now() - createStart}ms: id=${hServer.id}`);
+      state.providerServerId = providerServer.providerId;
+      log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId}`);
 
       // Update placeholder with real data
-      serverIp = hServer.public_net.ipv4.ip;
+      serverIp = providerServer.ipv4;
       db.updateServer(dbServer.id, {
-        hetzner_id: String(hServer.id),
+        provider_id: providerServer.providerId,
         ipv4: serverIp,
-        ipv6: hServer.public_net.ipv6.ip || "",
+        ipv6: providerServer.ipv6 || "",
         status: "provisioning",
       });
       log("server", `Server saved to DB: id=${dbServer.id}`);
@@ -245,7 +263,7 @@ export async function deploy(
 
       // Wait for server VM to boot before attempting SSH
       onProgress("provision", "Waiting for server to boot...");
-      await hetzner.waitForServerRunning(hServer.id, (msg) => {
+      await compute.waitForRunning(providerServer.providerId, (msg) => {
         onProgress("provision", msg);
       });
 
@@ -253,22 +271,22 @@ export async function deploy(
       onProgress("provision", "Waiting for server to be ready...");
       log("provision", `Waiting for server ${serverIp} to be provisioned...`);
       const provisionStart = Date.now();
-      await hetzner.waitForServer(serverIp, 30, (msg) => {
+      await waitForServer(serverIp, 30, (msg) => {
         onProgress("provision", msg);
       });
       log("provision", `Server provisioned in ${((Date.now() - provisionStart) / 1000).toFixed(1)}s`);
 
       // Verify docker is actually installed
-      const dockerCheck = await hetzner.sshExec(serverIp, "docker --version");
+      const dockerCheck = await sshExec(serverIp, "docker --version");
       if (dockerCheck.exitCode !== 0) {
-        const initLog = await hetzner.sshExec(serverIp, "tail -20 /var/log/cloud-init-deploy.log 2>/dev/null");
+        const initLog = await sshExec(serverIp, "tail -20 /var/log/cloud-init-deploy.log 2>/dev/null");
         log("provision", `Docker not found. Cloud-init log:\n${initLog.stdout}`);
         throw new Error("Server provisioned but Docker was not installed — server setup may have failed. Try deleting the server and deploying again.");
       }
       log("provision", `Docker verified: ${dockerCheck.stdout.trim()}`);
 
       // Capture SSH host key for future verification
-      serverHostKey = await hetzner.captureHostKey(serverIp);
+      serverHostKey = await captureHostKey(serverIp);
       if (serverHostKey) {
         db.updateServerHostKey(dbServer.id, serverHostKey);
         log("provision", "SSH host key captured and stored");
@@ -293,8 +311,9 @@ export async function deploy(
     if (req.domain && dnsZoneId) {
       try {
         log("dns", `Creating DNS A record: ${subdomain} -> ${serverIp} in zone ${dnsZoneId}`);
-        const record = await hetzner.createDnsRecord({
-          zone_id: dnsZoneId,
+        const dns = getDnsProvider();
+        const record = await dns.createRecord({
+          zoneId: dnsZoneId,
           name: subdomain,
           type: "A",
           value: serverIp,
@@ -316,27 +335,30 @@ export async function deploy(
     // Step 3: Create volume if requested
     let volumeMount: string | undefined;
     if (req.volume_size && req.volume_size > 0) {
-      // Get the Hetzner server ID (either from new server or existing)
-      let hetznerServerId: number;
-      if (state.hetznerServerId) {
-        hetznerServerId = parseInt(state.hetznerServerId, 10);
+      const compute = getComputeProvider();
+      if (!compute.volumes) throw new Error(`Provider "${compute.name}" does not support managed volumes`);
+
+      // Get the provider server ID (either from new server or existing)
+      let providerServerId: string;
+      if (state.providerServerId) {
+        providerServerId = state.providerServerId;
       } else {
         const existingServer = db.getServer(serverId!);
         if (!existingServer) throw new Error(`Server ${serverId} not found`);
-        hetznerServerId = parseInt(existingServer.hetzner_id, 10);
+        providerServerId = existingServer.provider_id;
       }
 
       onProgress("build", `Creating ${req.volume_size}GB persistent volume...`);
-      const vol = await hetzner.createVolume({
+      const vol = await compute.volumes.create({
         name: `ocd-${req.app_name}-data`,
-        size: req.volume_size,
-        server_id: hetznerServerId,
+        sizeGb: req.volume_size,
+        serverId: providerServerId,
         location: settings.default_location || "nbg1",
       });
-      state.volumeId = String(vol.id);
+      state.volumeId = vol.providerId;
       const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
       const containerPath = req.volume_path || "/data";
-      await hetzner.sshExec(serverIp, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, serverHostKey || undefined);
+      await sshExec(serverIp, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, serverHostKey || undefined);
       volumeMount = `${hostMountPath}:${containerPath}`;
       log("build", `Volume mounted: ${volumeMount}`);
       onProgress("build", `Volume ready (${req.volume_size}GB at /data)`);
@@ -391,7 +413,7 @@ export async function deploy(
       const detected = req.compose_file || await (async () => {
         // Need to clone before we can detect — cloneAndBuild/cloneAndComposeBuild handle this
         // Do a preliminary clone to check for compose files
-        await hetzner.sshExec(serverIp, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps`);
+        await sshExec(serverIp, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps`);
         const appDir = `/home/deploy/apps/${req.app_name}`;
         const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
         let cloneUrl = req.git_repo;
@@ -403,14 +425,14 @@ export async function deploy(
         if (githubPat && cloneUrl !== req.git_repo) {
           await sshExecForDetection(serverIp, asUser(`cd ${appDir} && git remote set-url origin ${req.git_repo}`));
         }
-        return await hetzner.detectComposeFile(serverIp, req.app_name, serverHostKey || undefined);
+        return await detectComposeFile(serverIp, req.app_name, serverHostKey || undefined);
       })();
 
       if (detected) {
         deployMode = "compose";
         composeFile = detected;
         composeWebService = req.compose_web_service ||
-          await hetzner.detectWebService(serverIp, req.app_name, detected, serverHostKey || undefined) ||
+          await detectWebService(serverIp, req.app_name, detected, serverHostKey || undefined) ||
           "web";
         log("build", `Compose mode detected: file=${composeFile} service=${composeWebService}`);
       }
@@ -420,7 +442,7 @@ export async function deploy(
     let buildImageTag = `${req.app_name}:latest`; // default, overridden by Dockerfile builds
 
     if (deployMode === "compose") {
-      const result = await hetzner.cloneAndComposeBuild(
+      const result = await cloneAndComposeBuild(
         serverIp,
         {
           name: req.app_name,
@@ -440,7 +462,7 @@ export async function deploy(
       );
       db.updateAppDeployMode(app.id, "compose", result.composeFile, result.webService);
     } else {
-      const result = await hetzner.cloneAndBuild(
+      const result = await cloneAndBuild(
         serverIp,
         {
           name: req.app_name,
@@ -469,7 +491,7 @@ export async function deploy(
     let caddyPort = replica.host_port;
     if (req.auth_password) {
       onProgress("build", "Deploying auth proxy...");
-      caddyPort = await hetzner.deployAuthProxy(serverIp, req.app_name, req.auth_password, replica.host_port, serverHostKey || undefined);
+      caddyPort = await deployAuthProxy(serverIp, req.app_name, req.auth_password, replica.host_port, serverHostKey || undefined);
       maskedLog(app.id, `[auth] Auth proxy deployed on port ${caddyPort}`);
     }
 
@@ -495,7 +517,7 @@ export async function deploy(
     }
 
     onProgress("caddy", `Configuring TLS + reverse proxy for ${useDomain}...`);
-    await hetzner.deployCaddySite(serverIp, useDomain, caddyPort, useInternalTls, serverHostKey || undefined);
+    await deployCaddySite(serverIp, useDomain, caddyPort, useInternalTls, serverHostKey || undefined);
     state.caddyConfigured = true;
     state.caddyDomain = useDomain;
     maskedLog(app.id, `[caddy] Reverse proxy configured for ${useDomain}`);
@@ -504,8 +526,8 @@ export async function deploy(
     // Step 5: Health check
     onProgress("health", "Checking app health...");
     const health = deployMode === "compose"
-      ? await hetzner.composeHealthCheck(serverIp, req.app_name, replica.host_port, 5, serverHostKey || undefined)
-      : await hetzner.healthCheck(serverIp, req.app_name, replica.host_port, 5, serverHostKey || undefined);
+      ? await composeHealthCheck(serverIp, req.app_name, replica.host_port, 5, serverHostKey || undefined)
+      : await healthCheck(serverIp, req.app_name, replica.host_port, 5, serverHostKey || undefined);
     if (health.healthy) {
       maskedLog(app.id, `[health] Health check passed (HTTP ${health.statusCode})`);
       onProgress("health", `Health check passed (HTTP ${health.statusCode})`);
@@ -517,7 +539,7 @@ export async function deploy(
     }
 
     // Record deployment history
-    const gitCommitResult = await hetzner.sshExec(
+    const gitCommitResult = await sshExec(
       serverIp,
       `su - deploy -c "cd /home/deploy/apps/${req.app_name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
       serverHostKey || undefined

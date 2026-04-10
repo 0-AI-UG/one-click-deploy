@@ -4,7 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { secretStore, maskToken } from "../../bun/secret-store.ts";
 import { validateHetznerToken } from "../../bun/validate.ts";
-import { hetznerApi } from "../../bun/hetzner/api.ts";
+import { getComputeProvider } from "../../bun/providers/index.ts";
 
 export async function handleGetSettings(request: Request): Promise<Response> {
   try {
@@ -32,22 +32,8 @@ export async function handleGetSettings(request: Request): Promise<Response> {
 export async function handleGetServerTypes(request: Request): Promise<Response> {
   try {
     await requireAdmin(request);
-    const data = await hetznerApi("/server_types?per_page=50") as Record<string, unknown>;
-    const types: Array<{ name: string; description: string; cores: number; memory: number; disk: number; locations: string[] }> = [];
-    for (const t of (data.server_types as any[]) ?? []) {
-      // Only include shared vCPU types (cpx/cx/cax) that aren't deprecated globally
-      if (t.deprecation?.announced) continue;
-      types.push({
-        name: t.name,
-        description: t.description,
-        cores: t.cores,
-        memory: t.memory,
-        disk: t.disk,
-        locations: (t.prices ?? []).map((p: { location: string }) => p.location),
-      });
-    }
-    // Sort by memory then cores
-    types.sort((a, b) => a.memory - b.memory || a.cores - b.cores);
+    const compute = getComputeProvider();
+    const types = await compute.listServerTypes();
     return Response.json({ server_types: types }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

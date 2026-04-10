@@ -115,7 +115,7 @@ export function ResourcesPage() {
                       </Btn>
                     </PermissionGate>
                     <PermissionGate permission="resources.delete">
-                      <Btn size="xs" variant="danger" disabled={s.replica_count > 0} title={s.replica_count > 0 ? "In use by replicas" : undefined} loading={deleting === `server-${s.hetzner_id}`} onClick={() => handleDelete("server", s.hetzner_id, s.name)}>
+                      <Btn size="xs" variant="danger" disabled={s.replica_count > 0} title={s.replica_count > 0 ? "In use by replicas" : undefined} loading={deleting === `server-${s.provider_id}`} onClick={() => handleDelete("server", s.provider_id, s.name)}>
                         <Trash2 size={11} />
                       </Btn>
                     </PermissionGate>

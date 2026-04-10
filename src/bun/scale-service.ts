@@ -1,6 +1,7 @@
 import * as db from "./db.ts";
 import type { ServiceRow, ServiceInstanceRow } from "./db.ts";
-import * as hetzner from "./hetzner/index.ts";
+import { getComputeProvider } from "./providers/index.ts";
+import { sshExec, pullAndRunService, serviceHealthCheck } from "./remote/index.ts";
 import { getCatalogEntry, buildConnectionUrl } from "./services/catalog.ts";
 import type { ServiceDefinition } from "./services/catalog.ts";
 
@@ -88,12 +89,12 @@ async function scaleUp(
 
     // Create volume for replica data
     emit("scale", `Creating volume for replica ${replicaNum}...`);
-    const hetznerServerId = parseInt(targetServer.hetzner_id, 10);
+    const compute = getComputeProvider();
     const serverLocation = targetServer.location || "nbg1";
-    const vol = await hetzner.createVolume({
+    const vol = await compute.volumes!.create({
       name: `ocd-svc-${service.name}-r${replicaNum}-data`,
-      size: 10,
-      server_id: hetznerServerId,
+      sizeGb: 10,
+      serverId: targetServer.provider_id,
       location: serverLocation,
     });
     await Bun.sleep(3000); // Wait for volume mount
@@ -112,7 +113,7 @@ async function scaleUp(
       : undefined;
 
     emit("scale", `Starting replica ${replicaNum}...`);
-    await hetzner.pullAndRunService(
+    await pullAndRunService(
       targetServer.ipv4,
       {
         name: containerName,
@@ -133,7 +134,7 @@ async function scaleUp(
       role: "replica",
       container_name: containerName,
       host_port: hostPort,
-      volume_id: String(vol.id),
+      volume_id: vol.providerId,
       volume_mount: volumeMount,
       status: "deploying",
     });
@@ -141,7 +142,7 @@ async function scaleUp(
     // Health check
     emit("scale", `Health checking replica ${replicaNum}...`);
     const healthCmd = catalog.replication.replicaHealthCmd || catalog.healthCmd;
-    const health = await hetzner.serviceHealthCheck(
+    const health = await serviceHealthCheck(
       targetServer.ipv4, containerName, healthCmd, 10, targetHostKey
     );
 
@@ -181,7 +182,7 @@ async function scaleDown(
     if (server) {
       const hostKey = server.ssh_host_key || undefined;
       try {
-        await hetzner.sshExec(
+        await sshExec(
           server.ipv4,
           `su - deploy -c "docker rm -f ${instance.container_name} 2>/dev/null || true"`,
           hostKey
@@ -193,7 +194,7 @@ async function scaleDown(
 
     if (instance.volume_id) {
       try {
-        await hetzner.deleteVolume(instance.volume_id);
+        await getComputeProvider().volumes!.delete(instance.volume_id);
       } catch (err) {
         log("scale", `Failed to delete volume ${instance.volume_id}: ${err}`);
       }

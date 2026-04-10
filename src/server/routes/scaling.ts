@@ -3,7 +3,7 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { scaleApp, wakeApp, collectMetrics } from "../../bun/scale.ts";
-import * as hetzner from "../../bun/hetzner/index.ts";
+import { updateScaleDaemonConfig } from "../../bun/remote/index.ts";
 import { secretStore } from "../../bun/secret-store.ts";
 
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
@@ -64,18 +64,18 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
 
     // Update scale daemon config if app is scaled
     const app = db.getApp(appId);
-    if (app && app.hetzner_lb_id) {
+    if (app && app.lb_provider_id) {
       const replicas = db.getReplicas(appId);
       const primaryServer = replicas[0] ? db.getServer(replicas[0].server_id) : null;
       if (primaryServer) {
         const tokens = await secretStore.getTokens();
-        await hetzner.updateScaleDaemonConfig(
+        await updateScaleDaemonConfig(
           primaryServer.ipv4,
           {
             hetzner_token: tokens.hetzner_api_token,
             apps: [{
               app_name: app.name,
-              hetzner_lb_id: app.hetzner_lb_id,
+              hetzner_lb_id: app.lb_provider_id,
               container_port: app.container_port,
               min_replicas,
               max_replicas,

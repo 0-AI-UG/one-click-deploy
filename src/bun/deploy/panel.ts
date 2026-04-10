@@ -15,7 +15,11 @@
 //     SSH blocking. All DB writes happen BEFORE dispatch so they land even
 //     if the panel container is destroyed seconds later.
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
+import {
+  sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
+  cloneAndBuild, deployCaddySite, healthCheck, getContainerLogs,
+} from "../remote/index.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
@@ -64,25 +68,30 @@ export async function bootstrapPanel(
   }
 
   // Rollback state
-  let hetznerServerId: string | undefined;
+  let providerServerId: string | undefined;
   let dbServerId: number | undefined;
   let volumeId: string | undefined;
-  let dnsRecordKey: { zone_id: string; name: string; type: string; value: string } | undefined;
+  let dnsRecordKey: { zoneId: string; name: string; type: string; value: string } | undefined;
+
+  const compute = getComputeProvider();
+  const dns = getDnsProvider();
 
   try {
     // 1. SSH key + firewall
     onProgress("server", "Ensuring SSH key + firewall...");
+    const { publicKey } = await getOrCreateLocalKeyPair();
     const [sshKey, firewallId] = await Promise.all([
-      hetzner.ensureSshKey("one-click-deploy"),
-      hetzner.ensureFirewall(),
+      compute.ensureSshKey("one-click-deploy", publicKey),
+      compute.ensureFirewall(),
     ]);
 
     // 2. Create server
-    onProgress("server", "Creating Hetzner server...");
+    onProgress("server", "Creating server...");
     const serverName = `ocd-${opts.appName}-${Date.now()}`;
     const dbServer = db.insertServer({
       name: serverName,
-      hetzner_id: "",
+      provider_id: "",
+      provider: compute.id,
       ipv4: "",
       ipv6: "",
       type: opts.serverType,
@@ -91,36 +100,37 @@ export async function bootstrapPanel(
     });
     dbServerId = dbServer.id;
 
-    const hServer = await hetzner.createServer({
+    const providerServer = await compute.createServer({
       name: serverName,
-      server_type: opts.serverType,
+      serverType: opts.serverType,
       location: opts.serverLocation,
-      ssh_key_name: sshKey.name,
-      firewall_id: firewallId,
+      sshKeyName: sshKey.name,
+      firewallId,
+      userData: "",
     });
-    hetznerServerId = String(hServer.id);
-    const serverIp = hServer.public_net.ipv4.ip;
+    providerServerId = providerServer.providerId;
+    const serverIp = providerServer.ipv4;
     db.updateServer(dbServer.id, {
-      hetzner_id: hetznerServerId,
+      provider_id: providerServerId,
       ipv4: serverIp,
-      ipv6: hServer.public_net.ipv6.ip || "",
+      ipv6: providerServer.ipv6 || "",
       status: "provisioning",
     });
     onProgress("server", `Server created: ${serverIp}`);
 
     // 3. Wait for boot + cloud-init
     onProgress("provision", "Waiting for server to boot...");
-    await hetzner.waitForServerRunning(hServer.id, (msg) => onProgress("provision", msg));
+    await compute.waitForRunning(providerServerId, (msg) => onProgress("provision", msg));
     onProgress("provision", "Waiting for cloud-init...");
-    await hetzner.waitForServer(serverIp, 30, (msg) => onProgress("provision", msg));
+    await waitForServer(serverIp, 30, (msg) => onProgress("provision", msg));
 
-    const dockerCheck = await hetzner.sshExec(serverIp, "docker --version");
+    const dockerCheck = await sshExec(serverIp, "docker --version");
     if (dockerCheck.exitCode !== 0) {
       throw new Error("Server provisioned but Docker is missing — cloud-init failed.");
     }
 
     // 4. Capture host key
-    const hostKey = await hetzner.captureHostKey(serverIp);
+    const hostKey = await captureHostKey(serverIp);
     if (hostKey) db.updateServerHostKey(dbServer.id, hostKey);
     db.updateServerStatus(dbServer.id, "ready");
 
@@ -129,13 +139,13 @@ export async function bootstrapPanel(
       try {
         const parts = opts.domain.split(".");
         const sub = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
-        await hetzner.createDnsRecord({
-          zone_id: opts.dnsZoneId,
+        await dns.createRecord({
+          zoneId: opts.dnsZoneId,
           name: sub,
           type: "A",
           value: serverIp,
         });
-        dnsRecordKey = { zone_id: opts.dnsZoneId, name: sub, type: "A", value: serverIp };
+        dnsRecordKey = { zoneId: opts.dnsZoneId, name: sub, type: "A", value: serverIp };
         onProgress("dns", `DNS A record created: ${opts.domain} → ${serverIp}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -145,15 +155,16 @@ export async function bootstrapPanel(
 
     // 6. Create + mount volume
     onProgress("build", `Creating ${opts.volumeSize}GB persistent volume...`);
-    const vol = await hetzner.createVolume({
+    if (!compute.volumes) throw new Error("Compute provider does not support volumes");
+    const vol = await compute.volumes.create({
       name: `ocd-${opts.appName}-data`,
-      size: opts.volumeSize,
-      server_id: hServer.id,
+      sizeGb: opts.volumeSize,
+      serverId: providerServerId,
       location: opts.serverLocation,
     });
-    volumeId = String(vol.id);
+    volumeId = vol.providerId;
     const hostMountPath = `/mnt/ocd-${opts.appName}-data`;
-    await hetzner.sshExec(
+    await sshExec(
       serverIp,
       `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`,
       hostKey || undefined,
@@ -192,7 +203,12 @@ export async function bootstrapPanel(
     // up later (the panel lives outside the apps table, so dns_records keyed
     // by app_id wouldn't catch it).
     if (dnsRecordKey) {
-      db.updatePanelDnsRecord(dnsRecordKey);
+      db.updatePanelDnsRecord({
+        zone_id: dnsRecordKey.zoneId,
+        name: dnsRecordKey.name,
+        type: dnsRecordKey.type,
+        value: dnsRecordKey.value,
+      });
     }
 
     // 8. Handoff: snapshot bootstrap DB onto the mounted volume BEFORE the
@@ -207,7 +223,7 @@ export async function bootstrapPanel(
 
     // 9. Build image + run container
     onProgress("build", "Cloning repo and building image...");
-    await hetzner.cloneAndBuild(
+    await cloneAndBuild(
       serverIp,
       {
         name: opts.appName,
@@ -223,7 +239,7 @@ export async function bootstrapPanel(
     // 10. Caddy + TLS
     onProgress("caddy", `Configuring reverse proxy for ${opts.domain}...`);
     const useInternalTls = opts.domain.endsWith(".nip.io");
-    await hetzner.deployCaddySite(
+    await deployCaddySite(
       serverIp,
       opts.domain,
       hostPort,
@@ -233,7 +249,7 @@ export async function bootstrapPanel(
 
     // 11. Health check
     onProgress("health", "Checking panel health...");
-    const health = await hetzner.healthCheck(
+    const health = await healthCheck(
       serverIp,
       opts.appName,
       hostPort,
@@ -258,23 +274,23 @@ export async function bootstrapPanel(
     // Rollback
     if (dnsRecordKey) {
       try {
-        await hetzner.deleteDnsRecord(dnsRecordKey);
+        await dns.deleteRecord(dnsRecordKey);
       } catch (e) {
         log("error", `Rollback: failed to delete DNS record: ${e}`);
       }
     }
     if (volumeId) {
       try {
-        await hetzner.deleteVolume(volumeId);
+        await compute.volumes?.delete(volumeId);
       } catch (e) {
         log("error", `Rollback: failed to delete volume ${volumeId}: ${e}`);
       }
     }
-    if (hetznerServerId) {
+    if (providerServerId) {
       try {
-        await hetzner.deleteHetznerServer(hetznerServerId);
+        await compute.deleteServer(providerServerId);
       } catch (e) {
-        log("error", `Rollback: failed to delete Hetzner server ${hetznerServerId}: ${e}`);
+        log("error", `Rollback: failed to delete server ${providerServerId}: ${e}`);
       }
     }
     if (dbServerId) {
@@ -368,7 +384,7 @@ export async function redeployPanel(
     ].join("\n");
 
     onProgress("dispatch", "Dispatching detached rebuild via systemd-run...");
-    const result = await hetzner.sshExec(server.ipv4, dispatch, hostKey);
+    const result = await sshExec(server.ipv4, dispatch, hostKey);
     if (result.exitCode !== 0) {
       // The DB writes already happened; roll back panel_deployments so the
       // history doesn't lie.
@@ -398,7 +414,7 @@ export async function getPanelContainerLogs(tail = 200): Promise<string> {
   if (!panel) return "";
   const server = db.getServer(panel.server_id);
   if (!server) return "";
-  return hetzner.getContainerLogs(
+  return getContainerLogs(
     server.ipv4,
     panel.name,
     tail,

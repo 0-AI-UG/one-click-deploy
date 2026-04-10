@@ -1,5 +1,9 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
+import {
+  sshExec, deployCaddySite, deployCaddyWakePage, removeCaddySite,
+  authProxyPort, removeAuthProxy,
+} from "../remote/index.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
 import { rebindContainer } from "./rebind.ts";
 
@@ -10,7 +14,9 @@ export async function scaleDown(
   targetCount: number,
   emit: ProgressFn
 ) {
-  const lbId = app.hetzner_lb_id;
+  const compute = getComputeProvider();
+  const dns = getDnsProvider();
+  const lbId = app.lb_provider_id;
 
   // Sort: prefer unhealthy first, then newest
   const sorted = [...currentReplicas].sort((a, b) => {
@@ -33,7 +39,7 @@ export async function scaleDown(
       // Remove from LB
       if (lbId) {
         try {
-          await hetzner.removeLBTarget(lbId, server.hetzner_id);
+          await compute.loadBalancers!.removeTarget(lbId, server.provider_id);
         } catch (err) {
           log("scale", `Failed to remove LB target (continuing): ${err}`);
         }
@@ -49,13 +55,13 @@ export async function scaleDown(
       if (app.deploy_mode === "compose" && replica.container_name === app.name) {
         // This is the primary compose instance — handled separately during 2→1
       } else {
-        await hetzner.sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
+        await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
       }
 
       // Remove auth proxy if present
       if (app.auth_password) {
         try {
-          await hetzner.removeAuthProxy(server.ipv4, replica.container_name, hostKey);
+          await removeAuthProxy(server.ipv4, replica.container_name, hostKey);
         } catch (err) {
           log("scale", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
         }
@@ -87,7 +93,7 @@ export async function scaleDown(
       const panel = db.getPanel();
       const panelDomain = panel?.domain || "";
       const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-      await hetzner.deployCaddyWakePage(
+      await deployCaddyWakePage(
         lastServer.ipv4, app.domain, panelDomain, app.id, wakeToken, useInternalTls,
         lastServer.ssh_host_key || undefined
       );
@@ -115,8 +121,8 @@ export async function scaleDown(
 
       // Restore Caddy
       const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-      const caddyPort = app.auth_password ? hetzner.authProxyPort(primaryHostPort) : primaryHostPort;
-      await hetzner.deployCaddySite(primaryServer.ipv4, app.domain, caddyPort, useInternalTls, primaryHostKey);
+      const caddyPort = app.auth_password ? authProxyPort(primaryHostPort) : primaryHostPort;
+      await deployCaddySite(primaryServer.ipv4, app.domain, caddyPort, useInternalTls, primaryHostKey);
 
       // Atomic DNS swap: create new record first, then delete old (overlap, not gap)
       const dnsRecords = db.getDnsRecords(app.id);
@@ -124,8 +130,8 @@ export async function scaleDown(
       if (dnsRecords.length > 0 && settings.dns_zone_id) {
         const parts = app.domain.split(".");
         const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
-        const newRecord = await hetzner.createDnsRecord({
-          zone_id: settings.dns_zone_id,
+        const newRecord = await dns.createRecord({
+          zoneId: settings.dns_zone_id,
           name: subdomain,
           type: "A",
           value: primaryServer.ipv4,
@@ -140,8 +146,8 @@ export async function scaleDown(
         });
         for (const record of dnsRecords) {
           try {
-            await hetzner.deleteDnsRecord({
-              zone_id: record.zone_id,
+            await dns.deleteRecord({
+              zoneId: record.zone_id,
               name: record.name,
               type: record.type,
               value: record.value,
@@ -164,8 +170,8 @@ export async function scaleDown(
         if (dnsRecords.length > 0 && settings.dns_zone_id) {
           const parts = app.domain.split(".");
           const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
-          const newRecord = await hetzner.createDnsRecord({
-            zone_id: settings.dns_zone_id,
+          const newRecord = await dns.createRecord({
+            zoneId: settings.dns_zone_id,
             name: subdomain,
             type: "A",
             value: sleepingServer.ipv4,
@@ -180,8 +186,8 @@ export async function scaleDown(
           });
           for (const record of dnsRecords) {
             try {
-              await hetzner.deleteDnsRecord({
-                zone_id: record.zone_id,
+              await dns.deleteRecord({
+                zoneId: record.zone_id,
                 name: record.name,
                 type: record.type,
                 value: record.value,
@@ -196,22 +202,22 @@ export async function scaleDown(
     }
 
     // Delete LB (may already be gone if deleted externally)
-    const lb = await hetzner.getLoadBalancer(lbId).catch(() => null);
+    const lb = await compute.loadBalancers!.get(lbId).catch(() => null);
     if (lb) {
-      await hetzner.deleteLoadBalancer(lbId);
+      await compute.loadBalancers!.delete(lbId);
       // Remove LB firewall rules — use any known host port for the firewall rule
       try {
-        const firewallId = await hetzner.ensureFirewall();
+        const firewallId = await compute.ensureFirewall();
         const anyHostPort = toRemove[0]?.host_port || 0;
-        const destPort = app.auth_password ? hetzner.authProxyPort(anyHostPort) : anyHostPort;
+        const destPort = app.auth_password ? authProxyPort(anyHostPort) : anyHostPort;
         if (destPort) {
-          await hetzner.removeLBFirewallRule(firewallId, destPort, lb.public_net.ipv4.ip);
+          await compute.firewallRules?.removeLBRule(firewallId, destPort, lb.ipv4);
         }
       } catch (err) {
         log("scale", `Failed to remove LB firewall rule: ${err}`);
       }
     }
-    db.updateAppScaling(app.id, { hetzner_lb_id: "" });
+    db.updateAppScaling(app.id, { lb_provider_id: "" });
 
     emit("scale", "Load balancer removed");
   }

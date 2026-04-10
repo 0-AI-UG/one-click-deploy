@@ -22,7 +22,8 @@ function initSchema(instance: Database) {
   instance.run(`CREATE TABLE IF NOT EXISTS servers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    hetzner_id TEXT NOT NULL UNIQUE,
+    provider_id TEXT NOT NULL UNIQUE,
+    provider TEXT NOT NULL DEFAULT 'hetzner',
     ipv4 TEXT NOT NULL DEFAULT '',
     ipv6 TEXT NOT NULL DEFAULT '',
     type TEXT NOT NULL DEFAULT 'cx23',

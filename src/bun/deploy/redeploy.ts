@@ -1,6 +1,11 @@
 import type { ServerWithApps, Server } from "../../shared/rpc.ts";
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider } from "../providers/index.ts";
+import {
+  sshExec, cloneAndBuild, cloneAndComposeBuild, cloneAndRailpackBuild,
+  deployCaddySite, deployAuthProxy, removeAuthProxy, removeContainer,
+  healthCheck, composeHealthCheck,
+} from "../remote/index.ts";
 import { validateEnvVars } from "../validate.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { rollingRedeploy } from "../scale.ts";
@@ -17,7 +22,7 @@ type DbApp = {
   compose_file: string;
   compose_web_service: string;
   dockerfile_path: string;
-  hetzner_lb_id: string;
+  lb_provider_id: string;
   volume_id: string;
   volume_mount: string;
   auth_password: string;
@@ -97,7 +102,7 @@ export async function redeployApp(
     // Build new image on primary server first
     let buildImageTag = `${app.name}:latest`;
     if (app.deploy_mode === "compose") {
-      await hetzner.cloneAndComposeBuild(
+      await cloneAndComposeBuild(
         server.ipv4,
         {
           name: app.name,
@@ -116,7 +121,7 @@ export async function redeployApp(
         }
       );
     } else if (app.deploy_mode === "railpack") {
-      const buildResult = await hetzner.cloneAndRailpackBuild(
+      const buildResult = await cloneAndRailpackBuild(
         server.ipv4,
         {
           name: app.name,
@@ -136,7 +141,7 @@ export async function redeployApp(
         buildImageTag = buildResult.imageTag;
       }
     } else {
-      const buildResult = await hetzner.cloneAndBuild(
+      const buildResult = await cloneAndBuild(
         server.ipv4,
         {
           name: app.name,
@@ -160,7 +165,7 @@ export async function redeployApp(
 
     // If scaled (>1 replicas), do rolling deploy for the other replicas
     const replicas = db.getReplicas(appId);
-    if (replicas.length > 1 && app.hetzner_lb_id) {
+    if (replicas.length > 1 && app.lb_provider_id) {
       onProgress("scale", "Starting rolling update across replicas...");
       const rollingResult = await rollingRedeploy(appId, onProgress);
       if (!rollingResult.ok) {
@@ -171,22 +176,22 @@ export async function redeployApp(
     // Handle auth proxy: deploy, update, or remove (primary server)
     let caddyPort = hostPort;
     if (authPassword) {
-      caddyPort = await hetzner.deployAuthProxy(server.ipv4, app.name, authPassword, hostPort, hostKey);
+      caddyPort = await deployAuthProxy(server.ipv4, app.name, authPassword, hostPort, hostKey);
     } else if (app.auth_password && !authPassword) {
-      await hetzner.removeAuthProxy(server.ipv4, app.name, hostKey);
+      await removeAuthProxy(server.ipv4, app.name, hostKey);
     }
 
     // Only update Caddy if single-replica (LB handles TLS when scaled)
-    if (!app.hetzner_lb_id) {
+    if (!app.lb_provider_id) {
       onProgress("caddy", "Reloading reverse proxy...");
       const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-      await hetzner.deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
+      await deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
     }
 
     onProgress("health", "Checking app health...");
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await hetzner.healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Success — now persist env/auth changes to DB
@@ -201,7 +206,7 @@ export async function redeployApp(
     }
 
     // Record deployment
-    const gitCommitResult = await hetzner.sshExec(
+    const gitCommitResult = await sshExec(
       server.ipv4,
       `su - deploy -c "cd /home/deploy/apps/${app.name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
       hostKey
@@ -252,7 +257,7 @@ export async function updateAppEnv(
     const logLine = (line: string) => db.appendDeployLog(appId, `[env-update] ${line}`);
 
     if (app.deploy_mode === "compose") {
-      await hetzner.cloneAndComposeBuild(
+      await cloneAndComposeBuild(
         server.ipv4,
         {
           name: app.name,
@@ -268,7 +273,7 @@ export async function updateAppEnv(
         logLine
       );
     } else if (app.deploy_mode === "railpack") {
-      await hetzner.cloneAndRailpackBuild(
+      await cloneAndRailpackBuild(
         server.ipv4,
         {
           name: app.name,
@@ -282,7 +287,7 @@ export async function updateAppEnv(
         logLine
       );
     } else {
-      await hetzner.cloneAndBuild(
+      await cloneAndBuild(
         server.ipv4,
         {
           name: app.name,
@@ -299,8 +304,8 @@ export async function updateAppEnv(
     }
 
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await hetzner.healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Success — now persist env vars to DB
@@ -339,7 +344,7 @@ export async function rollbackApp(
 
     if (app.deploy_mode === "compose") {
       // Compose rollback: checkout old commit and rebuild
-      await hetzner.sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${deployment.git_commit}`), hostKey);
+      await sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${deployment.git_commit}`), hostKey);
 
       const envVars = JSON.parse(app.env_vars || "{}");
       const envEntries = Object.entries(envVars);
@@ -347,18 +352,18 @@ export async function rollbackApp(
         const envFilePath = `${appDir}/.env.deploy`;
         const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
         const escapedContent = envFileContent.replace(/'/g, "'\\''");
-        await hetzner.sshExec(server.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, hostKey);
+        await sshExec(server.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, hostKey);
       }
 
       const envFileFlag = envEntries.length > 0 ? `--env-file ${appDir}/.env.deploy` : "";
       const composeCmd = `cd ${appDir} && docker compose -f ${app.compose_file} -f docker-compose.ocd.yml -p ${app.name} ${envFileFlag} up -d --build`;
-      const result = await hetzner.sshExec(server.ipv4, asUser(composeCmd), hostKey);
+      const result = await sshExec(server.ipv4, asUser(composeCmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to rollback compose project — the previous version may have build errors");
       }
     } else {
       // Dockerfile rollback: restart with old image tag
-      await hetzner.removeContainer(server.ipv4, app.name, hostKey);
+      await removeContainer(server.ipv4, app.name, hostKey);
 
       const envVars = JSON.parse(app.env_vars || "{}");
       const envEntries = Object.entries(envVars);
@@ -367,13 +372,13 @@ export async function rollbackApp(
         const envFilePath = `${appDir}/.env.deploy`;
         const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
         const escapedContent = envFileContent.replace(/'/g, "'\\''");
-        await hetzner.sshExec(server.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, hostKey);
+        await sshExec(server.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, hostKey);
         envFileFlag = `--env-file ${envFilePath}`;
       }
 
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
       const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${deployment.image_tag}`;
-      const result = await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+      const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to rollback — the previous image may no longer be available on this server");
       }
@@ -381,8 +386,8 @@ export async function rollbackApp(
 
     // Health check
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await hetzner.healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Record rollback as new deployment
@@ -455,7 +460,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
 
   // Use the token of the user who deployed this app
   const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
-  const lbId = app.hetzner_lb_id;
+  const lbId = app.lb_provider_id;
   const multi = replicas.length > 1 && !!lbId;
 
   append(`[webhook] Starting rolling redeploy across ${replicas.length} replica(s)`);
@@ -474,7 +479,8 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
 
       if (multi) {
         try {
-          await hetzner.removeLBTarget(lbId!, server.hetzner_id);
+          const compute = getComputeProvider();
+          await compute.loadBalancers!.removeTarget(lbId!, server.provider_id);
         } catch (e) {
           append(`[webhook] Warning: failed to remove LB target for ${replica.container_name}: ${e}`);
         }
@@ -483,7 +489,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
       }
 
       if (app.deploy_mode === "compose") {
-        await hetzner.cloneAndComposeBuild(
+        await cloneAndComposeBuild(
           server.ipv4,
           {
             name: app.name,
@@ -499,7 +505,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
           (line) => append(`[build] ${line}`),
         );
       } else if (app.deploy_mode === "railpack") {
-        await hetzner.cloneAndRailpackBuild(
+        await cloneAndRailpackBuild(
           server.ipv4,
           {
             name: app.name,
@@ -514,7 +520,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
         );
         if (multi) {
           const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-          await hetzner.sshExec(
+          await sshExec(
             server.ipv4,
             asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`),
             hostKey,
@@ -525,10 +531,10 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
           }
           const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p 0.0.0.0:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
-          await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+          await sshExec(server.ipv4, asUser(cmd), hostKey);
         }
       } else {
-        await hetzner.cloneAndBuild(
+        await cloneAndBuild(
           server.ipv4,
           {
             name: app.name,
@@ -545,7 +551,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
         if (multi) {
           // Multi-replica: rebind to 0.0.0.0 so the LB can reach it.
           const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-          await hetzner.sshExec(
+          await sshExec(
             server.ipv4,
             asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`),
             hostKey,
@@ -556,13 +562,13 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
           }
           const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p 0.0.0.0:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
-          await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+          await sshExec(server.ipv4, asUser(cmd), hostKey);
         }
       }
 
       const health = app.deploy_mode === "compose"
-        ? await hetzner.composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
-        : await hetzner.healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
+        ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
+        : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
 
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 
@@ -571,14 +577,15 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
       }
 
       if (multi) {
-        await hetzner.addLBTarget(lbId!, server.hetzner_id);
+        const compute = getComputeProvider();
+        await compute.loadBalancers!.addTarget(lbId!, server.provider_id);
         append(`[webhook] Re-added ${replica.container_name} to LB`);
       }
 
       // Capture commit hash from this replica (first one wins).
       if (i === 0) {
         try {
-          const r = await hetzner.sshExec(
+          const r = await sshExec(
             server.ipv4,
             `su - deploy -c "cd /home/deploy/apps/${app.name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
             hostKey,

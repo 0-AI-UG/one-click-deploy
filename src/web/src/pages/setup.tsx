@@ -4,12 +4,12 @@ import { setTempToken } from "../stores/auth.ts";
 import { showToast, Spinner, Card } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Terminal, ArrowRight, ArrowLeft, Key, Server } from "lucide-react";
-import { type HetznerServerType, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
+import { type ServerType, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 
 export function SetupPage() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [serverTypes, setServerTypes] = useState<HetznerServerType[]>([]);
+  const [serverTypes, setServerTypes] = useState<ServerType[]>([]);
   const [typesLoading, setTypesLoading] = useState(false);
   // When the panel was handed off from a bootstrap instance, the Hetzner
   // token is already present — skip the API-keys step and only ask for the

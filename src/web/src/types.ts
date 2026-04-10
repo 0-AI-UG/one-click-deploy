@@ -66,7 +66,7 @@ export type ServerData = {
   location?: string;
   replica_count?: number;
   monthly_eur?: number;
-  hetzner_id?: string | number;
+  provider_id?: string | number;
   apps: AppData[];
 };
 
@@ -114,7 +114,7 @@ export type ResourceServer = {
   location: string;
   replica_count: number;
   monthly_eur?: number;
-  hetzner_id: string;
+  provider_id: string;
 };
 
 export type ResourceLoadBalancer = {

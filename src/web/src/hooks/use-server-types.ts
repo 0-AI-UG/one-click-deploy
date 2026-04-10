@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get } from "../api/client.ts";
 import { getToken } from "../stores/auth.ts";
 
-export type HetznerServerType = {
+export type ServerType = {
   name: string;
   description: string;
   cores: number;
@@ -12,7 +12,7 @@ export type HetznerServerType = {
 };
 
 export function useServerTypes() {
-  const [serverTypes, setServerTypes] = useState<HetznerServerType[]>([]);
+  const [serverTypes, setServerTypes] = useState<ServerType[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -23,7 +23,7 @@ export function useServerTypes() {
       return;
     }
     get("/api/admin/settings/server-types")
-      .then((data) => setServerTypes((data as { server_types?: HetznerServerType[] }).server_types ?? []))
+      .then((data) => setServerTypes((data as { server_types?: ServerType[] }).server_types ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -31,11 +31,11 @@ export function useServerTypes() {
   return { serverTypes, loading };
 }
 
-export function typeOptions(types: HetznerServerType[]) {
+export function typeOptions(types: ServerType[]) {
   return types.map((t) => ({ value: t.name, label: `${t.name} (${t.cores}c/${t.memory}GB)` }));
 }
 
-export function locationOptions(types: HetznerServerType[], selectedType: string) {
+export function locationOptions(types: ServerType[], selectedType: string) {
   const t = types.find((t) => t.name === selectedType);
   return (t?.locations ?? []).map((l) => ({ value: l, label: l }));
 }

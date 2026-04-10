@@ -1,7 +1,7 @@
 import * as db from "./db.ts";
 import type { AppRow, ReplicaRow, ServiceRow, ServiceInstanceRow } from "./db.ts";
-import * as hetzner from "./hetzner/index.ts";
-import type { LoadBalancerTarget } from "./hetzner/load-balancers.ts";
+import { getComputeProvider } from "./providers/index.ts";
+import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContainer, checkCaddyRoute, deployCaddySite, authProxyPort, serviceHealthCheck } from "./remote/index.ts";
 import { evaluateAutoScale } from "./scale.ts";
 import { getCatalogEntry } from "./services/catalog.ts";
 
@@ -23,7 +23,7 @@ async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
 
   // Metrics
   try {
-    const result = await hetzner.sshExec(
+    const result = await sshExec(
       server.ipv4,
       `su - deploy -c "docker stats --no-stream --format '{{json .}}' ${replica.container_name} 2>/dev/null"`,
       hostKey
@@ -47,8 +47,8 @@ async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
   // Health
   try {
     const check = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, replica.host_port, 1, hostKey)
-      : await hetzner.healthCheck(server.ipv4, replica.container_name, replica.host_port, 1, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 1, hostKey)
+      : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 1, hostKey);
 
     if (check.healthy) {
       db.updateReplicaStatus(replica.id, "running");
@@ -62,9 +62,9 @@ async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
         log("health", `auto-restarting ${replica.container_name}`);
         try {
           if (app.deploy_mode === "compose") {
-            await hetzner.restartCompose(server.ipv4, app.name, hostKey);
+            await restartCompose(server.ipv4, app.name, hostKey);
           } else {
-            await hetzner.restartContainer(server.ipv4, replica.container_name, hostKey);
+            await restartContainer(server.ipv4, replica.container_name, hostKey);
           }
           db.resetUnhealthyTicks(replica.id);
           db.insertScalingEvent({
@@ -85,43 +85,44 @@ async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
 }
 
 async function reconcileLB(app: AppRow): Promise<void> {
-  if (!app.hetzner_lb_id) return;
+  if (!app.lb_provider_id) return;
+  const compute = getComputeProvider();
 
   // 1. LB still exists?
   try {
-    await hetzner.getLoadBalancer(app.hetzner_lb_id);
+    await compute.loadBalancers!.get(app.lb_provider_id);
   } catch (err) {
-    log("lb", `app ${app.id} LB ${app.hetzner_lb_id} missing — clearing`);
-    db.updateAppScaling(app.id, { hetzner_lb_id: "" });
+    log("lb", `app ${app.id} LB ${app.lb_provider_id} missing — clearing`);
+    db.updateAppScaling(app.id, { lb_provider_id: "" });
     db.insertScalingEvent({
       app_id: app.id,
       event_type: "lb_missing",
       from_count: 0,
       to_count: 0,
-      reason: `Hetzner LB ${app.hetzner_lb_id} not found`,
+      reason: `LB ${app.lb_provider_id} not found`,
     });
     return;
   }
 
   // 2. Target diff
   try {
-    const lb = await hetzner.getLoadBalancer(app.hetzner_lb_id);
+    const lb = await compute.loadBalancers!.get(app.lb_provider_id);
     const lbTargetServerIds = new Set(
       (lb.targets || [])
-        .filter((t: LoadBalancerTarget) => t.type === "server" && t.server?.id)
-        .map((t: LoadBalancerTarget) => String(t.server!.id))
+        .filter((t) => t.type === "server" && t.server?.id)
+        .map((t) => String(t.server!.id))
     );
     const replicas = db.getReplicas(app.id);
     const wantServerIds = new Set<string>();
     for (const r of replicas) {
       const s = db.getServer(r.server_id);
-      if (s) wantServerIds.add(String(s.hetzner_id));
+      if (s) wantServerIds.add(String(s.provider_id));
     }
 
     for (const want of wantServerIds) {
       if (!lbTargetServerIds.has(want)) {
         log("lb", `app ${app.id}: adding missing target server=${want}`);
-        try { await hetzner.addLBTarget(app.hetzner_lb_id, want); } catch (e) { log("lb", `add target failed: ${e}`); }
+        try { await compute.loadBalancers!.addTarget(app.lb_provider_id, want); } catch (e) { log("lb", `add target failed: ${e}`); }
         db.insertScalingEvent({
           app_id: app.id,
           event_type: "lb_reconcile_add",
@@ -134,7 +135,7 @@ async function reconcileLB(app: AppRow): Promise<void> {
     for (const have of lbTargetServerIds) {
       if (!wantServerIds.has(have as string)) {
         log("lb", `app ${app.id}: removing orphan target server=${have}`);
-        try { await hetzner.removeLBTarget(app.hetzner_lb_id, have as string); } catch (e) { log("lb", `remove target failed: ${e}`); }
+        try { await compute.loadBalancers!.removeTarget(app.lb_provider_id, have as string); } catch (e) { log("lb", `remove target failed: ${e}`); }
         db.insertScalingEvent({
           app_id: app.id,
           event_type: "lb_reconcile_remove",
@@ -156,7 +157,7 @@ async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<v
     const app = db.getApp(appId);
     if (!app || !app.domain) continue;
     // Only reconcile single-replica apps not behind a LB (LB handles TLS)
-    if (app.hetzner_lb_id) continue;
+    if (app.lb_provider_id) continue;
     if (app.status !== "running" && app.status !== "unhealthy") continue;
     const firstReplica = list[0];
     if (!firstReplica) continue;
@@ -172,15 +173,15 @@ async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<v
 
     for (const { app, replica } of items) {
       try {
-        const exists = await hetzner.checkCaddyRoute(server.ipv4, app.domain, hostKey);
+        const exists = await checkCaddyRoute(server.ipv4, app.domain, hostKey);
         if (!exists) {
           log("caddy", `Route missing for ${app.domain} — re-adding`);
           let caddyPort = replica.host_port;
           if (app.auth_password) {
-            caddyPort = hetzner.authProxyPort(replica.host_port);
+            caddyPort = authProxyPort(replica.host_port);
           }
           const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-          await hetzner.deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
+          await deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
         }
       } catch (err) {
         log("caddy", `Route check failed for ${app.domain}: ${err}`);
@@ -199,7 +200,7 @@ async function collectServiceInstance(instance: ServiceInstanceRow, service: Ser
 
   // Metrics (same as app replicas — docker stats works for any container)
   try {
-    const result = await hetzner.sshExec(
+    const result = await sshExec(
       server.ipv4,
       `su - deploy -c "docker stats --no-stream --format '{{json .}}' ${instance.container_name} 2>/dev/null"`,
       hostKey
@@ -220,7 +221,7 @@ async function collectServiceInstance(instance: ServiceInstanceRow, service: Ser
       ? catalog.replication.replicaHealthCmd
       : catalog.healthCmd;
 
-    const check = await hetzner.serviceHealthCheck(
+    const check = await serviceHealthCheck(
       server.ipv4, instance.container_name, healthCmd, 1, hostKey
     );
 
@@ -235,7 +236,7 @@ async function collectServiceInstance(instance: ServiceInstanceRow, service: Ser
       if (ticks >= UNHEALTHY_RESTART_THRESHOLD) {
         log("health", `auto-restarting service ${instance.container_name}`);
         try {
-          await hetzner.restartContainer(server.ipv4, instance.container_name, hostKey);
+          await restartContainer(server.ipv4, instance.container_name, hostKey);
           db.resetServiceInstanceUnhealthyTicks(instance.id);
         } catch (err) {
           log("health", `restart failed: ${err}`);
@@ -292,7 +293,7 @@ async function tick(): Promise<void> {
         }
       }
 
-      if (app.hetzner_lb_id) {
+      if (app.lb_provider_id) {
         await reconcileLB(app);
       }
     }

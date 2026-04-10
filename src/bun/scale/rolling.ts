@@ -1,5 +1,8 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider } from "../providers/index.ts";
+import {
+  sshExec, cloneAndComposeBuild, transferImage, healthCheck, composeHealthCheck,
+} from "../remote/index.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { type ProgressFn, log } from "./types.ts";
 
@@ -22,7 +25,8 @@ export async function rollingRedeploy(
     const primaryServer = db.getServer(replicas[0].server_id);
     if (!primaryServer) throw new Error("First replica's server not found");
 
-    const lbId = app.hetzner_lb_id;
+    const compute = getComputeProvider();
+    const lbId = app.lb_provider_id;
     if (!lbId) throw new Error("No load balancer found for rolling deploy");
 
     const imageName = `${app.name}:latest`;
@@ -38,7 +42,7 @@ export async function rollingRedeploy(
 
       // Transfer new image
       if (server.id !== primaryServer.id) {
-        await hetzner.transferImage(
+        await transferImage(
           primaryServer.ipv4,
           server.ipv4,
           imageName,
@@ -49,7 +53,7 @@ export async function rollingRedeploy(
 
       // Remove from LB
       try {
-        await hetzner.removeLBTarget(lbId, server.hetzner_id);
+        await compute.loadBalancers!.removeTarget(lbId, server.provider_id);
       } catch (err) {
         log("scale", `Failed to remove LB target during rolling redeploy: ${err}`);
       }
@@ -62,7 +66,7 @@ export async function rollingRedeploy(
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
       if (app.deploy_mode === "compose") {
-        await hetzner.cloneAndComposeBuild(
+        await cloneAndComposeBuild(
           server.ipv4,
           {
             name: app.name,
@@ -78,7 +82,7 @@ export async function rollingRedeploy(
           (line) => emit("scale", line)
         );
       } else {
-        await hetzner.sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
+        await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
         const envVars = JSON.parse(app.env_vars || "{}");
         const envEntries = Object.entries(envVars);
         let envFileFlag = "";
@@ -87,18 +91,18 @@ export async function rollingRedeploy(
           envFileFlag = `--env-file ${envFilePath}`;
         }
         const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p 0.0.0.0:${replica.host_port}:${app.container_port} ${envFileFlag} ${imageName}`;
-        await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+        await sshExec(server.ipv4, asUser(cmd), hostKey);
       }
 
       // Health check
       const health = app.deploy_mode === "compose"
-        ? await hetzner.composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
-        : await hetzner.healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
+        ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
+        : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
 
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 
       // Add back to LB
-      await hetzner.addLBTarget(lbId, server.hetzner_id);
+      await compute.loadBalancers!.addTarget(lbId, server.provider_id);
 
       emit("scale", `Replica ${replica.container_name} updated`);
     }

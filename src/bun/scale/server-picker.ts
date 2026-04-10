@@ -1,5 +1,6 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider } from "../providers/index.ts";
+import { getOrCreateLocalKeyPair, waitForServer, captureHostKey } from "../remote/index.ts";
 import { type ProgressFn, type App, type Server } from "./types.ts";
 
 export async function pickTargetServer(
@@ -41,9 +42,11 @@ export async function pickTargetServer(
   if (!bestServer || bestCount > 0) {
     emit("scale", "Provisioning new server for replica...");
 
+    const compute = getComputeProvider();
+    const { publicKey } = await getOrCreateLocalKeyPair();
     const [sshKey, firewallId] = await Promise.all([
-      hetzner.ensureSshKey("one-click-deploy"),
-      hetzner.ensureFirewall(),
+      compute.ensureSshKey("one-click-deploy", publicKey),
+      compute.ensureFirewall(),
     ]);
 
     const serverType = settings.default_server_type;
@@ -54,29 +57,31 @@ export async function pickTargetServer(
     const location = anyReplicaServer?.location || settings.default_location;
     const serverName = `ocd-${app.name}-r${Date.now()}`;
 
-    const hServer = await hetzner.createServer({
+    const hServer = await compute.createServer({
       name: serverName,
-      server_type: serverType,
+      serverType,
       location,
-      ssh_key_name: sshKey.name,
-      firewall_id: firewallId,
+      sshKeyName: sshKey.name,
+      firewallId,
+      userData: "",
     });
 
-    const serverIp = hServer.public_net.ipv4.ip;
+    const serverIp = hServer.ipv4;
     const dbServer = db.insertServer({
       name: serverName,
-      hetzner_id: String(hServer.id),
+      provider_id: hServer.providerId,
+      provider: compute.id,
       ipv4: serverIp,
-      ipv6: hServer.public_net.ipv6.ip || "",
+      ipv6: hServer.ipv6 || "",
       type: serverType,
       location,
       status: "provisioning",
     });
 
     emit("scale", `Waiting for server ${serverName}...`);
-    await hetzner.waitForServer(serverIp, 30, (msg) => emit("scale", msg));
+    await waitForServer(serverIp, 30, (msg) => emit("scale", msg));
 
-    const hostKey = await hetzner.captureHostKey(serverIp);
+    const hostKey = await captureHostKey(serverIp);
     if (hostKey) {
       db.updateServerHostKey(dbServer.id, hostKey);
     }

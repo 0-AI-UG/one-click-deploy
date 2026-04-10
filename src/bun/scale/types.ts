@@ -30,7 +30,7 @@ export interface App {
   autoscale_cooldown: number;
   scale_to_zero_after: number;
   last_scale_at: string | null;
-  hetzner_lb_id: string;
+  lb_provider_id: string;
   deployed_by: string;
   sleeping_server_id: number | null;
   sleeping_host_port: number | null;
@@ -54,7 +54,8 @@ export interface Replica {
 export interface Server {
   id: number;
   name: string;
-  hetzner_id: string;
+  provider_id: string;
+  provider: string;
   ipv4: string;
   ipv6: string;
   type: string;

@@ -1,5 +1,5 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { sshExec, composeHealthCheck, healthCheck, deployAuthProxy, authProxyPort, deployCaddySite } from "../remote/index.ts";
 import { log } from "./types.ts";
 
 export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: string }> {
@@ -24,7 +24,7 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
 
     // Start container
     if (app.deploy_mode === "compose") {
-      await hetzner.sshExec(server.ipv4, asUser(
+      await sshExec(server.ipv4, asUser(
         `cd /home/deploy/apps/${app.name} && docker compose -p ${app.name} up -d`
       ), hostKey);
     } else {
@@ -36,23 +36,23 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
       const cmd = `docker run -d --name ${containerName} --restart unless-stopped ` +
         `-p 127.0.0.1:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
-      await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+      await sshExec(server.ipv4, asUser(cmd), hostKey);
     }
 
     // Health check
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await hetzner.healthCheck(server.ipv4, containerName, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, containerName, hostPort, 5, hostKey);
 
     // Re-deploy auth proxy if needed
     if (app.auth_password) {
-      await hetzner.deployAuthProxy(server.ipv4, containerName, app.auth_password, hostPort, hostKey);
+      await deployAuthProxy(server.ipv4, containerName, app.auth_password, hostPort, hostKey);
     }
 
     // Restore Caddy reverse proxy route
     const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-    const caddyPort = app.auth_password ? hetzner.authProxyPort(hostPort) : hostPort;
-    await hetzner.deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
+    const caddyPort = app.auth_password ? authProxyPort(hostPort) : hostPort;
+    await deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
 
     // Insert replica record
     db.insertReplica({

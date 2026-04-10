@@ -1,5 +1,5 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { sshExec } from "../remote/index.ts";
 import { log } from "./types.ts";
 import { scaleApp } from "./scale-app.ts";
 
@@ -16,7 +16,7 @@ export async function collectMetrics(appId: number): Promise<void> {
 
     try {
       const hostKey = server.ssh_host_key || undefined;
-      const result = await hetzner.sshExec(
+      const result = await sshExec(
         server.ipv4,
         `su - deploy -c "docker stats --no-stream --format '{{json .}}' ${replica.container_name} 2>/dev/null"`,
         hostKey

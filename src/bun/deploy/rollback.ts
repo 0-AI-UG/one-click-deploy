@@ -1,8 +1,9 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { removeCaddySite, removeCompose, removeContainer } from "../remote/index.ts";
+import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
 
 export type DeployState = {
-  hetznerServerId?: string;
+  providerServerId?: string;
   dbServerId?: number;
   dbAppId?: number;
   dnsRecord?: { zone_id: string; name: string; type: string; value: string };
@@ -23,7 +24,7 @@ export async function rollback(state: DeployState, serverIp: string, hostKey?: s
 
   if (state.caddyConfigured && state.caddyDomain && serverIp) {
     try {
-      await hetzner.removeCaddySite(serverIp, state.caddyDomain, hostKey);
+      await removeCaddySite(serverIp, state.caddyDomain, hostKey);
       log("rollback", "Removed Caddy site");
     } catch (err) {
       log("rollback", `Failed to remove Caddy site: ${err}`);
@@ -33,9 +34,9 @@ export async function rollback(state: DeployState, serverIp: string, hostKey?: s
   if (state.containerName && serverIp) {
     try {
       if (state.deployMode === "compose") {
-        await hetzner.removeCompose(serverIp, state.containerName, false, hostKey);
+        await removeCompose(serverIp, state.containerName, false, hostKey);
       } else {
-        await hetzner.removeContainer(serverIp, state.containerName, hostKey);
+        await removeContainer(serverIp, state.containerName, hostKey);
       }
       log("rollback", `Removed container ${state.containerName}`);
     } catch (err) {
@@ -45,7 +46,8 @@ export async function rollback(state: DeployState, serverIp: string, hostKey?: s
 
   if (state.volumeId) {
     try {
-      await hetzner.deleteVolume(state.volumeId);
+      const compute = getComputeProvider();
+      await compute.volumes!.delete(state.volumeId);
       log("rollback", `Deleted volume ${state.volumeId}`);
     } catch (err) {
       log("rollback", `Failed to delete volume: ${err}`);
@@ -54,7 +56,13 @@ export async function rollback(state: DeployState, serverIp: string, hostKey?: s
 
   if (state.dnsRecord) {
     try {
-      await hetzner.deleteDnsRecord(state.dnsRecord);
+      const dns = getDnsProvider();
+      await dns.deleteRecord({
+        zoneId: state.dnsRecord.zone_id,
+        name: state.dnsRecord.name,
+        type: state.dnsRecord.type,
+        value: state.dnsRecord.value,
+      });
       log("rollback", `Deleted DNS record ${state.dnsRecord.name}/${state.dnsRecord.type}`);
     } catch (err) {
       log("rollback", `Failed to delete DNS record: ${err}`);

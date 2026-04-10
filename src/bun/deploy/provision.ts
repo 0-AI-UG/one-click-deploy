@@ -1,5 +1,8 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider } from "../providers/index.ts";
+import {
+  sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
+} from "../remote/index.ts";
 import type { DeployState } from "./rollback.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
@@ -31,12 +34,15 @@ export async function provisionOrReuseServer(
     return { serverId, serverIp, serverHostKey };
   }
 
-  onProgress("server", "Creating new Hetzner server...");
+  onProgress("server", "Creating new server...");
+
+  const compute = getComputeProvider();
 
   log("ssh", "Ensuring SSH key and firewall exist...");
+  const { publicKey } = await getOrCreateLocalKeyPair();
   const [sshKey, firewallId] = await Promise.all([
-    hetzner.ensureSshKey("one-click-deploy"),
-    hetzner.ensureFirewall(),
+    compute.ensureSshKey("one-click-deploy", publicKey),
+    compute.ensureFirewall(),
   ]);
   log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}`);
   onProgress("server", `SSH key + firewall ready`);
@@ -49,7 +55,8 @@ export async function provisionOrReuseServer(
 
   const dbServer = db.insertServer({
     name: serverName,
-    hetzner_id: "",
+    provider_id: "",
+    provider: compute.id,
     ipv4: "",
     ipv6: "",
     type: serverType,
@@ -59,50 +66,51 @@ export async function provisionOrReuseServer(
   const serverId = dbServer.id;
   state.dbServerId = dbServer.id;
 
-  log("server", `Creating Hetzner server: name=${serverName} type=${serverType} location=${location}`);
+  log("server", `Creating server: name=${serverName} type=${serverType} location=${location}`);
   const createStart = Date.now();
-  const hServer = await hetzner.createServer({
+  const providerServer = await compute.createServer({
     name: serverName,
-    server_type: serverType,
+    serverType,
     location,
-    ssh_key_name: sshKey.name,
-    firewall_id: firewallId,
+    sshKeyName: sshKey.name,
+    firewallId,
+    userData: "",
   });
-  state.hetznerServerId = String(hServer.id);
-  log("server", `Hetzner server created in ${Date.now() - createStart}ms: id=${hServer.id}`);
+  state.providerServerId = providerServer.providerId;
+  log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId}`);
 
-  const serverIp = hServer.public_net.ipv4.ip;
+  const serverIp = providerServer.ipv4;
   db.updateServer(dbServer.id, {
-    hetzner_id: String(hServer.id),
+    provider_id: providerServer.providerId,
     ipv4: serverIp,
-    ipv6: hServer.public_net.ipv6.ip || "",
+    ipv6: providerServer.ipv6 || "",
     status: "provisioning",
   });
   log("server", `Server saved to DB: id=${dbServer.id}`);
   onProgress("server", `Server created: ${serverName} (${serverIp})`);
 
   onProgress("provision", "Waiting for server to boot...");
-  await hetzner.waitForServerRunning(hServer.id, (msg) => {
+  await compute.waitForRunning(providerServer.providerId, (msg) => {
     onProgress("provision", msg);
   });
 
   onProgress("provision", "Waiting for server to be ready...");
   log("provision", `Waiting for server ${serverIp} to be provisioned...`);
   const provisionStart = Date.now();
-  await hetzner.waitForServer(serverIp, 30, (msg) => {
+  await waitForServer(serverIp, 30, (msg) => {
     onProgress("provision", msg);
   });
   log("provision", `Server provisioned in ${((Date.now() - provisionStart) / 1000).toFixed(1)}s`);
 
-  const dockerCheck = await hetzner.sshExec(serverIp, "docker --version");
+  const dockerCheck = await sshExec(serverIp, "docker --version");
   if (dockerCheck.exitCode !== 0) {
-    const initLog = await hetzner.sshExec(serverIp, "tail -20 /var/log/cloud-init-deploy.log 2>/dev/null");
+    const initLog = await sshExec(serverIp, "tail -20 /var/log/cloud-init-deploy.log 2>/dev/null");
     log("provision", `Docker not found. Cloud-init log:\n${initLog.stdout}`);
     throw new Error("Server provisioned but Docker was not installed — server setup may have failed. Try deleting the server and deploying again.");
   }
   log("provision", `Docker verified: ${dockerCheck.stdout.trim()}`);
 
-  const serverHostKey = await hetzner.captureHostKey(serverIp);
+  const serverHostKey = await captureHostKey(serverIp);
   if (serverHostKey) {
     db.updateServerHostKey(dbServer.id, serverHostKey);
     log("provision", "SSH host key captured and stored");
@@ -119,33 +127,36 @@ export async function createVolume(
   volumeSize: number,
   volumePath: string | undefined,
   serverId: number,
-  hetznerServerId: string | undefined,
+  providerServerId: string | undefined,
   serverIp: string,
   serverHostKey: string,
   defaultLocation: string | undefined,
   state: DeployState,
   onProgress: ProgressFn,
 ): Promise<string | undefined> {
-  let resolvedHetznerServerId: number;
-  if (hetznerServerId) {
-    resolvedHetznerServerId = parseInt(hetznerServerId, 10);
+  const compute = getComputeProvider();
+  if (!compute.volumes) throw new Error("Compute provider does not support volumes");
+
+  let resolvedProviderId: string;
+  if (providerServerId) {
+    resolvedProviderId = providerServerId;
   } else {
     const existingServer = db.getServer(serverId);
     if (!existingServer) throw new Error(`Server ${serverId} not found`);
-    resolvedHetznerServerId = parseInt(existingServer.hetzner_id, 10);
+    resolvedProviderId = existingServer.provider_id;
   }
 
   onProgress("build", `Creating ${volumeSize}GB persistent volume...`);
-  const vol = await hetzner.createVolume({
+  const vol = await compute.volumes.create({
     name: `ocd-${appName}-data`,
-    size: volumeSize,
-    server_id: resolvedHetznerServerId,
+    sizeGb: volumeSize,
+    serverId: resolvedProviderId,
     location: defaultLocation || "nbg1",
   });
-  state.volumeId = String(vol.id);
+  state.volumeId = vol.providerId;
   const hostMountPath = `/mnt/ocd-${appName}-data`;
   const containerPath = volumePath || "/data";
-  await hetzner.sshExec(serverIp, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, serverHostKey || undefined);
+  await sshExec(serverIp, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, serverHostKey || undefined);
   const volumeMount = `${hostMountPath}:${containerPath}`;
   log("build", `Volume mounted: ${volumeMount}`);
   onProgress("build", `Volume ready (${volumeSize}GB at /data)`);

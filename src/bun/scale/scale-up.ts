@@ -1,5 +1,10 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
+import {
+  sshExec, removeCaddySite, deployCaddySite, cloneAndComposeBuild,
+  transferImage, healthCheck, composeHealthCheck,
+  authProxyPort, deployAuthProxy, removeAuthProxy,
+} from "../remote/index.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
 import { pickTargetServer } from "./server-picker.ts";
@@ -13,6 +18,8 @@ export async function scaleUp(
   emit: ProgressFn,
   targetServerId?: number
 ) {
+  const compute = getComputeProvider();
+  const dns = getDnsProvider();
   const settings = db.getSettings();
   const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
   // The "primary" is just whichever server hosts the first (oldest) replica.
@@ -22,30 +29,30 @@ export async function scaleUp(
   const primaryHostPort = firstReplica.host_port;
 
   // Validate that stored LB still exists (may have been deleted externally)
-  if (app.hetzner_lb_id) {
-    const lb = await hetzner.getLoadBalancer(app.hetzner_lb_id).catch(() => null);
+  if (app.lb_provider_id) {
+    const lb = await compute.loadBalancers!.get(app.lb_provider_id).catch(() => null);
     if (!lb) {
-      log("scale", `Load balancer ${app.hetzner_lb_id} not found, will re-create`);
-      db.updateAppScaling(app.id, { hetzner_lb_id: "" });
-      app = { ...app, hetzner_lb_id: "" };
+      log("scale", `Load balancer ${app.lb_provider_id} not found, will re-create`);
+      db.updateAppScaling(app.id, { lb_provider_id: "" });
+      app = { ...app, lb_provider_id: "" };
     }
   }
 
   // If going from 1 to N, set up LB
-  if (currentCount === 1 && !app.hetzner_lb_id) {
+  if (currentCount === 1 && !app.lb_provider_id) {
     emit("scale", "Creating load balancer...");
 
     // Create LB
-    const lb = await hetzner.createLoadBalancer(app.name, primaryServer.location);
-    db.updateAppScaling(app.id, { hetzner_lb_id: String(lb.id) });
+    const lb = await compute.loadBalancers!.create(app.name, primaryServer.location);
+    db.updateAppScaling(app.id, { lb_provider_id: lb.providerId });
 
     // Create managed TLS certificate (only for real domains, not nip.io)
     let certId: number | undefined;
     if (app.domain && !app.domain.endsWith(".nip.io")) {
       emit("scale", "Creating TLS certificate...");
       try {
-        const cert = await hetzner.createManagedCertificate(app.name, app.domain);
-        certId = cert.id;
+        const cert = await compute.loadBalancers!.createCertificate(app.name, app.domain);
+        certId = Number(cert.providerId);
         // Wait a moment for cert to register
         await Bun.sleep(2000);
       } catch (err) {
@@ -55,10 +62,10 @@ export async function scaleUp(
 
     // Add LB service — uses HTTPS if cert available, HTTP otherwise
     const destPort = app.auth_password
-      ? hetzner.authProxyPort(primaryHostPort)
+      ? authProxyPort(primaryHostPort)
       : primaryHostPort;
-    await hetzner.addLBService(
-      String(lb.id),
+    await compute.loadBalancers!.addService(
+      lb.providerId,
       destPort,
       certId,
       !!app.auth_password
@@ -71,8 +78,8 @@ export async function scaleUp(
       const parts = app.domain.split(".");
       const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
       // Create new record pointing to LB first
-      const newRecord = await hetzner.createDnsRecord({
-        zone_id: dnsSettings.dns_zone_id,
+      const newRecord = await dns.createRecord({
+        zoneId: dnsSettings.dns_zone_id,
         name: subdomain,
         type: "A",
         value: lb.ipv4,
@@ -88,8 +95,8 @@ export async function scaleUp(
       // Now safe to delete old records
       for (const record of dnsRecords) {
         try {
-          await hetzner.deleteDnsRecord({
-            zone_id: record.zone_id,
+          await dns.deleteRecord({
+            zoneId: record.zone_id,
             name: record.name,
             type: record.type,
             value: record.value,
@@ -109,22 +116,22 @@ export async function scaleUp(
     await rebindContainer(primaryServer.ipv4, app, bindAddr, primaryHostPort, primaryHostKey);
 
     // Add firewall rule for LB access
-    const firewallId = await hetzner.ensureFirewall();
-    await hetzner.addLBFirewallRule(firewallId, destPort, lb.ipv4);
+    const firewallId = await compute.ensureFirewall();
+    await compute.firewallRules?.addLBRule(firewallId, destPort, lb.ipv4);
 
     // Add primary server as LB target
-    await hetzner.addLBTarget(String(lb.id), primaryServer.hetzner_id);
+    await compute.loadBalancers!.addTarget(lb.providerId, primaryServer.provider_id);
 
     // Remove Caddy reverse proxy (LB handles TLS now)
-    await hetzner.removeCaddySite(primaryServer.ipv4, app.domain, primaryHostKey);
+    await removeCaddySite(primaryServer.ipv4, app.domain, primaryHostKey);
 
     emit("scale", "Load balancer ready");
   }
 
   // Add new replicas
-  const lbId = app.hetzner_lb_id;
-  const lb = await hetzner.getLoadBalancer(lbId);
-  const lbIpv4 = lb.public_net.ipv4.ip;
+  const lbId = app.lb_provider_id;
+  const lb = await compute.loadBalancers!.get(lbId);
+  const lbIpv4 = lb.ipv4;
 
   for (let i = currentCount; i < targetCount; i++) {
     const replicaNum = i + 1;
@@ -140,7 +147,7 @@ export async function scaleUp(
 
     if (app.deploy_mode === "compose") {
       // For compose, clone repo and build on target
-      await hetzner.cloneAndComposeBuild(
+      await cloneAndComposeBuild(
         targetServer.ipv4,
         {
           name: app.name,
@@ -156,7 +163,7 @@ export async function scaleUp(
         (line) => emit("scale", line)
       );
     } else {
-      await hetzner.transferImage(
+      await transferImage(
         primaryServer.ipv4,
         targetServer.ipv4,
         imageName,
@@ -178,13 +185,13 @@ export async function scaleUp(
         const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
         const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
         const escapedContent = envFileContent.replace(/'/g, "'\\''");
-        await hetzner.sshExec(targetServer.ipv4, `mkdir -p /home/deploy/apps/${app.name}`, targetHostKey);
-        await hetzner.sshExec(targetServer.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, targetHostKey);
+        await sshExec(targetServer.ipv4, `mkdir -p /home/deploy/apps/${app.name}`, targetHostKey);
+        await sshExec(targetServer.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, targetHostKey);
         envFileFlag = `--env-file ${envFilePath}`;
       }
       const replicaBindAddr = "0.0.0.0";
       const cmd = `docker run -d --name ${containerName} --restart unless-stopped -p ${replicaBindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${imageName}`;
-      const result = await hetzner.sshExec(targetServer.ipv4, asUser(cmd), targetHostKey);
+      const result = await sshExec(targetServer.ipv4, asUser(cmd), targetHostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to start replica on target server — check that Docker is running and the image was transferred");
       }
@@ -192,7 +199,7 @@ export async function scaleUp(
 
     // Deploy auth proxy on new server if needed
     if (app.auth_password) {
-      await hetzner.deployAuthProxy(
+      await deployAuthProxy(
         targetServer.ipv4,
         containerName,
         app.auth_password,
@@ -204,16 +211,16 @@ export async function scaleUp(
     // Health check
     emit("scale", `Health checking replica ${replicaNum}...`);
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(targetServer.ipv4, app.name, hostPort, 5, targetHostKey)
-      : await hetzner.healthCheck(targetServer.ipv4, containerName, hostPort, 5, targetHostKey);
+      ? await composeHealthCheck(targetServer.ipv4, app.name, hostPort, 5, targetHostKey)
+      : await healthCheck(targetServer.ipv4, containerName, hostPort, 5, targetHostKey);
 
     // Add LB target
-    await hetzner.addLBTarget(lbId, targetServer.hetzner_id);
+    await compute.loadBalancers!.addTarget(lbId, targetServer.provider_id);
 
     // Add firewall rule
-    const firewallId = await hetzner.ensureFirewall();
-    const destPort = app.auth_password ? hetzner.authProxyPort(hostPort) : hostPort;
-    await hetzner.addLBFirewallRule(firewallId, destPort, lbIpv4);
+    const firewallId = await compute.ensureFirewall();
+    const destPort = app.auth_password ? authProxyPort(hostPort) : hostPort;
+    await compute.firewallRules?.addLBRule(firewallId, destPort, lbIpv4);
 
     // Insert replica record
     db.insertReplica({
@@ -251,25 +258,26 @@ export async function rollbackScaleUp(
     if (server) {
       const hostKey = server.ssh_host_key || undefined;
       try {
-        await hetzner.sshExec(server.ipv4, `su - deploy -c "docker rm -f ${replica.container_name} 2>/dev/null || true"`, hostKey);
+        await sshExec(server.ipv4, `su - deploy -c "docker rm -f ${replica.container_name} 2>/dev/null || true"`, hostKey);
       } catch (err) {
         log("scale", `Rollback: failed to remove container ${replica.container_name}: ${err}`);
       }
       if (app.auth_password) {
-        try { await hetzner.removeAuthProxy(server.ipv4, replica.container_name, hostKey); } catch { /* cleanup, container may already be gone */ }
+        try { await removeAuthProxy(server.ipv4, replica.container_name, hostKey); } catch { /* cleanup, container may already be gone */ }
       }
     }
     db.deleteReplica(replica.id);
   }
 
   // If LB was just created (wasn't there before), tear it down
-  const lbId = freshApp.hetzner_lb_id;
-  if (lbId && !app.hetzner_lb_id && primaryServer) {
+  const compute = getComputeProvider();
+  const lbId = freshApp.lb_provider_id;
+  if (lbId && !app.lb_provider_id && primaryServer) {
     emit("scale", "Removing load balancer...");
-    try { await hetzner.deleteLoadBalancer(lbId); } catch (e) {
+    try { await compute.loadBalancers!.delete(lbId); } catch (e) {
       log("rollback", `Failed to delete LB ${lbId}: ${e}`);
     }
-    db.updateAppScaling(app.id, { hetzner_lb_id: "" });
+    db.updateAppScaling(app.id, { lb_provider_id: "" });
 
     // Restore container to 127.0.0.1 binding
     const primaryHostKey = primaryServer.ssh_host_key || undefined;
@@ -282,8 +290,8 @@ export async function rollbackScaleUp(
     // Restore Caddy
     try {
       const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-      const caddyPort = app.auth_password ? hetzner.authProxyPort(primaryHostPort) : primaryHostPort;
-      await hetzner.deployCaddySite(primaryServer.ipv4, app.domain, caddyPort, useInternalTls, primaryHostKey);
+      const caddyPort = app.auth_password ? authProxyPort(primaryHostPort) : primaryHostPort;
+      await deployCaddySite(primaryServer.ipv4, app.domain, caddyPort, useInternalTls, primaryHostKey);
     } catch (e) {
       log("rollback", `Failed to restore Caddy: ${e}`);
     }

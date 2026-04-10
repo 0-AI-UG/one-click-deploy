@@ -1,7 +1,8 @@
 export type Server = {
   id: number;
   name: string;
-  hetzner_id: string;
+  provider_id: string;
+  provider: string;
   ipv4: string;
   ipv6: string;
   type: string;
@@ -41,7 +42,7 @@ export type App = {
   autoscale_mem_threshold: number;
   autoscale_cooldown: number;
   last_scale_at: string;
-  hetzner_lb_id: string;
+  lb_provider_id: string;
   volume_id: string;
   volume_mount: string;
   created_at: string;
@@ -170,4 +171,6 @@ export type Settings = {
   dns_zone_id: string;
   default_server_type: string;
   default_location: string;
+  compute_provider: string;
+  dns_provider: string;
 };

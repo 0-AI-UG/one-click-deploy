@@ -7,11 +7,14 @@ process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-test-"));
 
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
-// Mock hetzner BEFORE importing db.ts so the dynamic import in
+// Mock the provider BEFORE importing db.ts so the dynamic import in
 // gcServerIfEmpty resolves to the mock.
-const deleteHetznerServer = mock(async (_id: string) => {});
-mock.module("./hetzner/index.ts", () => ({
-  deleteHetznerServer,
+const deleteServer = mock(async (_id: string) => {});
+const fakeProvider = { id: "hetzner", name: "Hetzner", deleteServer };
+const fakeDnsProvider = { id: "hetzner-dns", name: "Hetzner DNS", listZones: async () => [], createRecord: async () => ({ id: "1", name: "", type: "", value: "" }), deleteRecord: async () => {} };
+mock.module("./providers/index.ts", () => ({
+  getComputeProvider: () => fakeProvider,
+  getDnsProvider: () => fakeDnsProvider,
 }));
 
 import * as db from "./db.ts";
@@ -19,7 +22,7 @@ import * as db from "./db.ts";
 function freshServer(name: string) {
   return db.insertServer({
     name,
-    hetzner_id: `h-${name}-${Date.now()}-${Math.random()}`,
+    provider_id: `h-${name}-${Date.now()}-${Math.random()}`,
     ipv4: "1.2.3.4",
     ipv6: "",
     type: "cx23",
@@ -30,14 +33,14 @@ function freshServer(name: string) {
 
 describe("gcServerIfEmpty", () => {
   beforeEach(() => {
-    deleteHetznerServer.mockClear();
+    deleteServer.mockClear();
     db.deletePanel();
   });
 
   test("deletes a non-panel empty server", async () => {
     const server = freshServer("empty");
     await db.gcServerIfEmpty(server.id);
-    expect(deleteHetznerServer).toHaveBeenCalledTimes(1);
+    expect(deleteServer).toHaveBeenCalledTimes(1);
     expect(db.getServer(server.id)).toBeFalsy();
   });
 
@@ -52,7 +55,7 @@ describe("gcServerIfEmpty", () => {
       host_port: 10000,
     });
     await db.gcServerIfEmpty(server.id);
-    expect(deleteHetznerServer).not.toHaveBeenCalled();
+    expect(deleteServer).not.toHaveBeenCalled();
     expect(db.getServer(server.id)).toBeTruthy();
     db.deletePanel();
   });
@@ -75,7 +78,7 @@ describe("gcServerIfEmpty", () => {
       container_name: app.name,
     });
     await db.gcServerIfEmpty(server.id);
-    expect(deleteHetznerServer).not.toHaveBeenCalled();
+    expect(deleteServer).not.toHaveBeenCalled();
     expect(db.getServer(server.id)).toBeTruthy();
   });
 });

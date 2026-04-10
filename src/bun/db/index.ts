@@ -3,7 +3,7 @@ export type { ServerRow } from "./servers.ts";
 export {
   getServers,
   getServer,
-  getServerByHetznerId,
+  getServerByProviderId,
   insertServer,
   updateServerStatus,
   updateServer,

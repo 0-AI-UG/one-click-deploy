@@ -18,7 +18,7 @@ import { tmpdir } from "os";
 import { unlinkSync, writeFileSync } from "fs";
 import path from "path";
 import localDb from "../db.ts";
-import { sshExec, getSshKeyPath } from "../hetzner/ssh.ts";
+import { sshExec, getSshKeyPath } from "../remote/index.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [handoff:${context}]`, ...args);

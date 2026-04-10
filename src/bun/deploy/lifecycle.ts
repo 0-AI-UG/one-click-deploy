@@ -1,5 +1,20 @@
 import * as db from "../db.ts";
-import * as hetzner from "../hetzner/index.ts";
+import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
+import {
+  sshExec,
+  removeContainer,
+  removeCompose,
+  removeCaddySite,
+  removeAuthProxy,
+  restartContainer,
+  pauseContainer,
+  unpauseContainer,
+  restartCompose,
+  pauseCompose,
+  unpauseCompose,
+  composeHealthCheck,
+  healthCheck,
+} from "../remote/index.ts";
 import * as github from "../github.ts";
 
 function log(context: string, ...args: any[]) {
@@ -43,9 +58,9 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
         const hostKey = replicaServer.ssh_host_key || undefined;
         try {
           if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-            await hetzner.removeCompose(replicaServer.ipv4, app.name, true, hostKey);
+            await removeCompose(replicaServer.ipv4, app.name, true, hostKey);
           } else {
-            await hetzner.removeContainer(replicaServer.ipv4, replica.container_name, hostKey);
+            await removeContainer(replicaServer.ipv4, replica.container_name, hostKey);
           }
         } catch (err) {
           log("destroyApp", `Failed to remove replica ${replica.container_name}: ${err}`);
@@ -54,19 +69,19 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
         // Remove auth proxy for this replica if present
         if (app.auth_password) {
           try {
-            await hetzner.removeAuthProxy(replicaServer.ipv4, replica.container_name, hostKey);
+            await removeAuthProxy(replicaServer.ipv4, replica.container_name, hostKey);
           } catch (e) {
             log("destroyApp", `Failed to remove auth proxy for ${replica.container_name}: ${e}`);
           }
         }
         // Remove Caddy site + app dir from each server hosting a replica
         try {
-          await hetzner.removeCaddySite(replicaServer.ipv4, app.domain, hostKey);
+          await removeCaddySite(replicaServer.ipv4, app.domain, hostKey);
         } catch (err) {
           log("destroyApp", `Failed to remove Caddy site: ${err}`);
         }
         try {
-          await hetzner.sshExec(replicaServer.ipv4, `rm -rf /home/deploy/apps/${app.name}`, hostKey);
+          await sshExec(replicaServer.ipv4, `rm -rf /home/deploy/apps/${app.name}`, hostKey);
         } catch (err) {
           log("destroyApp", `Failed to remove app directory: ${err}`);
         }
@@ -75,10 +90,12 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     }
 
     // Delete LB if present
-    if (app.hetzner_lb_id) {
+    if (app.lb_provider_id) {
       try {
-        await hetzner.deleteLoadBalancer(app.hetzner_lb_id);
-        log("destroyApp", `Deleted load balancer ${app.hetzner_lb_id}`);
+        const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
+        const compute = getComputeProvider(firstServer?.provider || "hetzner");
+        await compute.loadBalancers?.delete(app.lb_provider_id);
+        log("destroyApp", `Deleted load balancer ${app.lb_provider_id}`);
       } catch (err) {
         log("destroyApp", `Failed to delete LB: ${err instanceof Error ? err.message : err}`);
         cleanupFailed = true;
@@ -86,10 +103,11 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     }
 
     const dnsRecords = db.getDnsRecords(appId);
+    const dns = getDnsProvider();
     for (const record of dnsRecords) {
       try {
-        await hetzner.deleteDnsRecord({
-          zone_id: record.zone_id,
+        await dns.deleteRecord({
+          zoneId: record.zone_id,
           name: record.name,
           type: record.type,
           value: record.value,
@@ -100,10 +118,12 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       }
     }
 
-    // Delete Hetzner volume if attached
+    // Delete volume if attached
     if (app.volume_id) {
       try {
-        await hetzner.deleteVolume(app.volume_id);
+        const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
+        const compute = getComputeProvider(firstServer?.provider || "hetzner");
+        await compute.volumes?.delete(app.volume_id);
         log("destroyApp", `Deleted volume ${app.volume_id}`);
       } catch (err) {
         log("destroyApp", `Failed to delete volume ${app.volume_id}:`, err instanceof Error ? err.message : err);
@@ -153,13 +173,14 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
     // and volume too. The panel lives in its own table (not `apps`), so the
     // loop above wouldn't touch it. Note: if the panel is destroying the
     // server it's running on, it will `docker rm` itself mid-request — so
-    // these cleanups MUST run before deleteHetznerServer.
+    // these cleanups MUST run before deleteServer.
     const panel = db.getPanel();
     if (panel && panel.server_id === serverId) {
       if (panel.dns_zone_id && panel.dns_name && panel.dns_type && panel.dns_value) {
         try {
-          await hetzner.deleteDnsRecord({
-            zone_id: panel.dns_zone_id,
+          const dns = getDnsProvider();
+          await dns.deleteRecord({
+            zoneId: panel.dns_zone_id,
             name: panel.dns_name,
             type: panel.dns_type,
             value: panel.dns_value,
@@ -171,7 +192,8 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
       }
       if (panel.volume_id) {
         try {
-          await hetzner.deleteVolume(panel.volume_id);
+          const compute = getComputeProvider(server.provider);
+          await compute.volumes?.delete(panel.volume_id);
           log("destroyServer", `Deleted panel volume ${panel.volume_id}`);
         } catch (err) {
           log("destroyServer", `Failed to delete panel volume ${panel.volume_id}:`, err instanceof Error ? err.message : err);
@@ -182,7 +204,8 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
       db.deletePanel();
     }
 
-    await hetzner.deleteHetznerServer(server.hetzner_id);
+    const compute = getComputeProvider(server.provider);
+    await compute.deleteServer(server.provider_id);
     db.deleteServer(serverId);
     log("destroyServer", `Server id=${serverId} destroyed successfully`);
     return { ok: true };
@@ -209,14 +232,14 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
       const hostKey = server.ssh_host_key || undefined;
 
       if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-        await hetzner.restartCompose(server.ipv4, app.name, hostKey);
+        await restartCompose(server.ipv4, app.name, hostKey);
       } else {
-        await hetzner.restartContainer(server.ipv4, replica.container_name, hostKey);
+        await restartContainer(server.ipv4, replica.container_name, hostKey);
       }
 
       const health = app.deploy_mode === "compose" && replica.container_name === app.name
-        ? await hetzner.composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
-        : await hetzner.healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
+        ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
+        : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }
@@ -261,16 +284,16 @@ export async function recreateAppContainer(
       }
       const override = JSON.stringify({ services: overrideServices });
       const escapedOverride = override.replace(/'/g, "'\\''");
-      await hetzner.sshExec(server.ipv4, `echo '${escapedOverride}' > ${appDir}/docker-compose.ocd.yml && chown deploy:deploy ${appDir}/docker-compose.ocd.yml`, hostKey);
+      await sshExec(server.ipv4, `echo '${escapedOverride}' > ${appDir}/docker-compose.ocd.yml && chown deploy:deploy ${appDir}/docker-compose.ocd.yml`, hostKey);
 
       // Restart compose (no rebuild)
       const envFilePath = `${appDir}/.env.deploy`;
       const envFileFlag = app.env_vars && app.env_vars !== "{}" ? `--env-file ${envFilePath}` : "";
       const composeCmd = `cd ${appDir} && docker compose -f ${app.compose_file} -f docker-compose.ocd.yml -p ${app.name} ${envFileFlag} up -d`;
-      await hetzner.sshExec(server.ipv4, asUser(composeCmd), hostKey);
+      await sshExec(server.ipv4, asUser(composeCmd), hostKey);
     } else {
       // Dockerfile mode: rm + run with updated flags
-      await hetzner.removeContainer(server.ipv4, app.name, hostKey);
+      await removeContainer(server.ipv4, app.name, hostKey);
 
       const envVars = JSON.parse(app.env_vars || "{}");
       const envFileEntries = Object.entries(envVars);
@@ -282,7 +305,7 @@ export async function recreateAppContainer(
 
       const volumeFlag = volumeMount ? `-v ${volumeMount}` : "";
       const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
-      const result = await hetzner.sshExec(server.ipv4, asUser(cmd), hostKey);
+      const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to start container — check your port configuration and environment variables");
       }
@@ -290,8 +313,8 @@ export async function recreateAppContainer(
 
     // Health check
     const health = app.deploy_mode === "compose"
-      ? await hetzner.composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await hetzner.healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
     db.updateReplicaStatus(firstReplica.id, health.healthy ? "running" : "unhealthy");
 
@@ -319,9 +342,9 @@ export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: st
       const hostKey = server.ssh_host_key || undefined;
 
       if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-        await hetzner.pauseCompose(server.ipv4, app.name, hostKey);
+        await pauseCompose(server.ipv4, app.name, hostKey);
       } else {
-        await hetzner.pauseContainer(server.ipv4, replica.container_name, hostKey);
+        await pauseContainer(server.ipv4, replica.container_name, hostKey);
       }
       db.updateReplicaStatus(replica.id, "paused");
     }
@@ -352,14 +375,14 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
       const hostKey = server.ssh_host_key || undefined;
 
       if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-        await hetzner.unpauseCompose(server.ipv4, app.name, hostKey);
+        await unpauseCompose(server.ipv4, app.name, hostKey);
       } else {
-        await hetzner.unpauseContainer(server.ipv4, replica.container_name, hostKey);
+        await unpauseContainer(server.ipv4, replica.container_name, hostKey);
       }
 
       const health = app.deploy_mode === "compose" && replica.container_name === app.name
-        ? await hetzner.composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
-        : await hetzner.healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
+        ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
+        : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }

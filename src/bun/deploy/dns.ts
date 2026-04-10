@@ -1,6 +1,6 @@
 import { resolve4 } from "node:dns/promises";
-import * as hetzner from "../hetzner/index.ts";
 import * as db from "../db.ts";
+import { getDnsProvider } from "../providers/index.ts";
 import type { DeployState } from "./rollback.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
@@ -39,8 +39,9 @@ export async function setupDns(
   if (req.domain && dnsZoneId) {
     try {
       log("dns", `Creating DNS A record: ${subdomain} -> ${serverIp} in zone ${dnsZoneId}`);
-      const record = await hetzner.createDnsRecord({
-        zone_id: dnsZoneId,
+      const dns = getDnsProvider();
+      const record = await dns.createRecord({
+        zoneId: dnsZoneId,
         name: subdomain,
         type: "A",
         value: serverIp,

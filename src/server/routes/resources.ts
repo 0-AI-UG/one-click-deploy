@@ -3,70 +3,64 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { destroyServer } from "../../bun/deploy/index.ts";
-import * as hetzner from "../../bun/hetzner/index.ts";
+import { getComputeProvider } from "../../bun/providers/index.ts";
 
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
 
-    // Fetch Hetzner pricing once and build lookup maps. Hetzner returns gross
-    // prices as strings; we coerce to number and round to cents for display.
+    const compute = getComputeProvider();
+
+    // Fetch pricing once and build lookup maps.
     // If pricing fetch fails (no token, network), monthly_eur falls back to null.
-    let serverPriceMap = new Map<string, number>(); // `${type}|${location}` -> EUR/mo
+    let serverPriceMap = new Map<string, number>();
     let lbPriceMap = new Map<string, number>();
     let volumePerGbMonth: number | null = null;
     let currency = "EUR";
     try {
-      const pricing = await hetzner.hetznerApi("/pricing");
-      const p = pricing.pricing || {};
-      currency = p.currency || "EUR";
-      for (const st of p.server_types || []) {
-        for (const pr of st.prices || []) {
-          const eur = parseFloat(pr.price_monthly?.gross ?? "0");
-          if (!isNaN(eur)) serverPriceMap.set(`${st.name}|${pr.location}`, eur);
+      const pricing = await compute.getPricing?.();
+      if (pricing) {
+        currency = pricing.currency;
+        for (const [key, value] of Object.entries(pricing.servers)) {
+          serverPriceMap.set(key, value);
         }
-      }
-      for (const lt of p.load_balancer_types || []) {
-        for (const pr of lt.prices || []) {
-          const eur = parseFloat(pr.price_monthly?.gross ?? "0");
-          if (!isNaN(eur)) lbPriceMap.set(`${lt.name}|${pr.location}`, eur);
+        for (const [key, value] of Object.entries(pricing.loadBalancers)) {
+          lbPriceMap.set(key, value);
         }
+        volumePerGbMonth = pricing.volumePerGbMonth;
       }
-      const v = parseFloat(p.volume?.price_per_gb_month?.gross ?? "");
-      if (!isNaN(v)) volumePerGbMonth = v;
     } catch (e) {
-      console.error("resources: failed to fetch Hetzner pricing:", e);
+      console.error("resources: failed to fetch pricing:", e);
     }
 
     const priceForServer = (type: string, location: string): number | null =>
       serverPriceMap.get(`${type}|${location}`) ?? null;
     const priceForLb = (type: string, location: string): number | null =>
       lbPriceMap.get(`${type}|${location}`) ?? null;
-
     let dbServers = db.getServers();
     try {
-      const remote = await hetzner.hetznerApiPublic("/servers?label_selector=managed_by%3Done-click-deploy&per_page=50");
-      for (const rs of remote.servers || []) {
-        const hetznerId = String(rs.id);
-        if (dbServers.find((s) => s.hetzner_id === hetznerId)) continue;
+      const remoteServers = await compute.listServers();
+      for (const rs of remoteServers) {
+        const providerId = String(rs.providerId);
+        if (dbServers.find((s) => s.provider_id === providerId)) continue;
         db.insertServer({
           name: rs.name,
-          hetzner_id: hetznerId,
-          ipv4: rs.public_net?.ipv4?.ip || "",
-          ipv6: rs.public_net?.ipv6?.ip || "",
-          type: rs.server_type?.name || "",
-          location: rs.datacenter?.location?.name || "",
+          provider_id: providerId,
+          ipv4: rs.ipv4 || "",
+          ipv6: rs.ipv6 || "",
+          type: rs.type || "",
+          location: rs.location || "",
           status: rs.status || "running",
         });
       }
       dbServers = db.getServers();
     } catch (e) {
-      console.error("resources: failed to sync servers from Hetzner:", e);
+      console.error("resources: failed to sync servers from provider:", e);
     }
     const servers = dbServers.map((s) => ({
       id: s.id,
       name: s.name,
-      hetzner_id: s.hetzner_id,
+      provider_id: s.provider_id,
       ipv4: s.ipv4,
       type: s.type,
       location: s.location,
@@ -97,51 +91,41 @@ export async function handleGetResources(request: Request): Promise<Response> {
     }
     let load_balancers: LoadBalancerResource[] = [];
     try {
-      const lbs = await hetzner.hetznerApiPublic("/load_balancers?label_selector=managed_by%3Done-click-deploy&per_page=50");
-      load_balancers = (lbs.load_balancers || []).map((lb: Record<string, unknown>) => {
-        const lbType = lb.load_balancer_type as Record<string, unknown> | undefined;
-        const lbLocation = lb.location as Record<string, unknown> | undefined;
-        const lbPublicNet = lb.public_net as Record<string, Record<string, unknown>> | undefined;
-        const lbLabels = lb.labels as Record<string, string> | undefined;
-        const lbTargets = lb.targets as unknown[] | undefined;
-        const type = (lbType?.name as string) || "lb11";
-        const location = (lbLocation?.name as string) || "";
-        return {
-          id: String(lb.id),
-          name: lb.name as string,
-          ipv4: (lbPublicNet?.ipv4?.ip as string) || "",
-          type,
-          location,
-          app_name: lbLabels?.app || "",
-          targets: lbTargets?.length || 0,
-          monthly_eur: priceForLb(type, location),
-        };
-      });
+      const lbs = await compute.loadBalancers?.list() ?? [];
+      load_balancers = lbs.map((lb) => ({
+        id: lb.providerId,
+        name: lb.name,
+        ipv4: lb.ipv4,
+        type: lb.type,
+        location: lb.location,
+        app_name: lb.labels.app || "",
+        targets: lb.targetCount,
+        monthly_eur: priceForLb(lb.type, lb.location),
+      }));
     } catch (e) {
-      console.error("resources: failed to fetch load balancers from Hetzner:", e);
+      console.error("resources: failed to fetch load balancers:", e);
     }
 
     let volumes: VolumeResource[] = [];
     try {
-      const vols = await hetzner.hetznerApiPublic("/volumes?label_selector=managed_by%3Done-click-deploy&per_page=50");
-      volumes = (vols.volumes || []).map((v: Record<string, unknown>) => {
-        const vLocation = v.location as Record<string, unknown> | undefined;
-        const serverName = v.server ? dbServers.find((s) => s.hetzner_id === String(v.server))?.name || `server-${v.server}` : "";
-        const allApps = db.getApps();
-        const app = allApps.find((a) => a.volume_id === String(v.id));
+      const vols = await compute.volumes?.list() ?? [];
+      const allApps = db.getApps();
+      volumes = vols.map((v) => {
+        const serverName = v.serverId ? dbServers.find((s) => s.provider_id === v.serverId)?.name || `server-${v.serverId}` : "";
+        const app = allApps.find((a) => a.volume_id === v.providerId);
         return {
-          id: String(v.id),
-          name: v.name as string,
-          size: v.size as number,
+          id: v.providerId,
+          name: v.name,
+          size: v.sizeGb,
           server_name: serverName,
           app_name: app?.name || "",
-          location: (vLocation?.name as string) || "",
+          location: v.location,
           app_id: app?.id || 0,
-          monthly_eur: volumePerGbMonth != null ? volumePerGbMonth * (v.size as number) : null,
+          monthly_eur: volumePerGbMonth != null ? volumePerGbMonth * v.sizeGb : null,
         };
       });
     } catch (e) {
-      console.error("resources: failed to fetch volumes from Hetzner:", e);
+      console.error("resources: failed to fetch volumes:", e);
     }
 
     interface ResourceWithCost { monthly_eur: number | null }
@@ -164,9 +148,10 @@ export async function handleGetResources(request: Request): Promise<Response> {
 export async function handleDeleteResource(request: Request, type: string, id: string): Promise<Response> {
   try {
     await requirePermission(request, "resources.delete");
+    const compute = getComputeProvider();
 
     if (type === "server") {
-      const server = db.getServers().find((s) => s.hetzner_id === id || String(s.id) === id);
+      const server = db.getServers().find((s) => s.provider_id === id || String(s.id) === id);
       if (server) {
         const replicas = db.getReplicasByServer(server.id);
         if (replicas.length > 0) {
@@ -176,15 +161,15 @@ export async function handleDeleteResource(request: Request, type: string, id: s
         const result = await destroyServer(server.id);
         return Response.json(result, { headers: corsHeaders });
       }
-      await hetzner.deleteHetznerServer(id);
+      await compute.deleteServer(id);
       return Response.json({ ok: true }, { headers: corsHeaders });
     } else if (type === "load_balancer") {
       const apps = db.getApps();
-      const using = apps.filter((a) => a.hetzner_lb_id === id);
+      const using = apps.filter((a) => a.lb_provider_id === id);
       if (using.length > 0) {
         return Response.json({ ok: false, error: `Load balancer is in use by: ${using.map((a) => a.name).join(", ")}` }, { headers: corsHeaders });
       }
-      await hetzner.deleteLoadBalancer(id);
+      await compute.loadBalancers!.delete(id);
       return Response.json({ ok: true }, { headers: corsHeaders });
     } else if (type === "volume") {
       const allApps = db.getApps();
@@ -192,7 +177,7 @@ export async function handleDeleteResource(request: Request, type: string, id: s
       if (using.length > 0) {
         return Response.json({ ok: false, error: `Volume is in use by: ${using.map((a) => a.name).join(", ")}` }, { headers: corsHeaders });
       }
-      await hetzner.deleteVolume(id);
+      await compute.volumes!.delete(id);
       return Response.json({ ok: true }, { headers: corsHeaders });
     }
 

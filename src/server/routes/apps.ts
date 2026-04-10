@@ -13,7 +13,7 @@ import {
   updateAppEnv,
   rollbackApp,
 } from "../../bun/deploy/index.ts";
-import * as hetzner from "../../bun/hetzner/index.ts";
+import { sshExec, getComposeLogs, getContainerLogs } from "../../bun/remote/index.ts";
 import { validateAppName } from "../../bun/validate.ts";
 import { introspectRepo } from "../../bun/github-introspect.ts";
 
@@ -289,18 +289,18 @@ export async function handleRenameApp(request: Request, appId: number): Promise<
 
       if (app.deploy_mode === "compose") {
         // Compose projects can't be renamed in-place — just rename the directory
-        await hetzner.sshExec(
+        await sshExec(
           server.ipv4,
           `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
           hostKey
         );
       } else {
-        await hetzner.sshExec(
+        await sshExec(
           server.ipv4,
           `su - deploy -c "docker rename ${app.name} ${newName} 2>/dev/null || true"`,
           hostKey
         );
-        await hetzner.sshExec(
+        await sshExec(
           server.ipv4,
           `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
           hostKey
@@ -331,8 +331,8 @@ export async function handleGetContainerLogs(request: Request, appId: number): P
     if (!server) return Response.json({ logs: "", error: "Server not found" }, { headers: corsHeaders });
 
     const logs = app.deploy_mode === "compose"
-      ? await hetzner.getComposeLogs(server.ipv4, app.name, tail, server.ssh_host_key || undefined)
-      : await hetzner.getContainerLogs(server.ipv4, app.name, tail, server.ssh_host_key || undefined);
+      ? await getComposeLogs(server.ipv4, app.name, tail, server.ssh_host_key || undefined)
+      : await getContainerLogs(server.ipv4, app.name, tail, server.ssh_host_key || undefined);
 
     return Response.json({ logs }, { headers: corsHeaders });
   } catch (error) {

@@ -3,7 +3,8 @@ import db from "./connection.ts";
 export type ServerRow = {
   id: number;
   name: string;
-  hetzner_id: string;
+  provider_id: string;
+  provider: string;
   ipv4: string;
   ipv6: string;
   type: string;
@@ -23,15 +24,16 @@ export function getServer(id: number): ServerRow | null {
   return db.query("SELECT * FROM servers WHERE id = ?").get(id) as ServerRow | null;
 }
 
-export function getServerByHetznerId(hetznerId: string): ServerRow | null {
+export function getServerByProviderId(providerId: string): ServerRow | null {
   return db
-    .query("SELECT * FROM servers WHERE hetzner_id = ?")
-    .get(hetznerId) as ServerRow | null;
+    .query("SELECT * FROM servers WHERE provider_id = ?")
+    .get(providerId) as ServerRow | null;
 }
 
 export function insertServer(server: {
   name: string;
-  hetzner_id: string;
+  provider_id: string;
+  provider?: string;
   ipv4: string;
   ipv6: string;
   type: string;
@@ -40,11 +42,12 @@ export function insertServer(server: {
 }): ServerRow {
   return db
     .query(
-      "INSERT INTO servers (name, hetzner_id, ipv4, ipv6, type, location, status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO servers (name, provider_id, provider, ipv4, ipv6, type, location, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       server.name,
-      server.hetzner_id,
+      server.provider_id,
+      server.provider ?? "hetzner",
       server.ipv4,
       server.ipv6,
       server.type,
@@ -58,14 +61,14 @@ export function updateServerStatus(id: number, status: string): void {
 }
 
 export function updateServer(id: number, fields: {
-  hetzner_id?: string;
+  provider_id?: string;
   ipv4?: string;
   ipv6?: string;
   status?: string;
 }): void {
   const setClauses: string[] = [];
   const values: (string | number)[] = [];
-  if (fields.hetzner_id !== undefined) { setClauses.push("hetzner_id = ?"); values.push(fields.hetzner_id); }
+  if (fields.provider_id !== undefined) { setClauses.push("provider_id = ?"); values.push(fields.provider_id); }
   if (fields.ipv4 !== undefined) { setClauses.push("ipv4 = ?"); values.push(fields.ipv4); }
   if (fields.ipv6 !== undefined) { setClauses.push("ipv6 = ?"); values.push(fields.ipv6); }
   if (fields.status !== undefined) { setClauses.push("status = ?"); values.push(fields.status); }

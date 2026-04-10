@@ -53,8 +53,8 @@ describe("runMigrations", () => {
     const db = freshDb();
     runMigrations(db);
     // Should not throw when querying the new column
-    db.run("INSERT INTO servers (name, hetzner_id, ssh_host_key) VALUES ('test', '123', 'key-data')");
-    const server = db.query("SELECT ssh_host_key FROM servers WHERE hetzner_id = '123'").get() as any;
+    db.run("INSERT INTO servers (name, provider_id, ssh_host_key) VALUES ('test', '123', 'key-data')");
+    const server = db.query("SELECT ssh_host_key FROM servers WHERE provider_id = '123'").get() as any;
     expect(server.ssh_host_key).toBe("key-data");
   });
 
@@ -62,7 +62,7 @@ describe("runMigrations", () => {
     const db = freshDb();
     runMigrations(db);
     // Insert a server and app first for the FK
-    db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h1')");
+    db.run("INSERT INTO servers (name, provider_id) VALUES ('s1', 'h1')");
     db.run("INSERT INTO apps (name, domain, git_repo) VALUES ('app1', 'app.com', 'https://x.git')");
     db.run("INSERT INTO deployment_history (app_id, image_tag, git_commit) VALUES (1, 'app:latest', 'abc123')");
     const dep = db.query("SELECT * FROM deployment_history WHERE app_id = 1").get() as any;
@@ -73,7 +73,7 @@ describe("runMigrations", () => {
   test("adds volume_id and volume_mount columns to apps", () => {
     const db = freshDb();
     runMigrations(db);
-    db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h1')");
+    db.run("INSERT INTO servers (name, provider_id) VALUES ('s1', 'h1')");
     db.run("INSERT INTO apps (name, domain, git_repo, volume_id, volume_mount) VALUES ('app1', 'app.com', 'https://x.git', 'vol-123', '/mnt/data:/data')");
     const app = db.query("SELECT volume_id, volume_mount FROM apps WHERE name = 'app1'").get() as any;
     expect(app.volume_id).toBe("vol-123");
@@ -112,7 +112,7 @@ describe("runMigrations", () => {
     const db = freshDb();
     runMigrations(db);
     // Insert a panel row + a legacy self-redeploy panel_deployment.
-    db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h-panel')");
+    db.run("INSERT INTO servers (name, provider_id) VALUES ('s1', 'h-panel')");
     db.run(
       "INSERT INTO panel (id, server_id, name, domain, git_repo, container_port, host_port) VALUES (1, 1, 'p', 'p.example.com', 'https://github.com/x/y', 3000, 3001)",
     );
