@@ -259,23 +259,31 @@ export async function bootstrapPanel(
     if (dnsRecordKey) {
       try {
         await hetzner.deleteDnsRecord(dnsRecordKey);
-      } catch {}
+      } catch (e) {
+        log("error", `Rollback: failed to delete DNS record: ${e}`);
+      }
     }
     if (volumeId) {
       try {
         await hetzner.deleteVolume(volumeId);
-      } catch {}
+      } catch (e) {
+        log("error", `Rollback: failed to delete volume ${volumeId}: ${e}`);
+      }
     }
     if (hetznerServerId) {
       try {
         await hetzner.deleteHetznerServer(hetznerServerId);
-      } catch {}
+      } catch (e) {
+        log("error", `Rollback: failed to delete Hetzner server ${hetznerServerId}: ${e}`);
+      }
     }
     if (dbServerId) {
       // Cascades to the panel row via FK ON DELETE CASCADE.
       try {
         db.deleteServer(dbServerId);
-      } catch {}
+      } catch (e) {
+        log("error", `Rollback: failed to delete DB server ${dbServerId}: ${e}`);
+      }
     }
 
     return { ok: false, error: msg };

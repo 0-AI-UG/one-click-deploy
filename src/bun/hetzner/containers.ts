@@ -74,9 +74,9 @@ export async function transferImage(
     log("transfer", `Image ${imageName} transferred successfully`);
   } finally {
     // Cleanup remote temp files (as root, which owns them)
-    await sshExec(sourceIp, `rm -f ${tmpFile}`, sourceHostKey).catch(() => {});
-    await sshExec(targetIp, `rm -f ${tmpFile}`, targetHostKey).catch(() => {});
-    try { unlinkSync(localTmp); } catch {}
+    await sshExec(sourceIp, `rm -f ${tmpFile}`, sourceHostKey).catch(() => { /* non-fatal cleanup */ });
+    await sshExec(targetIp, `rm -f ${tmpFile}`, targetHostKey).catch(() => { /* non-fatal cleanup */ });
+    try { unlinkSync(localTmp); } catch { /* file may already be gone */ }
   }
 }
 

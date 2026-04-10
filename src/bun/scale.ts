@@ -165,7 +165,9 @@ async function scaleUp(
             value: record.value,
           });
           db.deleteDnsRecord(record.record_id);
-        } catch {}
+        } catch (e) {
+          log("dns", `Failed to delete old DNS record ${record.record_id}:`, e);
+        }
       }
     }
 
@@ -384,7 +386,9 @@ async function scaleDown(
       if (app.auth_password) {
         try {
           await hetzner.removeAuthProxy(server.ipv4, replica.container_name, hostKey);
-        } catch {}
+        } catch (e) {
+          log("scale", `Failed to remove auth proxy for ${replica.container_name}:`, e);
+        }
       }
 
       db.deleteReplica(replica.id);
@@ -504,7 +508,9 @@ async function scaleDown(
               value: record.value,
             });
             db.deleteDnsRecord(record.record_id);
-          } catch {}
+          } catch (e) {
+            log("dns", `Failed to delete old DNS record ${record.record_id}:`, e);
+          }
         }
       }
     }
@@ -542,7 +548,9 @@ async function scaleDown(
                 value: record.value,
               });
               db.deleteDnsRecord(record.record_id);
-            } catch {}
+            } catch (e) {
+              log("dns", `Failed to delete old DNS record ${record.record_id}:`, e);
+            }
           }
         }
       }
@@ -560,7 +568,9 @@ async function scaleDown(
         if (destPort) {
           await hetzner.removeLBFirewallRule(firewallId, destPort, lb.public_net.ipv4.ip);
         }
-      } catch {}
+      } catch (e) {
+        log("lb", "Failed to remove LB firewall rule:", e);
+      }
     }
     db.updateAppScaling(app.id, { hetzner_lb_id: "" });
 
@@ -614,9 +624,15 @@ async function rollbackScaleUp(
       const hostKey = server.ssh_host_key || undefined;
       try {
         await hetzner.sshExec(server.ipv4, `su - deploy -c "docker rm -f ${replica.container_name} 2>/dev/null || true"`, hostKey);
-      } catch {}
+      } catch (e) {
+        log("rollback", `Failed to remove container ${replica.container_name}:`, e);
+      }
       if (app.auth_password) {
-        try { await hetzner.removeAuthProxy(server.ipv4, replica.container_name, hostKey); } catch {}
+        try {
+          await hetzner.removeAuthProxy(server.ipv4, replica.container_name, hostKey);
+        } catch (e) {
+          log("rollback", `Failed to remove auth proxy for ${replica.container_name}:`, e);
+        }
       }
     }
     db.deleteReplica(replica.id);
@@ -1041,7 +1057,9 @@ export async function rollingRedeploy(
       // Remove from LB
       try {
         await hetzner.removeLBTarget(lbId, server.hetzner_id);
-      } catch {}
+      } catch (e) {
+        log("lb", `Failed to remove LB target for ${replica.container_name}:`, e);
+      }
 
       // Drain
       emit("scale", `Draining ${replica.container_name}...`);

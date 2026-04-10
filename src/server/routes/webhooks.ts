@@ -111,7 +111,9 @@ export async function handleDisableWebhook(request: Request, appId: number): Pro
             webhookId: app.github_webhook_id,
             token: pat,
           });
-        } catch {}
+        } catch (e) {
+          console.error("webhooks: failed to delete GitHub webhook for app:", e);
+        }
       }
     }
 
@@ -274,7 +276,9 @@ export async function handleDisablePanelWebhook(request: Request): Promise<Respo
             webhookId: panel.github_webhook_id,
             token: pat,
           });
-        } catch {}
+        } catch (e) {
+          console.error("webhooks: failed to delete GitHub webhook for panel:", e);
+        }
       }
     }
 

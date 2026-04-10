@@ -60,7 +60,9 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
             `rm -rf /home/deploy/services/${service.name}`,
             hostKey
           );
-        } catch {}
+        } catch (e) {
+          log("destroy", `Failed to remove service directory for ${service.name}: ${e}`);
+        }
       }
 
       // Delete Hetzner volume

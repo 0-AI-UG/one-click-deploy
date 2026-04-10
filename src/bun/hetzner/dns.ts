@@ -40,7 +40,7 @@ export async function createDnsRecord(opts: {
     if (/already exists|uniqueness|conflict/i.test(msg)) {
       await hetznerApi(rrsetPath(opts.zone_id, opts.name, opts.type), {
         method: "DELETE",
-      }).catch(() => {}); // ignore if it vanished between calls
+      }).catch(() => { /* ignore if the record vanished between calls */ });
       await postRrset();
     } else {
       throw err;
