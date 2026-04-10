@@ -1,6 +1,6 @@
 import { hetznerApi } from "./api.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
@@ -19,8 +19,9 @@ export async function pollAction(
 
   log("action", `Polling action ${actionId} (interval=${interval}ms, timeout=${timeout}ms${successAtProgress != null ? `, successAtProgress=${successAtProgress}` : ""})`);
 
+  type ActionResponse = { action: { status: string; progress: number; error?: { message: string } } };
   while (Date.now() < deadline) {
-    const data = await hetznerApi(`/actions/${actionId}`);
+    const data = await hetznerApi(`/actions/${actionId}`) as unknown as ActionResponse;
     const status = data.action?.status;
     const progress = data.action?.progress;
     log("action", `Action ${actionId}: status=${status} progress=${progress}`);

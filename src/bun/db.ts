@@ -4,9 +4,170 @@ import { mkdirSync } from "fs";
 import { runMigrations } from "./migrations.ts";
 import { DATA_DIR } from "./paths.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [db:${context}]`, ...args);
 }
+
+export type ServerRow = {
+  id: number;
+  name: string;
+  hetzner_id: string;
+  ipv4: string;
+  ipv6: string;
+  type: string;
+  location: string;
+  status: string;
+  ssh_host_key: string | null;
+  created_at: string;
+};
+
+export type AppRow = {
+  id: number;
+  name: string;
+  domain: string;
+  git_repo: string;
+  dockerfile_path: string;
+  container_port: number;
+  env_vars: string;
+  status: string;
+  deploy_log: string;
+  auth_password: string;
+  deploy_mode: string;
+  compose_file: string;
+  compose_web_service: string;
+  volume_id: string | null;
+  volume_mount: string | null;
+  webhook_enabled: number;
+  webhook_secret: string;
+  webhook_branch: string;
+  webhook_path: string;
+  github_webhook_id: string;
+  deployed_by: string | null;
+  desired_replicas: number;
+  min_replicas: number;
+  max_replicas: number;
+  autoscale_enabled: number;
+  autoscale_cpu_threshold: number;
+  autoscale_mem_threshold: number;
+  autoscale_cooldown: number;
+  scale_to_zero_after: number | null;
+  last_scale_at: string | null;
+  hetzner_lb_id: string | null;
+  sleeping_server_id: number | null;
+  sleeping_host_port: number | null;
+  wake_token: string | null;
+  created_at: string;
+};
+
+export type ReplicaRow = {
+  id: number;
+  app_id: number;
+  server_id: number;
+  host_port: number;
+  container_name: string;
+  status: string;
+  cpu_percent: number;
+  memory_percent: number;
+  last_health_at: string | null;
+  unhealthy_ticks: number;
+  created_at: string;
+};
+
+export type ServiceRow = {
+  id: number;
+  name: string;
+  service_type: string;
+  version: string;
+  port: number;
+  env_vars: string;
+  credentials: string;
+  status: string;
+  desired_instances: number;
+  created_at: string;
+};
+
+export type ServiceInstanceRow = {
+  id: number;
+  service_id: number;
+  server_id: number;
+  role: string;
+  container_name: string;
+  host_port: number;
+  volume_id: string;
+  volume_mount: string;
+  status: string;
+  cpu_percent: number;
+  memory_percent: number;
+  last_health_at: string | null;
+  unhealthy_ticks: number;
+  created_at: string;
+};
+
+export type ServiceLinkRow = {
+  id: number;
+  service_id: number;
+  app_id: number;
+  env_prefix: string;
+  app_name?: string;
+  service_name?: string;
+  service_type?: string;
+  credentials?: string;
+};
+
+export type DeploymentRow = {
+  id: number;
+  app_id: number;
+  image_tag: string;
+  git_commit: string;
+  deploy_log: string;
+  status: string;
+  source: string;
+  created_at: string;
+};
+
+export type MetricSampleRow = {
+  replica_id: number;
+  app_id: number;
+  cpu_percent: number;
+  memory_percent: number;
+  sampled_at: string;
+};
+
+export type DnsRecordRow = {
+  id: number;
+  app_id: number;
+  zone_id: string;
+  record_id: string;
+  name: string;
+  type: string;
+  value: string;
+};
+
+export type ScalingEventRow = {
+  id: number;
+  app_id: number;
+  event_type: string;
+  from_count: number;
+  to_count: number;
+  reason: string;
+  created_at: string;
+};
+
+export type ServiceDeployJobRow = {
+  id: number;
+  service_name: string;
+  status: string;
+  result_json: string;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type DeployJobEventRow = {
+  seq: number;
+  ts: string;
+  step: string;
+  detail: string;
+};
 
 export function createDatabase(dbPathOrMemory: string): Database {
   const instance = new Database(dbPathOrMemory);
@@ -86,20 +247,20 @@ log("init", "Database opened successfully");
 export default db;
 
 // Query helpers
-export function getServers() {
+export function getServers(): ServerRow[] {
   return db
     .query("SELECT * FROM servers ORDER BY created_at DESC")
-    .all() as any[];
+    .all() as ServerRow[];
 }
 
-export function getServer(id: number) {
-  return db.query("SELECT * FROM servers WHERE id = ?").get(id) as any;
+export function getServer(id: number): ServerRow | null {
+  return db.query("SELECT * FROM servers WHERE id = ?").get(id) as ServerRow | null;
 }
 
-export function getServerByHetznerId(hetznerId: string) {
+export function getServerByHetznerId(hetznerId: string): ServerRow | null {
   return db
     .query("SELECT * FROM servers WHERE hetzner_id = ?")
-    .get(hetznerId) as any;
+    .get(hetznerId) as ServerRow | null;
 }
 
 export function insertServer(server: {
@@ -123,7 +284,7 @@ export function insertServer(server: {
       server.type,
       server.location,
       server.status
-    ) as any;
+    ) as ServerRow;
 }
 
 export function updateServerStatus(id: number, status: string) {
@@ -137,7 +298,7 @@ export function updateServer(id: number, fields: {
   status?: string;
 }) {
   const setClauses: string[] = [];
-  const values: any[] = [];
+  const values: (string | number)[] = [];
   if (fields.hetzner_id !== undefined) { setClauses.push("hetzner_id = ?"); values.push(fields.hetzner_id); }
   if (fields.ipv4 !== undefined) { setClauses.push("ipv4 = ?"); values.push(fields.ipv4); }
   if (fields.ipv6 !== undefined) { setClauses.push("ipv6 = ?"); values.push(fields.ipv6); }
@@ -151,25 +312,25 @@ export function deleteServer(id: number) {
   db.query("DELETE FROM servers WHERE id = ?").run(id);
 }
 
-export function getApps(serverId?: number) {
+export function getApps(serverId?: number): AppRow[] {
   if (serverId) {
     return db
       .query(
         "SELECT DISTINCT a.* FROM apps a JOIN replicas r ON r.app_id = a.id WHERE r.server_id = ? ORDER BY a.created_at DESC"
       )
-      .all(serverId) as any[];
+      .all(serverId) as AppRow[];
   }
   return db
     .query("SELECT * FROM apps ORDER BY created_at DESC")
-    .all() as any[];
+    .all() as AppRow[];
 }
 
-export function getApp(id: number) {
-  return db.query("SELECT * FROM apps WHERE id = ?").get(id) as any;
+export function getApp(id: number): AppRow | null {
+  return db.query("SELECT * FROM apps WHERE id = ?").get(id) as AppRow | null;
 }
 
-export function getAppByName(name: string) {
-  return db.query("SELECT * FROM apps WHERE name = ?").get(name) as any;
+export function getAppByName(name: string): AppRow | null {
+  return db.query("SELECT * FROM apps WHERE name = ?").get(name) as AppRow | null;
 }
 
 export function renameApp(id: number, newName: string) {
@@ -185,7 +346,7 @@ export function insertApp(app: {
   container_port: number;
   env_vars: string;
   auth_password?: string;
-}) {
+}): AppRow {
   return db
     .query(
       "INSERT INTO apps (name, domain, git_repo, dockerfile_path, container_port, env_vars, auth_password) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
@@ -198,7 +359,7 @@ export function insertApp(app: {
       app.container_port,
       app.env_vars,
       app.auth_password || ""
-    ) as any;
+    ) as AppRow;
 }
 
 /**
@@ -216,7 +377,7 @@ export function insertAppWithFirstReplica(
     auth_password?: string;
   },
   serverId: number,
-): { app: any; replica: any } {
+): { app: AppRow; replica: ReplicaRow } {
   const tx = db.transaction(() => {
     const appRow = db
       .query(
@@ -230,13 +391,13 @@ export function insertAppWithFirstReplica(
         app.container_port,
         app.env_vars,
         app.auth_password || "",
-      ) as any;
+      ) as AppRow;
     const hostPort = nextReplicaHostPort(serverId);
     const replicaRow = db
       .query(
         "INSERT INTO replicas (app_id, server_id, host_port, container_name, status) VALUES (?, ?, ?, ?, ?) RETURNING *",
       )
-      .get(appRow.id, serverId, hostPort, app.name, "deploying") as any;
+      .get(appRow.id, serverId, hostPort, app.name, "deploying") as ReplicaRow;
     return { app: appRow, replica: replicaRow };
   });
   return tx();
@@ -246,12 +407,12 @@ export function insertAppWithFirstReplica(
  * Distinct servers across an app's replicas. Replaces any code that used to
  * read app.server_id.
  */
-export function getServersForApp(appId: number): any[] {
+export function getServersForApp(appId: number): ServerRow[] {
   return db
     .query(
       "SELECT DISTINCT s.* FROM servers s JOIN replicas r ON r.server_id = s.id WHERE r.app_id = ? ORDER BY s.id ASC",
     )
-    .all(appId) as any[];
+    .all(appId) as ServerRow[];
 }
 
 /**
@@ -263,7 +424,7 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
   if (getApps(serverId).length > 0) return;
   if (getPanel()?.server_id === serverId) return;
   // Don't GC servers that host sleeping apps (scale-to-zero)
-  const sleepingCount = (db.query("SELECT COUNT(*) as c FROM apps WHERE sleeping_server_id = ?").get(serverId) as any)?.c ?? 0;
+  const sleepingCount = (db.query("SELECT COUNT(*) as c FROM apps WHERE sleeping_server_id = ?").get(serverId) as { c: number } | null)?.c ?? 0;
   if (sleepingCount > 0) return;
   const server = getServer(serverId);
   if (!server) return;
@@ -304,7 +465,7 @@ export function appendDeployLog(id: number, line: string) {
 export function getDeployLog(id: number): string {
   const row = db
     .query("SELECT deploy_log FROM apps WHERE id = ?")
-    .get(id) as any;
+    .get(id) as { deploy_log: string } | null;
   return row?.deploy_log ?? "";
 }
 
@@ -313,7 +474,7 @@ export function deleteApp(id: number) {
 }
 
 export function getSettings(): Record<string, string> {
-  const rows = db.query("SELECT key, value FROM settings").all() as any[];
+  const rows = db.query("SELECT key, value FROM settings").all() as Array<{ key: string; value: string }>;
   const result: Record<string, string> = {};
   for (const row of rows) result[row.key] = row.value;
   return result;
@@ -333,7 +494,7 @@ export function insertDnsRecord(record: {
   name: string;
   type: string;
   value: string;
-}) {
+}): DnsRecordRow {
   return db
     .query(
       "INSERT INTO dns_records (app_id, zone_id, record_id, name, type, value) VALUES (?, ?, ?, ?, ?, ?) RETURNING *"
@@ -345,13 +506,13 @@ export function insertDnsRecord(record: {
       record.name,
       record.type,
       record.value
-    ) as any;
+    ) as DnsRecordRow;
 }
 
-export function getDnsRecords(appId: number) {
+export function getDnsRecords(appId: number): DnsRecordRow[] {
   return db
     .query("SELECT * FROM dns_records WHERE app_id = ?")
-    .all(appId) as any[];
+    .all(appId) as DnsRecordRow[];
 }
 
 export function deleteDnsRecord(recordId: string) {
@@ -388,7 +549,7 @@ export function insertDeployment(deployment: {
         status,
         source,
         deployment.created_at
-      ) as any;
+      ) as DeploymentRow;
   }
   return db
     .query(
@@ -401,7 +562,7 @@ export function insertDeployment(deployment: {
       deployment.deploy_log ?? "",
       status,
       source
-    ) as any;
+    ) as DeploymentRow;
 }
 
 export function updateDeploymentStatus(id: number, status: string) {
@@ -418,18 +579,18 @@ export function updateDeploymentGitCommit(id: number, gitCommit: string) {
   db.query("UPDATE deployment_history SET git_commit = ? WHERE id = ?").run(gitCommit, id);
 }
 
-export function getDeployments(appId: number) {
+export function getDeployments(appId: number): DeploymentRow[] {
   return db
     .query(
       "SELECT * FROM deployment_history WHERE app_id = ? ORDER BY created_at DESC"
     )
-    .all(appId) as any[];
+    .all(appId) as DeploymentRow[];
 }
 
-export function getDeployment(id: number) {
+export function getDeployment(id: number): DeploymentRow | null {
   return db
     .query("SELECT * FROM deployment_history WHERE id = ?")
-    .get(id) as any;
+    .get(id) as DeploymentRow | null;
 }
 
 // Deploy jobs (durable progress tracking for in-flight deploys)
@@ -456,7 +617,7 @@ export function finishDeployJob(jobId: number, result: { ok: boolean; error?: st
 }
 
 export function getDeployJob(id: number): { id: number; app_name: string; status: string; result_json: string; started_at: string; finished_at: string | null } | null {
-  return db.query("SELECT * FROM deploy_jobs WHERE id = ?").get(id) as any;
+  return db.query("SELECT * FROM deploy_jobs WHERE id = ?").get(id) as { id: number; app_name: string; status: string; result_json: string; started_at: string; finished_at: string | null } | null;
 }
 
 export function getDeployJobEvents(jobId: number, sinceSeq: number): Array<{ seq: number; ts: string; step: string; detail: string }> {
@@ -464,7 +625,7 @@ export function getDeployJobEvents(jobId: number, sinceSeq: number): Array<{ seq
     .query(
       "SELECT seq, ts, step, detail FROM deploy_job_events WHERE job_id = ? AND seq > ? ORDER BY seq ASC"
     )
-    .all(jobId, sinceSeq) as any[];
+    .all(jobId, sinceSeq) as DeployJobEventRow[];
 }
 
 // App updates
@@ -613,9 +774,19 @@ export function appendPanelDeployLog(line: string) {
 }
 
 export function getPanelDeployLog(): string {
-  const row = db.query("SELECT deploy_log FROM panel WHERE id = 1").get() as any;
+  const row = db.query("SELECT deploy_log FROM panel WHERE id = 1").get() as { deploy_log: string } | null;
   return row?.deploy_log ?? "";
 }
+
+export type PanelDeploymentRow = {
+  id: number;
+  image_tag: string;
+  git_commit: string;
+  status: string;
+  source: string;
+  deploy_log: string;
+  created_at: string;
+};
 
 export function insertPanelDeployment(deployment: {
   image_tag: string;
@@ -623,7 +794,7 @@ export function insertPanelDeployment(deployment: {
   status?: string;
   source?: string;
   deploy_log?: string;
-}) {
+}): PanelDeploymentRow {
   return db
     .query(
       "INSERT INTO panel_deployments (image_tag, git_commit, status, source, deploy_log) VALUES (?, ?, ?, ?, ?) RETURNING *",
@@ -634,13 +805,13 @@ export function insertPanelDeployment(deployment: {
       deployment.status ?? "deployed",
       deployment.source ?? "manual",
       deployment.deploy_log ?? "",
-    ) as any;
+    ) as PanelDeploymentRow;
 }
 
-export function getPanelDeployments() {
+export function getPanelDeployments(): PanelDeploymentRow[] {
   return db
     .query("SELECT * FROM panel_deployments ORDER BY created_at DESC LIMIT 50")
-    .all() as any[];
+    .all() as PanelDeploymentRow[];
 }
 
 // --- Replicas ---
@@ -651,7 +822,7 @@ export function insertReplica(replica: {
   host_port: number;
   container_name: string;
   status?: string;
-}) {
+}): ReplicaRow {
   return db
     .query(
       "INSERT INTO replicas (app_id, server_id, host_port, container_name, status) VALUES (?, ?, ?, ?, ?) RETURNING *"
@@ -662,23 +833,23 @@ export function insertReplica(replica: {
       replica.host_port,
       replica.container_name,
       replica.status || "deploying"
-    ) as any;
+    ) as ReplicaRow;
 }
 
-export function getReplicas(appId: number) {
+export function getReplicas(appId: number): ReplicaRow[] {
   return db
     .query("SELECT * FROM replicas WHERE app_id = ? ORDER BY created_at ASC")
-    .all(appId) as any[];
+    .all(appId) as ReplicaRow[];
 }
 
-export function getReplica(id: number) {
-  return db.query("SELECT * FROM replicas WHERE id = ?").get(id) as any;
+export function getReplica(id: number): ReplicaRow | null {
+  return db.query("SELECT * FROM replicas WHERE id = ?").get(id) as ReplicaRow | null;
 }
 
-export function getReplicasByServer(serverId: number) {
+export function getReplicasByServer(serverId: number): ReplicaRow[] {
   return db
     .query("SELECT * FROM replicas WHERE server_id = ?")
-    .all(serverId) as any[];
+    .all(serverId) as ReplicaRow[];
 }
 
 export function updateReplicaStatus(id: number, status: string) {
@@ -695,8 +866,8 @@ export function deleteReplica(id: number) {
   db.query("DELETE FROM replicas WHERE id = ?").run(id);
 }
 
-export function getAllReplicas() {
-  return db.query("SELECT * FROM replicas").all() as any[];
+export function getAllReplicas(): ReplicaRow[] {
+  return db.query("SELECT * FROM replicas").all() as ReplicaRow[];
 }
 
 export function touchReplicaHealth(id: number) {
@@ -705,7 +876,7 @@ export function touchReplicaHealth(id: number) {
 
 export function incrementUnhealthyTicks(id: number): number {
   db.query("UPDATE replicas SET unhealthy_ticks = unhealthy_ticks + 1 WHERE id = ?").run(id);
-  const row = db.query("SELECT unhealthy_ticks FROM replicas WHERE id = ?").get(id) as any;
+  const row = db.query("SELECT unhealthy_ticks FROM replicas WHERE id = ?").get(id) as { unhealthy_ticks: number } | null;
   return row?.unhealthy_ticks ?? 0;
 }
 
@@ -726,7 +897,7 @@ export function insertMetricSample(sample: {
   ).run(sample.replica_id, sample.app_id, sample.cpu_percent, sample.memory_percent);
 }
 
-export function getRecentAppMetrics(appId: number, sinceSeconds: number) {
+export function getRecentAppMetrics(appId: number, sinceSeconds: number): MetricSampleRow[] {
   return db
     .query(
       `SELECT replica_id, cpu_percent, memory_percent, sampled_at
@@ -734,7 +905,7 @@ export function getRecentAppMetrics(appId: number, sinceSeconds: number) {
        WHERE app_id = ? AND sampled_at >= datetime('now', ?)
        ORDER BY sampled_at ASC`
     )
-    .all(appId, `-${sinceSeconds} seconds`) as any[];
+    .all(appId, `-${sinceSeconds} seconds`) as MetricSampleRow[];
 }
 
 export function pruneOldMetrics(olderThanSeconds: number) {
@@ -762,13 +933,13 @@ export function insertScalingEvent(event: {
       event.from_count,
       event.to_count,
       event.reason || ""
-    ) as any;
+    ) as ScalingEventRow;
 }
 
-export function getScalingEvents(appId: number, limit = 50) {
+export function getScalingEvents(appId: number, limit = 50): ScalingEventRow[] {
   return db
     .query("SELECT * FROM scaling_events WHERE app_id = ? ORDER BY created_at DESC LIMIT ?")
-    .all(appId, limit) as any[];
+    .all(appId, limit) as ScalingEventRow[];
 }
 
 // --- App Scaling ---
@@ -786,7 +957,7 @@ export function updateAppScaling(id: number, fields: {
   hetzner_lb_id?: string;
 }) {
   const sets: string[] = [];
-  const values: any[] = [];
+  const values: (string | number)[] = [];
   if (fields.desired_replicas !== undefined) { sets.push("desired_replicas = ?"); values.push(fields.desired_replicas); }
   if (fields.min_replicas !== undefined) { sets.push("min_replicas = ?"); values.push(fields.min_replicas); }
   if (fields.max_replicas !== undefined) { sets.push("max_replicas = ?"); values.push(fields.max_replicas); }
@@ -806,7 +977,7 @@ export function nextReplicaHostPort(serverId: number): number {
   const BASE_PORT = 10000;
   const row = db
     .query("SELECT MAX(host_port) as max_port FROM replicas WHERE server_id = ?")
-    .get(serverId) as any;
+    .get(serverId) as { max_port: number | null } | null;
   const maxPort = row?.max_port;
   return (maxPort && maxPort >= BASE_PORT) ? maxPort + 1 : BASE_PORT;
 }
@@ -829,7 +1000,7 @@ export type UserRow = {
 };
 
 export function getUserCount(): number {
-  const row = db.query("SELECT COUNT(*) as count FROM users").get() as any;
+  const row = db.query("SELECT COUNT(*) as count FROM users").get() as { count: number } | null;
   return row?.count ?? 0;
 }
 
@@ -894,7 +1065,7 @@ export function disableTotp(userId: string): void {
 }
 
 export function getTotpSecret(userId: string): string | null {
-  const row = db.query("SELECT totp_secret FROM users WHERE id = ?").get(userId) as any;
+  const row = db.query("SELECT totp_secret FROM users WHERE id = ?").get(userId) as { totp_secret: string | null } | null;
   return row?.totp_secret ?? null;
 }
 
@@ -907,7 +1078,7 @@ export function insertBackupCodes(userId: string, codeHashes: string[]): void {
 }
 
 export function getUnusedBackupCodes(userId: string): Array<{ id: string; code_hash: string }> {
-  return db.query("SELECT id, code_hash FROM totp_backup_codes WHERE user_id = ? AND used = 0").all(userId) as any[];
+  return db.query("SELECT id, code_hash FROM totp_backup_codes WHERE user_id = ? AND used = 0").all(userId) as Array<{ id: string; code_hash: string }>;
 }
 
 export function markBackupCodeUsed(codeId: string): void {
@@ -915,7 +1086,7 @@ export function markBackupCodeUsed(codeId: string): void {
 }
 
 export function getUnusedBackupCodeCount(userId: string): number {
-  const row = db.query("SELECT COUNT(*) as count FROM totp_backup_codes WHERE user_id = ? AND used = 0").get(userId) as any;
+  const row = db.query("SELECT COUNT(*) as count FROM totp_backup_codes WHERE user_id = ? AND used = 0").get(userId) as { count: number } | null;
   return row?.count ?? 0;
 }
 
@@ -983,7 +1154,7 @@ export function disableWebAuthn(userId: string): void {
 }
 
 export function getWebAuthnCredentialCount(userId: string): number {
-  const row = db.query("SELECT COUNT(*) as count FROM webauthn_credentials WHERE user_id = ?").get(userId) as any;
+  const row = db.query("SELECT COUNT(*) as count FROM webauthn_credentials WHERE user_id = ?").get(userId) as { count: number } | null;
   return row?.count ?? 0;
 }
 
@@ -1013,8 +1184,8 @@ export const ALL_PERMISSIONS = [
 export type Permission = typeof ALL_PERMISSIONS[number];
 
 export function getUserPermissions(userId: string): string[] {
-  const rows = db.query("SELECT permission FROM user_permissions WHERE user_id = ?").all(userId) as any[];
-  return rows.map((r: any) => r.permission);
+  const rows = db.query("SELECT permission FROM user_permissions WHERE user_id = ?").all(userId) as Array<{ permission: string }>;
+  return rows.map((r) => r.permission);
 }
 
 export function hasPermission(userId: string, permission: string): boolean {
@@ -1043,24 +1214,24 @@ export function insertService(data: {
   env_vars: string;
   credentials: string;
   desired_instances?: number;
-}): any {
+}): ServiceRow {
   return db
     .query(
       "INSERT INTO services (name, service_type, version, port, env_vars, credentials, desired_instances) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
-    .get(data.name, data.service_type, data.version, data.port, data.env_vars, data.credentials, data.desired_instances ?? 1);
+    .get(data.name, data.service_type, data.version, data.port, data.env_vars, data.credentials, data.desired_instances ?? 1) as ServiceRow;
 }
 
-export function getService(id: number): any {
-  return db.query("SELECT * FROM services WHERE id = ?").get(id);
+export function getService(id: number): ServiceRow | null {
+  return db.query("SELECT * FROM services WHERE id = ?").get(id) as ServiceRow | null;
 }
 
-export function getServiceByName(name: string): any {
-  return db.query("SELECT * FROM services WHERE name = ?").get(name);
+export function getServiceByName(name: string): ServiceRow | null {
+  return db.query("SELECT * FROM services WHERE name = ?").get(name) as ServiceRow | null;
 }
 
-export function getServices(): any[] {
-  return db.query("SELECT * FROM services ORDER BY created_at DESC").all() as any[];
+export function getServices(): ServiceRow[] {
+  return db.query("SELECT * FROM services ORDER BY created_at DESC").all() as ServiceRow[];
 }
 
 export function updateServiceStatus(id: number, status: string): void {
@@ -1090,7 +1261,7 @@ export function insertServiceInstance(data: {
   volume_id?: string;
   volume_mount?: string;
   status?: string;
-}): any {
+}): ServiceInstanceRow {
   return db
     .query(
       "INSERT INTO service_instances (service_id, server_id, role, container_name, host_port, volume_id, volume_mount, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
@@ -1104,39 +1275,39 @@ export function insertServiceInstance(data: {
       data.volume_id || "",
       data.volume_mount || "",
       data.status || "deploying"
-    );
+    ) as ServiceInstanceRow;
 }
 
-export function getServiceInstances(serviceId: number): any[] {
+export function getServiceInstances(serviceId: number): ServiceInstanceRow[] {
   return db
     .query("SELECT * FROM service_instances WHERE service_id = ? ORDER BY created_at ASC")
-    .all(serviceId) as any[];
+    .all(serviceId) as ServiceInstanceRow[];
 }
 
-export function getServiceInstance(id: number): any {
-  return db.query("SELECT * FROM service_instances WHERE id = ?").get(id);
+export function getServiceInstance(id: number): ServiceInstanceRow | null {
+  return db.query("SELECT * FROM service_instances WHERE id = ?").get(id) as ServiceInstanceRow | null;
 }
 
-export function getPrimaryInstance(serviceId: number): any {
+export function getPrimaryInstance(serviceId: number): ServiceInstanceRow | null {
   return db
     .query("SELECT * FROM service_instances WHERE service_id = ? AND role = 'primary'")
-    .get(serviceId);
+    .get(serviceId) as ServiceInstanceRow | null;
 }
 
-export function getReplicaInstances(serviceId: number): any[] {
+export function getReplicaInstances(serviceId: number): ServiceInstanceRow[] {
   return db
     .query("SELECT * FROM service_instances WHERE service_id = ? AND role = 'replica' ORDER BY created_at ASC")
-    .all(serviceId) as any[];
+    .all(serviceId) as ServiceInstanceRow[];
 }
 
-export function getAllServiceInstances(): any[] {
-  return db.query("SELECT * FROM service_instances").all() as any[];
+export function getAllServiceInstances(): ServiceInstanceRow[] {
+  return db.query("SELECT * FROM service_instances").all() as ServiceInstanceRow[];
 }
 
-export function getServiceInstancesByServer(serverId: number): any[] {
+export function getServiceInstancesByServer(serverId: number): ServiceInstanceRow[] {
   return db
     .query("SELECT * FROM service_instances WHERE server_id = ?")
-    .all(serverId) as any[];
+    .all(serverId) as ServiceInstanceRow[];
 }
 
 export function updateServiceInstanceStatus(id: number, status: string): void {
@@ -1155,7 +1326,7 @@ export function touchServiceInstanceHealth(id: number): void {
 
 export function incrementServiceInstanceUnhealthyTicks(id: number): number {
   db.query("UPDATE service_instances SET unhealthy_ticks = unhealthy_ticks + 1 WHERE id = ?").run(id);
-  const row = db.query("SELECT unhealthy_ticks FROM service_instances WHERE id = ?").get(id) as any;
+  const row = db.query("SELECT unhealthy_ticks FROM service_instances WHERE id = ?").get(id) as { unhealthy_ticks: number } | null;
   return row?.unhealthy_ticks ?? 0;
 }
 
@@ -1172,36 +1343,36 @@ const SERVICE_BASE_PORT = 15000;
 export function nextServiceHostPort(serverId: number): number {
   const row = db
     .query("SELECT MAX(host_port) as max_port FROM service_instances WHERE server_id = ?")
-    .get(serverId) as any;
+    .get(serverId) as { max_port: number | null } | null;
   const maxPort = row?.max_port;
   return (maxPort && maxPort >= SERVICE_BASE_PORT) ? maxPort + 1 : SERVICE_BASE_PORT;
 }
 
 // --- Service Links ---
 
-export function insertServiceLink(serviceId: number, appId: number, envPrefix: string): any {
+export function insertServiceLink(serviceId: number, appId: number, envPrefix: string): ServiceLinkRow {
   return db
     .query("INSERT INTO service_links (service_id, app_id, env_prefix) VALUES (?, ?, ?) RETURNING *")
-    .get(serviceId, appId, envPrefix);
+    .get(serviceId, appId, envPrefix) as ServiceLinkRow;
 }
 
 export function deleteServiceLink(serviceId: number, appId: number): void {
   db.query("DELETE FROM service_links WHERE service_id = ? AND app_id = ?").run(serviceId, appId);
 }
 
-export function getServiceLinks(serviceId: number): any[] {
+export function getServiceLinks(serviceId: number): ServiceLinkRow[] {
   return db
     .query("SELECT sl.*, a.name as app_name FROM service_links sl JOIN apps a ON sl.app_id = a.id WHERE sl.service_id = ?")
-    .all(serviceId) as any[];
+    .all(serviceId) as ServiceLinkRow[];
 }
 
-export function getLinkedServices(appId: number): any[] {
+export function getLinkedServices(appId: number): ServiceLinkRow[] {
   return db
     .query("SELECT sl.*, s.name as service_name, s.service_type, s.credentials FROM service_links sl JOIN services s ON sl.service_id = s.id WHERE sl.app_id = ?")
-    .all(appId) as any[];
+    .all(appId) as ServiceLinkRow[];
 }
 
-export function getServicesOnServer(serverId: number): any[] {
+export function getServicesOnServer(serverId: number): ServiceRow[] {
   return db
     .query(`
       SELECT DISTINCT s.* FROM services s
@@ -1209,7 +1380,7 @@ export function getServicesOnServer(serverId: number): any[] {
       WHERE si.server_id = ?
       ORDER BY s.created_at DESC
     `)
-    .all(serverId) as any[];
+    .all(serverId) as ServiceRow[];
 }
 
 // --- Service Deploy Jobs ---
@@ -1236,14 +1407,14 @@ export function finishServiceDeployJob(jobId: number, result: { ok: boolean; err
   ).run(result.ok ? "done" : "error", JSON.stringify(result), jobId);
 }
 
-export function getServiceDeployJob(id: number): any {
-  return db.query("SELECT * FROM service_deploy_jobs WHERE id = ?").get(id);
+export function getServiceDeployJob(id: number): ServiceDeployJobRow | null {
+  return db.query("SELECT * FROM service_deploy_jobs WHERE id = ?").get(id) as ServiceDeployJobRow | null;
 }
 
-export function getServiceDeployJobEvents(jobId: number, sinceSeq: number): any[] {
+export function getServiceDeployJobEvents(jobId: number, sinceSeq: number): DeployJobEventRow[] {
   return db
     .query(
       "SELECT seq, ts, step, detail FROM service_deploy_job_events WHERE job_id = ? AND seq > ? ORDER BY seq ASC"
     )
-    .all(jobId, sinceSeq) as any[];
+    .all(jobId, sinceSeq) as DeployJobEventRow[];
 }

@@ -215,6 +215,7 @@ export async function deployService(
       hetznerServerId = parseInt(state.hetznerServerId, 10);
     } else {
       const srv = db.getServer(serverId);
+      if (!srv) throw new Error(`Server ${serverId} not found`);
       hetznerServerId = parseInt(srv.hetzner_id, 10);
     }
 

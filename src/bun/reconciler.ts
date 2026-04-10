@@ -1,9 +1,11 @@
 import * as db from "./db.ts";
+import type { AppRow, ReplicaRow, ServiceRow, ServiceInstanceRow } from "./db.ts";
 import * as hetzner from "./hetzner/index.ts";
+import type { LoadBalancerTarget } from "./hetzner/load-balancers.ts";
 import { evaluateAutoScale } from "./scale.ts";
 import { getCatalogEntry } from "./services/catalog.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
 }
 
@@ -14,7 +16,7 @@ const UNHEALTHY_RESTART_THRESHOLD = 2;
 let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 
-async function collectReplica(replica: any, app: any): Promise<void> {
+async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
   const server = db.getServer(replica.server_id);
   if (!server) return;
   const hostKey = server.ssh_host_key || undefined;
@@ -82,7 +84,7 @@ async function collectReplica(replica: any, app: any): Promise<void> {
   }
 }
 
-async function reconcileLB(app: any): Promise<void> {
+async function reconcileLB(app: AppRow): Promise<void> {
   if (!app.hetzner_lb_id) return;
 
   // 1. LB still exists?
@@ -106,8 +108,8 @@ async function reconcileLB(app: any): Promise<void> {
     const lb = await hetzner.getLoadBalancer(app.hetzner_lb_id);
     const lbTargetServerIds = new Set(
       (lb.targets || [])
-        .filter((t: any) => t.type === "server" && t.server?.id)
-        .map((t: any) => String(t.server.id))
+        .filter((t: LoadBalancerTarget) => t.type === "server" && t.server?.id)
+        .map((t: LoadBalancerTarget) => String(t.server!.id))
     );
     const replicas = db.getReplicas(app.id);
     const wantServerIds = new Set<string>();
@@ -147,9 +149,9 @@ async function reconcileLB(app: any): Promise<void> {
   }
 }
 
-async function reconcileCaddyRoutes(byApp: Map<number, any[]>): Promise<void> {
+async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<void> {
   // Group apps by server to batch checks
-  const serverApps = new Map<number, { app: any; replica: any }[]>();
+  const serverApps = new Map<number, { app: AppRow; replica: ReplicaRow }[]>();
   for (const [appId, list] of byApp) {
     const app = db.getApp(appId);
     if (!app || !app.domain) continue;
@@ -187,7 +189,7 @@ async function reconcileCaddyRoutes(byApp: Map<number, any[]>): Promise<void> {
   }
 }
 
-async function collectServiceInstance(instance: any, service: any): Promise<void> {
+async function collectServiceInstance(instance: ServiceInstanceRow, service: ServiceRow): Promise<void> {
   const server = db.getServer(instance.server_id);
   if (!server) return;
   const hostKey = server.ssh_host_key || undefined;
@@ -255,7 +257,7 @@ async function tick(): Promise<void> {
   try {
     // --- App replicas ---
     const replicas = db.getAllReplicas();
-    const byApp = new Map<number, any[]>();
+    const byApp = new Map<number, ReplicaRow[]>();
     for (const r of replicas) {
       const list = byApp.get(r.app_id) ?? [];
       list.push(r);
@@ -273,8 +275,8 @@ async function tick(): Promise<void> {
       // Propagate replica health to app status
       // Only touch apps that are in a "live" state (running/unhealthy), not deploying/paused
       if (app.status === "running" || app.status === "unhealthy") {
-        const freshReplicas = list.map((r) => db.getReplica(r.id)).filter(Boolean);
-        const allHealthy = freshReplicas.length > 0 && freshReplicas.every((r: any) => r.status === "running");
+        const freshReplicas = list.map((r) => db.getReplica(r.id)).filter((r): r is NonNullable<typeof r> => r !== null);
+        const allHealthy = freshReplicas.length > 0 && freshReplicas.every((r) => r.status === "running");
         const newStatus = allHealthy ? "running" : "unhealthy";
         if (newStatus !== app.status) {
           log("status", `app ${appId}: ${app.status} -> ${newStatus}`);
@@ -311,8 +313,8 @@ async function tick(): Promise<void> {
 
       // Propagate instance health to service status
       if (service.status === "running" || service.status === "unhealthy") {
-        const freshInstances = instances.map((i: any) => db.getServiceInstance(i.id)).filter(Boolean);
-        const allHealthy = freshInstances.length > 0 && freshInstances.every((i: any) => i.status === "running");
+        const freshInstances = instances.map((i) => db.getServiceInstance(i.id)).filter((i): i is NonNullable<typeof i> => i !== null);
+        const allHealthy = freshInstances.length > 0 && freshInstances.every((i) => i.status === "running");
         const newStatus = allHealthy ? "running" : "unhealthy";
         if (newStatus !== service.status) {
           log("status", `service ${service.id}: ${service.status} -> ${newStatus}`);

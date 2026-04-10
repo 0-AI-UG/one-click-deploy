@@ -1,9 +1,55 @@
 import { hetznerApi } from "./api.ts";
 import { pollAction } from "./actions.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
+
+type LBHttpConfig = {
+  redirect_http: boolean;
+  sticky_sessions: boolean;
+  cookie_name?: string;
+  cookie_lifetime?: number;
+  certificates?: number[];
+};
+
+type LBService = {
+  protocol: string;
+  listen_port: number;
+  destination_port: number;
+  health_check: {
+    protocol: string;
+    port: number;
+    interval: number;
+    timeout: number;
+    retries: number;
+    http: {
+      path: string;
+      status_codes: string[];
+    };
+  };
+  http: LBHttpConfig;
+};
+
+export type LoadBalancerTarget = {
+  type: string;
+  server?: { id: number };
+};
+
+export type LoadBalancer = {
+  id: number;
+  name: string;
+  public_net: {
+    ipv4: { ip: string };
+    ipv6: { ip: string };
+  };
+  targets: LoadBalancerTarget[];
+  services: LBService[];
+};
+
+type WithAction = { action?: { id: number } };
+type WithLoadBalancer = { load_balancer: LoadBalancer };
+type WithCertificate = { certificate: { id: number } };
 
 export async function createLoadBalancer(
   appName: string,
@@ -19,7 +65,7 @@ export async function createLoadBalancer(
       algorithm: { type: "least_connections" },
       labels: { managed_by: "one-click-deploy", app: appName },
     }),
-  });
+  }) as unknown as WithLoadBalancer;
   const lb = data.load_balancer;
   log("lb", `Load balancer created: id=${lb.id} ipv4=${lb.public_net.ipv4.ip}`);
   return { id: lb.id, ipv4: lb.public_net.ipv4.ip };
@@ -40,7 +86,7 @@ export async function addLBTarget(lbId: string, serverId: string): Promise<void>
       server: { id: parseInt(serverId, 10) },
       use_private_net: false,
     }),
-  });
+  }) as unknown as WithAction;
   if (data.action?.id) {
     await pollAction(data.action.id);
   }
@@ -55,7 +101,7 @@ export async function removeLBTarget(lbId: string, serverId: string): Promise<vo
       type: "server",
       server: { id: parseInt(serverId, 10) },
     }),
-  });
+  }) as unknown as WithAction;
   if (data.action?.id) {
     await pollAction(data.action.id);
   }
@@ -75,7 +121,7 @@ export async function addLBService(
   const protocol = useHttps ? "https" : "http";
   const listenPort = useHttps ? 443 : 80;
 
-  const httpConfig: any = {
+  const httpConfig: LBHttpConfig = {
     redirect_http: useHttps,
     sticky_sessions: !!stickySession,
   };
@@ -87,7 +133,7 @@ export async function addLBService(
     httpConfig.certificates = [certId];
   }
 
-  const service: any = {
+  const service: LBService = {
     protocol,
     listen_port: listenPort,
     destination_port: destPort,
@@ -107,7 +153,7 @@ export async function addLBService(
   const data = await hetznerApi(`/load_balancers/${lbId}/actions/add_service`, {
     method: "POST",
     body: JSON.stringify(service),
-  });
+  }) as unknown as WithAction;
   if (data.action?.id) {
     await pollAction(data.action.id);
   }
@@ -126,7 +172,7 @@ export async function createManagedCertificate(
       type: "managed",
       domain_names: [domain],
     }),
-  });
+  }) as unknown as WithCertificate;
   log("lb", `Certificate created: id=${data.certificate.id}`);
   return { id: data.certificate.id };
 }
@@ -137,7 +183,7 @@ export async function deleteCertificate(certId: string): Promise<void> {
   log("lb", `Certificate ${certId} deleted`);
 }
 
-export async function getLoadBalancer(lbId: string): Promise<any> {
+export async function getLoadBalancer(lbId: string): Promise<LoadBalancer> {
   const data = await hetznerApi(`/load_balancers/${lbId}`);
-  return data.load_balancer;
+  return data.load_balancer as LoadBalancer;
 }

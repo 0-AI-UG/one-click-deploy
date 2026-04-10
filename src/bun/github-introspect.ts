@@ -285,8 +285,8 @@ export async function introspectRepo(url: string, userId?: string): Promise<Intr
   }
   const tree = await treeRes.json();
   const paths: string[] = (tree.tree || [])
-    .filter((e: any) => e.type === "blob")
-    .map((e: any) => e.path as string);
+    .filter((e: { type: string }) => e.type === "blob")
+    .map((e: { path: string }) => e.path);
   if (tree.truncated) notes.push("Repo is large — some files may have been skipped.");
 
   // 3. Discover .ocd-deploy.json manifests

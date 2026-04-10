@@ -1,6 +1,6 @@
 
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [github:${context}]`, ...args);
 }
 
@@ -8,7 +8,7 @@ async function githubApi(
   path: string,
   token: string,
   options: RequestInit = {}
-): Promise<any> {
+): Promise<Record<string, unknown> | null> {
   const method = options.method || "GET";
   log("api", `${method} ${path}`);
   const res = await fetch(`https://api.github.com${path}`, {
@@ -77,8 +77,9 @@ export async function createWebhook(opts: {
     }),
   });
 
+  if (!data) throw new Error("GitHub API returned empty response");
   log("webhook", `Webhook created: id=${data.id}`);
-  return { id: data.id };
+  return { id: data.id as number };
 }
 
 export async function createWebhookAtUrl(opts: {
@@ -103,8 +104,9 @@ export async function createWebhookAtUrl(opts: {
       },
     }),
   });
+  if (!data) throw new Error("GitHub API returned empty response");
   log("webhook", `Webhook created: id=${data.id}`);
-  return { id: data.id };
+  return { id: data.id as number };
 }
 
 export async function deleteWebhook(opts: {

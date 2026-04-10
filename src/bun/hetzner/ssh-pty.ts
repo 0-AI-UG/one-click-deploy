@@ -1,7 +1,7 @@
 import { unlinkSync } from "fs";
 import { buildSshArgs } from "./ssh.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [ssh-pty:${context}]`, ...args);
 }
 
@@ -90,7 +90,7 @@ export function spawnSshPty(opts: {
     return code;
   });
 
-  const stdin = proc.stdin as any;
+  const stdin = proc.stdin as { write(data: string | Uint8Array): void; flush?(): void };
 
   return {
     write(data) {

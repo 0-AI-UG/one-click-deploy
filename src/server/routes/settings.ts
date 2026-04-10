@@ -32,9 +32,9 @@ export async function handleGetSettings(request: Request): Promise<Response> {
 export async function handleGetServerTypes(request: Request): Promise<Response> {
   try {
     await requireAdmin(request);
-    const data = await hetznerApi("/server_types?per_page=50");
+    const data = await hetznerApi("/server_types?per_page=50") as Record<string, unknown>;
     const types: Array<{ name: string; description: string; cores: number; memory: number; disk: number; locations: string[] }> = [];
-    for (const t of data.server_types ?? []) {
+    for (const t of (data.server_types as any[]) ?? []) {
       // Only include shared vCPU types (cpx/cx/cax) that aren't deprecated globally
       if (t.deprecation?.announced) continue;
       types.push({

@@ -18,7 +18,7 @@ export type AutoDeployConfig = {
   webhook_branch?: string;
 };
 
-function log(...args: any[]) {
+function log(...args: unknown[]) {
   console.log("[auto-deploy]", ...args);
 }
 
@@ -32,20 +32,21 @@ export function loadAutoDeployConfig(raw: string): AutoDeployConfig {
     ? trimmed
     : (log(`Reading config from file: ${trimmed}`), readFileSync(trimmed, "utf-8"));
 
-  let parsed: any;
+  let parsed: unknown;
   try {
     parsed = JSON.parse(jsonText);
   } catch (err) {
     throw new Error(`OCD_AUTO_DEPLOY is not valid JSON: ${(err as Error).message}`);
   }
 
-  if (!parsed.hetzner_token || typeof parsed.hetzner_token !== "string") {
+  const cfg = parsed as Record<string, unknown>;
+  if (!cfg.hetzner_token || typeof cfg.hetzner_token !== "string") {
     throw new Error("auto-deploy config missing required field: hetzner_token");
   }
-  if (!parsed.domain || typeof parsed.domain !== "string") {
+  if (!cfg.domain || typeof cfg.domain !== "string") {
     throw new Error("auto-deploy config missing required field: domain");
   }
-  return parsed as AutoDeployConfig;
+  return cfg as unknown as AutoDeployConfig;
 }
 
 export async function runAutoDeploy(

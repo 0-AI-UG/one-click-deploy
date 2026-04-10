@@ -1,4 +1,4 @@
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [secrets:${context}]`, ...args);
 }
 
@@ -41,7 +41,7 @@ class DbSecretStore implements SecretStore {
 
   async get(key: string): Promise<string | null> {
     const { default: db } = await import("./db.ts");
-    const row = db.query("SELECT encrypted_value, iv FROM encrypted_secrets WHERE key = ?").get(key) as any;
+    const row = db.query("SELECT encrypted_value, iv FROM encrypted_secrets WHERE key = ?").get(key) as { encrypted_value: string; iv: string } | null;
     if (!row) return null;
     try {
       const encKey = await this.getKey();

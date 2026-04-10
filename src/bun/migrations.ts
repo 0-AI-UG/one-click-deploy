@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [migrations:${context}]`, ...args);
 }
 
@@ -125,7 +125,7 @@ export const migrations: Migration[] = [
       const hasLegacyCols = cols.some((c) => c.name === "server_id") &&
                             cols.some((c) => c.name === "host_port");
       if (hasLegacyCols) {
-        const apps = db.query("SELECT id, name, server_id, host_port, status FROM apps").all() as any[];
+        const apps = db.query("SELECT id, name, server_id, host_port, status FROM apps").all() as Array<{ id: number; name: string; server_id: number; host_port: number; status: string }>;
         const insertReplica = db.prepare(
           "INSERT INTO replicas (app_id, server_id, host_port, container_name, status) VALUES (?, ?, ?, ?, ?)"
         );
@@ -231,11 +231,12 @@ export const migrations: Migration[] = [
       // deployed before this split) out of the apps table. Match heuristic:
       // git_repo mentioning "one-click-deploy". If multiple match, take the
       // oldest.
+      type LegacyApp = { id: number; server_id: number; name: string; domain: string; git_repo: string; webhook_branch?: string; container_port: number; host_port: number; volume_id?: string; volume_mount?: string; env_vars?: string; status?: string; deploy_log?: string; created_at: string };
       const panelApp = db
         .query(
           "SELECT * FROM apps WHERE git_repo LIKE '%one-click-deploy%' ORDER BY id ASC LIMIT 1",
         )
-        .get() as any;
+        .get() as LegacyApp | null;
 
       if (panelApp) {
         db.query(
@@ -262,7 +263,7 @@ export const migrations: Migration[] = [
           .query(
             "SELECT image_tag, git_commit, status, source, deploy_log, created_at FROM deployment_history WHERE app_id = ? ORDER BY id ASC",
           )
-          .all(panelApp.id) as any[];
+          .all(panelApp.id) as Array<{ image_tag: string; git_commit: string; status: string; source: string; deploy_log: string; created_at: string }>;
         const insertPd = db.prepare(
           "INSERT INTO panel_deployments (image_tag, git_commit, status, source, deploy_log, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         );
