@@ -3,6 +3,7 @@ import { corsHeaders, securityHeaders, htmlCsp } from "./lib/cors.ts";
 import { tryTerminalUpgrade, terminalWsHandlers } from "./routes/terminal.ts";
 import { apiRoutes } from "./routes.ts";
 import { startReconciler } from "../bun/reconciler.ts";
+import { startFreezeWorker } from "../bun/scale/freeze-worker.ts";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -115,3 +116,4 @@ export const server = Bun.serve({
 console.log(`[server] One-Click Deploy API running on http://localhost:${PORT}`);
 
 startReconciler();
+startFreezeWorker();

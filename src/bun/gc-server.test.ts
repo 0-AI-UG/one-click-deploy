@@ -10,7 +10,19 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 // Mock the provider BEFORE importing db.ts so the dynamic import in
 // gcServerIfEmpty resolves to the mock.
 const deleteServer = mock(async (_id: string) => {});
-const fakeProvider = { id: "hetzner", name: "Hetzner", deleteServer };
+const deleteSnapshot = mock(async (_id: string) => {});
+const fakeProvider = {
+  id: "hetzner",
+  name: "Hetzner",
+  deleteServer,
+  snapshots: {
+    async delete(id: string) { await deleteSnapshot(id); },
+    async create() { throw new Error("unused"); },
+    async get() { throw new Error("unused"); },
+    async list() { return []; },
+    async createServerFromSnapshot() { throw new Error("unused"); },
+  },
+};
 const fakeDnsProvider = { id: "hetzner-dns", name: "Hetzner DNS", listZones: async () => [], createRecord: async () => ({ id: "1", name: "", type: "", value: "" }), deleteRecord: async () => {} };
 mock.module("./providers/index.ts", () => ({
   getComputeProvider: () => fakeProvider,
@@ -34,6 +46,7 @@ function freshServer(name: string) {
 describe("gcServerIfEmpty", () => {
   beforeEach(() => {
     deleteServer.mockClear();
+    deleteSnapshot.mockClear();
     db.deletePanel();
   });
 
@@ -80,5 +93,79 @@ describe("gcServerIfEmpty", () => {
     await db.gcServerIfEmpty(server.id);
     expect(deleteServer).not.toHaveBeenCalled();
     expect(db.getServer(server.id)).toBeTruthy();
+  });
+
+  test("does NOT delete a server whose only replica is status=stopped (light sleep anchor)", async () => {
+    const server = freshServer("lightsleep");
+    const app = db.insertApp({
+      name: `app-sleep-${Date.now()}`,
+      domain: "x.com",
+      git_repo: "https://x.git",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+    });
+    const replica = db.insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 10000,
+      container_name: app.name,
+    });
+    db.markReplicaStopped(replica.id);
+    // The stopped replica should keep the server alive (light sleep) and
+    // hasRunningReplicas should report false, hasAnyReplicas true.
+    expect(db.hasRunningReplicas(server.id)).toBe(false);
+    expect(db.hasAnyReplicas(server.id)).toBe(true);
+
+    await db.gcServerIfEmpty(server.id);
+    expect(deleteServer).not.toHaveBeenCalled();
+    expect(db.getServer(server.id)).toBeTruthy();
+  });
+
+  test("deletes the snapshot (not the cloud server) when gc'ing a frozen empty server", async () => {
+    // Phase 7: last app on a frozen server goes away — the server row still
+    // holds a snapshot_id even though provider_id is empty. gcServerIfEmpty
+    // must release the snapshot via the provider then drop the row.
+    const server = freshServer("frozen-empty");
+    db.markServerFrozen(server.id, {
+      snapshot_id: "snap-to-release",
+      volume_ids: [],
+    });
+
+    await db.gcServerIfEmpty(server.id);
+
+    expect(deleteSnapshot).toHaveBeenCalledTimes(1);
+    expect(deleteSnapshot).toHaveBeenCalledWith("snap-to-release");
+    // A frozen server has no cloud instance — we must not try to delete one.
+    expect(deleteServer).not.toHaveBeenCalled();
+    expect(db.getServer(server.id)).toBeFalsy();
+  });
+
+  test("markReplicaStopped sets stopped_at and markReplicaRunning clears it", () => {
+    const server = freshServer("toggle");
+    const app = db.insertApp({
+      name: `app-toggle-${Date.now()}`,
+      domain: "x.com",
+      git_repo: "https://x.git",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+    });
+    const replica = db.insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 10000,
+      container_name: app.name,
+      status: "running",
+    });
+    db.markReplicaStopped(replica.id);
+    const after1 = db.getReplica(replica.id);
+    expect(after1?.status).toBe("stopped");
+    expect(after1?.stopped_at).toBeTruthy();
+
+    db.markReplicaRunning(replica.id);
+    const after2 = db.getReplica(replica.id);
+    expect(after2?.status).toBe("running");
+    expect(after2?.stopped_at).toBeNull();
   });
 });

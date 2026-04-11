@@ -17,6 +17,10 @@ let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 
 async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
+  // Stopped replicas are light-sleep anchors — their container is off by
+  // design. Do NOT collect metrics, do NOT health-check them, and do NOT
+  // auto-restart them. Any of those would resurrect the sleeping app.
+  if (replica.status === "stopped") return;
   const server = db.getServer(replica.server_id);
   if (!server) return;
   const hostKey = server.ssh_host_key || undefined;
@@ -276,7 +280,11 @@ async function tick(): Promise<void> {
       // Propagate replica health to app status
       // Only touch apps that are in a "live" state (running/unhealthy), not deploying/paused
       if (app.status === "running" || app.status === "unhealthy") {
-        const freshReplicas = list.map((r) => db.getReplica(r.id)).filter((r): r is NonNullable<typeof r> => r !== null);
+        // Ignore stopped replicas (light-sleep anchors) when computing app
+        // health — they are intentionally off.
+        const freshReplicas = list
+          .map((r) => db.getReplica(r.id))
+          .filter((r): r is NonNullable<typeof r> => r !== null && r.status !== "stopped");
         const allHealthy = freshReplicas.length > 0 && freshReplicas.every((r) => r.status === "running");
         const newStatus = allHealthy ? "running" : "unhealthy";
         if (newStatus !== app.status) {

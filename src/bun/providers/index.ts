@@ -29,4 +29,7 @@ export type {
   VolumeOps,
   LoadBalancerOps,
   FirewallRuleOps,
+  SnapshotOps,
+  SnapshotInfo,
+  SnapshotListItem,
 } from "./types.ts";

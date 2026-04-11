@@ -2,7 +2,7 @@ import * as db from "../db.ts";
 import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
 import {
   sshExec, deployCaddySite, deployCaddyWakePage, removeCaddySite,
-  authProxyPort, removeAuthProxy,
+  authProxyPort, removeAuthProxy, stopContainer, stopCompose,
 } from "../remote/index.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
 import { rebindContainer } from "./rebind.ts";
@@ -27,8 +27,18 @@ export async function scaleDown(
 
   const toRemove = sorted.slice(0, currentCount - targetCount);
 
+  // When scaling to zero, the *last* replica in `toRemove` is kept on disk as
+  // the "sleeping anchor": container stopped (not removed), replica row
+  // preserved with status = "stopped". This makes wake a single `docker start`
+  // (~1s) instead of a fresh `docker run` (~several seconds). All other
+  // replicas going away are genuinely removed.
+  const goingToZero = targetCount === 0;
+  const anchorIdx = goingToZero ? toRemove.length - 1 : -1;
+
   let removedCount = 0;
-  for (const replica of toRemove) {
+  for (let i = 0; i < toRemove.length; i++) {
+    const replica = toRemove[i];
+    const preserveAsAnchor = i === anchorIdx;
     try {
       emit("scale", `Draining replica ${replica.container_name}...`);
 
@@ -50,26 +60,52 @@ export async function scaleDown(
       emit("scale", `Waiting 10s drain for ${replica.container_name}...`);
       await Bun.sleep(10_000);
 
-      // Stop and remove container
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-      if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-        // This is the primary compose instance — handled separately during 2→1
-      } else {
-        await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
-      }
 
-      // Remove auth proxy if present
-      if (app.auth_password) {
-        try {
-          await removeAuthProxy(server.ipv4, replica.container_name, hostKey);
-        } catch (err) {
-          log("scale", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
+      if (preserveAsAnchor) {
+        // Stop-but-preserve path (light sleep). Keep the container, env file,
+        // and volume mount on disk so wake is `docker start`.
+        if (app.deploy_mode === "compose") {
+          try {
+            await stopCompose(server.ipv4, app.name, hostKey);
+          } catch (err) {
+            log("scale", `Failed to stop compose project ${app.name}: ${err}`);
+            throw err;
+          }
+        } else {
+          try {
+            await stopContainer(server.ipv4, replica.container_name, hostKey);
+          } catch (err) {
+            log("scale", `Failed to stop container ${replica.container_name}: ${err}`);
+            throw err;
+          }
         }
-      }
+        // Leave auth proxy in place (if any) — it will proxy to the stopped
+        // container during sleep, but nothing routes traffic there: Caddy is
+        // pointing at the wake page. On wake, `docker start` restores the
+        // backend without needing to re-deploy the auth proxy.
+        db.markReplicaStopped(replica.id);
+        emit("scale", `Replica ${replica.container_name} stopped (anchor for sleep)`);
+      } else {
+        // Stop-and-remove path (actual scale-down, not sleep).
+        if (app.deploy_mode === "compose" && replica.container_name === app.name) {
+          // This is the primary compose instance — handled separately during 2→1
+        } else {
+          await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
+        }
 
-      db.deleteReplica(replica.id);
+        if (app.auth_password) {
+          try {
+            await removeAuthProxy(server.ipv4, replica.container_name, hostKey);
+          } catch (err) {
+            log("scale", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
+          }
+        }
+
+        db.deleteReplica(replica.id);
+        emit("scale", `Replica ${replica.container_name} removed`);
+      }
       removedCount++;
-      emit("scale", `Replica ${replica.container_name} removed`);
     } catch (err) {
       log("scale", `Failed to remove replica ${replica.container_name}: ${err}`);
       // Stop attempting further removals — don't make things worse
@@ -222,8 +258,9 @@ export async function scaleDown(
     emit("scale", "Load balancer removed");
   }
 
-  // GC every affected server uniformly — gcServerIfEmpty handles the
-  // empty/panel checks. No primary exemption.
+  // Decide what happens to every affected server uniformly. `freezeServerIfEmpty`
+  // handles all three cases: still-in-use → no-op, completely empty → gc,
+  // light-sleep anchor present → enqueue a freeze job.
   const candidateServerIds = new Set<number>();
   for (const replica of toRemove) {
     candidateServerIds.add(replica.server_id);
@@ -231,11 +268,14 @@ export async function scaleDown(
   for (const serverId of candidateServerIds) {
     try {
       const before = db.getServer(serverId);
-      await db.gcServerIfEmpty(serverId);
+      await db.freezeServerIfEmpty(serverId);
       const after = db.getServer(serverId);
       if (before && !after) emit("scale", `Server ${before.name} deleted`);
+      else if (after && db.getActiveFreezeJobForServer(serverId)) {
+        emit("scale", `Server ${after.name} queued for freeze`);
+      }
     } catch (err) {
-      log("scale", `Failed to gc server ${serverId}: ${err}`);
+      log("scale", `Failed to freeze/gc server ${serverId}: ${err}`);
     }
   }
 }

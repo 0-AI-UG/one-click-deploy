@@ -37,6 +37,13 @@ import {
   deleteCertificate,
   getLoadBalancer,
 } from "../hetzner/load-balancers.ts";
+import {
+  snapshotServer as hetznerSnapshotServer,
+  getSnapshot as hetznerGetSnapshot,
+  deleteSnapshot as hetznerDeleteSnapshot,
+  listSnapshots as hetznerListSnapshots,
+  createServerFromSnapshot as hetznerCreateServerFromSnapshot,
+} from "../hetzner/snapshots.ts";
 import { cloudInitScript } from "./cloud-init.ts";
 
 export const hetznerCompute: ComputeProvider = {
@@ -241,6 +248,38 @@ export const hetznerCompute: ComputeProvider = {
     },
     async removeLBRule(firewallId, port, lbIpv4) {
       await removeLBFirewallRule(parseInt(firewallId, 10), port, lbIpv4);
+    },
+  },
+
+  snapshots: {
+    async create(providerServerId, description) {
+      return hetznerSnapshotServer(providerServerId, description);
+    },
+    async get(snapshotId) {
+      return hetznerGetSnapshot(snapshotId);
+    },
+    async delete(snapshotId) {
+      await hetznerDeleteSnapshot(snapshotId);
+    },
+    async list() {
+      return hetznerListSnapshots();
+    },
+    async createServerFromSnapshot(opts) {
+      const server = await hetznerCreateServerFromSnapshot({
+        name: opts.name,
+        snapshotId: opts.snapshotId,
+        serverType: opts.serverType,
+        location: opts.location,
+        sshKeyName: opts.sshKeyName,
+        firewallId: parseInt(opts.firewallId, 10),
+        volumeIds: opts.volumeIds,
+      });
+      return {
+        providerId: String(server.id),
+        ipv4: server.public_net.ipv4.ip,
+        ipv6: server.public_net.ipv6.ip || "",
+        status: server.status ?? "creating",
+      };
     },
   },
 

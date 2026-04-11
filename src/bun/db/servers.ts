@@ -1,5 +1,7 @@
 import db from "./connection.ts";
 
+export type ServerState = "materialized" | "frozen";
+
 export type ServerRow = {
   id: number;
   name: string;
@@ -11,6 +13,17 @@ export type ServerRow = {
   location: string;
   status: string;
   ssh_host_key: string;
+  /** Lifecycle state — "materialized" (cloud instance exists) or "frozen"
+   *  (snapshot-only parking state, provider_id/ipv4 cleared). */
+  state: ServerState;
+  /** Provider snapshot id when frozen, empty string otherwise. */
+  snapshot_id: string;
+  /** JSON-encoded array of provider volume IDs detached during freeze. Empty
+   *  string when the server has no cloud volumes. */
+  frozen_volume_ids: string;
+  frozen_at: string | null;
+  /** Last freeze attempt failure timestamp, for retry backoff. */
+  freeze_failed_at: string | null;
   created_at: string;
 };
 
@@ -83,4 +96,71 @@ export function deleteServer(id: number): void {
 
 export function updateServerHostKey(id: number, hostKey: string): void {
   db.query("UPDATE servers SET ssh_host_key = ? WHERE id = ?").run(hostKey, id);
+}
+
+/**
+ * Mark a server as frozen: the provider instance has been destroyed, the
+ * snapshot is available, and detached cloud volumes are listed in
+ * `volumeIds`. Clears `provider_id` and `ipv4` so nothing tries to talk to
+ * the dead instance, but keeps the row so the wake path can recreate it.
+ */
+export function markServerFrozen(
+  id: number,
+  fields: { snapshot_id: string; volume_ids: string[] },
+): void {
+  const frozenAt = new Date().toISOString();
+  db.query(
+    `UPDATE servers SET
+       state = 'frozen',
+       snapshot_id = ?,
+       frozen_volume_ids = ?,
+       frozen_at = ?,
+       freeze_failed_at = NULL,
+       provider_id = '',
+       ipv4 = ''
+     WHERE id = ?`,
+  ).run(fields.snapshot_id, JSON.stringify(fields.volume_ids), frozenAt, id);
+}
+
+/**
+ * Mark a server as materialized again after a wake-from-deep-sleep: store
+ * the new provider_id / ipv4, clear the frozen pointers, but keep
+ * `snapshot_id` around until the wake path confirms the server is healthy
+ * and deletes the old snapshot.
+ */
+export function markServerMaterialized(
+  id: number,
+  fields: { provider_id: string; ipv4: string; ipv6?: string },
+): void {
+  db.query(
+    `UPDATE servers SET
+       state = 'materialized',
+       provider_id = ?,
+       ipv4 = ?,
+       ipv6 = COALESCE(?, ipv6),
+       frozen_at = NULL,
+       frozen_volume_ids = ''
+     WHERE id = ?`,
+  ).run(fields.provider_id, fields.ipv4, fields.ipv6 ?? null, id);
+}
+
+export function clearServerSnapshot(id: number): void {
+  db.query("UPDATE servers SET snapshot_id = '' WHERE id = ?").run(id);
+}
+
+export function setFreezeFailed(id: number): void {
+  db.query("UPDATE servers SET freeze_failed_at = ? WHERE id = ?").run(
+    new Date().toISOString(),
+    id,
+  );
+}
+
+export function getFrozenVolumeIds(server: ServerRow): string[] {
+  if (!server.frozen_volume_ids) return [];
+  try {
+    const parsed = JSON.parse(server.frozen_volume_ids);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
 }

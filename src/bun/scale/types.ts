@@ -48,6 +48,7 @@ export interface Replica {
   memory_percent: number;
   last_health_at: string | null;
   unhealthy_ticks: number;
+  stopped_at: string | null;
   created_at: string;
 }
 
@@ -62,6 +63,11 @@ export interface Server {
   location: string;
   status: string;
   ssh_host_key: string;
+  state: "materialized" | "frozen";
+  snapshot_id: string;
+  frozen_volume_ids: string;
+  frozen_at: string | null;
+  freeze_failed_at: string | null;
   created_at: string;
 }
 

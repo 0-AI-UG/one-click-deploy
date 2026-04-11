@@ -9,6 +9,7 @@ import {
 import { validateEnvVars } from "../validate.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { rollingRedeploy } from "../scale.ts";
+import { wakeApp } from "../scale/wake.ts";
 
 type DbApp = {
   id: number;
@@ -73,13 +74,38 @@ export async function redeployApp(
   log("redeployApp", `Redeploying app id=${appId}`);
   let previousStatus = "running"; // fallback if app lookup fails
   try {
-    const app = db.getApp(appId);
+    let app = db.getApp(appId);
     if (!app) throw new Error("App not found");
+
+    // Phase 7: redeploying a sleeping app. We must bring the app back up
+    // before we can build into it. For light sleep, wakeApp re-starts the
+    // preserved container in-place; for deep sleep it materializes the
+    // frozen server from the snapshot first. Either way, after this returns
+    // we have a live server we can SSH into and a running replica row.
+    // The snapshot (if any) is invalidated and cleaned up by wakeApp, so
+    // the freshly-built image won't be shadowed by a stale one on next freeze.
+    if (app.status === "sleeping") {
+      onProgress("wake", "App is sleeping — waking before redeploy...");
+      const wakeResult = await wakeApp(appId);
+      if (!wakeResult.ok) {
+        throw new Error(`Failed to wake sleeping app before redeploy: ${wakeResult.error}`);
+      }
+      const refreshed = db.getApp(appId);
+      if (!refreshed) throw new Error("App disappeared after wake");
+      app = refreshed;
+    }
+
     const replicasInit = db.getReplicas(appId);
     if (replicasInit.length === 0) throw new Error("App has no replicas");
     const firstReplica = replicasInit[0];
     const server = db.getServer(firstReplica.server_id);
     if (!server) throw new Error("Server not found");
+    if (server.state === "frozen") {
+      // Shouldn't be reachable — wakeApp either materialized the server or
+      // threw. Kept as a defensive guard to fail loudly instead of trying
+      // to SSH to an empty ipv4.
+      throw new Error("Server is frozen — wake path did not materialize it");
+    }
     const hostPort = firstReplica.host_port;
 
     // Capture previous state for rollback

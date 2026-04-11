@@ -14,6 +14,7 @@ import {
   unpauseCompose,
   composeHealthCheck,
   healthCheck,
+  removePanelWakePage,
 } from "../remote/index.ts";
 import * as github from "../github.ts";
 
@@ -54,7 +55,11 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     for (const replica of replicas) {
       affectedServerIds.add(replica.server_id);
       const replicaServer = db.getServer(replica.server_id);
-      if (replicaServer) {
+      // Frozen servers have no running cloud instance — their containers
+      // live only inside the snapshot, which we release via gcServerIfEmpty
+      // once the last app is gone. Skip all SSH cleanup here; trying to ssh
+      // into ipv4="" would just set cleanupFailed and strand the app.
+      if (replicaServer && replicaServer.state !== "frozen") {
         const hostKey = replicaServer.ssh_host_key || undefined;
         try {
           if (app.deploy_mode === "compose" && replica.container_name === app.name) {
@@ -99,6 +104,27 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       } catch (err) {
         log("destroyApp", `Failed to delete LB: ${err instanceof Error ? err.message : err}`);
         cleanupFailed = true;
+      }
+    }
+
+    // If this app's wake page currently lives on the panel (Phase 5 state:
+    // server is frozen, or woke a sibling but this app never got a request
+    // yet), remove the Caddy route from the panel server. Best-effort —
+    // leaving a stale route is harmless (ask endpoint refuses cert minting
+    // once the row is gone) but we clean up to avoid cruft.
+    if (app.wake_page_on_panel) {
+      try {
+        const panel = db.getPanel();
+        const panelServer = panel ? db.getServer(panel.server_id) : null;
+        if (panelServer?.ipv4) {
+          await removePanelWakePage(
+            panelServer.ipv4,
+            app.domain,
+            panelServer.ssh_host_key || undefined,
+          );
+        }
+      } catch (err) {
+        log("destroyApp", `Failed to remove panel wake page: ${err}`);
       }
     }
 

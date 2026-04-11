@@ -16,6 +16,7 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
     if (app.volume_id) return Response.json({ ok: false, error: "App already has a volume attached" }, { headers: corsHeaders });
     const reps = db.getReplicas(app_id);
     if (reps.length === 0) return Response.json({ ok: false, error: "App has no replicas" }, { headers: corsHeaders });
+    if (reps.length > 1) return Response.json({ ok: false, error: "Cannot attach a volume to an app with more than 1 replica. Scale down to 1 first." }, { headers: corsHeaders });
     const server = db.getServer(reps[0].server_id);
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
@@ -36,6 +37,9 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
     const volumeMount = `${hostMountPath}:${containerPath}`;
 
     db.updateAppVolume(app_id, String(vol.providerId), volumeMount);
+    // A volume locks the app to a single server: force min/max replicas to 1
+    // so autoscale + manual scaling cannot ever bring up replica 2+.
+    db.updateAppScaling(app_id, { min_replicas: Math.min(1, app.min_replicas), max_replicas: 1 });
     const result = await recreateAppContainer(app_id, volumeMount);
     if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
 
@@ -55,6 +59,7 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
     if (app.volume_id) return Response.json({ ok: false, error: "App already has a volume attached" }, { headers: corsHeaders });
     const reps = db.getReplicas(app_id);
     if (reps.length === 0) return Response.json({ ok: false, error: "App has no replicas" }, { headers: corsHeaders });
+    if (reps.length > 1) return Response.json({ ok: false, error: "Cannot attach a volume to an app with more than 1 replica. Scale down to 1 first." }, { headers: corsHeaders });
     const server = db.getServer(reps[0].server_id);
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
@@ -72,6 +77,8 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
     const volumeMount = `${hostMountPath}:${containerPath}`;
 
     db.updateAppVolume(app_id, volume_id, volumeMount);
+    // A volume locks the app to a single server: force min/max replicas to 1.
+    db.updateAppScaling(app_id, { min_replicas: Math.min(1, app.min_replicas), max_replicas: 1 });
     const result = await recreateAppContainer(app_id, volumeMount);
     if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
 

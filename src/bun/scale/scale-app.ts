@@ -27,6 +27,13 @@ export async function scaleApp(
       return { ok: false, error: "Replicas cannot be negative" };
     }
 
+    // A cloud volume can only be attached to one server at a time, so volume
+    // apps cannot scale above 1 replica. Both compose and image scale-up paths
+    // silently drop / mis-bind the volume on replica 2+ — enforce at the edge.
+    if (app.volume_id && targetReplicas > 1) {
+      return { ok: false, error: "Apps with persistent storage cannot have more than 1 replica." };
+    }
+
     if (targetReplicas > currentCount) {
       try {
         await scaleUp(app, currentReplicas, currentCount, targetReplicas, emit, targetServerId);

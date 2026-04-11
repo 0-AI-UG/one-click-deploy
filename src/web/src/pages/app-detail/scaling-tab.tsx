@@ -28,11 +28,19 @@ interface ScalingTabProps {
 }
 
 export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoading, action, loadReplicas, load }: ScalingTabProps) {
+  const hasVolume = Boolean(app.volume_id);
+  const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica — a cloud volume can only be attached to a single server at a time.";
   return (
     <div className="space-y-4">
       {(!app.domain || app.domain.endsWith(".nip.io")) && (
         <Card className="p-4">
           <p className="font-mono text-[10px] text-accent-amber font-bold">Scaling requires a custom domain. Add a domain in Settings first — nip.io URLs are tied to a single server IP and cannot be load-balanced.</p>
+        </Card>
+      )}
+
+      {hasVolume && (
+        <Card className="p-4">
+          <p className="font-mono text-[10px] text-accent-amber font-bold">{volumeLockedReason}</p>
         </Card>
       )}
 
@@ -90,10 +98,17 @@ export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoad
             <Btn
               size="sm"
               loading={actionLoading === "scale-up"}
-              disabled={!app.domain || app.domain.endsWith(".nip.io")}
-              title={!app.domain || app.domain.endsWith(".nip.io") ? "Add a custom domain to enable scaling" : "Add one replica. Placement is automatic: reuse a ready server with no replica of this app, or provision a new one."}
+              disabled={!app.domain || app.domain.endsWith(".nip.io") || hasVolume || replicas.length >= 1 && hasVolume}
+              title={
+                hasVolume
+                  ? volumeLockedReason
+                  : (!app.domain || app.domain.endsWith(".nip.io"))
+                    ? "Add a custom domain to enable scaling"
+                    : "Add one replica. Placement is automatic: reuse a ready server with no replica of this app, or provision a new one."
+              }
               onClick={() => action("scale-up", async () => {
                 const current = replicas.length || app.desired_replicas || 1;
+                if (hasVolume && current >= 1) return;
                 await post(`/api/apps/${appId}/scale`, { replicas: current + 1 });
                 await loadReplicas();
               })}
@@ -137,12 +152,14 @@ export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoad
                 />
               </div>
               <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Max <InfoTip text="Highest replica count the autoscaler will scale up to." /></label>
+                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Max <InfoTip text={hasVolume ? volumeLockedReason : "Highest replica count the autoscaler will scale up to."} /></label>
                 <input
                   type="number"
                   min={1}
-                  value={policy.max_replicas}
-                  disabled={!policy.autoscale_enabled}
+                  max={hasVolume ? 1 : undefined}
+                  value={hasVolume ? 1 : policy.max_replicas}
+                  disabled={!policy.autoscale_enabled || hasVolume}
+                  title={hasVolume ? volumeLockedReason : undefined}
                   onChange={(e) => setPolicy({ ...policy, max_replicas: parseInt(e.target.value) || 1 })}
                 />
               </div>

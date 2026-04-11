@@ -140,12 +140,13 @@ export function CopyButton({ text, size = 12 }: { text: string; size?: number })
 }
 
 // --- Status Badge ---
-export function StatusBadge({ status }: { status: string }) {
+export function StatusBadge({ status, subLabel }: { status: string; subLabel?: string }) {
   const s = status?.toLowerCase() || "unknown";
   const dotColor =
     s === "running" ? "bg-accent" :
     s === "deploying" || s === "waking" ? "bg-accent-amber" :
-    s === "paused" || s === "sleeping" ? "bg-alt" :
+    s === "sleeping" ? "bg-accent-amber" :
+    s === "paused" ? "bg-alt" :
     s === "unhealthy" ? "bg-accent-amber" :
     s === "error" || s === "failed" ? "bg-accent-red" :
     "bg-alt";
@@ -154,6 +155,9 @@ export function StatusBadge({ status }: { status: string }) {
     <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-fg">
       <span className={`w-[7px] h-[7px] border-[1.5px] border-fg flex-shrink-0 ${dotColor} ${s === "deploying" || s === "waking" ? "pulse" : ""}`} />
       {status}
+      {subLabel && (
+        <span className="font-mono text-[9px] text-muted font-normal normal-case tracking-normal">· {subLabel}</span>
+      )}
     </span>
   );
 }

@@ -11,6 +11,7 @@ export type ReplicaRow = {
   memory_percent: number;
   unhealthy_ticks: number;
   last_health_at: string | null;
+  stopped_at: string | null;
   created_at: string;
 };
 
@@ -71,6 +72,18 @@ export function getReplicasByServer(serverId: number): ReplicaRow[] {
 
 export function updateReplicaStatus(id: number, status: string): void {
   db.query("UPDATE replicas SET status = ? WHERE id = ?").run(status, id);
+}
+
+export function markReplicaStopped(id: number): void {
+  db.query(
+    "UPDATE replicas SET status = 'stopped', stopped_at = datetime('now') WHERE id = ?"
+  ).run(id);
+}
+
+export function markReplicaRunning(id: number): void {
+  db.query(
+    "UPDATE replicas SET status = 'running', stopped_at = NULL WHERE id = ?"
+  ).run(id);
 }
 
 export function updateReplicaMetrics(id: number, cpuPercent: number, memoryPercent: number): void {

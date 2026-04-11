@@ -8,6 +8,12 @@ export type Migration = {
   version: number;
   description: string;
   up: (db: Database) => void;
+  /** Set for migrations that recreate parent tables whose children cascade on
+   *  delete. SQLite treats `DROP TABLE` with `foreign_keys = ON` as a
+   *  cascading delete against any ON DELETE CASCADE children, wiping them.
+   *  The only way to avoid that is to toggle the pragma OFF *outside* the
+   *  transaction — which is what the runner does when this flag is true. */
+  disableForeignKeys?: boolean;
 };
 
 export const migrations: Migration[] = [
@@ -571,6 +577,140 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 25,
+    description: "Add stopped_at to replicas for freeze-eligibility tracking",
+    up: (db) => {
+      db.run("ALTER TABLE replicas ADD COLUMN stopped_at TEXT");
+    },
+  },
+  {
+    version: 26,
+    description:
+      "Add freeze state fields to servers and create freeze_jobs table",
+    up: (db) => {
+      // servers: lifecycle state (materialized|frozen) + snapshot pointers.
+      // Guarded for fresh DBs created by initSchema() with the latest columns
+      // already present (same pattern as migration 24).
+      const cols = db
+        .query("PRAGMA table_info(servers)")
+        .all() as { name: string }[];
+      const colNames = new Set(cols.map((c) => c.name));
+      if (!colNames.has("state")) {
+        db.run(
+          "ALTER TABLE servers ADD COLUMN state TEXT NOT NULL DEFAULT 'materialized'",
+        );
+      }
+      if (!colNames.has("snapshot_id")) {
+        db.run(
+          "ALTER TABLE servers ADD COLUMN snapshot_id TEXT NOT NULL DEFAULT ''",
+        );
+      }
+      if (!colNames.has("frozen_volume_ids")) {
+        // JSON-encoded array of provider volume IDs. Stored as TEXT so the
+        // column stays usable on SQLite builds without JSON1.
+        db.run(
+          "ALTER TABLE servers ADD COLUMN frozen_volume_ids TEXT NOT NULL DEFAULT ''",
+        );
+      }
+      if (!colNames.has("frozen_at")) {
+        db.run("ALTER TABLE servers ADD COLUMN frozen_at TEXT");
+      }
+      if (!colNames.has("freeze_failed_at")) {
+        db.run("ALTER TABLE servers ADD COLUMN freeze_failed_at TEXT");
+      }
+
+      // Durable queue for the freeze worker. Survives panel restart.
+      db.run(`CREATE TABLE IF NOT EXISTS freeze_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        state TEXT NOT NULL DEFAULT 'pending',
+        snapshot_id TEXT NOT NULL DEFAULT '',
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT,
+        error TEXT NOT NULL DEFAULT ''
+      )`);
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_freeze_jobs_server ON freeze_jobs(server_id)",
+      );
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_freeze_jobs_state ON freeze_jobs(state)",
+      );
+    },
+  },
+  {
+    version: 27,
+    description:
+      "Drop UNIQUE on servers.provider_id so frozen servers can share ''",
+    disableForeignKeys: true,
+    up: (db) => {
+      // Phase 3 frees the cloud instance when a server is frozen and clears
+      // `provider_id` to ''. Multiple frozen servers cannot coexist under the
+      // original UNIQUE constraint. Recreate the table without it.
+      //
+      // Skip the recreate if `initSchema()` already built the table without
+      // UNIQUE (fresh DBs created by a newer connection.ts). Detect this by
+      // looking at sqlite_master for the UNIQUE keyword on provider_id.
+      const ddlRow = db
+        .query(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'servers'",
+        )
+        .get() as { sql: string } | null;
+      if (!ddlRow || !/provider_id\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(ddlRow.sql)) {
+        return;
+      }
+
+      db.run(`CREATE TABLE servers_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        provider_id TEXT NOT NULL DEFAULT '',
+        provider TEXT NOT NULL DEFAULT 'hetzner',
+        ipv4 TEXT NOT NULL DEFAULT '',
+        ipv6 TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'cx23',
+        location TEXT NOT NULL DEFAULT 'nbg1',
+        status TEXT NOT NULL DEFAULT 'provisioning',
+        ssh_host_key TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL DEFAULT 'materialized',
+        snapshot_id TEXT NOT NULL DEFAULT '',
+        frozen_volume_ids TEXT NOT NULL DEFAULT '',
+        frozen_at TEXT,
+        freeze_failed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run(`INSERT INTO servers_new (
+        id, name, provider_id, provider, ipv4, ipv6, type, location, status,
+        ssh_host_key, state, snapshot_id, frozen_volume_ids, frozen_at,
+        freeze_failed_at, created_at
+      ) SELECT
+        id, name, provider_id, provider, ipv4, ipv6, type, location, status,
+        ssh_host_key, state, snapshot_id, frozen_volume_ids, frozen_at,
+        freeze_failed_at, created_at
+      FROM servers`);
+      db.run("DROP TABLE servers");
+      db.run("ALTER TABLE servers_new RENAME TO servers");
+    },
+  },
+  {
+    version: 28,
+    description:
+      "Add apps.wake_page_on_panel flag for Phase 5 on-demand TLS authorization",
+    up: (db) => {
+      // Set when the freeze worker installs a wake page route on the panel's
+      // Caddy for this app, cleared when the wake path removes it. The Caddy
+      // on-demand-TLS `ask` endpoint uses this flag as the sole authorization
+      // signal — only apps whose wake page legitimately lives on the panel
+      // right now may trigger Let's Encrypt cert minting for their domain.
+      const cols = db
+        .query("PRAGMA table_info(apps)")
+        .all() as { name: string }[];
+      if (!cols.some((c) => c.name === "wake_page_on_panel")) {
+        db.run(
+          "ALTER TABLE apps ADD COLUMN wake_page_on_panel INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {
@@ -601,6 +741,12 @@ export function runMigrations(db: Database): void {
 
   for (const migration of pending) {
     log("run", `Migration ${migration.version}: ${migration.description}`);
+    // SQLite requires foreign_keys pragma toggling to happen outside of any
+    // active transaction — the runner handles that here on behalf of opt-in
+    // migrations.
+    if (migration.disableForeignKeys) {
+      db.run("PRAGMA foreign_keys = OFF");
+    }
     db.run("BEGIN TRANSACTION");
     try {
       migration.up(db);
@@ -613,6 +759,10 @@ export function runMigrations(db: Database): void {
       throw new Error(
         `Database migration failed (${migration.description}). The app may need to be reinstalled if this persists.`
       );
+    } finally {
+      if (migration.disableForeignKeys) {
+        db.run("PRAGMA foreign_keys = ON");
+      }
     }
   }
 

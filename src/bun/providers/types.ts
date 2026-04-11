@@ -105,6 +105,60 @@ export interface FirewallRuleOps {
   ): Promise<void>;
 }
 
+// --- Snapshot / freeze capability ---
+//
+// Optional. Providers that don't implement snapshots skip the "deep sleep" path
+// in the lifecycle state machine; their apps stay in light sleep (container
+// stopped but server still alive).
+
+export type SnapshotInfo = {
+  /** "creating" while the provider is still building the image, "available"
+   *  once it can be used to boot a new server, "failed" on a terminal error. */
+  status: "creating" | "available" | "failed";
+  /** Size in GB. May be 0 while status === "creating". */
+  sizeGb: number;
+};
+
+export type SnapshotListItem = {
+  snapshotId: string;
+  description: string;
+  sizeGb: number;
+  status: "creating" | "available" | "failed";
+};
+
+export interface SnapshotOps {
+  /**
+   * Issue a snapshot of the given server's system disk. Returns once the job
+   * has been accepted and an id has been assigned — the image may still be
+   * building. Poll with `get` until status === "available".
+   */
+  create(
+    providerServerId: string,
+    description: string,
+  ): Promise<{ snapshotId: string }>;
+  get(snapshotId: string): Promise<SnapshotInfo>;
+  delete(snapshotId: string): Promise<void>;
+  /**
+   * List every snapshot this account owns that is managed by the panel. Used
+   * by the freeze worker to guard against blowing the provider snapshot quota.
+   */
+  list(): Promise<SnapshotListItem[]>;
+  /**
+   * Create a new cloud instance from an existing snapshot, in `location`, with
+   * `volumeIds` attached at creation time. The SSH key + firewall the provider
+   * uses for fresh servers are reused automatically.
+   */
+  createServerFromSnapshot(opts: {
+    name: string;
+    snapshotId: string;
+    serverType: string;
+    location: string;
+    sshKeyName: string;
+    firewallId: string;
+    volumeIds: string[];
+  }): Promise<ProviderServer>;
+}
+
 export interface ComputeProvider {
   readonly id: ProviderId;
   readonly name: string;
@@ -142,6 +196,7 @@ export interface ComputeProvider {
   volumes?: VolumeOps;
   loadBalancers?: LoadBalancerOps;
   firewallRules?: FirewallRuleOps;
+  snapshots?: SnapshotOps;
   getPricing?(): Promise<{
     currency: string;
     servers: Record<string, number>;

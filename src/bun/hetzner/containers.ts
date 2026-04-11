@@ -218,24 +218,27 @@ export async function deployCaddySite(
 }
 
 /**
- * Deploy a Caddy route that serves a "Waking up" HTML page for a sleeping app.
- * The page auto-triggers a wake request to the panel and polls until ready.
+ * TLS mode for a Caddy wake-page route.
+ *
+ *   - `internal`: issue a self-signed cert via Caddy's "internal" issuer. Used
+ *                 for nip.io / localhost domains.
+ *   - `default`:  no explicit policy — Caddy does its normal ACME HTTP-01
+ *                 flow at startup (the original app server case, where DNS
+ *                 already points here).
+ *   - `on-demand`: Caddy defers certificate issuance to the moment of the
+ *                  first TLS handshake and gates it on the global `ask`
+ *                  endpoint. Used by the panel server in Phase 5 when it
+ *                  fronts arbitrary tenant domains for deep-frozen apps.
  */
-export async function deployCaddyWakePage(
-  ip: string,
-  domain: string,
-  panelDomain: string,
-  appId: number,
-  wakeToken: string,
-  internalTls: boolean = false,
-  hostKey?: string
-) {
-  log("caddy", `Deploying wake page: domain=${domain} appId=${appId}`);
+type WakePageTlsMode = "internal" | "default" | "on-demand";
 
-  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
-  const panelOrigin = panelDomain ? `https://${panelDomain}` : "";
-
-  const html = `<!DOCTYPE html>
+/**
+ * Build the HTML served by a Caddy wake-page route. Extracted so both
+ * `deployCaddyWakePage` and `deployPanelWakePage` share the same polling /
+ * reload JS without duplication.
+ */
+function wakePageHtml(panelOrigin: string, appId: number, wakeToken: string): string {
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -287,8 +290,19 @@ a{color:#888}
 </script>
 </body>
 </html>`;
+}
 
-  const route: CaddyRoute = {
+/**
+ * Build a static_response wake-page Caddy route that 503s with the HTML
+ * above. Identical for the tenant-server and panel-server cases — only the
+ * TLS policy differs, so policy handling is done by the callers.
+ */
+function wakePageRoute(
+  domain: string,
+  html: string,
+  routeId: string,
+): CaddyRoute {
+  return {
     "@id": routeId,
     match: [{ host: [domain] }],
     handle: [
@@ -305,6 +319,27 @@ a{color:#888}
     ],
     terminal: true,
   };
+}
+
+/**
+ * Deploy a Caddy route that serves a "Waking up" HTML page for a sleeping app.
+ * The page auto-triggers a wake request to the panel and polls until ready.
+ */
+export async function deployCaddyWakePage(
+  ip: string,
+  domain: string,
+  panelDomain: string,
+  appId: number,
+  wakeToken: string,
+  internalTls: boolean = false,
+  hostKey?: string
+) {
+  log("caddy", `Deploying wake page: domain=${domain} appId=${appId}`);
+
+  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
+  const panelOrigin = panelDomain ? `https://${panelDomain}` : "";
+  const html = wakePageHtml(panelOrigin, appId, wakeToken);
+  const route = wakePageRoute(domain, html, routeId);
 
   const tlsPolicy: CaddyTlsPolicy = internalTls
     ? { automation: { policies: [{ subjects: [domain], issuers: [{ module: "internal" }] }] } }
@@ -349,6 +384,196 @@ a{color:#888}
 
   await persistCaddyConfig(ip, hostKey);
   log("caddy", "Wake page configured via admin API (persisted to disk)");
+}
+
+// --- Panel-colocated wake pages (Phase 5) ---
+//
+// When a server is frozen, its wake pages must move to the panel server so
+// HTTP requests for tenant domains can still reach *something* even though
+// the tenant instance has been destroyed. That brings two problems the
+// tenant-server variant doesn't have:
+//
+//   1. TLS for tenant domains: the panel doesn't own these certs at startup
+//      time, so they must be minted on the first TLS handshake via Caddy's
+//      on-demand-TLS flow, gated by an `ask` endpoint hosted by the panel
+//      API that verifies the domain is really one we're fronting right now.
+//   2. Idempotent reconfig: the same wake page can be overwritten multiple
+//      times (e.g. re-freeze after a wake), and the on-demand-TLS automation
+//      must not be installed twice.
+//
+// The helpers below operate on the panel's *own* Caddy via SSH — same pattern
+// as `deployCaddyWakePage`, just with different policy state.
+
+const PANEL_ON_DEMAND_POLICY_ID = "ocd-on-demand-policy";
+
+/**
+ * Idempotently ensure the panel's Caddy has on-demand-TLS wired up with its
+ * `ask` endpoint pointing back at the panel API. Safe to call before every
+ * panel-wake-page install — the PUT/replace semantics mean repeated calls
+ * converge to the same state.
+ *
+ * The caller is responsible for passing a reachable panel ipv4 (the panel's
+ * own server) and the panel's public domain so the ask URL can be built.
+ */
+export async function ensurePanelOnDemandTls(
+  panelIp: string,
+  panelDomain: string,
+  hostKey?: string,
+): Promise<void> {
+  if (!panelDomain) {
+    throw new Error("ensurePanelOnDemandTls: panelDomain is required");
+  }
+  log("caddy", `Ensuring on-demand TLS on panel ${panelIp} (ask=https://${panelDomain}/api/caddy/ask)`);
+
+  // 1. Write the global on-demand config (ask URL + rate limit). PUT upserts
+  //    at the path — if the parent automation object doesn't exist yet, we
+  //    first have to ensure the path is addressable. PATCH on /config/apps/tls
+  //    creates intermediate objects, so we use that instead.
+  const onDemandConfig = {
+    automation: {
+      on_demand: {
+        ask: `https://${panelDomain}/api/caddy/ask`,
+        rate_limit: { interval: "2m", burst: 5 },
+      },
+    },
+  };
+  const onDemandJson = JSON.stringify(onDemandConfig).replace(/'/g, "'\\''");
+  const patchTls = await sshExec(
+    panelIp,
+    `curl -sf -X PATCH -H 'Content-Type: application/json' -d '${onDemandJson}' http://localhost:2019/config/apps/tls`,
+    hostKey,
+  );
+  if (patchTls.exitCode !== 0) {
+    throw new Error(`Failed to PATCH Caddy tls automation.on_demand: ${patchTls.stderr}`);
+  }
+
+  // 2. Ensure the catch-all on-demand policy is appended to
+  //    automation.policies. Keyed by @id so we can delete-then-add for
+  //    idempotency without clobbering any explicit panel-domain policy.
+  //
+  //    Caddy evaluates policies in order; explicit subjects-based policies
+  //    for the panel's own domain (added earlier by deployCaddySite) match
+  //    first, so our catch-all only kicks in for everything else — i.e.
+  //    tenant domains.
+  await sshExec(
+    panelIp,
+    `curl -sf -X DELETE http://localhost:2019/id/${PANEL_ON_DEMAND_POLICY_ID} 2>/dev/null || true`,
+    hostKey,
+  );
+  const policy = {
+    "@id": PANEL_ON_DEMAND_POLICY_ID,
+    on_demand: true,
+  };
+  const policyJson = JSON.stringify(policy).replace(/'/g, "'\\''");
+  const addPolicy = await sshExec(
+    panelIp,
+    `curl -sf -X POST -H 'Content-Type: application/json' -d '${policyJson}' http://localhost:2019/config/apps/tls/automation/policies`,
+    hostKey,
+  );
+  if (addPolicy.exitCode !== 0) {
+    // Parent path may not exist yet — seed it with an array containing the
+    // policy and retry as a PUT.
+    const putPolicies = JSON.stringify([policy]).replace(/'/g, "'\\''");
+    const retry = await sshExec(
+      panelIp,
+      `curl -sf -X PUT -H 'Content-Type: application/json' -d '${putPolicies}' http://localhost:2019/config/apps/tls/automation/policies`,
+      hostKey,
+    );
+    if (retry.exitCode !== 0) {
+      throw new Error(`Failed to register on-demand TLS policy on panel: ${addPolicy.stderr || retry.stderr}`);
+    }
+  }
+
+  await persistCaddyConfig(panelIp, hostKey);
+  log("caddy", "On-demand TLS ready on panel");
+}
+
+/**
+ * Install a wake-page route on the panel server for a tenant app whose own
+ * server is being frozen. The route serves the same HTML as the tenant-side
+ * version but uses on-demand TLS (no explicit tls policy on the route — the
+ * catch-all panel policy installed by `ensurePanelOnDemandTls` handles cert
+ * issuance at handshake time).
+ *
+ * Must be called *after* `ensurePanelOnDemandTls` at least once.
+ */
+export async function deployPanelWakePage(
+  panelIp: string,
+  panelDomain: string,
+  appDomain: string,
+  appId: number,
+  wakeToken: string,
+  hostKey?: string,
+): Promise<void> {
+  log("caddy", `Installing panel wake page: domain=${appDomain} appId=${appId}`);
+  if (!panelDomain) {
+    throw new Error("deployPanelWakePage: panelDomain is required");
+  }
+
+  const routeId = `ocd-${appDomain.replace(/\./g, "-")}`;
+  const panelOrigin = `https://${panelDomain}`;
+  const html = wakePageHtml(panelOrigin, appId, wakeToken);
+  const route = wakePageRoute(appDomain, html, routeId);
+
+  // Delete any previous route for this domain first — it may already exist
+  // from a previous freeze cycle, and @id-keyed POSTs conflict if the id is
+  // already registered.
+  await sshExec(
+    panelIp,
+    `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`,
+    hostKey,
+  );
+
+  const routeJson = JSON.stringify(route).replace(/'/g, "'\\''");
+  const addResult = await sshExec(
+    panelIp,
+    `curl -sf -X POST -H 'Content-Type: application/json' -d '${routeJson}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
+    hostKey,
+  );
+  if (addResult.exitCode !== 0) {
+    // Same "restart caddy and retry" fallback as the tenant-side variant.
+    // On the panel server this is slightly more invasive (it briefly
+    // interrupts panel TLS), but we'd rather have a brief blip than leave
+    // the tenant without any wake page at all.
+    log("caddy", `Panel wake page add failed: ${addResult.stderr}. Restarting Caddy and retrying...`);
+    await sshExec(panelIp, "systemctl restart caddy", hostKey);
+    await Bun.sleep(1000);
+    await sshExec(
+      panelIp,
+      `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`,
+      hostKey,
+    );
+    const retry = await sshExec(
+      panelIp,
+      `curl -sf -X POST -H 'Content-Type: application/json' -d '${routeJson}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
+      hostKey,
+    );
+    if (retry.exitCode !== 0) {
+      throw new Error("Failed to configure panel wake page for " + appDomain);
+    }
+  }
+
+  await persistCaddyConfig(panelIp, hostKey);
+  log("caddy", `Panel wake page installed for ${appDomain}`);
+}
+
+/**
+ * Remove a panel-hosted wake-page route. Best-effort — a missing route is
+ * treated as success so callers can run this unconditionally on wake.
+ */
+export async function removePanelWakePage(
+  panelIp: string,
+  appDomain: string,
+  hostKey?: string,
+): Promise<void> {
+  log("caddy", `Removing panel wake page: domain=${appDomain}`);
+  const routeId = `ocd-${appDomain.replace(/\./g, "-")}`;
+  await sshExec(
+    panelIp,
+    `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`,
+    hostKey,
+  );
+  await persistCaddyConfig(panelIp, hostKey);
 }
 
 export async function removeCaddySite(ip: string, domain: string, hostKey?: string) {
@@ -1059,6 +1284,105 @@ export async function unpauseContainer(
   if (result.exitCode !== 0) {
     throw new Error("Failed to unpause container");
   }
+}
+
+/**
+ * `docker stop <name>` — stops the container but preserves its filesystem,
+ * volume mounts, and config. Used for scale-to-zero so that a subsequent
+ * `docker start` can bring it back up in ~1s without re-running `docker run`.
+ * Returns true if the container was stopped (or already stopped), false if it
+ * didn't exist.
+ */
+export async function stopContainer(
+  ip: string,
+  containerName: string,
+  hostKey?: string
+): Promise<boolean> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker stop ${containerName} 2>&1"`,
+    hostKey
+  );
+  if (result.exitCode === 0) return true;
+  // `docker stop` on a nonexistent container prints "No such container"
+  if (/No such container/i.test(result.stdout + result.stderr)) return false;
+  throw new Error(`Failed to stop container ${containerName}: ${result.stderr || result.stdout}`);
+}
+
+/**
+ * `docker start <name>` — starts a previously stopped container. Returns true
+ * if started, false if the container doesn't exist (caller should fall back
+ * to the full `docker run` path).
+ */
+export async function startContainer(
+  ip: string,
+  containerName: string,
+  hostKey?: string
+): Promise<boolean> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker start ${containerName} 2>&1"`,
+    hostKey
+  );
+  if (result.exitCode === 0) return true;
+  if (/No such container/i.test(result.stdout + result.stderr)) return false;
+  throw new Error(`Failed to start container ${containerName}: ${result.stderr || result.stdout}`);
+}
+
+/** Returns true iff a container with this name exists on the host (running or stopped). */
+export async function containerExists(
+  ip: string,
+  containerName: string,
+  hostKey?: string
+): Promise<boolean> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker inspect ${containerName} >/dev/null 2>&1 && echo yes || echo no"`,
+    hostKey
+  );
+  return result.stdout.trim() === "yes";
+}
+
+/**
+ * `docker compose stop` — stops all containers in the compose project without
+ * removing them. Counterpart to `startCompose`. Unlike `pauseCompose` (SIGSTOP)
+ * this actually releases CPU/memory, making it the correct choice for
+ * scale-to-zero.
+ */
+export async function stopCompose(ip: string, projectName: string, hostKey?: string) {
+  const appDir = `/home/deploy/apps/${projectName}`;
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} stop"`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to stop compose project");
+  }
+}
+
+/** `docker compose start` — restarts a previously-stopped compose project. */
+export async function startCompose(ip: string, projectName: string, hostKey?: string) {
+  const appDir = `/home/deploy/apps/${projectName}`;
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} start"`,
+    hostKey
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to start compose project");
+  }
+}
+
+/** Returns true iff the compose project directory exists on the host. */
+export async function composeProjectExists(ip: string, projectName: string, hostKey?: string): Promise<boolean> {
+  const appDir = `/home/deploy/apps/${projectName}`;
+  const result = await sshExec(
+    ip,
+    `[ -d "${appDir}" ] && echo yes || echo no`,
+    hostKey
+  );
+  return result.stdout.trim() === "yes";
 }
 
 // --- Docker Network for Services ---

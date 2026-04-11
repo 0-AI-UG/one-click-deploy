@@ -11,6 +11,8 @@ export async function collectMetrics(appId: number): Promise<void> {
   const replicas = db.getReplicas(appId);
 
   for (const replica of replicas) {
+    // Skip light-sleep anchors — they have no running container to stat.
+    if (replica.status === "stopped") continue;
     const server = db.getServer(replica.server_id);
     if (!server) continue;
 
@@ -38,7 +40,18 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
   const app = db.getApp(appId);
   if (!app || !app.autoscale_enabled) return;
 
-  const replicas = db.getReplicas(appId);
+  // Sleeping / waking apps are off-limits to the autoscaler — their replicas
+  // are either stopped anchors or in the middle of being brought back up.
+  if (app.status === "sleeping" || app.status === "waking") {
+    idleSince.delete(appId);
+    return;
+  }
+
+  // Only consider running (or unhealthy-but-not-stopped) replicas for metrics.
+  // A status='stopped' replica row is a light-sleep anchor: treating it as
+  // "present but idle" would cause the autoscaler to try to sleep an already-
+  // sleeping app on every tick.
+  const replicas = db.getReplicas(appId).filter((r) => r.status !== "stopped");
   if (replicas.length === 0) return;
 
   // Check cooldown
@@ -53,12 +66,17 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
   const avgCpu = replicas.reduce((sum, r) => sum + r.cpu_percent, 0) / replicas.length;
   const avgMem = replicas.reduce((sum, r) => sum + r.memory_percent, 0) / replicas.length;
 
-  log("autoscale", `App ${appId}: avgCPU=${avgCpu.toFixed(1)}% avgMem=${avgMem.toFixed(1)}% replicas=${replicas.length} min=${app.min_replicas} max=${app.max_replicas}`);
+  // Volume apps can never scale beyond 1 replica (cloud volumes attach 1:1).
+  // Treat them as capped at 1 even if their stored max_replicas is higher
+  // (e.g. a volume attached after the fact without the cap being re-applied).
+  const effectiveMax = app.volume_id ? Math.min(1, app.max_replicas) : app.max_replicas;
+
+  log("autoscale", `App ${appId}: avgCPU=${avgCpu.toFixed(1)}% avgMem=${avgMem.toFixed(1)}% replicas=${replicas.length} min=${app.min_replicas} max=${effectiveMax}${app.volume_id ? " (volume-capped)" : ""}`);
 
   // Scale up
   if (
     (avgCpu > app.autoscale_cpu_threshold || avgMem > app.autoscale_mem_threshold) &&
-    replicas.length < app.max_replicas
+    replicas.length < effectiveMax
   ) {
     log("autoscale", `Scaling up app ${appId}: CPU=${avgCpu.toFixed(1)}% > ${app.autoscale_cpu_threshold}% or MEM=${avgMem.toFixed(1)}% > ${app.autoscale_mem_threshold}%`);
     const result = await scaleApp(appId, replicas.length + 1);
