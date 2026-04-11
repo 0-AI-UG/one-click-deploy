@@ -6,7 +6,7 @@ import {
 } from "../remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
-import { log, type Server } from "./types.ts";
+import { log, type Server, replicaBindHost } from "./types.ts";
 import { cancelFreezeForServer } from "./freeze-worker.ts";
 import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
 
@@ -98,6 +98,8 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
       }
     }
 
+    const bindAddr = replicaBindHost(server);
+
     // Slow path: full re-run. Only taken when the container/compose project
     // is not on disk — e.g. a restored snapshot that lost state, or a
     // pre-Phase-0 sleep where scale-down did `docker rm -f`.
@@ -114,15 +116,15 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
         }
         const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
         const cmd = `docker run -d --name ${containerName} --restart unless-stopped ` +
-          `-p 127.0.0.1:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+          `-p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
         await sshExec(server.ipv4, asUser(cmd), hostKey);
       }
     }
 
     // Health check
     const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await healthCheck(server.ipv4, containerName, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, containerName, bindAddr, hostPort, 5, hostKey);
 
     // Re-deploy auth proxy only on the slow path. The fast path preserved
     // the auth proxy systemd unit when the container was stopped.

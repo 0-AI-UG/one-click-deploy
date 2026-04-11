@@ -4,7 +4,7 @@ import {
 } from "../remote/index.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
-import { type ProgressFn, log } from "./types.ts";
+import { type ProgressFn, log, replicaBindHost } from "./types.ts";
 
 export async function rollingRedeploy(
   appId: number,
@@ -63,10 +63,9 @@ export async function rollingRedeploy(
       // Recreate container
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
-      // Bind on 0.0.0.0 — reachable via localhost (legacy tenant Caddy,
-      // health checks) and via the private IPv4 (panel Caddy). Hetzner
-      // firewall blocks arbitrary host ports from the public internet.
-      const replicaBindAddr = "0.0.0.0";
+      // Bind on the target server's private IPv4 so only the panel
+      // Caddy (also on the private network) can reach this replica.
+      const replicaBindAddr = replicaBindHost(server);
 
       if (app.deploy_mode === "compose") {
         await cloneAndComposeBuild(
@@ -100,8 +99,8 @@ export async function rollingRedeploy(
 
       // Health check
       const health = app.deploy_mode === "compose"
-        ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
-        : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
+        ? await composeHealthCheck(server.ipv4, app.name, replicaBindAddr, replica.host_port, 5, hostKey)
+        : await healthCheck(server.ipv4, replica.container_name, replicaBindAddr, replica.host_port, 5, hostKey);
 
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 

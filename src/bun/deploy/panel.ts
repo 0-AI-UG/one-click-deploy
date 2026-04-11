@@ -251,11 +251,14 @@ export async function bootstrapPanel(
       hostKey || undefined,
     );
 
-    // 11. Health check
+    // 11. Health check. The panel container binds to 127.0.0.1 (cloneAndBuild
+    // default), and the panel's own Caddy reaches it via localhost, so we
+    // probe the same address here.
     onProgress("health", "Checking panel health...");
     const health = await healthCheck(
       serverIp,
       opts.appName,
+      "127.0.0.1",
       hostPort,
       5,
       hostKey || undefined,

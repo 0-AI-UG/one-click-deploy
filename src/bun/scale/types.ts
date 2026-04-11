@@ -74,3 +74,18 @@ export interface Server {
 export function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [scale:${context}]`, ...args);
 }
+
+/**
+ * The address a tenant server's replica containers are bound to — always
+ * the server's private IPv4 on the shared `ocd-net` network. Throws if
+ * unset so misconfigured servers fail fast at deploy time instead of
+ * silently publishing to the public NIC.
+ */
+export function replicaBindHost(server: { name: string; private_ipv4: string }): string {
+  if (!server.private_ipv4) {
+    throw new Error(
+      `Server ${server.name} has no private_ipv4 — wait for the network reconciler to attach it before deploying`,
+    );
+  }
+  return server.private_ipv4;
+}

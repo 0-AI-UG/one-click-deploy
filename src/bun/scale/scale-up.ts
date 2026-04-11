@@ -5,7 +5,7 @@ import {
   deployAuthProxy, removeAuthProxy,
 } from "../remote/index.ts";
 import { resolveGitHubToken } from "../github-token.ts";
-import { type ProgressFn, log, type App, type Replica } from "./types.ts";
+import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
 import { pickTargetServer } from "./server-picker.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
 
@@ -39,12 +39,11 @@ export async function scaleUp(
     // reason about.
     const hostPort = primaryHostPort;
 
-    // Bind the container's published port on 0.0.0.0 so it's reachable
-    // via both localhost (tenant's own Caddy / health checks) and the
-    // server's private IPv4 (panel Caddy over the private network).
-    // Hetzner firewall only whitelists 22/80/443/ICMP so arbitrary host
-    // ports aren't reachable from the public internet.
-    const replicaBindAddr = "0.0.0.0";
+    // Bind the replica on the target server's private IPv4. Traffic from
+    // the panel Caddy uses the private network, so the public NIC is
+    // never touched for inter-server app traffic. Fails fast if the
+    // target isn't yet attached to the shared network.
+    const replicaBindAddr = replicaBindHost(targetServer);
 
     // Transfer image to target server
     emit("scale", `Transferring image to ${targetServer.name}...`);
@@ -114,8 +113,8 @@ export async function scaleUp(
     // Health check
     emit("scale", `Health checking replica ${replicaNum}...`);
     const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(targetServer.ipv4, app.name, hostPort, 5, targetHostKey)
-      : await healthCheck(targetServer.ipv4, containerName, hostPort, 5, targetHostKey);
+      ? await composeHealthCheck(targetServer.ipv4, app.name, replicaBindAddr, hostPort, 5, targetHostKey)
+      : await healthCheck(targetServer.ipv4, containerName, replicaBindAddr, hostPort, 5, targetHostKey);
 
     // Insert replica record BEFORE syncing Caddy so the upstream list
     // built from the DB actually includes the new replica.

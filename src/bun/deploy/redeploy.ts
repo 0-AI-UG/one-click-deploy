@@ -11,6 +11,7 @@ import { resolveGitHubToken } from "../github-token.ts";
 import { rollingRedeploy } from "../scale.ts";
 import { wakeApp } from "../scale/wake.ts";
 import { syncAppCaddy } from "../scale/caddy-manager.ts";
+import { replicaBindHost } from "../scale/types.ts";
 
 type DbApp = {
   id: number;
@@ -127,11 +128,10 @@ export async function redeployApp(
 
     // Build new image on primary server first
     let buildImageTag = `${app.name}:latest`;
-    // Bind on 0.0.0.0 — both the tenant's legacy localhost-based Caddy
-    // (during the rollout window) and the panel's new private-IP based
-    // Caddy can reach the container. Hetzner firewall blocks arbitrary
-    // host ports from the public internet.
-    const containerBindAddr = "0.0.0.0";
+    // Bind on the server's private IPv4 — the panel Caddy dials this
+    // over the shared private network, and the container never listens
+    // on the public NIC.
+    const containerBindAddr = replicaBindHost(server);
     if (app.deploy_mode === "compose") {
       await cloneAndComposeBuild(
         server.ipv4,
@@ -226,8 +226,8 @@ export async function redeployApp(
 
     onProgress("health", "Checking app health...");
     const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, containerBindAddr, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, app.name, containerBindAddr, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Success — now persist env/auth changes to DB
@@ -291,6 +291,7 @@ export async function updateAppEnv(
     const resolvedGitToken = await resolveGitHubToken(userId);
     const githubPat = resolvedGitToken || undefined;
     const logLine = (line: string) => db.appendDeployLog(appId, `[env-update] ${line}`);
+    const bindAddr = replicaBindHost(server);
 
     if (app.deploy_mode === "compose") {
       await cloneAndComposeBuild(
@@ -305,6 +306,7 @@ export async function updateAppEnv(
           composeFile: app.compose_file,
           webService: app.compose_web_service,
           gitToken: githubPat,
+          bindAddr,
         },
         logLine
       );
@@ -319,6 +321,7 @@ export async function updateAppEnv(
           envVars,
           volumeMount: app.volume_mount || undefined,
           gitToken: githubPat,
+          bindAddr,
         },
         logLine
       );
@@ -334,14 +337,15 @@ export async function updateAppEnv(
           volumeMount: app.volume_mount || undefined,
           dockerfilePath: app.dockerfile_path || undefined,
           gitToken: githubPat,
+          bindAddr,
         },
         logLine
       );
     }
 
     const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Success — now persist env vars to DB
@@ -377,6 +381,7 @@ export async function rollbackApp(
     const hostKey = server.ssh_host_key || undefined;
     const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
     const appDir = `/home/deploy/apps/${app.name}`;
+    const bindAddr = replicaBindHost(server);
 
     if (app.deploy_mode === "compose") {
       // Compose rollback: checkout old commit and rebuild
@@ -413,7 +418,7 @@ export async function rollbackApp(
       }
 
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${deployment.image_tag}`;
+      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${deployment.image_tag}`;
       const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to rollback — the previous image may no longer be available on this server");
@@ -422,8 +427,8 @@ export async function rollbackApp(
 
     // Health check
     const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
     // Record rollback as new deployment
@@ -512,7 +517,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
       const hostKey = server.ssh_host_key || undefined;
       append(`[webhook] (${i + 1}/${replicas.length}) ${replica.container_name} on ${server.name}`);
 
-      const replicaBindAddr = "0.0.0.0";
+      const replicaBindAddr = replicaBindHost(server);
 
       if (multi) {
         // Drop this replica from the panel Caddy upstream list so in-flight
@@ -608,8 +613,8 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
       }
 
       const health = app.deploy_mode === "compose"
-        ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
-        : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
+        ? await composeHealthCheck(server.ipv4, app.name, replicaBindAddr, replica.host_port, 5, hostKey)
+        : await healthCheck(server.ipv4, replica.container_name, replicaBindAddr, replica.host_port, 5, hostKey);
 
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 

@@ -9,6 +9,7 @@ import {
   deployAuthProxy,
 } from "../remote/index.ts";
 import { syncAppCaddy, removeAppCaddy } from "../scale/caddy-manager.ts";
+import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../github.ts";
 import { validateDeployRequest } from "../validate.ts";
 import { createMasker } from "../mask.ts";
@@ -456,14 +457,14 @@ export async function deploy(
     state.deployMode = deployMode;
     let buildImageTag = `${req.app_name}:latest`; // default, overridden by Dockerfile builds
 
-    // Bind published ports on 0.0.0.0 so the container is reachable both
-    // from the host's own Caddy (via localhost) and from the panel's Caddy
-    // over the shared private network (via the server's private IPv4).
-    // Isolation from the public internet comes from the Hetzner Cloud
-    // Firewall, which only whitelists 22/80/443/ICMP — arbitrary host
-    // ports aren't reachable from outside even though the listener is
-    // wildcard-bound.
-    const containerBindAddr = "0.0.0.0";
+    // Bind replica containers on the server's private IPv4. Traffic only
+    // traverses the Hetzner private network between the panel's Caddy and
+    // the backends; the public NIC never sees these host ports. Throws if
+    // the server isn't yet attached to `ocd-net` — deploys that race the
+    // network reconciler fail fast instead of silently publishing wide.
+    const tenantServerRow = db.getServer(serverId!);
+    if (!tenantServerRow) throw new Error(`Server ${serverId} not found`);
+    const containerBindAddr = replicaBindHost(tenantServerRow);
 
     if (deployMode === "compose") {
       const result = await cloneAndComposeBuild(
@@ -561,8 +562,8 @@ export async function deploy(
     // Step 5: Health check
     onProgress("health", "Checking app health...");
     const health = deployMode === "compose"
-      ? await composeHealthCheck(serverIp, req.app_name, replica.host_port, 5, serverHostKey || undefined)
-      : await healthCheck(serverIp, req.app_name, replica.host_port, 5, serverHostKey || undefined);
+      ? await composeHealthCheck(serverIp, req.app_name, containerBindAddr, replica.host_port, 5, serverHostKey || undefined)
+      : await healthCheck(serverIp, req.app_name, containerBindAddr, replica.host_port, 5, serverHostKey || undefined);
     if (health.healthy) {
       maskedLog(app.id, `[health] Health check passed (HTTP ${health.statusCode})`);
       onProgress("health", `Health check passed (HTTP ${health.statusCode})`);

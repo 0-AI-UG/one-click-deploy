@@ -16,6 +16,7 @@ import {
   removePanelWakePage,
 } from "../remote/index.ts";
 import { removeAppCaddy } from "../scale/caddy-manager.ts";
+import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../github.ts";
 
 function log(context: string, ...args: any[]) {
@@ -253,9 +254,10 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
         await restartContainer(server.ipv4, replica.container_name, hostKey);
       }
 
+      const bindAddr = replicaBindHost(server);
       const health = app.deploy_mode === "compose" && replica.container_name === app.name
-        ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
-        : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
+        ? await composeHealthCheck(server.ipv4, app.name, bindAddr, replica.host_port, 5, hostKey)
+        : await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }
@@ -286,13 +288,14 @@ export async function recreateAppContainer(
     const hostKey = server.ssh_host_key || undefined;
     const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
     const hostPort = firstReplica.host_port;
+    const bindAddr = replicaBindHost(server);
 
     if (app.deploy_mode === "compose") {
       // Rewrite the compose override to update volume mount
       const appDir = `/home/deploy/apps/${app.name}`;
       const overrideServices: Record<string, { ports: string[]; volumes?: string[] }> = {
         [app.compose_web_service]: {
-          ports: [`127.0.0.1:${hostPort}:${app.container_port}`],
+          ports: [`${bindAddr}:${hostPort}:${app.container_port}`],
         },
       };
       if (volumeMount) {
@@ -320,7 +323,7 @@ export async function recreateAppContainer(
       }
 
       const volumeFlag = volumeMount ? `-v ${volumeMount}` : "";
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p 127.0.0.1:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
       const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to start container — check your port configuration and environment variables");
@@ -329,8 +332,8 @@ export async function recreateAppContainer(
 
     // Health check
     const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, hostPort, 5, hostKey)
-      : await healthCheck(server.ipv4, app.name, hostPort, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey)
+      : await healthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
     db.updateReplicaStatus(firstReplica.id, health.healthy ? "running" : "unhealthy");
 
@@ -396,9 +399,10 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
         await unpauseContainer(server.ipv4, replica.container_name, hostKey);
       }
 
+      const bindAddr = replicaBindHost(server);
       const health = app.deploy_mode === "compose" && replica.container_name === app.name
-        ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 5, hostKey)
-        : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 5, hostKey);
+        ? await composeHealthCheck(server.ipv4, app.name, bindAddr, replica.host_port, 5, hostKey)
+        : await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }

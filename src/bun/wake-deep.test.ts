@@ -47,6 +47,15 @@ const fakeProvider = {
   },
   async waitForRunning() {},
   async deleteServer() {},
+  networks: {
+    async ensure() {
+      return { id: "net-1" };
+    },
+    async attachServer() {},
+    async getPrivateIpv4() {
+      return `10.0.1.${nextRestoreIp}`;
+    },
+  },
   snapshots: {
     async create() {
       return { snapshotId: "unused-in-these-tests" };
@@ -61,11 +70,14 @@ const fakeProvider = {
       createFromSnapshotCalls += 1;
       lastCreateOpts = opts;
       if (createGate) await createGate;
-      const ip = `10.0.0.${nextRestoreIp++}`;
+      const ip = `10.0.0.${nextRestoreIp}`;
+      const privateIp = `10.0.1.${nextRestoreIp}`;
+      nextRestoreIp += 1;
       return {
         providerId: `new-${createFromSnapshotCalls}`,
         ipv4: ip,
         ipv6: "",
+        privateIpv4: privateIp,
         status: "running",
       };
     },

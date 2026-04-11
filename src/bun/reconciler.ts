@@ -4,9 +4,8 @@ import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContai
 import { evaluateAutoScale } from "./scale.ts";
 import { getCatalogEntry } from "./services/catalog.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
-import { reconcileAppDns } from "./scale/dns-reconciler.ts";
-import { reconcileLegacyCaddyRoutes } from "./scale/caddy-legacy-cleanup.ts";
 import { syncAppCaddy } from "./scale/caddy-manager.ts";
+import { replicaBindHost } from "./scale/types.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -51,11 +50,16 @@ async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
     log("metrics", `replica ${replica.container_name}: ${err}`);
   }
 
-  // Health
+  // Health — probe the container via the server's private IPv4 (same
+  // address the replica is published on). A server still waiting on the
+  // network reconciler to attach + assign a private IP is skipped; the
+  // next tick picks it up once the backfill lands.
+  if (!server.private_ipv4) return;
+  const bindHost = replicaBindHost(server);
   try {
     const check = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, replica.host_port, 1, hostKey)
-      : await healthCheck(server.ipv4, replica.container_name, replica.host_port, 1, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, bindHost, replica.host_port, 1, hostKey)
+      : await healthCheck(server.ipv4, replica.container_name, bindHost, replica.host_port, 1, hostKey);
 
     if (check.healthy) {
       db.updateReplicaStatus(replica.id, "running");
@@ -225,24 +229,6 @@ async function tick(): Promise<void> {
       await reconcileNetwork();
     } catch (err) {
       log("network", `reconcile failed: ${err}`);
-    }
-
-    // Swing every app's public A records to the panel's public IPv4 — a
-    // post-migration cleanup that converges once all records point at the
-    // panel. No-op after convergence.
-    try {
-      await reconcileAppDns();
-    } catch (err) {
-      log("dns", `reconcile failed: ${err}`);
-    }
-
-    // Scrub legacy `ocd-<domain-dashed>` Caddy routes left behind by the
-    // old per-tenant ingress. No-op after the first successful pass thanks
-    // to an in-memory dedupe set.
-    try {
-      await reconcileLegacyCaddyRoutes();
-    } catch (err) {
-      log("caddy-legacy", `cleanup failed: ${err}`);
     }
 
     // Ensure Caddy routes exist on the panel for all live apps (restores

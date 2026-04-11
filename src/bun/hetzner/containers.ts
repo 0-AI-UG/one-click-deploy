@@ -1077,11 +1077,12 @@ export async function getComposeLogs(
 export async function composeHealthCheck(
   ip: string,
   projectName: string,
+  bindHost: string,
   port: number,
   maxAttempts = 5,
   hostKey?: string
 ): Promise<{ healthy: boolean; statusCode?: number; error?: string }> {
-  log("health", `Checking compose health of ${projectName} on ${ip}:${port}`);
+  log("health", `Checking compose health of ${projectName} on ${ip} via ${bindHost}:${port}`);
 
   for (let i = 0; i < maxAttempts; i++) {
     // Check all services are running
@@ -1125,10 +1126,12 @@ export async function composeHealthCheck(
       return { healthy: false, error: "Not all compose services are running" };
     }
 
-    // Check HTTP response on web service port
+    // Check HTTP response on the web service's published port. `bindHost`
+    // is the address the container's `-p` flag publishes on — usually the
+    // server's private IPv4 for tenant apps, or 127.0.0.1 for the panel.
     const curl = await sshExec(
       ip,
-      `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:${port}/`,
+      `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://${bindHost}:${port}/`,
       hostKey
     );
     const statusCode = parseInt(curl.stdout.trim(), 10);
@@ -1155,11 +1158,12 @@ export async function composeHealthCheck(
 export async function healthCheck(
   ip: string,
   containerName: string,
+  bindHost: string,
   port: number,
   maxAttempts = 5,
   hostKey?: string
 ): Promise<{ healthy: boolean; statusCode?: number; error?: string }> {
-  log("health", `Checking health of ${containerName} on ${ip}:${port}`);
+  log("health", `Checking health of ${containerName} on ${ip} via ${bindHost}:${port}`);
 
   for (let i = 0; i < maxAttempts; i++) {
     // Check container is running
@@ -1177,10 +1181,12 @@ export async function healthCheck(
       return { healthy: false, error: "Container is not running" };
     }
 
-    // Check HTTP response
+    // Check HTTP response on the container's published port. `bindHost`
+    // is whatever address the container is bound to — typically the
+    // server's private IPv4 for tenant apps, 127.0.0.1 for the panel.
     const curl = await sshExec(
       ip,
-      `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:${port}/`,
+      `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://${bindHost}:${port}/`,
       hostKey
     );
     const statusCode = parseInt(curl.stdout.trim(), 10);

@@ -138,15 +138,15 @@ function buildUpstreams(
   for (const replica of replicas) {
     const server = db.getServer(replica.server_id);
     if (!server) continue;
-    // Prefer the private IP, fall back to public during the reconciler's
-    // backfill window. Without *some* address we'd write an empty upstream
-    // pool and Caddy would 503 every request.
-    const addr = server.private_ipv4 || server.ipv4;
-    if (!addr) continue;
+    // Only servers attached to the shared private network can serve this
+    // app — the container is bound to the private IP. A server without one
+    // gets silently skipped; the network reconciler backfills it on the
+    // next tick and syncAppCaddy picks it up from there.
+    if (!server.private_ipv4) continue;
     const destPort = authPassword
       ? authProxyPort(replica.host_port)
       : replica.host_port;
-    ups.push({ dial: `${addr}:${destPort}` });
+    ups.push({ dial: `${server.private_ipv4}:${destPort}` });
   }
   return ups;
 }
