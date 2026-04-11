@@ -1,11 +1,11 @@
-FROM oven/bun:1 AS build
+FROM oven/bun:1.3.5 AS build
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY src/ src/
 RUN bun build src/web/index.html --outdir=src/web/dist
 
-FROM oven/bun:1-slim
+FROM oven/bun:1.3.5-slim
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openssh-client ca-certificates \

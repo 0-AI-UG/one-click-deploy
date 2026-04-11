@@ -7,25 +7,27 @@ function log(context: string, ...args: unknown[]) {
 
 export type PtySession = {
   write: (data: Uint8Array | string) => void;
+  resize: (cols: number, rows: number) => void;
   kill: () => void;
   exited: Promise<number>;
 };
 
 /**
- * Spawn an interactive ssh (or ssh + docker exec) session.
+ * Spawn an interactive ssh (or ssh + docker exec) session inside a real local
+ * pseudo-terminal. Bun allocates the PTY for us (`terminal:` option), so ssh
+ * sees a tty on both ends — raw mode, control sequences, SIGWINCH-driven
+ * resize, and full-screen TUIs (htop, vim, less) all work correctly.
  *
- * Note: this uses `ssh -tt` which asks sshd to allocate a PTY on the remote
- * side. We do NOT allocate a local PTY, so terminal resize events can't be
- * forwarded precisely — we pass initial cols/rows via an exported env var on
- * the remote (`stty cols rows`) before exec. For a richer experience swap in
- * node-pty later.
+ * Resizes come in via `resize(cols, rows)` → Bun TIOCSWINSZ on the local PTY
+ * master → SIGWINCH to ssh → forwarded through the ssh channel → remote sshd
+ * resizes the remote PTY → SIGWINCH to the remote shell.
  */
 export function spawnSshPty(opts: {
   ip: string;
   hostKey?: string;
   /** Optional remote command. Omit for an interactive login shell. */
   remoteCommand?: string;
-  /** Initial terminal size hint sent via stty before the shell starts. */
+  /** Initial terminal size. */
   cols?: number;
   rows?: number;
   onStdout: (chunk: Uint8Array) => void;
@@ -34,17 +36,9 @@ export function spawnSshPty(opts: {
   const cols = opts.cols ?? 120;
   const rows = opts.rows ?? 32;
 
-  // Wrap remote command so we size the terminal before exec'ing it.
-  let remote: string | undefined;
-  if (opts.remoteCommand) {
-    remote = `stty cols ${cols} rows ${rows} 2>/dev/null; ${opts.remoteCommand}`;
-  } else {
-    remote = `stty cols ${cols} rows ${rows} 2>/dev/null; exec $SHELL -l`;
-  }
-
   const { args, tmpKnownHostsPath } = buildSshArgs({
     ip: opts.ip,
-    command: remote,
+    command: opts.remoteCommand,
     hostKey: opts.hostKey,
     interactive: true,
   });
@@ -52,54 +46,38 @@ export function spawnSshPty(opts: {
   log("spawn", `${opts.ip} cmd=${(opts.remoteCommand || "<shell>").slice(0, 80)}`);
 
   const proc = Bun.spawn(args, {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
+    terminal: {
+      cols,
+      rows,
+      data: (_terminal, chunk) => {
+        try { opts.onStdout(chunk); } catch (err) { log("data", `error: ${err}`); }
+      },
+    },
   });
 
-  // Pump stdout
-  (async () => {
-    const reader = proc.stdout.getReader();
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (value) opts.onStdout(value);
-      }
-    } catch (err) {
-      log("stdout", `error: ${err}`);
-    }
-  })();
-
-  // Pump stderr onto the same stream
-  (async () => {
-    const reader = proc.stderr.getReader();
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (value) opts.onStdout(value);
-      }
-    } catch { /* stream closed, process exited */ }
-  })();
+  const terminal = proc.terminal!;
 
   const exited = proc.exited.then((code) => {
     log("exit", `${opts.ip} code=${code}`);
     if (tmpKnownHostsPath) { try { unlinkSync(tmpKnownHostsPath); } catch { /* cleanup, file may already be gone */ } }
+    try { terminal.close(); } catch { /* terminal may already be closed */ }
     opts.onExit(code);
     return code;
   });
 
-  const stdin = proc.stdin as { write(data: string | Uint8Array): void; flush?(): void };
-
   return {
     write(data) {
       try {
-        if (typeof data === "string") stdin.write(data);
-        else stdin.write(data);
-        stdin.flush?.();
+        terminal.write(data);
       } catch (err) {
         log("write", `error: ${err}`);
+      }
+    },
+    resize(newCols, newRows) {
+      try {
+        terminal.resize(newCols, newRows);
+      } catch (err) {
+        log("resize", `error: ${err}`);
       }
     },
     kill() {

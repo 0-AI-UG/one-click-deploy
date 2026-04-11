@@ -84,8 +84,11 @@ export function TerminalPage({ kind, id }: Props) {
         ws.onclose = () => { setStatus("closed"); };
         ws.onerror = () => { setStatus("error"); setError("WebSocket error"); };
 
+        const encoder = new TextEncoder();
         term.onData((data: string) => {
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
+          // Send input as binary so the server can cleanly discriminate
+          // keystrokes (bytes) from control frames (JSON strings).
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
         });
 
         const onResize = () => {

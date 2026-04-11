@@ -160,14 +160,18 @@ export const terminalWsHandlers = {
   message(ws: Bun.ServerWebSocket<TerminalWsData>, message: string | Uint8Array) {
     const data = ws.data as TerminalWsData;
     if (!data.pty) return;
+    // Wire format: binary frames are raw keystrokes, string frames are JSON
+    // control messages (currently `{type:"resize", cols, rows}`).
     if (typeof message === "string") {
-      // Control frame (JSON) — currently only resize is supported, and we
-      // can't forward it without a local PTY, so we just ignore.
-      if (message.startsWith("{")) return;
-      data.pty.write(message);
-    } else {
-      data.pty.write(message);
+      try {
+        const msg = JSON.parse(message) as { type?: string; cols?: number; rows?: number };
+        if (msg.type === "resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
+          data.pty.resize(msg.cols, msg.rows);
+        }
+      } catch { /* malformed control frame — ignore */ }
+      return;
     }
+    data.pty.write(message);
   },
 
   close(ws: Bun.ServerWebSocket<TerminalWsData>) {
