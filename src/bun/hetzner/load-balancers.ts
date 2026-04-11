@@ -184,6 +184,10 @@ export async function deleteCertificate(certId: string): Promise<void> {
 }
 
 export async function getLoadBalancer(lbId: string): Promise<LoadBalancer> {
+  // Empty id would silently hit GET /load_balancers/ (the list endpoint),
+  // returning { load_balancers: [...] } and producing a confusing
+  // `undefined.public_net` crash downstream. Fail clearly instead.
+  if (!lbId) throw new Error("getLoadBalancer called with empty id");
   const data = await hetznerApi(`/load_balancers/${lbId}`);
   return data.load_balancer as LoadBalancer;
 }

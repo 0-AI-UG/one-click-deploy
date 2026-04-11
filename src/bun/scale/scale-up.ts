@@ -45,6 +45,10 @@ export async function scaleUp(
     // Create LB
     const lb = await compute.loadBalancers!.create(app.name, primaryServer.location);
     db.updateAppScaling(app.id, { lb_provider_id: lb.providerId });
+    // Mirror the DB write into the local app object so the "Add new replicas"
+    // block below reads the fresh provider id instead of the stale empty string
+    // (which would call GET /load_balancers/ and crash on lb.public_net).
+    app = { ...app, lb_provider_id: lb.providerId };
 
     // Create managed TLS certificate (only for real domains, not nip.io)
     let certId: number | undefined;
