@@ -1,9 +1,52 @@
-import { post, put } from "../../api/client.ts";
-import { Card, Btn, Checkbox, confirm } from "../../components/ui.tsx";
+import { useEffect, useRef, useState } from "react";
+import { get, post, put } from "../../api/client.ts";
+import { Card, Btn, Checkbox, Spinner, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { Zap, Gauge } from "lucide-react";
 import { InfoTip } from "./shared.tsx";
 import type { AppData, ReplicaData } from "../../types.ts";
+
+type ScaleJobPoll = {
+  status: "running" | "done" | "error";
+  events: Array<{ seq: number; ts: string; step: string; detail: string }>;
+  last_seq: number;
+  result: { ok: boolean; error?: string } | null;
+};
+
+// Long-polls /api/deploy-jobs/:id (the existing job-poll endpoint) until the
+// scale job finishes. Pumps each new event's detail into onProgress so the
+// UI can show what's happening live. Throws on job error so the calling
+// `action` wrapper surfaces it as a toast.
+async function pollScaleJob(
+  jobId: number,
+  onProgress: (msg: string) => void,
+  alive: { current: boolean },
+): Promise<void> {
+  let since = 0;
+  while (alive.current) {
+    let resp: ScaleJobPoll;
+    try {
+      resp = (await get(`/api/deploy-jobs/${jobId}?since=${since}`)) as ScaleJobPoll;
+    } catch {
+      // Transient network blip — back off briefly and retry. The server
+      // long-poll already blocks up to 25s per request so this loop is cheap.
+      await new Promise((r) => setTimeout(r, 1500));
+      continue;
+    }
+    if (!alive.current) return;
+    if (resp.events.length > 0) {
+      const latest = resp.events[resp.events.length - 1];
+      onProgress(latest.detail || latest.step);
+      since = resp.last_seq;
+    }
+    if (resp.status !== "running") {
+      if (resp.result && !resp.result.ok) {
+        throw new Error(resp.result.error || "Scaling failed");
+      }
+      return;
+    }
+  }
+}
 
 interface ScalingPolicy {
   autoscale_enabled: boolean;
@@ -30,6 +73,31 @@ interface ScalingTabProps {
 export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoading, action, loadReplicas, load }: ScalingTabProps) {
   const hasVolume = Boolean(app.volume_id);
   const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica — a cloud volume can only be attached to a single server at a time.";
+  const [progressMessage, setProgressMessage] = useState<string>("");
+  // Tracks whether the component is still mounted, so the long-poll loop can
+  // bail out if the user switches tabs mid-scale (the server-side scale keeps
+  // running regardless — they just stop watching it).
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
+  // Clear the progress text once the action wrapper releases its lock, so
+  // stale "Re-binding container..." doesn't linger after success/failure.
+  useEffect(() => {
+    if (actionLoading === null) setProgressMessage("");
+  }, [actionLoading]);
+
+  const runScale = async (target: number): Promise<void> => {
+    setProgressMessage("Starting...");
+    const res = (await post(`/api/apps/${appId}/scale`, { replicas: target })) as { deployment_id: number };
+    await pollScaleJob(res.deployment_id, setProgressMessage, aliveRef);
+    await loadReplicas();
+    await load();
+  };
+
+  const showProgress =
+    (actionLoading === "scale-up" || actionLoading === "scale-down" || actionLoading === "wake") && !!progressMessage;
   return (
     <div className="space-y-4">
       {(!app.domain || app.domain.endsWith(".nip.io")) && (
@@ -71,11 +139,7 @@ export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoad
               <Btn
                 size="sm"
                 loading={actionLoading === "wake"}
-                onClick={() => action("wake", async () => {
-                  await post(`/api/apps/${appId}/scale`, { replicas: 1 });
-                  await loadReplicas();
-                  await load();
-                })}
+                onClick={() => action("wake", () => runScale(1))}
               >Wake</Btn>
             )}
             <Btn
@@ -90,9 +154,7 @@ export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoad
                 if (current === 1) {
                   if (!await confirm("Scale to Zero", "This will sleep the app. It wakes automatically when it receives an HTTP request.")) return;
                 }
-                await post(`/api/apps/${appId}/scale`, { replicas: current - 1 });
-                await loadReplicas();
-                await load();
+                await runScale(current - 1);
               })}
             >–</Btn>
             <Btn
@@ -109,12 +171,18 @@ export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoad
               onClick={() => action("scale-up", async () => {
                 const current = replicas.length || app.desired_replicas || 1;
                 if (hasVolume && current >= 1) return;
-                await post(`/api/apps/${appId}/scale`, { replicas: current + 1 });
-                await loadReplicas();
+                await runScale(current + 1);
               })}
             >+</Btn>
           </div>
         </PermissionGate>
+
+        {showProgress && (
+          <div className="mt-3 flex items-center gap-2 px-3 py-2 border-2 border-fg bg-alt">
+            <Spinner />
+            <span className="font-mono text-[10px] text-fg uppercase tracking-wider truncate">{progressMessage}</span>
+          </div>
+        )}
       </Card>
 
       <Card className="p-4">

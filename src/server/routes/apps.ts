@@ -19,15 +19,18 @@ import { introspectRepo } from "../../bun/github-introspect.ts";
 
 // In-process notifier for long-poll waiters. Keyed by deploy job id; each
 // waiter is a no-arg callback that resolves the long-poll Promise.
+// Exported so other route modules (e.g. scaling) can plug into the same
+// deploy_jobs table and the existing long-poll endpoint without standing up
+// their own job system.
 const jobWaiters = new Map<number, Set<() => void>>();
 
-function notifyJob(jobId: number) {
+export function notifyJob(jobId: number) {
   const set = jobWaiters.get(jobId);
   if (!set) return;
   for (const w of set) w();
 }
 
-function waitForJob(jobId: number, timeoutMs: number): Promise<void> {
+export function waitForJob(jobId: number, timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
     let done = false;
     const finish = () => {
@@ -143,7 +146,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
   }
 }
 
-const LONG_POLL_TIMEOUT_MS = 25_000;
+export const LONG_POLL_TIMEOUT_MS = 25_000;
 
 export async function handleDeployJobPoll(request: Request, jobId: number): Promise<Response> {
   try {

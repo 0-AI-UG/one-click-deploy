@@ -5,6 +5,7 @@ import * as db from "../../bun/db.ts";
 import { scaleApp, wakeApp, collectMetrics } from "../../bun/scale.ts";
 import { updateScaleDaemonConfig } from "../../bun/remote/index.ts";
 import { secretStore } from "../../bun/secret-store.ts";
+import { notifyJob } from "./apps.ts";
 
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
   try {
@@ -15,17 +16,38 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
       return Response.json({ error: "replicas must be an integer >= 0" }, { status: 400, headers: corsHeaders });
     }
     const app = db.getApp(appId);
-    if (app && replicas > 1 && (!app.domain || app.domain.endsWith(".nip.io"))) {
+    if (!app) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
+    if (replicas > 1 && (!app.domain || app.domain.endsWith(".nip.io"))) {
       return Response.json({ error: "Scaling requires a custom domain. Add a domain in app settings first." }, { status: 400, headers: corsHeaders });
     }
-    if (app && replicas > 1 && app.volume_id) {
+    if (replicas > 1 && app.volume_id) {
       return Response.json({ error: "Apps with persistent storage cannot have more than 1 replica." }, { status: 400, headers: corsHeaders });
     }
-    const result = await scaleApp(appId, replicas, () => {});
-    if (!result.ok) {
-      return Response.json({ error: result.error || "Scaling failed" }, { status: 400, headers: corsHeaders });
-    }
-    return Response.json(result, { headers: corsHeaders });
+
+    // Run scaling as a background job and stream progress through the
+    // existing deploy_jobs table. The frontend long-polls
+    // /api/deploy-jobs/:id?since=N to watch each step in real time instead
+    // of staring at a spinner for 30-60 seconds.
+    const job = db.createDeployJob(app.name);
+    (async () => {
+      try {
+        const result = await scaleApp(appId, replicas, (step, detail) => {
+          db.appendDeployJobEvent(job.id, step, detail);
+          notifyJob(job.id);
+        });
+        db.finishDeployJob(job.id, result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        db.appendDeployJobEvent(job.id, "error", msg);
+        db.finishDeployJob(job.id, { ok: false, error: msg });
+      } finally {
+        notifyJob(job.id);
+      }
+    })();
+
+    return Response.json({ deployment_id: job.id }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
