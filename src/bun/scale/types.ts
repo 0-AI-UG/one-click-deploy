@@ -62,11 +62,6 @@ export interface Server {
   location: string;
   status: string;
   ssh_host_key: string;
-  state: "materialized" | "frozen";
-  snapshot_id: string;
-  frozen_volume_ids: string;
-  frozen_at: string | null;
-  freeze_failed_at: string | null;
   private_ipv4: string;
   created_at: string;
 }

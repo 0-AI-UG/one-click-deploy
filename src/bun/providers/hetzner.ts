@@ -26,13 +26,6 @@ import {
   listDnsZones,
 } from "../hetzner/dns.ts";
 import {
-  snapshotServer as hetznerSnapshotServer,
-  getSnapshot as hetznerGetSnapshot,
-  deleteSnapshot as hetznerDeleteSnapshot,
-  listSnapshots as hetznerListSnapshots,
-  createServerFromSnapshot as hetznerCreateServerFromSnapshot,
-} from "../hetzner/snapshots.ts";
-import {
   ensureNetwork,
   attachServerToNetwork,
   getPrivateIpv4,
@@ -209,44 +202,6 @@ export const hetznerCompute: ComputeProvider = {
     },
     async getPrivateIpv4(serverId, networkId) {
       return getPrivateIpv4(serverId, parseInt(networkId, 10));
-    },
-  },
-
-  snapshots: {
-    async create(providerServerId, description) {
-      return hetznerSnapshotServer(providerServerId, description);
-    },
-    async get(snapshotId) {
-      return hetznerGetSnapshot(snapshotId);
-    },
-    async delete(snapshotId) {
-      await hetznerDeleteSnapshot(snapshotId);
-    },
-    async list() {
-      return hetznerListSnapshots();
-    },
-    async createServerFromSnapshot(opts) {
-      const networkId = opts.networkId ? parseInt(opts.networkId, 10) : undefined;
-      const server = await hetznerCreateServerFromSnapshot({
-        name: opts.name,
-        snapshotId: opts.snapshotId,
-        serverType: opts.serverType,
-        location: opts.location,
-        sshKeyName: opts.sshKeyName,
-        firewallId: parseInt(opts.firewallId, 10),
-        volumeIds: opts.volumeIds,
-        networkId,
-      });
-      const privateEntry = networkId
-        ? (server.private_net ?? []).find((n) => n.network === networkId)
-        : undefined;
-      return {
-        providerId: String(server.id),
-        ipv4: server.public_net.ipv4.ip,
-        ipv6: server.public_net.ipv6.ip || "",
-        privateIpv4: privateEntry?.ip || "",
-        status: server.status ?? "creating",
-      };
     },
   },
 

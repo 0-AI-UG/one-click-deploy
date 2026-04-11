@@ -37,7 +37,6 @@ export type AppRow = {
   sleeping_host_port: number | null;
   scale_to_zero_after: number;
   wake_token: string | null;
-  wake_page_on_panel: number;
 };
 
 export type DnsRecordRow = {
@@ -75,13 +74,6 @@ export function getAppByDomain(domain: string): AppRow | null {
   return db
     .query("SELECT * FROM apps WHERE domain = ? LIMIT 1")
     .get(domain) as AppRow | null;
-}
-
-export function setAppWakePageOnPanel(id: number, onPanel: boolean): void {
-  db.query("UPDATE apps SET wake_page_on_panel = ? WHERE id = ?").run(
-    onPanel ? 1 : 0,
-    id,
-  );
 }
 
 export function renameApp(id: number, newName: string): void {
@@ -173,8 +165,8 @@ export function hasRunningReplicas(serverId: number): boolean {
 
 /**
  * Returns true iff the server has at least one replica row (of any status).
- * A server with only stopped replicas is freeze-eligible but not gc-eligible:
- * the stopped rows anchor the light-sleep state and must survive.
+ * A server with only stopped replicas anchors the light-sleep state and must
+ * survive gc — those rows are how wake knows where to `docker start`.
  */
 export function hasAnyReplicas(serverId: number): boolean {
   const row = db
@@ -185,8 +177,8 @@ export function hasAnyReplicas(serverId: number): boolean {
 
 export async function gcServerIfEmpty(serverId: number): Promise<void> {
   // A server is gc-eligible iff it has *zero* replica rows. Stopped replicas
-  // (light-sleep anchors) count as "present" — those servers go through the
-  // freeze path instead.
+  // (light-sleep anchors) count as "present" — those servers stay
+  // materialized so the next wake is a `docker start` away.
   if (hasAnyReplicas(serverId)) return;
   if (getApps(serverId).length > 0) return;
   const { getPanel } = await import("./panel.ts");
@@ -204,19 +196,7 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
   } catch {
     compute = undefined;
   }
-  // Frozen servers have no cloud instance (provider_id = ''), but they DO
-  // have a snapshot we must release — otherwise we leak quota. This is the
-  // last-app-on-a-frozen-server cleanup path (Phase 7).
-  if (server.state === "frozen" && server.snapshot_id && compute?.snapshots) {
-    try {
-      await compute.snapshots.delete(server.snapshot_id);
-    } catch (err) {
-      console.error(
-        `[db:gcServerIfEmpty] failed to delete frozen snapshot ${server.snapshot_id}:`,
-        err,
-      );
-    }
-  } else if (server.provider_id && compute) {
+  if (server.provider_id && compute) {
     try {
       await compute.deleteServer(server.provider_id);
     } catch (err) {
@@ -227,48 +207,6 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
     }
   }
   deleteServer(serverId);
-}
-
-/**
- * Decide the lifecycle fate of a server whose last running replica just went
- * away. Three outcomes:
- *
- *   1. Still has running replicas → no-op (scale-down wasn't the final one).
- *   2. Completely empty (no replicas *and* no apps referencing it) → hand off
- *      to `gcServerIfEmpty` which destroys it outright.
- *   3. Light sleep anchors present → enqueue a freeze job. The freeze worker
- *      (see `scale/freeze-worker.ts`) will take a snapshot and destroy the
- *      instance asynchronously.
- *
- * The freeze path is skipped if:
- *   - the server is the panel's own host
- *   - the server is already frozen
- *   - the provider doesn't implement snapshot ops (stays in light sleep
- *     forever; the worker can't do anything useful for it)
- *   - there's already an active freeze job for the server (dedupe)
- */
-export async function freezeServerIfEmpty(serverId: number): Promise<void> {
-  if (hasRunningReplicas(serverId)) return;
-  // Truly empty — no anchors to preserve, delete the row outright.
-  if (!hasAnyReplicas(serverId) && getApps(serverId).length === 0) {
-    return gcServerIfEmpty(serverId);
-  }
-  const { getPanel } = await import("./panel.ts");
-  if (getPanel()?.server_id === serverId) return;
-  const { getServer } = await import("./servers.ts");
-  const server = getServer(serverId);
-  if (!server) return;
-  if (server.state === "frozen") return;
-  const { getComputeProvider } = await import("../providers/index.ts");
-  let compute;
-  try {
-    compute = getComputeProvider(server.provider);
-  } catch {
-    return; // unknown provider — stay in light sleep
-  }
-  if (!compute.snapshots) return; // provider can't snapshot → light sleep only
-  const { enqueueFreezeJob } = await import("./freeze-jobs.ts");
-  enqueueFreezeJob(serverId);
 }
 
 export function updateAppStatus(id: number, status: string): void {

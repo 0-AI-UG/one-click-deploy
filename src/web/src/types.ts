@@ -24,7 +24,6 @@ export type AppData = {
   scale_to_zero_after?: number;
   sleeping_server_id?: number | null;
   sleeping_host_port?: number | null;
-  wake_page_on_panel?: number | boolean;
 };
 
 export type ReplicaData = {
@@ -70,9 +69,6 @@ export type ServerData = {
   replica_count?: number;
   monthly_eur?: number;
   provider_id?: string | number;
-  state?: "materialized" | "frozen";
-  snapshot_id?: string;
-  frozen_at?: string | null;
   apps: AppData[];
 };
 

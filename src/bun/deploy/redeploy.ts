@@ -101,12 +101,6 @@ export async function redeployApp(
     const firstReplica = replicasInit[0];
     const server = db.getServer(firstReplica.server_id);
     if (!server) throw new Error("Server not found");
-    if (server.state === "frozen") {
-      // Shouldn't be reachable — wakeApp either materialized the server or
-      // threw. Kept as a defensive guard to fail loudly instead of trying
-      // to SSH to an empty ipv4.
-      throw new Error("Server is frozen — wake path did not materialize it");
-    }
     const hostPort = firstReplica.host_port;
 
     // Capture previous state for rollback

@@ -767,6 +767,85 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 31,
+    description:
+      "Remove deep-sleep machinery: drop freeze_jobs, apps.wake_page_on_panel, and servers freeze columns",
+    disableForeignKeys: true,
+    up: (db) => {
+      // Scale-to-zero only pauses containers now; the freeze worker + all
+      // snapshot/deep-wake state is gone. This migration drops the dead
+      // tables/columns. No frozen servers exist in the wild (confirmed by
+      // the operator), so no rescue path is needed.
+
+      db.run("DROP TABLE IF EXISTS freeze_jobs");
+
+      // 1. apps.wake_page_on_panel
+      const appCols = db
+        .query("PRAGMA table_info(apps)")
+        .all() as { name: string }[];
+      if (appCols.some((c) => c.name === "wake_page_on_panel")) {
+        try {
+          db.run("ALTER TABLE apps DROP COLUMN wake_page_on_panel");
+        } catch {
+          // Old-SQLite fallback: table recreate, copying every column
+          // except the one we're dropping.
+          db.run("ALTER TABLE apps RENAME TO apps_pre_31");
+          const oldCols = db
+            .query("PRAGMA table_info(apps_pre_31)")
+            .all() as { name: string; type: string; notnull: number; dflt_value: unknown; pk: number }[];
+          const keep = oldCols.filter((c) => c.name !== "wake_page_on_panel");
+          const colDefs = keep
+            .map((c) => `${c.name} ${c.type}${c.notnull ? " NOT NULL" : ""}${c.dflt_value !== null ? ` DEFAULT ${c.dflt_value}` : ""}${c.pk ? " PRIMARY KEY AUTOINCREMENT" : ""}`)
+            .join(", ");
+          db.run(`CREATE TABLE apps (${colDefs})`);
+          const names = keep.map((c) => c.name).join(", ");
+          db.run(`INSERT INTO apps (${names}) SELECT ${names} FROM apps_pre_31`);
+          db.run("DROP TABLE apps_pre_31");
+        }
+      }
+
+      // 2. servers: drop state / snapshot_id / frozen_volume_ids /
+      //    frozen_at / freeze_failed_at in one table-recreate pass.
+      const serverCols = db
+        .query("PRAGMA table_info(servers)")
+        .all() as { name: string }[];
+      const serverColNames = new Set(serverCols.map((c) => c.name));
+      const freezeCols = [
+        "state",
+        "snapshot_id",
+        "frozen_volume_ids",
+        "frozen_at",
+        "freeze_failed_at",
+      ];
+      const hasAny = freezeCols.some((c) => serverColNames.has(c));
+      if (hasAny) {
+        db.run(`CREATE TABLE servers_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          provider_id TEXT NOT NULL DEFAULT '',
+          provider TEXT NOT NULL DEFAULT 'hetzner',
+          ipv4 TEXT NOT NULL DEFAULT '',
+          ipv6 TEXT NOT NULL DEFAULT '',
+          type TEXT NOT NULL DEFAULT 'cx23',
+          location TEXT NOT NULL DEFAULT 'nbg1',
+          status TEXT NOT NULL DEFAULT 'provisioning',
+          ssh_host_key TEXT NOT NULL DEFAULT '',
+          private_ipv4 TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )`);
+        db.run(`INSERT INTO servers_new (
+          id, name, provider_id, provider, ipv4, ipv6, type, location, status,
+          ssh_host_key, private_ipv4, created_at
+        ) SELECT
+          id, name, provider_id, provider, ipv4, ipv6, type, location, status,
+          ssh_host_key, private_ipv4, created_at
+        FROM servers`);
+        db.run("DROP TABLE servers");
+        db.run("ALTER TABLE servers_new RENAME TO servers");
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

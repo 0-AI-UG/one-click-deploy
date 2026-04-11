@@ -17,9 +17,6 @@ export { spawnSshPty, type PtySession } from "../hetzner/ssh-pty.ts";
 export {
   deployCaddySite,
   deployCaddyWakePage,
-  deployPanelWakePage,
-  removePanelWakePage,
-  ensurePanelOnDemandTls,
   cloneAndBuild,
   cloneAndRailpackBuild,
   removeContainer,

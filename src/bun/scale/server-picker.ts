@@ -14,11 +14,6 @@ export async function pickTargetServer(
   if (preferredServerId) {
     const preferred = db.getServer(preferredServerId) as Server | null;
     if (!preferred) throw new Error(`Target server ${preferredServerId} not found`);
-    if (preferred.state === "frozen") {
-      throw new Error(
-        `Target server ${preferred.name} is frozen — wake it before placing replicas on it`,
-      );
-    }
     if (preferred.status !== "ready") throw new Error(`Target server ${preferred.name} is not ready (status: ${preferred.status})`);
     emit("scale", `Placing replica on ${preferred.name} (user-selected)`);
     return preferred;
@@ -33,13 +28,10 @@ export async function pickTargetServer(
   }
 
   // Find server with fewest replicas (prefer existing servers with 0 replicas
-  // of this app). Frozen servers are parked — skip them; a new replica either
-  // provisions a brand-new server or goes through the deep-wake path
-  // explicitly (not this picker).
+  // of this app).
   let bestServer: Server | null = null;
   let bestCount = Infinity;
   for (const server of allServers) {
-    if (server.state === "frozen") continue;
     if (server.status !== "ready") continue;
     const count = replicasByServer.get(server.id) || 0;
     if (count < bestCount) {

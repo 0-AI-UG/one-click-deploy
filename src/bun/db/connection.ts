@@ -22,8 +22,6 @@ function initSchema(instance: Database) {
   instance.run(`CREATE TABLE IF NOT EXISTS servers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    /* No UNIQUE: multiple frozen servers share provider_id='' once their
-       cloud instance is destroyed. Migration 27 drops the old constraint. */
     provider_id TEXT NOT NULL DEFAULT '',
     provider TEXT NOT NULL DEFAULT 'hetzner',
     ipv4 TEXT NOT NULL DEFAULT '',
@@ -31,11 +29,6 @@ function initSchema(instance: Database) {
     type TEXT NOT NULL DEFAULT 'cx23',
     location TEXT NOT NULL DEFAULT 'nbg1',
     status TEXT NOT NULL DEFAULT 'provisioning',
-    state TEXT NOT NULL DEFAULT 'materialized',
-    snapshot_id TEXT NOT NULL DEFAULT '',
-    frozen_volume_ids TEXT NOT NULL DEFAULT '',
-    frozen_at TEXT,
-    freeze_failed_at TEXT,
     private_ipv4 TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`);

@@ -29,8 +29,8 @@ export async function reconcileNetwork(): Promise<void> {
   }
   if (!networkId) return;
 
-  // Attach any materialized server that isn't on the network yet.
-  const servers = db.getServers().filter((s) => s.state === "materialized" && s.provider_id);
+  // Attach any server that isn't on the network yet.
+  const servers = db.getServers().filter((s) => s.provider_id);
   for (const server of servers) {
     if (server.private_ipv4) continue;
     try {
@@ -78,7 +78,7 @@ export async function syncInternalHosts(): Promise<void> {
   }
   const block = lines.join("\n");
 
-  const servers = db.getServers().filter((s) => s.state === "materialized" && s.ipv4);
+  const servers = db.getServers().filter((s) => s.ipv4);
   for (const server of servers) {
     try {
       await writeHostsBlock(server.ipv4, block, server.ssh_host_key || undefined);

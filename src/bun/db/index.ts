@@ -1,5 +1,5 @@
 export { createDatabase, default } from "./connection.ts";
-export type { ServerRow, ServerState } from "./servers.ts";
+export type { ServerRow } from "./servers.ts";
 export {
   getServers,
   getServer,
@@ -9,33 +9,18 @@ export {
   updateServer,
   deleteServer,
   updateServerHostKey,
-  markServerFrozen,
-  markServerMaterialized,
-  clearServerSnapshot,
-  setFreezeFailed,
-  getFrozenVolumeIds,
 } from "./servers.ts";
-export type { FreezeJobRow, FreezeJobState } from "./freeze-jobs.ts";
-export {
-  enqueueFreezeJob,
-  getFreezeJob,
-  getActiveFreezeJobForServer,
-  listActiveFreezeJobs,
-  updateFreezeJobState,
-} from "./freeze-jobs.ts";
 export type { AppRow, DnsRecordRow } from "./apps.ts";
 export {
   getApps,
   getApp,
   getAppByName,
   getAppByDomain,
-  setAppWakePageOnPanel,
   renameApp,
   insertApp,
   insertAppWithFirstReplica,
   getServersForApp,
   gcServerIfEmpty,
-  freezeServerIfEmpty,
   hasRunningReplicas,
   hasAnyReplicas,
   updateAppStatus,

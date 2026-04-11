@@ -26,7 +26,4 @@ export type {
   ProviderVolume,
   VolumeOps,
   NetworkOps,
-  SnapshotOps,
-  SnapshotInfo,
-  SnapshotListItem,
 } from "./types.ts";

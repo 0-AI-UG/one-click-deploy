@@ -137,21 +137,11 @@ export function AppDetailPage({ appId }: { appId: number }) {
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
   if (!app) return <div className="text-center py-20 text-muted font-mono text-[10px] uppercase tracking-wider">App not found</div>;
 
-  // Cold-start ETA sub-label for the state badge (Phase 6).
-  //
-  //   running  → no sub-label
-  //   sleeping (light)  — server materialized, container on disk → ~1s
-  //   sleeping (deep)   — server frozen, or wake page still on panel → ~60s
-  //
-  // "wake_page_on_panel" drives the ~60s label even for an already-materialized
-  // server, because a sibling app wake left DNS pointing at the panel; the
-  // next request walks through DNS propagation + the panel → tenant swap.
-  const isSleeping = app.status === "sleeping";
-  const wakePageOnPanel = Boolean(app.wake_page_on_panel);
-  const serverFrozen = server?.state === "frozen";
+  // Cold-start ETA sub-label for the state badge. Scale-to-zero is a
+  // `docker stop` on the tenant host, so wake is always ~1s.
   let badgeSubLabel: string | undefined;
-  if (isSleeping || wakePageOnPanel) {
-    badgeSubLabel = (serverFrozen || wakePageOnPanel) ? "wakes in ~60s" : "wakes in ~1s";
+  if (app.status === "sleeping") {
+    badgeSubLabel = "wakes in ~1s";
   } else if (app.status === "waking") {
     badgeSubLabel = "starting...";
   }

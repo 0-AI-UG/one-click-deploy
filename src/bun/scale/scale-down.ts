@@ -160,9 +160,10 @@ export async function scaleDown(
     }
   }
 
-  // Decide what happens to every affected server uniformly. `freezeServerIfEmpty`
-  // handles all three cases: still-in-use → no-op, completely empty → gc,
-  // light-sleep anchor present → enqueue a freeze job.
+  // GC any server whose last app just went away. `gcServerIfEmpty` no-ops if
+  // the server still has replica rows — including stopped anchors — so
+  // scale-to-zero leaves the tenant VM materialized and only the
+  // last-app-on-a-server case actually destroys the instance.
   const candidateServerIds = new Set<number>();
   for (const replica of toRemove) {
     candidateServerIds.add(replica.server_id);
@@ -170,14 +171,11 @@ export async function scaleDown(
   for (const serverId of candidateServerIds) {
     try {
       const before = db.getServer(serverId);
-      await db.freezeServerIfEmpty(serverId);
+      await db.gcServerIfEmpty(serverId);
       const after = db.getServer(serverId);
       if (before && !after) emit("scale", `Server ${before.name} deleted`);
-      else if (after && db.getActiveFreezeJobForServer(serverId)) {
-        emit("scale", `Server ${after.name} queued for freeze`);
-      }
     } catch (err) {
-      log("scale", `Failed to freeze/gc server ${serverId}: ${err}`);
+      log("scale", `Failed to gc server ${serverId}: ${err}`);
     }
   }
 }

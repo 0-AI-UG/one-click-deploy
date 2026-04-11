@@ -164,38 +164,6 @@ export async function handleWakeApp(request: Request, appId: number): Promise<Re
   }
 }
 
-/**
- * Caddy on-demand-TLS `ask` endpoint.
- *
- * Caddy on the panel server calls this before issuing a Let's Encrypt cert
- * for a tenant domain. We authorize only if the domain currently has a
- * wake-page route installed on the panel (freeze worker sets the flag,
- * wake path clears it). Any other response is treated by Caddy as "don't
- * mint a cert for this domain" — which hard-stops attempts to abuse the
- * panel as an open ACME relay for arbitrary DNS names pointed at us.
- *
- * Must be unauthenticated — Caddy has no credentials at this stage.
- */
-export async function handleCaddyAsk(request: Request): Promise<Response> {
-  const domain = new URL(request.url).searchParams.get("domain") || "";
-  if (!domain) {
-    return new Response("missing domain", { status: 400 });
-  }
-  // Reject internal / nip.io domains outright — they never use on-demand
-  // ACME, they go through Caddy's internal issuer on the tenant server.
-  if (domain.endsWith(".nip.io") || domain.endsWith(".localhost")) {
-    return new Response("internal domain", { status: 404 });
-  }
-  const app = db.getAppByDomain(domain);
-  if (!app) {
-    return new Response("unknown domain", { status: 404 });
-  }
-  if (!app.wake_page_on_panel) {
-    return new Response("not hosted on panel", { status: 404 });
-  }
-  return new Response("ok", { status: 200 });
-}
-
 /** Token-authenticated — polled by the wake page to check when the app is ready. */
 export async function handleWakeStatus(request: Request, appId: number): Promise<Response> {
   const app = db.getApp(appId);

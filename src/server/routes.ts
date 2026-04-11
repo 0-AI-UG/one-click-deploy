@@ -46,7 +46,7 @@ import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleDeleteResource } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
-import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus, handleCaddyAsk } from "./routes/scaling.ts";
+import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus } from "./routes/scaling.ts";
 import {
   handleEnableWebhook,
   handleDisableWebhook,
@@ -239,12 +239,6 @@ export const apiRoutes = {
   "/api/apps/:appId/wake-status": {
     GET: (req: Request) => handleWakeStatus(req, appIdFrom(req)),
     OPTIONS: () => new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } }),
-  },
-
-  // Caddy on-demand-TLS ask endpoint (Phase 5). Unauthenticated — Caddy
-  // calls this before minting a Let's Encrypt cert for a tenant domain.
-  "/api/caddy/ask": {
-    GET: (req: Request) => handleCaddyAsk(req),
   },
 
   // --- Admin: Settings ---
