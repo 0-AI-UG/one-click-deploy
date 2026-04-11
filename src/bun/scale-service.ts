@@ -2,6 +2,7 @@ import * as db from "./db.ts";
 import type { ServiceRow, ServiceInstanceRow } from "./db.ts";
 import { getComputeProvider } from "./providers/index.ts";
 import { sshExec, pullAndRunService, serviceHealthCheck } from "./remote/index.ts";
+import { replicaBindHost } from "./scale/types.ts";
 import { getCatalogEntry, buildConnectionUrl } from "./services/catalog.ts";
 import type { ServiceDefinition } from "./services/catalog.ts";
 
@@ -66,16 +67,13 @@ async function scaleUp(
 
   const primaryServer = db.getServer(primary.server_id);
   if (!primaryServer) throw new Error("Primary server not found");
-  const primaryHostKey = primaryServer.ssh_host_key || undefined;
-
-  // Determine primary host for replication — use server IP for cross-server,
-  // container name for same-server
-  const primaryHost = primaryServer.ipv4;
+  // Primary's private IPv4 is the replication endpoint for every replica.
+  // Since all servers sit on the shared ocd-net Hetzner network, this
+  // address is reachable from any replica's container via the host's
+  // bridge whether or not the replica lands on the same server. Fails
+  // fast if the primary host isn't attached to the private network.
+  const primaryHost = replicaBindHost(primaryServer);
   const primaryPort = primary.host_port;
-
-  // If adding replicas on other servers, ensure primary is accessible
-  // For now, all replicas go on the same server as primary for simplicity
-  // Cross-server replication would need 0.0.0.0 binding + firewall rules
 
   const image = `${catalog.image}:${service.version}`;
 
@@ -86,6 +84,7 @@ async function scaleUp(
     // Use same server as primary for volume locality
     const targetServer = primaryServer;
     const targetHostKey = targetServer.ssh_host_key || undefined;
+    const targetBindAddress = replicaBindHost(targetServer);
 
     // Create volume for replica data
     emit("scale", `Creating volume for replica ${replicaNum}...`);
@@ -122,6 +121,7 @@ async function scaleUp(
         hostPort,
         envVars: replicaEnv,
         volumeMount,
+        bindAddress: targetBindAddress,
         cmd: replicaCmd,
       },
       targetHostKey
@@ -228,8 +228,8 @@ async function updateLinkedAppsReplicaUrls(service: ServiceRow): Promise<void> {
       if (replicas.length > 0) {
         const replicaUrls = replicas.map((r) => {
           const server = db.getServer(r.server_id);
-          if (!server) return "";
-          return buildConnectionUrl(catalog, envVars, server.ipv4, r.host_port);
+          if (!server || !server.private_ipv4) return "";
+          return buildConnectionUrl(catalog, envVars, server.private_ipv4, r.host_port);
         }).filter(Boolean);
         appEnv[`${prefix}_REPLICA_URLS`] = replicaUrls.join(",");
       } else {

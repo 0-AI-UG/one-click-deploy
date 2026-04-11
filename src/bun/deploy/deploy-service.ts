@@ -8,6 +8,7 @@ import {
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { getTokens } from "../secret-store.ts";
 import { createMasker } from "../mask.ts";
+import { replicaBindHost } from "../scale/types.ts";
 import {
   getCatalogEntry,
   generateEnvVars,
@@ -257,9 +258,18 @@ export async function deployService(
     const hostPort = db.nextServiceHostPort(serverId);
     const containerName = req.name;
 
-    const connectionUrl = buildConnectionUrl(catalog, envVars, serverIp, hostPort);
+    // Service containers bind to the host server's private IPv4 on the
+    // shared ocd-net Hetzner network — the same invariant app replicas
+    // hold. Callers (apps) reach the service via this private address;
+    // the public NIC is never involved. `replicaBindHost` throws if the
+    // server isn't attached yet, so misconfigured provisions fail fast.
+    const serverRow = db.getServer(serverId);
+    if (!serverRow) throw new Error(`Server ${serverId} not found`);
+    const bindAddress = replicaBindHost(serverRow);
+
+    const connectionUrl = buildConnectionUrl(catalog, envVars, bindAddress, hostPort);
     const credentials = {
-      host: serverIp,
+      host: bindAddress,
       port: hostPort,
       internal_host: containerName,
       internal_port: catalog.defaultPort,
@@ -306,6 +316,7 @@ export async function deployService(
         hostPort,
         envVars,
         volumeMount,
+        bindAddress,
         cmd: primaryExtraCmd,
       },
       serverHostKey || undefined

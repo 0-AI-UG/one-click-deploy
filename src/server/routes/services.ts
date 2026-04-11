@@ -282,13 +282,15 @@ export async function handleLinkService(request: Request, serviceId: number, app
     if (credentials.password) appEnv[`${envPrefix}_PASSWORD`] = credentials.password;
     if (credentials.database) appEnv[`${envPrefix}_NAME`] = credentials.database;
 
-    // Add replica URLs if replicas exist
+    // Add replica URLs if replicas exist. Use the service host's private
+    // IPv4 so apps reach read replicas over the shared Hetzner private
+    // network, the same path the primary URL uses.
     const replicas = db.getReplicaInstances(serviceId);
     if (replicas.length > 0) {
       const replicaUrls = replicas.map((r) => {
         const server = db.getServer(r.server_id);
-        if (!server) return "";
-        return buildConnectionUrl(catalog, serviceEnv, server.ipv4, r.host_port);
+        if (!server || !server.private_ipv4) return "";
+        return buildConnectionUrl(catalog, serviceEnv, server.private_ipv4, r.host_port);
       }).filter(Boolean);
       if (replicaUrls.length > 0) {
         appEnv[`${envPrefix}_REPLICA_URLS`] = replicaUrls.join(",");
@@ -304,23 +306,10 @@ export async function handleLinkService(request: Request, serviceId: number, app
       // UNIQUE constraint — link already exists, just update env vars
     }
 
-    // Connect app container to ocd-net if not already connected
-    const appReplicas = db.getReplicas(appId);
-    for (const replica of appReplicas) {
-      const server = db.getServer(replica.server_id);
-      if (!server) continue;
-      const hostKey = server.ssh_host_key || undefined;
-      try {
-        const { sshExec } = await import("../../bun/hetzner/ssh.ts");
-        await sshExec(
-          server.ipv4,
-          `su - deploy -c "docker network connect ocd-net ${replica.container_name} 2>/dev/null || true"`,
-          hostKey
-        );
-      } catch (e) {
-        console.error(`services: failed to connect ${replica.container_name} to ocd-net:`, e);
-      }
-    }
+    // No per-host Docker-bridge hack needed: with services bound to
+    // their server's private IPv4 on the shared ocd-net Hetzner network,
+    // the app reaches the DB directly via its DATABASE_URL / _HOST env
+    // vars regardless of whether they're colocated on the same server.
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {

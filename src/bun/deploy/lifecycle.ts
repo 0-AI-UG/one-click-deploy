@@ -14,7 +14,7 @@ import {
   composeHealthCheck,
   healthCheck,
 } from "../remote/index.ts";
-import { removeAppCaddy } from "../scale/caddy-manager.ts";
+import { removeAppCaddy, syncAppCaddy } from "../scale/caddy-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../github.ts";
 
@@ -343,6 +343,15 @@ export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: st
     }
 
     db.updateAppStatus(appId, "paused");
+    // Drop the paused replicas from the Caddy upstream pool so external
+    // traffic gets a clean 503 instead of flapping through the passive
+    // health-check window on a frozen TCP-accepting-but-not-serving
+    // backend.
+    try {
+      await syncAppCaddy(appId);
+    } catch (err) {
+      log("pauseApp", `syncAppCaddy after pause failed (non-fatal): ${err}`);
+    }
     log("pauseApp", `App id=${appId} paused`);
     return { ok: true };
   } catch (err) {
@@ -381,6 +390,14 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
       if (!health.healthy) allHealthy = false;
     }
     db.updateAppStatus(appId, allHealthy ? "running" : "unhealthy");
+    // Re-add the replicas to the Caddy upstream pool now that they're
+    // live again. The reconciler would pick this up within 30s anyway,
+    // but waiting means the first requests after unpause hit stale 503s.
+    try {
+      await syncAppCaddy(appId);
+    } catch (err) {
+      log("unpauseApp", `syncAppCaddy after unpause failed (non-fatal): ${err}`);
+    }
 
     log("unpauseApp", `App id=${appId} unpaused`);
     return { ok: true };

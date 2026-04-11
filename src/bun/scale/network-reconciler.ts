@@ -61,9 +61,22 @@ export async function reconcileNetwork(): Promise<void> {
 }
 
 /**
- * Build the `<app>.ocd.internal` line block and push it into /etc/hosts on
- * every materialized server. Idempotent — the block is delimited by
- * BEGIN/END markers so repeated runs just overwrite the same region.
+ * Build two /etc/hosts lines per entry and push into /etc/hosts on every
+ * materialized server:
+ *
+ *   - `<app>.ocd.internal`      → panel's private_ipv4 (Caddy ingress)
+ *   - `<svc>.svc.ocd.internal`  → service host's private_ipv4 (direct)
+ *
+ * Idempotent — the block is delimited by BEGIN/END markers so repeated
+ * runs just overwrite the same region. Services are resolved to their
+ * primary instance's host; multi-instance services still resolve to the
+ * primary and apps read replica URLs via `DATABASE_REPLICA_URLS`
+ * (populated with raw private IPs by the link handler).
+ *
+ * These hosts entries are for host-level use (panel SSH, debugging,
+ * container runs that opt-in via `--add-host`). App/service containers
+ * themselves read the resolved private IP directly from their env vars,
+ * so container-level /etc/hosts inheritance isn't required.
  */
 export async function syncInternalHosts(): Promise<void> {
   const panel = db.getPanel();
@@ -71,10 +84,17 @@ export async function syncInternalHosts(): Promise<void> {
   const panelServer = db.getServer(panel.server_id);
   if (!panelServer || !panelServer.private_ipv4) return; // nothing to point at yet
 
-  const apps = db.getApps();
   const lines: string[] = [];
-  for (const app of apps) {
+  for (const app of db.getApps()) {
     lines.push(`${panelServer.private_ipv4} ${app.name}.ocd.internal`);
+  }
+  for (const service of db.getServices()) {
+    const instances = db.getServiceInstances(service.id);
+    const primary = instances.find((i) => i.role === "primary") ?? instances[0];
+    if (!primary) continue;
+    const host = db.getServer(primary.server_id);
+    if (!host || !host.private_ipv4) continue;
+    lines.push(`${host.private_ipv4} ${service.name}.svc.ocd.internal`);
   }
   const block = lines.join("\n");
 

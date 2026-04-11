@@ -118,6 +118,9 @@ async function persistCaddyConfig(panel: PanelAccess): Promise<void> {
  * excluded:
  *
  *   - `stopped`    — scale-to-zero anchor, container is off.
+ *   - `paused`     — `docker pause` froze the container; it accepts TCP
+ *                    but won't serve. Keeping it in the pool would cause
+ *                    Caddy's passive health check to flap every 30s.
  *   - `draining`   — scale-down has signalled the replica to quiesce; no
  *                    new requests should land on it, in-flight ones drain
  *                    naturally on the existing TCP connections.
