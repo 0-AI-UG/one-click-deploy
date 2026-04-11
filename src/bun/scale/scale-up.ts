@@ -106,6 +106,7 @@ export async function scaleUp(
         containerName,
         app.auth_password,
         hostPort,
+        replicaBindAddr,
         targetHostKey
       );
     }

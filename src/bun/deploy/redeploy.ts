@@ -203,7 +203,7 @@ export async function redeployApp(
 
     // Handle auth proxy: deploy, update, or remove (primary server)
     if (authPassword) {
-      await deployAuthProxy(server.ipv4, app.name, authPassword, hostPort, hostKey);
+      await deployAuthProxy(server.ipv4, app.name, authPassword, hostPort, containerBindAddr, hostKey);
     } else if (app.auth_password && !authPassword) {
       await removeAuthProxy(server.ipv4, app.name, hostKey);
     }

@@ -89,7 +89,7 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     // Re-deploy auth proxy only on the slow path. The fast path preserved
     // the auth proxy systemd unit when the container was stopped.
     if (app.auth_password && !startedFastPath) {
-      await deployAuthProxy(server.ipv4, containerName, app.auth_password, hostPort, hostKey);
+      await deployAuthProxy(server.ipv4, containerName, app.auth_password, hostPort, bindAddr, hostKey);
     }
 
     // Upsert the replica row. On the fast path a preserved row already

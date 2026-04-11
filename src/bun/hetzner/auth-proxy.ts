@@ -10,10 +10,10 @@ export function authProxyPort(hostPort: number): number {
   return hostPort + AUTH_PROXY_PORT_OFFSET;
 }
 
-function authProxyScript(appName: string, password: string, appPort: number, listenPort: number): string {
+function authProxyScript(appName: string, password: string, appPort: number, listenPort: number, bindHost: string): string {
   // HMAC-based cookie signing. Cookie = timestamp.signature
   return `const PASSWORD = ${JSON.stringify(password)};
-const UPSTREAM = "http://127.0.0.1:${appPort}";
+const UPSTREAM = "http://${bindHost}:${appPort}";
 const COOKIE = "ocd_sess";
 const MAX_AGE = 86400 * 7; // 7 days
 
@@ -77,7 +77,7 @@ button:hover{background:#f5f0eb;color:#1a1a1a}
 
 Bun.serve({
   port: ${listenPort},
-  hostname: "127.0.0.1",
+  hostname: "${bindHost}",
   async fetch(req) {
     const url = new URL(req.url);
 
@@ -125,10 +125,11 @@ export async function deployAuthProxy(
   appName: string,
   password: string,
   appPort: number,
+  bindHost: string,
   hostKey?: string
 ): Promise<number> {
   const listenPort = authProxyPort(appPort);
-  log("auth", `Deploying auth proxy for ${appName}: proxy=:${listenPort} -> app=:${appPort}`);
+  log("auth", `Deploying auth proxy for ${appName}: proxy=${bindHost}:${listenPort} -> app=${bindHost}:${appPort}`);
 
   // Ensure Bun is available and executable by the deploy user
   const bunCheck = await sshExec(ip, "su - deploy -c '/usr/local/bin/bun --version' 2>/dev/null && echo ok || echo missing", hostKey);
@@ -141,7 +142,7 @@ export async function deployAuthProxy(
     }
   }
 
-  const script = authProxyScript(appName, password, appPort, listenPort);
+  const script = authProxyScript(appName, password, appPort, listenPort, bindHost);
   const scriptPath = `/home/deploy/apps/${appName}/.auth-proxy.ts`;
 
   // Use base64 to safely transfer the script (avoids heredoc/quoting issues)

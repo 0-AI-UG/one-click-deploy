@@ -518,7 +518,7 @@ export async function deploy(
     let caddyPort = replica.host_port;
     if (req.auth_password) {
       onProgress("build", "Deploying auth proxy...");
-      caddyPort = await deployAuthProxy(serverIp, req.app_name, req.auth_password, replica.host_port, serverHostKey || undefined);
+      caddyPort = await deployAuthProxy(serverIp, req.app_name, req.auth_password, replica.host_port, containerBindAddr, serverHostKey || undefined);
       maskedLog(app.id, `[auth] Auth proxy deployed on port ${caddyPort}`);
     }
 
