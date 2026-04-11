@@ -20,6 +20,7 @@ export type TerminalWsData = {
   userId: string;
   target: { kind: "server" | "replica" | "service-instance"; id: number };
   pty: PtySession | null;
+  pingTimer: ReturnType<typeof setInterval> | null;
 };
 
 async function authFromQuery(req: Request): Promise<{ userId: string } | null> {
@@ -79,16 +80,31 @@ export async function tryTerminalUpgrade(req: Request, server: Bun.Server<Termin
     return new Response("too many terminal sessions", { status: 429 });
   }
 
-  const data: TerminalWsData = { userId: auth.userId, target, pty: null };
+  const data: TerminalWsData = { userId: auth.userId, target, pty: null, pingTimer: null };
   const ok = server.upgrade(req, { data });
   if (!ok) return new Response("upgrade failed", { status: 500 });
   return null;
 }
 
 export const terminalWsHandlers = {
+  // Disable Bun's default 120s idle timeout — interactive shells can and
+  // should sit idle for hours. Liveness is enforced at the ssh layer via
+  // ServerAliveInterval (see buildSshArgs) and by our own ping loop below.
+  idleTimeout: 0,
+  sendPings: true,
+  // Generous buffer for bursty shell output (e.g. `find /`, cat large files).
+  backpressureLimit: 16 * 1024 * 1024,
+  closeOnBackpressureLimit: false,
+
   open(ws: Bun.ServerWebSocket<TerminalWsData>) {
     const data = ws.data as TerminalWsData;
     sessionsByUser.set(data.userId, (sessionsByUser.get(data.userId) ?? 0) + 1);
+
+    // Keepalive ping every 30s — also gives us a backstop to detect broken
+    // connections if any intermediary proxy eats ws control frames.
+    data.pingTimer = setInterval(() => {
+      try { ws.ping(); } catch { /* ws may be closed */ }
+    }, 30_000);
 
     let ip: string | undefined;
     let hostKey: string | undefined;
@@ -147,7 +163,15 @@ export const terminalWsHandlers = {
       hostKey,
       remoteCommand,
       onStdout: (chunk) => {
-        try { ws.send(chunk); } catch { /* ws may be closed */ }
+        try {
+          const sent = ws.send(chunk);
+          // Bun.ServerWebSocket.send returns negative on backpressure drop.
+          // If we hit this, shell echo disappears and the user thinks their
+          // keystroke didn't register. Log so we can see it.
+          if (typeof sent === "number" && sent < 0) {
+            log("send", `backpressure: code=${sent}, chunk=${chunk.length}B, buffered=${ws.getBufferedAmount?.() ?? "?"}`);
+          }
+        } catch { /* ws may be closed */ }
       },
       onExit: (code) => {
         try { ws.send(`\r\n[session ended, exit ${code}]\r\n`); } catch { /* ws may be closed */ }
@@ -176,6 +200,10 @@ export const terminalWsHandlers = {
 
   close(ws: Bun.ServerWebSocket<TerminalWsData>) {
     const data = ws.data as TerminalWsData;
+    if (data.pingTimer) {
+      clearInterval(data.pingTimer);
+      data.pingTimer = null;
+    }
     if (data.pty) {
       try { data.pty.kill(); } catch { /* process may already be dead */ }
     }

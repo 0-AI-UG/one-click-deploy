@@ -102,6 +102,10 @@ export function buildSshArgs(opts: {
   ];
   if (opts.interactive) {
     args.push("-tt");
+    // Detect dead connections (no keepalive response for 30s * 3 = 90s)
+    // so a hung session exits cleanly instead of silently ignoring input.
+    args.push("-o", "ServerAliveInterval=30");
+    args.push("-o", "ServerAliveCountMax=3");
   } else {
     args.push("-o", "BatchMode=yes");
   }

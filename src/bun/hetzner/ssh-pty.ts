@@ -45,6 +45,9 @@ export function spawnSshPty(opts: {
 
   log("spawn", `${opts.ip} cmd=${(opts.remoteCommand || "<shell>").slice(0, 80)}`);
 
+  // Pending bytes that didn't fit on the last terminal.write — flushed on `drain`.
+  let pending: Uint8Array | null = null;
+
   const proc = Bun.spawn(args, {
     terminal: {
       cols,
@@ -52,10 +55,33 @@ export function spawnSshPty(opts: {
       data: (_terminal, chunk) => {
         try { opts.onStdout(chunk); } catch (err) { log("data", `error: ${err}`); }
       },
+      drain: (t) => {
+        if (!pending) return;
+        const n = t.write(pending);
+        if (n >= pending.length) pending = null;
+        else pending = pending.subarray(n);
+      },
     },
   });
 
   const terminal = proc.terminal!;
+
+  function writeBytes(data: Uint8Array | string) {
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+    if (pending) {
+      // Still draining — append to the queue instead of writing out of order.
+      const merged = new Uint8Array(pending.length + bytes.length);
+      merged.set(pending);
+      merged.set(bytes, pending.length);
+      pending = merged;
+      return;
+    }
+    const n = terminal.write(bytes);
+    if (n < bytes.length) {
+      log("write", `short write: ${n}/${bytes.length}, queued for drain`);
+      pending = bytes.subarray(n);
+    }
+  }
 
   const exited = proc.exited.then((code) => {
     log("exit", `${opts.ip} code=${code}`);
@@ -68,7 +94,7 @@ export function spawnSshPty(opts: {
   return {
     write(data) {
       try {
-        terminal.write(data);
+        writeBytes(data);
       } catch (err) {
         log("write", `error: ${err}`);
       }
