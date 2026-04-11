@@ -121,20 +121,31 @@ export async function scaleDown(
       db.updateAppSleepingState(app.id, lastServer.id, lastRemoved.host_port, wakeToken);
       const panel = db.getPanel();
       const panelDomain = panel?.domain || "";
-      const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-      // Remove the app's vhost from the panel's Caddy so the wake page
-      // becomes the authoritative handler for this domain. The wake page
-      // itself still lives on the tenant server for now — Phase 5 may
-      // move it to the panel later.
+      // Remove the app's proxy vhost from the panel's Caddy first so the
+      // wake page route replaces it as the authoritative handler for this
+      // domain (otherwise the live vhost would shadow the wake page).
       try {
         await removeAppCaddy(app.name, app.domain);
       } catch (err) {
         log("scale", `Failed to remove panel Caddy route during sleep: ${err}`);
       }
-      await deployCaddyWakePage(
-        lastServer.ipv4, app.domain, panelDomain, app.id, wakeToken, useInternalTls,
-        lastServer.ssh_host_key || undefined
-      );
+      // Install the wake page on the panel server — since DNS now points
+      // at the panel, the wake page must live where the traffic lands.
+      const panelServer = panel ? db.getServer(panel.server_id) : null;
+      if (panelServer?.ipv4) {
+        const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
+        await deployCaddyWakePage(
+          panelServer.ipv4,
+          app.domain,
+          panelDomain,
+          app.id,
+          wakeToken,
+          useInternalTls,
+          panelServer.ssh_host_key || undefined,
+        );
+      } else {
+        log("scale", `Panel server missing — cannot install wake page for app ${app.name}`);
+      }
     }
     db.updateAppStatus(app.id, "sleeping");
     emit("scale", "App scaled to zero — sleeping");

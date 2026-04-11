@@ -576,40 +576,6 @@ export async function removePanelWakePage(
   await persistCaddyConfig(panelIp, hostKey);
 }
 
-export async function removeCaddySite(ip: string, domain: string, hostKey?: string) {
-  log("caddy", `Removing site: ${domain}`);
-  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
-
-  // Try admin API first
-  const result = await sshExec(
-    ip,
-    `curl -sf -X DELETE http://localhost:2019/id/${routeId}`,
-    hostKey
-  );
-
-  if (result.exitCode !== 0) {
-    log("caddy", `Admin API delete failed for ${domain}, restarting Caddy and retrying...`);
-    await sshExec(ip, "systemctl restart caddy", hostKey);
-    await Bun.sleep(1000);
-    await sshExec(ip, `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`, hostKey);
-  }
-
-  // Persist live config to disk so routes survive Caddy restarts
-  await persistCaddyConfig(ip, hostKey);
-  log("caddy", `Site ${domain} removed (persisted to disk)`);
-}
-
-/** Check whether a Caddy route exists for the given domain. */
-export async function checkCaddyRoute(ip: string, domain: string, hostKey?: string): Promise<boolean> {
-  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
-  const result = await sshExec(
-    ip,
-    `curl -sf http://localhost:2019/id/${routeId} > /dev/null`,
-    hostKey
-  );
-  return result.exitCode === 0;
-}
-
 // --- Registry Auth ---
 
 async function dockerLoginGhcr(

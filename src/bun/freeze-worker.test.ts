@@ -107,8 +107,6 @@ mock.module("./remote/index.ts", () => ({
   ensurePanelOnDemandTls: async () => {
     panelOnDemandTlsCalls.push(Date.now());
   },
-  removeCaddySite: async () => {},
-  checkCaddyRoute: async () => true,
   stopContainer: async () => {},
   startContainer: async () => true,
   containerExists: async () => true,

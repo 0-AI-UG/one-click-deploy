@@ -20,8 +20,6 @@ export {
   deployPanelWakePage,
   removePanelWakePage,
   ensurePanelOnDemandTls,
-  removeCaddySite,
-  checkCaddyRoute,
   cloneAndBuild,
   cloneAndRailpackBuild,
   removeContainer,
