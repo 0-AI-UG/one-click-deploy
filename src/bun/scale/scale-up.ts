@@ -77,19 +77,53 @@ export async function scaleUp(
       !!app.auth_password
     );
 
-    // Atomic DNS swap: create new record first, then delete old (overlap, not gap)
-    const dnsRecords = db.getDnsRecords(app.id);
+    // Point the domain at the LB. This MUST run on every scale-up of a
+    // custom-domain app, regardless of what dns_records the DB happens
+    // to know about: a previous failed/partial attempt may have left
+    // zero DB rows but the actual A record still pointing at the
+    // primary's IP, in which case the LB sits dark and the user gets
+    // "domain not reachable". (That's exactly the regression we just
+    // hit.) createDnsRecord is idempotent — it replaces the rrset
+    // in-place on conflict — so one call swings the domain to the LB
+    // regardless of prior state.
     const dnsSettings = db.getSettings();
-    if (dnsRecords.length > 0 && dnsSettings.dns_zone_id) {
+    if (app.domain && !app.domain.endsWith(".nip.io") && dnsSettings.dns_zone_id) {
       const parts = app.domain.split(".");
       const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
-      // Create new record pointing to LB first
+
+      // Snapshot DB rows BEFORE we mutate anything, so we know which
+      // values were stale and need cleanup after the swing.
+      const oldDnsRecords = db.getDnsRecords(app.id);
+
+      emit("scale", `Pointing ${app.domain} at LB ${lb.ipv4}...`);
       const newRecord = await dns.createRecord({
         zoneId: dnsSettings.dns_zone_id,
         name: subdomain,
         type: "A",
         value: lb.ipv4,
       });
+
+      // Drop stale DB rows. Best-effort dns.deleteRecord for any value
+      // that isn't already the LB IP — createDnsRecord above replaced
+      // the rrset wholesale, so this is mostly DB bookkeeping plus a
+      // safety net for stragglers. Skip the dns.deleteRecord call when
+      // the stale row already references the LB IP, otherwise we'd
+      // delete the value we just set.
+      for (const record of oldDnsRecords) {
+        if (record.value !== lb.ipv4) {
+          try {
+            await dns.deleteRecord({
+              zoneId: record.zone_id,
+              name: record.name,
+              type: record.type,
+              value: record.value,
+            });
+          } catch (err) {
+            log("scale", `Failed to delete stale DNS value ${record.value}: ${err}`);
+          }
+        }
+        db.deleteDnsRecord(record.record_id);
+      }
       db.insertDnsRecord({
         app_id: app.id,
         zone_id: dnsSettings.dns_zone_id,
@@ -98,20 +132,6 @@ export async function scaleUp(
         type: "A",
         value: lb.ipv4,
       });
-      // Now safe to delete old records
-      for (const record of dnsRecords) {
-        try {
-          await dns.deleteRecord({
-            zoneId: record.zone_id,
-            name: record.name,
-            type: record.type,
-            value: record.value,
-          });
-          db.deleteDnsRecord(record.record_id);
-        } catch (err) {
-          log("scale", `Failed to delete DNS record during rollback: ${err}`);
-        }
-      }
     }
 
     // Re-bind existing container to 0.0.0.0
