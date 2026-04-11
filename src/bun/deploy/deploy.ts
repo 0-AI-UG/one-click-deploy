@@ -456,14 +456,14 @@ export async function deploy(
     state.deployMode = deployMode;
     let buildImageTag = `${req.app_name}:latest`; // default, overridden by Dockerfile builds
 
-    // Prefer binding the published port to the tenant server's private IP so
-    // it's only reachable over the shared private network. Fall back to
-    // 127.0.0.1 when we don't have a private IP yet — the reconciler
-    // attach-to-network pass takes care of late arrivals, and we'll
-    // reconfigure the port binding on the next redeploy.
-    const tenantServerRow = db.getServer(serverId!);
-    const tenantPrivateIp = tenantServerRow?.private_ipv4 || "";
-    const containerBindAddr = tenantPrivateIp || "0.0.0.0";
+    // Bind published ports on 0.0.0.0 so the container is reachable both
+    // from the host's own Caddy (via localhost) and from the panel's Caddy
+    // over the shared private network (via the server's private IPv4).
+    // Isolation from the public internet comes from the Hetzner Cloud
+    // Firewall, which only whitelists 22/80/443/ICMP — arbitrary host
+    // ports aren't reachable from outside even though the listener is
+    // wildcard-bound.
+    const containerBindAddr = "0.0.0.0";
 
     if (deployMode === "compose") {
       const result = await cloneAndComposeBuild(

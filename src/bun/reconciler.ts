@@ -4,7 +4,7 @@ import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContai
 import { evaluateAutoScale } from "./scale.ts";
 import { getCatalogEntry } from "./services/catalog.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
-import { syncAppCaddy, checkAppCaddyRoute } from "./scale/caddy-manager.ts";
+import { syncAppCaddy } from "./scale/caddy-manager.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -90,20 +90,20 @@ async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
 }
 
 async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<void> {
-  // The panel owns a single Caddy ingress now, so the reconciler just checks
-  // each app's vhost is present and rewrites it from DB state if missing.
+  // The panel owns a single Caddy ingress now. Re-sync every tracked app on
+  // every tick so the upstream pool reflects the current replica set: a
+  // replica flipping running ↔ unhealthy gets re-added/removed, a gc'd
+  // replica's dial entry disappears, and a restarted Caddy gets its routes
+  // back. syncAppCaddy is idempotent and each call is ~4 curls, so the cost
+  // is bounded by the app count.
   for (const [appId] of byApp) {
     const app = db.getApp(appId);
     if (!app || !app.domain) continue;
     if (app.status !== "running" && app.status !== "unhealthy") continue;
     try {
-      const present = await checkAppCaddyRoute(app.name);
-      if (!present) {
-        log("caddy", `Panel route missing for ${app.name} — re-adding`);
-        await syncAppCaddy(app.id);
-      }
+      await syncAppCaddy(app.id);
     } catch (err) {
-      log("caddy", `Panel route check failed for ${app.name}: ${err}`);
+      log("caddy", `Panel route sync failed for ${app.name}: ${err}`);
     }
   }
 }

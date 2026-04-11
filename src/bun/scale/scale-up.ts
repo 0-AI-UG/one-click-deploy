@@ -39,11 +39,12 @@ export async function scaleUp(
     // reason about.
     const hostPort = primaryHostPort;
 
-    // Bind the container's published port to the target server's private
-    // IP so only the panel (also on the private network) can reach it.
-    // Fall back to 0.0.0.0 when the private IP hasn't been captured yet —
-    // the reconciler attach-to-network pass will backfill it soon.
-    const replicaBindAddr = targetServer.private_ipv4 || "0.0.0.0";
+    // Bind the container's published port on 0.0.0.0 so it's reachable
+    // via both localhost (tenant's own Caddy / health checks) and the
+    // server's private IPv4 (panel Caddy over the private network).
+    // Hetzner firewall only whitelists 22/80/443/ICMP so arbitrary host
+    // ports aren't reachable from the public internet.
+    const replicaBindAddr = "0.0.0.0";
 
     // Transfer image to target server
     emit("scale", `Transferring image to ${targetServer.name}...`);

@@ -63,7 +63,10 @@ export async function rollingRedeploy(
       // Recreate container
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
-      const replicaBindAddr = server.private_ipv4 || "0.0.0.0";
+      // Bind on 0.0.0.0 — reachable via localhost (legacy tenant Caddy,
+      // health checks) and via the private IPv4 (panel Caddy). Hetzner
+      // firewall blocks arbitrary host ports from the public internet.
+      const replicaBindAddr = "0.0.0.0";
 
       if (app.deploy_mode === "compose") {
         await cloneAndComposeBuild(

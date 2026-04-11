@@ -29,9 +29,26 @@ export const INTERNAL_PORT = 8080;
 
 type CaddyUpstream = { dial: string };
 
+type CaddyLoadBalancing = {
+  selection_policy: { policy: string };
+  try_duration?: string;
+  try_interval?: string;
+};
+
+type CaddyHealthChecks = {
+  passive?: {
+    fail_duration: string;
+    max_fails: number;
+    unhealthy_status?: number[];
+    unhealthy_latency?: string;
+  };
+};
+
 type CaddyHandler = {
   handler: string;
   upstreams?: CaddyUpstream[];
+  load_balancing?: CaddyLoadBalancing;
+  health_checks?: CaddyHealthChecks;
   headers?: Record<string, unknown>;
   response?: {
     set?: Record<string, string[]>;
@@ -95,11 +112,28 @@ async function persistCaddyConfig(panel: PanelAccess): Promise<void> {
   }
 }
 
+/**
+ * Build the upstream pool for an app. Includes only replicas the DB
+ * currently considers servable: `running` and `unhealthy`. Explicitly
+ * excluded:
+ *
+ *   - `stopped`    — scale-to-zero anchor, container is off.
+ *   - `draining`   — scale-down has signalled the replica to quiesce; no
+ *                    new requests should land on it, in-flight ones drain
+ *                    naturally on the existing TCP connections.
+ *   - `deploying`  — container hasn't finished starting yet.
+ *
+ * `unhealthy` stays in the pool so Caddy's passive health checks can
+ * probe it and take it out organically; if it stays failing, the
+ * reconciler auto-restarts it.
+ */
 function buildUpstreams(
   appId: number,
   authPassword: string,
 ): CaddyUpstream[] {
-  const replicas = db.getReplicas(appId).filter((r) => r.status !== "stopped");
+  const replicas = db.getReplicas(appId).filter(
+    (r) => r.status === "running" || r.status === "unhealthy",
+  );
   const ups: CaddyUpstream[] = [];
   for (const replica of replicas) {
     const server = db.getServer(replica.server_id);
@@ -115,6 +149,41 @@ function buildUpstreams(
     ups.push({ dial: `${addr}:${destPort}` });
   }
   return ups;
+}
+
+/**
+ * Build the reverse_proxy handler shared by the public and internal routes.
+ * Every app gets:
+ *
+ *   - `round_robin` selection — requests are distributed evenly across the
+ *     pool, regardless of Caddy's default (random).
+ *   - `try_duration = 10s` — on connection failure, Caddy keeps trying
+ *     other upstreams for up to 10s before returning 502 to the client.
+ *     This is the retry budget for pinning the right peer inside a single
+ *     request.
+ *   - Passive health checks — an upstream that fails twice within 30s
+ *     (connection error or 5xx status) is taken out of rotation for 30s.
+ *     The next probe after fail_duration re-admits it if it succeeds. This
+ *     gives us automatic failover without needing an active /health probe
+ *     that every app would have to implement.
+ */
+function reverseProxyHandler(upstreams: CaddyUpstream[]): CaddyHandler {
+  return {
+    handler: "reverse_proxy",
+    upstreams,
+    load_balancing: {
+      selection_policy: { policy: "round_robin" },
+      try_duration: "10s",
+      try_interval: "250ms",
+    },
+    health_checks: {
+      passive: {
+        fail_duration: "30s",
+        max_fails: 2,
+        unhealthy_status: [500, 502, 503, 504],
+      },
+    },
+  };
 }
 
 function buildPublicRoute(
@@ -138,10 +207,7 @@ function buildPublicRoute(
           deferred: true,
         },
       },
-      {
-        handler: "reverse_proxy",
-        upstreams,
-      },
+      reverseProxyHandler(upstreams),
     ],
     terminal: true,
   };
@@ -154,12 +220,7 @@ function buildInternalRoute(
   return {
     "@id": internalRouteId(appName),
     match: [{ host: [internalHost(appName)] }],
-    handle: [
-      {
-        handler: "reverse_proxy",
-        upstreams,
-      },
-    ],
+    handle: [reverseProxyHandler(upstreams)],
     terminal: true,
   };
 }
@@ -347,17 +408,4 @@ export async function removeAppCaddy(
   }
   await persistCaddyConfig(panel);
   log("remove", `app ${appName}: routes removed from panel Caddy`);
-}
-
-/** Check whether the app's public route is registered with the panel Caddy. */
-export async function checkAppCaddyRoute(appName: string): Promise<boolean> {
-  const panel = getPanelAccess();
-  if (!panel) return false;
-  const id = publicRouteId(appName);
-  const result = await sshExec(
-    panel.ipv4,
-    `curl -sf http://localhost:2019/id/${id} > /dev/null`,
-    panel.hostKey,
-  );
-  return result.exitCode === 0;
 }

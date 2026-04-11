@@ -127,7 +127,11 @@ export async function redeployApp(
 
     // Build new image on primary server first
     let buildImageTag = `${app.name}:latest`;
-    const containerBindAddr = server.private_ipv4 || "0.0.0.0";
+    // Bind on 0.0.0.0 — both the tenant's legacy localhost-based Caddy
+    // (during the rollout window) and the panel's new private-IP based
+    // Caddy can reach the container. Hetzner firewall blocks arbitrary
+    // host ports from the public internet.
+    const containerBindAddr = "0.0.0.0";
     if (app.deploy_mode === "compose") {
       await cloneAndComposeBuild(
         server.ipv4,
@@ -508,7 +512,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
       const hostKey = server.ssh_host_key || undefined;
       append(`[webhook] (${i + 1}/${replicas.length}) ${replica.container_name} on ${server.name}`);
 
-      const replicaBindAddr = server.private_ipv4 || "0.0.0.0";
+      const replicaBindAddr = "0.0.0.0";
 
       if (multi) {
         // Drop this replica from the panel Caddy upstream list so in-flight
