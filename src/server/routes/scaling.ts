@@ -3,8 +3,6 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { scaleApp, wakeApp, collectMetrics } from "../../bun/scale.ts";
-import { updateScaleDaemonConfig } from "../../bun/remote/index.ts";
-import { secretStore } from "../../bun/secret-store.ts";
 import { notifyJob } from "./apps.ts";
 
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
@@ -91,41 +89,6 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
       ...(typeof cooldown === "number" ? { autoscale_cooldown: cooldown } : {}),
       ...(typeof scale_to_zero_after === "number" ? { scale_to_zero_after } : {}),
     });
-
-    // Update scale daemon config if app is scaled
-    const app = db.getApp(appId);
-    if (app && app.lb_provider_id) {
-      const replicas = db.getReplicas(appId);
-      const primaryServer = replicas[0] ? db.getServer(replicas[0].server_id) : null;
-      if (primaryServer) {
-        const tokens = await secretStore.getTokens();
-        await updateScaleDaemonConfig(
-          primaryServer.ipv4,
-          {
-            hetzner_token: tokens.hetzner_api_token,
-            apps: [{
-              app_name: app.name,
-              hetzner_lb_id: app.lb_provider_id,
-              container_port: app.container_port,
-              min_replicas,
-              max_replicas,
-              cpu_threshold,
-              mem_threshold,
-              cooldown_seconds: app.autoscale_cooldown,
-              replicas: replicas.map((r) => {
-                const s = db.getServer(r.server_id);
-                return {
-                  server_ip: s?.ipv4 || "",
-                  container_name: r.container_name,
-                  host_port: r.host_port,
-                };
-              }),
-            }],
-          },
-          primaryServer.ssh_host_key || undefined,
-        );
-      }
-    }
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {

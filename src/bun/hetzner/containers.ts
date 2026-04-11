@@ -696,6 +696,11 @@ export async function cloneAndBuild(
     volumeMount?: string; // e.g. "/mnt/data:/data" — host:container
     dockerfilePath?: string; // explicit path to Dockerfile in repo
     gitToken?: string; // GitHub PAT for private repos
+    /** Host-side bind address for the published port. Defaults to 127.0.0.1
+     *  so containers aren't exposed on the public interface. Pass the
+     *  server's `private_ipv4` when the app is reached by the panel Caddy
+     *  over the shared private network. */
+    bindAddr?: string;
   },
   onLog?: (line: string) => void
 ) {
@@ -783,7 +788,8 @@ export async function cloneAndBuild(
   // Ensure ocd-net exists so apps can reach infrastructure services by container name
   await ensureOcdNetwork(ip);
   const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
-  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p 127.0.0.1:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
+  const bindAddr = opts.bindAddr || "127.0.0.1";
+  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
   log("build", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
@@ -816,6 +822,8 @@ export async function cloneAndRailpackBuild(
     envVars: Record<string, string>;
     volumeMount?: string;
     gitToken?: string;
+    /** See `cloneAndBuild` — defaults to 127.0.0.1. */
+    bindAddr?: string;
   },
   onLog?: (line: string) => void
 ) {
@@ -875,7 +883,8 @@ export async function cloneAndRailpackBuild(
   emit("Starting container...");
   await ensureOcdNetwork(ip);
   const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
-  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p 127.0.0.1:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
+  const bindAddr = opts.bindAddr || "127.0.0.1";
+  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
   log("railpack", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
@@ -963,6 +972,11 @@ export async function cloneAndComposeBuild(
     composeFile: string; // e.g. "docker-compose.yml"
     webService: string; // e.g. "web"
     gitToken?: string;
+    /** Host-side bind address for the web service's published port.
+     *  Defaults to 127.0.0.1 for public-interface isolation. Pass the
+     *  server's `private_ipv4` when the panel Caddy reaches this replica
+     *  over the shared private network. */
+    bindAddr?: string;
   },
   onLog?: (line: string) => void
 ) {
@@ -979,9 +993,10 @@ export async function cloneAndComposeBuild(
 
   // Generate override file for port mapping and volume
   emit("Generating compose override...");
+  const bindAddr = opts.bindAddr || "127.0.0.1";
   const overrideServices: ComposeOverrideServices = {
     [opts.webService]: {
-      ports: [`127.0.0.1:${opts.hostPort}:${opts.port}`],
+      ports: [`${bindAddr}:${opts.hostPort}:${opts.port}`],
     },
   };
   if (opts.volumeMount) {

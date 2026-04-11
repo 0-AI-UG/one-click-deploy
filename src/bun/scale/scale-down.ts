@@ -1,11 +1,10 @@
 import * as db from "../db.ts";
-import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
 import {
-  sshExec, deployCaddySite, deployCaddyWakePage, removeCaddySite,
-  authProxyPort, removeAuthProxy, stopContainer, stopCompose,
+  sshExec, deployCaddyWakePage,
+  removeAuthProxy, stopContainer, stopCompose,
 } from "../remote/index.ts";
+import { syncAppCaddy, removeAppCaddy } from "./caddy-manager.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
-import { rebindContainer } from "./rebind.ts";
 
 export async function scaleDown(
   app: App,
@@ -14,10 +13,6 @@ export async function scaleDown(
   targetCount: number,
   emit: ProgressFn
 ) {
-  const compute = getComputeProvider();
-  const dns = getDnsProvider();
-  const lbId = app.lb_provider_id;
-
   // Sort: prefer unhealthy first, then newest
   const sorted = [...currentReplicas].sort((a, b) => {
     if (a.status !== "running" && b.status === "running") return -1;
@@ -46,17 +41,15 @@ export async function scaleDown(
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
 
-      // Remove from LB
-      if (lbId) {
-        try {
-          await compute.loadBalancers!.removeTarget(lbId, server.provider_id);
-        } catch (err) {
-          log("scale", `Failed to remove LB target (continuing): ${err}`);
-        }
-      }
-
-      // Drain period
+      // Drop the replica from the Caddy upstream list first so in-flight
+      // requests drain through the remaining healthy replicas instead of
+      // the one we're about to stop.
       db.updateReplicaStatus(replica.id, "draining");
+      try {
+        await syncAppCaddy(app.id);
+      } catch (err) {
+        log("scale", `Caddy sync during drain failed (continuing): ${err}`);
+      }
       emit("scale", `Waiting 10s drain for ${replica.container_name}...`);
       await Bun.sleep(10_000);
 
@@ -129,6 +122,15 @@ export async function scaleDown(
       const panel = db.getPanel();
       const panelDomain = panel?.domain || "";
       const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
+      // Remove the app's vhost from the panel's Caddy so the wake page
+      // becomes the authoritative handler for this domain. The wake page
+      // itself still lives on the tenant server for now — Phase 5 may
+      // move it to the panel later.
+      try {
+        await removeAppCaddy(app.name, app.domain);
+      } catch (err) {
+        log("scale", `Failed to remove panel Caddy route during sleep: ${err}`);
+      }
       await deployCaddyWakePage(
         lastServer.ipv4, app.domain, panelDomain, app.id, wakeToken, useInternalTls,
         lastServer.ssh_host_key || undefined
@@ -136,126 +138,15 @@ export async function scaleDown(
     }
     db.updateAppStatus(app.id, "sleeping");
     emit("scale", "App scaled to zero — sleeping");
-  }
-
-  // Tear down LB when going to 1 or 0 replicas.
-  if (targetCount <= 1 && lbId) {
-    emit("scale", "Removing load balancer...");
-
-    // When going to 1, rebind the surviving container back to localhost + Caddy
-    if (targetCount === 1) {
-      const survivors = db.getReplicas(app.id);
-      const survivor = survivors[0];
-      if (!survivor) throw new Error("No surviving replica after scale-down");
-      const primaryServer = db.getServer(survivor.server_id);
-      if (!primaryServer) throw new Error("Surviving replica's server not found");
-      const primaryHostPort = survivor.host_port;
-      const primaryHostKey = primaryServer.ssh_host_key || undefined;
-
-      // Re-bind container back to 127.0.0.1
-      await rebindContainer(primaryServer.ipv4, app, "127.0.0.1", primaryHostPort, primaryHostKey);
-
-      // Restore Caddy
-      const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-      const caddyPort = app.auth_password ? authProxyPort(primaryHostPort) : primaryHostPort;
-      await deployCaddySite(primaryServer.ipv4, app.domain, caddyPort, useInternalTls, primaryHostKey);
-
-      // Atomic DNS swap: create new record first, then delete old (overlap, not gap)
-      const dnsRecords = db.getDnsRecords(app.id);
-      const settings = db.getSettings();
-      if (dnsRecords.length > 0 && settings.dns_zone_id) {
-        const parts = app.domain.split(".");
-        const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
-        const newRecord = await dns.createRecord({
-          zoneId: settings.dns_zone_id,
-          name: subdomain,
-          type: "A",
-          value: primaryServer.ipv4,
-        });
-        db.insertDnsRecord({
-          app_id: app.id,
-          zone_id: settings.dns_zone_id,
-          record_id: newRecord.id,
-          name: subdomain,
-          type: "A",
-          value: primaryServer.ipv4,
-        });
-        for (const record of dnsRecords) {
-          try {
-            await dns.deleteRecord({
-              zoneId: record.zone_id,
-              name: record.name,
-              type: record.type,
-              value: record.value,
-            });
-            db.deleteDnsRecord(record.record_id);
-          } catch (err) {
-            log("scale", `Failed to delete old DNS record ${record.record_id}: ${err}`);
-          }
-        }
-      }
+  } else {
+    // Rewrite the Caddy vhost so the upstream list matches what's left
+    // after the scale-down. The draining-phase sync above already removed
+    // the draining replicas; this second sync is belt-and-braces.
+    try {
+      await syncAppCaddy(app.id);
+    } catch (err) {
+      log("scale", `Caddy sync after scale-down failed: ${err}`);
     }
-
-    // When going to 0, DNS should point to the sleeping server (wake page is already deployed)
-    if (targetCount === 0) {
-      const sleepingApp = db.getApp(app.id);
-      const sleepingServer = sleepingApp?.sleeping_server_id ? db.getServer(sleepingApp.sleeping_server_id) : null;
-      if (sleepingServer) {
-        const dnsRecords = db.getDnsRecords(app.id);
-        const settings = db.getSettings();
-        if (dnsRecords.length > 0 && settings.dns_zone_id) {
-          const parts = app.domain.split(".");
-          const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
-          const newRecord = await dns.createRecord({
-            zoneId: settings.dns_zone_id,
-            name: subdomain,
-            type: "A",
-            value: sleepingServer.ipv4,
-          });
-          db.insertDnsRecord({
-            app_id: app.id,
-            zone_id: settings.dns_zone_id,
-            record_id: newRecord.id,
-            name: subdomain,
-            type: "A",
-            value: sleepingServer.ipv4,
-          });
-          for (const record of dnsRecords) {
-            try {
-              await dns.deleteRecord({
-                zoneId: record.zone_id,
-                name: record.name,
-                type: record.type,
-                value: record.value,
-              });
-              db.deleteDnsRecord(record.record_id);
-            } catch (err) {
-              log("scale", `Failed to delete old DNS record ${record.record_id}: ${err}`);
-            }
-          }
-        }
-      }
-    }
-
-    // Delete LB (may already be gone if deleted externally)
-    const lb = await compute.loadBalancers!.get(lbId).catch(() => null);
-    if (lb) {
-      await compute.loadBalancers!.delete(lbId);
-      // Remove LB firewall rules — use any known host port for the firewall rule
-      try {
-        const firewallId = await compute.ensureFirewall();
-        const anyHostPort = toRemove[0]?.host_port || 0;
-        const destPort = app.auth_password ? authProxyPort(anyHostPort) : anyHostPort;
-        if (destPort) {
-          await compute.firewallRules?.removeLBRule(firewallId, destPort, lb.ipv4);
-        }
-      } catch (err) {
-        log("scale", `Failed to remove LB firewall rule: ${err}`);
-      }
-    }
-    db.updateAppScaling(app.id, { lb_provider_id: "" });
-
-    emit("scale", "Load balancer removed");
   }
 
   // Decide what happens to every affected server uniformly. `freezeServerIfEmpty`

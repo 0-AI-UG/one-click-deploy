@@ -4,7 +4,6 @@ import {
   sshExec,
   removeContainer,
   removeCompose,
-  removeCaddySite,
   removeAuthProxy,
   restartContainer,
   pauseContainer,
@@ -16,6 +15,7 @@ import {
   healthCheck,
   removePanelWakePage,
 } from "../remote/index.ts";
+import { removeAppCaddy } from "../scale/caddy-manager.ts";
 import * as github from "../github.ts";
 
 function log(context: string, ...args: any[]) {
@@ -79,12 +79,8 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
             log("destroyApp", `Failed to remove auth proxy for ${replica.container_name}: ${e}`);
           }
         }
-        // Remove Caddy site + app dir from each server hosting a replica
-        try {
-          await removeCaddySite(replicaServer.ipv4, app.domain, hostKey);
-        } catch (err) {
-          log("destroyApp", `Failed to remove Caddy site: ${err}`);
-        }
+        // App directories live on the tenant server. Caddy routes are
+        // removed from the panel server once, after this loop.
         try {
           await sshExec(replicaServer.ipv4, `rm -rf /home/deploy/apps/${app.name}`, hostKey);
         } catch (err) {
@@ -94,17 +90,11 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       db.deleteReplica(replica.id);
     }
 
-    // Delete LB if present
-    if (app.lb_provider_id) {
-      try {
-        const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
-        const compute = getComputeProvider(firstServer?.provider || "hetzner");
-        await compute.loadBalancers?.delete(app.lb_provider_id);
-        log("destroyApp", `Deleted load balancer ${app.lb_provider_id}`);
-      } catch (err) {
-        log("destroyApp", `Failed to delete LB: ${err instanceof Error ? err.message : err}`);
-        cleanupFailed = true;
-      }
+    // Remove the app's Caddy vhost from the panel ingress.
+    try {
+      await removeAppCaddy(app.name, app.domain);
+    } catch (err) {
+      log("destroyApp", `Failed to remove panel Caddy route: ${err}`);
     }
 
     // If this app's wake page currently lives on the panel (Phase 5 state:

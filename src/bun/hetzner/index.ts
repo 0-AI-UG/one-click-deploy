@@ -10,11 +10,11 @@ export { sshExec, getSshKeyPath, captureHostKey, waitForServer, ensureSshKey } f
 // DNS
 export { createDnsRecord, deleteDnsRecord, listDnsZones } from "./dns.ts";
 
-// Load balancers
-export { createLoadBalancer, deleteLoadBalancer, addLBTarget, removeLBTarget, addLBService, createManagedCertificate, deleteCertificate, getLoadBalancer } from "./load-balancers.ts";
-
 // Servers & firewall
-export { createServer, getHetznerServer, waitForServerRunning, deleteHetznerServer, listHetznerServers, ensureFirewall, addLBFirewallRule, removeLBFirewallRule } from "./servers.ts";
+export { createServer, getHetznerServer, waitForServerRunning, deleteHetznerServer, listHetznerServers, ensureFirewall } from "./servers.ts";
+
+// Networks
+export { ensureNetwork, attachServerToNetwork, getPrivateIpv4 } from "./networks.ts";
 
 // Volumes
 export { createVolume, detachVolume, attachVolume, resizeVolume, deleteVolume } from "./volumes.ts";
@@ -24,6 +24,3 @@ export { deployCaddySite, deployCaddyWakePage, removeCaddySite, checkCaddyRoute,
 
 // Auth proxy
 export { authProxyPort, deployAuthProxy, removeAuthProxy } from "./auth-proxy.ts";
-
-// Scale daemon
-export { deployScaleDaemon, updateScaleDaemonConfig, removeScaleDaemon } from "./scale-daemon.ts";

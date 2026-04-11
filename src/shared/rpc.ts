@@ -5,6 +5,7 @@ export type Server = {
   provider: string;
   ipv4: string;
   ipv6: string;
+  private_ipv4: string;
   type: string;
   location: string;
   status: string;
@@ -42,7 +43,6 @@ export type App = {
   autoscale_mem_threshold: number;
   autoscale_cooldown: number;
   last_scale_at: string;
-  lb_provider_id: string;
   volume_id: string;
   volume_mount: string;
   created_at: string;

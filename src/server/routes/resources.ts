@@ -14,7 +14,6 @@ export async function handleGetResources(request: Request): Promise<Response> {
     // Fetch pricing once and build lookup maps.
     // If pricing fetch fails (no token, network), monthly_eur falls back to null.
     let serverPriceMap = new Map<string, number>();
-    let lbPriceMap = new Map<string, number>();
     let volumePerGbMonth: number | null = null;
     let currency = "EUR";
     try {
@@ -24,9 +23,6 @@ export async function handleGetResources(request: Request): Promise<Response> {
         for (const [key, value] of Object.entries(pricing.servers)) {
           serverPriceMap.set(key, value);
         }
-        for (const [key, value] of Object.entries(pricing.loadBalancers)) {
-          lbPriceMap.set(key, value);
-        }
         volumePerGbMonth = pricing.volumePerGbMonth;
       }
     } catch (e) {
@@ -35,8 +31,6 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
     const priceForServer = (type: string, location: string): number | null =>
       serverPriceMap.get(`${type}|${location}`) ?? null;
-    const priceForLb = (type: string, location: string): number | null =>
-      lbPriceMap.get(`${type}|${location}`) ?? null;
     let dbServers = db.getServers();
     try {
       const remoteServers = await compute.listServers();
@@ -69,16 +63,6 @@ export async function handleGetResources(request: Request): Promise<Response> {
       monthly_eur: priceForServer(s.type, s.location),
     }));
 
-    interface LoadBalancerResource {
-      id: string;
-      name: string;
-      ipv4: string;
-      type: string;
-      location: string;
-      app_name: string;
-      targets: number;
-      monthly_eur: number | null;
-    }
     interface VolumeResource {
       id: string;
       name: string;
@@ -88,22 +72,6 @@ export async function handleGetResources(request: Request): Promise<Response> {
       location: string;
       app_id: number;
       monthly_eur: number | null;
-    }
-    let load_balancers: LoadBalancerResource[] = [];
-    try {
-      const lbs = await compute.loadBalancers?.list() ?? [];
-      load_balancers = lbs.map((lb) => ({
-        id: lb.providerId,
-        name: lb.name,
-        ipv4: lb.ipv4,
-        type: lb.type,
-        location: lb.location,
-        app_name: lb.labels.app || "",
-        targets: lb.targetCount,
-        monthly_eur: priceForLb(lb.type, lb.location),
-      }));
-    } catch (e) {
-      console.error("resources: failed to fetch load balancers:", e);
     }
 
     let volumes: VolumeResource[] = [];
@@ -134,12 +102,11 @@ export async function handleGetResources(request: Request): Promise<Response> {
     const totals = {
       currency,
       servers: sum(servers),
-      load_balancers: sum(load_balancers),
       volumes: sum(volumes),
-      total: sum(servers) + sum(load_balancers) + sum(volumes),
+      total: sum(servers) + sum(volumes),
     };
 
-    return Response.json({ servers, load_balancers, volumes, totals }, { headers: corsHeaders });
+    return Response.json({ servers, volumes, totals }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -162,14 +129,6 @@ export async function handleDeleteResource(request: Request, type: string, id: s
         return Response.json(result, { headers: corsHeaders });
       }
       await compute.deleteServer(id);
-      return Response.json({ ok: true }, { headers: corsHeaders });
-    } else if (type === "load_balancer") {
-      const apps = db.getApps();
-      const using = apps.filter((a) => a.lb_provider_id === id);
-      if (using.length > 0) {
-        return Response.json({ ok: false, error: `Load balancer is in use by: ${using.map((a) => a.name).join(", ")}` }, { headers: corsHeaders });
-      }
-      await compute.loadBalancers!.delete(id);
       return Response.json({ ok: true }, { headers: corsHeaders });
     } else if (type === "volume") {
       const allApps = db.getApps();

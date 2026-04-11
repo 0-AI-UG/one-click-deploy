@@ -59,9 +59,3 @@ export {
   removeAuthProxy,
 } from "../hetzner/auth-proxy.ts";
 
-// Scale daemon
-export {
-  deployScaleDaemon,
-  updateScaleDaemonConfig,
-  removeScaleDaemon,
-} from "../hetzner/scale-daemon.ts";

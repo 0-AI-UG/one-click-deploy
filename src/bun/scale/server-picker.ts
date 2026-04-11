@@ -1,6 +1,7 @@
 import * as db from "../db.ts";
 import { getComputeProvider } from "../providers/index.ts";
 import { getOrCreateLocalKeyPair, waitForServer, captureHostKey } from "../remote/index.ts";
+import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { type ProgressFn, type App, type Server } from "./types.ts";
 
 export async function pickTargetServer(
@@ -53,9 +54,10 @@ export async function pickTargetServer(
 
     const compute = getComputeProvider();
     const { publicKey } = await getOrCreateLocalKeyPair();
-    const [sshKey, firewallId] = await Promise.all([
+    const [sshKey, firewallId, networkId] = await Promise.all([
       compute.ensureSshKey("one-click-deploy", publicKey),
       compute.ensureFirewall(),
+      ensureSharedNetwork(),
     ]);
 
     const serverType = settings.default_server_type;
@@ -72,6 +74,7 @@ export async function pickTargetServer(
       location,
       sshKeyName: sshKey.name,
       firewallId,
+      networkId: networkId || undefined,
       userData: "",
     });
 
@@ -85,6 +88,7 @@ export async function pickTargetServer(
       type: serverType,
       location,
       status: "provisioning",
+      private_ipv4: hServer.privateIpv4 || "",
     });
 
     emit("scale", `Waiting for server ${serverName}...`);

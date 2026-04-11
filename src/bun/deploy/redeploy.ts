@@ -3,13 +3,14 @@ import * as db from "../db.ts";
 import { getComputeProvider } from "../providers/index.ts";
 import {
   sshExec, cloneAndBuild, cloneAndComposeBuild, cloneAndRailpackBuild,
-  deployCaddySite, deployAuthProxy, removeAuthProxy, removeContainer,
+  deployAuthProxy, removeAuthProxy, removeContainer,
   healthCheck, composeHealthCheck,
 } from "../remote/index.ts";
 import { validateEnvVars } from "../validate.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { rollingRedeploy } from "../scale.ts";
 import { wakeApp } from "../scale/wake.ts";
+import { syncAppCaddy } from "../scale/caddy-manager.ts";
 
 type DbApp = {
   id: number;
@@ -23,7 +24,6 @@ type DbApp = {
   compose_file: string;
   compose_web_service: string;
   dockerfile_path: string;
-  lb_provider_id: string;
   volume_id: string;
   volume_mount: string;
   auth_password: string;
@@ -127,6 +127,7 @@ export async function redeployApp(
 
     // Build new image on primary server first
     let buildImageTag = `${app.name}:latest`;
+    const containerBindAddr = server.private_ipv4 || "0.0.0.0";
     if (app.deploy_mode === "compose") {
       await cloneAndComposeBuild(
         server.ipv4,
@@ -140,6 +141,7 @@ export async function redeployApp(
           composeFile: app.compose_file,
           webService: app.compose_web_service,
           gitToken: githubPat,
+          bindAddr: containerBindAddr,
         },
         (line) => {
           db.appendDeployLog(appId, `[redeploy] ${line}`);
@@ -157,6 +159,7 @@ export async function redeployApp(
           envVars,
           volumeMount: app.volume_mount || undefined,
           gitToken: githubPat,
+          bindAddr: containerBindAddr,
         },
         (line) => {
           db.appendDeployLog(appId, `[redeploy] ${line}`);
@@ -178,6 +181,7 @@ export async function redeployApp(
           volumeMount: app.volume_mount || undefined,
           dockerfilePath: app.dockerfile_path || undefined,
           gitToken: githubPat,
+          bindAddr: containerBindAddr,
         },
         (line) => {
           db.appendDeployLog(appId, `[redeploy] ${line}`);
@@ -191,7 +195,7 @@ export async function redeployApp(
 
     // If scaled (>1 replicas), do rolling deploy for the other replicas
     const replicas = db.getReplicas(appId);
-    if (replicas.length > 1 && app.lb_provider_id) {
+    if (replicas.length > 1) {
       onProgress("scale", "Starting rolling update across replicas...");
       const rollingResult = await rollingRedeploy(appId, onProgress);
       if (!rollingResult.ok) {
@@ -200,18 +204,20 @@ export async function redeployApp(
     }
 
     // Handle auth proxy: deploy, update, or remove (primary server)
-    let caddyPort = hostPort;
     if (authPassword) {
-      caddyPort = await deployAuthProxy(server.ipv4, app.name, authPassword, hostPort, hostKey);
+      await deployAuthProxy(server.ipv4, app.name, authPassword, hostPort, hostKey);
     } else if (app.auth_password && !authPassword) {
       await removeAuthProxy(server.ipv4, app.name, hostKey);
     }
 
-    // Only update Caddy if single-replica (LB handles TLS when scaled)
-    if (!app.lb_provider_id) {
-      onProgress("caddy", "Reloading reverse proxy...");
-      const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-      await deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
+    // Reload the panel Caddy vhost so the upstream pool matches the
+    // fresh replicas (in particular, auth proxy port changes and new
+    // container IDs are picked up here).
+    onProgress("caddy", "Reloading panel Caddy...");
+    try {
+      await syncAppCaddy(appId);
+    } catch (err) {
+      db.appendDeployLog(appId, `[redeploy] Caddy sync warning: ${err}`);
     }
 
     onProgress("health", "Checking app health...");
@@ -486,8 +492,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
 
   // Use the token of the user who deployed this app
   const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
-  const lbId = app.lb_provider_id;
-  const multi = replicas.length > 1 && !!lbId;
+  const multi = replicas.length > 1;
 
   append(`[webhook] Starting rolling redeploy across ${replicas.length} replica(s)`);
 
@@ -503,12 +508,16 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
       const hostKey = server.ssh_host_key || undefined;
       append(`[webhook] (${i + 1}/${replicas.length}) ${replica.container_name} on ${server.name}`);
 
+      const replicaBindAddr = server.private_ipv4 || "0.0.0.0";
+
       if (multi) {
+        // Drop this replica from the panel Caddy upstream list so in-flight
+        // requests drain via the remaining healthy replicas.
+        db.updateReplicaStatus(replica.id, "draining");
         try {
-          const compute = getComputeProvider();
-          await compute.loadBalancers!.removeTarget(lbId!, server.provider_id);
+          await syncAppCaddy(appId);
         } catch (e) {
-          append(`[webhook] Warning: failed to remove LB target for ${replica.container_name}: ${e}`);
+          append(`[webhook] Caddy drain sync warning: ${e}`);
         }
         append(`[webhook] Drained ${replica.container_name}, waiting 10s`);
         await Bun.sleep(10_000);
@@ -527,6 +536,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             composeFile: app.compose_file,
             webService: app.compose_web_service,
             gitToken: githubPat,
+            bindAddr: replicaBindAddr,
           },
           (line) => append(`[build] ${line}`),
         );
@@ -541,6 +551,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             envVars: JSON.parse(app.env_vars || "{}"),
             volumeMount: app.volume_mount || undefined,
             gitToken: githubPat,
+            bindAddr: replicaBindAddr,
           },
           (line) => append(`[build] ${line}`),
         );
@@ -556,7 +567,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
           if (Object.keys(envVars).length > 0) {
             envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
           }
-          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p 0.0.0.0:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
+          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
           await sshExec(server.ipv4, asUser(cmd), hostKey);
         }
       } else {
@@ -571,11 +582,11 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             volumeMount: app.volume_mount || undefined,
             dockerfilePath: app.dockerfile_path || undefined,
             gitToken: githubPat,
+            bindAddr: replicaBindAddr,
           },
           (line) => append(`[build] ${line}`),
         );
         if (multi) {
-          // Multi-replica: rebind to 0.0.0.0 so the LB can reach it.
           const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
           await sshExec(
             server.ipv4,
@@ -587,7 +598,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
           if (Object.keys(envVars).length > 0) {
             envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
           }
-          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p 0.0.0.0:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
+          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
           await sshExec(server.ipv4, asUser(cmd), hostKey);
         }
       }
@@ -603,9 +614,12 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
       }
 
       if (multi) {
-        const compute = getComputeProvider();
-        await compute.loadBalancers!.addTarget(lbId!, server.provider_id);
-        append(`[webhook] Re-added ${replica.container_name} to LB`);
+        try {
+          await syncAppCaddy(appId);
+          append(`[webhook] Re-added ${replica.container_name} to panel Caddy`);
+        } catch (e) {
+          append(`[webhook] Caddy sync warning: ${e}`);
+        }
       }
 
       // Capture commit hash from this replica (first one wins).

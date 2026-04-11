@@ -30,7 +30,6 @@ export interface App {
   autoscale_cooldown: number;
   scale_to_zero_after: number;
   last_scale_at: string | null;
-  lb_provider_id: string;
   deployed_by: string;
   sleeping_server_id: number | null;
   sleeping_host_port: number | null;
@@ -68,6 +67,7 @@ export interface Server {
   frozen_volume_ids: string;
   frozen_at: string | null;
   freeze_failed_at: string | null;
+  private_ipv4: string;
   created_at: string;
 }
 

@@ -36,6 +36,7 @@ function initSchema(instance: Database) {
     frozen_volume_ids TEXT NOT NULL DEFAULT '',
     frozen_at TEXT,
     freeze_failed_at TEXT,
+    private_ipv4 TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`);
 
@@ -73,6 +74,7 @@ function initSchema(instance: Database) {
     default_server_type: "",
     default_location: "",
     require_2fa: "1",
+    network_id: "",
   };
 
   const insertSetting = instance.prepare(

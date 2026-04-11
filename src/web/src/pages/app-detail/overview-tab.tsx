@@ -17,6 +17,7 @@ interface OverviewTabProps {
 
 export function OverviewTab({ app, appId, replicas, metricsHistory, scalingEvents, allServers, setReplicas }: OverviewTabProps) {
   const envVars = app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {};
+  const internalUrl = `http://${app.name}.ocd.internal:8080`;
 
   return (
     <div className="space-y-4">
@@ -25,8 +26,15 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, scalingEvent
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Configuration</h3>
           <div className="space-y-2 text-[10px] font-mono">
             {app.domain && (
-              <div className="flex justify-between items-center"><span className="text-muted">URL</span><span className="flex items-center gap-1"><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="text-accent-blue font-bold hover:underline">https://{app.domain}</a><CopyButton text={`https://${app.domain}`} /><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="p-1 text-muted hover:text-fg"><ExternalLink size={10} /></a></span></div>
+              <div className="flex justify-between items-center"><span className="text-muted">Public URL</span><span className="flex items-center gap-1"><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="text-accent-blue font-bold hover:underline">https://{app.domain}</a><CopyButton text={`https://${app.domain}`} /><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="p-1 text-muted hover:text-fg"><ExternalLink size={10} /></a></span></div>
             )}
+            <div className="flex justify-between items-center" title="Reachable from other apps on the private network. Set this in env vars when one app needs to call another.">
+              <span className="text-muted">Internal URL</span>
+              <span className="flex items-center gap-1">
+                <span className="text-fg font-bold">{internalUrl}</span>
+                <CopyButton text={internalUrl} />
+              </span>
+            </div>
             <div className="flex justify-between"><span className="text-muted">Git Repo</span><span className="text-fg font-bold">{app.git_repo}</span></div>
             <div className="flex justify-between"><span className="text-muted">Deploy Mode</span><span className="text-fg">{app.deploy_mode}</span></div>
             <div className="flex justify-between"><span className="text-muted">Container Port</span><span className="text-fg">{app.container_port}</span></div>

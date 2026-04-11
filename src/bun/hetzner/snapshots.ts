@@ -19,6 +19,7 @@ type HetznerServer = {
   id: number;
   status: string;
   public_net: { ipv4: { ip: string }; ipv6: { ip: string } };
+  private_net?: Array<{ network: number; ip: string }>;
   name: string;
 };
 
@@ -129,6 +130,7 @@ export async function createServerFromSnapshot(opts: {
   sshKeyName: string;
   firewallId: number;
   volumeIds: string[];
+  networkId?: number;
 }): Promise<HetznerServer> {
   log(
     "snapshot",
@@ -147,6 +149,9 @@ export async function createServerFromSnapshot(opts: {
   };
   if (opts.volumeIds.length > 0) {
     body.volumes = opts.volumeIds.map((id) => Number(id));
+  }
+  if (opts.networkId) {
+    body.networks = [opts.networkId];
   }
   const data = (await hetznerApi("/servers", {
     method: "POST",

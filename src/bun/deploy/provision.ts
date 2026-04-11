@@ -3,6 +3,7 @@ import { getComputeProvider } from "../providers/index.ts";
 import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
 } from "../remote/index.ts";
+import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import type { DeployState } from "./rollback.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
@@ -38,14 +39,15 @@ export async function provisionOrReuseServer(
 
   const compute = getComputeProvider();
 
-  log("ssh", "Ensuring SSH key and firewall exist...");
+  log("ssh", "Ensuring SSH key, firewall, and private network exist...");
   const { publicKey } = await getOrCreateLocalKeyPair();
-  const [sshKey, firewallId] = await Promise.all([
+  const [sshKey, firewallId, networkId] = await Promise.all([
     compute.ensureSshKey("one-click-deploy", publicKey),
     compute.ensureFirewall(),
+    ensureSharedNetwork(),
   ]);
-  log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}`);
-  onProgress("server", `SSH key + firewall ready`);
+  log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}, network: ${networkId || "(none)"}`);
+  onProgress("server", `SSH key + firewall + network ready`);
 
   const serverType = settings.default_server_type;
   if (!serverType) throw new Error("No default server type configured — set one in Settings");
@@ -74,16 +76,18 @@ export async function provisionOrReuseServer(
     location,
     sshKeyName: sshKey.name,
     firewallId,
+    networkId: networkId || undefined,
     userData: "",
   });
   state.providerServerId = providerServer.providerId;
-  log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId}`);
+  log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId} private=${providerServer.privateIpv4 || "(none)"}`);
 
   const serverIp = providerServer.ipv4;
   db.updateServer(dbServer.id, {
     provider_id: providerServer.providerId,
     ipv4: serverIp,
     ipv6: providerServer.ipv6 || "",
+    private_ipv4: providerServer.privateIpv4 || "",
     status: "provisioning",
   });
   log("server", `Server saved to DB: id=${dbServer.id}`);

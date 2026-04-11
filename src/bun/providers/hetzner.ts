@@ -12,8 +12,6 @@ import {
   deleteHetznerServer,
   listHetznerServers,
   ensureFirewall,
-  addLBFirewallRule,
-  removeLBFirewallRule,
 } from "../hetzner/servers.ts";
 import {
   createVolume,
@@ -28,22 +26,17 @@ import {
   listDnsZones,
 } from "../hetzner/dns.ts";
 import {
-  createLoadBalancer,
-  deleteLoadBalancer,
-  addLBTarget,
-  removeLBTarget,
-  addLBService,
-  createManagedCertificate,
-  deleteCertificate,
-  getLoadBalancer,
-} from "../hetzner/load-balancers.ts";
-import {
   snapshotServer as hetznerSnapshotServer,
   getSnapshot as hetznerGetSnapshot,
   deleteSnapshot as hetznerDeleteSnapshot,
   listSnapshots as hetznerListSnapshots,
   createServerFromSnapshot as hetznerCreateServerFromSnapshot,
 } from "../hetzner/snapshots.ts";
+import {
+  ensureNetwork,
+  attachServerToNetwork,
+  getPrivateIpv4,
+} from "../hetzner/networks.ts";
 import { cloudInitScript } from "./cloud-init.ts";
 
 export const hetznerCompute: ComputeProvider = {
@@ -115,11 +108,17 @@ export const hetznerCompute: ComputeProvider = {
       location: opts.location,
       ssh_key_name: opts.sshKeyName,
       firewall_id: parseInt(opts.firewallId, 10),
+      network_id: opts.networkId ? parseInt(opts.networkId, 10) : undefined,
     });
+    const networkId = opts.networkId ? parseInt(opts.networkId, 10) : 0;
+    const privateEntry = networkId
+      ? (server.private_net ?? []).find((n) => n.network === networkId)
+      : undefined;
     return {
       providerId: String(server.id),
       ipv4: server.public_net.ipv4.ip,
       ipv6: server.public_net.ipv6.ip || "",
+      privateIpv4: privateEntry?.ip || "",
       status: "creating",
     };
   },
@@ -200,54 +199,16 @@ export const hetznerCompute: ComputeProvider = {
     },
   },
 
-  loadBalancers: {
-    async create(appName, location) {
-      const lb = await createLoadBalancer(appName, location);
-      return { providerId: String(lb.id), ipv4: lb.ipv4 };
+  networks: {
+    async ensure() {
+      const net = await ensureNetwork();
+      return { id: String(net.id) };
     },
-    async delete(lbId) {
-      await deleteLoadBalancer(lbId);
+    async attachServer(serverId, networkId) {
+      await attachServerToNetwork(serverId, parseInt(networkId, 10));
     },
-    async get(lbId) {
-      const lb = await getLoadBalancer(lbId);
-      return { ipv4: lb.public_net.ipv4.ip, targets: lb.targets, services: lb.services };
-    },
-    async list() {
-      const data = await hetznerApi("/load_balancers?label_selector=managed_by%3Done-click-deploy&per_page=50") as any;
-      return (data.load_balancers ?? []).map((lb: any) => ({
-        providerId: String(lb.id),
-        name: lb.name,
-        ipv4: lb.public_net?.ipv4?.ip ?? "",
-        type: lb.load_balancer_type?.name ?? "lb11",
-        location: lb.location?.name ?? "",
-        labels: lb.labels ?? {},
-        targetCount: lb.targets?.length ?? 0,
-      }));
-    },
-    async addTarget(lbId, serverId) {
-      await addLBTarget(lbId, serverId);
-    },
-    async removeTarget(lbId, serverId) {
-      await removeLBTarget(lbId, serverId);
-    },
-    async addService(lbId, destPort, certId?, stickySession?) {
-      await addLBService(lbId, destPort, certId, stickySession);
-    },
-    async createCertificate(appName, domain) {
-      const cert = await createManagedCertificate(appName, domain);
-      return { providerId: String(cert.id) };
-    },
-    async deleteCertificate(certId) {
-      await deleteCertificate(certId);
-    },
-  },
-
-  firewallRules: {
-    async addLBRule(firewallId, port, lbIpv4) {
-      await addLBFirewallRule(parseInt(firewallId, 10), port, lbIpv4);
-    },
-    async removeLBRule(firewallId, port, lbIpv4) {
-      await removeLBFirewallRule(parseInt(firewallId, 10), port, lbIpv4);
+    async getPrivateIpv4(serverId, networkId) {
+      return getPrivateIpv4(serverId, parseInt(networkId, 10));
     },
   },
 
@@ -265,6 +226,7 @@ export const hetznerCompute: ComputeProvider = {
       return hetznerListSnapshots();
     },
     async createServerFromSnapshot(opts) {
+      const networkId = opts.networkId ? parseInt(opts.networkId, 10) : undefined;
       const server = await hetznerCreateServerFromSnapshot({
         name: opts.name,
         snapshotId: opts.snapshotId,
@@ -273,11 +235,16 @@ export const hetznerCompute: ComputeProvider = {
         sshKeyName: opts.sshKeyName,
         firewallId: parseInt(opts.firewallId, 10),
         volumeIds: opts.volumeIds,
+        networkId,
       });
+      const privateEntry = networkId
+        ? (server.private_net ?? []).find((n) => n.network === networkId)
+        : undefined;
       return {
         providerId: String(server.id),
         ipv4: server.public_net.ipv4.ip,
         ipv6: server.public_net.ipv6.ip || "",
+        privateIpv4: privateEntry?.ip || "",
         status: server.status ?? "creating",
       };
     },
@@ -294,16 +261,9 @@ export const hetznerCompute: ComputeProvider = {
           servers[key] = parseFloat(price.price_monthly?.gross ?? "0");
         }
       }
-      const loadBalancers: Record<string, number> = {};
-      for (const lt of pricing?.load_balancer_types ?? []) {
-        for (const price of lt.prices ?? []) {
-          const key = `${lt.name}|${price.location}`;
-          loadBalancers[key] = parseFloat(price.price_monthly?.gross ?? "0");
-        }
-      }
       const volGross = parseFloat(pricing?.volume?.price_per_gb_month?.gross ?? "");
       const volumePerGbMonth = isNaN(volGross) ? null : volGross;
-      return { currency: "EUR", servers, loadBalancers, volumePerGbMonth };
+      return { currency: "EUR", servers, volumePerGbMonth };
     } catch {
       return null;
     }

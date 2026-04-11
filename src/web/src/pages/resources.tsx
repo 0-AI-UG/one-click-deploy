@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get, del } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { HardDrive, Server, Network, Database, Trash2, RefreshCw, Terminal } from "lucide-react";
+import { HardDrive, Server, Database, Trash2, RefreshCw, Terminal } from "lucide-react";
 import type { ResourcesData } from "../types.ts";
 
 export function ResourcesPage() {
@@ -67,14 +67,10 @@ export function ResourcesPage() {
               gross · {data.totals.currency || "EUR"}
             </span>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <div className="border-2 border-fg p-3 bg-alt">
               <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Servers</div>
               <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.servers)}</div>
-            </div>
-            <div className="border-2 border-fg p-3 bg-alt">
-              <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Load Balancers</div>
-              <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.load_balancers)}</div>
             </div>
             <div className="border-2 border-fg p-3 bg-alt">
               <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Volumes</div>
@@ -120,36 +116,6 @@ export function ResourcesPage() {
                       </Btn>
                     </PermissionGate>
                   </div>
-                </td>
-              </tr>
-            ))}
-          </Table>
-        )}
-      </Card>
-
-      {/* Load Balancers */}
-      <Card className="p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Network size={14} className="text-fg" />
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Load Balancers ({data?.load_balancers?.length || 0})</h3>
-        </div>
-        {!data?.load_balancers?.length ? <EmptyState message="No load balancers" /> : (
-          <Table headers={["Name", "IP", "Type", "Location", "App", "Targets", "€/mo", ""]}>
-            {data.load_balancers.map((lb) => (
-              <tr key={lb.id} className="hover:bg-alt/50">
-                <td className="py-2 px-3 text-fg font-bold">{lb.name}</td>
-                <td className="py-2 px-3 text-fg-dim">{lb.ipv4}</td>
-                <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{lb.type}</span></td>
-                <td className="py-2 px-3 text-fg-dim">{lb.location}</td>
-                <td className="py-2 px-3 text-accent-blue font-bold">{lb.app_name || "—"}</td>
-                <td className="py-2 px-3 text-fg-dim">{lb.targets}</td>
-                <td className="py-2 px-3 text-fg font-bold">{fmtPrice(lb.monthly_eur)}</td>
-                <td className="py-2 px-3">
-                  <PermissionGate permission="resources.delete">
-                    <Btn size="xs" variant="danger" disabled={!!lb.app_name} title={lb.app_name ? `In use by ${lb.app_name}` : undefined} loading={deleting === `load_balancer-${lb.id}`} onClick={() => handleDelete("load_balancer", lb.id, lb.name)}>
-                      <Trash2 size={11} />
-                    </Btn>
-                  </PermissionGate>
                 </td>
               </tr>
             ))}

@@ -1,6 +1,7 @@
 import * as db from "../db.ts";
-import { removeCaddySite, removeCompose, removeContainer } from "../remote/index.ts";
+import { removeCompose, removeContainer } from "../remote/index.ts";
 import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
+import { removeAppCaddy } from "../scale/caddy-manager.ts";
 
 export type DeployState = {
   providerServerId?: string;
@@ -8,6 +9,7 @@ export type DeployState = {
   dbAppId?: number;
   dnsRecord?: { zone_id: string; name: string; type: string; value: string };
   containerName?: string;
+  appName?: string;
   deployMode?: "dockerfile" | "compose";
   caddyConfigured?: boolean;
   caddyDomain?: string;
@@ -21,11 +23,12 @@ function log(context: string, ...args: any[]) {
 
 export async function rollback(state: DeployState, serverIp: string, hostKey?: string): Promise<void> {
   log("rollback", "Rolling back deploy state:", state);
+  void serverIp; void hostKey;
 
-  if (state.caddyConfigured && state.caddyDomain && serverIp) {
+  if (state.caddyConfigured && state.caddyDomain && state.appName) {
     try {
-      await removeCaddySite(serverIp, state.caddyDomain, hostKey);
-      log("rollback", "Removed Caddy site");
+      await removeAppCaddy(state.appName, state.caddyDomain);
+      log("rollback", "Removed Caddy site from panel");
     } catch (err) {
       log("rollback", `Failed to remove Caddy site: ${err}`);
     }

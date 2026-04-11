@@ -1,9 +1,11 @@
 import * as db from "../db.ts";
 import {
-  sshExec, composeHealthCheck, healthCheck, deployAuthProxy, authProxyPort,
-  deployCaddySite, startContainer, startCompose, containerExists, composeProjectExists,
+  sshExec, composeHealthCheck, healthCheck, deployAuthProxy,
+  startContainer, startCompose, containerExists, composeProjectExists,
   getOrCreateLocalKeyPair, waitForServer, captureHostKey, removePanelWakePage,
 } from "../remote/index.ts";
+import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
+import { syncAppCaddy } from "./caddy-manager.ts";
 import { log, type Server } from "./types.ts";
 import { cancelFreezeForServer } from "./freeze-worker.ts";
 import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
@@ -128,10 +130,11 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
       await deployAuthProxy(server.ipv4, containerName, app.auth_password, hostPort, hostKey);
     }
 
-    // Restore Caddy reverse proxy route (swap away from the wake page)
-    const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-    const caddyPort = app.auth_password ? authProxyPort(hostPort) : hostPort;
-    await deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
+    // Install the panel Caddy vhost that fans out to this replica.
+    // Note: the replica record below is inserted/upserted after this call,
+    // so the Caddy upstream list picks up the fresh upstream on the next
+    // line. syncAppCaddy is idempotent; a second call after the replica
+    // flip below is harmless.
 
     // Upsert the replica row. On the fast path a preserved row already
     // exists (status = 'stopped') — flip it back to running. On the slow
@@ -160,6 +163,15 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     db.updateAppScaling(appId, { desired_replicas: 1, last_scale_at: new Date().toISOString() });
     db.updateAppStatus(appId, "running");
     db.insertScalingEvent({ app_id: appId, event_type: "wake", from_count: 0, to_count: 1, reason: "wake request" });
+
+    // Reinstall the panel Caddy vhost so public traffic is routed back to
+    // the replica (instead of the tenant-server wake page that was
+    // serving 503s while the app was asleep).
+    try {
+      await syncAppCaddy(appId);
+    } catch (err) {
+      log("wake", `syncAppCaddy after wake failed: ${err}`);
+    }
 
     // Phase 5 handoff cleanup. If the wake page for this app currently
     // lives on the panel server — either because the server was just
@@ -253,9 +265,10 @@ async function materializeServer(serverId: number): Promise<Server> {
 
     const volumeIds = db.getFrozenVolumeIds(row);
     const { publicKey } = await getOrCreateLocalKeyPair();
-    const [sshKey, firewallId] = await Promise.all([
+    const [sshKey, firewallId, networkId] = await Promise.all([
       compute.ensureSshKey("one-click-deploy", publicKey),
       compute.ensureFirewall(),
+      ensureSharedNetwork(),
     ]);
 
     log("wake", `Materializing server ${row.name} from snapshot ${row.snapshot_id} (volumes=[${volumeIds.join(",")}])`);
@@ -267,6 +280,7 @@ async function materializeServer(serverId: number): Promise<Server> {
       sshKeyName: sshKey.name,
       firewallId,
       volumeIds,
+      networkId: networkId || undefined,
     });
 
     // Wait until the provider reports the VM is running, then until SSH +
@@ -280,6 +294,7 @@ async function materializeServer(serverId: number): Promise<Server> {
       provider_id: providerServer.providerId,
       ipv4: providerServer.ipv4,
       ipv6: providerServer.ipv6,
+      private_ipv4: providerServer.privateIpv4 || "",
     });
     if (newHostKey) db.updateServerHostKey(serverId, newHostKey);
 

@@ -24,6 +24,10 @@ export type ServerRow = {
   frozen_at: string | null;
   /** Last freeze attempt failure timestamp, for retry backoff. */
   freeze_failed_at: string | null;
+  /** Private IPv4 on the shared `ocd-net` Hetzner network. Empty string until
+   *  the reconciler attaches the server. Used by Caddy upstreams + internal
+   *  DNS so traffic stays off the public NIC. */
+  private_ipv4: string;
   created_at: string;
 };
 
@@ -52,10 +56,11 @@ export function insertServer(server: {
   type: string;
   location: string;
   status: string;
+  private_ipv4?: string;
 }): ServerRow {
   return db
     .query(
-      "INSERT INTO servers (name, provider_id, provider, ipv4, ipv6, type, location, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO servers (name, provider_id, provider, ipv4, ipv6, type, location, status, private_ipv4) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       server.name,
@@ -65,7 +70,8 @@ export function insertServer(server: {
       server.ipv6,
       server.type,
       server.location,
-      server.status
+      server.status,
+      server.private_ipv4 ?? "",
     ) as ServerRow;
 }
 
@@ -78,6 +84,7 @@ export function updateServer(id: number, fields: {
   ipv4?: string;
   ipv6?: string;
   status?: string;
+  private_ipv4?: string;
 }): void {
   const setClauses: string[] = [];
   const values: (string | number)[] = [];
@@ -85,6 +92,7 @@ export function updateServer(id: number, fields: {
   if (fields.ipv4 !== undefined) { setClauses.push("ipv4 = ?"); values.push(fields.ipv4); }
   if (fields.ipv6 !== undefined) { setClauses.push("ipv6 = ?"); values.push(fields.ipv6); }
   if (fields.status !== undefined) { setClauses.push("status = ?"); values.push(fields.status); }
+  if (fields.private_ipv4 !== undefined) { setClauses.push("private_ipv4 = ?"); values.push(fields.private_ipv4); }
   if (setClauses.length === 0) return;
   values.push(id);
   db.query(`UPDATE servers SET ${setClauses.join(", ")} WHERE id = ?`).run(...values);
@@ -117,7 +125,8 @@ export function markServerFrozen(
        frozen_at = ?,
        freeze_failed_at = NULL,
        provider_id = '',
-       ipv4 = ''
+       ipv4 = '',
+       private_ipv4 = ''
      WHERE id = ?`,
   ).run(fields.snapshot_id, JSON.stringify(fields.volume_ids), frozenAt, id);
 }
@@ -130,7 +139,7 @@ export function markServerFrozen(
  */
 export function markServerMaterialized(
   id: number,
-  fields: { provider_id: string; ipv4: string; ipv6?: string },
+  fields: { provider_id: string; ipv4: string; ipv6?: string; private_ipv4?: string },
 ): void {
   db.query(
     `UPDATE servers SET
@@ -138,10 +147,17 @@ export function markServerMaterialized(
        provider_id = ?,
        ipv4 = ?,
        ipv6 = COALESCE(?, ipv6),
+       private_ipv4 = COALESCE(?, private_ipv4),
        frozen_at = NULL,
        frozen_volume_ids = ''
      WHERE id = ?`,
-  ).run(fields.provider_id, fields.ipv4, fields.ipv6 ?? null, id);
+  ).run(
+    fields.provider_id,
+    fields.ipv4,
+    fields.ipv6 ?? null,
+    fields.private_ipv4 ?? null,
+    id,
+  );
 }
 
 export function clearServerSnapshot(id: number): void {

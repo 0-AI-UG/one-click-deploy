@@ -1,9 +1,10 @@
 import * as db from "./db.ts";
 import type { AppRow, ReplicaRow, ServiceRow, ServiceInstanceRow } from "./db.ts";
-import { getComputeProvider } from "./providers/index.ts";
-import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContainer, checkCaddyRoute, deployCaddySite, authProxyPort, serviceHealthCheck } from "./remote/index.ts";
+import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck } from "./remote/index.ts";
 import { evaluateAutoScale } from "./scale.ts";
 import { getCatalogEntry } from "./services/catalog.ts";
+import { reconcileNetwork } from "./scale/network-reconciler.ts";
+import { syncAppCaddy, checkAppCaddyRoute } from "./scale/caddy-manager.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -88,108 +89,21 @@ async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
   }
 }
 
-async function reconcileLB(app: AppRow): Promise<void> {
-  if (!app.lb_provider_id) return;
-  const compute = getComputeProvider();
-
-  // 1. LB still exists?
-  try {
-    await compute.loadBalancers!.get(app.lb_provider_id);
-  } catch (err) {
-    log("lb", `app ${app.id} LB ${app.lb_provider_id} missing — clearing`);
-    db.updateAppScaling(app.id, { lb_provider_id: "" });
-    db.insertScalingEvent({
-      app_id: app.id,
-      event_type: "lb_missing",
-      from_count: 0,
-      to_count: 0,
-      reason: `LB ${app.lb_provider_id} not found`,
-    });
-    return;
-  }
-
-  // 2. Target diff
-  try {
-    const lb = await compute.loadBalancers!.get(app.lb_provider_id);
-    const lbTargetServerIds = new Set(
-      (lb.targets || [])
-        .filter((t) => t.type === "server" && t.server?.id)
-        .map((t) => String(t.server!.id))
-    );
-    const replicas = db.getReplicas(app.id);
-    const wantServerIds = new Set<string>();
-    for (const r of replicas) {
-      const s = db.getServer(r.server_id);
-      if (s) wantServerIds.add(String(s.provider_id));
-    }
-
-    for (const want of wantServerIds) {
-      if (!lbTargetServerIds.has(want)) {
-        log("lb", `app ${app.id}: adding missing target server=${want}`);
-        try { await compute.loadBalancers!.addTarget(app.lb_provider_id, want); } catch (e) { log("lb", `add target failed: ${e}`); }
-        db.insertScalingEvent({
-          app_id: app.id,
-          event_type: "lb_reconcile_add",
-          from_count: 0,
-          to_count: 0,
-          reason: `added server ${want} to LB`,
-        });
-      }
-    }
-    for (const have of lbTargetServerIds) {
-      if (!wantServerIds.has(have as string)) {
-        log("lb", `app ${app.id}: removing orphan target server=${have}`);
-        try { await compute.loadBalancers!.removeTarget(app.lb_provider_id, have as string); } catch (e) { log("lb", `remove target failed: ${e}`); }
-        db.insertScalingEvent({
-          app_id: app.id,
-          event_type: "lb_reconcile_remove",
-          from_count: 0,
-          to_count: 0,
-          reason: `removed orphan server ${have} from LB`,
-        });
-      }
-    }
-  } catch (err) {
-    log("lb", `reconcile failed for app ${app.id}: ${err}`);
-  }
-}
-
 async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<void> {
-  // Group apps by server to batch checks
-  const serverApps = new Map<number, { app: AppRow; replica: ReplicaRow }[]>();
-  for (const [appId, list] of byApp) {
+  // The panel owns a single Caddy ingress now, so the reconciler just checks
+  // each app's vhost is present and rewrites it from DB state if missing.
+  for (const [appId] of byApp) {
     const app = db.getApp(appId);
     if (!app || !app.domain) continue;
-    // Only reconcile single-replica apps not behind a LB (LB handles TLS)
-    if (app.lb_provider_id) continue;
     if (app.status !== "running" && app.status !== "unhealthy") continue;
-    const firstReplica = list[0];
-    if (!firstReplica) continue;
-    const items = serverApps.get(firstReplica.server_id) ?? [];
-    items.push({ app, replica: firstReplica });
-    serverApps.set(firstReplica.server_id, items);
-  }
-
-  for (const [serverId, items] of serverApps) {
-    const server = db.getServer(serverId);
-    if (!server) continue;
-    const hostKey = server.ssh_host_key || undefined;
-
-    for (const { app, replica } of items) {
-      try {
-        const exists = await checkCaddyRoute(server.ipv4, app.domain, hostKey);
-        if (!exists) {
-          log("caddy", `Route missing for ${app.domain} — re-adding`);
-          let caddyPort = replica.host_port;
-          if (app.auth_password) {
-            caddyPort = authProxyPort(replica.host_port);
-          }
-          const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
-          await deployCaddySite(server.ipv4, app.domain, caddyPort, useInternalTls, hostKey);
-        }
-      } catch (err) {
-        log("caddy", `Route check failed for ${app.domain}: ${err}`);
+    try {
+      const present = await checkAppCaddyRoute(app.name);
+      if (!present) {
+        log("caddy", `Panel route missing for ${app.name} — re-adding`);
+        await syncAppCaddy(app.id);
       }
+    } catch (err) {
+      log("caddy", `Panel route check failed for ${app.name}: ${err}`);
     }
   }
 }
@@ -300,13 +214,19 @@ async function tick(): Promise<void> {
           log("autoscale", `app ${appId}: ${err}`);
         }
       }
-
-      if (app.lb_provider_id) {
-        await reconcileLB(app);
-      }
     }
 
-    // Ensure Caddy routes exist for all live apps (restores routes lost by Caddy restarts)
+    // Drag every server onto the shared private network + keep
+    // `<app>.ocd.internal` lines in /etc/hosts in sync. Runs every tick but
+    // is a no-op once servers are attached and hosts files are current.
+    try {
+      await reconcileNetwork();
+    } catch (err) {
+      log("network", `reconcile failed: ${err}`);
+    }
+
+    // Ensure Caddy routes exist on the panel for all live apps (restores
+    // routes lost by Caddy restarts).
     await reconcileCaddyRoutes(byApp);
 
     // --- Infrastructure services ---

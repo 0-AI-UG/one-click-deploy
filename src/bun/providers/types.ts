@@ -6,21 +6,16 @@ export type ProviderServer = {
   providerId: string;
   ipv4: string;
   ipv6: string;
+  /** Private network IPv4 assigned by the provider at create time. Empty
+   *  string when the provider doesn't implement private networking or the
+   *  server isn't attached. */
+  privateIpv4?: string;
   status: string;
 };
 
 export type ProviderVolume = {
   providerId: string;
   linuxDevice: string;
-};
-
-export type ProviderLoadBalancer = {
-  providerId: string;
-  ipv4: string;
-};
-
-export type ProviderCertificate = {
-  providerId: string;
 };
 
 export type ServerType = {
@@ -62,47 +57,16 @@ export interface VolumeOps {
   delete(volumeId: string): Promise<void>;
 }
 
-export type LoadBalancerInfo = {
-  providerId: string;
-  name: string;
-  ipv4: string;
-  type: string;
-  location: string;
-  labels: Record<string, string>;
-  targetCount: number;
-};
+// --- Private network capability ---
 
-export interface LoadBalancerOps {
-  create(appName: string, location: string): Promise<ProviderLoadBalancer>;
-  delete(lbId: string): Promise<void>;
-  get(lbId: string): Promise<{
-    ipv4: string;
-    targets: Array<{ type: string; server?: { id: number } }>;
-    services: unknown[];
-  }>;
-  list(): Promise<LoadBalancerInfo[]>;
-  addTarget(lbId: string, serverId: string): Promise<void>;
-  removeTarget(lbId: string, serverId: string): Promise<void>;
-  addService(
-    lbId: string,
-    destPort: number,
-    certId?: number,
-    stickySession?: boolean,
-  ): Promise<void>;
-  createCertificate(
-    appName: string,
-    domain: string,
-  ): Promise<ProviderCertificate>;
-  deleteCertificate(certId: string): Promise<void>;
-}
-
-export interface FirewallRuleOps {
-  addLBRule(firewallId: string, port: number, lbIpv4: string): Promise<void>;
-  removeLBRule(
-    firewallId: string,
-    port: number,
-    lbIpv4: string,
-  ): Promise<void>;
+export interface NetworkOps {
+  /** Ensure the shared private network exists. Returns its provider id. */
+  ensure(): Promise<{ id: string }>;
+  /** Attach a server to the network. Idempotent — already-attached is OK. */
+  attachServer(serverId: string, networkId: string): Promise<void>;
+  /** Read back the server's private IPv4 on the given network. Empty string
+   *  if the attachment hasn't settled yet. */
+  getPrivateIpv4(serverId: string, networkId: string): Promise<string>;
 }
 
 // --- Snapshot / freeze capability ---
@@ -156,6 +120,7 @@ export interface SnapshotOps {
     sshKeyName: string;
     firewallId: string;
     volumeIds: string[];
+    networkId?: string;
   }): Promise<ProviderServer>;
 }
 
@@ -181,6 +146,9 @@ export interface ComputeProvider {
     sshKeyName: string;
     firewallId: string;
     userData: string;
+    /** Private network to attach at create time — when set, the returned
+     *  ProviderServer.privateIpv4 reflects the assigned address. */
+    networkId?: string;
   }): Promise<ProviderServer>;
   getServer(providerId: string): Promise<ProviderServer>;
   waitForRunning(
@@ -194,13 +162,11 @@ export interface ComputeProvider {
 
   // Optional capabilities
   volumes?: VolumeOps;
-  loadBalancers?: LoadBalancerOps;
-  firewallRules?: FirewallRuleOps;
   snapshots?: SnapshotOps;
+  networks?: NetworkOps;
   getPricing?(): Promise<{
     currency: string;
     servers: Record<string, number>;
-    loadBalancers: Record<string, number>;
     volumePerGbMonth: number | null;
   } | null>;
 }

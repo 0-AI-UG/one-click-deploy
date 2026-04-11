@@ -32,7 +32,6 @@ export type AppRow = {
   autoscale_mem_threshold: number;
   autoscale_cooldown: number;
   last_scale_at: string | null;
-  lb_provider_id: string;
   deployed_by: string;
   sleeping_server_id: number | null;
   sleeping_host_port: number | null;
@@ -391,7 +390,6 @@ export function updateAppScaling(id: number, fields: {
   autoscale_cooldown?: number;
   scale_to_zero_after?: number;
   last_scale_at?: string;
-  lb_provider_id?: string;
 }): void {
   const sets: string[] = [];
   const values: (string | number)[] = [];
@@ -404,7 +402,6 @@ export function updateAppScaling(id: number, fields: {
   if (fields.autoscale_cooldown !== undefined) { sets.push("autoscale_cooldown = ?"); values.push(fields.autoscale_cooldown); }
   if (fields.scale_to_zero_after !== undefined) { sets.push("scale_to_zero_after = ?"); values.push(fields.scale_to_zero_after); }
   if (fields.last_scale_at !== undefined) { sets.push("last_scale_at = ?"); values.push(fields.last_scale_at); }
-  if (fields.lb_provider_id !== undefined) { sets.push("lb_provider_id = ?"); values.push(fields.lb_provider_id); }
   if (sets.length === 0) return;
   values.push(id);
   db.query(`UPDATE apps SET ${sets.join(", ")} WHERE id = ?`).run(...values);

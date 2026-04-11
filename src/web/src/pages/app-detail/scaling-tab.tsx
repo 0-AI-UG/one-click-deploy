@@ -102,7 +102,7 @@ export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoad
     <div className="space-y-4">
       {(!app.domain || app.domain.endsWith(".nip.io")) && (
         <Card className="p-4">
-          <p className="font-mono text-[10px] text-accent-amber font-bold">Scaling requires a custom domain. Add a domain in Settings first — nip.io URLs are tied to a single server IP and cannot be load-balanced.</p>
+          <p className="font-mono text-[10px] text-accent-amber font-bold">Scaling requires a custom domain. Add a domain in Settings first — nip.io URLs are derived from a single server IP and can't be used once replicas are spread across multiple hosts.</p>
         </Card>
       )}
 

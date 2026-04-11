@@ -14,86 +14,19 @@ type FirewallRule = {
 };
 
 type HetznerFirewall = { id: number; rules?: FirewallRule[] };
-type HetznerServer = { id: number; status: string; public_net: { ipv4: { ip: string }; ipv6: { ip: string } }; name: string };
+type HetznerServer = {
+  id: number;
+  status: string;
+  public_net: { ipv4: { ip: string }; ipv6: { ip: string } };
+  private_net?: Array<{ network: number; ip: string }>;
+  name: string;
+};
 type WithFirewall = { firewall: HetznerFirewall };
 type WithServer = { server: HetznerServer };
 
 // --- Firewall ---
 
 const FIREWALL_NAME = "one-click-deploy";
-
-export async function addLBFirewallRule(
-  firewallId: number,
-  port: number,
-  lbIpv4: string
-): Promise<void> {
-  log("firewall", `Adding LB firewall rule: port=${port} from=${lbIpv4}`);
-  const fwData = await hetznerApi(`/firewalls/${firewallId}`) as unknown as WithFirewall;
-  const existingRules = fwData.firewall.rules ?? [];
-
-  // Check if rule already exists
-  const exists = existingRules.some((r) =>
-    r.direction === "in" && r.protocol === "tcp" && r.port === String(port) &&
-    r.source_ips?.includes(`${lbIpv4}/32`)
-  );
-  if (exists) {
-    log("firewall", "Rule already exists");
-    return;
-  }
-
-  const newRules = [
-    ...existingRules.map((r) => ({
-      direction: r.direction,
-      protocol: r.protocol,
-      port: r.port,
-      source_ips: r.source_ips,
-      destination_ips: r.destination_ips,
-      description: r.description,
-    })),
-    {
-      direction: "in",
-      protocol: "tcp",
-      port: String(port),
-      source_ips: [`${lbIpv4}/32`],
-      description: `LB access to port ${port}`,
-    },
-  ];
-
-  await hetznerApi(`/firewalls/${firewallId}/actions/set_rules`, {
-    method: "POST",
-    body: JSON.stringify({ rules: newRules }),
-  });
-  log("firewall", `LB firewall rule added for port ${port}`);
-}
-
-export async function removeLBFirewallRule(
-  firewallId: number,
-  port: number,
-  lbIpv4: string
-): Promise<void> {
-  log("firewall", `Removing LB firewall rule: port=${port} from=${lbIpv4}`);
-  const fwData2 = await hetznerApi(`/firewalls/${firewallId}`) as unknown as WithFirewall;
-  const existingRules = fwData2.firewall.rules ?? [];
-  const filteredRules = existingRules
-    .filter((r) => !(
-      r.direction === "in" && r.protocol === "tcp" && r.port === String(port) &&
-      r.source_ips?.includes(`${lbIpv4}/32`)
-    ))
-    .map((r) => ({
-      direction: r.direction,
-      protocol: r.protocol,
-      port: r.port,
-      source_ips: r.source_ips,
-      destination_ips: r.destination_ips,
-      description: r.description,
-    }));
-
-  await hetznerApi(`/firewalls/${firewallId}/actions/set_rules`, {
-    method: "POST",
-    body: JSON.stringify({ rules: filteredRules }),
-  });
-  log("firewall", `LB firewall rule removed for port ${port}`);
-}
 
 export async function ensureFirewall(): Promise<number> {
   // Check if our firewall already exists
@@ -295,19 +228,27 @@ export async function createServer(opts: {
   location: string;
   ssh_key_name: string;
   firewall_id: number;
+  network_id?: number;
 }): Promise<HetznerServer> {
+  const body: Record<string, unknown> = {
+    name: opts.name,
+    server_type: opts.server_type,
+    location: opts.location,
+    image: "docker-ce",
+    ssh_keys: [opts.ssh_key_name],
+    firewalls: [{ firewall: opts.firewall_id }],
+    labels: { managed_by: "one-click-deploy" },
+    user_data: cloudInitScript(),
+  };
+  if (opts.network_id) {
+    // Attaching the network at create time avoids a second round trip and
+    // ensures the server's private IPv4 is assigned before the first SSH
+    // connection — the reconciler only has to pick up existing rows.
+    body.networks = [opts.network_id];
+  }
   const data = await hetznerApi("/servers", {
     method: "POST",
-    body: JSON.stringify({
-      name: opts.name,
-      server_type: opts.server_type,
-      location: opts.location,
-      image: "docker-ce",
-      ssh_keys: [opts.ssh_key_name],
-      firewalls: [{ firewall: opts.firewall_id }],
-      labels: { managed_by: "one-click-deploy" },
-      user_data: cloudInitScript(),
-    }),
+    body: JSON.stringify(body),
   }) as unknown as WithServer;
   return data.server;
 }

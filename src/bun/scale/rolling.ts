@@ -1,9 +1,9 @@
 import * as db from "../db.ts";
-import { getComputeProvider } from "../providers/index.ts";
 import {
   sshExec, cloneAndComposeBuild, transferImage, healthCheck, composeHealthCheck,
 } from "../remote/index.ts";
 import { resolveGitHubToken } from "../github-token.ts";
+import { syncAppCaddy } from "./caddy-manager.ts";
 import { type ProgressFn, log } from "./types.ts";
 
 export async function rollingRedeploy(
@@ -24,10 +24,6 @@ export async function rollingRedeploy(
     // Use the first replica's server as the image source for transferImage.
     const primaryServer = db.getServer(replicas[0].server_id);
     if (!primaryServer) throw new Error("First replica's server not found");
-
-    const compute = getComputeProvider();
-    const lbId = app.lb_provider_id;
-    if (!lbId) throw new Error("No load balancer found for rolling deploy");
 
     const imageName = `${app.name}:latest`;
     const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
@@ -51,11 +47,13 @@ export async function rollingRedeploy(
         );
       }
 
-      // Remove from LB
+      // Drop from the Caddy upstream list so in-flight requests drain
+      // via the other replicas before we tear this one down.
+      db.updateReplicaStatus(replica.id, "draining");
       try {
-        await compute.loadBalancers!.removeTarget(lbId, server.provider_id);
+        await syncAppCaddy(app.id);
       } catch (err) {
-        log("scale", `Failed to remove LB target during rolling redeploy: ${err}`);
+        log("scale", `Caddy sync during rolling drain failed: ${err}`);
       }
 
       // Drain
@@ -64,6 +62,8 @@ export async function rollingRedeploy(
 
       // Recreate container
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+      const replicaBindAddr = server.private_ipv4 || "0.0.0.0";
 
       if (app.deploy_mode === "compose") {
         await cloneAndComposeBuild(
@@ -78,6 +78,7 @@ export async function rollingRedeploy(
             composeFile: app.compose_file,
             webService: app.compose_web_service,
             gitToken: githubPat,
+            bindAddr: replicaBindAddr,
           },
           (line) => emit("scale", line)
         );
@@ -90,7 +91,7 @@ export async function rollingRedeploy(
           const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
           envFileFlag = `--env-file ${envFilePath}`;
         }
-        const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p 0.0.0.0:${replica.host_port}:${app.container_port} ${envFileFlag} ${imageName}`;
+        const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${imageName}`;
         await sshExec(server.ipv4, asUser(cmd), hostKey);
       }
 
@@ -101,8 +102,12 @@ export async function rollingRedeploy(
 
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 
-      // Add back to LB
-      await compute.loadBalancers!.addTarget(lbId, server.provider_id);
+      // Re-install this replica in the panel Caddy upstream list.
+      try {
+        await syncAppCaddy(app.id);
+      } catch (err) {
+        log("scale", `Caddy sync after rolling replace failed: ${err}`);
+      }
 
       emit("scale", `Replica ${replica.container_name} updated`);
     }

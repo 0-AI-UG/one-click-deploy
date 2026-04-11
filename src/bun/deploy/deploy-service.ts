@@ -5,6 +5,7 @@ import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
   pullAndRunService, serviceHealthCheck,
 } from "../remote/index.ts";
+import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { getTokens } from "../secret-store.ts";
 import { createMasker } from "../mask.ts";
 import {
@@ -153,11 +154,12 @@ export async function deployService(
       onProgress("server", `Creating new ${compute.name} server...`);
 
       const { publicKey } = await getOrCreateLocalKeyPair();
-      const [sshKey, firewallId] = await Promise.all([
+      const [sshKey, firewallId, networkId] = await Promise.all([
         compute.ensureSshKey("one-click-deploy", publicKey),
         compute.ensureFirewall(),
+        ensureSharedNetwork(),
       ]);
-      onProgress("server", "SSH key + firewall ready");
+      onProgress("server", "SSH key + firewall + network ready");
 
       const serverType = settings.default_server_type;
       if (!serverType) throw new Error("No default server type configured — set one in Settings");
@@ -184,6 +186,7 @@ export async function deployService(
         location,
         sshKeyName: sshKey.name,
         firewallId,
+        networkId: networkId || undefined,
         userData: "",
       });
       state.providerServerId = providerServer.providerId;
@@ -193,6 +196,7 @@ export async function deployService(
         provider_id: providerServer.providerId,
         ipv4: serverIp,
         ipv6: providerServer.ipv6 || "",
+        private_ipv4: providerServer.privateIpv4 || "",
         status: "provisioning",
       });
       onProgress("server", `Server created: ${serverName} (${serverIp})`);

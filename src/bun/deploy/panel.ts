@@ -20,6 +20,7 @@ import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
   cloneAndBuild, deployCaddySite, healthCheck, getContainerLogs,
 } from "../remote/index.ts";
+import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
@@ -77,12 +78,13 @@ export async function bootstrapPanel(
   const dns = getDnsProvider();
 
   try {
-    // 1. SSH key + firewall
-    onProgress("server", "Ensuring SSH key + firewall...");
+    // 1. SSH key + firewall + private network
+    onProgress("server", "Ensuring SSH key + firewall + network...");
     const { publicKey } = await getOrCreateLocalKeyPair();
-    const [sshKey, firewallId] = await Promise.all([
+    const [sshKey, firewallId, networkId] = await Promise.all([
       compute.ensureSshKey("one-click-deploy", publicKey),
       compute.ensureFirewall(),
+      ensureSharedNetwork(),
     ]);
 
     // 2. Create server
@@ -106,6 +108,7 @@ export async function bootstrapPanel(
       location: opts.serverLocation,
       sshKeyName: sshKey.name,
       firewallId,
+      networkId: networkId || undefined,
       userData: "",
     });
     providerServerId = providerServer.providerId;
@@ -114,6 +117,7 @@ export async function bootstrapPanel(
       provider_id: providerServerId,
       ipv4: serverIp,
       ipv6: providerServer.ipv6 || "",
+      private_ipv4: providerServer.privateIpv4 || "",
       status: "provisioning",
     });
     onProgress("server", `Server created: ${serverIp}`);

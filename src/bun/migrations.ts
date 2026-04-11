@@ -711,6 +711,62 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 29,
+    description:
+      "Add servers.private_ipv4 for shared private network routing",
+    up: (db) => {
+      const cols = db
+        .query("PRAGMA table_info(servers)")
+        .all() as { name: string }[];
+      if (!cols.some((c) => c.name === "private_ipv4")) {
+        db.run(
+          "ALTER TABLE servers ADD COLUMN private_ipv4 TEXT NOT NULL DEFAULT ''",
+        );
+      }
+      const hasSettings = db
+        .query(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='settings'",
+        )
+        .get();
+      if (hasSettings) {
+        db.run(
+          "INSERT OR IGNORE INTO settings (key, value) VALUES ('network_id', '')",
+        );
+      }
+    },
+  },
+  {
+    version: 30,
+    description:
+      "Drop apps.lb_provider_id — Hetzner load balancers replaced by panel Caddy ingress",
+    up: (db) => {
+      const cols = db
+        .query("PRAGMA table_info(apps)")
+        .all() as { name: string }[];
+      if (cols.some((c) => c.name === "lb_provider_id")) {
+        try {
+          db.run("ALTER TABLE apps DROP COLUMN lb_provider_id");
+        } catch {
+          // SQLite older than 3.35 — fall back to table recreate. We only
+          // ship on Bun ≥ 1.1, which embeds SQLite 3.45+, so this path is
+          // defensive but effectively unreachable in production.
+          db.run("ALTER TABLE apps RENAME TO apps_pre_30");
+          const oldCols = db
+            .query("PRAGMA table_info(apps_pre_30)")
+            .all() as { name: string; type: string; notnull: number; dflt_value: unknown; pk: number }[];
+          const keep = oldCols.filter((c) => c.name !== "lb_provider_id");
+          const colDefs = keep
+            .map((c) => `${c.name} ${c.type}${c.notnull ? " NOT NULL" : ""}${c.dflt_value !== null ? ` DEFAULT ${c.dflt_value}` : ""}${c.pk ? " PRIMARY KEY AUTOINCREMENT" : ""}`)
+            .join(", ");
+          db.run(`CREATE TABLE apps (${colDefs})`);
+          const names = keep.map((c) => c.name).join(", ");
+          db.run(`INSERT INTO apps (${names}) SELECT ${names} FROM apps_pre_30`);
+          db.run("DROP TABLE apps_pre_30");
+        }
+      }
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

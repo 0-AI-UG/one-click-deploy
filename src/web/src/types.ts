@@ -123,17 +123,6 @@ export type ResourceServer = {
   provider_id: string;
 };
 
-export type ResourceLoadBalancer = {
-  id: string;
-  name: string;
-  ipv4: string;
-  type: string;
-  location: string;
-  app_name?: string;
-  targets: number;
-  monthly_eur?: number;
-};
-
 export type ResourceVolume = {
   id: string;
   name: string;
@@ -146,11 +135,9 @@ export type ResourceVolume = {
 
 export type ResourcesData = {
   servers: ResourceServer[];
-  load_balancers: ResourceLoadBalancer[];
   volumes: ResourceVolume[];
   totals?: {
     servers: number;
-    load_balancers: number;
     volumes: number;
     total: number;
     currency: string;

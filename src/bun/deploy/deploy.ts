@@ -3,17 +3,19 @@ import * as db from "../db.ts";
 import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
 import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
-  deployCaddySite, removeCaddySite, cloneAndBuild, cloneAndComposeBuild,
+  cloneAndBuild, cloneAndComposeBuild,
   cloneAndRailpackBuild, detectComposeFile, detectWebService, removeContainer,
   removeCompose, healthCheck, composeHealthCheck,
   deployAuthProxy,
 } from "../remote/index.ts";
+import { syncAppCaddy, removeAppCaddy } from "../scale/caddy-manager.ts";
 import * as github from "../github.ts";
 import { validateDeployRequest } from "../validate.ts";
 import { createMasker } from "../mask.ts";
 import { getTokens } from "../secret-store.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { scaleApp } from "../scale.ts";
+import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { resolve4 } from "node:dns/promises";
 
 // Resolve a hostname to IPv4 addresses with a short timeout.
@@ -52,6 +54,7 @@ type DeployState = {
   dbAppId?: number;
   dnsRecord?: { zone_id: string; name: string; type: string; value: string };
   containerName?: string;
+  appName?: string;
   deployMode?: "dockerfile" | "compose";
   caddyConfigured?: boolean;
   caddyDomain?: string;
@@ -62,11 +65,11 @@ type DeployState = {
 async function rollback(state: DeployState, serverIp: string, hostKey?: string): Promise<void> {
   log("rollback", "Rolling back deploy state:", state);
 
-  // Remove Caddy site
-  if (state.caddyConfigured && state.caddyDomain && serverIp) {
+  // Remove Caddy site from the panel ingress
+  if (state.caddyConfigured && state.caddyDomain && state.appName) {
     try {
-      await removeCaddySite(serverIp, state.caddyDomain, hostKey);
-      log("rollback", "Removed Caddy site");
+      await removeAppCaddy(state.appName, state.caddyDomain);
+      log("rollback", "Removed Caddy site from panel");
     } catch (err) {
       log("rollback", `Failed to remove Caddy site: ${err}`);
     }
@@ -208,14 +211,15 @@ export async function deploy(
       const compute = getComputeProvider();
       onProgress("server", `Creating new ${compute.name} server...`);
 
-      log("ssh", "Ensuring SSH key and firewall exist...");
+      log("ssh", "Ensuring SSH key, firewall, and private network exist...");
       const { publicKey } = await getOrCreateLocalKeyPair();
-      const [sshKey, firewallId] = await Promise.all([
+      const [sshKey, firewallId, networkId] = await Promise.all([
         compute.ensureSshKey("one-click-deploy", publicKey),
         compute.ensureFirewall(),
+        ensureSharedNetwork(),
       ]);
-      log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}`);
-      onProgress("server", `SSH key + firewall ready`);
+      log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}, network: ${networkId || "(none)"}`);
+      onProgress("server", `SSH key + firewall + network ready`);
 
       const serverType = settings.default_server_type;
       if (!serverType) throw new Error("No default server type configured — set one in Settings");
@@ -245,10 +249,11 @@ export async function deploy(
         location,
         sshKeyName: sshKey.name,
         firewallId,
+        networkId: networkId || undefined,
         userData: "",
       });
       state.providerServerId = providerServer.providerId;
-      log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId}`);
+      log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId} private=${providerServer.privateIpv4 || "(none)"}`);
 
       // Update placeholder with real data
       serverIp = providerServer.ipv4;
@@ -256,6 +261,7 @@ export async function deploy(
         provider_id: providerServer.providerId,
         ipv4: serverIp,
         ipv6: providerServer.ipv6 || "",
+        private_ipv4: providerServer.privateIpv4 || "",
         status: "provisioning",
       });
       log("server", `Server saved to DB: id=${dbServer.id}`);
@@ -296,10 +302,19 @@ export async function deploy(
       onProgress("provision", "Server provisioned with Docker + Caddy");
     }
 
-    // Step 2: Determine domain + create DNS record
-    const useDomain = req.domain || `${req.app_name}.${serverIp}.nip.io`;
+    // Step 2: Determine domain + create DNS record.
+    //
+    // Caddy ingress now lives on the panel server, so every app's public DNS
+    // record points at the panel's public IPv4 rather than the tenant's.
+    // When no panel exists (pre-bootstrap), fall back to the tenant server
+    // IP as before.
+    const panel = db.getPanel();
+    const panelServerRow = panel ? db.getServer(panel.server_id) : null;
+    const ingressIp = panelServerRow?.ipv4 || serverIp;
+
+    const useDomain = req.domain || `${req.app_name}.${ingressIp}.nip.io`;
     const useInternalTls = !req.domain;
-    log("dns", `Domain: ${useDomain} (internal TLS: ${useInternalTls})`);
+    log("dns", `Domain: ${useDomain} (internal TLS: ${useInternalTls}) ingress=${ingressIp}`);
 
     onProgress("dns", req.domain ? `Creating DNS record for ${req.domain}...` : `Using ${useDomain} (no custom domain)`);
     const dnsZoneId = settings.dns_zone_id;
@@ -310,17 +325,17 @@ export async function deploy(
 
     if (req.domain && dnsZoneId) {
       try {
-        log("dns", `Creating DNS A record: ${subdomain} -> ${serverIp} in zone ${dnsZoneId}`);
+        log("dns", `Creating DNS A record: ${subdomain} -> ${ingressIp} in zone ${dnsZoneId}`);
         const dns = getDnsProvider();
         const record = await dns.createRecord({
           zoneId: dnsZoneId,
           name: subdomain,
           type: "A",
-          value: serverIp,
+          value: ingressIp,
         });
-        state.dnsRecord = { zone_id: dnsZoneId, name: subdomain, type: "A", value: serverIp };
+        state.dnsRecord = { zone_id: dnsZoneId, name: subdomain, type: "A", value: ingressIp };
         log("dns", `DNS record created: ${record.id}`);
-        onProgress("dns", `DNS A record created: ${req.domain} -> ${serverIp}`);
+        onProgress("dns", `DNS A record created: ${req.domain} -> ${ingressIp}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log("dns", `DNS record creation failed: ${msg}`);
@@ -441,6 +456,15 @@ export async function deploy(
     state.deployMode = deployMode;
     let buildImageTag = `${req.app_name}:latest`; // default, overridden by Dockerfile builds
 
+    // Prefer binding the published port to the tenant server's private IP so
+    // it's only reachable over the shared private network. Fall back to
+    // 127.0.0.1 when we don't have a private IP yet — the reconciler
+    // attach-to-network pass takes care of late arrivals, and we'll
+    // reconfigure the port binding on the next redeploy.
+    const tenantServerRow = db.getServer(serverId!);
+    const tenantPrivateIp = tenantServerRow?.private_ipv4 || "";
+    const containerBindAddr = tenantPrivateIp || "0.0.0.0";
+
     if (deployMode === "compose") {
       const result = await cloneAndComposeBuild(
         serverIp,
@@ -454,6 +478,7 @@ export async function deploy(
           composeFile,
           webService: composeWebService,
           gitToken: githubPat,
+          bindAddr: containerBindAddr,
         },
         (line) => {
           maskedLog(app.id, `[build] ${line}`);
@@ -473,6 +498,7 @@ export async function deploy(
           volumeMount,
           dockerfilePath: req.dockerfile_path,
           gitToken: githubPat,
+          bindAddr: containerBindAddr,
         },
         (line) => {
           maskedLog(app.id, `[build] ${line}`);
@@ -495,32 +521,41 @@ export async function deploy(
       maskedLog(app.id, `[auth] Auth proxy deployed on port ${caddyPort}`);
     }
 
-    // Step 5: Configure Caddy reverse proxy
-    // DNS preflight: if user supplied a custom domain and we didn't manage the
-    // record ourselves, verify it resolves to this server. Otherwise Caddy's
-    // ACME challenge will fail and visitors hit whatever else owns that IP
-    // (e.g. the old hoster's placeholder page).
+    // Step 5: Configure Caddy reverse proxy on the panel server.
+    //
+    // DNS preflight: if the user supplied a custom domain and we didn't
+    // manage the record ourselves, verify it resolves to the *panel*
+    // ingress IP. The panel owns TLS termination for every app now, so the
+    // ACME HTTP-01 challenge lands on the panel's :80 listener — mismatched
+    // DNS makes Let's Encrypt fail and visitors hit the wrong host entirely.
     if (req.domain && !useInternalTls && !state.dnsRecord) {
       onProgress("caddy", `Verifying DNS for ${req.domain}...`);
       const resolved = await resolveDomainIps(req.domain);
       if (resolved.length === 0) {
         throw new Error(
-          `DNS lookup for ${req.domain} returned no A records. Create an A record pointing to ${serverIp} and retry (DNS can take a few minutes to propagate).`
+          `DNS lookup for ${req.domain} returned no A records. Create an A record pointing to ${ingressIp} and retry (DNS can take a few minutes to propagate).`
         );
       }
-      if (!resolved.includes(serverIp)) {
+      if (!resolved.includes(ingressIp)) {
         throw new Error(
-          `Domain ${req.domain} resolves to ${resolved.join(", ")} but this server is ${serverIp}. Update the A record to ${serverIp} (Let's Encrypt will fail to issue a certificate otherwise) and retry.`
+          `Domain ${req.domain} resolves to ${resolved.join(", ")} but the ingress server is ${ingressIp}. Update the A record to ${ingressIp} (Let's Encrypt will fail to issue a certificate otherwise) and retry.`
         );
       }
-      onProgress("caddy", `DNS OK: ${req.domain} -> ${serverIp}`);
+      onProgress("caddy", `DNS OK: ${req.domain} -> ${ingressIp}`);
     }
 
-    onProgress("caddy", `Configuring TLS + reverse proxy for ${useDomain}...`);
-    await deployCaddySite(serverIp, useDomain, caddyPort, useInternalTls, serverHostKey || undefined);
+    // caddyPort is read for its side-effect (the auth proxy deploy above
+    // already returned the right upstream port). The Caddy manager re-derives
+    // upstream ports from the replica row, so nothing else needs to consume
+    // this value here.
+    void caddyPort;
+
+    onProgress("caddy", `Configuring panel Caddy for ${useDomain}...`);
+    await syncAppCaddy(app.id);
     state.caddyConfigured = true;
     state.caddyDomain = useDomain;
-    maskedLog(app.id, `[caddy] Reverse proxy configured for ${useDomain}`);
+    state.appName = app.name;
+    maskedLog(app.id, `[caddy] Panel ingress configured for ${useDomain}`);
     onProgress("caddy", useInternalTls ? "Caddy configured with self-signed TLS" : "Caddy configured with auto-TLS");
 
     // Step 5: Health check

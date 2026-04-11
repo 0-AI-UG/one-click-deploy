@@ -1,0 +1,117 @@
+import * as db from "../db.ts";
+import { getComputeProvider } from "../providers/index.ts";
+import { sshExec } from "../remote/index.ts";
+import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
+
+function log(context: string, ...args: unknown[]) {
+  console.log(`[${new Date().toISOString()}] [net-recon:${context}]`, ...args);
+}
+
+/**
+ * Reconciler pass that drags every server onto the shared private network
+ * and keeps each server's /etc/hosts in sync with the panel's private IP for
+ * the `<app>.ocd.internal` convention used by intra-app traffic.
+ *
+ * Runs inside the main reconciler tick, after replica/health work. Completes
+ * in a few provider calls per new server and skips fast when everything is
+ * already up to date.
+ */
+export async function reconcileNetwork(): Promise<void> {
+  const compute = getComputeProvider();
+  if (!compute.networks) return; // provider doesn't support private networking
+
+  let networkId: string;
+  try {
+    networkId = await ensureSharedNetwork();
+  } catch (err) {
+    log("ensure", `failed to ensure network: ${err}`);
+    return;
+  }
+  if (!networkId) return;
+
+  // Attach any materialized server that isn't on the network yet.
+  const servers = db.getServers().filter((s) => s.state === "materialized" && s.provider_id);
+  for (const server of servers) {
+    if (server.private_ipv4) continue;
+    try {
+      log("attach", `Attaching server ${server.name} (${server.provider_id})`);
+      await compute.networks.attachServer(server.provider_id, networkId);
+      const privateIp = await compute.networks.getPrivateIpv4(server.provider_id, networkId);
+      if (privateIp) {
+        db.updateServer(server.id, { private_ipv4: privateIp });
+        log("attach", `Server ${server.name} private_ipv4=${privateIp}`);
+      } else {
+        log("attach", `Server ${server.name} attached but no private IPv4 yet`);
+      }
+    } catch (err) {
+      log("attach", `Failed to attach ${server.name}: ${err}`);
+    }
+  }
+
+  // Sync /etc/hosts for `<app>.ocd.internal` on every server. The panel owns
+  // the Caddy ingress, so every internal hostname resolves to the panel's
+  // private IP. A server with an outdated panel IP still works at the DNS
+  // level but falls back to the public path — so we treat the hosts sync as
+  // best-effort.
+  try {
+    await syncInternalHosts();
+  } catch (err) {
+    log("hosts", `sync failed: ${err}`);
+  }
+}
+
+/**
+ * Build the `<app>.ocd.internal` line block and push it into /etc/hosts on
+ * every materialized server. Idempotent — the block is delimited by
+ * BEGIN/END markers so repeated runs just overwrite the same region.
+ */
+export async function syncInternalHosts(): Promise<void> {
+  const panel = db.getPanel();
+  if (!panel) return;
+  const panelServer = db.getServer(panel.server_id);
+  if (!panelServer || !panelServer.private_ipv4) return; // nothing to point at yet
+
+  const apps = db.getApps();
+  const lines: string[] = [];
+  for (const app of apps) {
+    lines.push(`${panelServer.private_ipv4} ${app.name}.ocd.internal`);
+  }
+  const block = lines.join("\n");
+
+  const servers = db.getServers().filter((s) => s.state === "materialized" && s.ipv4);
+  for (const server of servers) {
+    try {
+      await writeHostsBlock(server.ipv4, block, server.ssh_host_key || undefined);
+    } catch (err) {
+      log("hosts", `Failed to update /etc/hosts on ${server.name}: ${err}`);
+    }
+  }
+}
+
+const HOSTS_BEGIN = "# BEGIN ocd-internal";
+const HOSTS_END = "# END ocd-internal";
+
+async function writeHostsBlock(
+  serverIp: string,
+  block: string,
+  hostKey: string | undefined,
+): Promise<void> {
+  // Rewrite /etc/hosts: strip any existing BEGIN/END ocd-internal region and
+  // append the fresh block. awk is available on every Ubuntu image so we
+  // avoid a Python/sed portability rabbit hole.
+  const newBody = block.length > 0
+    ? `${HOSTS_BEGIN}\n${block}\n${HOSTS_END}`
+    : `${HOSTS_BEGIN}\n${HOSTS_END}`;
+  const escaped = newBody.replace(/'/g, "'\\''");
+  const cmd = `set -e
+tmp=$(mktemp)
+awk -v b='${HOSTS_BEGIN}' -v e='${HOSTS_END}' '
+  $0==b {skip=1; next}
+  $0==e && skip==1 {skip=0; next}
+  skip==0 {print}
+' /etc/hosts > "$tmp"
+printf '%s\\n' '${escaped}' >> "$tmp"
+cat "$tmp" > /etc/hosts
+rm -f "$tmp"`;
+  await sshExec(serverIp, cmd, hostKey);
+}
