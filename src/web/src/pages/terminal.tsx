@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Terminal } from "xterm";
+import { FitAddon } from "xterm-addon-fit";
+import "xterm/css/xterm.css";
 import { useAuth } from "../stores/auth.ts";
 import { Btn } from "../components/ui.tsx";
 import { ArrowLeft } from "lucide-react";
@@ -8,112 +11,153 @@ type Props = {
   id: number;
 };
 
+type Status = "connecting" | "open" | "disconnected" | "error";
+
 export function TerminalPage({ kind, id }: Props) {
   const { token } = useAuth();
+  // Keep the token in a ref so reconnect() always reads the freshest value
+  // without re-running the main effect (which would tear down the terminal).
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+
   const containerRef = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<"loading" | "connecting" | "open" | "closed" | "error">("loading");
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backoffRef = useRef(500);
+  const disposedRef = useRef(false);
+
+  const [status, setStatus] = useState<Status>("connecting");
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    interface XTerm {
-      cols: number; rows: number;
-      loadAddon(addon: unknown): void;
-      open(el: HTMLElement): void;
-      focus(): void;
-      write(data: string | Uint8Array): void;
-      onData(cb: (data: string) => void): void;
-      dispose(): void;
+  const connect = useCallback(() => {
+    if (disposedRef.current) return;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
     }
-    interface FitAddon { fit(): void; }
-    let term: XTerm | undefined;
-    let fitAddon: FitAddon | undefined;
-    let ws: WebSocket | null = null;
-    let disposed = false;
 
-    (async () => {
-      try {
-        setStatus("loading");
-        // Dynamic import from esm.sh to avoid adding a build-time dep.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        // @ts-ignore - CDN import
-        const xterm = await import(/* @vite-ignore */ "https://esm.sh/xterm@5.3.0") as { Terminal: new (opts: Record<string, unknown>) => XTerm };
-        // @ts-ignore - CDN import
-        const fit = await import(/* @vite-ignore */ "https://esm.sh/xterm-addon-fit@0.8.0") as { FitAddon: new () => FitAddon };
-        // Style (inject once)
-        if (!document.getElementById("xterm-css")) {
-          const link = document.createElement("link");
-          link.id = "xterm-css";
-          link.rel = "stylesheet";
-          link.href = "https://esm.sh/xterm@5.3.0/css/xterm.css";
-          document.head.appendChild(link);
-        }
+    setStatus("connecting");
+    const proto = window.location.protocol === "https:" ? "wss" : "ws";
+    const url = `${proto}://${window.location.host}/api/terminal/ws?target=${kind}:${id}&token=${encodeURIComponent(tokenRef.current || "")}`;
+    const ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
 
-        if (disposed || !containerRef.current) return;
-        term = new xterm.Terminal({
-          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-          fontSize: 12,
-          theme: { background: "#000000" },
-          cursorBlink: true,
-        });
-        fitAddon = new fit.FitAddon();
-        term.loadAddon(fitAddon);
-        term.open(containerRef.current);
-        fitAddon.fit();
-
-        setStatus("connecting");
-        const proto = window.location.protocol === "https:" ? "wss" : "ws";
-        const url = `${proto}://${window.location.host}/api/terminal/ws?target=${kind}:${id}&token=${encodeURIComponent(token || "")}`;
-        ws = new WebSocket(url);
-        ws.binaryType = "arraybuffer";
-
-        ws.onopen = () => {
-          setStatus("open");
-          term!.focus();
-          // Send initial size
-          try {
-            ws!.send(JSON.stringify({ type: "resize", cols: term!.cols, rows: term!.rows }));
-          } catch { /* ws may not be open yet */ }
-        };
-        ws.onmessage = (ev) => {
-          if (ev.data instanceof ArrayBuffer) {
-            term!.write(new Uint8Array(ev.data));
-          } else {
-            term!.write(ev.data);
-          }
-        };
-        ws.onclose = () => { setStatus("closed"); };
-        ws.onerror = () => { setStatus("error"); setError("WebSocket error"); };
-
-        const encoder = new TextEncoder();
-        term.onData((data: string) => {
-          // Send input as binary so the server can cleanly discriminate
-          // keystrokes (bytes) from control frames (JSON strings).
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
-        });
-
-        const onResize = () => {
-          try {
-            fitAddon!.fit();
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "resize", cols: term!.cols, rows: term!.rows }));
-            }
-          } catch { /* terminal may be disposed during resize */ }
-        };
-        window.addEventListener("resize", onResize);
-
-        return () => window.removeEventListener("resize", onResize);
-      } catch (err: any) {
-        setStatus("error");
-        setError(err?.message || String(err));
+    ws.onopen = () => {
+      if (disposedRef.current) { try { ws.close(); } catch { /* closed */ } return; }
+      setStatus("open");
+      backoffRef.current = 500;
+      const term = termRef.current;
+      if (term) {
+        term.focus();
+        try {
+          ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        } catch { /* ws may not be fully open yet */ }
       }
-    })();
+    };
+
+    ws.onmessage = (ev) => {
+      const term = termRef.current;
+      if (!term) return;
+      if (ev.data instanceof ArrayBuffer) {
+        term.write(new Uint8Array(ev.data));
+      } else {
+        term.write(ev.data);
+      }
+    };
+
+    ws.onerror = () => {
+      setStatus("error");
+      setError("WebSocket error");
+    };
+
+    ws.onclose = () => {
+      if (disposedRef.current) return;
+      setStatus("disconnected");
+      // Exponential backoff capped at 5s.
+      const delay = Math.min(backoffRef.current, 5000);
+      backoffRef.current = Math.min(backoffRef.current * 2, 5000);
+      reconnectTimerRef.current = setTimeout(() => {
+        if (!disposedRef.current) connect();
+      }, delay);
+    };
+  }, [kind, id]);
+
+  useEffect(() => {
+    disposedRef.current = false;
+
+    const term = new Terminal({
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      fontSize: 12,
+      theme: { background: "#000000" },
+      cursorBlink: true,
+      scrollback: 5000,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    if (containerRef.current) {
+      term.open(containerRef.current);
+      try { fit.fit(); } catch { /* container may not be laid out yet */ }
+    }
+    termRef.current = term;
+    fitRef.current = fit;
+
+    // Pipe keystrokes to whatever ws is currently active (read via ref so
+    // reconnected sessions transparently pick up the new socket).
+    const encoder = new TextEncoder();
+    term.onData((data) => {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(encoder.encode(data));
+      }
+      // If the ws isn't OPEN, silently drop — the auto-reconnect overlay
+      // is already visible so the user knows input isn't flowing.
+    });
+
+    const onResize = () => {
+      try {
+        fit.fit();
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        }
+      } catch { /* terminal may be disposed */ }
+    };
+    window.addEventListener("resize", onResize);
+
+    // Refocus the terminal whenever the window/tab regains focus — otherwise
+    // alt-tabbing back lands keystrokes on the document body.
+    const onWindowFocus = () => { termRef.current?.focus(); };
+    window.addEventListener("focus", onWindowFocus);
+
+    connect();
 
     return () => {
-      disposed = true;
-      try { ws?.close(); } catch { /* cleanup, may already be closed */ }
-      try { term?.dispose(); } catch { /* cleanup, may already be disposed */ }
+      disposedRef.current = true;
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("focus", onWindowFocus);
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      try { wsRef.current?.close(); } catch { /* cleanup */ }
+      try { term.dispose(); } catch { /* cleanup */ }
+      termRef.current = null;
+      fitRef.current = null;
+      wsRef.current = null;
     };
-  }, [kind, id, token]);
+  }, [kind, id, connect]);
+
+  // Click anywhere in the terminal frame to refocus xterm — works around the
+  // "I clicked a notification and now typing goes nowhere" class of issue.
+  const onContainerPointerDown = () => { termRef.current?.focus(); };
+
+  const statusColor =
+    status === "open" ? "text-accent-green"
+    : status === "connecting" || status === "disconnected" ? "text-accent-amber"
+    : "text-accent-red";
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
@@ -122,14 +166,24 @@ export function TerminalPage({ kind, id }: Props) {
         <h1 className="font-mono font-bold text-sm text-fg uppercase">
           Terminal — {kind} #{id}
         </h1>
-        <span className="font-mono text-[9px] text-muted uppercase tracking-wider">{status}</span>
+        <span className={`font-mono text-[9px] uppercase tracking-wider ${statusColor}`}>{status}</span>
       </div>
       {error && <div className="font-mono text-[10px] text-red-500 mb-2">{error}</div>}
-      <div
-        ref={containerRef}
-        className="border-2 border-fg bg-black"
-        style={{ height: "70vh" }}
-      />
+      <div className="relative">
+        <div
+          ref={containerRef}
+          onPointerDown={onContainerPointerDown}
+          className="border-2 border-fg bg-black"
+          style={{ height: "70vh" }}
+        />
+        {(status === "disconnected" || status === "connecting") && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/60 pointer-events-none">
+            <div className="font-mono text-xs text-accent-amber uppercase tracking-wider">
+              {status === "connecting" ? "Connecting…" : "Disconnected — reconnecting…"}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
