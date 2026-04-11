@@ -28,15 +28,15 @@ export async function rebindContainer(
     if (envEntries.length > 0) {
       envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
     }
-    const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-    const tempName = `${app.name}-rebind`;
-    const cmd = `docker run -d --name ${tempName} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+    // Remove the old container first to free the host port. Docker won't let
+    // two containers bind the same hostPort, so a temp-then-rename pattern
+    // can't avoid downtime here — accept the sub-second gap and just swap.
+    // No volume flag: scaleApp blocks volume-backed apps from crossing 1↔N.
+    await sshExec(serverIpv4, asUser(`docker rm -f ${app.name} 2>/dev/null || true`), hostKey);
+    const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
     const startResult = await sshExec(serverIpv4, asUser(cmd), hostKey);
     if (startResult.exitCode !== 0) {
-      await sshExec(serverIpv4, asUser(`docker rm -f ${tempName} 2>/dev/null || true`), hostKey);
       throw new Error(`Failed to restart container during scaling — check container logs for details`);
     }
-    await sshExec(serverIpv4, asUser(`docker rm -f ${app.name} 2>/dev/null || true`), hostKey);
-    await sshExec(serverIpv4, asUser(`docker rename ${tempName} ${app.name}`), hostKey);
   }
 }
