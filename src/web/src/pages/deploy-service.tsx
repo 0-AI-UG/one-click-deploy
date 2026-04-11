@@ -10,7 +10,6 @@ type CatalogEntry = {
   defaultPort: number;
   requiredEnvVars: Array<{ key: string; label: string; generate?: string; default?: string }>;
   defaultVolumeSize: number;
-  replicationSupported: boolean;
 };
 
 const SERVICE_ICONS: Record<string, string> = {
@@ -121,7 +120,6 @@ export function DeployServicePage() {
               <div className="flex items-center justify-between mt-2">
                 <span className="font-mono text-[8px] text-muted uppercase">
                   {entry.versions.length} version{entry.versions.length > 1 ? "s" : ""}
-                  {entry.replicationSupported && " | replication"}
                 </span>
                 <ChevronRight size={14} className="text-muted group-hover:text-fg transition-colors" />
               </div>

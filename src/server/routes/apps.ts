@@ -325,17 +325,26 @@ export async function handleGetContainerLogs(request: Request, appId: number): P
     await requirePermission(request, "apps.logs");
     const url = new URL(request.url);
     const tail = parseInt(url.searchParams.get("tail") || "100", 10);
+    const replicaIdParam = url.searchParams.get("replica_id");
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ logs: "", error: "App not found" }, { headers: corsHeaders });
     const replicas = db.getReplicas(appId);
     if (replicas.length === 0) return Response.json({ logs: "", error: "App has no replicas" }, { headers: corsHeaders });
-    const server = db.getServer(replicas[0].server_id);
+
+    let replica = replicas[0];
+    if (replicaIdParam) {
+      const requested = replicas.find((r) => r.id === parseInt(replicaIdParam, 10));
+      if (!requested) return Response.json({ logs: "", error: "Replica not found" }, { headers: corsHeaders });
+      replica = requested;
+    }
+
+    const server = db.getServer(replica.server_id);
     if (!server) return Response.json({ logs: "", error: "Server not found" }, { headers: corsHeaders });
 
     const logs = app.deploy_mode === "compose"
       ? await getComposeLogs(server.ipv4, app.name, tail, server.ssh_host_key || undefined)
-      : await getContainerLogs(server.ipv4, app.name, tail, server.ssh_host_key || undefined);
+      : await getContainerLogs(server.ipv4, replica.container_name, tail, server.ssh_host_key || undefined);
 
     return Response.json({ logs }, { headers: corsHeaders });
   } catch (error) {

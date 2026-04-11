@@ -141,12 +141,8 @@ async function collectServiceInstance(instance: ServiceInstanceRow, service: Ser
 
   // Health check via docker exec
   try {
-    const healthCmd = instance.role === "replica" && catalog.replication.replicaHealthCmd
-      ? catalog.replication.replicaHealthCmd
-      : catalog.healthCmd;
-
     const check = await serviceHealthCheck(
-      server.ipv4, instance.container_name, healthCmd, 1, hostKey
+      server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey
     );
 
     if (check.healthy) {

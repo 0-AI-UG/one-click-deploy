@@ -10,8 +10,7 @@ import {
   unpauseService,
   getServiceLogs,
 } from "../../bun/deploy/service-lifecycle.ts";
-import { scaleService } from "../../bun/scale-service.ts";
-import { getCatalogEntries, buildConnectionUrl, getCatalogEntry } from "../../bun/services/catalog.ts";
+import { getCatalogEntries, getCatalogEntry } from "../../bun/services/catalog.ts";
 
 // Long-poll notifier (same pattern as app deploy jobs)
 const jobWaiters = new Map<number, Set<() => void>>();
@@ -53,7 +52,6 @@ export async function handleGetCatalog(_request: Request): Promise<Response> {
       defaultPort: e.defaultPort,
       requiredEnvVars: e.requiredEnvVars,
       defaultVolumeSize: e.defaultVolumeSize,
-      replicationSupported: e.replication.supported,
     }));
     return Response.json(entries, { headers: corsHeaders });
   } catch (error) {
@@ -72,8 +70,7 @@ export async function handleGetServices(request: Request): Promise<Response> {
       const links = db.getServiceLinks(s.id);
       return {
         ...s,
-        instance_count: instances.length,
-        primary_instance: instances.find((i) => i.role === "primary") || null,
+        primary_instance: instances[0] || null,
         linked_apps: links.map((l) => ({ id: l.app_id, name: l.app_name })),
       };
     });
@@ -92,7 +89,12 @@ export async function handleGetService(request: Request, serviceId: number): Pro
     if (!service) {
       return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
     }
-    const instances = db.getServiceInstances(serviceId);
+    // Join the hosting server's name onto each instance so the detail page
+    // can show a meaningful "Server" column without a second fetch.
+    const instances = db.getServiceInstances(serviceId).map((inst) => {
+      const srv = db.getServer(inst.server_id);
+      return { ...inst, server_name: srv?.name ?? `srv#${inst.server_id}` };
+    });
     const links = db.getServiceLinks(serviceId);
     return Response.json({
       ...service,
@@ -163,6 +165,7 @@ export async function handleServiceDeployJobPoll(request: Request, jobId: number
 
     return Response.json({
       status: fresh.status,
+      service_name: fresh.service_name,
       events,
       last_seq: lastSeq,
       result,
@@ -214,23 +217,6 @@ export async function handleUnpauseService(request: Request, serviceId: number):
   }
 }
 
-// --- Scale ---
-
-export async function handleScaleService(request: Request, serviceId: number): Promise<Response> {
-  try {
-    await requirePermission(request, "scaling.manage");
-    const body = await request.json();
-    const { instances } = body;
-    if (typeof instances !== "number" || instances < 1) {
-      return Response.json({ ok: false, error: "instances must be >= 1" }, { status: 400, headers: corsHeaders });
-    }
-    const result = await scaleService(serviceId, instances);
-    return Response.json(result, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
 // --- Logs ---
 
 export async function handleGetServiceLogs(request: Request, serviceId: number): Promise<Response> {
@@ -271,7 +257,6 @@ export async function handleLinkService(request: Request, serviceId: number, app
 
     // Parse credentials
     const credentials = JSON.parse(service.credentials || "{}");
-    const serviceEnv = JSON.parse(service.env_vars || "{}");
 
     // Inject connection env vars into the app
     const appEnv = JSON.parse(app.env_vars || "{}");
@@ -281,21 +266,6 @@ export async function handleLinkService(request: Request, serviceId: number, app
     if (credentials.username) appEnv[`${envPrefix}_USER`] = credentials.username;
     if (credentials.password) appEnv[`${envPrefix}_PASSWORD`] = credentials.password;
     if (credentials.database) appEnv[`${envPrefix}_NAME`] = credentials.database;
-
-    // Add replica URLs if replicas exist. Use the service host's private
-    // IPv4 so apps reach read replicas over the shared Hetzner private
-    // network, the same path the primary URL uses.
-    const replicas = db.getReplicaInstances(serviceId);
-    if (replicas.length > 0) {
-      const replicaUrls = replicas.map((r) => {
-        const server = db.getServer(r.server_id);
-        if (!server || !server.private_ipv4) return "";
-        return buildConnectionUrl(catalog, serviceEnv, server.private_ipv4, r.host_port);
-      }).filter(Boolean);
-      if (replicaUrls.length > 0) {
-        appEnv[`${envPrefix}_REPLICA_URLS`] = replicaUrls.join(",");
-      }
-    }
 
     db.updateAppEnvVars(appId, JSON.stringify(appEnv));
 

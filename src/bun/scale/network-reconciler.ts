@@ -68,10 +68,8 @@ export async function reconcileNetwork(): Promise<void> {
  *   - `<svc>.svc.ocd.internal`  → service host's private_ipv4 (direct)
  *
  * Idempotent — the block is delimited by BEGIN/END markers so repeated
- * runs just overwrite the same region. Services are resolved to their
- * primary instance's host; multi-instance services still resolve to the
- * primary and apps read replica URLs via `DATABASE_REPLICA_URLS`
- * (populated with raw private IPs by the link handler).
+ * runs just overwrite the same region. Services resolve to their single
+ * container's host (services are one-instance only).
  *
  * These hosts entries are for host-level use (panel SSH, debugging,
  * container runs that opt-in via `--add-host`). App/service containers
@@ -89,10 +87,9 @@ export async function syncInternalHosts(): Promise<void> {
     lines.push(`${panelServer.private_ipv4} ${app.name}.ocd.internal`);
   }
   for (const service of db.getServices()) {
-    const instances = db.getServiceInstances(service.id);
-    const primary = instances.find((i) => i.role === "primary") ?? instances[0];
-    if (!primary) continue;
-    const host = db.getServer(primary.server_id);
+    const instance = db.getServiceInstances(service.id)[0];
+    if (!instance) continue;
+    const host = db.getServer(instance.server_id);
     if (!host || !host.private_ipv4) continue;
     lines.push(`${host.private_ipv4} ${service.name}.svc.ocd.internal`);
   }

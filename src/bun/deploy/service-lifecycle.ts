@@ -128,24 +128,16 @@ export async function restartService(serviceId: number): Promise<{ ok: boolean; 
     const instances = db.getServiceInstances(serviceId);
     if (instances.length === 0) throw new Error("Service has no instances");
 
-    // Restart primary first, then replicas
-    const sorted = [...instances].sort((a, b) =>
-      a.role === "primary" ? -1 : b.role === "primary" ? 1 : 0
-    );
-
     let allHealthy = true;
-    for (const instance of sorted) {
+    for (const instance of instances) {
       const server = db.getServer(instance.server_id);
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
       await restartContainer(server.ipv4, instance.container_name, hostKey);
 
-      const healthCmd = instance.role === "replica" && catalog.replication.replicaHealthCmd
-        ? catalog.replication.replicaHealthCmd
-        : catalog.healthCmd;
       const health = await serviceHealthCheck(
-        server.ipv4, instance.container_name, healthCmd, 5, hostKey
+        server.ipv4, instance.container_name, catalog.healthCmd, 5, hostKey
       );
       db.updateServiceInstanceStatus(instance.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
@@ -202,11 +194,8 @@ export async function unpauseService(serviceId: number): Promise<{ ok: boolean; 
 
       await unpauseContainer(server.ipv4, instance.container_name, hostKey);
 
-      const healthCmd = instance.role === "replica" && catalog.replication.replicaHealthCmd
-        ? catalog.replication.replicaHealthCmd
-        : catalog.healthCmd;
       const health = await serviceHealthCheck(
-        server.ipv4, instance.container_name, healthCmd, 5, hostKey
+        server.ipv4, instance.container_name, catalog.healthCmd, 5, hostKey
       );
       db.updateServiceInstanceStatus(instance.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;

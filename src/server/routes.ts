@@ -78,7 +78,6 @@ import {
   handleRestartService,
   handlePauseService,
   handleUnpauseService,
-  handleScaleService,
   handleGetServiceLogs,
   handleLinkService,
   handleUnlinkService,
@@ -280,7 +279,6 @@ export const apiRoutes = {
   "/api/services/:id/restart": { POST: (req: Request) => handleRestartService(req, serviceIdFrom(req)) },
   "/api/services/:id/pause": { POST: (req: Request) => handlePauseService(req, serviceIdFrom(req)) },
   "/api/services/:id/unpause": { POST: (req: Request) => handleUnpauseService(req, serviceIdFrom(req)) },
-  "/api/services/:id/scale": { POST: (req: Request) => handleScaleService(req, serviceIdFrom(req)) },
   "/api/services/:id/logs": { GET: (req: Request) => handleGetServiceLogs(req, serviceIdFrom(req)) },
   "/api/services/:id/link/:appId": {
     POST: (req: Request) => {

@@ -77,6 +77,9 @@ export type ServiceInstance = {
   container_name: string;
   role: string;
   status: string;
+  server_id: number;
+  server_name?: string;
+  host_port: number;
   cpu_percent?: number;
   memory_percent?: number;
 };
@@ -93,7 +96,6 @@ export type ServiceData = {
   service_type: string;
   version: string;
   status: string;
-  instance_count: number;
   instances?: ServiceInstance[];
   linked_apps: LinkedApp[];
   credentials?: {

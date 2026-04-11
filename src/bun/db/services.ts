@@ -94,10 +94,6 @@ export function updateServiceCredentials(id: number, credentials: string): void 
   db.query("UPDATE services SET credentials = ? WHERE id = ?").run(credentials, id);
 }
 
-export function updateServiceDesiredInstances(id: number, count: number): void {
-  db.query("UPDATE services SET desired_instances = ? WHERE id = ?").run(count, id);
-}
-
 export function deleteService(id: number): void {
   db.query("DELETE FROM services WHERE id = ?").run(id);
 }
@@ -142,12 +138,6 @@ export function getPrimaryInstance(serviceId: number): ServiceInstanceRow | null
   return db
     .query("SELECT * FROM service_instances WHERE service_id = ? AND role = 'primary'")
     .get(serviceId) as ServiceInstanceRow | null;
-}
-
-export function getReplicaInstances(serviceId: number): ServiceInstanceRow[] {
-  return db
-    .query("SELECT * FROM service_instances WHERE service_id = ? AND role = 'replica' ORDER BY created_at ASC")
-    .all(serviceId) as ServiceInstanceRow[];
 }
 
 export function getAllServiceInstances(): ServiceInstanceRow[] {

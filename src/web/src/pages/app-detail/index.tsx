@@ -38,6 +38,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [tail, setTail] = useState(100);
+  const [selectedReplicaId, setSelectedReplicaId] = useState<number | null>(null);
   const [webhookForm, setWebhookForm] = useState<{ branch: string; path: string }>({ branch: "main", path: "" });
 
   const load = async () => {
@@ -58,7 +59,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
   const loadLogs = async () => {
     try {
-      const res = await get(`/api/apps/${appId}/logs?tail=${tail}`);
+      const qs = `tail=${tail}${selectedReplicaId != null ? `&replica_id=${selectedReplicaId}` : ""}`;
+      const res = await get(`/api/apps/${appId}/logs?${qs}`);
       setLogs(res.logs || res.error || "No logs available");
     } catch (err: any) {
       setLogs(err.message);
@@ -105,7 +107,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   }, [tab, app]);
 
   useEffect(() => {
-    if (tab === "logs") loadLogs();
+    if (tab === "logs") { loadReplicas(); loadLogs(); }
     if (tab === "deployments") loadDeployments();
     if (tab === "overview" || tab === "scaling") loadReplicas();
     if (tab === "settings" && app) {
@@ -120,6 +122,10 @@ export function AppDetailPage({ appId }: { appId: number }) {
       }
     }
   }, [tab, app]);
+
+  useEffect(() => {
+    if (tab === "logs" && selectedReplicaId != null) loadLogs();
+  }, [selectedReplicaId]);
 
   const action = async (name: string, fn: () => Promise<unknown>) => {
     setActionLoading(name);
@@ -244,6 +250,9 @@ export function AppDetailPage({ appId }: { appId: number }) {
           tail={tail}
           setTail={setTail}
           loadLogs={loadLogs}
+          replicas={replicas}
+          selectedReplicaId={selectedReplicaId}
+          setSelectedReplicaId={setSelectedReplicaId}
         />
       )}
 

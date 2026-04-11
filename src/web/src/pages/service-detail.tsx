@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { get, post, del } from "../api/client.ts";
-import { Card, StatusBadge, Btn, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
+import { Card, StatusBadge, Btn, Spinner, showToast, confirm, CopyButton, Table } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import {
-  Database, RotateCcw, Pause, Play, Trash2, Plus, Minus,
+  RotateCcw, Pause, Play, Trash2, Server as ServerIcon,
   Link2, Unlink, ScrollText, ArrowLeft, RefreshCw, Terminal,
 } from "lucide-react";
 import type { ServiceData, AppData, ServiceInstance, LinkedApp } from "../types.ts";
@@ -18,7 +18,6 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const [linkPrefix, setLinkPrefix] = useState("DATABASE");
   const [tab, setTab] = useState<"overview" | "logs">("overview");
   const [logs, setLogs] = useState("");
-  const [logInstanceId, setLogInstanceId] = useState("");
   const [tail, setTail] = useState(100);
 
   const load = async () => {
@@ -38,8 +37,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
 
   const loadLogs = async () => {
     try {
-      const params = logInstanceId ? `?instance_id=${logInstanceId}` : "";
-      const data = await get(`/api/services/${serviceId}/logs${params}`);
+      const data = await get(`/api/services/${serviceId}/logs?tail=${tail}`);
       setLogs(data.logs || "No logs available");
     } catch (err: any) {
       setLogs(err.message);
@@ -47,7 +45,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   };
 
   useEffect(() => { load(); }, [serviceId]);
-  useEffect(() => { if (tab === "logs") loadLogs(); }, [tab, logInstanceId]);
+  useEffect(() => { if (tab === "logs") loadLogs(); }, [tab, tail]);
 
   const action = async (act: string, label: string) => {
     setActionLoading(act);
@@ -60,22 +58,6 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
       }
       await post(`/api/services/${serviceId}/${act}`);
       showToast(`${label} successful`, "success");
-      load();
-    } catch (err: any) {
-      showToast(err.message, "error");
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const scale = async (delta: number) => {
-    const current = service?.instances?.length || 1;
-    const target = current + delta;
-    if (target < 1) return;
-    setActionLoading("scale");
-    try {
-      await post(`/api/services/${serviceId}/scale`, { instances: target });
-      showToast(`Scaled to ${target} instances`, "success");
       load();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -252,55 +234,43 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
             </div>
           </Card>
 
-          {/* Instances */}
-          <Card>
-            <div className="px-4 py-2 border-b-2 border-fg bg-alt flex items-center justify-between">
-              <span className="font-mono text-[10px] font-bold text-fg uppercase">
-                Instances ({instances.length})
-              </span>
-              <PermissionGate permission="scaling.manage">
-                <div className="flex items-center gap-1">
-                  <Btn size="xs" variant="ghost" loading={actionLoading === "scale"} onClick={() => scale(1)}>
-                    <Plus size={12} /> Add Replica
-                  </Btn>
-                  {instances.length > 1 && (
-                    <Btn size="xs" variant="ghost" loading={actionLoading === "scale"} onClick={() => scale(-1)}>
-                      <Minus size={12} />
-                    </Btn>
-                  )}
-                </div>
-              </PermissionGate>
+          {/* Container */}
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <ServerIcon size={14} className="text-fg" />
+                <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Container</h3>
+              </div>
+              <Btn size="xs" variant="ghost" onClick={load}>
+                <RefreshCw size={12} /> Refresh
+              </Btn>
             </div>
-            <div className="divide-y divide-fg/10">
-              {instances.map((inst: ServiceInstance) => (
-                <div key={inst.id} className="px-4 py-2 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-[10px] font-bold text-fg">{inst.container_name}</span>
-                    <span className={`font-mono text-[8px] font-bold uppercase border px-1 py-0.5 ${
-                      inst.role === "primary"
-                        ? "border-accent-blue text-accent-blue"
-                        : "border-muted text-muted"
-                    }`}>
-                      {inst.role}
-                    </span>
-                    <StatusBadge status={inst.status} />
-                    <span className="font-mono text-[9px] text-muted">
-                      CPU {inst.cpu_percent?.toFixed(1)}% | MEM {inst.memory_percent?.toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Btn size="xs" variant="ghost" onClick={() => { setLogInstanceId(String(inst.id)); setTab("logs"); }}>
-                      <ScrollText size={12} />
-                    </Btn>
-                    <PermissionGate permission="terminal.access">
-                      <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/service-instance/${inst.id}`; }}>
-                        <Terminal size={12} /> Shell
-                      </Btn>
-                    </PermissionGate>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {instances.length === 0 ? (
+              <p className="text-[10px] text-muted font-mono py-4 text-center uppercase tracking-wider">No container running</p>
+            ) : (
+              <Table headers={["ID", "Container", "Server", "Port", "Status", "CPU", "Memory", ""]}>
+                {instances.map((inst: ServiceInstance) => (
+                  <tr key={inst.id}>
+                    <td className="py-2 px-3 text-fg font-bold">#{inst.id}</td>
+                    <td className="py-2 px-3 text-fg-dim">{inst.container_name}</td>
+                    <td className="py-2 px-3 text-[9px] text-fg-dim">
+                      {inst.server_name || `srv#${inst.server_id}`}
+                    </td>
+                    <td className="py-2 px-3 text-fg-dim">{inst.host_port}</td>
+                    <td className="py-2 px-3"><StatusBadge status={inst.status} /></td>
+                    <td className="py-2 px-3 text-fg-dim">{inst.cpu_percent?.toFixed(1)}%</td>
+                    <td className="py-2 px-3 text-fg-dim">{inst.memory_percent?.toFixed(1)}%</td>
+                    <td className="py-2 px-3">
+                      <PermissionGate permission="terminal.access">
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/service-instance/${inst.id}`; }}>
+                          <Terminal size={12} /> Shell
+                        </Btn>
+                      </PermissionGate>
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            )}
           </Card>
 
           {/* Linked Apps */}
@@ -381,22 +351,6 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
               <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Container Logs</h3>
             </div>
             <div className="flex items-center gap-2">
-              {instances.length > 1 && (
-                <div className="w-40">
-                  <NeoSelect
-                    value={logInstanceId}
-                    onChange={setLogInstanceId}
-                    options={[
-                      { value: "", label: "Primary" },
-                      ...instances.map((inst: ServiceInstance) => ({
-                        value: String(inst.id),
-                        label: `${inst.container_name} (${inst.role})`,
-                      })),
-                    ]}
-                    compact
-                  />
-                </div>
-              )}
               <div className="w-24">
                 <NeoSelect
                   value={String(tail)}

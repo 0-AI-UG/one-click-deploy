@@ -302,11 +302,6 @@ export async function deployService(
     // Step 4: Pull image and run container
     onProgress("deploy", `Pulling ${image}...`);
 
-    // Determine if we need replication-ready config for primary
-    const primaryExtraCmd = catalog.replication.supported
-      ? catalog.replication.primaryExtraCmd
-      : undefined;
-
     await pullAndRunService(
       serverIp,
       {
@@ -317,7 +312,6 @@ export async function deployService(
         envVars,
         volumeMount,
         bindAddress,
-        cmd: primaryExtraCmd,
       },
       serverHostKey || undefined
     );
