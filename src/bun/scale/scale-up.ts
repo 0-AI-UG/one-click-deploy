@@ -50,18 +50,20 @@ export async function scaleUp(
     // (which would call GET /load_balancers/ and crash on lb.public_net).
     app = { ...app, lb_provider_id: lb.providerId };
 
-    // Create managed TLS certificate (only for real domains, not nip.io)
+    // Create managed TLS certificate (only for real domains, not nip.io).
+    // Fail loud if this errors: silently dropping HTTPS for a custom-domain
+    // app produces an LB with an HTTP-only listener, and the user's browser
+    // hits "connection refused" on :443 the moment DNS flips. The
+    // createCertificate call is now idempotent (handles 409 from prior
+    // attempts), so any error reaching here is a real failure worth aborting.
     let certId: number | undefined;
     if (app.domain && !app.domain.endsWith(".nip.io")) {
       emit("scale", "Creating TLS certificate...");
-      try {
-        const cert = await compute.loadBalancers!.createCertificate(app.name, app.domain);
-        certId = Number(cert.providerId);
-        // Wait a moment for cert to register
-        await Bun.sleep(2000);
-      } catch (err) {
-        log("scale", `Certificate creation failed (will use HTTP): ${err}`);
-      }
+      const cert = await compute.loadBalancers!.createCertificate(app.name, app.domain);
+      certId = Number(cert.providerId);
+      // Brief settle so Hetzner has the cert indexed before we reference it
+      // from the service definition.
+      await Bun.sleep(2000);
     }
 
     // Add LB service — uses HTTPS if cert available, HTTP otherwise
@@ -145,6 +147,14 @@ export async function scaleUp(
     let targetServer = await pickTargetServer(app, settings, emit, targetServerId);
     const targetHostKey = targetServer.ssh_host_key || undefined;
 
+    // Every replica of the app must listen on the same host port: the LB
+    // service has a single `destination_port`, and that was set to
+    // primaryHostPort when the LB was created. If we let
+    // nextReplicaHostPort() pick a fresh port on the new server (which would
+    // return BASE_PORT=10000 on a brand-new server), the LB would forward to
+    // a port nothing is bound to and the target stays unhealthy forever.
+    const hostPort = primaryHostPort;
+
     // Transfer image to target server
     emit("scale", `Transferring image to ${targetServer.name}...`);
     const imageName = `${app.name}:latest`;
@@ -157,7 +167,7 @@ export async function scaleUp(
           name: app.name,
           gitRepo: app.git_repo,
           port: app.container_port,
-          hostPort: db.nextReplicaHostPort(targetServer.id),
+          hostPort,
           envVars: JSON.parse(app.env_vars || "{}"),
           volumeMount: app.volume_mount || undefined,
           composeFile: app.compose_file,
@@ -176,8 +186,6 @@ export async function scaleUp(
       );
     }
 
-    // Allocate host port and start container
-    const hostPort = db.nextReplicaHostPort(targetServer.id);
     const containerName = `${app.name}-r${replicaNum}`;
 
     if (app.deploy_mode !== "compose") {

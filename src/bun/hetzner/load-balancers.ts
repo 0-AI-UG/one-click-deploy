@@ -164,17 +164,40 @@ export async function createManagedCertificate(
   appName: string,
   domain: string
 ): Promise<{ id: number }> {
+  const certName = `ocd-cert-${appName}`;
   log("lb", `Creating managed certificate for ${domain}`);
-  const data = await hetznerApi("/certificates", {
-    method: "POST",
-    body: JSON.stringify({
-      name: `ocd-cert-${appName}`,
-      type: "managed",
-      domain_names: [domain],
-    }),
-  }) as unknown as WithCertificate;
-  log("lb", `Certificate created: id=${data.certificate.id}`);
-  return { id: data.certificate.id };
+  try {
+    const data = await hetznerApi("/certificates", {
+      method: "POST",
+      body: JSON.stringify({
+        name: certName,
+        type: "managed",
+        domain_names: [domain],
+      }),
+    }) as unknown as WithCertificate;
+    log("lb", `Certificate created: id=${data.certificate.id}`);
+    return { id: data.certificate.id };
+  } catch (err) {
+    // Hetzner returns 409 ("certificate with exact set of domains already
+    // exists" or "name already used") when a previous scale-up attempt
+    // already created this cert. Look it up and reuse it instead of falling
+    // through to a no-HTTPS LB. Without this, retried scale-ups silently
+    // produce HTTP-only LBs and the domain becomes unreachable.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("already exists") && !msg.includes("already used")) {
+      throw err;
+    }
+    log("lb", `Certificate already exists, looking up by domain ${domain}`);
+    const list = await hetznerApi(`/certificates`) as unknown as { certificates: Array<{ id: number; name: string; domain_names: string[] }> };
+    const existing = (list.certificates ?? []).find(
+      (c) => c.domain_names?.includes(domain) || c.name === certName,
+    );
+    if (!existing) {
+      throw new Error(`Hetzner reported cert exists for ${domain} but lookup returned none`);
+    }
+    log("lb", `Reusing existing certificate id=${existing.id} (${existing.name})`);
+    return { id: existing.id };
+  }
 }
 
 export async function deleteCertificate(certId: string): Promise<void> {
