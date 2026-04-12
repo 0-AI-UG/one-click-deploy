@@ -1,5 +1,5 @@
 import * as db from "./db.ts";
-import type { AppRow, ReplicaRow, ServiceRow, ServiceInstanceRow } from "./db.ts";
+import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } from "./db.ts";
 import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck } from "./remote/index.ts";
 import { evaluateAutoScale } from "./scale.ts";
 import { getCatalogEntry } from "./services/catalog.ts";
@@ -18,44 +18,91 @@ const UNHEALTHY_RESTART_THRESHOLD = 2;
 let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 
-async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
-  // Skip replicas whose containers are intentionally not running.
-  // - stopped: light-sleep anchors (container off by design)
-  // - paused/sleeping/waking: user-paused or scale-to-zero states
-  // Health-checking these would overwrite their status with "unhealthy".
-  if (replica.status === "stopped" || replica.status === "paused" || replica.status === "sleeping" || replica.status === "waking") return;
-  const server = db.getServer(replica.server_id);
-  if (!server) return;
-  const hostKey = server.ssh_host_key || undefined;
+// ---------------------------------------------------------------------------
+// Per-server batched metrics collection
+// ---------------------------------------------------------------------------
 
-  // Metrics
-  try {
-    const result = await sshExec(
-      server.ipv4,
-      `su - deploy -c "docker stats --no-stream --format '{{json .}}' ${replica.container_name} 2>/dev/null"`,
-      hostKey
-    );
-    if (result.exitCode === 0 && result.stdout.trim()) {
-      const stats = JSON.parse(result.stdout.trim());
+/** Parse docker stats JSON lines into a map of container_name -> {cpu, mem} */
+function parseDockerStats(stdout: string): Map<string, { cpu: number; mem: number }> {
+  const result = new Map<string, { cpu: number; mem: number }>();
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith("{")) continue;
+    try {
+      const stats = JSON.parse(trimmed);
+      const name = stats.Name as string;
+      if (!name) continue;
       const cpu = parseFloat(stats.CPUPerc?.replace("%", "") || "0");
       const mem = parseFloat(stats.MemPerc?.replace("%", "") || "0");
-      db.updateReplicaMetrics(replica.id, cpu, mem);
-      db.insertMetricSample({
-        replica_id: replica.id,
-        app_id: replica.app_id,
-        cpu_percent: cpu,
-        memory_percent: mem,
-      });
+      result.set(name, { cpu, mem });
+    } catch {
+      // skip malformed lines
     }
-  } catch (err) {
-    log("metrics", `replica ${replica.container_name}: ${err}`);
   }
+  return result;
+}
 
-  // Health — probe the container via the server's private IPv4 (same
-  // address the replica is published on). A server still waiting on the
-  // network reconciler to attach + assign a private IP is skipped; the
-  // next tick picks it up once the backfill lands.
+/** Parse server-level CPU and memory from top + /proc/meminfo output */
+function parseServerMetrics(stdout: string): { cpu: number; mem: number } | null {
+  const lines = stdout.split("\n");
+  const cpuLine = lines.find((l) => l.includes("Cpu"));
+  let cpuPercent: number | null = null;
+  if (cpuLine) {
+    const idleMatch = cpuLine.match(/([\d.]+)\s*id/);
+    if (idleMatch) cpuPercent = Math.round((100 - parseFloat(idleMatch[1])) * 10) / 10;
+  }
+  let memTotal = 0, memAvailable = 0;
+  for (const line of lines) {
+    const totalMatch = line.match(/MemTotal:\s+(\d+)/);
+    const availMatch = line.match(/MemAvailable:\s+(\d+)/);
+    if (totalMatch) memTotal = parseInt(totalMatch[1]);
+    if (availMatch) memAvailable = parseInt(availMatch[1]);
+  }
+  const memPercent = memTotal > 0 ? Math.round((1 - memAvailable / memTotal) * 1000) / 10 : null;
+  if (cpuPercent != null && memPercent != null) return { cpu: cpuPercent, mem: memPercent };
+  return null;
+}
+
+/**
+ * Single SSH call per server: collect docker stats for all containers + server
+ * CPU/RAM in one shot.
+ */
+async function collectServerMetrics(
+  server: ServerRow,
+): Promise<{ containerStats: Map<string, { cpu: number; mem: number }>; serverMetrics: { cpu: number; mem: number } | null }> {
+  const hostKey = server.ssh_host_key || undefined;
+  const cmd = [
+    `su - deploy -c "docker stats --no-stream --format '{{json .}}' 2>/dev/null"`,
+    `echo '---SEPARATOR---'`,
+    `top -bn1 | grep '%Cpu' | head -1`,
+    `grep -E '^(MemTotal|MemAvailable):' /proc/meminfo`,
+  ].join(" && ");
+
+  try {
+    const result = await sshExec(server.ipv4, cmd, hostKey);
+    if (result.exitCode !== 0) return { containerStats: new Map(), serverMetrics: null };
+
+    const [dockerPart, metricsPart] = result.stdout.split("---SEPARATOR---");
+    const containerStats = parseDockerStats(dockerPart || "");
+    const serverMetrics = parseServerMetrics(metricsPart || "");
+    return { containerStats, serverMetrics };
+  } catch (err) {
+    log("metrics", `server ${server.ipv4}: ${err}`);
+    return { containerStats: new Map(), serverMetrics: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Health checks (run in parallel per server)
+// ---------------------------------------------------------------------------
+
+async function checkReplicaHealth(
+  replica: ReplicaRow,
+  app: AppRow,
+  server: ServerRow,
+): Promise<void> {
   if (!server.private_ipv4) return;
+  const hostKey = server.ssh_host_key || undefined;
   const bindHost = replicaBindHost(server);
   try {
     const check = app.deploy_mode === "compose"
@@ -96,56 +143,18 @@ async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
   }
 }
 
-async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<void> {
-  // The panel owns a single Caddy ingress now. Re-sync every tracked app on
-  // every tick so the upstream pool reflects the current replica set: a
-  // replica flipping running ↔ unhealthy gets re-added/removed, a gc'd
-  // replica's dial entry disappears, and a restarted Caddy gets its routes
-  // back. syncAppCaddy is idempotent and each call is ~4 curls, so the cost
-  // is bounded by the app count.
-  for (const [appId] of byApp) {
-    const app = db.getApp(appId);
-    if (!app || !app.domain) continue;
-    if (app.status !== "running" && app.status !== "unhealthy") continue;
-    try {
-      await syncAppCaddy(app.id);
-    } catch (err) {
-      log("caddy", `Panel route sync failed for ${app.name}: ${err}`);
-    }
-  }
-}
-
-async function collectServiceInstance(instance: ServiceInstanceRow, service: ServiceRow): Promise<void> {
-  // Skip instances whose containers are intentionally not running.
-  if (instance.status === "paused" || instance.status === "stopped") return;
-  const server = db.getServer(instance.server_id);
-  if (!server) return;
+async function checkServiceInstanceHealth(
+  instance: ServiceInstanceRow,
+  service: ServiceRow,
+  server: ServerRow,
+): Promise<void> {
   const hostKey = server.ssh_host_key || undefined;
-
   const catalog = getCatalogEntry(service.service_type);
   if (!catalog) return;
 
-  // Metrics (same as app replicas — docker stats works for any container)
-  try {
-    const result = await sshExec(
-      server.ipv4,
-      `su - deploy -c "docker stats --no-stream --format '{{json .}}' ${instance.container_name} 2>/dev/null"`,
-      hostKey
-    );
-    if (result.exitCode === 0 && result.stdout.trim()) {
-      const stats = JSON.parse(result.stdout.trim());
-      const cpu = parseFloat(stats.CPUPerc?.replace("%", "") || "0");
-      const mem = parseFloat(stats.MemPerc?.replace("%", "") || "0");
-      db.updateServiceInstanceMetrics(instance.id, cpu, mem);
-    }
-  } catch (err) {
-    log("metrics", `service instance ${instance.container_name}: ${err}`);
-  }
-
-  // Health check via docker exec
   try {
     const check = await serviceHealthCheck(
-      server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey
+      server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey,
     );
 
     if (check.healthy) {
@@ -171,6 +180,82 @@ async function collectServiceInstance(instance: ServiceInstanceRow, service: Ser
   }
 }
 
+// ---------------------------------------------------------------------------
+// Caddy route sync
+// ---------------------------------------------------------------------------
+
+async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<void> {
+  for (const [appId] of byApp) {
+    const app = db.getApp(appId);
+    if (!app || !app.domain) continue;
+    if (app.status !== "running" && app.status !== "unhealthy") continue;
+    try {
+      await syncAppCaddy(app.id);
+    } catch (err) {
+      log("caddy", `Panel route sync failed for ${app.name}: ${err}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main tick
+// ---------------------------------------------------------------------------
+
+interface ServerWorkItem {
+  server: ServerRow;
+  replicas: { replica: ReplicaRow; app: AppRow }[];
+  serviceInstances: { instance: ServiceInstanceRow; service: ServiceRow }[];
+}
+
+async function processServer(work: ServerWorkItem): Promise<void> {
+  const { server } = work;
+
+  // --- Phase 1: One SSH call for all docker stats + server metrics ---
+  const { containerStats, serverMetrics } = await collectServerMetrics(server);
+
+  // Apply container metrics to replicas
+  for (const { replica } of work.replicas) {
+    const stats = containerStats.get(replica.container_name);
+    if (stats) {
+      db.updateReplicaMetrics(replica.id, stats.cpu, stats.mem);
+      db.insertMetricSample({
+        replica_id: replica.id,
+        app_id: replica.app_id,
+        cpu_percent: stats.cpu,
+        memory_percent: stats.mem,
+      });
+    }
+  }
+
+  // Apply container metrics to service instances
+  for (const { instance } of work.serviceInstances) {
+    const stats = containerStats.get(instance.container_name);
+    if (stats) {
+      db.updateServiceInstanceMetrics(instance.id, stats.cpu, stats.mem);
+    }
+  }
+
+  // Apply server-level metrics
+  if (serverMetrics) {
+    db.insertServerMetricSample(server.id, serverMetrics.cpu, serverMetrics.mem);
+  }
+
+  // --- Phase 2: Health checks in parallel for all containers on this server ---
+  const healthChecks: Promise<void>[] = [];
+
+  for (const { replica, app } of work.replicas) {
+    if (replica.status === "stopped" || replica.status === "paused" || replica.status === "sleeping" || replica.status === "waking") continue;
+    healthChecks.push(checkReplicaHealth(replica, app, server));
+  }
+
+  for (const { instance, service } of work.serviceInstances) {
+    if (instance.status === "paused" || instance.status === "stopped") continue;
+    healthChecks.push(checkServiceInstanceHealth(instance, service, server));
+  }
+
+  await Promise.all(healthChecks);
+}
+
 async function tick(): Promise<void> {
   if (running) {
     log("tick", "skip (previous tick still running)");
@@ -179,28 +264,66 @@ async function tick(): Promise<void> {
   running = true;
   const start = Date.now();
   try {
-    // --- App replicas ---
+    // --- Gather all work, grouped by server ---
     const replicas = db.getAllReplicas();
     const byApp = new Map<number, ReplicaRow[]>();
-    for (const r of replicas) {
-      const list = byApp.get(r.app_id) ?? [];
-      list.push(r);
-      byApp.set(r.app_id, list);
+    const serverWork = new Map<number, ServerWorkItem>();
+
+    const ensureServer = (serverId: number): ServerWorkItem | null => {
+      let item = serverWork.get(serverId);
+      if (item) return item;
+      const server = db.getServer(serverId);
+      if (!server) return null;
+      item = { server, replicas: [], serviceInstances: [] };
+      serverWork.set(serverId, item);
+      return item;
+    };
+
+    for (const replica of replicas) {
+      // Build byApp index (needed for status propagation + caddy)
+      const list = byApp.get(replica.app_id) ?? [];
+      list.push(replica);
+      byApp.set(replica.app_id, list);
+
+      // Skip non-live replicas for metrics/health (but still include in byApp)
+      if (replica.status === "stopped" || replica.status === "paused" || replica.status === "sleeping" || replica.status === "waking") continue;
+
+      const app = db.getApp(replica.app_id);
+      if (!app) continue;
+      const work = ensureServer(replica.server_id);
+      if (work) work.replicas.push({ replica, app });
     }
 
+    const services = db.getServices();
+    let serviceCount = 0;
+    for (const service of services) {
+      if (service.status === "paused" || service.status === "deploying") continue;
+      const instances = db.getServiceInstances(service.id);
+      for (const instance of instances) {
+        if (instance.status === "paused" || instance.status === "stopped") continue;
+        const work = ensureServer(instance.server_id);
+        if (work) work.serviceInstances.push({ instance, service });
+      }
+      serviceCount++;
+    }
+
+    // Also ensure servers with no containers still get server-level metrics
+    const allServers = db.getServers();
+    for (const server of allServers) {
+      if (server.ipv4) ensureServer(server.id);
+    }
+
+    // --- Process all servers in parallel ---
+    await Promise.all(
+      Array.from(serverWork.values()).map((work) => processServer(work)),
+    );
+
+    // --- Status propagation (app + service level) ---
     for (const [appId, list] of byApp) {
       const app = db.getApp(appId);
       if (!app) continue;
 
-      for (const replica of list) {
-        await collectReplica(replica, app);
-      }
-
-      // Propagate replica health to app status
-      // Only touch apps that are in a "live" state (running/unhealthy), not deploying/paused
       if (app.status === "running" || app.status === "unhealthy") {
-        // Ignore stopped replicas (light-sleep anchors) when computing app
-        // health — they are intentionally off.
         const freshReplicas = list
           .map((r) => db.getReplica(r.id))
           .filter((r): r is NonNullable<typeof r> => r !== null && r.status !== "stopped");
@@ -221,32 +344,10 @@ async function tick(): Promise<void> {
       }
     }
 
-    // Drag every server onto the shared private network + keep
-    // `<app>.ocd.internal` lines in /etc/hosts in sync. Runs every tick but
-    // is a no-op once servers are attached and hosts files are current.
-    try {
-      await reconcileNetwork();
-    } catch (err) {
-      log("network", `reconcile failed: ${err}`);
-    }
-
-    // Ensure Caddy routes exist on the panel for all live apps (restores
-    // routes lost by Caddy restarts).
-    await reconcileCaddyRoutes(byApp);
-
-    // --- Infrastructure services ---
-    const services = db.getServices();
-    let serviceCount = 0;
     for (const service of services) {
       if (service.status === "paused" || service.status === "deploying") continue;
-
-      const instances = db.getServiceInstances(service.id);
-      for (const instance of instances) {
-        await collectServiceInstance(instance, service);
-      }
-
-      // Propagate instance health to service status
       if (service.status === "running" || service.status === "unhealthy") {
+        const instances = db.getServiceInstances(service.id);
         const freshInstances = instances.map((i) => db.getServiceInstance(i.id)).filter((i): i is NonNullable<typeof i> => i !== null);
         const allHealthy = freshInstances.length > 0 && freshInstances.every((i) => i.status === "running");
         const newStatus = allHealthy ? "running" : "unhealthy";
@@ -255,50 +356,22 @@ async function tick(): Promise<void> {
           db.updateServiceStatus(service.id, newStatus);
         }
       }
-      serviceCount++;
     }
 
-    // --- Server-level metrics (CPU/RAM via SSH) ---
-    const allServers = db.getServers();
-    await Promise.all(
-      allServers.map(async (s) => {
-        if (!s.ipv4) return;
-        try {
-          const hostKey = s.ssh_host_key || undefined;
-          const result = await sshExec(
-            s.ipv4,
-            `top -bn1 | grep '%Cpu' | head -1 && grep -E '^(MemTotal|MemAvailable):' /proc/meminfo`,
-            hostKey,
-          );
-          if (result.exitCode === 0 && result.stdout.trim()) {
-            const lines = result.stdout.trim().split("\n");
-            const cpuLine = lines.find((l: string) => l.includes("Cpu"));
-            let cpuPercent: number | null = null;
-            if (cpuLine) {
-              const idleMatch = cpuLine.match(/([\d.]+)\s*id/);
-              if (idleMatch) cpuPercent = Math.round((100 - parseFloat(idleMatch[1])) * 10) / 10;
-            }
-            let memTotal = 0, memAvailable = 0;
-            for (const line of lines) {
-              const totalMatch = line.match(/MemTotal:\s+(\d+)/);
-              const availMatch = line.match(/MemAvailable:\s+(\d+)/);
-              if (totalMatch) memTotal = parseInt(totalMatch[1]);
-              if (availMatch) memAvailable = parseInt(availMatch[1]);
-            }
-            const memPercent = memTotal > 0 ? Math.round((1 - memAvailable / memTotal) * 1000) / 10 : null;
-            if (cpuPercent != null && memPercent != null) {
-              db.insertServerMetricSample(s.id, cpuPercent, memPercent);
-            }
-          }
-        } catch {
-          // best-effort — skip unreachable servers
-        }
-      }),
-    );
+    // --- Network reconciliation ---
+    try {
+      await reconcileNetwork();
+    } catch (err) {
+      log("network", `reconcile failed: ${err}`);
+    }
 
+    // --- Caddy route sync ---
+    await reconcileCaddyRoutes(byApp);
+
+    // --- Cleanup ---
     db.pruneOldMetrics(METRICS_RETENTION_SEC);
     db.pruneOldServerMetrics(METRICS_RETENTION_SEC);
-    log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps, ${serviceCount} services)`);
+    log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps, ${serviceCount} services, ${serverWork.size} servers)`);
   } catch (err) {
     log("tick", `error: ${err}`);
   } finally {
