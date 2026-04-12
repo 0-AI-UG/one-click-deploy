@@ -44,11 +44,19 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
   "webhook": {
     "enabled": "boolean — enable auto-deploy on git push",
     "branch": "string — branch to watch (default: repo's default branch)",
-    "path": "string — only redeploy when files under this path prefix change"
+    "path": "string — only redeploy when files under this path prefix change",
+    "wait_for_ci": "boolean — wait for CI checks to pass before deploying (default: false)"
   },
 
   "suggested_app_name": "string — suggested app name (DNS-safe: lowercase, digits, hyphens)",
-  "replicas": "number — desired replica count (default: 1)"
+  "replicas": "number — desired replica count (default: 1)",
+  "public": "boolean — whether the app is publicly accessible (default: true)",
+  "extra_volumes": [
+    {
+      "host_path": "string — absolute path on the host machine",
+      "container_path": "string — absolute mount path inside the container"
+    }
+  ]
 }
 \`\`\`
 

@@ -159,6 +159,8 @@ export function DeployPage() {
       webhook_path: m.webhook?.path || f.webhook_path,
       webhook_wait_for_ci: m.webhook?.wait_for_ci ?? f.webhook_wait_for_ci,
       replicas: m.replicas ? String(m.replicas) : f.replicas,
+      public: m.public ?? f.public,
+      extra_volumes: m.extra_volumes ?? f.extra_volumes,
     }));
 
     if (m.env && m.env.length > 0) {

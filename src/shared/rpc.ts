@@ -176,6 +176,8 @@ export type DeployManifest = {
   webhook?: { enabled?: boolean; branch?: string; path?: string; wait_for_ci?: boolean };
   suggested_app_name?: string;
   replicas?: number;
+  public?: boolean;
+  extra_volumes?: Array<{ host_path: string; container_path: string }>;
 };
 
 export type ParsedManifest = {
