@@ -53,14 +53,18 @@ function getRpConfig(request: Request) {
 
 function checkRateLimit(request: Request): Response | null {
   const ip = getClientIP(request);
-  const { allowed, retryAfterSeconds } = authRateLimiter.check(ip);
-  if (!allowed) {
+  const { limited, retryAfterSeconds } = authRateLimiter.isLimited(ip);
+  if (limited) {
     return Response.json(
       { error: "Too many attempts. Please try again later." },
       { status: 429, headers: { ...corsHeaders, "Retry-After": String(retryAfterSeconds) } },
     );
   }
   return null;
+}
+
+function recordFailure(request: Request): void {
+  authRateLimiter.recordFailure(getClientIP(request));
 }
 
 function credentialTransports(c: db.WebAuthnCredential): AuthenticatorTransportFuture[] {
@@ -150,6 +154,7 @@ export async function handleWebAuthnRegisterVerify(request: Request): Promise<Re
     });
 
     if (!verification.verified || !verification.registrationInfo) {
+      recordFailure(request);
       return Response.json({ error: "Verification failed" }, { status: 400, headers: corsHeaders });
     }
 
@@ -258,6 +263,7 @@ export async function handleWebAuthnRegisterVerifyFromLogin(request: Request): P
     });
 
     if (!verification.verified || !verification.registrationInfo) {
+      recordFailure(request);
       return Response.json({ error: "Verification failed" }, { status: 400, headers: corsHeaders });
     }
 
@@ -354,6 +360,7 @@ export async function handleWebAuthnLoginVerify(request: Request): Promise<Respo
 
     const storedCredential = db.getWebAuthnCredentialById(body.credential.id);
     if (!storedCredential || storedCredential.user_id !== userId) {
+      recordFailure(request);
       return Response.json({ error: "Unknown credential" }, { status: 400, headers: corsHeaders });
     }
 
@@ -372,6 +379,7 @@ export async function handleWebAuthnLoginVerify(request: Request): Promise<Respo
     });
 
     if (!verification.verified) {
+      recordFailure(request);
       return Response.json({ error: "Verification failed" }, { status: 400, headers: corsHeaders });
     }
 
@@ -403,13 +411,22 @@ export async function handlePasswordResetWebAuthnOptions(request: Request): Prom
       { error: "Unable to initiate passkey verification. Check your username." },
       { status: 400, headers: corsHeaders },
     );
-    if (!body.username) return genericError;
+    if (!body.username) {
+      recordFailure(request);
+      return genericError;
+    }
 
     const user = db.getUserByUsername(body.username);
-    if (!user || !user.webauthn_enabled) return genericError;
+    if (!user || !user.webauthn_enabled) {
+      recordFailure(request);
+      return genericError;
+    }
 
     const credentials = db.getWebAuthnCredentials(user.id);
-    if (credentials.length === 0) return genericError;
+    if (credentials.length === 0) {
+      recordFailure(request);
+      return genericError;
+    }
 
     const rp = getRpConfig(request);
     const options = await generateAuthenticationOptions({
@@ -457,7 +474,10 @@ export async function handlePasswordResetWebAuthnVerify(request: Request): Promi
     }
 
     const user = db.getUserByUsername(body.username);
-    if (!user || !user.webauthn_enabled) return genericError;
+    if (!user || !user.webauthn_enabled) {
+      recordFailure(request);
+      return genericError;
+    }
 
     const challenge = getAndDeleteChallenge(user.id);
     if (!challenge) {
@@ -468,7 +488,10 @@ export async function handlePasswordResetWebAuthnVerify(request: Request): Promi
     }
 
     const storedCredential = db.getWebAuthnCredentialById(body.credential.id);
-    if (!storedCredential || storedCredential.user_id !== user.id) return genericError;
+    if (!storedCredential || storedCredential.user_id !== user.id) {
+      recordFailure(request);
+      return genericError;
+    }
 
     const rp = getRpConfig(request);
     const verification = await verifyAuthenticationResponse({
@@ -484,7 +507,10 @@ export async function handlePasswordResetWebAuthnVerify(request: Request): Promi
       },
     });
 
-    if (!verification.verified) return genericError;
+    if (!verification.verified) {
+      recordFailure(request);
+      return genericError;
+    }
 
     db.updateWebAuthnCounter(storedCredential.id, verification.authenticationInfo.newCounter);
 

@@ -8,14 +8,18 @@ import * as db from "../../bun/db.ts";
 
 function checkRateLimit(request: Request): Response | null {
   const ip = getClientIP(request);
-  const { allowed, retryAfterSeconds } = authRateLimiter.check(ip);
-  if (!allowed) {
+  const { limited, retryAfterSeconds } = authRateLimiter.isLimited(ip);
+  if (limited) {
     return Response.json(
       { error: "Too many attempts. Please try again later." },
       { status: 429, headers: { ...corsHeaders, "Retry-After": String(retryAfterSeconds) } },
     );
   }
   return null;
+}
+
+function recordFailure(request: Request): void {
+  authRateLimiter.recordFailure(getClientIP(request));
 }
 
 export async function handleLogin(request: Request): Promise<Response> {
@@ -89,6 +93,7 @@ export async function handleLogin(request: Request): Promise<Response> {
       { headers: corsHeaders },
     );
   } catch (error) {
+    if (error instanceof AuthError) recordFailure(request);
     return handleError(error);
   }
 }
@@ -129,10 +134,16 @@ export async function handlePasswordReset(request: Request): Promise<Response> {
       { error: "Unable to reset password. Check your username and 2FA code." },
       { status: 400, headers: corsHeaders },
     );
-    if (!user || !user.totp_enabled) return genericError;
+    if (!user || !user.totp_enabled) {
+      recordFailure(request);
+      return genericError;
+    }
 
     const ok = await verifyTotpOrBackupCode(user, body.totpCode);
-    if (!ok) return genericError;
+    if (!ok) {
+      recordFailure(request);
+      return genericError;
+    }
 
     const hash = await Bun.password.hash(body.newPassword, "bcrypt");
     db.updateUserPassword(user.id, hash);

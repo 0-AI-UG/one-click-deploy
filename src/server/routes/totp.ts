@@ -61,14 +61,18 @@ export function generateBackupCodes(count = 8): string[] {
 
 function checkRateLimit(request: Request): Response | null {
   const ip = getClientIP(request);
-  const { allowed, retryAfterSeconds } = authRateLimiter.check(ip);
-  if (!allowed) {
+  const { limited, retryAfterSeconds } = authRateLimiter.isLimited(ip);
+  if (limited) {
     return Response.json(
       { error: "Too many attempts. Please try again later." },
       { status: 429, headers: { ...corsHeaders, "Retry-After": String(retryAfterSeconds) } },
     );
   }
   return null;
+}
+
+function recordFailure(request: Request): void {
+  authRateLimiter.recordFailure(getClientIP(request));
 }
 
 /** POST /api/auth/totp/setup — start TOTP setup (authenticated) */
@@ -207,6 +211,7 @@ export async function handleTotpLogin(request: Request): Promise<Response> {
       }
     }
 
+    recordFailure(request);
     return Response.json(
       { error: "Invalid code" },
       { status: 400, headers: corsHeaders },
@@ -293,6 +298,7 @@ export async function handleTotpConfirmFromLogin(request: Request): Promise<Resp
     const totp = createTOTP(secret, user.username);
     const delta = totp.validate({ token: body.code, window: 1 });
     if (delta === null) {
+      recordFailure(request);
       return Response.json(
         { error: "Invalid code. Please try again." },
         { status: 400, headers: corsHeaders },
@@ -413,6 +419,7 @@ export async function handleTotpResetFromLogin(request: Request): Promise<Respon
       }
     }
     if (!matched) {
+      recordFailure(request);
       return Response.json(
         { error: "Invalid backup code" },
         { status: 400, headers: corsHeaders },

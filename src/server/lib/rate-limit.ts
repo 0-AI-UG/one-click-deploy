@@ -9,7 +9,8 @@ export class RateLimiter {
     this.cleanupTimer = setInterval(() => this.cleanup(), 5 * 60 * 1000);
   }
 
-  check(key: string): { allowed: boolean; retryAfterSeconds: number } {
+  /** Check whether the key is rate-limited without recording an attempt. */
+  isLimited(key: string): { limited: boolean; retryAfterSeconds: number } {
     const now = Date.now();
     const cutoff = now - this.windowMs;
 
@@ -25,11 +26,21 @@ export class RateLimiter {
     if (timestamps.length >= this.maxAttempts) {
       const oldest = timestamps[0]!;
       const retryAfterSeconds = Math.ceil((oldest + this.windowMs - now) / 1000);
-      return { allowed: false, retryAfterSeconds };
+      return { limited: true, retryAfterSeconds };
     }
 
-    timestamps.push(now);
-    return { allowed: true, retryAfterSeconds: 0 };
+    return { limited: false, retryAfterSeconds: 0 };
+  }
+
+  /** Record a failed attempt for the given key. */
+  recordFailure(key: string): void {
+    const now = Date.now();
+    const timestamps = this.windows.get(key);
+    if (timestamps) {
+      timestamps.push(now);
+    } else {
+      this.windows.set(key, [now]);
+    }
   }
 
   private cleanup() {
