@@ -113,29 +113,30 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
         </Card>
       )}
 
-      <Card className="p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Zap size={14} className="text-fg" />
+      <Card className="p-3">
+        <div className="flex items-center gap-2">
+          <Zap size={12} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Manual Scaling</h3>
-          <span className="ml-auto font-mono text-[9px] text-muted uppercase tracking-wider">
+          <span className="font-mono text-[9px] text-muted uppercase tracking-wider">
             {replicas.length} running · desired {app.desired_replicas ?? replicas.length}
           </span>
-        </div>
 
-        {replicas.length > 0 ? (
-          <div className="flex gap-1 mb-4">
-            {Array.from({ length: replicas.length }).map((_, i) => (
-              <div key={i} className="flex-1 h-8 border-2 border-fg bg-accent shadow-neo-sm" />
-            ))}
-          </div>
-        ) : (
-          <p className="text-[10px] text-muted font-mono py-4 text-center uppercase tracking-wider mb-4">
-            {app.status === "sleeping" ? "No replicas — app is sleeping. Wakes automatically on HTTP request." : "No replicas"}
-          </p>
-        )}
+          {replicas.length === 0 && (
+            <span className="font-mono text-[9px] text-muted ml-1">
+              {app.status === "sleeping" ? "— sleeping" : ""}
+            </span>
+          )}
 
+          <div className="ml-auto flex items-center gap-1">
+            {replicas.length > 0 && (
+              <div className="flex gap-0.5 mr-2">
+                {Array.from({ length: replicas.length }).map((_, i) => (
+                  <div key={i} className="w-3 h-3 border border-fg bg-accent" />
+                ))}
+              </div>
+            )}
         <PermissionGate permission="scaling.manage">
-          <div className="flex justify-end gap-2">
+          <div className="flex gap-1">
             {app.status === "sleeping" && (
               <Btn
                 size="sm"
@@ -177,9 +178,11 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
             >+</Btn>
           </div>
         </PermissionGate>
+          </div>
+        </div>
 
         {showProgress && (
-          <div className="mt-3 flex items-center gap-2 px-3 py-2 border-2 border-fg bg-alt">
+          <div className="mt-2 flex items-center gap-2 px-3 py-1.5 border-2 border-fg bg-alt">
             <Spinner />
             <span className="font-mono text-[10px] text-fg uppercase tracking-wider truncate">{progressMessage}</span>
           </div>
