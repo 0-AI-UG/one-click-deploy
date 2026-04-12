@@ -23,6 +23,7 @@ import { TerminalPage } from "./pages/terminal.tsx";
 import { DeployServicePage } from "./pages/deploy-service.tsx";
 import { ServiceDeployProgressPage } from "./pages/service-deploy-progress.tsx";
 import { ServiceDetailPage } from "./pages/service-detail.tsx";
+import { EnvironmentsPage } from "./pages/environments.tsx";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -132,6 +133,8 @@ export function App() {
   } else if (hash.startsWith("#/services/")) {
     const serviceId = parseInt(hash.split("/")[2], 10);
     content = serviceId ? <ServiceDetailPage serviceId={serviceId} /> : <DashboardPage />;
+  } else if (hash === "#/environments") {
+    content = <EnvironmentsPage />;
   } else if (hash === "#/resources") {
     content = <ResourcesPage />;
   } else if (hash === "#/account") {

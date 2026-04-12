@@ -1,4 +1,5 @@
 import * as db from "../db.ts";
+import { resolveAppEnvVars } from "../env-crypto.ts";
 import {
   sshExec, composeHealthCheck, healthCheck, deployAuthProxy,
   startContainer, startCompose, containerExists, composeProjectExists,
@@ -69,7 +70,7 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
           `cd /home/deploy/apps/${app.name} && docker compose -p ${app.name} up -d`
         ), hostKey);
       } else {
-        const envVars = JSON.parse(app.env_vars || "{}");
+        const envVars = await resolveAppEnvVars(app);
         let envFileFlag = "";
         if (Object.keys(envVars).length > 0) {
           envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;

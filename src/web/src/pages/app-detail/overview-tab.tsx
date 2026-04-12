@@ -15,7 +15,9 @@ interface OverviewTabProps {
 }
 
 export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas }: OverviewTabProps) {
-  const envVars = app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {};
+  const envEntries: Array<{ key: string; value: string; secret: boolean }> = Array.isArray(app.env_vars)
+    ? app.env_vars.map((e: any) => ({ key: e.key, value: e.value, secret: !!e.secret }))
+    : Object.entries(app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {}).map(([k, v]) => ({ key: k, value: String(v), secret: false }));
   const internalUrl = `http://${app.name}.ocd.internal:8080`;
 
   return (
@@ -47,14 +49,14 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
         </Card>
         <Card className="p-4 space-y-3">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Environment Variables</h3>
-          {Object.keys(envVars).length === 0 ? (
+          {envEntries.length === 0 ? (
             <p className="text-[10px] text-muted font-mono">No environment variables set</p>
           ) : (
             <div className="space-y-1 text-[10px] font-mono">
-              {Object.entries(envVars).map(([k, v]) => (
-                <div key={k} className="flex justify-between gap-4">
-                  <span className="text-accent-blue font-bold">{k}</span>
-                  <span className="text-fg-dim truncate">{String(v)}</span>
+              {envEntries.map((e) => (
+                <div key={e.key} className="flex justify-between gap-4">
+                  <span className="text-accent-blue font-bold">{e.key}</span>
+                  <span className="text-fg-dim truncate">{e.secret ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" : e.value}</span>
                 </div>
               ))}
             </div>

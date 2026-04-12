@@ -20,23 +20,28 @@ export interface SecretStore {
   }>;
 }
 
+// Shared encryption key, cached after first derivation
+let _sharedEncryptionKey: CryptoKey | null = null;
+
+export async function getEncryptionKey(): Promise<CryptoKey> {
+  if (_sharedEncryptionKey) return _sharedEncryptionKey;
+  const secret = getJwtSecret();
+  const rawKey = new TextEncoder().encode(secret);
+  const keyMaterial = await crypto.subtle.importKey("raw", rawKey, "HKDF", false, ["deriveKey"]);
+  _sharedEncryptionKey = await crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("ocd-secrets"), info: new TextEncoder().encode("encryption") },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  return _sharedEncryptionKey;
+}
+
 // Encrypted SQLite storage (AES-GCM, key derived from JWT_SECRET via HKDF)
 class DbSecretStore implements SecretStore {
-  private encryptionKey: CryptoKey | null = null;
-
   private async getKey(): Promise<CryptoKey> {
-    if (this.encryptionKey) return this.encryptionKey;
-    const secret = getJwtSecret();
-    const rawKey = new TextEncoder().encode(secret);
-    const keyMaterial = await crypto.subtle.importKey("raw", rawKey, "HKDF", false, ["deriveKey"]);
-    this.encryptionKey = await crypto.subtle.deriveKey(
-      { name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("ocd-secrets"), info: new TextEncoder().encode("encryption") },
-      keyMaterial,
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["encrypt", "decrypt"],
-    );
-    return this.encryptionKey;
+    return getEncryptionKey();
   }
 
   async get(key: string): Promise<string | null> {

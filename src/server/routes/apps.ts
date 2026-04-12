@@ -2,6 +2,8 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
+import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../bun/env-crypto.ts";
+import type { AppRow } from "../../bun/db/apps.ts";
 import {
   deploy,
   destroyApp,
@@ -17,6 +19,16 @@ import { sshExec, getComposeLogs, getContainerLogs } from "../../bun/remote/inde
 import { validateAppName } from "../../bun/validate.ts";
 import { introspectRepo } from "../../bun/github-introspect.ts";
 import { tryAcquireLock } from "../../bun/op-lock.ts";
+
+/** Mask env_vars in an app row for API responses. */
+function maskAppEnvVars(app: AppRow & Record<string, unknown>) {
+  const parsed = parseEnvVars(app.env_vars);
+  return {
+    ...app,
+    env_vars: maskEnvVarsForResponse(parsed),
+    environment_id: app.environment_id ?? null,
+  };
+}
 
 // In-process notifier for long-poll waiters. Keyed by deploy job id; each
 // waiter is a no-arg callback that resolves the long-poll Promise.
@@ -69,7 +81,10 @@ export async function handleIntrospectRepo(request: Request): Promise<Response> 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");
-    const result = getServersWithApps();
+    const result = getServersWithApps().map((s: any) => ({
+      ...s,
+      apps: (s.apps || []).map((a: any) => maskAppEnvVars(a)),
+    }));
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -81,7 +96,7 @@ export async function handleGetDashboard(request: Request): Promise<Response> {
     await requirePermission(request, "servers.view");
     const apps = db.getApps().map((a) => {
       const reps = db.getReplicas(a.id);
-      return { ...a, desired_replicas: a.desired_replicas ?? reps.length };
+      return maskAppEnvVars({ ...a, desired_replicas: a.desired_replicas ?? reps.length });
     });
     const services = db.getServices().map((svc) => {
       const instances = db.getServiceInstances(svc.id);
@@ -106,7 +121,7 @@ export async function handleGetApps(request: Request): Promise<Response> {
       const reps = db.getReplicas(a.id);
       const first = reps[0];
       const servers = db.getServersForApp(a.id).map((s) => s.id);
-      return { ...a, host_port: first?.host_port ?? 0, servers };
+      return maskAppEnvVars({ ...a, host_port: first?.host_port ?? 0, servers });
     });
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
@@ -266,7 +281,12 @@ export async function handleUnpauseApp(request: Request, appId: number): Promise
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.redeploy");
-    const body = (await request.json().catch(() => ({}))) as { env_vars?: Record<string, string>; auth_password?: string | null; container_port?: number };
+    const body = (await request.json().catch(() => ({}))) as {
+      env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
+      auth_password?: string | null;
+      container_port?: number;
+      environment_id?: number | null;
+    };
 
     if (body.container_port !== undefined) {
       const p = Number(body.container_port);
@@ -276,12 +296,31 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       body.container_port = p;
     }
 
+    // Process env vars through the new format
+    let resolvedEnvVars: Record<string, string> | undefined;
+    if (body.env_vars) {
+      const app = db.getApp(appId);
+      if (app) {
+        const existingParsed = parseEnvVars(app.env_vars);
+        const incoming = Array.isArray(body.env_vars)
+          ? body.env_vars.map((e) => ({ key: e.key, value: e.value, secret: e.secret ?? false }))
+          : Object.entries(body.env_vars).map(([key, value]) => ({ key, value, secret: false }));
+        const merged = await mergeEnvVarUpdate(existingParsed, incoming);
+        db.updateAppEnvVars(appId, serializeEnvVars(merged.entries));
+      }
+    }
+
+    if (body.environment_id !== undefined) {
+      db.updateAppEnvironment(appId, body.environment_id);
+    }
+
     const lock = tryAcquireLock(`app:${appId}`, "redeploy");
     if ("busy" in lock) {
       return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
     }
     try {
-      const result = await redeployApp(appId, () => {}, body.env_vars, body.auth_password, body.container_port, payload.userId);
+      // Pass undefined for env_vars since we already persisted them above
+      const result = await redeployApp(appId, () => {}, undefined, body.auth_password, body.container_port, payload.userId);
       return Response.json(result, { headers: corsHeaders });
     } finally {
       lock.release();
@@ -294,13 +333,28 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
 export async function handleUpdateAppEnv(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.env");
-    const body = await request.json() as { env_vars: Record<string, string> };
+    const body = await request.json() as {
+      env_vars: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
+    };
+
+    // Process through the new format, then pass flat map to existing updateAppEnv
+    const app = db.getApp(appId);
+    if (!app) {
+      return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
+    const existingParsed = parseEnvVars(app.env_vars);
+    const incoming = Array.isArray(body.env_vars)
+      ? body.env_vars.map((e) => ({ key: e.key, value: e.value, secret: e.secret ?? false }))
+      : Object.entries(body.env_vars).map(([key, value]) => ({ key, value, secret: false }));
+    const merged = await mergeEnvVarUpdate(existingParsed, incoming);
+    db.updateAppEnvVars(appId, serializeEnvVars(merged.entries));
+
     const lock = tryAcquireLock(`app:${appId}`, "updateEnv");
     if ("busy" in lock) {
       return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
     }
     try {
-      const result = await updateAppEnv(appId, body.env_vars, payload.userId);
+      const result = await updateAppEnv(appId, undefined as any, payload.userId);
       return Response.json(result, { headers: corsHeaders });
     } finally {
       lock.release();

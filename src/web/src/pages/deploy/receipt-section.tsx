@@ -99,6 +99,17 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest 
           )}
         </ReceiptRow>
 
+        {!isCompose && (
+          <ReceiptRow label="Build Context" detected={!!form.docker_context}>
+            <input
+              type="text"
+              value={form.docker_context}
+              onChange={set("docker_context")}
+              placeholder=". (repo root)"
+            />
+          </ReceiptRow>
+        )}
+
         {isCompose && (
           <ReceiptRow label="Web Service" detected={!!form.compose_web_service}>
             {hasMultipleServices ? (

@@ -1,4 +1,5 @@
 import * as db from "../db.ts";
+import { resolveAppEnvVars } from "../env-crypto.ts";
 import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
 import {
   sshExec,
@@ -288,7 +289,7 @@ export async function recreateAppContainer(
       // Dockerfile mode: rm + run with updated flags
       await removeContainer(server.ipv4, app.name, hostKey);
 
-      const envVars = JSON.parse(app.env_vars || "{}");
+      const envVars = await resolveAppEnvVars(app);
       const envFileEntries = Object.entries(envVars);
       let envFileFlag = "";
       if (envFileEntries.length > 0) {

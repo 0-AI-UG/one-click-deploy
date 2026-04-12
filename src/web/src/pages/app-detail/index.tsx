@@ -18,7 +18,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [nameEdit, setNameEdit] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [portEdit, setPortEdit] = useState<number>(0);
-  const [envEdit, setEnvEdit] = useState<{ key: string; value: string }[]>([]);
+  const [envEdit, setEnvEdit] = useState<{ key: string; value: string; secret: boolean }[]>([]);
   const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
@@ -114,8 +114,13 @@ export function AppDetailPage({ appId }: { appId: number }) {
       setNameEdit(app.name || "");
       setAuthPassword(app.auth_password || "");
       setPortEdit(app.container_port || 0);
-      const ev = app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {};
-      setEnvEdit(Object.entries(ev).map(([k, v]) => ({ key: k, value: String(v) })));
+      const raw = app.env_vars;
+      if (Array.isArray(raw)) {
+        setEnvEdit(raw.map((e: any) => ({ key: e.key, value: e.value, secret: !!e.secret })));
+      } else {
+        const ev = raw ? (typeof raw === "string" ? JSON.parse(raw) : raw) : {};
+        setEnvEdit(Object.entries(ev).map(([k, v]) => ({ key: k, value: String(v), secret: false })));
+      }
       if (app.volume_mount) {
         const parts = String(app.volume_mount).split(":");
         setVolumeForm((f) => ({ ...f, mount_path: parts[1] || "/data" }));

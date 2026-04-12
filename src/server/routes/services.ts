@@ -2,6 +2,8 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
+import { parseEnvVars, serializeEnvVars, encryptValue } from "../../bun/env-crypto.ts";
+import type { EnvVarEntry } from "../../bun/env-crypto.ts";
 import { deployService, type ServiceDeployRequest } from "../../bun/deploy/deploy-service.ts";
 import {
   destroyService,
@@ -291,16 +293,36 @@ export async function handleLinkService(request: Request, serviceId: number, app
     // Parse credentials
     const credentials = JSON.parse(service.credentials || "{}");
 
-    // Inject connection env vars into the app
-    const appEnv = JSON.parse(app.env_vars || "{}");
-    appEnv[`${envPrefix}_URL`] = credentials.connection_url || "";
-    appEnv[`${envPrefix}_HOST`] = credentials.host || "";
-    appEnv[`${envPrefix}_PORT`] = String(credentials.port || "");
-    if (credentials.username) appEnv[`${envPrefix}_USER`] = credentials.username;
-    if (credentials.password) appEnv[`${envPrefix}_PASSWORD`] = credentials.password;
-    if (credentials.database) appEnv[`${envPrefix}_NAME`] = credentials.database;
+    // Build new env var entries for the service link
+    const now = new Date().toISOString();
+    const parsed = parseEnvVars(app.env_vars);
+    const newEntries: EnvVarEntry[] = [];
 
-    db.updateAppEnvVars(appId, JSON.stringify(appEnv));
+    // Helper: create entry, marking URL and password as secrets
+    const secretKeys = new Set([`${envPrefix}_URL`, `${envPrefix}_PASSWORD`]);
+    const pairs: [string, string][] = [
+      [`${envPrefix}_URL`, credentials.connection_url || ""],
+      [`${envPrefix}_HOST`, credentials.host || ""],
+      [`${envPrefix}_PORT`, String(credentials.port || "")],
+    ];
+    if (credentials.username) pairs.push([`${envPrefix}_USER`, credentials.username]);
+    if (credentials.password) pairs.push([`${envPrefix}_PASSWORD`, credentials.password]);
+    if (credentials.database) pairs.push([`${envPrefix}_NAME`, credentials.database]);
+
+    for (const [key, value] of pairs) {
+      const isSecret = secretKeys.has(key);
+      if (isSecret) {
+        const { encrypted_value, iv } = await encryptValue(value);
+        newEntries.push({ key, value: "", encrypted_value, iv, secret: true, updated_at: now });
+      } else {
+        newEntries.push({ key, value, secret: false, updated_at: now });
+      }
+    }
+
+    // Merge: remove existing entries with same keys, then append new ones
+    const newKeys = new Set(newEntries.map((e) => e.key));
+    const filtered = parsed.entries.filter((e) => !newKeys.has(e.key));
+    db.updateAppEnvVars(appId, serializeEnvVars([...filtered, ...newEntries]));
 
     // Create link record
     try {
@@ -343,12 +365,9 @@ export async function handleUnlinkService(request: Request, serviceId: number, a
     const prefix = link.env_prefix || "DATABASE";
 
     // Remove injected env vars
-    const appEnv = JSON.parse(app.env_vars || "{}");
-    const keysToRemove = Object.keys(appEnv).filter((k) => k.startsWith(`${prefix}_`));
-    for (const key of keysToRemove) {
-      delete appEnv[key];
-    }
-    db.updateAppEnvVars(appId, JSON.stringify(appEnv));
+    const parsed = parseEnvVars(app.env_vars);
+    const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
+    db.updateAppEnvVars(appId, serializeEnvVars(filtered));
 
     db.deleteServiceLink(serviceId, appId);
 

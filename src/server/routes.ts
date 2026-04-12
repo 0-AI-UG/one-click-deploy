@@ -70,6 +70,12 @@ import {
 import { handleLlmTxt } from "./routes/llm-txt.ts";
 import { handleGetDeploySession, handleSaveDeploySession, handleDeleteDeploySession } from "./routes/deploy-sessions.ts";
 import {
+  handleGetEnvironments,
+  handleCreateEnvironment,
+  handleUpdateEnvironment,
+  handleDeleteEnvironment,
+} from "./routes/environments.ts";
+import {
   handleGetCatalog,
   handleGetServices,
   handleGetService,
@@ -117,6 +123,13 @@ function serviceLinkPartsFrom(req: Request): { serviceId: number; appId: number 
   const match = url.pathname.match(/\/api\/services\/(\d+)\/link\/(\d+)/);
   return match ? { serviceId: parseInt(match[1], 10), appId: parseInt(match[2], 10) } : { serviceId: 0, appId: 0 };
 }
+
+function environmentIdFrom(req: Request): number {
+  const url = new URL(req.url);
+  const match = url.pathname.match(/\/api\/environments\/(\d+)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
 
 export const apiRoutes = {
   // --- LLM-readable manifest docs (public) ---
@@ -295,6 +308,16 @@ export const apiRoutes = {
       const { serviceId, appId } = serviceLinkPartsFrom(req);
       return handleUnlinkService(req, serviceId, appId);
     },
+  },
+
+  // --- Environments ---
+  "/api/environments": {
+    GET: (req: Request) => handleGetEnvironments(req),
+    POST: (req: Request) => handleCreateEnvironment(req),
+  },
+  "/api/environments/:id": {
+    PUT: (req: Request) => handleUpdateEnvironment(req, environmentIdFrom(req)),
+    DELETE: (req: Request) => handleDeleteEnvironment(req, environmentIdFrom(req)),
   },
 
   // --- Volumes ---

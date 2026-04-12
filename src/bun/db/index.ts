@@ -41,6 +41,7 @@ export {
   updateAppDeployMode,
   updateAppWebhook,
   updateAppScaling,
+  updateAppEnvironment,
   nextReplicaHostPort,
 } from "./apps.ts";
 export type { ReplicaRow, MetricSampleRow, ScalingEventRow } from "./replicas.ts";
@@ -167,3 +168,11 @@ export {
   getServiceDeployJob,
   getServiceDeployJobEvents,
 } from "./services.ts";
+export type { EnvironmentRow } from "./environments.ts";
+export {
+  getEnvironments,
+  getEnvironment,
+  insertEnvironment,
+  updateEnvironment,
+  deleteEnvironment,
+} from "./environments.ts";

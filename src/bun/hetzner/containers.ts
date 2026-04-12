@@ -457,6 +457,7 @@ export async function cloneAndBuild(
     envVars: Record<string, string>;
     volumeMount?: string; // e.g. "/mnt/data:/data" — host:container
     dockerfilePath?: string; // explicit path to Dockerfile in repo
+    dockerContext?: string; // build context path relative to repo root, defaults to "."
     gitToken?: string; // GitHub PAT for private repos
     /** Host-side bind address for the published port. Defaults to 127.0.0.1
      *  so containers aren't exposed on the public interface. Pass the
@@ -505,9 +506,7 @@ export async function cloneAndBuild(
 
   // Build image first (before stopping old container — build-before-destroy)
   emit("Building Docker image...");
-  const dockerContext = dockerfilePath.includes("/")
-    ? dockerfilePath.substring(0, dockerfilePath.lastIndexOf("/"))
-    : ".";
+  const dockerContext = opts.dockerContext || ".";
   const buildCmd = `cd ${appDir} && docker build -t ${opts.name}:latest -f ${dockerfilePath} ${dockerContext}`;
   log("build", `Docker build command: ${buildCmd}`);
   const dockerBuildStart = Date.now();

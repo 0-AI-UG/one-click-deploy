@@ -13,6 +13,7 @@ import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../github.ts";
 import { validateDeployRequest } from "../validate.ts";
 import { createMasker } from "../mask.ts";
+import { processIncomingEnvVars, serializeEnvVars } from "../env-crypto.ts";
 import { getTokens } from "../secret-store.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { scaleApp } from "../scale.ts";
@@ -384,14 +385,29 @@ export async function deploy(
     onProgress("build", `Cloning ${req.git_repo} and building...`);
 
     let dockerfilePath = req.dockerfile_path || "Dockerfile";
+    const processedEnv = await processIncomingEnvVars(req.env_vars || {});
+    // Flat plaintext env vars for the container build functions
+    const flatEnvVars: Record<string, string> = {};
+    for (const entry of processedEnv.entries) {
+      flatEnvVars[entry.key] = entry.value || "";
+    }
+    // For secrets, the plaintext value is in the incoming data, not in processed (which has encrypted_value)
+    // So we build flatEnvVars from the raw input
+    const rawEntries = Array.isArray(req.env_vars)
+      ? req.env_vars
+      : Object.entries(req.env_vars || {}).map(([k, v]) => ({ key: k, value: v as string }));
+    for (const e of rawEntries) {
+      flatEnvVars[e.key] = e.value;
+    }
     const { app, replica } = db.insertAppWithFirstReplica(
       {
         name: req.app_name,
         domain: useDomain,
         git_repo: req.git_repo,
         dockerfile_path: dockerfilePath,
+        docker_context: req.docker_context,
         container_port: req.container_port,
-        env_vars: JSON.stringify(req.env_vars),
+        env_vars: serializeEnvVars(processedEnv.entries),
         auth_password: req.auth_password,
       },
       serverId!,
@@ -474,7 +490,7 @@ export async function deploy(
           gitRepo: req.git_repo,
           port: req.container_port,
           hostPort: replica.host_port,
-          envVars: req.env_vars,
+          envVars: flatEnvVars,
           volumeMount,
           composeFile,
           webService: composeWebService,
@@ -495,9 +511,10 @@ export async function deploy(
           gitRepo: req.git_repo,
           port: req.container_port,
           hostPort: replica.host_port,
-          envVars: req.env_vars,
+          envVars: flatEnvVars,
           volumeMount,
           dockerfilePath: req.dockerfile_path,
+          dockerContext: req.docker_context,
           gitToken: githubPat,
           bindAddr: containerBindAddr,
         },

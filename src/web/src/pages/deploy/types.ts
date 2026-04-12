@@ -14,6 +14,7 @@ export type DeployManifest = {
   icon?: string;
   build?: {
     dockerfile?: string;
+    context?: string;
     container_port?: number;
     compose_file?: string;
     compose_web_service?: string;
@@ -57,6 +58,7 @@ export type FormState = {
   volume_size: string;
   volume_path: string;
   dockerfile_path: string;
+  docker_context: string;
   webhook_enabled: boolean;
   webhook_branch: string;
   webhook_path: string;

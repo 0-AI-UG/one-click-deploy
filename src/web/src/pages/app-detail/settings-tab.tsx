@@ -1,8 +1,10 @@
-import { post, put } from "../../api/client.ts";
+import { useState, useEffect } from "react";
+import { get, post, put } from "../../api/client.ts";
 import { Card, Btn, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Plus, Minus } from "lucide-react";
-import type { AppData } from "../../types.ts";
+import { EnvVarEditor, type EnvVarRow } from "../../components/env-var-editor.tsx";
+import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Layers } from "lucide-react";
+import type { AppData, EnvironmentData } from "../../types.ts";
 
 interface SettingsTabProps {
   app: AppData;
@@ -13,8 +15,8 @@ interface SettingsTabProps {
   setAuthPassword: (v: string) => void;
   portEdit: number;
   setPortEdit: (v: number) => void;
-  envEdit: { key: string; value: string }[];
-  setEnvEdit: (v: { key: string; value: string }[]) => void;
+  envEdit: EnvVarRow[];
+  setEnvEdit: (v: EnvVarRow[]) => void;
   volumeForm: { size: number; mount_path: string };
   setVolumeForm: (f: { size: number; mount_path: string }) => void;
   actionLoading: string | null;
@@ -30,6 +32,17 @@ export function SettingsTab({
   volumeForm, setVolumeForm,
   actionLoading, action,
 }: SettingsTabProps) {
+  const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
+  const [selectedEnvId, setSelectedEnvId] = useState<number | null>(app.environment_id ?? null);
+
+  useEffect(() => {
+    get("/api/environments").then((r) => r.json()).then(setEnvironments).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setSelectedEnvId(app.environment_id ?? null);
+  }, [app]);
+
   return (
     <div className="space-y-4">
       <Card className="p-4">
@@ -95,52 +108,36 @@ export function SettingsTab({
         />
       </Card>
 
-      <Card className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <SettingsIcon size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Environment Variables</h3>
+      {environments.length > 0 && (
+        <Card className="p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Layers size={14} className="text-fg" />
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Environment</h3>
           </div>
-          <Btn size="xs" variant="ghost" onClick={() => setEnvEdit([...envEdit, { key: "", value: "" }])}>
-            <Plus size={12} /> Add
-          </Btn>
+          <p className="text-[10px] text-muted font-mono mb-3">
+            Assign a global environment. Its variables are inherited by this app (app-specific vars override).
+          </p>
+          <select
+            value={selectedEnvId ?? ""}
+            onChange={(e) => setSelectedEnvId(e.target.value ? parseInt(e.target.value) : null)}
+            className="w-full"
+          >
+            <option value="">None</option>
+            {environments.map((env) => (
+              <option key={env.id} value={env.id}>
+                {env.name} — {env.env_vars.length} var{env.env_vars.length !== 1 ? "s" : ""}
+              </option>
+            ))}
+          </select>
+        </Card>
+      )}
+
+      <Card className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <SettingsIcon size={14} className="text-fg" />
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Environment Variables</h3>
         </div>
-        {envEdit.length === 0 ? (
-          <p className="text-[10px] text-muted font-mono mb-2">No environment variables.</p>
-        ) : (
-          envEdit.map((v, i) => (
-            <div key={i} className="flex gap-2 items-center mt-2">
-              <input
-                type="text"
-                value={v.key}
-                placeholder="KEY"
-                onChange={(e) => {
-                  const next = [...envEdit];
-                  next[i].key = e.target.value;
-                  setEnvEdit(next);
-                }}
-                className="!w-1/3"
-              />
-              <input
-                type="text"
-                value={v.value}
-                placeholder="value"
-                onChange={(e) => {
-                  const next = [...envEdit];
-                  next[i].value = e.target.value;
-                  setEnvEdit(next);
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => setEnvEdit(envEdit.filter((_, j) => j !== i))}
-                className="text-muted hover:text-accent-red transition-colors flex-shrink-0"
-              >
-                <Minus size={14} />
-              </button>
-            </div>
-          ))
-        )}
+        <EnvVarEditor entries={envEdit} onChange={setEnvEdit} />
       </Card>
 
       <PermissionGate permission="apps.redeploy">
@@ -151,14 +148,14 @@ export function SettingsTab({
             loading={actionLoading === "save-settings"}
             disabled={!portEdit}
             onClick={() => action("save-settings", async () => {
-              const env_vars: Record<string, string> = {};
-              for (const { key, value } of envEdit) {
-                if (key.trim()) env_vars[key.trim()] = value;
-              }
+              const env_vars = envEdit
+                .filter((e) => e.key.trim())
+                .map((e) => ({ key: e.key.trim(), value: e.value, secret: e.secret }));
               await post(`/api/apps/${appId}/redeploy`, {
                 env_vars,
                 auth_password: authPassword || null,
                 container_port: portEdit,
+                environment_id: selectedEnvId,
               });
             })}
           >Save & Redeploy</Btn>

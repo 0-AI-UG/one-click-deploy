@@ -273,9 +273,13 @@ export function DeployPage() {
         return showToast(`Required: ${missing.map((e) => e.key).join(", ")}`, "error");
     }
 
-    const env: Record<string, string> = { ...envValues };
+    const envArray: Array<{ key: string; value: string; secret: boolean }> = [];
+    for (const [key, value] of Object.entries(envValues)) {
+      const def = manifestEnvDefs.find((d) => d.key === key);
+      envArray.push({ key, value, secret: def?.secret ?? false });
+    }
     extraEnv.forEach((v) => {
-      if (v.key) env[v.key] = v.value;
+      if (v.key) envArray.push({ key: v.key, value: v.value, secret: false });
     });
 
     const body: DeployBody = {
@@ -283,7 +287,7 @@ export function DeployPage() {
       git_repo: form.git_repo,
       domain: form.domain || undefined,
       container_port: parseInt(form.container_port, 10),
-      env_vars: env,
+      env_vars: envArray,
       volume_size: form.volume_size ? parseInt(form.volume_size, 10) : undefined,
       volume_path: form.volume_size ? form.volume_path : undefined,
       dockerfile_path: form.dockerfile_path || undefined,

@@ -92,15 +92,25 @@ export type DeploymentRecord = {
 
 export type ServerWithApps = Server & { apps: App[] };
 
+export type EnvVarEntry = {
+  key: string;
+  value: string;
+  secret: boolean;
+  updated_at: string;
+  encrypted_value?: string;
+  iv?: string;
+};
+
 export type DeployRequest = {
   app_name: string;
   domain?: string;
   git_repo: string;
   container_port: number;
-  env_vars: Record<string, string>;
+  env_vars: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   volume_size?: number; // GB, if set a Hetzner Volume is created and mounted
   volume_path?: string; // Container mount path, defaults to /data
   dockerfile_path?: string; // Path to Dockerfile in repo, auto-discovered if omitted
+  docker_context?: string; // Docker build context path relative to repo root, defaults to "."
   webhook_enabled?: boolean;
   webhook_branch?: string; // Branch to watch, defaults to "main"
   webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
@@ -144,6 +154,7 @@ export type DeployManifest = {
   icon?: string;
   build?: {
     dockerfile?: string;
+    context?: string;
     container_port?: number;
     compose_file?: string;
     compose_web_service?: string;

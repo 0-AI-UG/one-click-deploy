@@ -1,3 +1,17 @@
+export type EnvVarEntry = {
+  key: string;
+  value: string;
+  secret: boolean;
+  updated_at: string;
+};
+
+export type EnvironmentData = {
+  id: number;
+  name: string;
+  env_vars: EnvVarEntry[];
+  created_at: string;
+};
+
 export type AppData = {
   id: number;
   name: string;
@@ -14,7 +28,8 @@ export type AppData = {
   volume_mount?: string;
   auth_password?: string;
   deployed_by_username?: string;
-  env_vars?: string | Record<string, string>;
+  env_vars?: EnvVarEntry[] | string | Record<string, string>;
+  environment_id?: number | null;
   autoscale_enabled?: boolean;
   min_replicas?: number;
   max_replicas?: number;
@@ -173,10 +188,11 @@ export type DeployBody = {
   git_repo: string;
   domain?: string;
   container_port: number;
-  env_vars?: Record<string, string>;
+  env_vars?: Array<{ key: string; value: string; secret: boolean }>;
   volume_size?: number;
   volume_path?: string;
   dockerfile_path?: string;
+  docker_context?: string;
   webhook_enabled?: boolean;
   webhook_branch?: string;
   webhook_path?: string;

@@ -1,4 +1,5 @@
 import * as db from "../db.ts";
+import { resolveAppEnvVars } from "../env-crypto.ts";
 import {
   sshExec, cloneAndComposeBuild, transferImage, healthCheck, composeHealthCheck,
 } from "../remote/index.ts";
@@ -75,7 +76,7 @@ export async function rollingRedeploy(
             gitRepo: app.git_repo,
             port: app.container_port,
             hostPort: replica.host_port,
-            envVars: JSON.parse(app.env_vars || "{}"),
+            envVars: await resolveAppEnvVars(app),
             volumeMount: app.volume_mount || undefined,
             composeFile: app.compose_file,
             webService: app.compose_web_service,
@@ -86,7 +87,7 @@ export async function rollingRedeploy(
         );
       } else {
         await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
-        const envVars = JSON.parse(app.env_vars || "{}");
+        const envVars = await resolveAppEnvVars(app);
         const envEntries = Object.entries(envVars);
         let envFileFlag = "";
         if (envEntries.length > 0) {

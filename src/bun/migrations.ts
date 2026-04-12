@@ -857,6 +857,58 @@ export const migrations: Migration[] = [
       )`);
     },
   },
+  {
+    version: 33,
+    description: "Add environments, env_templates, app_env_templates tables and apps.environment_id",
+    up: (db) => {
+      db.run(`CREATE TABLE environments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        env_vars TEXT NOT NULL DEFAULT '{"version":2,"entries":[]}',
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run(`CREATE TABLE env_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL DEFAULT '',
+        env_vars TEXT NOT NULL DEFAULT '{"version":2,"entries":[]}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run(`CREATE TABLE app_env_templates (
+        app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        template_id INTEGER NOT NULL REFERENCES env_templates(id) ON DELETE CASCADE,
+        priority INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (app_id, template_id)
+      )`);
+      db.run("ALTER TABLE apps ADD COLUMN environment_id INTEGER REFERENCES environments(id)");
+    },
+  },
+  {
+    version: 34,
+    description: "Add docker_context column to apps",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN docker_context TEXT NOT NULL DEFAULT '.'");
+    },
+  },
+  {
+    version: 35,
+    description: "Drop env_templates, app_env_templates, and is_default from environments",
+    up: (db) => {
+      db.run("DROP TABLE IF EXISTS app_env_templates");
+      db.run("DROP TABLE IF EXISTS env_templates");
+      // SQLite doesn't support DROP COLUMN before 3.35; recreate the table
+      db.run(`CREATE TABLE environments_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        env_vars TEXT NOT NULL DEFAULT '{"version":2,"entries":[]}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run("INSERT INTO environments_new (id, name, env_vars, created_at) SELECT id, name, env_vars, created_at FROM environments");
+      db.run("DROP TABLE environments");
+      db.run("ALTER TABLE environments_new RENAME TO environments");
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

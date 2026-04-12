@@ -7,6 +7,7 @@ import {
   healthCheck, composeHealthCheck,
 } from "../remote/index.ts";
 import { validateEnvVars } from "../validate.ts";
+import { resolveAppEnvVars } from "../env-crypto.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { rollingRedeploy } from "../scale.ts";
 import { wakeApp } from "../scale/wake.ts";
@@ -110,7 +111,7 @@ export async function redeployApp(
     // Defer DB writes — hold new values in local vars, only persist after success
     const authPassword = newAuthPassword !== undefined ? (newAuthPassword || "") : app.auth_password;
 
-    const envVars = newEnvVars ?? JSON.parse(app.env_vars || "{}");
+    const envVars = newEnvVars ?? await resolveAppEnvVars(app);
     const containerPort = newContainerPort ?? app.container_port;
     const hostKey = server.ssh_host_key || undefined;
 
@@ -179,6 +180,7 @@ export async function redeployApp(
           envVars,
           volumeMount: app.volume_mount || undefined,
           dockerfilePath: app.dockerfile_path || undefined,
+          dockerContext: app.docker_context || undefined,
           gitToken: githubPat,
           bindAddr: containerBindAddr,
         },
@@ -331,6 +333,7 @@ export async function updateAppEnv(
           envVars,
           volumeMount: app.volume_mount || undefined,
           dockerfilePath: app.dockerfile_path || undefined,
+          dockerContext: app.docker_context || undefined,
           gitToken: githubPat,
           bindAddr,
         },
@@ -382,7 +385,7 @@ export async function rollbackApp(
       // Compose rollback: checkout old commit and rebuild
       await sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${deployment.git_commit}`), hostKey);
 
-      const envVars = JSON.parse(app.env_vars || "{}");
+      const envVars = await resolveAppEnvVars(app);
       const envEntries = Object.entries(envVars);
       if (envEntries.length > 0) {
         const envFilePath = `${appDir}/.env.deploy`;
@@ -401,7 +404,7 @@ export async function rollbackApp(
       // Dockerfile rollback: restart with old image tag
       await removeContainer(server.ipv4, app.name, hostKey);
 
-      const envVars = JSON.parse(app.env_vars || "{}");
+      const envVars = await resolveAppEnvVars(app);
       const envEntries = Object.entries(envVars);
       let envFileFlag = "";
       if (envEntries.length > 0) {
@@ -527,7 +530,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             gitRepo: app.git_repo,
             port: app.container_port,
             hostPort: replica.host_port,
-            envVars: JSON.parse(app.env_vars || "{}"),
+            envVars: await resolveAppEnvVars(app),
             volumeMount: app.volume_mount || undefined,
             composeFile: app.compose_file,
             webService: app.compose_web_service,
@@ -544,7 +547,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             gitRepo: app.git_repo,
             port: app.container_port,
             hostPort: replica.host_port,
-            envVars: JSON.parse(app.env_vars || "{}"),
+            envVars: await resolveAppEnvVars(app),
             volumeMount: app.volume_mount || undefined,
             gitToken: githubPat,
             bindAddr: replicaBindAddr,
@@ -558,7 +561,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`),
             hostKey,
           );
-          const envVars = JSON.parse(app.env_vars || "{}");
+          const envVars = await resolveAppEnvVars(app);
           let envFileFlag = "";
           if (Object.keys(envVars).length > 0) {
             envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
@@ -574,9 +577,10 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             gitRepo: app.git_repo,
             port: app.container_port,
             hostPort: replica.host_port,
-            envVars: JSON.parse(app.env_vars || "{}"),
+            envVars: await resolveAppEnvVars(app),
             volumeMount: app.volume_mount || undefined,
             dockerfilePath: app.dockerfile_path || undefined,
+            dockerContext: app.docker_context || undefined,
             gitToken: githubPat,
             bindAddr: replicaBindAddr,
           },
@@ -589,7 +593,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`),
             hostKey,
           );
-          const envVars = JSON.parse(app.env_vars || "{}");
+          const envVars = await resolveAppEnvVars(app);
           let envFileFlag = "";
           if (Object.keys(envVars).length > 0) {
             envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;

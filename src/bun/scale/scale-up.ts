@@ -1,4 +1,5 @@
 import * as db from "../db.ts";
+import { resolveAppEnvVars } from "../env-crypto.ts";
 import {
   sshExec, cloneAndComposeBuild,
   transferImage, healthCheck, composeHealthCheck,
@@ -58,7 +59,7 @@ export async function scaleUp(
           gitRepo: app.git_repo,
           port: app.container_port,
           hostPort,
-          envVars: JSON.parse(app.env_vars || "{}"),
+          envVars: await resolveAppEnvVars(app),
           volumeMount: app.volume_mount || undefined,
           composeFile: app.compose_file,
           webService: app.compose_web_service,
@@ -81,7 +82,7 @@ export async function scaleUp(
 
     if (app.deploy_mode !== "compose") {
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-      const envVars = JSON.parse(app.env_vars || "{}");
+      const envVars = await resolveAppEnvVars(app);
       const envEntries = Object.entries(envVars);
       let envFileFlag = "";
       if (envEntries.length > 0) {

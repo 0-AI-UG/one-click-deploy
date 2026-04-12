@@ -6,6 +6,7 @@ export interface App {
   domain: string;
   git_repo: string;
   dockerfile_path: string;
+  docker_context: string;
   container_port: number;
   env_vars: string;
   status: string;
@@ -16,6 +17,7 @@ export interface App {
   webhook_enabled: number;
   webhook_secret: string;
   webhook_branch: string;
+  webhook_path: string;
   github_webhook_id: string;
   auth_password: string;
   deploy_mode: string;
@@ -34,6 +36,7 @@ export interface App {
   sleeping_server_id: number | null;
   sleeping_host_port: number | null;
   wake_token: string | null;
+  environment_id: number | null;
 }
 
 export interface Replica {

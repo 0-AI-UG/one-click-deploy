@@ -84,9 +84,12 @@ const RESERVED_ENV_PREFIXES = ["DOCKER_", "PATH", "HOME", "LD_", "DYLD_"];
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function validateEnvVars(
-  vars: Record<string, string>
+  vars: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>
 ): ValidationResult<Record<string, string>> {
-  for (const [key, value] of Object.entries(vars)) {
+  const entries = Array.isArray(vars)
+    ? vars.map((v) => [v.key, v.value] as const)
+    : Object.entries(vars);
+  for (const [key, value] of entries) {
     if (!ENV_KEY_PATTERN.test(key))
       return {
         valid: false,
@@ -105,7 +108,11 @@ export function validateEnvVars(
         error: `Environment variable "${key}" contains a null byte`,
       };
   }
-  return { valid: true, value: vars };
+  const result: Record<string, string> = {};
+  for (const [key, value] of entries) {
+    result[key] = value;
+  }
+  return { valid: true, value: result };
 }
 
 export function validateHetznerToken(token: string): ValidationResult<string> {
@@ -179,6 +186,8 @@ export function validateDeployManifest(
       return { ok: false, error: '"build.compose_file" must be a string' };
     if ("compose_web_service" in b && typeof b.compose_web_service !== "string")
       return { ok: false, error: '"build.compose_web_service" must be a string' };
+    if ("context" in b && typeof b.context !== "string")
+      return { ok: false, error: '"build.context" must be a string' };
     if ("container_port" in b) {
       if (typeof b.container_port !== "number" || !Number.isInteger(b.container_port) || b.container_port < 1 || b.container_port > 65535)
         return { ok: false, error: '"build.container_port" must be an integer 1–65535' };
@@ -238,7 +247,7 @@ export function validateDeployRequest(req: {
   domain?: string;
   git_repo: string;
   container_port: number;
-  env_vars: Record<string, string>;
+  env_vars: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
 }): ValidationResult<void> {
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };

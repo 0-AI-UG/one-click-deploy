@@ -1,4 +1,5 @@
 import * as db from "../db.ts";
+import { parseEnvVars, serializeEnvVars } from "../env-crypto.ts";
 import { sshExec, restartContainer, serviceHealthCheck, pauseContainer, unpauseContainer, getContainerLogs } from "../remote/index.ts";
 import { getComputeProvider } from "../providers/index.ts";
 import { getCatalogEntry } from "../services/catalog.ts";
@@ -34,15 +35,10 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
       try {
         const app = db.getApp(link.app_id);
         if (app) {
-          const envVars = JSON.parse(app.env_vars || "{}");
+          const parsed = parseEnvVars(app.env_vars);
           const prefix = link.env_prefix || "DATABASE";
-          // Remove injected keys
-          for (const key of Object.keys(envVars)) {
-            if (key.startsWith(`${prefix}_`)) {
-              delete envVars[key];
-            }
-          }
-          db.updateAppEnvVars(app.id, JSON.stringify(envVars));
+          const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
+          db.updateAppEnvVars(app.id, serializeEnvVars(filtered));
         }
       } catch (err) {
         log("destroy", `Failed to unlink from app ${link.app_id}: ${err}`);
