@@ -150,6 +150,13 @@ export type ResourceVolume = {
   monthly_eur?: number;
 };
 
+export type ServerMetricSample = {
+  server_id: number;
+  cpu_percent: number;
+  memory_percent: number;
+  sampled_at: string;
+};
+
 export type ResourcesData = {
   servers: ResourceServer[];
   volumes: ResourceVolume[];

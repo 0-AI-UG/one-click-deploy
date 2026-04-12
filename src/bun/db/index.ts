@@ -1,5 +1,5 @@
 export { createDatabase, default } from "./connection.ts";
-export type { ServerRow } from "./servers.ts";
+export type { ServerRow, ServerMetricSampleRow } from "./servers.ts";
 export {
   getServers,
   getServer,
@@ -9,6 +9,9 @@ export {
   updateServer,
   deleteServer,
   updateServerHostKey,
+  insertServerMetricSample,
+  getRecentServerMetrics,
+  pruneOldServerMetrics,
 } from "./servers.ts";
 export type { AppRow, DnsRecordRow } from "./apps.ts";
 export {

@@ -258,7 +258,46 @@ async function tick(): Promise<void> {
       serviceCount++;
     }
 
+    // --- Server-level metrics (CPU/RAM via SSH) ---
+    const allServers = db.getServers();
+    await Promise.all(
+      allServers.map(async (s) => {
+        if (!s.ipv4) return;
+        try {
+          const hostKey = s.ssh_host_key || undefined;
+          const result = await sshExec(
+            s.ipv4,
+            `top -bn1 | grep '%Cpu' | head -1 && grep -E '^(MemTotal|MemAvailable):' /proc/meminfo`,
+            hostKey,
+          );
+          if (result.exitCode === 0 && result.stdout.trim()) {
+            const lines = result.stdout.trim().split("\n");
+            const cpuLine = lines.find((l: string) => l.includes("Cpu"));
+            let cpuPercent: number | null = null;
+            if (cpuLine) {
+              const idleMatch = cpuLine.match(/([\d.]+)\s*id/);
+              if (idleMatch) cpuPercent = Math.round((100 - parseFloat(idleMatch[1])) * 10) / 10;
+            }
+            let memTotal = 0, memAvailable = 0;
+            for (const line of lines) {
+              const totalMatch = line.match(/MemTotal:\s+(\d+)/);
+              const availMatch = line.match(/MemAvailable:\s+(\d+)/);
+              if (totalMatch) memTotal = parseInt(totalMatch[1]);
+              if (availMatch) memAvailable = parseInt(availMatch[1]);
+            }
+            const memPercent = memTotal > 0 ? Math.round((1 - memAvailable / memTotal) * 1000) / 10 : null;
+            if (cpuPercent != null && memPercent != null) {
+              db.insertServerMetricSample(s.id, cpuPercent, memPercent);
+            }
+          }
+        } catch {
+          // best-effort — skip unreachable servers
+        }
+      }),
+    );
+
     db.pruneOldMetrics(METRICS_RETENTION_SEC);
+    db.pruneOldServerMetrics(METRICS_RETENTION_SEC);
     log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps, ${serviceCount} services)`);
   } catch (err) {
     log("tick", `error: ${err}`);

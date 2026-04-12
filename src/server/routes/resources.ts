@@ -4,8 +4,6 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { destroyServer } from "../../bun/deploy/index.ts";
 import { getComputeProvider } from "../../bun/providers/index.ts";
-import { sshExec } from "../../bun/remote/index.ts";
-
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
@@ -52,49 +50,16 @@ export async function handleGetResources(request: Request): Promise<Response> {
     } catch (e) {
       console.error("resources: failed to sync servers from provider:", e);
     }
-    // Collect live CPU/RAM usage from each server via SSH (best-effort, parallel)
-    const usageMap = new Map<number, { cpu_percent: number; memory_percent: number }>();
-    await Promise.all(
-      dbServers.map(async (s) => {
-        if (!s.ipv4) return;
-        try {
-          const hostKey = s.ssh_host_key || undefined;
-          // One-liner: idle% from top, then used/total mem from /proc/meminfo
-          const result = await sshExec(
-            s.ipv4,
-            `top -bn1 | grep '%Cpu' | head -1 && grep -E '^(MemTotal|MemAvailable):' /proc/meminfo`,
-            hostKey,
-          );
-          if (result.exitCode === 0 && result.stdout.trim()) {
-            const lines = result.stdout.trim().split("\n");
-            // Parse CPU: "%Cpu(s): ... XX.X id, ..."
-            const cpuLine = lines.find((l: string) => l.includes("Cpu"));
-            let cpuPercent: number | null = null;
-            if (cpuLine) {
-              const idleMatch = cpuLine.match(/([\d.]+)\s*id/);
-              if (idleMatch) cpuPercent = Math.round((100 - parseFloat(idleMatch[1])) * 10) / 10;
-            }
-            // Parse memory
-            let memTotal = 0, memAvailable = 0;
-            for (const line of lines) {
-              const totalMatch = line.match(/MemTotal:\s+(\d+)/);
-              const availMatch = line.match(/MemAvailable:\s+(\d+)/);
-              if (totalMatch) memTotal = parseInt(totalMatch[1]);
-              if (availMatch) memAvailable = parseInt(availMatch[1]);
-            }
-            const memPercent = memTotal > 0 ? Math.round((1 - memAvailable / memTotal) * 1000) / 10 : null;
-            if (cpuPercent != null && memPercent != null) {
-              usageMap.set(s.id, { cpu_percent: cpuPercent, memory_percent: memPercent });
-            }
-          }
-        } catch {
-          // best-effort — skip unreachable servers
-        }
-      }),
-    );
+
+    // Get latest metric sample per server from the reconciler-collected history
+    const recentMetrics = db.getRecentServerMetrics(120); // last 2 minutes
+    const latestByServer = new Map<number, { cpu_percent: number; memory_percent: number }>();
+    for (const m of recentMetrics) {
+      latestByServer.set(m.server_id, { cpu_percent: m.cpu_percent, memory_percent: m.memory_percent });
+    }
 
     const servers = dbServers.map((s) => {
-      const usage = usageMap.get(s.id);
+      const usage = latestByServer.get(s.id);
       return {
         id: s.id,
         name: s.name,
@@ -154,6 +119,18 @@ export async function handleGetResources(request: Request): Promise<Response> {
     };
 
     return Response.json({ servers, volumes, totals }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleGetServerMetricsHistory(request: Request): Promise<Response> {
+  try {
+    await requirePermission(request, "resources.view");
+    const url = new URL(request.url);
+    const since = parseInt(url.searchParams.get("since") || "3600", 10);
+    const samples = db.getRecentServerMetrics(since);
+    return Response.json(samples, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

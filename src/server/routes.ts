@@ -43,7 +43,7 @@ import {
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
-import { handleGetResources, handleDeleteResource } from "./routes/resources.ts";
+import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus } from "./routes/scaling.ts";
 import {
@@ -279,6 +279,7 @@ export const apiRoutes = {
 
   // --- Resources ---
   "/api/resources": { GET: (req: Request) => handleGetResources(req) },
+  "/api/resources/metrics/history": { GET: (req: Request) => handleGetServerMetricsHistory(req) },
   "/api/resources/:type/:id": {
     DELETE: (req: Request) => {
       const { type, id } = resourcePartsFrom(req);

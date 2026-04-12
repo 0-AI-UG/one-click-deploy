@@ -92,3 +92,36 @@ export function deleteServer(id: number): void {
 export function updateServerHostKey(id: number, hostKey: string): void {
   db.query("UPDATE servers SET ssh_host_key = ? WHERE id = ?").run(hostKey, id);
 }
+
+// --- Server-level metrics ---
+
+export type ServerMetricSampleRow = {
+  id: number;
+  server_id: number;
+  cpu_percent: number;
+  memory_percent: number;
+  sampled_at: string;
+};
+
+export function insertServerMetricSample(serverId: number, cpuPercent: number, memPercent: number): void {
+  db.query(
+    "INSERT INTO server_metrics_samples (server_id, cpu_percent, memory_percent) VALUES (?, ?, ?)"
+  ).run(serverId, cpuPercent, memPercent);
+}
+
+export function getRecentServerMetrics(sinceSeconds: number): Pick<ServerMetricSampleRow, "server_id" | "cpu_percent" | "memory_percent" | "sampled_at">[] {
+  return db
+    .query(
+      `SELECT server_id, cpu_percent, memory_percent, sampled_at
+       FROM server_metrics_samples
+       WHERE sampled_at >= datetime('now', ?)
+       ORDER BY sampled_at ASC`
+    )
+    .all(`-${sinceSeconds} seconds`) as Pick<ServerMetricSampleRow, "server_id" | "cpu_percent" | "memory_percent" | "sampled_at">[];
+}
+
+export function pruneOldServerMetrics(olderThanSeconds: number): void {
+  db.query(
+    "DELETE FROM server_metrics_samples WHERE sampled_at < datetime('now', ?)"
+  ).run(`-${olderThanSeconds} seconds`);
+}

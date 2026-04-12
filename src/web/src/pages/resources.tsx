@@ -2,17 +2,24 @@ import { useState, useEffect } from "react";
 import { get, del } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
+import { Sparkline } from "./app-detail/shared.tsx";
 import { HardDrive, Server, Database, Trash2, RefreshCw, Terminal } from "lucide-react";
-import type { ResourcesData } from "../types.ts";
+import type { ResourcesData, ServerMetricSample } from "../types.ts";
 
 export function ResourcesPage() {
   const [data, setData] = useState<ResourcesData | null>(null);
+  const [metricsHistory, setMetricsHistory] = useState<ServerMetricSample[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
 
   const load = async () => {
     try {
-      setData(await get("/api/resources"));
+      const [resources, history] = await Promise.all([
+        get("/api/resources"),
+        get("/api/resources/metrics/history?since=3600"),
+      ]);
+      setData(resources);
+      setMetricsHistory(history);
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
@@ -94,33 +101,43 @@ export function ResourcesPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Servers ({data?.servers?.length || 0})</h3>
         </div>
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
-          <Table headers={["Name", "IP", "Type", "CPU", "RAM", "Location", "Replicas", "€/mo", ""]}>
-            {data.servers.map((s) => (
-              <tr key={s.id} className="hover:bg-alt/50">
-                <td className="py-2 px-3 text-fg font-bold">{s.name}</td>
-                <td className="py-2 px-3 text-fg-dim">{s.ipv4}</td>
-                <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.type}</span></td>
-                <td className="py-2 px-3 font-mono text-xs">{s.cpu_percent != null ? `${s.cpu_percent}%` : "—"}</td>
-                <td className="py-2 px-3 font-mono text-xs">{s.memory_percent != null ? `${s.memory_percent}%` : "—"}</td>
-                <td className="py-2 px-3 text-fg-dim">{s.location}</td>
-                <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
-                <td className="py-2 px-3 text-fg font-bold">{fmtPrice(s.monthly_eur)}</td>
-                <td className="py-2 px-3">
-                  <div className="flex items-center gap-1">
-                    <PermissionGate permission="terminal.access">
-                      <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/server/${s.id}`; }}>
-                        <Terminal size={11} /> Shell
-                      </Btn>
-                    </PermissionGate>
-                    <PermissionGate permission="resources.delete">
-                      <Btn size="xs" variant="danger" disabled={s.replica_count > 0} title={s.replica_count > 0 ? "In use by replicas" : undefined} loading={deleting === `server-${s.provider_id}`} onClick={() => handleDelete("server", s.provider_id, s.name)}>
-                        <Trash2 size={11} />
-                      </Btn>
-                    </PermissionGate>
-                  </div>
-                </td>
-              </tr>
-            ))}
+          <Table headers={["Name", "IP", "Type", "CPU", "RAM", "CPU (1h)", "RAM (1h)", "Location", "Replicas", "€/mo", ""]}>
+            {data.servers.map((s) => {
+              const cpuSeries = metricsHistory
+                .filter((m) => m.server_id === s.id)
+                .map((m) => m.cpu_percent);
+              const memSeries = metricsHistory
+                .filter((m) => m.server_id === s.id)
+                .map((m) => m.memory_percent);
+              return (
+                <tr key={s.id} className="hover:bg-alt/50">
+                  <td className="py-2 px-3 text-fg font-bold">{s.name}</td>
+                  <td className="py-2 px-3 text-fg-dim">{s.ipv4}</td>
+                  <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.type}</span></td>
+                  <td className="py-2 px-3 font-mono text-xs">{s.cpu_percent != null ? `${s.cpu_percent}%` : "—"}</td>
+                  <td className="py-2 px-3 font-mono text-xs">{s.memory_percent != null ? `${s.memory_percent}%` : "—"}</td>
+                  <td className="py-2 px-3"><Sparkline values={cpuSeries} /></td>
+                  <td className="py-2 px-3"><Sparkline values={memSeries} color="#f59e0b" /></td>
+                  <td className="py-2 px-3 text-fg-dim">{s.location}</td>
+                  <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
+                  <td className="py-2 px-3 text-fg font-bold">{fmtPrice(s.monthly_eur)}</td>
+                  <td className="py-2 px-3">
+                    <div className="flex items-center gap-1">
+                      <PermissionGate permission="terminal.access">
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/server/${s.id}`; }}>
+                          <Terminal size={11} /> Shell
+                        </Btn>
+                      </PermissionGate>
+                      <PermissionGate permission="resources.delete">
+                        <Btn size="xs" variant="danger" disabled={s.replica_count > 0} title={s.replica_count > 0 ? "In use by replicas" : undefined} loading={deleting === `server-${s.provider_id}`} onClick={() => handleDelete("server", s.provider_id, s.name)}>
+                          <Trash2 size={11} />
+                        </Btn>
+                      </PermissionGate>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </Table>
         )}
       </Card>

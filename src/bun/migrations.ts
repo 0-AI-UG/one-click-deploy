@@ -998,6 +998,20 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN webhook_wait_for_ci INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 39,
+    description: "Add server_metrics_samples table for server-level CPU/RAM history",
+    up: (db) => {
+      db.run(`CREATE TABLE IF NOT EXISTS server_metrics_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        cpu_percent REAL NOT NULL,
+        memory_percent REAL NOT NULL,
+        sampled_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run("CREATE INDEX IF NOT EXISTS idx_server_metrics_server_time ON server_metrics_samples(server_id, sampled_at)");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */
