@@ -132,6 +132,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
           notifyJob(job.id);
         }, payload.userId);
         db.finishDeployJob(job.id, result);
+        if (result.ok) db.deleteDeploySession(payload.userId);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         db.appendDeployJobEvent(job.id, "error", msg);

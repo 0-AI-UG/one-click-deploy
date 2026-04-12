@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
-import { Rocket, RotateCcw, X } from "lucide-react";
+import { Rocket, RotateCcw, X, Save } from "lucide-react";
 import { startDeploy } from "../../stores/deploy-progress.ts";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
@@ -10,6 +10,23 @@ import { EnvSection } from "./env-section.tsx";
 import { AdvancedSection } from "./advanced-section.tsx";
 import type { IntrospectResult, ManifestEnvDef, FormState } from "./types.ts";
 import type { DeployBody } from "../../types.ts";
+
+const EMPTY_FORM: FormState = {
+  app_name: "",
+  git_repo: "",
+  domain: "",
+  container_port: "3000",
+  volume_size: "",
+  volume_path: "/data",
+  dockerfile_path: "",
+  webhook_enabled: false,
+  webhook_branch: "main",
+  webhook_path: "",
+  auth_password: "",
+  replicas: "1",
+  compose_file: "",
+  compose_web_service: "",
+};
 
 export function DeployPage() {
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
@@ -23,22 +40,7 @@ export function DeployPage() {
   const [selectedManifest, setSelectedManifest] = useState<number | null>(null);
   const [manifestEnvDefs, setManifestEnvDefs] = useState<ManifestEnvDef[]>([]);
 
-  const [form, setForm] = useState<FormState>({
-    app_name: "",
-    git_repo: "",
-    domain: "",
-    container_port: "3000",
-    volume_size: "",
-    volume_path: "/data",
-    dockerfile_path: "",
-    webhook_enabled: false,
-    webhook_branch: "main",
-    webhook_path: "",
-    auth_password: "",
-    replicas: "1",
-    compose_file: "",
-    compose_web_service: "",
-  });
+  const [form, setForm] = useState<FormState>({ ...EMPTY_FORM });
 
   function applyManifest(idx: number, result: IntrospectResult & { ok: true }) {
     const pm = result.manifests[idx];
@@ -110,12 +112,16 @@ export function DeployPage() {
     }
   }
 
+  // --- Deploy session persistence ---
   const [pendingSession, setPendingSession] = useState<{
     form: FormState;
     envValues: Record<string, string>;
     extraEnv: Array<{ key: string; value: string }>;
   } | null>(null);
-  const hasRestored = useRef(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  // When true, the introspect effect is suppressed so a restored session
+  // isn't overwritten by repo discovery.
+  const skipIntrospect = useRef(false);
 
   // Check for a saved deploy session on mount
   useEffect(() => {
@@ -128,10 +134,13 @@ export function DeployPage() {
 
   function restoreSession() {
     if (!pendingSession) return;
-    hasRestored.current = true;
-    setForm((f) => ({ ...f, ...pendingSession.form }));
+    // Suppress the introspect effect that would fire from setting git_repo
+    skipIntrospect.current = true;
+    setForm({ ...EMPTY_FORM, ...pendingSession.form });
     if (pendingSession.envValues) setEnvValues(pendingSession.envValues);
     if (pendingSession.extraEnv) setExtraEnv(pendingSession.extraEnv);
+    // Show the form sections immediately
+    setRevealed(true);
     setPendingSession(null);
   }
 
@@ -148,13 +157,26 @@ export function DeployPage() {
       return;
     }
     if (!form.app_name && !form.git_repo) return;
+    setSaveStatus("saving");
     const timer = setTimeout(() => {
-      post("/api/deploy-session", { form, envValues, extraEnv }).catch(() => {});
+      post("/api/deploy-session", { form, envValues, extraEnv })
+        .then(() => {
+          setSaveStatus("saved");
+          setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
+        })
+        .catch(() => setSaveStatus("idle"));
     }, 1000);
     return () => clearTimeout(timer);
   }, [form, envValues, extraEnv]);
 
+  // --- Repo introspection ---
   useEffect(() => {
+    // After a session restore, skip the first introspect trigger
+    if (skipIntrospect.current) {
+      skipIntrospect.current = false;
+      return;
+    }
+
     const url = form.git_repo.trim();
     if (!url) {
       setIntrospect(null);
@@ -272,7 +294,6 @@ export function DeployPage() {
       compose_web_service: form.compose_web_service || undefined,
     };
 
-    del("/api/deploy-session").catch(() => {});
     void startDeploy(body);
     window.location.hash = "#/deploy/progress";
   };
@@ -286,6 +307,15 @@ export function DeployPage() {
         <div className="flex items-center gap-2 mb-2">
           <Rocket size={18} className="text-fg" />
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>
+          {saveStatus !== "idle" && (
+            <span className="ml-auto flex items-center gap-1.5 font-mono text-[9px] text-fg-dim uppercase tracking-wider">
+              {saveStatus === "saving" ? (
+                <><Save size={10} className="animate-pulse" /> Saving…</>
+              ) : (
+                <><Save size={10} /> Saved</>
+              )}
+            </span>
+          )}
         </div>
         <p className="text-fg-dim text-[12px]">
           Paste a GitHub repo. We'll figure out the rest.
