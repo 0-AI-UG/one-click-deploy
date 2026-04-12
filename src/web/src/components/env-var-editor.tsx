@@ -51,9 +51,19 @@ export function EnvVarEditor({ entries, onChange, readOnly, label }: Props) {
             <>
               <button
                 type="button"
-                onClick={() => update(i, "secret", !v.secret)}
+                onClick={() => {
+                  const next = [...entries];
+                  // When switching secret→plaintext, clear the masked value
+                  // so the user re-enters it (frontend never has the real value).
+                  if (v.secret) {
+                    next[i] = { ...next[i], secret: false, value: "" };
+                  } else {
+                    next[i] = { ...next[i], secret: true };
+                  }
+                  onChange(next);
+                }}
                 className="text-muted hover:text-fg transition-colors flex-shrink-0"
-                title={v.secret ? "Stored encrypted (click to make plaintext)" : "Stored as plaintext (click to encrypt)"}
+                title={v.secret ? "Encrypted — click to make plaintext (you'll need to re-enter the value)" : "Plaintext — click to encrypt"}
               >
                 {v.secret ? <Lock size={14} /> : <Unlock size={14} />}
               </button>
