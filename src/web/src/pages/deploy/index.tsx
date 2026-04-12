@@ -400,10 +400,11 @@ export function DeployPage() {
 
   const detected = introspect?.ok === true ? introspect : null;
   const showReceipt = revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1);
+  const centered = !revealed && !pendingSession && !form.git_repo.trim();
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-10 animate-fade-in">
-      <div className="mb-8">
+    <div className={`max-w-2xl mx-auto px-4 transition-all duration-500 ease-out ${centered ? "pt-[30vh]" : "py-10"}`}>
+      <div className={`transition-all duration-500 ease-out ${centered ? "mb-4" : "mb-8"}`}>
         <div className="flex items-center gap-2 mb-2">
           <Rocket size={18} className="text-fg" />
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>
