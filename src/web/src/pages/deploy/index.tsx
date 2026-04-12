@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
-import { Rocket, RotateCcw, X, Save } from "lucide-react";
+import { Rocket, RotateCcw, X, Save, Loader2 } from "lucide-react";
 import { startDeploy } from "../../stores/deploy-progress.ts";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
@@ -19,6 +19,7 @@ const EMPTY_FORM: FormState = {
   volume_size: "",
   volume_path: "/data",
   dockerfile_path: "",
+  docker_context: "",
   webhook_enabled: false,
   webhook_branch: "main",
   webhook_path: "",
@@ -57,6 +58,7 @@ export function DeployPage() {
           ? String(result.detected_port)
           : f.container_port,
       dockerfile_path: m.build?.dockerfile || f.dockerfile_path,
+      docker_context: m.build?.context || f.docker_context,
       compose_file: m.build?.compose_file || f.compose_file,
       compose_web_service: m.build?.compose_web_service || f.compose_web_service,
       volume_size: m.volume?.size ? String(m.volume.size) : f.volume_size,
@@ -285,6 +287,7 @@ export function DeployPage() {
       volume_size: form.volume_size ? parseInt(form.volume_size, 10) : undefined,
       volume_path: form.volume_size ? form.volume_path : undefined,
       dockerfile_path: form.dockerfile_path || undefined,
+      docker_context: form.docker_context || undefined,
       webhook_enabled: form.webhook_enabled,
       webhook_branch: form.webhook_enabled ? form.webhook_branch : undefined,
       webhook_path: form.webhook_enabled && form.webhook_path ? form.webhook_path : undefined,
@@ -307,13 +310,12 @@ export function DeployPage() {
         <div className="flex items-center gap-2 mb-2">
           <Rocket size={18} className="text-fg" />
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>
-          {saveStatus !== "idle" && (
+          {saveStatus === "saving" && (
+            <Loader2 size={12} className="ml-auto animate-spin text-fg-dim" />
+          )}
+          {saveStatus === "saved" && (
             <span className="ml-auto flex items-center gap-1.5 font-mono text-[9px] text-fg-dim uppercase tracking-wider">
-              {saveStatus === "saving" ? (
-                <><Save size={10} className="animate-pulse" /> Saving…</>
-              ) : (
-                <><Save size={10} /> Saved</>
-              )}
+              <Save size={10} /> Saved
             </span>
           )}
         </div>
@@ -327,8 +329,7 @@ export function DeployPage() {
           <div className="flex items-center gap-2 min-w-0">
             <RotateCcw size={14} className="text-fg shrink-0" />
             <span className="font-mono text-[11px] text-fg truncate">
-              You have an unsaved deploy session
-              {pendingSession.form.app_name ? ` for "${pendingSession.form.app_name}"` : ""}
+              Resume previous session{pendingSession.form.app_name ? ` for "${pendingSession.form.app_name}"` : ""}?
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
