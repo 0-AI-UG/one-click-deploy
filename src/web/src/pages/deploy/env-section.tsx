@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { get } from "../../api/client.ts";
 import { Card } from "../../components/ui.tsx";
+import { NeoSelect } from "../../components/neo-select.tsx";
 import type { ManifestEnvDef } from "./types.ts";
 import type { EnvironmentData } from "../../types.ts";
 
@@ -33,18 +34,17 @@ export function EnvSection({ envValues, setEnvValues, manifestEnvDefs, selectedE
 
       {environments.length > 0 && (
         <div className="mb-3">
-          <select
-            value={selectedEnvironmentId ?? "new"}
-            onChange={(e) => onEnvironmentChange(e.target.value === "new" ? null : parseInt(e.target.value))}
-            className="w-full"
-          >
-            <option value="new">Create new environment</option>
-            {environments.map((env) => (
-              <option key={env.id} value={env.id}>
-                {env.name} — {env.env_vars.length} var{env.env_vars.length !== 1 ? "s" : ""}
-              </option>
-            ))}
-          </select>
+          <NeoSelect
+            value={selectedEnvironmentId != null ? String(selectedEnvironmentId) : "new"}
+            onChange={(v) => onEnvironmentChange(v === "new" ? null : parseInt(v))}
+            options={[
+              { value: "new", label: "Create new environment" },
+              ...environments.map((env) => ({
+                value: String(env.id),
+                label: `${env.name} — ${env.env_vars.length} var${env.env_vars.length !== 1 ? "s" : ""}`,
+              })),
+            ]}
+          />
         </div>
       )}
 
