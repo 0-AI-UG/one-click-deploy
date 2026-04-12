@@ -17,7 +17,7 @@ function GitHubOAuthSettings({ form, setS }: { form: Record<string, string>; set
   };
 
   return (
-    <div className="border-t-2 border-fg pt-4 space-y-3">
+    <div className="pt-2 space-y-3">
       <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">GitHub OAuth</h3>
       <div>
         <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Callback URL</label>
@@ -216,7 +216,7 @@ export function UsersPage() {
         </div>
         <GitHubOAuthSettings form={settingsForm} setS={setS} />
 
-        <div className="border-t-2 border-fg pt-4">
+        <div className="pt-2">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">Defaults</h3>
           <div>
             <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>
@@ -290,7 +290,7 @@ export function UsersPage() {
             </Btn>
           </div>
 
-          <div className="border-t-2 border-fg pt-3">
+          <div className="pt-1">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="font-mono text-[11px] text-fg font-bold">Auto-update from {panel.git_branch}</div>
@@ -325,7 +325,7 @@ export function UsersPage() {
           </div>
 
           {panelDeployments.length > 0 && (
-            <div className="border-t-2 border-fg pt-3">
+            <div className="pt-1">
               <h4 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-2">Recent deployments</h4>
               <div className="space-y-1 text-[11px] font-mono max-h-48 overflow-y-auto">
                 {panelDeployments.slice(0, 10).map((d) => (
