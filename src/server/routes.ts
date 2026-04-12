@@ -34,7 +34,6 @@ import {
   handlePauseApp,
   handleUnpauseApp,
   handleRedeployApp,
-  handleUpdateAppEnv,
   handleRenameApp,
   handleGetContainerLogs,
   handleGetDeployLog,
@@ -74,6 +73,7 @@ import {
   handleCreateEnvironment,
   handleUpdateEnvironment,
   handleDeleteEnvironment,
+  handleGetEnvironmentApps,
 } from "./routes/environments.ts";
 import {
   handleGetCatalog,
@@ -213,7 +213,6 @@ export const apiRoutes = {
   "/api/apps/:appId/pause": { POST: (req: Request) => handlePauseApp(req, appIdFrom(req)) },
   "/api/apps/:appId/unpause": { POST: (req: Request) => handleUnpauseApp(req, appIdFrom(req)) },
   "/api/apps/:appId/redeploy": { POST: (req: Request) => handleRedeployApp(req, appIdFrom(req)) },
-  "/api/apps/:appId/env": { PUT: (req: Request) => handleUpdateAppEnv(req, appIdFrom(req)) },
   "/api/apps/:appId/rename": { PUT: (req: Request) => handleRenameApp(req, appIdFrom(req)) },
   "/api/apps/:appId/logs": { GET: (req: Request) => handleGetContainerLogs(req, appIdFrom(req)) },
   "/api/apps/:appId/deploy-log": { GET: (req: Request) => handleGetDeployLog(req, appIdFrom(req)) },
@@ -318,6 +317,9 @@ export const apiRoutes = {
   "/api/environments/:id": {
     PUT: (req: Request) => handleUpdateEnvironment(req, environmentIdFrom(req)),
     DELETE: (req: Request) => handleDeleteEnvironment(req, environmentIdFrom(req)),
+  },
+  "/api/environments/:id/apps": {
+    GET: (req: Request) => handleGetEnvironmentApps(req, environmentIdFrom(req)),
   },
 
   // --- Volumes ---

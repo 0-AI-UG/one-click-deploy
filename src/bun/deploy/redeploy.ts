@@ -6,7 +6,6 @@ import {
   deployAuthProxy, removeAuthProxy, removeContainer,
   healthCheck, composeHealthCheck,
 } from "../remote/index.ts";
-import { validateEnvVars } from "../validate.ts";
 import { resolveAppEnvVars } from "../env-crypto.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { rollingRedeploy } from "../scale.ts";
@@ -69,7 +68,6 @@ function log(context: string, ...args: any[]) {
 export async function redeployApp(
   appId: number,
   onProgress: ProgressFn,
-  newEnvVars?: Record<string, string>,
   newAuthPassword?: string | null,
   newContainerPort?: number,
   userId?: string,
@@ -111,7 +109,7 @@ export async function redeployApp(
     // Defer DB writes — hold new values in local vars, only persist after success
     const authPassword = newAuthPassword !== undefined ? (newAuthPassword || "") : app.auth_password;
 
-    const envVars = newEnvVars ?? await resolveAppEnvVars(app);
+    const envVars = await resolveAppEnvVars(app);
     const containerPort = newContainerPort ?? app.container_port;
     const hostKey = server.ssh_host_key || undefined;
 
@@ -227,10 +225,7 @@ export async function redeployApp(
       : await healthCheck(server.ipv4, app.name, containerBindAddr, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
 
-    // Success — now persist env/auth changes to DB
-    if (newEnvVars) {
-      db.updateAppEnvVars(appId, JSON.stringify(newEnvVars));
-    }
+    // Success — now persist auth/port changes to DB
     if (newAuthPassword !== undefined) {
       db.updateAppAuthPassword(appId, newAuthPassword || "");
     }
@@ -258,102 +253,6 @@ export async function redeployApp(
     log("redeployApp", `Failed:`, msg);
     // Rollback: restore previous status (env/auth were never written to DB)
     db.updateAppStatus(appId, previousStatus);
-    return { ok: false, error: msg };
-  }
-}
-
-export async function updateAppEnv(
-  appId: number,
-  envVars: Record<string, string>,
-  userId?: string,
-): Promise<{ ok: boolean; error?: string }> {
-  log("updateAppEnv", `Updating env vars for app id=${appId}`);
-  try {
-    const envResult = validateEnvVars(envVars);
-    if (!envResult.valid) return { ok: false, error: envResult.error };
-
-    const app = db.getApp(appId);
-    if (!app) throw new Error("App not found");
-    const replicas = db.getReplicas(appId);
-    if (replicas.length === 0) throw new Error("App has no replicas");
-    const firstReplica = replicas[0];
-    const server = db.getServer(firstReplica.server_id);
-    if (!server) throw new Error("Server not found");
-    const hostPort = firstReplica.host_port;
-    const containerPort = app.container_port;
-
-    // Defer DB write — only persist after successful rebuild
-    // Recreate container with new env vars
-    const hostKey = server.ssh_host_key || undefined;
-    const resolvedGitToken = await resolveGitHubToken(userId);
-    const githubPat = resolvedGitToken || undefined;
-    const logLine = (line: string) => db.appendDeployLog(appId, `[env-update] ${line}`);
-    const bindAddr = replicaBindHost(server);
-
-    if (app.deploy_mode === "compose") {
-      await cloneAndComposeBuild(
-        server.ipv4,
-        {
-          name: app.name,
-          gitRepo: app.git_repo,
-          port: containerPort,
-          hostPort: hostPort,
-          envVars,
-          volumeMount: app.volume_mount || undefined,
-          composeFile: app.compose_file,
-          webService: app.compose_web_service,
-          gitToken: githubPat,
-          bindAddr,
-        },
-        logLine
-      );
-    } else if (app.deploy_mode === "railpack") {
-      await cloneAndRailpackBuild(
-        server.ipv4,
-        {
-          name: app.name,
-          gitRepo: app.git_repo,
-          port: containerPort,
-          hostPort: hostPort,
-          envVars,
-          volumeMount: app.volume_mount || undefined,
-          gitToken: githubPat,
-          bindAddr,
-        },
-        logLine
-      );
-    } else {
-      await cloneAndBuild(
-        server.ipv4,
-        {
-          name: app.name,
-          gitRepo: app.git_repo,
-          port: containerPort,
-          hostPort: hostPort,
-          envVars,
-          volumeMount: app.volume_mount || undefined,
-          dockerfilePath: app.dockerfile_path || undefined,
-          dockerContext: app.docker_context || undefined,
-          gitToken: githubPat,
-          bindAddr,
-        },
-        logLine
-      );
-    }
-
-    const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey)
-      : await healthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey);
-    db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
-
-    // Success — now persist env vars to DB
-    db.updateAppEnvVars(appId, JSON.stringify(envVars));
-
-    log("updateAppEnv", `Env vars updated for app id=${appId}`);
-    return { ok: true };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log("updateAppEnv", `Failed:`, msg);
     return { ok: false, error: msg };
   }
 }
@@ -685,4 +584,34 @@ export function getServersWithApps(): any[] {
     }),
   };
   });
+}
+
+// ── Cascade redeploy: triggered when an environment's vars change ──
+
+export async function cascadeRedeployEnvironment(environmentId: number): Promise<void> {
+  const apps = db.getAppsByEnvironmentId(environmentId);
+  log("cascade", `Environment ${environmentId} changed — redeploying ${apps.length} app(s)`);
+
+  for (const app of apps) {
+    if (app.status === "stopped" || app.status === "destroying") {
+      log("cascade", `Skipping app ${app.id} (${app.name}): status=${app.status}`);
+      continue;
+    }
+    try {
+      const release = await acquireLock(`app:${app.id}`, "env-cascade-redeploy");
+      try {
+        log("cascade", `Redeploying app ${app.id} (${app.name})`);
+        const result = await redeployApp(app.id, () => {});
+        if (!result.ok) {
+          log("cascade", `App ${app.id} (${app.name}) failed: ${result.error}`);
+        }
+      } finally {
+        release();
+      }
+    } catch (err) {
+      log("cascade", `App ${app.id} (${app.name}) error:`, err);
+    }
+  }
+
+  log("cascade", `Cascade for environment ${environmentId} complete`);
 }

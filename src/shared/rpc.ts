@@ -106,7 +106,8 @@ export type DeployRequest = {
   domain?: string;
   git_repo: string;
   container_port: number;
-  env_vars: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
+  env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
+  environment_id?: number; // Link to an existing environment instead of providing env_vars
   volume_size?: number; // GB, if set a Hetzner Volume is created and mounted
   volume_path?: string; // Container mount path, defaults to /data
   dockerfile_path?: string; // Path to Dockerfile in repo, auto-discovered if omitted

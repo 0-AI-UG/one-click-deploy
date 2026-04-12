@@ -27,6 +27,5 @@ export function updateEnvironment(id: number, name: string, envVars: string): vo
 }
 
 export function deleteEnvironment(id: number): void {
-  db.query("UPDATE apps SET environment_id = NULL WHERE environment_id = ?").run(id);
   db.query("DELETE FROM environments WHERE id = ?").run(id);
 }

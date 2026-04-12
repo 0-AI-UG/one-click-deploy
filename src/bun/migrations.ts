@@ -909,7 +909,83 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE environments_new RENAME TO environments");
     },
   },
+  {
+    version: 36,
+    description: "Migrate app env_vars into dedicated environments (one app = one environment)",
+    up: (db) => {
+      const EMPTY_V2 = '{"version":2,"entries":[]}';
+      // Get all apps that have non-empty env_vars
+      const apps = db.query(
+        "SELECT id, name, env_vars, environment_id FROM apps"
+      ).all() as Array<{ id: number; name: string; env_vars: string; environment_id: number | null }>;
+
+      for (const app of apps) {
+        const hasEnvVars = app.env_vars && app.env_vars !== EMPTY_V2 && app.env_vars !== '{}';
+        if (!hasEnvVars && app.environment_id) continue; // already linked, no app vars — skip
+        if (!hasEnvVars && !app.environment_id) continue; // no vars at all — skip
+
+        // Pick a unique environment name based on the app name
+        let envName = app.name;
+        const existing = db.query("SELECT id FROM environments WHERE name = ?").get(envName) as { id: number } | null;
+        if (existing && app.environment_id === existing.id && !hasEnvVars) {
+          // App already points to an environment with its own name, no app vars to merge
+          continue;
+        }
+
+        if (hasEnvVars) {
+          if (app.environment_id) {
+            // App has both environment_id AND app-specific vars — create a new dedicated env merging both
+            const envRow = db.query("SELECT env_vars FROM environments WHERE id = ?").get(app.environment_id) as { env_vars: string } | null;
+            // Merge: parse both, app vars override environment vars
+            const envEntries = parseEntriesFromRaw(envRow?.env_vars);
+            const appEntries = parseEntriesFromRaw(app.env_vars);
+            const merged = new Map<string, any>();
+            for (const e of envEntries) merged.set(e.key, e);
+            for (const e of appEntries) merged.set(e.key, e);
+            const mergedJson = JSON.stringify({ version: 2, entries: Array.from(merged.values()) });
+
+            // Find unique name
+            let dedupName = app.name;
+            let suffix = 1;
+            while (db.query("SELECT id FROM environments WHERE name = ?").get(dedupName)) {
+              dedupName = `${app.name}-${suffix++}`;
+            }
+            const newEnv = db.query(
+              "INSERT INTO environments (name, env_vars) VALUES (?, ?) RETURNING id"
+            ).get(dedupName, mergedJson) as { id: number };
+            db.run("UPDATE apps SET environment_id = ?, env_vars = ? WHERE id = ?", [newEnv.id, EMPTY_V2, app.id]);
+          } else {
+            // App has env_vars but no environment — create one
+            let dedupName = app.name;
+            let suffix = 1;
+            while (db.query("SELECT id FROM environments WHERE name = ?").get(dedupName)) {
+              dedupName = `${app.name}-${suffix++}`;
+            }
+            const newEnv = db.query(
+              "INSERT INTO environments (name, env_vars) VALUES (?, ?) RETURNING id"
+            ).get(dedupName, app.env_vars) as { id: number };
+            db.run("UPDATE apps SET environment_id = ?, env_vars = ? WHERE id = ?", [newEnv.id, EMPTY_V2, app.id]);
+          }
+        }
+      }
+    },
+  },
 ];
+
+/** Helper for migration 36: parse env var entries from raw JSON. */
+function parseEntriesFromRaw(raw: string | null | undefined): Array<{ key: string; [k: string]: any }> {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.version === 2 && Array.isArray(parsed.entries)) return parsed.entries;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.entries(parsed).map(([key, value]) => ({
+        key, value: String(value), secret: false, updated_at: new Date().toISOString(),
+      }));
+    }
+    return [];
+  } catch { return []; }
+}
 
 export function runMigrations(db: Database): void {
   // Create schema_version table if it doesn't exist

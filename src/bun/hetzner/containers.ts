@@ -12,6 +12,8 @@ type CaddyHandler = {
   status_code?: string;
   headers?: Record<string, string[]>;
   body?: string;
+  flush_interval?: number;
+  transport?: Record<string, unknown>;
 };
 
 type CaddyRoute = {
@@ -140,6 +142,19 @@ export async function deployCaddySite(
   const handler: CaddyHandler = {
     handler: "reverse_proxy",
     upstreams: [{ dial: `localhost:${containerPort}` }],
+    // flush_interval -1 ensures streaming/WebSocket data is forwarded
+    // immediately instead of being buffered.
+    flush_interval: -1,
+    transport: {
+      protocol: "http",
+      // Keep upstream connections alive so WebSocket upgrades aren't dropped
+      // by stale TCP teardowns between Caddy and the backend.
+      keep_alive: {
+        enabled: true,
+        idle_conns_per_host: 16,
+        max_idle_conns_per_host: 32,
+      },
+    },
   };
 
   const route: CaddyRoute = {

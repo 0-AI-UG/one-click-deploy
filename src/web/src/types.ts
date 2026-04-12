@@ -30,6 +30,7 @@ export type AppData = {
   deployed_by_username?: string;
   env_vars?: EnvVarEntry[] | string | Record<string, string>;
   environment_id?: number | null;
+  environment_name?: string | null;
   autoscale_enabled?: boolean;
   min_replicas?: number;
   max_replicas?: number;
@@ -189,6 +190,7 @@ export type DeployBody = {
   domain?: string;
   container_port: number;
   env_vars?: Array<{ key: string; value: string; secret: boolean }>;
+  environment_id?: number;
   volume_size?: number;
   volume_path?: string;
   dockerfile_path?: string;

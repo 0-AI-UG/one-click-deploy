@@ -92,10 +92,11 @@ export function insertApp(app: {
   container_port: number;
   env_vars: string;
   auth_password?: string;
+  environment_id?: number;
 }): AppRow {
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       app.name,
@@ -105,7 +106,8 @@ export function insertApp(app: {
       app.docker_context || ".",
       app.container_port,
       app.env_vars,
-      app.auth_password || ""
+      app.auth_password || "",
+      app.environment_id ?? null,
     ) as AppRow;
 }
 
@@ -119,13 +121,14 @@ export function insertAppWithFirstReplica(
     container_port: number;
     env_vars: string;
     auth_password?: string;
+    environment_id?: number;
   },
   serverId: number,
 ): { app: AppRow; replica: ReplicaRow } {
   const tx = db.transaction(() => {
     const appRow = db
       .query(
-        "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+        "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
       )
       .get(
         app.name,
@@ -136,6 +139,7 @@ export function insertAppWithFirstReplica(
         app.container_port,
         app.env_vars,
         app.auth_password || "",
+        app.environment_id ?? null,
       ) as AppRow;
     const hostPort = nextReplicaHostPort(serverId);
     const replicaRow = db
@@ -282,6 +286,10 @@ export function deleteDnsRecord(recordId: string): void {
 
 export function updateAppEnvVars(id: number, envVars: string): void {
   db.query("UPDATE apps SET env_vars = ? WHERE id = ?").run(envVars, id);
+}
+
+export function getAppsByEnvironmentId(environmentId: number): AppRow[] {
+  return db.query("SELECT * FROM apps WHERE environment_id = ?").all(environmentId) as AppRow[];
 }
 
 export function updateAppEnvironment(id: number, environmentId: number | null): void {

@@ -176,10 +176,15 @@ export async function deploy(
   const resolvedGitToken = await resolveGitHubToken(userId);
   const githubPat = resolvedGitToken || undefined;
   log("deploy", `GitHub token ${githubPat ? `present (${githubPat.length} chars)` : "not configured (user has no linked GitHub)"}`);
+  const envVarValues = req.env_vars
+    ? Array.isArray(req.env_vars)
+      ? req.env_vars.map((e) => e.value)
+      : Object.values(req.env_vars)
+    : [];
   const secretValues = [
     tokens.hetzner_api_token,
     ...(githubPat ? [githubPat] : []),
-    ...Object.values(req.env_vars),
+    ...envVarValues,
   ];
   const mask = createMasker(secretValues);
 
@@ -385,20 +390,38 @@ export async function deploy(
     onProgress("build", `Cloning ${req.git_repo} and building...`);
 
     let dockerfilePath = req.dockerfile_path || "Dockerfile";
-    const processedEnv = await processIncomingEnvVars(req.env_vars || {});
-    // Flat plaintext env vars for the container build functions
+
+    // Resolve or create the environment for this app
+    let environmentId: number | undefined = req.environment_id;
     const flatEnvVars: Record<string, string> = {};
-    for (const entry of processedEnv.entries) {
-      flatEnvVars[entry.key] = entry.value || "";
+
+    if (environmentId) {
+      // Use existing environment — resolve its vars for the build
+      const envRow = db.getEnvironment(environmentId);
+      if (envRow) {
+        const { resolveEnvVarsForDeploy } = await import("../env-crypto.ts");
+        Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
+      }
+    } else if (req.env_vars && (Array.isArray(req.env_vars) ? req.env_vars.length > 0 : Object.keys(req.env_vars).length > 0)) {
+      // Auto-create environment named after the app
+      const processedEnv = await processIncomingEnvVars(req.env_vars);
+      // Build flat env vars from raw input (secrets have plaintext in incoming data)
+      const rawEntries = Array.isArray(req.env_vars)
+        ? req.env_vars
+        : Object.entries(req.env_vars).map(([k, v]) => ({ key: k, value: v as string }));
+      for (const e of rawEntries) {
+        flatEnvVars[e.key] = e.value;
+      }
+      // Find unique environment name
+      let envName = req.app_name;
+      let suffix = 1;
+      while (db.getEnvironments().find((e) => e.name === envName)) {
+        envName = `${req.app_name}-${suffix++}`;
+      }
+      const envRow = db.insertEnvironment(envName, serializeEnvVars(processedEnv.entries));
+      environmentId = envRow.id;
     }
-    // For secrets, the plaintext value is in the incoming data, not in processed (which has encrypted_value)
-    // So we build flatEnvVars from the raw input
-    const rawEntries = Array.isArray(req.env_vars)
-      ? req.env_vars
-      : Object.entries(req.env_vars || {}).map(([k, v]) => ({ key: k, value: v as string }));
-    for (const e of rawEntries) {
-      flatEnvVars[e.key] = e.value;
-    }
+
     const { app, replica } = db.insertAppWithFirstReplica(
       {
         name: req.app_name,
@@ -407,8 +430,9 @@ export async function deploy(
         dockerfile_path: dockerfilePath,
         docker_context: req.docker_context,
         container_port: req.container_port,
-        env_vars: serializeEnvVars(processedEnv.entries),
+        env_vars: serializeEnvVars([]),
         auth_password: req.auth_password,
+        environment_id: environmentId,
       },
       serverId!,
     );

@@ -32,6 +32,7 @@ const EMPTY_FORM: FormState = {
 export function DeployPage() {
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [extraEnv, setExtraEnv] = useState<Array<{ key: string; value: string }>>([]);
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<number | null>(null);
 
   const [introspect, setIntrospect] = useState<IntrospectResult | null>(null);
   const [introspecting, setIntrospecting] = useState(false);
@@ -273,14 +274,18 @@ export function DeployPage() {
         return showToast(`Required: ${missing.map((e) => e.key).join(", ")}`, "error");
     }
 
-    const envArray: Array<{ key: string; value: string; secret: boolean }> = [];
-    for (const [key, value] of Object.entries(envValues)) {
-      const def = manifestEnvDefs.find((d) => d.key === key);
-      envArray.push({ key, value, secret: def?.secret ?? false });
+    // If using an existing environment, don't send env_vars
+    let envArray: Array<{ key: string; value: string; secret: boolean }> | undefined;
+    if (!selectedEnvironmentId) {
+      envArray = [];
+      for (const [key, value] of Object.entries(envValues)) {
+        const def = manifestEnvDefs.find((d) => d.key === key);
+        envArray.push({ key, value, secret: def?.secret ?? false });
+      }
+      extraEnv.forEach((v) => {
+        if (v.key) envArray!.push({ key: v.key, value: v.value, secret: false });
+      });
     }
-    extraEnv.forEach((v) => {
-      if (v.key) envArray.push({ key: v.key, value: v.value, secret: false });
-    });
 
     const body: DeployBody = {
       app_name: form.app_name,
@@ -288,6 +293,7 @@ export function DeployPage() {
       domain: form.domain || undefined,
       container_port: parseInt(form.container_port, 10),
       env_vars: envArray,
+      environment_id: selectedEnvironmentId || undefined,
       volume_size: form.volume_size ? parseInt(form.volume_size, 10) : undefined,
       volume_path: form.volume_size ? form.volume_path : undefined,
       dockerfile_path: form.dockerfile_path || undefined,
@@ -384,6 +390,8 @@ export function DeployPage() {
             envValues={envValues}
             setEnvValues={setEnvValues}
             manifestEnvDefs={manifestEnvDefs}
+            selectedEnvironmentId={selectedEnvironmentId}
+            onEnvironmentChange={setSelectedEnvironmentId}
           />
         )}
 

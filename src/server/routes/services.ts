@@ -295,7 +295,6 @@ export async function handleLinkService(request: Request, serviceId: number, app
 
     // Build new env var entries for the service link
     const now = new Date().toISOString();
-    const parsed = parseEnvVars(app.env_vars);
     const newEntries: EnvVarEntry[] = [];
 
     // Helper: create entry, marking URL and password as secrets
@@ -319,10 +318,21 @@ export async function handleLinkService(request: Request, serviceId: number, app
       }
     }
 
-    // Merge: remove existing entries with same keys, then append new ones
-    const newKeys = new Set(newEntries.map((e) => e.key));
-    const filtered = parsed.entries.filter((e) => !newKeys.has(e.key));
-    db.updateAppEnvVars(appId, serializeEnvVars([...filtered, ...newEntries]));
+    // Write service env vars to the app's linked environment
+    if (app.environment_id) {
+      const envRow = db.getEnvironment(app.environment_id);
+      if (envRow) {
+        const envParsed = parseEnvVars(envRow.env_vars);
+        const newKeys = new Set(newEntries.map((e) => e.key));
+        const filtered = envParsed.entries.filter((e) => !newKeys.has(e.key));
+        db.updateEnvironment(app.environment_id, envRow.name, serializeEnvVars([...filtered, ...newEntries]));
+      }
+    } else {
+      // Fallback: create an environment for the app if it doesn't have one
+      const envName = app.name;
+      const envRow = db.insertEnvironment(envName, serializeEnvVars(newEntries));
+      db.updateAppEnvironment(appId, envRow.id);
+    }
 
     // Create link record
     try {
@@ -364,10 +374,15 @@ export async function handleUnlinkService(request: Request, serviceId: number, a
 
     const prefix = link.env_prefix || "DATABASE";
 
-    // Remove injected env vars
-    const parsed = parseEnvVars(app.env_vars);
-    const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
-    db.updateAppEnvVars(appId, serializeEnvVars(filtered));
+    // Remove injected env vars from the app's linked environment
+    if (app.environment_id) {
+      const envRow = db.getEnvironment(app.environment_id);
+      if (envRow) {
+        const envParsed = parseEnvVars(envRow.env_vars);
+        const filtered = envParsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
+        db.updateEnvironment(app.environment_id, envRow.name, serializeEnvVars(filtered));
+      }
+    }
 
     db.deleteServiceLink(serviceId, appId);
 

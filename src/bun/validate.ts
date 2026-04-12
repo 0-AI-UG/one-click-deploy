@@ -247,7 +247,7 @@ export function validateDeployRequest(req: {
   domain?: string;
   git_repo: string;
   container_port: number;
-  env_vars: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
+  env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
 }): ValidationResult<void> {
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };
@@ -263,8 +263,10 @@ export function validateDeployRequest(req: {
   const portResult = validatePort(req.container_port);
   if (!portResult.valid) return { valid: false, error: `Port: ${portResult.error}` };
 
-  const envResult = validateEnvVars(req.env_vars);
-  if (!envResult.valid) return { valid: false, error: envResult.error };
+  if (req.env_vars) {
+    const envResult = validateEnvVars(req.env_vars);
+    if (!envResult.valid) return { valid: false, error: envResult.error };
+  }
 
   return { valid: true, value: undefined };
 }

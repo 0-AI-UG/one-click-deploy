@@ -11,7 +11,7 @@ type Props = {
   id: number;
 };
 
-type Status = "connecting" | "open" | "disconnected" | "error";
+type Status = "connecting" | "open" | "disconnected" | "ended" | "error";
 
 export function TerminalPage({ kind, id }: Props) {
   const { token } = useAuth();
@@ -27,15 +27,27 @@ export function TerminalPage({ kind, id }: Props) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoffRef = useRef(500);
   const disposedRef = useRef(false);
+  const connectingRef = useRef(false);
+  const hasConnectedRef = useRef(false);
 
   const [status, setStatus] = useState<Status>("connecting");
   const [error, setError] = useState("");
 
   const connect = useCallback(() => {
-    if (disposedRef.current) return;
+    if (disposedRef.current || connectingRef.current) return;
+    connectingRef.current = true;
+
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
+    }
+
+    // Close previous WebSocket cleanly before opening a new one.
+    const prev = wsRef.current;
+    if (prev) {
+      prev.onopen = prev.onmessage = prev.onerror = prev.onclose = null;
+      try { prev.close(); } catch { /* cleanup */ }
+      wsRef.current = null;
     }
 
     setStatus("connecting");
@@ -46,11 +58,17 @@ export function TerminalPage({ kind, id }: Props) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      connectingRef.current = false;
       if (disposedRef.current) { try { ws.close(); } catch { /* closed */ } return; }
       setStatus("open");
       backoffRef.current = 500;
       const term = termRef.current;
       if (term) {
+        // Visual separator on reconnect so the user knows a new session started.
+        if (hasConnectedRef.current) {
+          term.write("\r\n\x1b[33m--- reconnected ---\x1b[0m\r\n");
+        }
+        hasConnectedRef.current = true;
         term.focus();
         try {
           ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
@@ -69,16 +87,25 @@ export function TerminalPage({ kind, id }: Props) {
     };
 
     ws.onerror = () => {
+      connectingRef.current = false;
       setStatus("error");
       setError("WebSocket error");
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
+      connectingRef.current = false;
       if (disposedRef.current) return;
+
+      // 4000 = clean SSH exit — don't auto-reconnect, the session ended normally.
+      if (ev.code === 4000) {
+        setStatus("ended");
+        return;
+      }
+
       setStatus("disconnected");
-      // Exponential backoff capped at 5s.
-      const delay = Math.min(backoffRef.current, 5000);
-      backoffRef.current = Math.min(backoffRef.current * 2, 5000);
+      // Exponential backoff capped at 30s.
+      const delay = Math.min(backoffRef.current, 30_000);
+      backoffRef.current = Math.min(backoffRef.current * 2, 30_000);
       reconnectTimerRef.current = setTimeout(() => {
         if (!disposedRef.current) connect();
       }, delay);
@@ -156,7 +183,7 @@ export function TerminalPage({ kind, id }: Props) {
 
   const statusColor =
     status === "open" ? "text-accent-green"
-    : status === "connecting" || status === "disconnected" ? "text-accent-amber"
+    : status === "connecting" || status === "disconnected" || status === "ended" ? "text-accent-amber"
     : "text-accent-red";
 
   return (
@@ -176,10 +203,13 @@ export function TerminalPage({ kind, id }: Props) {
           className="border-2 border-fg bg-black"
           style={{ height: "70vh" }}
         />
-        {(status === "disconnected" || status === "connecting") && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/60 pointer-events-none">
-            <div className="font-mono text-xs text-accent-amber uppercase tracking-wider">
-              {status === "connecting" ? "Connecting…" : "Disconnected — reconnecting…"}
+        {(status === "disconnected" || status === "connecting" || status === "ended") && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+            <div className="font-mono text-xs text-accent-amber uppercase tracking-wider text-center">
+              {status === "connecting" ? "Connecting…"
+                : status === "ended" ? <>Session ended<br /><button className="mt-2 underline text-[10px] cursor-pointer" onClick={connect}>reconnect</button></>
+                : <>Disconnected — reconnecting…<br /><button className="mt-2 underline text-[10px] cursor-pointer" onClick={() => { backoffRef.current = 500; connect(); }}>reconnect now</button></>
+              }
             </div>
           </div>
         )}

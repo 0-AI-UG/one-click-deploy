@@ -42,6 +42,7 @@ export {
   updateAppWebhook,
   updateAppScaling,
   updateAppEnvironment,
+  getAppsByEnvironmentId,
   nextReplicaHostPort,
 } from "./apps.ts";
 export type { ReplicaRow, MetricSampleRow, ScalingEventRow } from "./replicas.ts";

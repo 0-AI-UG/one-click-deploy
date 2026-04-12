@@ -29,16 +29,19 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
     let cleanupFailed = false;
     const affectedServerIds = new Set<number>();
 
-    // Remove all linked apps' env vars
+    // Remove all linked apps' service env vars from their environments
     const links = db.getServiceLinks(serviceId);
     for (const link of links) {
       try {
         const app = db.getApp(link.app_id);
-        if (app) {
-          const parsed = parseEnvVars(app.env_vars);
-          const prefix = link.env_prefix || "DATABASE";
-          const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
-          db.updateAppEnvVars(app.id, serializeEnvVars(filtered));
+        if (app?.environment_id) {
+          const envRow = db.getEnvironment(app.environment_id);
+          if (envRow) {
+            const parsed = parseEnvVars(envRow.env_vars);
+            const prefix = link.env_prefix || "DATABASE";
+            const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
+            db.updateEnvironment(app.environment_id, envRow.name, serializeEnvVars(filtered));
+          }
         }
       } catch (err) {
         log("destroy", `Failed to unlink from app ${link.app_id}: ${err}`);

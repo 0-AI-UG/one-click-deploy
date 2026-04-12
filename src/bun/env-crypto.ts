@@ -72,15 +72,12 @@ export async function decryptValue(encrypted_value: string, iv: string): Promise
   return new TextDecoder().decode(decrypted);
 }
 
-/** Decrypt all entries and return a flat Record<string, string> for container deploy.
- *  Merges layers: environment -> app-specific. App vars override environment vars. */
+/** Decrypt all entries and return a flat Record<string, string> for container deploy. */
 export async function resolveEnvVarsForDeploy(
-  appEnvRaw: string | null | undefined,
   environmentEnvRaw?: string | null,
 ): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
 
-  // Layer 1: environment
   if (environmentEnvRaw) {
     const env = parseEnvVars(environmentEnvRaw);
     for (const entry of env.entries) {
@@ -88,14 +85,6 @@ export async function resolveEnvVarsForDeploy(
         ? await decryptValue(entry.encrypted_value, entry.iv)
         : entry.value;
     }
-  }
-
-  // Layer 2: app-specific (always wins)
-  const app = parseEnvVars(appEnvRaw);
-  for (const entry of app.entries) {
-    result[entry.key] = entry.secret && entry.encrypted_value && entry.iv
-      ? await decryptValue(entry.encrypted_value, entry.iv)
-      : entry.value;
   }
 
   return result;
@@ -185,10 +174,9 @@ export async function processIncomingEnvVars(
   return { version: 2, entries };
 }
 
-/** Convenience: resolve all env vars for an app, including its environment.
- *  Loads the app's environment from the DB automatically. */
+/** Convenience: resolve all env vars for an app from its linked environment. */
 export async function resolveAppEnvVars(app: AppRow): Promise<Record<string, string>> {
   const db = await import("./db.ts");
   const envRow = app.environment_id ? db.getEnvironment(app.environment_id) : null;
-  return resolveEnvVarsForDeploy(app.env_vars, envRow?.env_vars);
+  return resolveEnvVarsForDeploy(envRow?.env_vars);
 }

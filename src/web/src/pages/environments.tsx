@@ -5,18 +5,32 @@ import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { Layers, Plus, Trash2, ChevronDown, ChevronRight, Key } from "lucide-react";
 import type { EnvironmentData } from "../types.ts";
 
+type AttachedApp = { id: number; name: string; status: string; domain: string };
+
 export function EnvironmentsPage() {
   const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
   const [expanded, setExpanded] = useState<number | "new" | null>(null);
   const [editName, setEditName] = useState("");
   const [editVars, setEditVars] = useState<EnvVarRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [attachedApps, setAttachedApps] = useState<Record<number, AttachedApp[]>>({});
 
   const load = () => {
     get("/api/environments").then(setEnvironments).catch(() => {});
   };
 
   useEffect(load, []);
+
+  // Load attached apps for all environments
+  useEffect(() => {
+    for (const env of environments) {
+      get(`/api/environments/${env.id}/apps`)
+        .then((apps: AttachedApp[]) => {
+          setAttachedApps((prev) => ({ ...prev, [env.id]: apps }));
+        })
+        .catch(() => {});
+    }
+  }, [environments]);
 
   const toggle = (env: EnvironmentData) => {
     if (expanded === env.id) {
@@ -44,8 +58,24 @@ export function EnvironmentsPage() {
         await post("/api/environments", { name: editName, env_vars: vars });
         showToast("Environment created", "success");
       } else {
-        await put(`/api/environments/${id}`, { name: editName, env_vars: vars });
-        showToast("Environment updated", "success");
+        const apps = attachedApps[id] || [];
+        const activeApps = apps.filter((a) => a.status !== "stopped" && a.status !== "destroying");
+        if (activeApps.length > 0) {
+          const ok = await confirm(
+            "Redeploy Apps",
+            `Saving will redeploy ${activeApps.length} app(s): ${activeApps.map((a) => a.name).join(", ")}`,
+            true,
+          );
+          if (!ok) { setLoading(false); return; }
+        }
+        const res = await put(`/api/environments/${id}`, { name: editName, env_vars: vars });
+        const redeploying = res?.redeploying ?? 0;
+        showToast(
+          redeploying > 0
+            ? `Environment updated — redeploying ${redeploying} app(s)`
+            : "Environment updated",
+          "success",
+        );
       }
       setExpanded(null);
       load();
@@ -99,6 +129,7 @@ export function EnvironmentsPage() {
             )}
             {environments.map((env) => {
               const isOpen = expanded === env.id;
+              const apps = attachedApps[env.id] || [];
               return (
                 <div key={env.id}>
                   <div
@@ -114,6 +145,11 @@ export function EnvironmentsPage() {
                       <span className="font-mono text-[9px] text-muted flex items-center gap-1">
                         <Key size={9} /> {env.env_vars.length}
                       </span>
+                      {apps.length > 0 && (
+                        <span className="font-mono text-[9px] text-muted">
+                          {apps.length} app{apps.length !== 1 ? "s" : ""}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       <Btn
@@ -121,9 +157,17 @@ export function EnvironmentsPage() {
                         variant="ghost"
                         title="Delete"
                         onClick={async () => {
+                          if (apps.length > 0) {
+                            showToast(`Cannot delete: used by ${apps.map((a) => a.name).join(", ")}`, "error");
+                            return;
+                          }
                           if (await confirm("Delete Environment", `Delete "${env.name}"?`, true)) {
-                            await del(`/api/environments/${env.id}`);
-                            load();
+                            try {
+                              await del(`/api/environments/${env.id}`);
+                              load();
+                            } catch (err: any) {
+                              showToast(err.message || "Failed to delete", "error");
+                            }
                           }
                         }}
                       >
@@ -131,7 +175,25 @@ export function EnvironmentsPage() {
                       </Btn>
                     </div>
                   </div>
-                  {isOpen && renderEditor(env.id)}
+                  {isOpen && (
+                    <>
+                      {apps.length > 0 && (
+                        <div className="px-4 py-2 ml-7 flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-[9px] text-muted uppercase">Apps:</span>
+                          {apps.map((a) => (
+                            <a
+                              key={a.id}
+                              href={`#/apps/${a.id}`}
+                              className="font-mono text-[9px] px-1.5 py-0.5 bg-alt text-fg hover:bg-fg/10 transition-colors"
+                            >
+                              {a.name}
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      {renderEditor(env.id)}
+                    </>
+                  )}
                 </div>
               );
             })}

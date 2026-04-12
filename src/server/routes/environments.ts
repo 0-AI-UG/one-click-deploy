@@ -3,6 +3,7 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../bun/env-crypto.ts";
+import { cascadeRedeployEnvironment } from "../../bun/deploy/index.ts";
 
 export async function handleGetEnvironments(request: Request): Promise<Response> {
   try {
@@ -52,8 +53,23 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
     const { name, env_vars } = body;
     const existingParsed = parseEnvVars(existing.env_vars);
     const merged = await mergeEnvVarUpdate(existingParsed, env_vars || []);
-    db.updateEnvironment(id, name || existing.name, serializeEnvVars(merged.entries));
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    const newSerialized = serializeEnvVars(merged.entries);
+    const envVarsChanged = newSerialized !== existing.env_vars;
+    db.updateEnvironment(id, name || existing.name, newSerialized);
+
+    // Cascade redeploy all attached apps if env vars changed
+    const attachedApps = db.getAppsByEnvironmentId(id);
+    if (envVarsChanged && attachedApps.length > 0) {
+      // Fire in background — don't block the HTTP response
+      cascadeRedeployEnvironment(id).catch((err) => {
+        console.error(`[environments] Cascade redeploy failed for env ${id}:`, err);
+      });
+    }
+
+    return Response.json({
+      ok: true,
+      redeploying: envVarsChanged ? attachedApps.length : 0,
+    }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -66,8 +82,32 @@ export async function handleDeleteEnvironment(request: Request, id: number): Pro
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
+    const attachedApps = db.getAppsByEnvironmentId(id);
+    if (attachedApps.length > 0) {
+      const names = attachedApps.map((a) => a.name).join(", ");
+      return Response.json({
+        ok: false,
+        error: `Cannot delete: environment is used by ${attachedApps.length} app(s): ${names}. Reassign them first.`,
+      }, { status: 409, headers: corsHeaders });
+    }
     db.deleteEnvironment(id);
     return Response.json({ ok: true }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleGetEnvironmentApps(request: Request, id: number): Promise<Response> {
+  try {
+    await requirePermission(request, "servers.view");
+    const env = db.getEnvironment(id);
+    if (!env) {
+      return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
+    }
+    const apps = db.getAppsByEnvironmentId(id).map((a) => ({
+      id: a.id, name: a.name, status: a.status, domain: a.domain,
+    }));
+    return Response.json(apps, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

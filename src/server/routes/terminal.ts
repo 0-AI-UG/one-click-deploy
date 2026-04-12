@@ -158,6 +158,15 @@ export const terminalWsHandlers = {
       log("open", `user=${data.userId} service-instance=${instance.id} container=${instance.container_name} ip=${ip}`);
     }
 
+    // Warn about secret visibility when exec-ing into a container
+    if (data.target.kind === "replica" || data.target.kind === "service-instance") {
+      try {
+        ws.send(new TextEncoder().encode(
+          "\x1b[33m\u26A0 Environment secrets are accessible inside this container.\x1b[0m\r\n\r\n"
+        ));
+      } catch { /* ws may be closed */ }
+    }
+
     const pty = spawnSshPty({
       ip: ip!,
       hostKey,
@@ -175,7 +184,9 @@ export const terminalWsHandlers = {
       },
       onExit: (code) => {
         try { ws.send(`\r\n[session ended, exit ${code}]\r\n`); } catch { /* ws may be closed */ }
-        try { ws.close(); } catch { /* ws may already be closed */ }
+        // Close with 4000 to tell the client this was a clean SSH exit — don't
+        // auto-reconnect (which would just open a fresh login shell + MOTD).
+        try { ws.close(4000, "ssh exited"); } catch { /* ws may already be closed */ }
       },
     });
     data.pty = pty;
