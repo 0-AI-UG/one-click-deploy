@@ -106,7 +106,14 @@ export const terminalWsHandlers = {
     // keeps the connection alive through any intermediary.
     const heartbeat = new TextEncoder().encode("\x00");
     data.pingTimer = setInterval(() => {
-      try { ws.send(heartbeat); } catch { /* ws may be closed */ }
+      try {
+        const sent = ws.send(heartbeat);
+        if (typeof sent === "number" && sent < 0) {
+          log("heartbeat", `send failed for user=${data.userId} target=${data.target.kind}:${data.target.id} code=${sent}`);
+        }
+      } catch (err) {
+        log("heartbeat", `error for user=${data.userId} target=${data.target.kind}:${data.target.id}: ${err}`);
+      }
     }, 25_000);
 
     let ip: string | undefined;
@@ -185,7 +192,8 @@ export const terminalWsHandlers = {
           }
         } catch { /* ws may be closed */ }
       },
-      onExit: (code) => {
+      onExit: (code, signal) => {
+        log("pty-exit", `user=${data.userId} target=${data.target.kind}:${data.target.id} code=${code} signal=${signal ?? "none"}`);
         try { ws.send(`\r\n[session ended, exit ${code}]\r\n`); } catch { /* ws may be closed */ }
         // Close with 4000 to tell the client this was a clean SSH exit — don't
         // auto-reconnect (which would just open a fresh login shell + MOTD).
@@ -214,8 +222,9 @@ export const terminalWsHandlers = {
     data.pty.write(message);
   },
 
-  close(ws: Bun.ServerWebSocket<TerminalWsData>) {
+  close(ws: Bun.ServerWebSocket<TerminalWsData>, code?: number, reason?: string) {
     const data = ws.data as TerminalWsData;
+    log("close", `user=${data.userId} target=${data.target.kind}:${data.target.id} code=${code ?? "none"} reason=${reason || "none"}`);
     if (data.pingTimer) {
       clearInterval(data.pingTimer);
       data.pingTimer = null;
@@ -226,6 +235,5 @@ export const terminalWsHandlers = {
     const n = (sessionsByUser.get(data.userId) ?? 1) - 1;
     if (n <= 0) sessionsByUser.delete(data.userId);
     else sessionsByUser.set(data.userId, n);
-    log("close", `user=${data.userId}`);
   },
 };

@@ -102,16 +102,26 @@ export function TerminalPage({ kind, id }: Props) {
       }
     };
 
-    ws.onerror = () => {
+    ws.onerror = (ev) => {
       connectingRef.current = false;
+      const detail = (ev as any).message || "unknown";
+      console.warn("[terminal] ws error:", detail);
+      termRef.current?.write(`\r\n\x1b[31m[ws error: ${detail}]\x1b[0m\r\n`);
       setStatus("error");
-      setError("WebSocket error");
+      setError(`WebSocket error: ${detail}`);
     };
 
     ws.onclose = (ev) => {
       connectingRef.current = false;
       if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+      console.warn(`[terminal] ws close: code=${ev.code} reason=${ev.reason || "none"} wasClean=${ev.wasClean}`);
       if (disposedRef.current) return;
+
+      // Show close details in the terminal so the user can see what happened.
+      const term = termRef.current;
+      if (term && ev.code !== 4000) {
+        term.write(`\r\n\x1b[31m[disconnected: code=${ev.code} reason=${ev.reason || "none"} clean=${ev.wasClean}]\x1b[0m\r\n`);
+      }
 
       // 4000 = clean SSH exit — don't auto-reconnect, the session ended normally.
       if (ev.code === 4000) {

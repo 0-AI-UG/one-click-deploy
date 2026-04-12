@@ -31,7 +31,7 @@ export function spawnSshPty(opts: {
   cols?: number;
   rows?: number;
   onStdout: (chunk: Uint8Array) => void;
-  onExit: (code: number) => void;
+  onExit: (code: number, signal?: string) => void;
 }): PtySession {
   const cols = opts.cols ?? 120;
   const rows = opts.rows ?? 32;
@@ -84,10 +84,11 @@ export function spawnSshPty(opts: {
   }
 
   const exited = proc.exited.then((code) => {
-    log("exit", `${opts.ip} code=${code}`);
+    const signal = proc.signalCode ?? undefined;
+    log("exit", `${opts.ip} code=${code} signal=${signal ?? "none"} killed=${proc.killed}`);
     if (tmpKnownHostsPath) { try { unlinkSync(tmpKnownHostsPath); } catch { /* cleanup, file may already be gone */ } }
     try { terminal.close(); } catch { /* terminal may already be closed */ }
-    opts.onExit(code);
+    opts.onExit(code, signal);
     return code;
   });
 
