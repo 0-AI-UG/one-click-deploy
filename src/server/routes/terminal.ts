@@ -106,14 +106,7 @@ export const terminalWsHandlers = {
     // keeps the connection alive through any intermediary.
     const heartbeat = new TextEncoder().encode("\x00");
     data.pingTimer = setInterval(() => {
-      try {
-        const sent = ws.send(heartbeat);
-        if (typeof sent === "number" && sent < 0) {
-          log("heartbeat", `send failed for user=${data.userId} target=${data.target.kind}:${data.target.id} code=${sent}`);
-        }
-      } catch (err) {
-        log("heartbeat", `error for user=${data.userId} target=${data.target.kind}:${data.target.id}: ${err}`);
-      }
+      try { ws.send(heartbeat); } catch { /* ws closing — close handler logs */ }
     }, 25_000);
 
     let ip: string | undefined;
