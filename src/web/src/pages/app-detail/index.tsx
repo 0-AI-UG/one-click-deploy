@@ -238,7 +238,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
           appId={appId}
           replicas={replicas}
           metricsHistory={metricsHistory}
-          scalingEvents={scalingEvents}
           allServers={allServers}
           setReplicas={setReplicas}
         />
@@ -269,6 +268,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           app={app}
           appId={appId}
           replicas={replicas}
+          scalingEvents={scalingEvents}
           policy={policy}
           setPolicy={setPolicy}
           actionLoading={actionLoading}

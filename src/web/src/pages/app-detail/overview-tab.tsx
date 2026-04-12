@@ -1,21 +1,20 @@
 import { get, post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { RefreshCw, ExternalLink, Server as ServerIcon, History, Terminal } from "lucide-react";
+import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal } from "lucide-react";
 import { Sparkline } from "./shared.tsx";
-import type { AppData, ReplicaData, MetricSample, ScalingEvent, ServerData } from "../../types.ts";
+import type { AppData, ReplicaData, MetricSample, ServerData } from "../../types.ts";
 
 interface OverviewTabProps {
   app: AppData;
   appId: number;
   replicas: ReplicaData[];
   metricsHistory: MetricSample[];
-  scalingEvents: ScalingEvent[];
   allServers: ServerData[];
   setReplicas: (r: ReplicaData[]) => void;
 }
 
-export function OverviewTab({ app, appId, replicas, metricsHistory, scalingEvents, allServers, setReplicas }: OverviewTabProps) {
+export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas }: OverviewTabProps) {
   const envVars = app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {};
   const internalUrl = `http://${app.name}.ocd.internal:8080`;
 
@@ -113,24 +112,6 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, scalingEvent
         )}
       </Card>
 
-      {scalingEvents.length > 0 && (
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <History size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Recent Scaling Events</h3>
-          </div>
-          <Table headers={["When", "Event", "From → To", "Reason"]}>
-            {scalingEvents.slice(0, 20).map((e) => (
-              <tr key={e.id}>
-                <td className="py-2 px-3 text-muted text-[9px]">{new Date(e.created_at).toLocaleString()}</td>
-                <td className="py-2 px-3 text-fg font-bold text-[9px] uppercase tracking-wider">{e.event_type}</td>
-                <td className="py-2 px-3 text-fg-dim">{e.from_count} → {e.to_count}</td>
-                <td className="py-2 px-3 text-fg-dim text-[9px]">{e.reason || "—"}</td>
-              </tr>
-            ))}
-          </Table>
-        </Card>
-      )}
     </div>
   );
 }

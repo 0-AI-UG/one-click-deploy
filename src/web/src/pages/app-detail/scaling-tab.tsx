@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { get, post, put } from "../../api/client.ts";
-import { Card, Btn, Checkbox, Spinner, confirm } from "../../components/ui.tsx";
+import { Card, Btn, Checkbox, Spinner, Table, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { Zap, Gauge } from "lucide-react";
+import { Zap, Gauge, History } from "lucide-react";
 import { InfoTip } from "./shared.tsx";
-import type { AppData, ReplicaData } from "../../types.ts";
+import type { AppData, ReplicaData, ScalingEvent } from "../../types.ts";
 
 type ScaleJobPoll = {
   status: "running" | "done" | "error";
@@ -62,6 +62,7 @@ interface ScalingTabProps {
   app: AppData;
   appId: number;
   replicas: ReplicaData[];
+  scalingEvents: ScalingEvent[];
   policy: ScalingPolicy | null;
   setPolicy: (p: ScalingPolicy) => void;
   actionLoading: string | null;
@@ -70,7 +71,7 @@ interface ScalingTabProps {
   load: () => Promise<void>;
 }
 
-export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoading, action, loadReplicas, load }: ScalingTabProps) {
+export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPolicy, actionLoading, action, loadReplicas, load }: ScalingTabProps) {
   const hasVolume = Boolean(app.volume_id);
   const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica — a cloud volume can only be attached to a single server at a time.";
   const [progressMessage, setProgressMessage] = useState<string>("");
@@ -296,6 +297,25 @@ export function ScalingTab({ app, appId, replicas, policy, setPolicy, actionLoad
           </div>
         )}
       </Card>
+
+      {scalingEvents.length > 0 && (
+        <Card className="p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <History size={14} className="text-fg" />
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Recent Scaling Events</h3>
+          </div>
+          <Table headers={["When", "Event", "From → To", "Reason"]}>
+            {scalingEvents.slice(0, 20).map((e) => (
+              <tr key={e.id}>
+                <td className="py-2 px-3 text-muted text-[9px]">{new Date(e.created_at).toLocaleString()}</td>
+                <td className="py-2 px-3 text-fg font-bold text-[9px] uppercase tracking-wider">{e.event_type}</td>
+                <td className="py-2 px-3 text-fg-dim">{e.from_count} → {e.to_count}</td>
+                <td className="py-2 px-3 text-fg-dim text-[9px]">{e.reason || "—"}</td>
+              </tr>
+            ))}
+          </Table>
+        </Card>
+      )}
     </div>
   );
 }
