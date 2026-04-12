@@ -15,6 +15,8 @@ import {
   buildConnectionUrl,
   type ServiceDefinition,
 } from "../services/catalog.ts";
+import { parseEnvVars, serializeEnvVars, encryptValue } from "../env-crypto.ts";
+import type { EnvVarEntry } from "../env-crypto.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
 
@@ -28,6 +30,8 @@ export type ServiceDeployRequest = {
   version?: string;
   volume_size?: number;
   env_overrides?: Record<string, string>;
+  environment_id?: number;
+  env_prefix?: string;
 };
 
 type DeployState = {
@@ -268,7 +272,7 @@ export async function deployService(
     const bindAddress = replicaBindHost(serverRow);
 
     const connectionUrl = buildConnectionUrl(catalog, envVars, bindAddress, hostPort);
-    const credentials = {
+    const credentials: Record<string, string | number> = {
       host: bindAddress,
       port: hostPort,
       internal_host: containerName,
@@ -335,6 +339,43 @@ export async function deployService(
       db.updateServiceInstanceStatus(instance.id, "unhealthy");
       db.updateServiceStatus(service.id, "unhealthy");
       onProgress("health", `Health check warning: ${health.error || "service may still be starting"}`);
+    }
+
+    // Step 6: Inject credentials into chosen environment
+    if (req.environment_id) {
+      const envPrefix = req.env_prefix || "DATABASE";
+      onProgress("environment", `Injecting credentials into environment...`);
+
+      const now = new Date().toISOString();
+      const secretKeys = new Set([`${envPrefix}_URL`, `${envPrefix}_PASSWORD`]);
+      const pairs: [string, string][] = [
+        [`${envPrefix}_URL`, String(credentials.connection_url || "")],
+        [`${envPrefix}_HOST`, String(credentials.host || "")],
+        [`${envPrefix}_PORT`, String(credentials.port || "")],
+      ];
+      if (credentials.username) pairs.push([`${envPrefix}_USER`, String(credentials.username)]);
+      if (credentials.password) pairs.push([`${envPrefix}_PASSWORD`, String(credentials.password)]);
+      if (credentials.database) pairs.push([`${envPrefix}_NAME`, String(credentials.database)]);
+
+      const newEntries: EnvVarEntry[] = [];
+      for (const [key, value] of pairs) {
+        const isSecret = secretKeys.has(key);
+        if (isSecret) {
+          const { encrypted_value, iv } = await encryptValue(value);
+          newEntries.push({ key, value: "", encrypted_value, iv, secret: true, updated_at: now });
+        } else {
+          newEntries.push({ key, value, secret: false, updated_at: now });
+        }
+      }
+
+      const envRow = db.getEnvironment(req.environment_id);
+      if (envRow) {
+        const envParsed = parseEnvVars(envRow.env_vars);
+        const newKeys = new Set(newEntries.map((e) => e.key));
+        const filtered = envParsed.entries.filter((e) => !newKeys.has(e.key));
+        db.updateEnvironment(req.environment_id, envRow.name, serializeEnvVars([...filtered, ...newEntries]));
+        onProgress("environment", `Credentials added to environment "${envRow.name}"`);
+      }
     }
 
     const elapsed = ((Date.now() - deployStart) / 1000).toFixed(1);

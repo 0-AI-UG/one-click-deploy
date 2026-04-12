@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
 import { Card, Btn, showToast, Spinner, CopyButton } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Database, Loader2 } from "lucide-react";
+import { Database, Loader2, Eye, EyeOff } from "lucide-react";
 
 type CatalogEntry = {
   type: string;
@@ -11,6 +11,11 @@ type CatalogEntry = {
   defaultPort: number;
   requiredEnvVars: Array<{ key: string; label: string; generate?: string; default?: string }>;
   defaultVolumeSize: number;
+};
+
+type Environment = {
+  id: number;
+  name: string;
 };
 
 const SERVICE_ICONS: Record<string, string> = {
@@ -35,8 +40,13 @@ function randomPassword(len = 24): string {
   return Array.from(bytes, (b) => chars[b % chars.length]).join("");
 }
 
+function isPasswordKey(key: string): boolean {
+  return /password/i.test(key);
+}
+
 export function DeployServicePage({ preselectedType }: { preselectedType?: string }) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
+  const [environments, setEnvironments] = useState<Environment[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<CatalogEntry | null>(null);
   const [name, setName] = useState("");
@@ -44,13 +54,20 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
   const [volumeSize, setVolumeSize] = useState(10);
   const [generatedEnv, setGeneratedEnv] = useState<Record<string, string>>({});
   const [deploying, setDeploying] = useState(false);
+  const [environmentId, setEnvironmentId] = useState<number | null>(null);
+  const [envPrefix, setEnvPrefix] = useState("DATABASE");
+  const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    get("/api/services/catalog")
-      .then((data: CatalogEntry[]) => {
-        setCatalog(data);
+    Promise.all([
+      get("/api/services/catalog"),
+      get("/api/environments"),
+    ])
+      .then(([catalogData, envData]: [CatalogEntry[], Environment[]]) => {
+        setCatalog(catalogData);
+        setEnvironments(envData);
         if (preselectedType) {
-          const entry = data.find((e: CatalogEntry) => e.type === preselectedType);
+          const entry = catalogData.find((e: CatalogEntry) => e.type === preselectedType);
           if (entry) selectService(entry);
         }
         setLoading(false);
@@ -66,6 +83,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
     setName(`my-${entry.type}`);
     setVersion(entry.versions[0]);
     setVolumeSize(entry.defaultVolumeSize);
+    setRevealedKeys(new Set());
     // Generate credentials
     const env: Record<string, string> = {};
     for (const v of entry.requiredEnvVars) {
@@ -74,6 +92,15 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
       else if (v.default) env[v.key] = v.default;
     }
     setGeneratedEnv(env);
+  };
+
+  const toggleReveal = (key: string) => {
+    setRevealedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
 
   const handleDeploy = async () => {
@@ -86,6 +113,8 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
         version,
         volume_size: volumeSize,
         env_overrides: generatedEnv,
+        environment_id: environmentId || undefined,
+        env_prefix: environmentId ? envPrefix : undefined,
       });
       window.location.hash = `#/deploy/service-progress/${res.deployment_id}`;
     } catch (err: any) {
@@ -162,18 +191,67 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Credentials</label>
                 <div className="bg-alt border-2 border-fg/30 divide-y divide-fg/10">
-                  {Object.entries(generatedEnv).map(([key, value]) => (
-                    <div key={key} className="px-3 py-2 flex items-center justify-between gap-2">
-                      <span className="font-mono text-[9px] text-muted uppercase shrink-0">{key}</span>
-                      <div className="flex items-center gap-1 min-w-0">
-                        <span className="font-mono text-[10px] text-fg truncate">{value}</span>
-                        <CopyButton text={value} />
+                  {Object.entries(generatedEnv).map(([key, value]) => {
+                    const isPassword = isPasswordKey(key);
+                    const revealed = revealedKeys.has(key);
+                    return (
+                      <div key={key} className="px-3 py-2 flex items-center justify-between gap-2">
+                        <span className="font-mono text-[9px] text-muted uppercase shrink-0">{key}</span>
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className="font-mono text-[10px] text-fg truncate">
+                            {isPassword && !revealed ? "••••••••••••••••" : value}
+                          </span>
+                          {isPassword && (
+                            <button
+                              onClick={() => toggleReveal(key)}
+                              className="p-0.5 text-muted hover:text-fg transition-colors shrink-0"
+                              title={revealed ? "Hide" : "Reveal"}
+                            >
+                              {revealed ? <EyeOff size={12} /> : <Eye size={12} />}
+                            </button>
+                          )}
+                          <CopyButton text={value} />
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-                <p className="font-mono text-[8px] text-muted mt-1">These credentials are auto-generated. You can change them before deploying.</p>
               </div>
+
+              {/* Environment */}
+              <div>
+                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">
+                  Add to Environment
+                  <span className="font-normal text-muted ml-1">(optional)</span>
+                </label>
+                <NeoSelect
+                  value={environmentId ? String(environmentId) : ""}
+                  onChange={(v) => setEnvironmentId(v ? Number(v) : null)}
+                  options={[
+                    { value: "", label: "None — add manually later" },
+                    ...environments.map((e) => ({ value: String(e.id), label: e.name })),
+                  ]}
+                />
+                <p className="font-mono text-[9px] text-muted mt-1">
+                  Inject connection credentials into this environment on deploy
+                </p>
+              </div>
+
+              {/* Env Prefix */}
+              {environmentId && (
+                <div>
+                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Env Prefix</label>
+                  <input
+                    type="text"
+                    value={envPrefix}
+                    onChange={(e) => setEnvPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
+                    className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
+                  />
+                  <p className="font-mono text-[9px] text-muted mt-1">
+                    Variables will be named {envPrefix}_URL, {envPrefix}_HOST, {envPrefix}_PASSWORD, etc.
+                  </p>
+                </div>
+              )}
 
               <Btn
                 onClick={handleDeploy}
