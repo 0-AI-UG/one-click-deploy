@@ -389,7 +389,7 @@ export async function syncAppCaddy(appId: number, force = false): Promise<void> 
   // Every upsert mutates Caddy's srv0 route array (DELETE + POST), which
   // causes Caddy to drop active WebSocket connections on that server —
   // including the panel's terminal sessions.
-  const key = upstreamsCacheKey(upstreams);
+  const key = `${app.public ? "pub" : "priv"}:${upstreamsCacheKey(upstreams)}`;
   if (!force && lastUpstreamsByApp.get(appId) === key) {
     return;
   }
@@ -401,12 +401,20 @@ export async function syncAppCaddy(appId: number, force = false): Promise<void> 
 
   await ensureInternalServer(panel);
 
-  await upsertRoute(panel, "srv0", buildPublicRoute(app.name, app.domain, upstreams));
-  await upsertRoute(panel, "srv_internal", buildInternalRoute(app.name, upstreams));
-
-  if (app.domain && app.domain.endsWith(".nip.io")) {
-    await ensureNipIoTlsPolicy(panel, app.domain);
+  if (app.public) {
+    await upsertRoute(panel, "srv0", buildPublicRoute(app.name, app.domain, upstreams));
+    if (app.domain && app.domain.endsWith(".nip.io")) {
+      await ensureNipIoTlsPolicy(panel, app.domain);
+    }
+  } else {
+    // Remove any existing public route when app is not public
+    await sshExec(
+      panel.ipv4,
+      `curl -sf -X DELETE http://localhost:2019/id/${publicRouteId(app.name)} 2>/dev/null || true`,
+      panel.hostKey,
+    );
   }
+  await upsertRoute(panel, "srv_internal", buildInternalRoute(app.name, upstreams));
   await persistCaddyConfig(panel);
   lastUpstreamsByApp.set(appId, key);
 }

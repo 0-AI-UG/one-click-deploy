@@ -433,6 +433,7 @@ export async function deploy(
         env_vars: serializeEnvVars([]),
         auth_password: req.auth_password,
         environment_id: environmentId,
+        public: req.public,
       },
       serverId!,
     );

@@ -40,6 +40,7 @@ export type AppRow = {
   wake_token: string | null;
   webhook_wait_for_ci: number;
   environment_id: number | null;
+  public: number;
 };
 
 export type DnsRecordRow = {
@@ -94,10 +95,11 @@ export function insertApp(app: {
   env_vars: string;
   auth_password?: string;
   environment_id?: number;
+  public?: boolean;
 }): AppRow {
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       app.name,
@@ -109,6 +111,7 @@ export function insertApp(app: {
       app.env_vars,
       app.auth_password || "",
       app.environment_id ?? null,
+      (app.public ?? true) ? 1 : 0,
     ) as AppRow;
 }
 
@@ -123,13 +126,14 @@ export function insertAppWithFirstReplica(
     env_vars: string;
     auth_password?: string;
     environment_id?: number;
+    public?: boolean;
   },
   serverId: number,
 ): { app: AppRow; replica: ReplicaRow } {
   const tx = db.transaction(() => {
     const appRow = db
       .query(
-        "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+        "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
       )
       .get(
         app.name,
@@ -141,6 +145,7 @@ export function insertAppWithFirstReplica(
         app.env_vars,
         app.auth_password || "",
         app.environment_id ?? null,
+        (app.public ?? true) ? 1 : 0,
       ) as AppRow;
     const hostPort = nextReplicaHostPort(serverId);
     const replicaRow = db
@@ -311,6 +316,10 @@ export function updateAppVolume(id: number, volumeId: string, volumeMount: strin
 
 export function updateAppAuthPassword(id: number, authPassword: string): void {
   db.query("UPDATE apps SET auth_password = ? WHERE id = ?").run(authPassword, id);
+}
+
+export function updateAppPublic(id: number, isPublic: boolean): void {
+  db.query("UPDATE apps SET public = ? WHERE id = ?").run(isPublic ? 1 : 0, id);
 }
 
 export function updateAppDeployMode(

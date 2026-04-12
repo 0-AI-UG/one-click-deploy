@@ -41,6 +41,7 @@ export type AppData = {
   scale_to_zero_after?: number;
   sleeping_server_id?: number | null;
   sleeping_host_port?: number | null;
+  public?: boolean | number;
 };
 
 export type ReplicaData = {
@@ -213,4 +214,5 @@ export type DeployBody = {
   replicas?: number;
   compose_file?: string;
   compose_web_service?: string;
+  public?: boolean;
 };

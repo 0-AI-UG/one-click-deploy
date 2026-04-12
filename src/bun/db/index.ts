@@ -41,6 +41,7 @@ export {
   updateAppDomain,
   updateAppVolume,
   updateAppAuthPassword,
+  updateAppPublic,
   updateAppDeployMode,
   updateAppWebhook,
   updateAppWebhookWaitForCi,

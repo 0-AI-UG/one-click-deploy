@@ -1,7 +1,7 @@
 import { post, put } from "../../api/client.ts";
-import { Card, Btn, confirm } from "../../components/ui.tsx";
+import { Card, Btn, Checkbox, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { Pencil, Lock, Settings as SettingsIcon, HardDrive } from "lucide-react";
+import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe } from "lucide-react";
 import type { AppData } from "../../types.ts";
 
 interface SettingsTabProps {
@@ -11,6 +11,8 @@ interface SettingsTabProps {
   setNameEdit: (v: string) => void;
   authPassword: string;
   setAuthPassword: (v: string) => void;
+  isPublic: boolean;
+  setIsPublic: (v: boolean) => void;
   portEdit: number;
   setPortEdit: (v: number) => void;
   volumeForm: { size: number; mount_path: string };
@@ -23,6 +25,7 @@ export function SettingsTab({
   app, appId,
   nameEdit, setNameEdit,
   authPassword, setAuthPassword,
+  isPublic, setIsPublic,
   portEdit, setPortEdit,
   volumeForm, setVolumeForm,
   actionLoading, action,
@@ -71,6 +74,19 @@ export function SettingsTab({
 
         <div>
           <div className="flex items-center gap-2 mb-2">
+            <Globe size={14} className="text-fg" />
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Public Access</h3>
+          </div>
+          <Checkbox
+            checked={isPublic}
+            onChange={setIsPublic}
+            label="Expose via public domain"
+          />
+          {!isPublic && <p className="text-[9px] text-muted mt-1">App will only be reachable over the internal network</p>}
+        </div>
+
+        <div>
+          <div className="flex items-center gap-2 mb-2">
             <SettingsIcon size={14} className="text-fg" />
             <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Container Port</h3>
           </div>
@@ -96,6 +112,7 @@ export function SettingsTab({
               await post(`/api/apps/${appId}/redeploy`, {
                 auth_password: authPassword || null,
                 container_port: portEdit,
+                public: isPublic,
               });
             })}
           >Save & Redeploy</Btn>

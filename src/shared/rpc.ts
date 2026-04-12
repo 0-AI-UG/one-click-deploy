@@ -121,6 +121,7 @@ export type DeployRequest = {
   compose_file?: string; // Path to compose file, auto-detected if omitted
   compose_web_service?: string; // Which compose service Caddy proxies to (default: auto-detect)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
+  public?: boolean; // Whether the app is publicly accessible (default true)
 };
 
 export type PanelInfo = {

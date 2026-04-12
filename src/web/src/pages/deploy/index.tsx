@@ -115,6 +115,7 @@ const EMPTY_FORM: FormState = {
   replicas: "1",
   compose_file: "",
   compose_web_service: "",
+  public: true,
 };
 
 export function DeployPage() {
@@ -396,6 +397,7 @@ export function DeployPage() {
       replicas: parseInt(form.replicas, 10) || 1,
       compose_file: form.compose_file || undefined,
       compose_web_service: form.compose_web_service || undefined,
+      public: form.public,
     };
 
     void startDeploy(body);

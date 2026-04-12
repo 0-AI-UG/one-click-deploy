@@ -1012,6 +1012,13 @@ export const migrations: Migration[] = [
       db.run("CREATE INDEX IF NOT EXISTS idx_server_metrics_server_time ON server_metrics_samples(server_id, sampled_at)");
     },
   },
+  {
+    version: 40,
+    description: "Add public column to apps",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN public INTEGER NOT NULL DEFAULT 1");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

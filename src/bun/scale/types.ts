@@ -38,6 +38,7 @@ export interface App {
   sleeping_host_port: number | null;
   wake_token: string | null;
   environment_id: number | null;
+  public: number;
 }
 
 export interface Replica {

@@ -59,6 +59,14 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
       </div>
       <div>
         <Checkbox
+          checked={form.public}
+          onChange={(v) => setForm((f) => ({ ...f, public: v }))}
+          label="Public access (expose via public domain)"
+        />
+        {!form.public && <p className="text-[9px] text-muted mt-1">App will only be reachable over the internal network</p>}
+      </div>
+      <div>
+        <Checkbox
           checked={!!form.webhook_enabled}
           onChange={(v) => setForm((f) => ({ ...f, webhook_enabled: v }))}
           label="Auto-deploy on git push"

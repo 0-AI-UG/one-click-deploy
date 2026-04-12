@@ -284,6 +284,7 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       auth_password?: string | null;
       container_port?: number;
       environment_id?: number | null;
+      public?: boolean;
     };
 
     if (body.container_port !== undefined) {
@@ -296,6 +297,10 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
 
     if (body.environment_id !== undefined) {
       db.updateAppEnvironment(appId, body.environment_id);
+    }
+
+    if (body.public !== undefined) {
+      db.updateAppPublic(appId, body.public);
     }
 
     const lock = tryAcquireLock(`app:${appId}`, "redeploy");

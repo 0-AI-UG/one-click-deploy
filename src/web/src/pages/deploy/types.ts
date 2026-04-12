@@ -67,4 +67,5 @@ export type FormState = {
   replicas: string;
   compose_file: string;
   compose_web_service: string;
+  public: boolean;
 };
