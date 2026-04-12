@@ -19,10 +19,11 @@ let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 
 async function collectReplica(replica: ReplicaRow, app: AppRow): Promise<void> {
-  // Stopped replicas are light-sleep anchors — their container is off by
-  // design. Do NOT collect metrics, do NOT health-check them, and do NOT
-  // auto-restart them. Any of those would resurrect the sleeping app.
-  if (replica.status === "stopped") return;
+  // Skip replicas whose containers are intentionally not running.
+  // - stopped: light-sleep anchors (container off by design)
+  // - paused/sleeping/waking: user-paused or scale-to-zero states
+  // Health-checking these would overwrite their status with "unhealthy".
+  if (replica.status === "stopped" || replica.status === "paused" || replica.status === "sleeping" || replica.status === "waking") return;
   const server = db.getServer(replica.server_id);
   if (!server) return;
   const hostKey = server.ssh_host_key || undefined;
@@ -115,6 +116,8 @@ async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<v
 }
 
 async function collectServiceInstance(instance: ServiceInstanceRow, service: ServiceRow): Promise<void> {
+  // Skip instances whose containers are intentionally not running.
+  if (instance.status === "paused" || instance.status === "stopped") return;
   const server = db.getServer(instance.server_id);
   if (!server) return;
   const hostKey = server.ssh_host_key || undefined;
