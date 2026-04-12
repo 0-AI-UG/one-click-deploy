@@ -23,6 +23,7 @@ export type AppData = {
   webhook_enabled: number | boolean;
   webhook_branch?: string;
   webhook_path?: string;
+  webhook_wait_for_ci?: number | boolean;
   desired_replicas: number;
   volume_id?: string | number;
   volume_mount?: string;
@@ -132,6 +133,8 @@ export type ResourceServer = {
   ipv4: string;
   type: string;
   location: string;
+  cpu_percent: number | null;
+  memory_percent: number | null;
   replica_count: number;
   monthly_eur?: number;
   provider_id: string;
@@ -198,6 +201,7 @@ export type DeployBody = {
   webhook_enabled?: boolean;
   webhook_branch?: string;
   webhook_path?: string;
+  webhook_wait_for_ci?: boolean;
   auth_password?: string;
   replicas?: number;
   compose_file?: string;

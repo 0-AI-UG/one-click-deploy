@@ -94,12 +94,14 @@ export function ResourcesPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Servers ({data?.servers?.length || 0})</h3>
         </div>
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
-          <Table headers={["Name", "IP", "Type", "Location", "Replicas", "€/mo", ""]}>
+          <Table headers={["Name", "IP", "Type", "CPU", "RAM", "Location", "Replicas", "€/mo", ""]}>
             {data.servers.map((s) => (
               <tr key={s.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3 text-fg font-bold">{s.name}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.ipv4}</td>
                 <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.type}</span></td>
+                <td className="py-2 px-3 font-mono text-xs">{s.cpu_percent != null ? `${s.cpu_percent}%` : "—"}</td>
+                <td className="py-2 px-3 font-mono text-xs">{s.memory_percent != null ? `${s.memory_percent}%` : "—"}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.location}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
                 <td className="py-2 px-3 text-fg font-bold">{fmtPrice(s.monthly_eur)}</td>
