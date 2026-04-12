@@ -68,7 +68,7 @@ function ServicePopover() {
         className="flex items-center gap-1.5 font-mono text-[10px] text-fg-dim hover:text-fg uppercase tracking-wider transition-colors"
       >
         <Database size={12} />
-        or deploy a service
+        Deploy a service
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-1.5 z-50 border-2 border-fg bg-bg shadow-lg min-w-[200px] animate-fade-in">
@@ -416,12 +416,6 @@ export function DeployPage() {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-4">
-          <p className="text-fg-dim text-[12px]">
-            Paste a GitHub repo. We'll figure out the rest.
-          </p>
-          <ServicePopover />
-        </div>
       </div>
 
       {pendingSession && (
@@ -454,6 +448,7 @@ export function DeployPage() {
           set={set}
           introspecting={introspecting}
           introspect={introspect}
+          extra={<ServicePopover />}
         />
 
         {revealed && detected && detected.manifests.length > 0 && (
