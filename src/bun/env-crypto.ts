@@ -144,10 +144,16 @@ export async function mergeEnvVarUpdate(
       }
     } else {
       // Non-secret: store plaintext
-      const changed = !prev || prev.value !== item.value || prev.secret !== false;
+      // If switching from secret to non-secret and value is still the mask,
+      // decrypt the old value so we don't store "••••••••" as plaintext.
+      let plainValue = item.value;
+      if (item.value === SECRET_MASK && prev?.secret && prev.encrypted_value && prev.iv) {
+        plainValue = await decryptValue(prev.encrypted_value, prev.iv);
+      }
+      const changed = !prev || prev.value !== plainValue || prev.secret !== false;
       entries.push({
         key: item.key,
-        value: item.value,
+        value: plainValue,
         secret: false,
         updated_at: changed ? now : (prev?.updated_at ?? now),
       });
