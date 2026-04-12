@@ -13,6 +13,7 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
 \`\`\`json
 {
   "$schema": 1,
+  "$llm": "string — URL to the llm.txt that documents this manifest format (lets AI agents fetch the latest schema)",
   "name": "string (required) — display name shown in the deploy UI",
   "description": "string — short description shown when picking a service",
   "icon": "string — URL to a small logo/icon",
@@ -54,6 +55,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 
 ## Rules
 
+- \`$llm\` should point to the One-Click Deploy panel's \`/llm.txt\` endpoint so AI agents can fetch the latest manifest schema. Copy the URL from the examples below (it is auto-filled with the current panel's URL).
 - \`$schema\` must be \`1\` (or omitted).
 - Paths in \`build\` are relative to the manifest file's directory. A manifest at \`services/api/.ocd-deploy.json\` with \`"dockerfile": "Dockerfile"\` resolves to \`services/api/Dockerfile\`.
 - Paths must not contain \`..\`.
@@ -65,6 +67,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 \`\`\`json
 {
   "$schema": 1,
+  "$llm": "{{PANEL_LLM_URL}}",
   "name": "My App",
   "description": "A Node.js web application",
   "build": {
@@ -85,6 +88,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 \`\`\`json
 {
   "$schema": 1,
+  "$llm": "{{PANEL_LLM_URL}}",
   "name": "My Compose App",
   "description": "Multi-container app using Docker Compose",
   "build": {
@@ -107,6 +111,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 \`\`\`json
 {
   "$schema": 1,
+  "$llm": "{{PANEL_LLM_URL}}",
   "name": "API Server",
   "description": "REST API backend",
   "build": { "dockerfile": "Dockerfile", "container_port": 8080 },
@@ -124,6 +129,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 \`\`\`json
 {
   "$schema": 1,
+  "$llm": "{{PANEL_LLM_URL}}",
   "name": "Web Frontend",
   "description": "React SPA served by nginx",
   "build": { "dockerfile": "Dockerfile", "container_port": 80 },
@@ -143,8 +149,12 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 - Add a \`description\` to help the deployer understand what each variable is for.
 `;
 
-export function handleLlmTxt(): Response {
-  return new Response(LLM_TXT, {
+export function handleLlmTxt(request: Request): Response {
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "localhost:3001";
+  const proto = request.headers.get("x-forwarded-proto") || "http";
+  const panelLlmUrl = `${proto}://${host}/llm.txt`;
+  const body = LLM_TXT.replaceAll("{{PANEL_LLM_URL}}", panelLlmUrl);
+  return new Response(body, {
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
 }

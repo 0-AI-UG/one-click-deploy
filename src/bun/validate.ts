@@ -156,6 +156,9 @@ export function validateDeployManifest(
   if ("$schema" in obj && obj.$schema !== 1)
     return { ok: false, error: "Unsupported $schema version (expected 1)" };
 
+  if ("$llm" in obj && typeof obj.$llm !== "string")
+    return { ok: false, error: '"$llm" must be a string' };
+
   if (typeof obj.name !== "string" || !obj.name.trim())
     return { ok: false, error: '"name" is required and must be a non-empty string' };
 

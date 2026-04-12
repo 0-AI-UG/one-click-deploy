@@ -119,7 +119,7 @@ function serviceLinkPartsFrom(req: Request): { serviceId: number; appId: number 
 
 export const apiRoutes = {
   // --- LLM-readable manifest docs (public) ---
-  "/llm.txt": { GET: () => handleLlmTxt() },
+  "/llm.txt": { GET: (req: Request) => handleLlmTxt(req) },
 
   // --- Setup ---
   "/api/setup/status": { GET: (req: Request) => handleSetupStatus(req) },
