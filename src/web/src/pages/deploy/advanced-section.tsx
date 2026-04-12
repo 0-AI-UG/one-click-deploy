@@ -1,4 +1,4 @@
-import { Plus, Minus } from "lucide-react";
+import { Plus, Minus, AlertTriangle } from "lucide-react";
 import { Btn, Checkbox } from "../../components/ui.tsx";
 import { Label, Section } from "./shared.tsx";
 import type { FormState } from "./types.ts";
@@ -99,6 +99,71 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
             </div>
           </>
         )}
+      </div>
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <Label>Extra Volume Mounts</Label>
+          <Btn
+            size="xs"
+            variant="ghost"
+            onClick={() =>
+              setForm((f) => ({
+                ...f,
+                extra_volumes: [...f.extra_volumes, { host_path: "", container_path: "" }],
+              }))
+            }
+          >
+            <Plus size={12} /> Add
+          </Btn>
+        </div>
+        {form.extra_volumes.length > 0 && (
+          <div className="flex items-start gap-1.5 mb-2 px-2 py-1.5 border border-accent-yellow/30 bg-accent-yellow/5 text-[9px] text-accent-yellow font-mono">
+            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+            <span>Volume mounts give the container access to host paths. Only mount paths you trust.</span>
+          </div>
+        )}
+        {form.extra_volumes.map((v, i) => (
+          <div key={i} className="flex gap-2 items-center mt-2">
+            <input
+              type="text"
+              value={v.host_path}
+              placeholder="Host path"
+              onChange={(e) =>
+                setForm((f) => {
+                  const next = [...f.extra_volumes];
+                  next[i] = { ...next[i], host_path: e.target.value };
+                  return { ...f, extra_volumes: next };
+                })
+              }
+              className="!w-1/2"
+            />
+            <input
+              type="text"
+              value={v.container_path}
+              placeholder="Container path"
+              onChange={(e) =>
+                setForm((f) => {
+                  const next = [...f.extra_volumes];
+                  next[i] = { ...next[i], container_path: e.target.value };
+                  return { ...f, extra_volumes: next };
+                })
+              }
+              className="!w-1/2"
+            />
+            <button
+              type="button"
+              onClick={() =>
+                setForm((f) => ({
+                  ...f,
+                  extra_volumes: f.extra_volumes.filter((_, j) => j !== i),
+                }))
+              }
+              className="text-muted hover:text-accent-red transition-colors flex-shrink-0"
+            >
+              <Minus size={14} />
+            </button>
+          </div>
+        ))}
       </div>
       <div>
         <div className="flex items-center justify-between mb-1">

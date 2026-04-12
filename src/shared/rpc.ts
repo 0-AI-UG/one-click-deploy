@@ -46,6 +46,7 @@ export type App = {
   last_scale_at: string;
   volume_id: string;
   volume_mount: string;
+  extra_volumes: string; // JSON array of "host:container" strings
   created_at: string;
 };
 
@@ -122,6 +123,7 @@ export type DeployRequest = {
   compose_web_service?: string; // Which compose service Caddy proxies to (default: auto-detect)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
   public?: boolean; // Whether the app is publicly accessible (default true)
+  extra_volumes?: Array<{ host_path: string; container_path: string }>; // Additional volume mounts
 };
 
 export type PanelInfo = {

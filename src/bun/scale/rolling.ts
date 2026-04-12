@@ -68,6 +68,8 @@ export async function rollingRedeploy(
       // Caddy (also on the private network) can reach this replica.
       const replicaBindAddr = replicaBindHost(server);
 
+      let rollingExtraVols: string[] = [];
+      try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) rollingExtraVols = ev; } catch {}
       if (app.deploy_mode === "compose") {
         await cloneAndComposeBuild(
           server.ipv4,
@@ -78,6 +80,7 @@ export async function rollingRedeploy(
             hostPort: replica.host_port,
             envVars: await resolveAppEnvVars(app),
             volumeMount: app.volume_mount || undefined,
+            extraVolumes: rollingExtraVols,
             composeFile: app.compose_file,
             webService: app.compose_web_service,
             gitToken: githubPat,
@@ -94,7 +97,9 @@ export async function rollingRedeploy(
           const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
           envFileFlag = `--env-file ${envFilePath}`;
         }
-        const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${imageName}`;
+        const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
+        const extraVolFlags = rollingExtraVols.map((v) => `-v ${v}`).join(" ");
+        const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${imageName}`;
         await sshExec(server.ipv4, asUser(cmd), hostKey);
       }
 

@@ -1019,6 +1019,13 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN public INTEGER NOT NULL DEFAULT 1");
     },
   },
+  {
+    version: 41,
+    description: "Add extra_volumes column to apps",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN extra_volumes TEXT NOT NULL DEFAULT '[]'");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

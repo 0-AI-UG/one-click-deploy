@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
 import { Card, Btn, showToast, Spinner, CopyButton } from "../components/ui.tsx";
+import { NeoSelect } from "../components/neo-select.tsx";
 import { Database, Loader2 } from "lucide-react";
 
 type CatalogEntry = {
@@ -138,15 +139,11 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
               {/* Version */}
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Version</label>
-                <select
+                <NeoSelect
                   value={version}
-                  onChange={(e) => setVersion(e.target.value)}
-                  className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
-                >
-                  {selected.versions.map((v) => (
-                    <option key={v} value={v}>{selected.label} {v}</option>
-                  ))}
-                </select>
+                  onChange={setVersion}
+                  options={selected.versions.map((v) => ({ value: v, label: `${selected.label} ${v}` }))}
+                />
               </div>
 
               {/* Volume */}

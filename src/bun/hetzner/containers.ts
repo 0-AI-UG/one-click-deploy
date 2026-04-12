@@ -471,6 +471,7 @@ export async function cloneAndBuild(
     hostPort: number; // host-side port for docker binding
     envVars: Record<string, string>;
     volumeMount?: string; // e.g. "/mnt/data:/data" — host:container
+    extraVolumes?: string[]; // additional -v mounts, e.g. ["/host:/container"]
     dockerfilePath?: string; // explicit path to Dockerfile in repo
     dockerContext?: string; // build context path relative to repo root, defaults to "."
     gitToken?: string; // GitHub PAT for private repos
@@ -564,8 +565,9 @@ export async function cloneAndBuild(
   // Ensure ocd-net exists so apps can reach infrastructure services by container name
   await ensureOcdNetwork(ip);
   const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
+  const extraVolFlags = (opts.extraVolumes || []).map((v) => `-v ${v}`).join(" ");
   const bindAddr = opts.bindAddr || "127.0.0.1";
-  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
+  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${opts.name}:latest`;
   log("build", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
@@ -597,6 +599,7 @@ export async function cloneAndRailpackBuild(
     hostPort: number;
     envVars: Record<string, string>;
     volumeMount?: string;
+    extraVolumes?: string[];
     gitToken?: string;
     /** See `cloneAndBuild` — defaults to 127.0.0.1. */
     bindAddr?: string;
@@ -659,8 +662,9 @@ export async function cloneAndRailpackBuild(
   emit("Starting container...");
   await ensureOcdNetwork(ip);
   const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
+  const extraVolFlags = (opts.extraVolumes || []).map((v) => `-v ${v}`).join(" ");
   const bindAddr = opts.bindAddr || "127.0.0.1";
-  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${opts.name}:latest`;
+  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${opts.name}:latest`;
   log("railpack", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
@@ -745,6 +749,7 @@ export async function cloneAndComposeBuild(
     hostPort: number; // host-side port for Caddy
     envVars: Record<string, string>;
     volumeMount?: string; // e.g. "/mnt/data:/data" — host:container
+    extraVolumes?: string[]; // additional volume mounts
     composeFile: string; // e.g. "docker-compose.yml"
     webService: string; // e.g. "web"
     gitToken?: string;
@@ -775,8 +780,12 @@ export async function cloneAndComposeBuild(
       ports: [`${bindAddr}:${opts.hostPort}:${opts.port}`],
     },
   };
-  if (opts.volumeMount) {
-    overrideServices[opts.webService].volumes = [opts.volumeMount];
+  const allVolumes = [
+    ...(opts.volumeMount ? [opts.volumeMount] : []),
+    ...(opts.extraVolumes || []),
+  ];
+  if (allVolumes.length > 0) {
+    overrideServices[opts.webService].volumes = allVolumes;
   }
   const override = JSON.stringify({ services: overrideServices });
   const overridePath = `${appDir}/docker-compose.ocd.yml`;

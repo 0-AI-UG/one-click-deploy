@@ -29,6 +29,7 @@ type DbApp = {
   dockerfile_path: string;
   volume_id: string;
   volume_mount: string;
+  extra_volumes: string;
   auth_password: string;
   webhook_enabled: number;
   github_webhook_id: string;
@@ -64,6 +65,10 @@ type ProgressFn = (step: string, detail: string) => void;
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [deploy:${context}]`, ...args);
+}
+
+function parseExtraVolumes(raw: string): string[] {
+  try { const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }
 }
 
 export async function redeployApp(
@@ -127,6 +132,7 @@ export async function redeployApp(
     // over the shared private network, and the container never listens
     // on the public NIC.
     const containerBindAddr = replicaBindHost(server);
+    const extraVolumes = parseExtraVolumes(app.extra_volumes);
     if (app.deploy_mode === "compose") {
       await cloneAndComposeBuild(
         server.ipv4,
@@ -137,6 +143,7 @@ export async function redeployApp(
           hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
+          extraVolumes,
           composeFile: app.compose_file,
           webService: app.compose_web_service,
           gitToken: githubPat,
@@ -157,6 +164,7 @@ export async function redeployApp(
           hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
+          extraVolumes,
           gitToken: githubPat,
           bindAddr: containerBindAddr,
         },
@@ -178,6 +186,7 @@ export async function redeployApp(
           hostPort: hostPort,
           envVars,
           volumeMount: app.volume_mount || undefined,
+          extraVolumes,
           dockerfilePath: app.dockerfile_path || undefined,
           dockerContext: app.docker_context || undefined,
           gitToken: githubPat,
@@ -316,7 +325,8 @@ export async function rollbackApp(
       }
 
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${deployment.image_tag}`;
+      const rollbackExtraVols = parseExtraVolumes(app.extra_volumes).map((v) => `-v ${v}`).join(" ");
+      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${rollbackExtraVols} ${deployment.image_tag}`;
       const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to rollback — the previous image may no longer be available on this server");
@@ -488,6 +498,8 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
         await Bun.sleep(10_000);
       }
 
+      const whExtraVolumes = parseExtraVolumes(app.extra_volumes);
+      const whExtraVolFlags = whExtraVolumes.map((v) => `-v ${v}`).join(" ");
       if (app.deploy_mode === "compose") {
         await cloneAndComposeBuild(
           server.ipv4,
@@ -498,6 +510,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             hostPort: replica.host_port,
             envVars: await resolveAppEnvVars(app),
             volumeMount: app.volume_mount || undefined,
+            extraVolumes: whExtraVolumes,
             composeFile: app.compose_file,
             webService: app.compose_web_service,
             gitToken: githubPat,
@@ -515,6 +528,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             hostPort: replica.host_port,
             envVars: await resolveAppEnvVars(app),
             volumeMount: app.volume_mount || undefined,
+            extraVolumes: whExtraVolumes,
             gitToken: githubPat,
             bindAddr: replicaBindAddr,
           },
@@ -532,7 +546,8 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
           if (Object.keys(envVars).length > 0) {
             envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
           }
-          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
+          const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
+          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${whExtraVolFlags} ${app.name}:latest`;
           await sshExec(server.ipv4, asUser(cmd), hostKey);
         }
       } else {
@@ -545,6 +560,7 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
             hostPort: replica.host_port,
             envVars: await resolveAppEnvVars(app),
             volumeMount: app.volume_mount || undefined,
+            extraVolumes: whExtraVolumes,
             dockerfilePath: app.dockerfile_path || undefined,
             dockerContext: app.docker_context || undefined,
             gitToken: githubPat,
@@ -564,7 +580,8 @@ export async function webhookRedeployApp(appId: number, gitSha: string): Promise
           if (Object.keys(envVars).length > 0) {
             envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
           }
-          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${app.name}:latest`;
+          const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
+          const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${whExtraVolFlags} ${app.name}:latest`;
           await sshExec(server.ipv4, asUser(cmd), hostKey);
         }
       }

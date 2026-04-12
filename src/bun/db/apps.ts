@@ -41,6 +41,7 @@ export type AppRow = {
   webhook_wait_for_ci: number;
   environment_id: number | null;
   public: number;
+  extra_volumes: string; // JSON array of "host:container" strings
 };
 
 export type DnsRecordRow = {
@@ -312,6 +313,10 @@ export function updateAppDomain(id: number, domain: string): void {
 
 export function updateAppVolume(id: number, volumeId: string, volumeMount: string): void {
   db.query("UPDATE apps SET volume_id = ?, volume_mount = ? WHERE id = ?").run(volumeId, volumeMount, id);
+}
+
+export function updateAppExtraVolumes(id: number, extraVolumes: string[]): void {
+  db.query("UPDATE apps SET extra_volumes = ? WHERE id = ?").run(JSON.stringify(extraVolumes), id);
 }
 
 export function updateAppAuthPassword(id: number, authPassword: string): void {

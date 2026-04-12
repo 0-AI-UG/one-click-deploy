@@ -40,6 +40,7 @@ export {
   updateAppContainerPort,
   updateAppDomain,
   updateAppVolume,
+  updateAppExtraVolumes,
   updateAppAuthPassword,
   updateAppPublic,
   updateAppDeployMode,

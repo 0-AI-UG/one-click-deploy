@@ -249,7 +249,8 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
 
 export async function recreateAppContainer(
   appId: number,
-  volumeMount: string | undefined
+  volumeMount: string | undefined,
+  extraVolumes?: string[]
 ): Promise<{ ok: boolean; error?: string }> {
   log("recreateContainer", `Recreating container for app id=${appId} volumeMount=${volumeMount || "none"}`);
   try {
@@ -273,8 +274,12 @@ export async function recreateAppContainer(
           ports: [`${bindAddr}:${hostPort}:${app.container_port}`],
         },
       };
-      if (volumeMount) {
-        overrideServices[app.compose_web_service].volumes = [volumeMount];
+      const allVols = [
+        ...(volumeMount ? [volumeMount] : []),
+        ...(extraVolumes || []),
+      ];
+      if (allVols.length > 0) {
+        overrideServices[app.compose_web_service].volumes = allVols;
       }
       const override = JSON.stringify({ services: overrideServices });
       const escapedOverride = override.replace(/'/g, "'\\''");
@@ -298,7 +303,8 @@ export async function recreateAppContainer(
       }
 
       const volumeFlag = volumeMount ? `-v ${volumeMount}` : "";
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+      const extraVolFlags = (extraVolumes || []).map((v) => `-v ${v}`).join(" ");
+      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${app.name}:latest`;
       const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to start container — check your port configuration and environment variables");

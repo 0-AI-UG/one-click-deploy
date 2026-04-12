@@ -39,6 +39,7 @@ export interface App {
   wake_token: string | null;
   environment_id: number | null;
   public: number;
+  extra_volumes: string;
 }
 
 export interface Replica {

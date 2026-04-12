@@ -50,6 +50,8 @@ export async function scaleUp(
     emit("scale", `Transferring image to ${targetServer.name}...`);
     const imageName = `${app.name}:latest`;
 
+    let scaleExtraVols: string[] = [];
+    try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) scaleExtraVols = ev; } catch {}
     if (app.deploy_mode === "compose") {
       // For compose, clone repo and build on target
       await cloneAndComposeBuild(
@@ -61,6 +63,7 @@ export async function scaleUp(
           hostPort,
           envVars: await resolveAppEnvVars(app),
           volumeMount: app.volume_mount || undefined,
+          extraVolumes: scaleExtraVols,
           composeFile: app.compose_file,
           webService: app.compose_web_service,
           gitToken: githubPat,
@@ -93,7 +96,9 @@ export async function scaleUp(
         await sshExec(targetServer.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, targetHostKey);
         envFileFlag = `--env-file ${envFilePath}`;
       }
-      const cmd = `docker run -d --name ${containerName} --restart unless-stopped -p ${replicaBindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${imageName}`;
+      const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
+      const extraVolFlags = scaleExtraVols.map((v) => `-v ${v}`).join(" ");
+      const cmd = `docker run -d --name ${containerName} --restart unless-stopped -p ${replicaBindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${imageName}`;
       const result = await sshExec(targetServer.ipv4, asUser(cmd), targetHostKey);
       if (result.exitCode !== 0) {
         throw new Error("Failed to start replica on target server — check that Docker is running and the image was transferred");

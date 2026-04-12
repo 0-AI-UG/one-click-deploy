@@ -76,8 +76,10 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
           envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
         }
         const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
+        let wakeExtraVolFlags = "";
+        try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) wakeExtraVolFlags = ev.map((v: string) => `-v ${v}`).join(" "); } catch {}
         const cmd = `docker run -d --name ${containerName} --restart unless-stopped ` +
-          `-p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${app.name}:latest`;
+          `-p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${wakeExtraVolFlags} ${app.name}:latest`;
         await sshExec(server.ipv4, asUser(cmd), hostKey);
       }
     }

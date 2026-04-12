@@ -459,6 +459,14 @@ export async function deploy(
       db.updateAppVolume(app.id, state.volumeId, volumeMount);
     }
 
+    // Persist extra volumes
+    const extraVolumes = (req.extra_volumes || []).map(
+      (v) => `${v.host_path}:${v.container_path}`
+    );
+    if (extraVolumes.length > 0) {
+      db.updateAppExtraVolumes(app.id, extraVolumes);
+    }
+
     const buildStart = Date.now();
     let deployMode: "dockerfile" | "compose" = "dockerfile";
     let composeFile = "";
@@ -517,6 +525,7 @@ export async function deploy(
           hostPort: replica.host_port,
           envVars: flatEnvVars,
           volumeMount,
+          extraVolumes,
           composeFile,
           webService: composeWebService,
           gitToken: githubPat,
@@ -538,6 +547,7 @@ export async function deploy(
           hostPort: replica.host_port,
           envVars: flatEnvVars,
           volumeMount,
+          extraVolumes,
           dockerfilePath: req.dockerfile_path,
           dockerContext: req.docker_context,
           gitToken: githubPat,

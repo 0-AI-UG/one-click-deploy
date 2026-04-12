@@ -6,6 +6,10 @@ import { getComputeProvider } from "../../bun/providers/index.ts";
 import { sshExec } from "../../bun/remote/index.ts";
 import { recreateAppContainer } from "../../bun/deploy/index.ts";
 
+function parseExtraVolumes(raw: string): string[] {
+  try { const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }
+}
+
 export async function handleAttachVolume(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "volumes.create");
@@ -40,7 +44,7 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
     // A volume locks the app to a single server: force min/max replicas to 1
     // so autoscale + manual scaling cannot ever bring up replica 2+.
     db.updateAppScaling(app_id, { min_replicas: Math.min(1, app.min_replicas), max_replicas: 1 });
-    const result = await recreateAppContainer(app_id, volumeMount);
+    const result = await recreateAppContainer(app_id, volumeMount, parseExtraVolumes(app.extra_volumes));
     if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
 
     return Response.json({ ok: true }, { headers: corsHeaders });
@@ -79,7 +83,7 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
     db.updateAppVolume(app_id, volume_id, volumeMount);
     // A volume locks the app to a single server: force min/max replicas to 1.
     db.updateAppScaling(app_id, { min_replicas: Math.min(1, app.min_replicas), max_replicas: 1 });
-    const result = await recreateAppContainer(app_id, volumeMount);
+    const result = await recreateAppContainer(app_id, volumeMount, parseExtraVolumes(app.extra_volumes));
     if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
 
     return Response.json({ ok: true }, { headers: corsHeaders });
@@ -100,7 +104,7 @@ export async function handleDetachVolume(request: Request): Promise<Response> {
     const compute = getComputeProvider();
     await compute.volumes!.detach(app.volume_id);
     db.updateAppVolume(app_id, "", "");
-    const result = await recreateAppContainer(app_id, undefined);
+    const result = await recreateAppContainer(app_id, undefined, parseExtraVolumes(app.extra_volumes));
     if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
 
     return Response.json({ ok: true }, { headers: corsHeaders });
@@ -134,7 +138,7 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
     const compute = getComputeProvider();
     await compute.volumes!.detach(volume_id);
     db.updateAppVolume(from_app_id, "", "");
-    await recreateAppContainer(from_app_id, undefined);
+    await recreateAppContainer(from_app_id, undefined, parseExtraVolumes(fromApp.extra_volumes));
 
     await compute.volumes!.attach(volume_id, toServer.provider_id);
     const hostMountPath = `/mnt/ocd-${toApp.name}-data`;
@@ -143,7 +147,7 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
     await sshExec(toServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, toHostKey);
     const volumeMount = `${hostMountPath}:${containerPath}`;
     db.updateAppVolume(to_app_id, volume_id, volumeMount);
-    await recreateAppContainer(to_app_id, volumeMount);
+    await recreateAppContainer(to_app_id, volumeMount, parseExtraVolumes(toApp.extra_volumes));
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {

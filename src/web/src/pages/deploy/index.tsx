@@ -116,6 +116,7 @@ const EMPTY_FORM: FormState = {
   compose_file: "",
   compose_web_service: "",
   public: true,
+  extra_volumes: [],
 };
 
 export function DeployPage() {
@@ -398,6 +399,9 @@ export function DeployPage() {
       compose_file: form.compose_file || undefined,
       compose_web_service: form.compose_web_service || undefined,
       public: form.public,
+      extra_volumes: form.extra_volumes.length > 0
+        ? form.extra_volumes.filter((v) => v.host_path && v.container_path)
+        : undefined,
     };
 
     void startDeploy(body);

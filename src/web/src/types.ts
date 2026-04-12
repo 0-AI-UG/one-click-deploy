@@ -215,4 +215,5 @@ export type DeployBody = {
   compose_file?: string;
   compose_web_service?: string;
   public?: boolean;
+  extra_volumes?: Array<{ host_path: string; container_path: string }>;
 };
