@@ -2,6 +2,7 @@ import * as db from "../db.ts";
 import { sshExec } from "../remote/index.ts";
 import { log } from "./types.ts";
 import { scaleApp } from "./scale-app.ts";
+import { tryAcquireLock } from "../op-lock.ts";
 
 // In-memory tracker: when each app first entered sustained idle state.
 // Cleared when metrics rise above idle thresholds or app scales.
@@ -78,16 +79,25 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
     (avgCpu > app.autoscale_cpu_threshold || avgMem > app.autoscale_mem_threshold) &&
     replicas.length < effectiveMax
   ) {
+    const lock = tryAcquireLock(`app:${appId}`, "autoscale");
+    if ("busy" in lock) {
+      log("autoscale", `Skipping app ${appId}: ${lock.holder} in progress`);
+      return;
+    }
     log("autoscale", `Scaling up app ${appId}: CPU=${avgCpu.toFixed(1)}% > ${app.autoscale_cpu_threshold}% or MEM=${avgMem.toFixed(1)}% > ${app.autoscale_mem_threshold}%`);
-    const result = await scaleApp(appId, replicas.length + 1);
-    if (result.ok) {
-      db.insertScalingEvent({
-        app_id: appId,
-        event_type: "autoscale_up",
-        from_count: replicas.length,
-        to_count: replicas.length + 1,
-        reason: `CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}% exceeded thresholds`,
-      });
+    try {
+      const result = await scaleApp(appId, replicas.length + 1);
+      if (result.ok) {
+        db.insertScalingEvent({
+          app_id: appId,
+          event_type: "autoscale_up",
+          from_count: replicas.length,
+          to_count: replicas.length + 1,
+          reason: `CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}% exceeded thresholds`,
+        });
+      }
+    } finally {
+      lock.release();
     }
     return;
   }
@@ -118,30 +128,48 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
         return;
       }
       // Sustained idle confirmed — scale to zero
+      const lock = tryAcquireLock(`app:${appId}`, "autoscale");
+      if ("busy" in lock) {
+        log("autoscale", `Skipping app ${appId}: ${lock.holder} in progress`);
+        return;
+      }
       idleSince.delete(appId);
       log("autoscale", `Scaling to zero app ${appId}: idle for ${Math.round(idleDuration)}s (threshold: ${idleTimeout}s)`);
-      const result = await scaleApp(appId, 0);
-      if (result.ok) {
-        db.insertScalingEvent({
-          app_id: appId,
-          event_type: "autoscale_sleep",
-          from_count: 1,
-          to_count: 0,
-          reason: `Idle for ${Math.round(idleDuration)}s — CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}%`,
-        });
+      try {
+        const result = await scaleApp(appId, 0);
+        if (result.ok) {
+          db.insertScalingEvent({
+            app_id: appId,
+            event_type: "autoscale_sleep",
+            from_count: 1,
+            to_count: 0,
+            reason: `Idle for ${Math.round(idleDuration)}s — CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}%`,
+          });
+        }
+      } finally {
+        lock.release();
       }
     } else {
       // Normal scale-down (N → N-1, where N-1 >= 1)
+      const lock = tryAcquireLock(`app:${appId}`, "autoscale");
+      if ("busy" in lock) {
+        log("autoscale", `Skipping app ${appId}: ${lock.holder} in progress`);
+        return;
+      }
       log("autoscale", `Scaling down app ${appId}: CPU=${avgCpu.toFixed(1)}% < ${app.autoscale_cpu_threshold * 0.5}% and MEM=${avgMem.toFixed(1)}% < ${app.autoscale_mem_threshold * 0.5}%`);
-      const result = await scaleApp(appId, replicas.length - 1);
-      if (result.ok) {
-        db.insertScalingEvent({
-          app_id: appId,
-          event_type: "autoscale_down",
-          from_count: replicas.length,
-          to_count: replicas.length - 1,
-          reason: `CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}% below thresholds`,
-        });
+      try {
+        const result = await scaleApp(appId, replicas.length - 1);
+        if (result.ok) {
+          db.insertScalingEvent({
+            app_id: appId,
+            event_type: "autoscale_down",
+            from_count: replicas.length,
+            to_count: replicas.length - 1,
+            reason: `CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}% below thresholds`,
+          });
+        }
+      } finally {
+        lock.release();
       }
     }
   }

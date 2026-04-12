@@ -12,6 +12,7 @@ import { rollingRedeploy } from "../scale.ts";
 import { wakeApp } from "../scale/wake.ts";
 import { syncAppCaddy } from "../scale/caddy-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
+import { acquireLock } from "../op-lock.ts";
 
 type DbApp = {
   id: number;
@@ -444,30 +445,22 @@ export async function rollbackApp(
 
 // ── Webhook-triggered rolling redeploy ──
 //
-// In-process per-app queue: pushes for the same app are serialized;
-// pushes for different apps run in parallel. Single-instance panel only.
-const webhookQueues = new Map<number, Promise<void>>();
+// Per-app serialization via the shared op-lock: pushes for the same app
+// wait in a FIFO queue; pushes for different apps run in parallel.
+// Manual operations (redeploy, scale, etc.) that hold the lock will
+// cause the webhook to wait until they finish.
 
-export function enqueueWebhookRedeploy(
+export async function enqueueWebhookRedeploy(
   appId: number,
   gitSha: string,
   runner: (appId: number, gitSha: string) => Promise<void> = webhookRedeployApp,
 ): Promise<void> {
-  const prev = webhookQueues.get(appId) ?? Promise.resolve();
-  // Swallow the previous job's error so the queue keeps running regardless of prior failures.
-  const next = prev.catch(() => {}).then(() => runner(appId, gitSha));
-  webhookQueues.set(
-    appId,
-    next.finally(() => {
-      if (webhookQueues.get(appId) === next) webhookQueues.delete(appId);
-    }),
-  );
-  return next;
-}
-
-// exported for tests
-export function _resetWebhookQueues() {
-  webhookQueues.clear();
+  const release = await acquireLock(`app:${appId}`, "webhookRedeploy");
+  try {
+    await runner(appId, gitSha);
+  } finally {
+    release();
+  }
 }
 
 export async function webhookRedeployApp(appId: number, gitSha: string): Promise<void> {

@@ -4,6 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { scaleApp, wakeApp, collectMetrics } from "../../bun/scale.ts";
 import { notifyJob } from "./apps.ts";
+import { tryAcquireLock } from "../../bun/op-lock.ts";
 
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
   try {
@@ -24,6 +25,11 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
       return Response.json({ error: "Apps with persistent storage cannot have more than 1 replica." }, { status: 400, headers: corsHeaders });
     }
 
+    const lock = tryAcquireLock(`app:${appId}`, "scale");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+
     // Run scaling as a background job and stream progress through the
     // existing deploy_jobs table. The frontend long-polls
     // /api/deploy-jobs/:id?since=N to watch each step in real time instead
@@ -41,6 +47,7 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
         db.appendDeployJobEvent(job.id, "error", msg);
         db.finishDeployJob(job.id, { ok: false, error: msg });
       } finally {
+        lock.release();
         notifyJob(job.id);
       }
     })();
@@ -156,8 +163,12 @@ export async function handleWakeApp(request: Request, appId: number): Promise<Re
     }
     if (app.status === "waking") return Response.json({ ok: true, status: "waking" }, { headers: wakeCorsHeaders });
     if (app.status !== "sleeping") return Response.json({ ok: true, status: app.status }, { headers: wakeCorsHeaders });
+    const lock = tryAcquireLock(`app:${appId}`, "wake");
+    if ("busy" in lock) {
+      return Response.json({ ok: true, status: "waking" }, { headers: wakeCorsHeaders });
+    }
     // Fire-and-forget: wake in the background so the response returns immediately
-    wakeApp(appId).catch(err => console.error(`[wake] Failed to wake app ${appId}:`, err));
+    wakeApp(appId).catch(err => console.error(`[wake] Failed to wake app ${appId}:`, err)).finally(() => lock.release());
     return Response.json({ ok: true, status: "waking" }, { headers: wakeCorsHeaders });
   } catch (error) {
     return Response.json({ error: "Internal error" }, { status: 500, headers: wakeCorsHeaders });

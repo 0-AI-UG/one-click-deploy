@@ -16,6 +16,7 @@ import {
 import { sshExec, getComposeLogs, getContainerLogs } from "../../bun/remote/index.ts";
 import { validateAppName } from "../../bun/validate.ts";
 import { introspectRepo } from "../../bun/github-introspect.ts";
+import { tryAcquireLock } from "../../bun/op-lock.ts";
 
 // In-process notifier for long-poll waiters. Keyed by deploy job id; each
 // waiter is a no-arg callback that resolves the long-poll Promise.
@@ -192,8 +193,16 @@ export async function handleDeployJobPoll(request: Request, jobId: number): Prom
 export async function handleDestroyApp(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.destroy");
-    const result = await destroyApp(appId);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`app:${appId}`, "destroy");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await destroyApp(appId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -202,8 +211,16 @@ export async function handleDestroyApp(request: Request, appId: number): Promise
 export async function handleRestartApp(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.restart");
-    const result = await restartApp(appId);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`app:${appId}`, "restart");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await restartApp(appId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -212,8 +229,16 @@ export async function handleRestartApp(request: Request, appId: number): Promise
 export async function handlePauseApp(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.pause");
-    const result = await pauseApp(appId);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`app:${appId}`, "pause");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await pauseApp(appId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -222,8 +247,16 @@ export async function handlePauseApp(request: Request, appId: number): Promise<R
 export async function handleUnpauseApp(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.pause");
-    const result = await unpauseApp(appId);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`app:${appId}`, "unpause");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await unpauseApp(appId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -242,9 +275,16 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       body.container_port = p;
     }
 
-    const result = await redeployApp(appId, () => {}, body.env_vars, body.auth_password, body.container_port, payload.userId);
-
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`app:${appId}`, "redeploy");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await redeployApp(appId, () => {}, body.env_vars, body.auth_password, body.container_port, payload.userId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -254,8 +294,16 @@ export async function handleUpdateAppEnv(request: Request, appId: number): Promi
   try {
     const payload = await requirePermission(request, "apps.env");
     const body = await request.json() as { env_vars: Record<string, string> };
-    const result = await updateAppEnv(appId, body.env_vars, payload.userId);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`app:${appId}`, "updateEnv");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await updateAppEnv(appId, body.env_vars, payload.userId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -283,38 +331,43 @@ export async function handleRenameApp(request: Request, appId: number): Promise<
       return Response.json({ error: `An app named "${newName}" already exists` }, { status: 409, headers: corsHeaders });
     }
 
-    // Rename container and directory on each server hosting a replica
-    const replicas = db.getReplicas(appId);
-    for (const replica of replicas) {
-      const server = db.getServer(replica.server_id);
-      if (!server) continue;
-      const hostKey = server.ssh_host_key || undefined;
-
-      if (app.deploy_mode === "compose") {
-        // Compose projects can't be renamed in-place — just rename the directory
-        await sshExec(
-          server.ipv4,
-          `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
-          hostKey
-        );
-      } else {
-        await sshExec(
-          server.ipv4,
-          `su - deploy -c "docker rename ${app.name} ${newName} 2>/dev/null || true"`,
-          hostKey
-        );
-        await sshExec(
-          server.ipv4,
-          `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
-          hostKey
-        );
-      }
+    const lock = tryAcquireLock(`app:${appId}`, "rename");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
     }
+    try {
+      // Rename container and directory on each server hosting a replica
+      const replicas = db.getReplicas(appId);
+      for (const replica of replicas) {
+        const server = db.getServer(replica.server_id);
+        if (!server) continue;
+        const hostKey = server.ssh_host_key || undefined;
 
-    // Update database records
-    db.renameApp(appId, newName);
+        if (app.deploy_mode === "compose") {
+          await sshExec(
+            server.ipv4,
+            `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
+            hostKey
+          );
+        } else {
+          await sshExec(
+            server.ipv4,
+            `su - deploy -c "docker rename ${app.name} ${newName} 2>/dev/null || true"`,
+            hostKey
+          );
+          await sshExec(
+            server.ipv4,
+            `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
+            hostKey
+          );
+        }
+      }
 
-    return Response.json({ ok: true, name: newName }, { headers: corsHeaders });
+      db.renameApp(appId, newName);
+      return Response.json({ ok: true, name: newName }, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -376,8 +429,16 @@ export async function handleRollbackApp(request: Request, appId: number): Promis
   try {
     await requirePermission(request, "apps.rollback");
     const body = await request.json() as { deployment_id: number };
-    const result = await rollbackApp(appId, body.deployment_id);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`app:${appId}`, "rollback");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await rollbackApp(appId, body.deployment_id);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }

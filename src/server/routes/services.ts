@@ -11,6 +11,7 @@ import {
   getServiceLogs,
 } from "../../bun/deploy/service-lifecycle.ts";
 import { getCatalogEntries, getCatalogEntry } from "../../bun/services/catalog.ts";
+import { tryAcquireLock } from "../../bun/op-lock.ts";
 
 // Long-poll notifier (same pattern as app deploy jobs)
 const jobWaiters = new Map<number, Set<() => void>>();
@@ -180,8 +181,16 @@ export async function handleServiceDeployJobPoll(request: Request, jobId: number
 export async function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.destroy");
-    const result = await destroyService(serviceId);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`service:${serviceId}`, "destroy");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await destroyService(serviceId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -190,8 +199,16 @@ export async function handleDestroyService(request: Request, serviceId: number):
 export async function handleRestartService(request: Request, serviceId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.restart");
-    const result = await restartService(serviceId);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`service:${serviceId}`, "restart");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await restartService(serviceId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -200,8 +217,16 @@ export async function handleRestartService(request: Request, serviceId: number):
 export async function handlePauseService(request: Request, serviceId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.pause");
-    const result = await pauseService(serviceId);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`service:${serviceId}`, "pause");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await pauseService(serviceId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
@@ -210,8 +235,16 @@ export async function handlePauseService(request: Request, serviceId: number): P
 export async function handleUnpauseService(request: Request, serviceId: number): Promise<Response> {
   try {
     await requirePermission(request, "apps.pause");
-    const result = await unpauseService(serviceId);
-    return Response.json(result, { headers: corsHeaders });
+    const lock = tryAcquireLock(`service:${serviceId}`, "unpause");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+    try {
+      const result = await unpauseService(serviceId);
+      return Response.json(result, { headers: corsHeaders });
+    } finally {
+      lock.release();
+    }
   } catch (error) {
     return handleError(error);
   }
