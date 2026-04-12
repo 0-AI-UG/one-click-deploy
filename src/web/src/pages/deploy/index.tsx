@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
-import { Rocket } from "lucide-react";
+import { Rocket, RotateCcw, X } from "lucide-react";
 import { startDeploy } from "../../stores/deploy-progress.ts";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
@@ -110,21 +110,43 @@ export function DeployPage() {
     }
   }
 
-  // Restore saved deploy session on mount
+  const [pendingSession, setPendingSession] = useState<{
+    form: FormState;
+    envValues: Record<string, string>;
+    extraEnv: Array<{ key: string; value: string }>;
+  } | null>(null);
+  const hasRestored = useRef(false);
+
+  // Check for a saved deploy session on mount
   useEffect(() => {
     get("/api/deploy-session")
       .then((res: any) => {
-        if (!res.session) return;
-        const { form: savedForm, envValues: savedEnv, extraEnv: savedExtra } = res.session;
-        if (savedForm) setForm((f) => ({ ...f, ...savedForm }));
-        if (savedEnv) setEnvValues(savedEnv);
-        if (savedExtra) setExtraEnv(savedExtra);
+        if (res.session) setPendingSession(res.session);
       })
       .catch(() => {});
   }, []);
 
-  // Auto-save form state (debounced 1s)
+  function restoreSession() {
+    if (!pendingSession) return;
+    hasRestored.current = true;
+    setForm((f) => ({ ...f, ...pendingSession.form }));
+    if (pendingSession.envValues) setEnvValues(pendingSession.envValues);
+    if (pendingSession.extraEnv) setExtraEnv(pendingSession.extraEnv);
+    setPendingSession(null);
+  }
+
+  function dismissSession() {
+    del("/api/deploy-session").catch(() => {});
+    setPendingSession(null);
+  }
+
+  // Auto-save form state (debounced 1s) — skip initial render
+  const isFirstRender = useRef(true);
   useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
     if (!form.app_name && !form.git_repo) return;
     const timer = setTimeout(() => {
       post("/api/deploy-session", { form, envValues, extraEnv }).catch(() => {});
@@ -269,6 +291,31 @@ export function DeployPage() {
           Paste a GitHub repo. We'll figure out the rest.
         </p>
       </div>
+
+      {pendingSession && (
+        <div className="mb-5 border-2 border-fg bg-bg-card px-4 py-3 flex items-center justify-between gap-3 animate-fade-in">
+          <div className="flex items-center gap-2 min-w-0">
+            <RotateCcw size={14} className="text-fg shrink-0" />
+            <span className="font-mono text-[11px] text-fg truncate">
+              You have an unsaved deploy session
+              {pendingSession.form.app_name ? ` for "${pendingSession.form.app_name}"` : ""}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Btn size="xs" variant="primary" onClick={restoreSession}>
+              Restore
+            </Btn>
+            <button
+              type="button"
+              onClick={dismissSession}
+              className="text-fg-dim hover:text-fg transition-colors"
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-5">
         <RepoSection
