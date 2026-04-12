@@ -100,11 +100,14 @@ export const terminalWsHandlers = {
     const data = ws.data as TerminalWsData;
     sessionsByUser.set(data.userId, (sessionsByUser.get(data.userId) ?? 0) + 1);
 
-    // Keepalive ping every 30s — also gives us a backstop to detect broken
-    // connections if any intermediary proxy eats ws control frames.
+    // Application-level heartbeat every 25s. WebSocket control-frame pings
+    // are often swallowed by reverse proxies (Caddy, Cloudflare, etc.), so we
+    // send a real data frame that the client recognises and ignores. This
+    // keeps the connection alive through any intermediary.
+    const heartbeat = new TextEncoder().encode("\x00");
     data.pingTimer = setInterval(() => {
-      try { ws.ping(); } catch { /* ws may be closed */ }
-    }, 30_000);
+      try { ws.send(heartbeat); } catch { /* ws may be closed */ }
+    }, 25_000);
 
     let ip: string | undefined;
     let hostKey: string | undefined;
@@ -206,6 +209,8 @@ export const terminalWsHandlers = {
       } catch { /* malformed control frame — ignore */ }
       return;
     }
+    // Single NUL byte = client heartbeat — don't pipe to the PTY.
+    if (message.length === 1 && message[0] === 0) return;
     data.pty.write(message);
   },
 

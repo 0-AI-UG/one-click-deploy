@@ -29,6 +29,7 @@ export function TerminalPage({ kind, id }: Props) {
   const disposedRef = useRef(false);
   const connectingRef = useRef(false);
   const hasConnectedRef = useRef(false);
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [status, setStatus] = useState<Status>("connecting");
   const [error, setError] = useState("");
@@ -62,6 +63,17 @@ export function TerminalPage({ kind, id }: Props) {
       if (disposedRef.current) { try { ws.close(); } catch { /* closed */ } return; }
       setStatus("open");
       backoffRef.current = 500;
+
+      // Client-side heartbeat every 25s — keeps the connection alive through
+      // reverse proxies by sending traffic in both directions.
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      const hb = new Uint8Array([0]);
+      heartbeatRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try { ws.send(hb); } catch { /* ws closing */ }
+        }
+      }, 25_000);
+
       const term = termRef.current;
       if (term) {
         // Visual separator on reconnect so the user knows a new session started.
@@ -80,7 +92,11 @@ export function TerminalPage({ kind, id }: Props) {
       const term = termRef.current;
       if (!term) return;
       if (ev.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(ev.data));
+        const bytes = new Uint8Array(ev.data);
+        // Server sends a single NUL byte as an application-level heartbeat
+        // to keep the connection alive through reverse proxies. Ignore it.
+        if (bytes.length === 1 && bytes[0] === 0) return;
+        term.write(bytes);
       } else {
         term.write(ev.data);
       }
@@ -94,6 +110,7 @@ export function TerminalPage({ kind, id }: Props) {
 
     ws.onclose = (ev) => {
       connectingRef.current = false;
+      if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
       if (disposedRef.current) return;
 
       // 4000 = clean SSH exit — don't auto-reconnect, the session ended normally.
@@ -165,6 +182,7 @@ export function TerminalPage({ kind, id }: Props) {
       disposedRef.current = true;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("focus", onWindowFocus);
+      if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
