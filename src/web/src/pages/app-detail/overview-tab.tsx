@@ -15,9 +15,6 @@ interface OverviewTabProps {
 }
 
 export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas }: OverviewTabProps) {
-  const envEntries: Array<{ key: string; value: string; secret: boolean }> = Array.isArray(app.env_vars)
-    ? app.env_vars.map((e: any) => ({ key: e.key, value: e.value, secret: !!e.secret }))
-    : Object.entries(app.env_vars ? (typeof app.env_vars === "string" ? JSON.parse(app.env_vars) : app.env_vars) : {}).map(([k, v]) => ({ key: k, value: String(v), secret: false }));
   const internalUrl = `http://${app.name}.ocd.internal:8080`;
 
   return (
@@ -26,16 +23,6 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
         <Card className="p-4 space-y-3">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Configuration</h3>
           <div className="space-y-2 text-[10px] font-mono">
-            {app.domain && (
-              <div className="flex justify-between items-center"><span className="text-muted">Public URL</span><span className="flex items-center gap-1"><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="text-accent-blue font-bold hover:underline">https://{app.domain}</a><CopyButton text={`https://${app.domain}`} /><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="p-1 text-muted hover:text-fg"><ExternalLink size={10} /></a></span></div>
-            )}
-            <div className="flex justify-between items-center" title="Reachable from other apps on the private network. Set this in env vars when one app needs to call another.">
-              <span className="text-muted">Internal URL</span>
-              <span className="flex items-center gap-1">
-                <span className="text-fg font-bold">{internalUrl}</span>
-                <CopyButton text={internalUrl} />
-              </span>
-            </div>
             <div className="flex justify-between"><span className="text-muted">Git Repo</span><span className="text-fg font-bold">{app.git_repo}</span></div>
             <div className="flex justify-between"><span className="text-muted">Deploy Mode</span><span className="text-fg">{app.deploy_mode}</span></div>
             <div className="flex justify-between"><span className="text-muted">Container Port</span><span className="text-fg">{app.container_port}</span></div>
@@ -45,22 +32,30 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
             {app.volume_id && <div className="flex justify-between"><span className="text-muted">Volume</span><span className="text-fg">{app.volume_mount}</span></div>}
             {app.auth_password && <div className="flex justify-between"><span className="text-muted">Auth</span><span className="text-accent-amber font-bold">Password protected</span></div>}
             {app.deployed_by_username && <div className="flex justify-between"><span className="text-muted">Last deployed by</span><span className="text-fg">{app.deployed_by_username}</span></div>}
+            {app.environment_name && <div className="flex justify-between"><span className="text-muted">Environment</span><a href="#/environments" className="text-fg font-bold hover:underline">{app.environment_name}</a></div>}
           </div>
         </Card>
         <Card className="p-4 space-y-3">
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Environment Variables</h3>
-          {envEntries.length === 0 ? (
-            <p className="text-[10px] text-muted font-mono">No environment variables set</p>
-          ) : (
-            <div className="space-y-1 text-[10px] font-mono">
-              {envEntries.map((e) => (
-                <div key={e.key} className="flex justify-between gap-4">
-                  <span className="text-accent-blue font-bold">{e.key}</span>
-                  <span className="text-fg-dim truncate">{e.secret ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" : e.value}</span>
-                </div>
-              ))}
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Connection</h3>
+          <div className="space-y-2 text-[10px] font-mono">
+            {app.domain && (
+              <div>
+                <span className="text-muted block mb-1">Public URL</span>
+                <span className="flex items-center gap-1">
+                  <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="text-accent-blue font-bold hover:underline">https://{app.domain}</a>
+                  <CopyButton text={`https://${app.domain}`} />
+                  <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="p-1 text-muted hover:text-fg"><ExternalLink size={10} /></a>
+                </span>
+              </div>
+            )}
+            <div title="Reachable from other apps on the private network. Set this in env vars when one app needs to call another.">
+              <span className="text-muted block mb-1">Internal URL</span>
+              <span className="flex items-center gap-1">
+                <span className="text-fg font-bold">{internalUrl}</span>
+                <CopyButton text={internalUrl} />
+              </span>
             </div>
-          )}
+          </div>
         </Card>
       </div>
 

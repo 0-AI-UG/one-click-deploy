@@ -3,7 +3,8 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../bun/env-crypto.ts";
-import { cascadeRedeployEnvironment } from "../../bun/deploy/index.ts";
+import { cascadeRedeployEnvironment, redeployApp } from "../../bun/deploy/index.ts";
+import { acquireLock } from "../../bun/op-lock.ts";
 
 export async function handleGetEnvironments(request: Request): Promise<Response> {
   try {
@@ -108,6 +109,52 @@ export async function handleGetEnvironmentApps(request: Request, id: number): Pr
       id: a.id, name: a.name, status: a.status, domain: a.domain,
     }));
     return Response.json(apps, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleAttachAppToEnvironment(request: Request, id: number): Promise<Response> {
+  try {
+    await requirePermission(request, "admin");
+    const env = db.getEnvironment(id);
+    if (!env) {
+      return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
+    }
+    const body = await request.json();
+    const { app_id } = body;
+    const app = db.getApp(app_id);
+    if (!app) {
+      return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
+    db.updateAppEnvironment(app_id, id);
+    // Redeploy the app in the background with the new environment
+    if (app.status !== "stopped" && app.status !== "destroying") {
+      (async () => {
+        const release = await acquireLock(`app:${app_id}`, "env-attach");
+        try { await redeployApp(app_id, () => {}); } finally { release(); }
+      })().catch((err) => console.error(`[environments] Redeploy after attach failed:`, err));
+    }
+    return Response.json({ ok: true }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleDetachAppFromEnvironment(request: Request, id: number): Promise<Response> {
+  try {
+    await requirePermission(request, "admin");
+    const body = await request.json();
+    const { app_id } = body;
+    const app = db.getApp(app_id);
+    if (!app) {
+      return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
+    if (app.environment_id !== id) {
+      return Response.json({ ok: false, error: "App is not attached to this environment" }, { status: 400, headers: corsHeaders });
+    }
+    db.updateAppEnvironment(app_id, null);
+    return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

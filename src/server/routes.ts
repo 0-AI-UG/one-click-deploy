@@ -74,6 +74,8 @@ import {
   handleUpdateEnvironment,
   handleDeleteEnvironment,
   handleGetEnvironmentApps,
+  handleAttachAppToEnvironment,
+  handleDetachAppFromEnvironment,
 } from "./routes/environments.ts";
 import {
   handleGetCatalog,
@@ -320,6 +322,10 @@ export const apiRoutes = {
   },
   "/api/environments/:id/apps": {
     GET: (req: Request) => handleGetEnvironmentApps(req, environmentIdFrom(req)),
+    POST: (req: Request) => handleAttachAppToEnvironment(req, environmentIdFrom(req)),
+  },
+  "/api/environments/:id/apps/detach": {
+    POST: (req: Request) => handleDetachAppFromEnvironment(req, environmentIdFrom(req)),
   },
 
   // --- Volumes ---
