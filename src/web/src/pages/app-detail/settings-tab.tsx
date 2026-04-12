@@ -29,67 +29,60 @@ export function SettingsTab({
 }: SettingsTabProps) {
   return (
     <div className="space-y-4">
-      <Card className="p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Pencil size={14} className="text-fg" />
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">App Name</h3>
+      <Card className="p-4 space-y-4">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Pencil size={14} className="text-fg" />
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">App Name</h3>
+          </div>
+          <div className="flex gap-2 items-center">
+            <input
+              type="text"
+              value={nameEdit}
+              onChange={(e) => setNameEdit(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+              placeholder={app.name}
+            />
+            <PermissionGate permission="apps.deploy">
+              <Btn
+                size="sm"
+                variant="primary"
+                loading={actionLoading === "rename"}
+                disabled={!nameEdit || nameEdit === app.name}
+                onClick={() => action("rename", async () => {
+                  await put(`/api/apps/${appId}/rename`, { name: nameEdit });
+                })}
+              >Rename</Btn>
+            </PermissionGate>
+          </div>
         </div>
-        <p className="text-[10px] text-muted font-mono mb-3">
-          Rename this app. This changes the container name and app directory on the server.
-        </p>
-        <div className="flex gap-2 items-center">
+
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Lock size={14} className="text-fg" />
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Password Protection</h3>
+          </div>
           <input
-            type="text"
-            value={nameEdit}
-            onChange={(e) => setNameEdit(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-            placeholder={app.name}
+            type="password"
+            value={authPassword}
+            onChange={(e) => setAuthPassword(e.target.value)}
+            placeholder="(none)"
           />
-          <PermissionGate permission="apps.deploy">
-            <Btn
-              size="sm"
-              variant="primary"
-              loading={actionLoading === "rename"}
-              disabled={!nameEdit || nameEdit === app.name}
-              onClick={() => action("rename", async () => {
-                await put(`/api/apps/${appId}/rename`, { name: nameEdit });
-              })}
-            >Rename</Btn>
-          </PermissionGate>
         </div>
-      </Card>
 
-      <Card className="p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Lock size={14} className="text-fg" />
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Password Protection</h3>
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <SettingsIcon size={14} className="text-fg" />
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Container Port</h3>
+          </div>
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={portEdit || ""}
+            onChange={(e) => setPortEdit(parseInt(e.target.value) || 0)}
+            placeholder="3000"
+          />
         </div>
-        <p className="text-[10px] text-muted font-mono mb-3">
-          Set a password to gate access to this app. Leave blank to remove. Saving triggers a redeploy.
-        </p>
-        <input
-          type="password"
-          value={authPassword}
-          onChange={(e) => setAuthPassword(e.target.value)}
-          placeholder="(none)"
-        />
-      </Card>
-
-      <Card className="p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <SettingsIcon size={14} className="text-fg" />
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Container Port</h3>
-        </div>
-        <p className="text-[10px] text-muted font-mono mb-3">
-          The port your app listens on inside the container. Saving triggers a rebuild and redeploy.
-        </p>
-        <input
-          type="number"
-          min={1}
-          max={65535}
-          value={portEdit || ""}
-          onChange={(e) => setPortEdit(parseInt(e.target.value) || 0)}
-          placeholder="3000"
-        />
       </Card>
 
       <PermissionGate permission="apps.redeploy">
