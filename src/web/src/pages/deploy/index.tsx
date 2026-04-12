@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
-import { Rocket, RotateCcw, X, Save, Loader2 } from "lucide-react";
+import { Rocket, RotateCcw, X, Save, Loader2, Database } from "lucide-react";
 import { startDeploy } from "../../stores/deploy-progress.ts";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
@@ -10,6 +10,93 @@ import { EnvSection } from "./env-section.tsx";
 import { AdvancedSection } from "./advanced-section.tsx";
 import type { IntrospectResult, ManifestEnvDef, FormState } from "./types.ts";
 import type { DeployBody } from "../../types.ts";
+
+const SERVICE_ICONS: Record<string, string> = {
+  postgresql: "PG",
+  mysql: "My",
+  mariadb: "Ma",
+  redis: "Re",
+  mongodb: "Mo",
+};
+
+const SERVICE_COLORS: Record<string, string> = {
+  postgresql: "bg-blue-600",
+  mysql: "bg-orange-500",
+  mariadb: "bg-teal-600",
+  redis: "bg-red-500",
+  mongodb: "bg-green-600",
+};
+
+type CatalogEntry = {
+  type: string;
+  label: string;
+  versions: string[];
+  defaultPort: number;
+};
+
+function ServicePopover() {
+  const [open, setOpen] = useState(false);
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const handleEnter = () => {
+    clearTimeout(closeTimer.current);
+    setOpen(true);
+    if (!loaded) {
+      get("/api/services/catalog")
+        .then((data: CatalogEntry[]) => {
+          setCatalog(data);
+          setLoaded(true);
+        })
+        .catch(() => setLoaded(true));
+    }
+  };
+
+  const handleLeave = () => {
+    closeTimer.current = setTimeout(() => setOpen(false), 150);
+  };
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
+    >
+      <button
+        type="button"
+        className="flex items-center gap-1.5 font-mono text-[10px] text-fg-dim hover:text-fg uppercase tracking-wider transition-colors"
+      >
+        <Database size={12} />
+        or deploy a service
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1.5 z-50 border-2 border-fg bg-bg shadow-lg min-w-[200px] animate-fade-in">
+          {!loaded ? (
+            <div className="px-3 py-2 flex items-center justify-center">
+              <Loader2 size={14} className="animate-spin text-fg-dim" />
+            </div>
+          ) : catalog.length === 0 ? (
+            <div className="px-3 py-2 font-mono text-[10px] text-fg-dim">No services available</div>
+          ) : (
+            catalog.map((entry) => (
+              <a
+                key={entry.type}
+                href={`#/deploy-service/${entry.type}`}
+                className="flex items-center gap-2.5 px-3 py-2 hover:bg-alt transition-colors"
+              >
+                <div className={`w-5 h-5 ${SERVICE_COLORS[entry.type] || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[7px] font-bold shrink-0`}>
+                  {SERVICE_ICONS[entry.type] || "??"}
+                </div>
+                <span className="font-mono text-[10px] font-bold text-fg uppercase">{entry.label}</span>
+              </a>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const EMPTY_FORM: FormState = {
   app_name: "",
@@ -329,9 +416,12 @@ export function DeployPage() {
             </span>
           )}
         </div>
-        <p className="text-fg-dim text-[12px]">
-          Paste a GitHub repo. We'll figure out the rest.
-        </p>
+        <div className="flex items-center gap-4">
+          <p className="text-fg-dim text-[12px]">
+            Paste a GitHub repo. We'll figure out the rest.
+          </p>
+          <ServicePopover />
+        </div>
       </div>
 
       {pendingSession && (

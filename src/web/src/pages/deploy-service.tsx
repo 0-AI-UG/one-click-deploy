@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
 import { Card, Btn, showToast, Spinner, CopyButton } from "../components/ui.tsx";
-import { Database, ChevronRight, Loader2 } from "lucide-react";
+import { Database, Loader2 } from "lucide-react";
 
 type CatalogEntry = {
   type: string;
@@ -34,7 +34,7 @@ function randomPassword(len = 24): string {
   return Array.from(bytes, (b) => chars[b % chars.length]).join("");
 }
 
-export function DeployServicePage() {
+export function DeployServicePage({ preselectedType }: { preselectedType?: string }) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<CatalogEntry | null>(null);
@@ -48,6 +48,10 @@ export function DeployServicePage() {
     get("/api/services/catalog")
       .then((data: CatalogEntry[]) => {
         setCatalog(data);
+        if (preselectedType) {
+          const entry = data.find((e: CatalogEntry) => e.type === preselectedType);
+          if (entry) selectService(entry);
+        }
         setLoading(false);
       })
       .catch((err: any) => {
@@ -100,40 +104,14 @@ export function DeployServicePage() {
         <p className="text-[10px] text-muted font-mono mt-0.5">Deploy a managed database or cache</p>
       </div>
 
-      {!selected ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {catalog.map((entry) => (
-            <button
-              key={entry.type}
-              onClick={() => selectService(entry)}
-              className="group border-2 border-fg bg-bg hover:bg-alt transition-all p-4 text-left"
-            >
-              <div className="flex items-center gap-3 mb-2">
-                <div className={`w-8 h-8 ${SERVICE_COLORS[entry.type] || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[10px] font-bold`}>
-                  {SERVICE_ICONS[entry.type] || "??"}
-                </div>
-                <div>
-                  <div className="font-mono text-[11px] font-bold text-fg uppercase">{entry.label}</div>
-                  <div className="font-mono text-[9px] text-muted">Port {entry.defaultPort}</div>
-                </div>
-              </div>
-              <div className="flex items-center justify-between mt-2">
-                <span className="font-mono text-[8px] text-muted uppercase">
-                  {entry.versions.length} version{entry.versions.length > 1 ? "s" : ""}
-                </span>
-                <ChevronRight size={14} className="text-muted group-hover:text-fg transition-colors" />
-              </div>
-            </button>
-          ))}
-        </div>
-      ) : (
+      {selected && (
         <div className="space-y-4">
-          <button
-            onClick={() => setSelected(null)}
+          <a
+            href="#/deploy"
             className="font-mono text-[10px] text-muted hover:text-fg transition-colors uppercase"
           >
-            &larr; Back to catalog
-          </button>
+            &larr; Back to deploy
+          </a>
 
           <Card>
             <div className="px-4 py-3 border-b-2 border-fg bg-alt flex items-center gap-3">

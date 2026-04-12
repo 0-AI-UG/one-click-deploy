@@ -51,7 +51,7 @@ export function ServiceDeployProgressPage({ jobId }: { jobId: number | null }) {
 
   useEffect(() => {
     if (!jobId) {
-      window.location.hash = "#/deploy-service";
+      window.location.hash = "#/deploy";
       return;
     }
 
@@ -241,7 +241,7 @@ export function ServiceDeployProgressPage({ jobId }: { jobId: number | null }) {
               </Btn>
               <Btn
                 variant="ghost"
-                onClick={() => { window.location.hash = "#/deploy-service"; }}
+                onClick={() => { window.location.hash = "#/deploy"; }}
               >
                 Deploy another
               </Btn>
@@ -250,7 +250,7 @@ export function ServiceDeployProgressPage({ jobId }: { jobId: number | null }) {
             <Btn
               variant="primary"
               className="flex-1 !py-2.5"
-              onClick={() => { window.location.hash = "#/deploy-service"; }}
+              onClick={() => { window.location.hash = "#/deploy"; }}
             >
               Back to form
             </Btn>

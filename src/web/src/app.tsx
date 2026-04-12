@@ -125,8 +125,9 @@ export function App() {
   } else if (hash.startsWith("#/apps/")) {
     const appId = parseInt(hash.split("/")[2], 10);
     content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;
-  } else if (hash === "#/deploy-service") {
-    content = <DeployServicePage />;
+  } else if (hash.startsWith("#/deploy-service")) {
+    const parts = hash.replace("#/deploy-service", "").replace(/^\//, "");
+    content = <DeployServicePage preselectedType={parts || undefined} />;
   } else if (hash.startsWith("#/deploy/service-progress/")) {
     const jobId = parseInt(hash.split("/")[3], 10);
     content = <ServiceDeployProgressPage jobId={jobId && !Number.isNaN(jobId) ? jobId : null} />;
