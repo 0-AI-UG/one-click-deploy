@@ -130,6 +130,15 @@ async function persistCaddyConfig(panel: PanelAccess): Promise<void> {
  * probe it and take it out organically; if it stays failing, the
  * reconciler auto-restarts it.
  */
+// Cache of upstream dial strings per app — used to skip no-op Caddy syncs that
+// would otherwise mutate srv0's route array and cause Caddy to drop active
+// WebSocket connections (including the panel's terminal sessions).
+const lastUpstreamsByApp = new Map<number, string>();
+
+function upstreamsCacheKey(ups: CaddyUpstream[]): string {
+  return ups.map((u) => u.dial).sort().join(",");
+}
+
 function buildUpstreams(
   appId: number,
   authPassword: string,
@@ -358,7 +367,7 @@ async function ensureNipIoTlsPolicy(
  * given app based on the current replicas in the DB. Idempotent — safe to
  * call on every lifecycle event.
  */
-export async function syncAppCaddy(appId: number): Promise<void> {
+export async function syncAppCaddy(appId: number, force = false): Promise<void> {
   const app = db.getApp(appId);
   if (!app) return;
 
@@ -371,7 +380,17 @@ export async function syncAppCaddy(appId: number): Promise<void> {
   const upstreams = buildUpstreams(appId, app.auth_password);
   if (upstreams.length === 0) {
     log("sync", `app ${appId}: no upstreams available — removing routes`);
+    lastUpstreamsByApp.delete(appId);
     await removeAppCaddy(app.name, app.domain);
+    return;
+  }
+
+  // Skip the upsert if upstreams haven't changed since the last sync.
+  // Every upsert mutates Caddy's srv0 route array (DELETE + POST), which
+  // causes Caddy to drop active WebSocket connections on that server —
+  // including the panel's terminal sessions.
+  const key = upstreamsCacheKey(upstreams);
+  if (!force && lastUpstreamsByApp.get(appId) === key) {
     return;
   }
 
@@ -389,6 +408,7 @@ export async function syncAppCaddy(appId: number): Promise<void> {
     await ensureNipIoTlsPolicy(panel, app.domain);
   }
   await persistCaddyConfig(panel);
+  lastUpstreamsByApp.set(appId, key);
 }
 
 /**
@@ -399,9 +419,11 @@ export async function syncAppCaddy(appId: number): Promise<void> {
 export async function removeAppCaddy(
   appName: string,
   _appDomain: string,
+  appId?: number,
 ): Promise<void> {
   const panel = getPanelAccess();
   if (!panel) return;
+  if (appId !== undefined) lastUpstreamsByApp.delete(appId);
   for (const id of [publicRouteId(appName), internalRouteId(appName)]) {
     await sshExec(
       panel.ipv4,
