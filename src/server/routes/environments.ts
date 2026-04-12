@@ -26,8 +26,12 @@ export async function handleCreateEnvironment(request: Request): Promise<Respons
     if (!name || typeof name !== "string") {
       return Response.json({ ok: false, error: "Name is required" }, { status: 400, headers: corsHeaders });
     }
+    const existing = db.getEnvironments().find((e) => e.name === name.trim());
+    if (existing) {
+      return Response.json({ ok: false, error: "An environment with that name already exists" }, { status: 409, headers: corsHeaders });
+    }
     const processed = await processIncomingEnvVars(env_vars || []);
-    const env = db.insertEnvironment(name, serializeEnvVars(processed.entries));
+    const env = db.insertEnvironment(name.trim(), serializeEnvVars(processed.entries));
     return Response.json({
       ...env,
       env_vars: maskEnvVarsForResponse(parseEnvVars(env.env_vars)),
