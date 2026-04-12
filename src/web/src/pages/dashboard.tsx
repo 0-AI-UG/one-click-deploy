@@ -118,7 +118,7 @@ export function DashboardPage() {
               </div>
               <div className="divide-y divide-fg/10">
                 {apps.map((app) => (
-                  <div key={app.id} className="px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors">
+                  <div key={app.id} className={`px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${app.status === "paused" ? "opacity-50" : ""}`}>
                     <div className="flex items-center gap-4 min-w-0">
                       <a href={`#/apps/${app.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{app.name}</a>
                       {app.domain && (
@@ -208,7 +208,7 @@ export function DashboardPage() {
               </div>
               <div className="divide-y divide-fg/10">
                 {services.map((svc) => (
-                  <div key={svc.id} className="px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors">
+                  <div key={svc.id} className={`px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${svc.status === "paused" ? "opacity-50" : ""}`}>
                     <div className="flex items-center gap-4 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <Database size={10} className="text-muted" />

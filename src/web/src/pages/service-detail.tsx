@@ -154,6 +154,22 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
         </div>
       </div>
 
+      {service.status === "paused" && (
+        <div className="flex items-center gap-2 px-4 py-2.5 mb-4 border-2 border-fg bg-alt">
+          <Pause size={12} className="text-muted" />
+          <span className="font-mono text-[10px] text-muted font-bold uppercase tracking-wider">
+            Service is paused — container is frozen
+          </span>
+          <div className="ml-auto">
+            <PermissionGate permission="services.manage">
+              <Btn size="xs" loading={actionLoading === "unpause"} onClick={() => action("unpause", "Unpause")}>
+                <Play size={12} /> Unpause
+              </Btn>
+            </PermissionGate>
+          </div>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="flex border-b-2 border-fg mb-4">
         {tabs.map((t) => (

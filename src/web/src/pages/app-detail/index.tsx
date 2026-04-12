@@ -210,6 +210,22 @@ export function AppDetailPage({ appId }: { appId: number }) {
         </div>
       </div>
 
+      {app.status === "paused" && (
+        <div className="flex items-center gap-2 px-4 py-2.5 mb-4 border-2 border-fg bg-alt">
+          <Pause size={12} className="text-muted" />
+          <span className="font-mono text-[10px] text-muted font-bold uppercase tracking-wider">
+            App is paused — containers are frozen and not serving traffic
+          </span>
+          <div className="ml-auto">
+            <PermissionGate permission="apps.pause">
+              <Btn size="xs" loading={actionLoading === "unpause"} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
+                <Play size={12} /> Unpause
+              </Btn>
+            </PermissionGate>
+          </div>
+        </div>
+      )}
+
       <div className="flex border-b-2 border-fg mb-4">
         {tabs.map((t) => (
           <button
