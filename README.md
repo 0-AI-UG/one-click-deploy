@@ -1,27 +1,46 @@
 # One-Click Deploy
 
-Deploy Docker containerized applications to [Hetzner Cloud](https://www.hetzner.com/cloud) with a single click.
+Deploy applications to the cloud with a single click.
 
 A self-hosted web panel that automates server provisioning, DNS configuration, TLS certificates, and container deployment — so you can go from a Git repo to a live, secured app in minutes.
 
 ## Features
 
-- **One-click deployment** from any Git repository with a Dockerfile
-- **Automatic server provisioning** on Hetzner Cloud
+- **One-click deployment** from any Git repository — with a Dockerfile or auto-detected via [Railpack](https://railpack.io)
+- **Automatic server provisioning** — Hetzner Cloud today, more providers coming
 - **TLS certificates** via Caddy (Let's Encrypt)
 - **DNS management** through Hetzner DNS API
 - **Multi-app support** — deploy multiple apps per server with subdomain routing
+- **Horizontal scaling** — manual replica count or auto-scaling policies with CPU/memory thresholds
+- **Infrastructure services** — deploy PostgreSQL, Redis, MySQL and more alongside your apps
+- **Private networking** — services and replicas communicate over Hetzner's private network
+- **Pause & resume** — scale apps to zero to save costs, wake them back up instantly
+- **Web terminal** — SSH into servers, replicas, and service instances from the browser
 - **Auto-redeploy on push** via GitHub webhooks
-- **Self-managing** — the panel can deploy and manage itself like any other app
+- **Multi-user with RBAC** — granular permissions for deploy, scale, pause, terminal access, and more
+- **Auth** — passkeys (WebAuthn), TOTP two-factor, and GitHub OAuth
+- **Self-managing** — the panel deploys and manages itself like any other app
 
 ## Prerequisites
 
-- A [Hetzner Cloud](https://www.hetzner.com/cloud) account with an API token
-- A [Hetzner DNS](https://dns.hetzner.com/) zone (optional, for custom domains)
+- A cloud provider account — currently [Hetzner Cloud](https://www.hetzner.com/cloud) (more providers planned)
+- A DNS zone on your provider (optional, for custom domains)
 
 ## Quick start
 
-The panel is distributed as a Docker image. One `docker run` provisions a Hetzner server, deploys a permanent copy of the panel to it, wires up TLS and auto-redeploy webhooks, and exits. No browser involved.
+### Option A: Bash (no Docker required)
+
+Copy `example.panel.json` to `panel.json`, fill in your values, and run:
+
+```bash
+./scripts/bootstrap.sh
+```
+
+The script installs [Bun](https://bun.sh) if needed, installs dependencies, provisions a Hetzner server, deploys a permanent copy of the panel to it, and exits.
+
+### Option B: Docker
+
+Pass the config inline:
 
 ```bash
 docker run --rm \
@@ -35,7 +54,7 @@ docker run --rm \
   ghcr.io/0-ai-ug/one-click-deploy:latest
 ```
 
-Or load the config from a file:
+Or load from a file:
 
 ```bash
 docker run --rm \
@@ -44,10 +63,20 @@ docker run --rm \
   ghcr.io/0-ai-ug/one-click-deploy:latest
 ```
 
-**Required fields:** `hetzner_token`, `domain`.
-**Optional fields:** `server_type` (default `cx23`), `server_location` (default `nbg1`), `dns_zone_id` (auto-creates the A record), `volume_size` (default `10` GB), `app_name` (default `ocd-panel`).
+### Config reference
 
-Progress streams to docker logs. When the container exits with code 0, open `https://<domain>`, create your admin account on the one-time setup page, and you're done. From that point on, the panel manages itself: redeploy, roll back, edit env vars, and view logs from its own app-detail page. GitHub pushes trigger auto-redeploys via the webhook.
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `hetzner_token` | yes | — | Hetzner Cloud API token |
+| `domain` | yes | — | Domain for the panel (e.g. `panel.example.com`) |
+| `server_type` | no | `cx23` | Hetzner server type |
+| `server_location` | no | `nbg1` | Hetzner datacenter location |
+| `dns_zone_id` | no | — | Hetzner DNS zone ID (auto-creates the A record) |
+| `volume_size` | no | `10` | Persistent volume size in GB |
+| `app_name` | no | `ocd-panel` | Container/resource name for the panel |
+| `webhook_branch` | no | `main` | Git branch that triggers auto-redeploy |
+
+Progress streams to stdout. When the process exits with code 0, open `https://<domain>`, create your admin account on the one-time setup page, and you're done. From that point on, the panel manages itself: redeploy, roll back, edit env vars, and view logs from its own app-detail page.
 
 ## Development
 
@@ -56,6 +85,7 @@ bun install
 bun run dev         # starts the panel on :3001 with hot reload and SKIP_2FA=1
 bun run typecheck
 bun run build       # builds the web bundle into src/web/dist
+bun run test        # runs unit tests
 ```
 
 ## Tech stack
