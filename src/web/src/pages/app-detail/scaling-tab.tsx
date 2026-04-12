@@ -307,7 +307,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
           <Table headers={["When", "Event", "From → To", "Reason"]}>
             {scalingEvents.slice(0, 20).map((e) => (
               <tr key={e.id}>
-                <td className="py-2 px-3 text-muted text-[9px]">{new Date(e.created_at).toLocaleString()}</td>
+                <td className="py-2 px-3 text-muted text-[9px]">{new Date(e.created_at + "Z").toLocaleString()}</td>
                 <td className="py-2 px-3 text-fg font-bold text-[9px] uppercase tracking-wider">{e.event_type}</td>
                 <td className="py-2 px-3 text-fg-dim">{e.from_count} → {e.to_count}</td>
                 <td className="py-2 px-3 text-fg-dim text-[9px]">{e.reason || "—"}</td>

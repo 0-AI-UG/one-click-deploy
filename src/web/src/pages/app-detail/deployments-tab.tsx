@@ -28,7 +28,7 @@ export function DeploymentsTab({ appId, deployments, action }: DeploymentsTabPro
               <td className="py-2 px-3 text-fg-dim">{d.git_commit?.slice(0, 7) || "—"}</td>
               <td className="py-2 px-3 text-fg-dim uppercase tracking-wider text-[9px]">{d.source || "manual"}</td>
               <td className="py-2 px-3"><StatusBadge status={d.status} /></td>
-              <td className="py-2 px-3 text-muted">{new Date(d.created_at).toLocaleString()}</td>
+              <td className="py-2 px-3 text-muted">{new Date(d.created_at + "Z").toLocaleString()}</td>
               <td className="py-2 px-3">
                 {d.status !== "failed" && (
                   <PermissionGate permission="apps.rollback">

@@ -108,7 +108,7 @@ function SecuritySection() {
                     {pk.backedUp ? "Synced" : pk.deviceType === "singleDevice" ? "Device-bound" : ""}
                   </span>
                   <span className="font-mono text-[9px] text-muted ml-2">
-                    {new Date(pk.createdAt).toLocaleDateString()}
+                    {new Date(pk.createdAt + "Z").toLocaleDateString()}
                   </span>
                 </div>
                 <button

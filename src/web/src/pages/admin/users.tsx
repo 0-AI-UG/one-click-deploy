@@ -330,7 +330,7 @@ export function UsersPage() {
               <div className="space-y-1 text-[11px] font-mono max-h-48 overflow-y-auto">
                 {panelDeployments.slice(0, 10).map((d) => (
                   <div key={d.id} className="flex justify-between gap-2">
-                    <span className="text-muted truncate">{new Date(d.created_at).toLocaleString()}</span>
+                    <span className="text-muted truncate">{new Date(d.created_at + "Z").toLocaleString()}</span>
                     <span className="text-fg">{d.source}</span>
                     <span className="text-muted truncate" title={d.git_commit}>{d.git_commit?.slice(0, 12) || "—"}</span>
                   </div>
@@ -415,7 +415,7 @@ export function UsersPage() {
                   <Key size={10} /> {u.isAdmin ? "All" : `${u.permissions.length}`}
                 </span>
               </td>
-              <td className="py-2.5 px-3 text-muted font-mono text-[10px]">{new Date(u.createdAt).toLocaleDateString()}</td>
+              <td className="py-2.5 px-3 text-muted font-mono text-[10px]">{new Date(u.createdAt + "Z").toLocaleDateString()}</td>
               <td className="py-2.5 px-3" onClick={(e) => e.stopPropagation()}>
                 {!u.isAdmin && (
                   <Btn size="xs" variant="danger" onClick={() => handleDelete(u)}>
