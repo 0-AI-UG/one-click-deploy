@@ -111,6 +111,7 @@ export {
   setUserPermissions,
 } from "./users.ts";
 export { getSettings, saveSetting } from "./settings.ts";
+export { getDeploySession, saveDeploySession, deleteDeploySession } from "./deploy-sessions.ts";
 export type { PanelRow, PanelDeploymentRow } from "./panel.ts";
 export {
   getPanel,

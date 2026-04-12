@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { get } from "../../api/client.ts";
+import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
 import { Rocket } from "lucide-react";
 import { startDeploy } from "../../stores/deploy-progress.ts";
@@ -109,6 +109,28 @@ export function DeployPage() {
       setEnvValues({});
     }
   }
+
+  // Restore saved deploy session on mount
+  useEffect(() => {
+    get("/api/deploy-session")
+      .then((res: any) => {
+        if (!res.session) return;
+        const { form: savedForm, envValues: savedEnv, extraEnv: savedExtra } = res.session;
+        if (savedForm) setForm((f) => ({ ...f, ...savedForm }));
+        if (savedEnv) setEnvValues(savedEnv);
+        if (savedExtra) setExtraEnv(savedExtra);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Auto-save form state (debounced 1s)
+  useEffect(() => {
+    if (!form.app_name && !form.git_repo) return;
+    const timer = setTimeout(() => {
+      post("/api/deploy-session", { form, envValues, extraEnv }).catch(() => {});
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [form, envValues, extraEnv]);
 
   useEffect(() => {
     const url = form.git_repo.trim();
@@ -228,6 +250,7 @@ export function DeployPage() {
       compose_web_service: form.compose_web_service || undefined,
     };
 
+    del("/api/deploy-session").catch(() => {});
     void startDeploy(body);
     window.location.hash = "#/deploy/progress";
   };

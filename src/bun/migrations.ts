@@ -846,6 +846,17 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 32,
+    description: "Add deploy_sessions table for persisting deploy form state",
+    up: (db) => {
+      db.run(`CREATE TABLE deploy_sessions (
+        user_id TEXT PRIMARY KEY,
+        form_data TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+    },
+  },
 ];
 
 export function runMigrations(db: Database): void {

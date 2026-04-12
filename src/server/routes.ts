@@ -68,6 +68,7 @@ import {
   handleGitHubStatus,
 } from "./routes/github-oauth.ts";
 import { handleLlmTxt } from "./routes/llm-txt.ts";
+import { handleGetDeploySession, handleSaveDeploySession, handleDeleteDeploySession } from "./routes/deploy-sessions.ts";
 import {
   handleGetCatalog,
   handleGetServices,
@@ -187,6 +188,11 @@ export const apiRoutes = {
   "/api/apps": { GET: (req: Request) => handleGetApps(req) },
   "/api/apps/deploy": { POST: (req: Request) => handleDeploy(req) },
   "/api/repos/introspect": { GET: (req: Request) => handleIntrospectRepo(req) },
+  "/api/deploy-session": {
+    GET: (req: Request) => handleGetDeploySession(req),
+    POST: (req: Request) => handleSaveDeploySession(req),
+    DELETE: (req: Request) => handleDeleteDeploySession(req),
+  },
 
   // App-specific
   "/api/apps/:appId": { DELETE: (req: Request) => handleDestroyApp(req, appIdFrom(req)) },
