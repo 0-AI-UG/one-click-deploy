@@ -14,7 +14,7 @@ type Props = {
 
 export function ReceiptSection({ form, set, setForm, detected, selectedManifest }: Props) {
   const hasBothModes = !!detected && detected.dockerfiles.length > 0 && !!detected.compose_files[0];
-  const isCompose = !!(form.compose_file || detected?.compose_files[0]);
+  const isCompose = !!(form.compose_file || (!form.dockerfile_path && detected?.compose_files[0]));
   const hasMultipleDockerfiles = !isCompose && !!detected && detected.dockerfiles.length > 1;
   const hasMultipleComposeFiles = isCompose && !!detected && detected.compose_files.length > 1;
   const hasMultipleServices = !!detected && detected.compose_services.length > 1;
