@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post, put, del } from "../api/client.ts";
 import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx";
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
+import { NeoSelect } from "../components/neo-select.tsx";
 import { Layers, Plus, Trash2, ChevronDown, ChevronRight, Key, X } from "lucide-react";
 import type { EnvironmentData, AppData } from "../types.ts";
 
@@ -222,18 +223,15 @@ export function EnvironmentsPage() {
                           </span>
                         ))}
                         {available.length > 0 && (
-                          <select
-                            className="font-mono text-[9px] py-0.5 px-1 bg-bg border border-fg/10"
-                            value=""
-                            onChange={(e) => {
-                              if (e.target.value) attachApp(env.id, parseInt(e.target.value));
-                            }}
-                          >
-                            <option value="">+ attach app</option>
-                            {available.map((a) => (
-                              <option key={a.id} value={a.id}>{a.name}</option>
-                            ))}
-                          </select>
+                          <div className="w-32">
+                            <NeoSelect
+                              compact
+                              value=""
+                              placeholder="+ attach app"
+                              options={available.map((a) => ({ value: String(a.id), label: a.name }))}
+                              onChange={(v) => { if (v) attachApp(env.id, parseInt(v)); }}
+                            />
+                          </div>
                         )}
                         {apps.length === 0 && available.length === 0 && (
                           <span className="font-mono text-[9px] text-muted">no apps</span>
