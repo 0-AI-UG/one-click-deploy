@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { get, post, del } from "../../api/client.ts";
-import { Btn, StatusBadge, Spinner, showToast, confirm, CopyButton } from "../../components/ui.tsx";
+import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink } from "lucide-react";
+import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
 import { LogsTab } from "./logs-tab.tsx";
 import { DeploymentsTab } from "./deployments-tab.tsx";
@@ -167,14 +167,9 @@ export function AppDetailPage({ appId }: { appId: number }) {
             <h1 className="font-mono font-bold text-sm text-fg uppercase">{app.name}</h1>
             <StatusBadge status={app.status} subLabel={badgeSubLabel} />
           </div>
-          {app.domain && (
+          {server && (
             <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="font-mono text-[9px] text-accent-blue font-bold">https://{app.domain}</span>
-              <CopyButton text={`https://${app.domain}`} />
-              <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="p-1 text-muted hover:text-fg transition-colors">
-                <ExternalLink size={12} />
-              </a>
-              <span className="font-mono text-[9px] text-muted ml-1">— {server?.name} ({server?.ipv4})</span>
+              <span className="font-mono text-[9px] text-muted">{server.name} ({server.ipv4})</span>
             </div>
           )}
         </div>
