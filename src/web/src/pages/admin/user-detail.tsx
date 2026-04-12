@@ -20,6 +20,16 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    label: "Services",
+    permissions: [
+      { key: "services.deploy", label: "Deploy infrastructure services" },
+      { key: "services.manage", label: "Restart/pause/unpause services" },
+      { key: "services.destroy", label: "Destroy services" },
+      { key: "services.logs", label: "View service logs" },
+      { key: "services.link", label: "Link/unlink services to apps" },
+    ],
+  },
+  {
     label: "Servers",
     permissions: [
       { key: "servers.view", label: "View server list" },
@@ -48,6 +58,14 @@ const PERMISSION_GROUPS = [
       { key: "resources.view", label: "View resources summary" },
       { key: "resources.delete", label: "Delete orphan resources" },
     ],
+  },
+  {
+    label: "Environments",
+    permissions: [{ key: "environments.manage", label: "Create/edit/delete environments, attach/detach apps" }],
+  },
+  {
+    label: "Terminal",
+    permissions: [{ key: "terminal.access", label: "Access container terminal" }],
   },
 ];
 

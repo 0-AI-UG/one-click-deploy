@@ -970,6 +970,27 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 37,
+    description: "Add services.* and environments.manage permissions, backfill from apps.*",
+    up: (db) => {
+      const mapping: [string, string][] = [
+        ["apps.deploy", "services.deploy"],
+        ["apps.restart", "services.manage"],
+        ["apps.pause", "services.manage"],
+        ["apps.destroy", "services.destroy"],
+        ["apps.logs", "services.logs"],
+        ["apps.env", "services.link"],
+      ];
+      for (const [oldPerm, newPerm] of mapping) {
+        db.run(
+          `INSERT OR IGNORE INTO user_permissions (user_id, permission)
+           SELECT user_id, ? FROM user_permissions WHERE permission = ?`,
+          [newPerm, oldPerm]
+        );
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

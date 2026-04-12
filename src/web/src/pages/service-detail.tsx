@@ -121,12 +121,12 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <PermissionGate permission="apps.restart">
+          <PermissionGate permission="services.manage">
             <Btn size="xs" variant="ghost" loading={actionLoading === "restart"} onClick={() => action("restart", "Restart")}>
               <RotateCcw size={12} /> Restart
             </Btn>
           </PermissionGate>
-          <PermissionGate permission="apps.pause">
+          <PermissionGate permission="services.manage">
             {service.status === "paused" ? (
               <Btn size="xs" variant="ghost" loading={actionLoading === "unpause"} onClick={() => action("unpause", "Unpause")}>
                 <Play size={12} /> Unpause
@@ -137,7 +137,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
               </Btn>
             )}
           </PermissionGate>
-          <PermissionGate permission="apps.destroy">
+          <PermissionGate permission="services.destroy">
             <Btn
               size="xs"
               variant="ghost"
@@ -290,7 +290,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                         </a>
                         <span className="font-mono text-[8px] text-muted uppercase">prefix: {link.env_prefix}</span>
                       </div>
-                      <PermissionGate permission="apps.env">
+                      <PermissionGate permission="services.link">
                         <Btn
                           size="xs"
                           variant="ghost"
@@ -307,7 +307,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                 <p className="font-mono text-[10px] text-muted text-center py-2">No apps linked yet</p>
               )}
 
-              <PermissionGate permission="apps.env">
+              <PermissionGate permission="services.link">
                 <div className="flex items-center gap-2">
                   <div className="flex-1">
                     <NeoSelect

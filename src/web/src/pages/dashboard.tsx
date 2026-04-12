@@ -224,10 +224,10 @@ export function DashboardPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-1">
-                      <PermissionGate permission="apps.logs">
+                      <PermissionGate permission="services.logs">
                         <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/services/${svc.id}`; }}><ScrollText size={12} /></Btn>
                       </PermissionGate>
-                      <PermissionGate permission="apps.restart">
+                      <PermissionGate permission="services.manage">
                         {(() => {
                           const k = `svc-restart-${svc.id}`;
                           const armed = confirmKey === k;
@@ -238,7 +238,7 @@ export function DashboardPage() {
                           );
                         })()}
                       </PermissionGate>
-                      <PermissionGate permission="apps.pause">
+                      <PermissionGate permission="services.manage">
                         {svc.status === "paused" ? (() => {
                           const k = `svc-unpause-${svc.id}`;
                           const armed = confirmKey === k;
@@ -257,7 +257,7 @@ export function DashboardPage() {
                           );
                         })()}
                       </PermissionGate>
-                      <PermissionGate permission="apps.destroy">
+                      <PermissionGate permission="services.destroy">
                         <Btn
                           size="xs"
                           variant="ghost"

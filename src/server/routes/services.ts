@@ -114,7 +114,7 @@ export async function handleGetService(request: Request, serviceId: number): Pro
 
 export async function handleDeployService(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "apps.deploy");
+    await requirePermission(request, "services.deploy");
     const req: ServiceDeployRequest = await request.json();
 
     const job = db.createServiceDeployJob(req.name);
@@ -143,7 +143,7 @@ export async function handleDeployService(request: Request): Promise<Response> {
 
 export async function handleServiceDeployJobPoll(request: Request, jobId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.deploy");
+    await requirePermission(request, "services.deploy");
     const url = new URL(request.url);
     const since = parseInt(url.searchParams.get("since") || "0", 10) || 0;
 
@@ -182,7 +182,7 @@ export async function handleServiceDeployJobPoll(request: Request, jobId: number
 
 export async function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.destroy");
+    await requirePermission(request, "services.destroy");
     const lock = tryAcquireLock(`service:${serviceId}`, "destroy");
     if ("busy" in lock) {
       return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
@@ -200,7 +200,7 @@ export async function handleDestroyService(request: Request, serviceId: number):
 
 export async function handleRestartService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.restart");
+    await requirePermission(request, "services.manage");
     const lock = tryAcquireLock(`service:${serviceId}`, "restart");
     if ("busy" in lock) {
       return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
@@ -218,7 +218,7 @@ export async function handleRestartService(request: Request, serviceId: number):
 
 export async function handlePauseService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.pause");
+    await requirePermission(request, "services.manage");
     const lock = tryAcquireLock(`service:${serviceId}`, "pause");
     if ("busy" in lock) {
       return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
@@ -236,7 +236,7 @@ export async function handlePauseService(request: Request, serviceId: number): P
 
 export async function handleUnpauseService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.pause");
+    await requirePermission(request, "services.manage");
     const lock = tryAcquireLock(`service:${serviceId}`, "unpause");
     if ("busy" in lock) {
       return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
@@ -256,7 +256,7 @@ export async function handleUnpauseService(request: Request, serviceId: number):
 
 export async function handleGetServiceLogs(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.logs");
+    await requirePermission(request, "services.logs");
     const url = new URL(request.url);
     const instanceId = url.searchParams.get("instance_id")
       ? parseInt(url.searchParams.get("instance_id")!, 10)
@@ -272,7 +272,7 @@ export async function handleGetServiceLogs(request: Request, serviceId: number):
 
 export async function handleLinkService(request: Request, serviceId: number, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.env");
+    await requirePermission(request, "services.link");
     const body = await request.json().catch(() => ({}));
     const envPrefix = body.env_prefix || "DATABASE";
 
@@ -354,7 +354,7 @@ export async function handleLinkService(request: Request, serviceId: number, app
 
 export async function handleUnlinkService(request: Request, serviceId: number, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.env");
+    await requirePermission(request, "services.link");
 
     const service = db.getService(serviceId);
     if (!service) {

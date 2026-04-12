@@ -22,7 +22,7 @@ export async function handleGetEnvironments(request: Request): Promise<Response>
 
 export async function handleCreateEnvironment(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "admin");
+    await requirePermission(request, "environments.manage");
     const body = await request.json();
     const { name, env_vars } = body;
     if (!name || typeof name !== "string") {
@@ -45,7 +45,7 @@ export async function handleCreateEnvironment(request: Request): Promise<Respons
 
 export async function handleUpdateEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "admin");
+    await requirePermission(request, "environments.manage");
     const existing = db.getEnvironment(id);
     if (!existing) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -78,7 +78,7 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
 
 export async function handleDeleteEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "admin");
+    await requirePermission(request, "environments.manage");
     const env = db.getEnvironment(id);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -116,7 +116,7 @@ export async function handleGetEnvironmentApps(request: Request, id: number): Pr
 
 export async function handleAttachAppToEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "admin");
+    await requirePermission(request, "environments.manage");
     const env = db.getEnvironment(id);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -143,7 +143,7 @@ export async function handleAttachAppToEnvironment(request: Request, id: number)
 
 export async function handleDetachAppFromEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "admin");
+    await requirePermission(request, "environments.manage");
     const body = await request.json();
     const { app_id } = body;
     const app = db.getApp(app_id);

@@ -36,6 +36,11 @@ export const ALL_PERMISSIONS = [
   "apps.destroy",
   "apps.logs",
   "apps.env",
+  "services.deploy",
+  "services.manage",
+  "services.destroy",
+  "services.logs",
+  "services.link",
   "servers.view",
   "servers.delete",
   "volumes.create",
@@ -45,6 +50,7 @@ export const ALL_PERMISSIONS = [
   "webhooks.manage",
   "resources.view",
   "resources.delete",
+  "environments.manage",
   "terminal.access",
 ] as const;
 
