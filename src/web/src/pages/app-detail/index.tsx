@@ -38,7 +38,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [tail, setTail] = useState(100);
   const [selectedReplicaId, setSelectedReplicaId] = useState<number | null>(null);
-  const [webhookForm, setWebhookForm] = useState<{ branch: string; path: string }>({ branch: "main", path: "" });
+  const [webhookForm, setWebhookForm] = useState<{ branch: string; path: string; waitForCi: boolean }>({ branch: "main", path: "", waitForCi: false });
 
   const load = async () => {
     try {

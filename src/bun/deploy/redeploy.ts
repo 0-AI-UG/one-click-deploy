@@ -13,6 +13,7 @@ import { wakeApp } from "../scale/wake.ts";
 import { syncAppCaddy } from "../scale/caddy-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { acquireLock } from "../op-lock.ts";
+import { getCommitCiStatus } from "../github.ts";
 
 type DbApp = {
   id: number;
@@ -352,17 +353,83 @@ export async function rollbackApp(
 // Manual operations (redeploy, scale, etc.) that hold the lock will
 // cause the webhook to wait until they finish.
 
+export type WebhookRedeployOpts = {
+  waitForCi?: boolean;
+  fullSha?: string;
+};
+
+const CI_POLL_INTERVAL = 15_000; // 15 seconds
+const CI_TIMEOUT = 30 * 60_000; // 30 minutes
+
 export async function enqueueWebhookRedeploy(
   appId: number,
   gitSha: string,
   runner: (appId: number, gitSha: string) => Promise<void> = webhookRedeployApp,
+  opts: WebhookRedeployOpts = {},
 ): Promise<void> {
+  // Wait for CI *before* acquiring the lock so we don't block other operations
+  if (opts.waitForCi && opts.fullSha) {
+    const ok = await waitForCi(appId, opts.fullSha);
+    if (!ok) return; // CI failed or timed out — skip deploy
+  }
+
   const release = await acquireLock(`app:${appId}`, "webhookRedeploy");
   try {
     await runner(appId, gitSha);
   } finally {
     release();
   }
+}
+
+async function waitForCi(appId: number, sha: string): Promise<boolean> {
+  const app = db.getApp(appId);
+  if (!app) return false;
+
+  const token = await resolveGitHubToken(app.deployed_by || undefined);
+  if (!token) {
+    log("waitForCi", `App ${appId}: no GitHub token — skipping CI wait`);
+    return true; // Can't check, proceed with deploy
+  }
+
+  log("waitForCi", `App ${appId}: waiting for CI on ${sha.slice(0, 7)}`);
+  const deadline = Date.now() + CI_TIMEOUT;
+
+  while (Date.now() < deadline) {
+    try {
+      const status = await getCommitCiStatus({ gitRepo: app.git_repo, ref: sha, token });
+      if (status === "success") {
+        log("waitForCi", `App ${appId}: CI passed for ${sha.slice(0, 7)}`);
+        return true;
+      }
+      if (status === "failure") {
+        log("waitForCi", `App ${appId}: CI failed for ${sha.slice(0, 7)} — skipping deploy`);
+        // Record a failed deployment so the user can see what happened
+        db.insertDeployment({
+          app_id: appId,
+          image_tag: `${app.name}:latest`,
+          git_commit: sha.slice(0, 7),
+          status: "failed",
+          source: "webhook",
+          deploy_log: `CI checks failed for commit ${sha.slice(0, 7)} — deploy skipped`,
+        });
+        return false;
+      }
+    } catch (err) {
+      log("waitForCi", `App ${appId}: error checking CI status:`, err);
+    }
+    await Bun.sleep(CI_POLL_INTERVAL);
+  }
+
+  log("waitForCi", `App ${appId}: CI timed out for ${sha.slice(0, 7)} — skipping deploy`);
+  db.insertDeployment({
+    app_id: appId,
+    image_tag: `${app.name}:latest`,
+    git_commit: sha.slice(0, 7),
+    status: "failed",
+    source: "webhook",
+    deploy_log: `CI checks timed out after 30 minutes for commit ${sha.slice(0, 7)} — deploy skipped`,
+  });
+  return false;
 }
 
 export async function webhookRedeployApp(appId: number, gitSha: string): Promise<void> {

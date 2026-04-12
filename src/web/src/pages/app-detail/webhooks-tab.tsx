@@ -7,8 +7,8 @@ import type { AppData } from "../../types.ts";
 interface WebhooksTabProps {
   app: AppData;
   appId: number;
-  webhookForm: { branch: string; path: string };
-  setWebhookForm: (f: { branch: string; path: string }) => void;
+  webhookForm: { branch: string; path: string; waitForCi: boolean };
+  setWebhookForm: (f: { branch: string; path: string; waitForCi: boolean }) => void;
   actionLoading: string | null;
   action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
 }
@@ -26,14 +26,26 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
           <>
             <div className="flex justify-between"><span className="text-muted">Branch</span><span>{app.webhook_branch}</span></div>
             <div className="flex justify-between"><span className="text-muted">Path filter</span><span>{app.webhook_path || "—"}</span></div>
+            <div className="flex justify-between"><span className="text-muted">Wait for CI</span><span>{app.webhook_wait_for_ci ? "Yes" : "No"}</span></div>
           </>
         )}
       </div>
       <PermissionGate permission="webhooks.manage">
         {app.webhook_enabled ? (
-          <Btn size="xs" variant="danger" loading={actionLoading === "disable-webhook"} onClick={() => action("disable-webhook", () => post(`/api/apps/${appId}/webhook/disable`))}>
-            Disable Webhook
-          </Btn>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!app.webhook_wait_for_ci}
+                onChange={(e) => action("update-webhook-ci", () => post(`/api/apps/${appId}/webhook/settings`, { wait_for_ci: e.target.checked }))}
+                className="accent-accent"
+              />
+              <span className="text-muted">Wait for CI checks before deploying</span>
+            </label>
+            <Btn size="xs" variant="danger" loading={actionLoading === "disable-webhook"} onClick={() => action("disable-webhook", () => post(`/api/apps/${appId}/webhook/disable`))}>
+              Disable Webhook
+            </Btn>
+          </div>
         ) : (
           <div className="space-y-2">
             <div>
@@ -54,7 +66,16 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
                 placeholder="e.g. services/api"
               />
             </div>
-            <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: webhookForm.branch || "main", path: webhookForm.path || undefined }))}>
+            <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">
+              <input
+                type="checkbox"
+                checked={webhookForm.waitForCi}
+                onChange={(e) => setWebhookForm({ ...webhookForm, waitForCi: e.target.checked })}
+                className="accent-accent"
+              />
+              <span className="text-muted">Wait for CI checks before deploying</span>
+            </label>
+            <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: webhookForm.branch || "main", path: webhookForm.path || undefined, wait_for_ci: webhookForm.waitForCi }))}>
               Enable Webhook
             </Btn>
           </div>

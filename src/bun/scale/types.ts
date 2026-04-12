@@ -18,6 +18,7 @@ export interface App {
   webhook_secret: string;
   webhook_branch: string;
   webhook_path: string;
+  webhook_wait_for_ci: number;
   github_webhook_id: string;
   auth_password: string;
   deploy_mode: string;

@@ -48,6 +48,7 @@ import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, han
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus } from "./routes/scaling.ts";
 import {
   handleEnableWebhook,
+  handleUpdateWebhookSettings,
   handleDisableWebhook,
   handleGithubWebhook,
   handlePanelGithubWebhook,
@@ -235,6 +236,7 @@ export const apiRoutes = {
 
   // Webhooks
   "/api/apps/:appId/webhook/enable": { POST: (req: Request) => handleEnableWebhook(req, appIdFrom(req)) },
+  "/api/apps/:appId/webhook/settings": { POST: (req: Request) => handleUpdateWebhookSettings(req, appIdFrom(req)) },
   "/api/apps/:appId/webhook/disable": { POST: (req: Request) => handleDisableWebhook(req, appIdFrom(req)) },
 
   // Public GitHub webhook receiver for the panel itself (HMAC verified)

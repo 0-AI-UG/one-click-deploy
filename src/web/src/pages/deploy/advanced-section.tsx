@@ -82,6 +82,13 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
                 placeholder="e.g. services/api — only redeploy when files under this path change"
               />
             </div>
+            <div className="mt-2">
+              <Checkbox
+                checked={!!form.webhook_wait_for_ci}
+                onChange={(v) => setForm((f) => ({ ...f, webhook_wait_for_ci: v }))}
+                label="Wait for CI checks to pass before deploying"
+              />
+            </div>
           </>
         )}
       </div>

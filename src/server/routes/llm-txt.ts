@@ -20,6 +20,7 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
 
   "build": {
     "dockerfile": "string — path to Dockerfile, relative to this file's directory (default: Dockerfile)",
+    "context": "string — Docker build context path, relative to the repo root (default: \".\" i.e. the repo root)",
     "container_port": "number — port the app listens on inside the container (1–65535)",
     "compose_file": "string — path to docker-compose/compose.yml, relative to this file's directory",
     "compose_web_service": "string — which compose service to route traffic to"
@@ -57,7 +58,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 
 - \`$llm\` should point to the One-Click Deploy panel's \`/llm.txt\` endpoint so AI agents can fetch the latest manifest schema. Copy the URL from the examples below (it is auto-filled with the current panel's URL).
 - \`$schema\` must be \`1\` (or omitted).
-- Paths in \`build\` are relative to the manifest file's directory. A manifest at \`services/api/.ocd-deploy.json\` with \`"dockerfile": "Dockerfile"\` resolves to \`services/api/Dockerfile\`.
+- Paths in \`build\` are relative to the manifest file's directory, except \`context\` which is relative to the repo root. A manifest at \`services/api/.ocd-deploy.json\` with \`"dockerfile": "Dockerfile"\` resolves to \`services/api/Dockerfile\`. If \`context\` is omitted, the build context defaults to \`"."\` (the repo root).
 - Paths must not contain \`..\`.
 - \`env[].key\` must match \`/^[A-Za-z_][A-Za-z0-9_]*$/\`. Reserved prefixes (\`DOCKER_\`, \`PATH\`, \`HOME\`, \`LD_\`, \`DYLD_\`) are blocked.
 - A repo can have up to 10 manifest files. Extra manifests beyond 10 are ignored.
@@ -114,7 +115,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
   "$llm": "{{PANEL_LLM_URL}}",
   "name": "API Server",
   "description": "REST API backend",
-  "build": { "dockerfile": "Dockerfile", "container_port": 8080 },
+  "build": { "dockerfile": "Dockerfile", "context": ".", "container_port": 8080 },
   "env": [
     { "key": "DATABASE_URL", "required": true, "secret": true },
     { "key": "JWT_SECRET", "required": true, "secret": true }
@@ -132,7 +133,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
   "$llm": "{{PANEL_LLM_URL}}",
   "name": "Web Frontend",
   "description": "React SPA served by nginx",
-  "build": { "dockerfile": "Dockerfile", "container_port": 80 },
+  "build": { "dockerfile": "Dockerfile", "context": ".", "container_port": 80 },
   "env": [
     { "key": "API_URL", "description": "URL of the API server", "required": true }
   ],

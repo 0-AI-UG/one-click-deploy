@@ -991,6 +991,13 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 38,
+    description: "Add webhook_wait_for_ci to apps",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN webhook_wait_for_ci INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

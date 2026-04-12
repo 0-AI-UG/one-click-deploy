@@ -124,6 +124,66 @@ export async function deleteWebhook(opts: {
   log("webhook", `Webhook ${opts.webhookId} deleted`);
 }
 
+// ── Commit CI status ──
+
+export type CiStatus = "pending" | "success" | "failure";
+
+/**
+ * Queries the GitHub combined commit status + check runs for a ref.
+ * Returns "success" only when all status contexts report success AND
+ * all check runs conclude with success/skipped/neutral.
+ * Returns "failure" if any report failure/error/cancelled.
+ * Returns "pending" otherwise (still running or no checks found).
+ */
+export async function getCommitCiStatus(opts: {
+  gitRepo: string;
+  ref: string;
+  token: string;
+}): Promise<CiStatus> {
+  const { owner, repo } = parseGitHubRepo(opts.gitRepo);
+
+  // Combined status (legacy status checks)
+  const statusData = await githubApi(
+    `/repos/${owner}/${repo}/commits/${opts.ref}/status`,
+    opts.token,
+  );
+  const combinedState = String((statusData as any)?.state ?? "pending");
+
+  // Check Runs (GitHub Actions, etc.)
+  const checksData = await githubApi(
+    `/repos/${owner}/${repo}/commits/${opts.ref}/check-runs`,
+    opts.token,
+  );
+  const checkRuns = Array.isArray((checksData as any)?.check_runs)
+    ? (checksData as any).check_runs as Array<{ status: string; conclusion: string | null }>
+    : [];
+
+  // If there are no checks at all, treat as pending (no CI configured yet
+  // for this commit — the run hasn't been picked up by GitHub yet).
+  const statusContexts = Array.isArray((statusData as any)?.statuses)
+    ? (statusData as any).statuses as Array<{ state: string }>
+    : [];
+  if (statusContexts.length === 0 && checkRuns.length === 0) {
+    return "pending";
+  }
+
+  // Any failure in legacy statuses?
+  if (combinedState === "failure" || combinedState === "error") return "failure";
+
+  // Evaluate check runs
+  for (const run of checkRuns) {
+    if (run.status !== "completed") return "pending";
+    if (run.conclusion === "failure" || run.conclusion === "cancelled" || run.conclusion === "timed_out" || run.conclusion === "action_required") {
+      return "failure";
+    }
+  }
+
+  // Legacy still pending?
+  if (combinedState === "pending" && statusContexts.length > 0) return "pending";
+
+  return "success";
+}
+
 export async function getGitHubPat(userId?: string): Promise<string | null> {
   const { resolveGitHubToken } = await import("./github-token.ts");
   const token = await resolveGitHubToken(userId);

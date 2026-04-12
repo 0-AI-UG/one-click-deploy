@@ -68,7 +68,7 @@ export async function verifyGithubSignature(
 export async function handleEnableWebhook(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "webhooks.manage");
-    const body = await request.json() as { branch?: string; path?: string };
+    const body = await request.json() as { branch?: string; path?: string; wait_for_ci?: boolean };
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
@@ -96,8 +96,29 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
       token: pat,
     });
 
-    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath);
+    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath, !!body.wait_for_ci);
     db.updateAppDeployedBy(appId, payload.userId);
+
+    return Response.json({ ok: true }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleUpdateWebhookSettings(request: Request, appId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "webhooks.manage");
+
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
+    if (!app.webhook_enabled) {
+      return Response.json({ ok: false, error: "Webhook is not enabled" }, { status: 400, headers: corsHeaders });
+    }
+
+    const body = await request.json() as { wait_for_ci?: boolean };
+    if (body.wait_for_ci !== undefined) {
+      db.updateAppWebhookWaitForCi(appId, !!body.wait_for_ci);
+    }
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
@@ -171,8 +192,12 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
       return new Response("Path filter: no matching files", { status: 204 });
     }
 
-    const sha = (payload.after && String(payload.after).slice(0, 7)) || "unknown";
-    enqueueWebhookRedeploy(appId, sha).catch((err) => {
+    const fullSha = payload.after ? String(payload.after) : "";
+    const sha = fullSha ? fullSha.slice(0, 7) : "unknown";
+    enqueueWebhookRedeploy(appId, sha, undefined, {
+      waitForCi: !!app.webhook_wait_for_ci,
+      fullSha,
+    }).catch((err) => {
       console.error(`[webhook] redeploy failed for app ${appId}:`, err);
     });
 

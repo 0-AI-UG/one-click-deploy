@@ -30,6 +30,7 @@ export type App = {
   webhook_secret: string;
   webhook_branch: string;
   webhook_path: string;
+  webhook_wait_for_ci: number;
   github_webhook_id: string;
   auth_password: string;
   deploy_mode: string; // "dockerfile" | "compose"
@@ -115,6 +116,7 @@ export type DeployRequest = {
   webhook_enabled?: boolean;
   webhook_branch?: string; // Branch to watch, defaults to "main"
   webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
+  webhook_wait_for_ci?: boolean; // Wait for CI checks to pass before deploying
   auth_password?: string; // If set, deploys a login gate in front of the app
   compose_file?: string; // Path to compose file, auto-detected if omitted
   compose_web_service?: string; // Which compose service Caddy proxies to (default: auto-detect)
@@ -168,7 +170,7 @@ export type DeployManifest = {
     secret?: boolean;
   }>;
   volume?: { size?: number; path?: string };
-  webhook?: { enabled?: boolean; branch?: string; path?: string };
+  webhook?: { enabled?: boolean; branch?: string; path?: string; wait_for_ci?: boolean };
   suggested_app_name?: string;
   replicas?: number;
 };

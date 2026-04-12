@@ -110,6 +110,7 @@ const EMPTY_FORM: FormState = {
   webhook_enabled: false,
   webhook_branch: "main",
   webhook_path: "",
+  webhook_wait_for_ci: false,
   auth_password: "",
   replicas: "1",
   compose_file: "",
@@ -154,6 +155,7 @@ export function DeployPage() {
       webhook_enabled: m.webhook?.enabled ?? f.webhook_enabled,
       webhook_branch: m.webhook?.branch || result.default_branch,
       webhook_path: m.webhook?.path || f.webhook_path,
+      webhook_wait_for_ci: m.webhook?.wait_for_ci ?? f.webhook_wait_for_ci,
       replicas: m.replicas ? String(m.replicas) : f.replicas,
     }));
 
@@ -191,6 +193,7 @@ export function DeployPage() {
       volume_path: "/data",
       webhook_enabled: false,
       webhook_path: "",
+      webhook_wait_for_ci: false,
       replicas: "1",
     }));
     if (result.env_vars.length > 0) {
@@ -388,6 +391,7 @@ export function DeployPage() {
       webhook_enabled: form.webhook_enabled,
       webhook_branch: form.webhook_enabled ? form.webhook_branch : undefined,
       webhook_path: form.webhook_enabled && form.webhook_path ? form.webhook_path : undefined,
+      webhook_wait_for_ci: form.webhook_enabled ? form.webhook_wait_for_ci : undefined,
       auth_password: form.auth_password || undefined,
       replicas: parseInt(form.replicas, 10) || 1,
       compose_file: form.compose_file || undefined,
@@ -400,11 +404,10 @@ export function DeployPage() {
 
   const detected = introspect?.ok === true ? introspect : null;
   const showReceipt = revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1);
-  const centered = !revealed && !pendingSession && !form.git_repo.trim();
 
   return (
-    <div className={`max-w-2xl mx-auto px-4 ${centered ? "pt-[30vh]" : "py-10"}`}>
-      <div className={centered ? "mb-4" : "mb-8"}>
+    <div className="max-w-2xl mx-auto px-4 py-10">
+      <div className="mb-8">
         <div className="flex items-center gap-2 mb-2">
           <Rocket size={18} className="text-fg" />
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>

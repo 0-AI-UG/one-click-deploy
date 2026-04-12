@@ -40,6 +40,7 @@ export {
   updateAppAuthPassword,
   updateAppDeployMode,
   updateAppWebhook,
+  updateAppWebhookWaitForCi,
   updateAppScaling,
   updateAppEnvironment,
   getAppsByEnvironmentId,

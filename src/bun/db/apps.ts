@@ -38,6 +38,7 @@ export type AppRow = {
   sleeping_host_port: number | null;
   scale_to_zero_after: number;
   wake_token: string | null;
+  webhook_wait_for_ci: number;
   environment_id: number | null;
 };
 
@@ -329,11 +330,16 @@ export function updateAppWebhook(
   secret: string,
   branch: string,
   githubWebhookId: string,
-  path: string = ""
+  path: string = "",
+  waitForCi: boolean = false
 ): void {
   db.query(
-    "UPDATE apps SET webhook_enabled = ?, webhook_secret = ?, webhook_branch = ?, webhook_path = ?, github_webhook_id = ? WHERE id = ?"
-  ).run(enabled ? 1 : 0, secret, branch, path, githubWebhookId, id);
+    "UPDATE apps SET webhook_enabled = ?, webhook_secret = ?, webhook_branch = ?, webhook_path = ?, github_webhook_id = ?, webhook_wait_for_ci = ? WHERE id = ?"
+  ).run(enabled ? 1 : 0, secret, branch, path, githubWebhookId, waitForCi ? 1 : 0, id);
+}
+
+export function updateAppWebhookWaitForCi(id: number, waitForCi: boolean): void {
+  db.query("UPDATE apps SET webhook_wait_for_ci = ? WHERE id = ?").run(waitForCi ? 1 : 0, id);
 }
 
 export function updateAppScaling(id: number, fields: {

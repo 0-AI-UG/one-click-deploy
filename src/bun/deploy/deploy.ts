@@ -647,7 +647,7 @@ export async function deploy(
           webhookSecret,
           token: githubPat,
         });
-        db.updateAppWebhook(app.id, true, webhookSecret, webhookBranch, String(created.id), webhookPath);
+        db.updateAppWebhook(app.id, true, webhookSecret, webhookBranch, String(created.id), webhookPath, !!req.webhook_wait_for_ci);
         const filterDesc = webhookPath ? ` (path: ${webhookPath})` : "";
         maskedLog(app.id, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}${filterDesc}`);
         onProgress("health", `Webhook configured for auto-redeploy on ${webhookBranch}${filterDesc}`);
