@@ -364,7 +364,7 @@ export function DeployPage() {
     if (!form.app_name || !form.git_repo)
       return showToast("App name and git repo are required", "error");
 
-    if (manifestEnvDefs.length > 0) {
+    if (manifestEnvDefs.length > 0 && !selectedEnvironmentId) {
       const missing = manifestEnvDefs.filter((e) => e.required && !envValues[e.key]?.trim());
       if (missing.length > 0)
         return showToast(`Required: ${missing.map((e) => e.key).join(", ")}`, "error");
