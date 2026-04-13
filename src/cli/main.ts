@@ -7,6 +7,7 @@ import { redeploy } from "./commands/redeploy.ts";
 import { restart } from "./commands/restart.ts";
 import { rollback } from "./commands/rollback.ts";
 import { pause, unpause } from "./commands/pause.ts";
+import { envs } from "./commands/envs.ts";
 import { services } from "./commands/services.ts";
 import { servers } from "./commands/servers.ts";
 import { ssh } from "./commands/ssh.ts";
@@ -25,6 +26,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   rollback,
   pause,
   unpause,
+  envs,
   services,
   servers,
   ssh,
@@ -40,8 +42,9 @@ ${BOLD}Commands:${RESET}
   status                 Dashboard overview
   apps                   List all apps
   logs <app> [--tail=N]  View app logs
-  deploy <repo> [opts]   Deploy a new app from a git repo
+  deploy [manifest]       Deploy current repo using .ocd-deploy.json
   redeploy <app>         Redeploy an existing app
+  envs                   Manage environments and variables
   restart <app>          Restart an app
   rollback <app>         Roll back to previous deployment
   pause <app>            Pause an app

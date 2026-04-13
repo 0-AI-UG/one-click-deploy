@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { resolve } from "node:path";
 import { get, post } from "../api.ts";
-import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../format.ts";
+import { BOLD, CYAN, DIM, GREEN, RED, RESET } from "../format.ts";
+import type { DeployManifest, DeployRequest } from "../../shared/rpc.ts";
 
 interface DeployJobPoll {
   status: "running" | "done" | "error";
@@ -8,272 +12,144 @@ interface DeployJobPoll {
   result: { ok: boolean; error?: string } | null;
 }
 
-interface IntrospectResult {
-  ok: boolean;
-  error?: string;
-  suggested_app_name?: string;
-  default_branch?: string;
-  detected_port?: number | null;
-  dockerfiles?: string[];
-  compose_files?: string[];
-  suggested_web_service?: string | null;
-  compose_services?: Array<{ name: string; port: number | null; has_ports: boolean }>;
-  env_vars?: Array<{ key: string; value: string }>;
-  manifests?: Array<{
-    path: string;
-    dir: string;
-    manifest: {
-      name: string;
-      description?: string;
-      build?: {
-        dockerfile?: string;
-        context?: string;
-        container_port?: number;
-        compose_file?: string;
-        compose_web_service?: string;
-      };
-      env?: Array<{ key: string; description?: string; default?: string; required?: boolean; secret?: boolean }>;
-      volume?: { size?: number; path?: string };
-      webhook?: { enabled?: boolean; branch?: string; path?: string; wait_for_ci?: boolean };
-      suggested_app_name?: string;
-      replicas?: number;
-      public?: boolean;
-      extra_volumes?: Array<{ host_path: string; container_path: string }>;
-    };
-  }>;
-  notes?: string[];
+interface Environment {
+  id: number;
+  name: string;
 }
 
-function parseFlags(args: string[]): { repo: string; flags: Record<string, string>; envPairs: Array<[string, string]>; extraVolumes: Array<[string, string]> } {
-  let repo = "";
-  const flags: Record<string, string> = {};
-  const envPairs: Array<[string, string]> = [];
-  const extraVolumes: Array<[string, string]> = [];
+function getGitRepo(): string {
+  try {
+    const url = execSync("git remote get-url origin", { encoding: "utf-8" }).trim();
+    const sshMatch = url.match(/^git@github\.com:(.+?)(?:\.git)?$/);
+    if (sshMatch) return `https://github.com/${sshMatch[1]}`;
+    return url.replace(/\.git$/, "");
+  } catch {
+    console.error(`${RED}Not a git repository (or no remote "origin" configured)${RESET}`);
+    process.exit(1);
+  }
+}
+
+function readManifest(path: string): DeployManifest {
+  try {
+    const raw = readFileSync(path, "utf-8");
+    return JSON.parse(raw) as DeployManifest;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      console.error(`${RED}Manifest not found: ${path}${RESET}`);
+    } else {
+      console.error(`${RED}Failed to read manifest: ${err instanceof Error ? err.message : err}${RESET}`);
+    }
+    process.exit(1);
+  }
+}
+
+async function resolveEnvironment(nameOrId: string): Promise<Environment> {
+  const list = await get<Environment[]>("/api/environments");
+
+  const id = parseInt(nameOrId, 10);
+  if (!isNaN(id)) {
+    const env = list.find((e) => e.id === id);
+    if (env) return env;
+  }
+
+  const lower = nameOrId.toLowerCase();
+  const env = list.find((e) => e.name.toLowerCase() === lower);
+  if (env) return env;
+
+  console.error(`Environment not found: ${nameOrId}`);
+  console.error(`Available: ${list.map((e) => e.name).join(", ") || "(none)"}`);
+  process.exit(1);
+}
+
+function parseFlags(args: string[]): { manifestPath: string; domain?: string; envName?: string; help: boolean } {
+  let manifestPath = "";
+  let domain: string | undefined;
+  let envName: string | undefined;
+  let help = false;
 
   for (const arg of args) {
-    if (arg.startsWith("--env=")) {
-      const kv = arg.slice(6);
-      const eq = kv.indexOf("=");
-      if (eq !== -1) envPairs.push([kv.slice(0, eq), kv.slice(eq + 1)]);
-    } else if (arg.startsWith("--volume=")) {
-      // --volume=host:container
-      const parts = arg.slice(9).split(":");
-      if (parts.length === 2) extraVolumes.push([parts[0], parts[1]]);
-    } else if (arg.startsWith("--")) {
-      const eq = arg.indexOf("=");
-      if (eq !== -1) {
-        flags[arg.slice(2, eq)] = arg.slice(eq + 1);
-      } else {
-        flags[arg.slice(2)] = "true";
-      }
-    } else if (!repo) {
-      repo = arg;
+    if (arg.startsWith("--domain=")) {
+      domain = arg.slice(9);
+    } else if (arg.startsWith("--env=")) {
+      envName = arg.slice(6);
+    } else if (arg === "--help" || arg === "-h") {
+      help = true;
+    } else if (!arg.startsWith("--") && !manifestPath) {
+      manifestPath = arg;
     }
   }
 
-  return { repo, flags, envPairs, extraVolumes };
+  if (!manifestPath) manifestPath = ".ocd-deploy.json";
+
+  return { manifestPath, domain, envName, help };
 }
 
 export async function deploy(args: string[]): Promise<void> {
-  const { repo, flags, envPairs, extraVolumes } = parseFlags(args);
+  const { manifestPath, domain, envName, help } = parseFlags(args);
 
-  if (!repo) {
-    console.error(`${BOLD}Usage:${RESET} ocd deploy <git-repo> [options]
+  if (help) {
+    console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
+
+Deploys the current git repo using a local .ocd-deploy.json manifest.
+Run from inside a git repo with an "origin" remote.
+
+${BOLD}Arguments:${RESET}
+  [manifest]                 Path to manifest (default: .ocd-deploy.json)
 
 ${BOLD}Options:${RESET}
-  --name=<name>              App name (default: derived from repo)
   --domain=<domain>          Custom domain
-  --port=<port>              Container port (default: auto-detect)
-  --env=KEY=VALUE            Environment variable (repeatable)
-  --environment=<id>         Link to an existing environment
-  --dockerfile=<path>        Dockerfile path
-  --docker-context=<path>    Docker build context (default: ".")
-  --compose=<path>           Docker Compose file path
-  --compose-service=<name>   Compose web service name
-  --branch=<branch>          Webhook branch to watch
-  --webhook                  Enable webhook auto-deploy
-  --webhook-path=<path>      Webhook path filter
-  --webhook-wait-ci          Wait for CI checks before deploying
-  --replicas=<n>             Number of replicas
-  --auth-password=<pw>       Password-protect the app
-  --volume-size=<gb>         Attach a volume (size in GB)
-  --volume-path=<path>       Volume mount path (default: /data)
-  --volume=<host>:<container> Extra volume mount (repeatable)
-  --private                  Make app private (not publicly accessible)
-  --manifest=<n>             Use the Nth manifest from repo (1-based)
-  --no-introspect            Skip repo introspection`);
-    process.exit(1);
+  --env=<name|id>            Link to an existing environment`);
+    process.exit(0);
   }
 
-  // Introspect the repo unless --no-introspect is set
-  let introspect: IntrospectResult | null = null;
-  if (flags["no-introspect"] !== "true") {
-    process.stdout.write(`${DIM}Inspecting repo...${RESET}`);
-    try {
-      introspect = await get<IntrospectResult>(`/api/repos/introspect?url=${encodeURIComponent(repo)}`);
-      process.stdout.write("\r" + " ".repeat(40) + "\r");
-      if (!introspect.ok) {
-        console.log(`${YELLOW}Introspection warning: ${introspect.error}${RESET}`);
-        introspect = null;
-      }
-    } catch {
-      process.stdout.write("\r" + " ".repeat(40) + "\r");
-    }
-  }
+  const repo = getGitRepo();
+  const manifest = readManifest(resolve(manifestPath));
 
-  // If a manifest is selected, apply its defaults
-  let manifest: NonNullable<IntrospectResult["manifests"]>[number] | undefined;
-  if (flags.manifest && introspect?.manifests?.length) {
-    const idx = parseInt(flags.manifest, 10) - 1;
-    if (idx >= 0 && idx < introspect.manifests.length) {
-      manifest = introspect.manifests[idx];
-      console.log(`Using manifest: ${BOLD}${manifest.manifest.name}${RESET}${manifest.manifest.description ? ` — ${manifest.manifest.description}` : ""}`);
-    } else {
-      console.error(`Invalid manifest index. Available manifests:`);
-      introspect.manifests.forEach((m, i) => {
-        console.error(`  ${i + 1}. ${m.manifest.name}${m.manifest.description ? ` — ${m.manifest.description}` : ""}`);
-      });
-      process.exit(1);
-    }
-  } else if (!flags.manifest && introspect?.manifests?.length) {
-    // Auto-select if there's exactly one manifest
-    if (introspect.manifests.length === 1) {
-      manifest = introspect.manifests[0];
-      console.log(`Using manifest: ${BOLD}${manifest.manifest.name}${RESET}${manifest.manifest.description ? ` — ${manifest.manifest.description}` : ""}`);
-    } else {
-      console.log(`${YELLOW}Multiple manifests found. Use --manifest=N to select:${RESET}`);
-      introspect.manifests.forEach((m, i) => {
-        console.log(`  ${i + 1}. ${m.manifest.name}${m.manifest.description ? ` — ${m.manifest.description}` : ""}`);
-      });
-    }
-  }
+  console.log(`${DIM}Repo:${RESET}     ${repo}`);
+  console.log(`${DIM}Manifest:${RESET} ${manifestPath} ${BOLD}(${manifest.name})${RESET}`);
 
-  const m = manifest?.manifest;
+  const name = manifest.suggested_app_name || repo.replace(/.*\//, "");
+  const port = manifest.build?.container_port ?? 3000;
 
-  // Resolve app name: flag > manifest > introspect > derive from repo
-  const name = flags.name
-    || m?.suggested_app_name
-    || introspect?.suggested_app_name
-    || repo.replace(/.*\//, "").replace(/\.git$/, "");
-
-  // Resolve port: flag > manifest > introspect > 3000
-  const port = flags.port
-    ? parseInt(flags.port, 10)
-    : m?.build?.container_port
-      ?? introspect?.detected_port
-      ?? 3000;
-
-  // Build deploy request body
-  const body: Record<string, unknown> = {
+  const body: DeployRequest = {
     app_name: name,
     git_repo: repo,
     container_port: port,
   };
 
-  // Domain
-  if (flags.domain) body.domain = flags.domain;
+  if (domain) body.domain = domain;
+  if (manifest.build?.dockerfile) body.dockerfile_path = manifest.build.dockerfile;
+  if (manifest.build?.context) body.docker_context = manifest.build.context;
+  if (manifest.build?.compose_file) body.compose_file = manifest.build.compose_file;
+  if (manifest.build?.compose_web_service) body.compose_web_service = manifest.build.compose_web_service;
 
-  // Dockerfile / build context
-  body.dockerfile_path = flags.dockerfile || m?.build?.dockerfile || undefined;
-  body.docker_context = flags["docker-context"] || m?.build?.context || undefined;
-
-  // Compose
-  body.compose_file = flags.compose || m?.build?.compose_file || undefined;
-  body.compose_web_service = flags["compose-service"]
-    || m?.build?.compose_web_service
-    || introspect?.suggested_web_service
-    || undefined;
-
-  // Webhook settings
-  const webhookEnabled = flags.webhook === "true"
-    || flags.branch !== undefined
-    || m?.webhook?.enabled === true;
-  if (webhookEnabled) {
+  if (manifest.webhook?.enabled) {
     body.webhook_enabled = true;
-    body.webhook_branch = flags.branch || m?.webhook?.branch || introspect?.default_branch || "main";
-    if (flags["webhook-path"] || m?.webhook?.path) {
-      body.webhook_path = flags["webhook-path"] || m?.webhook?.path;
-    }
-    if (flags["webhook-wait-ci"] === "true" || m?.webhook?.wait_for_ci) {
-      body.webhook_wait_for_ci = true;
-    }
+    body.webhook_branch = manifest.webhook.branch || "main";
+    if (manifest.webhook.path) body.webhook_path = manifest.webhook.path;
+    if (manifest.webhook.wait_for_ci) body.webhook_wait_for_ci = true;
   }
 
-  // Replicas
-  if (flags.replicas) body.replicas = parseInt(flags.replicas, 10);
-  else if (m?.replicas) body.replicas = m.replicas;
+  if (manifest.replicas) body.replicas = manifest.replicas;
+  if (manifest.public !== undefined) body.public = manifest.public;
 
-  // Auth password
-  if (flags["auth-password"]) body.auth_password = flags["auth-password"];
-
-  // Volume
-  const volSize = flags["volume-size"] ? parseInt(flags["volume-size"], 10) : m?.volume?.size;
-  if (volSize) {
-    body.volume_size = volSize;
-    body.volume_path = flags["volume-path"] || m?.volume?.path || "/data";
+  if (manifest.volume?.size) {
+    body.volume_size = manifest.volume.size;
+    body.volume_path = manifest.volume.path || "/data";
   }
 
-  // Extra volumes
-  const allExtraVolumes = [
-    ...extraVolumes.map(([h, c]) => ({ host_path: h, container_path: c })),
-    ...(m?.extra_volumes || []),
-  ];
-  if (allExtraVolumes.length > 0) body.extra_volumes = allExtraVolumes;
+  if (manifest.extra_volumes?.length) body.extra_volumes = manifest.extra_volumes;
 
-  // Public flag
-  if (flags.private === "true") body.public = false;
-  else if (m?.public !== undefined) body.public = m.public;
-
-  // Environment variables: flag > environment link > manifest env + introspect env
-  if (flags.environment) {
-    body.environment_id = parseInt(flags.environment, 10);
-  } else {
-    const envVars: Record<string, string> = {};
-
-    // Start with manifest defaults
-    if (m?.env) {
-      for (const e of m.env) {
-        if (e.default !== undefined) envVars[e.key] = e.default;
-      }
-    }
-
-    // Layer introspected .env.example values
-    if (introspect?.env_vars) {
-      for (const e of introspect.env_vars) {
-        if (!(e.key in envVars)) envVars[e.key] = e.value;
-      }
-    }
-
-    // Layer CLI --env flags (highest priority)
-    for (const [k, v] of envPairs) {
-      envVars[k] = v;
-    }
-
-    // Check for required manifest env vars without values
-    if (m?.env) {
-      const missing = m.env.filter((e) => e.required && !envVars[e.key]);
-      if (missing.length > 0) {
-        console.error(`${RED}Missing required environment variables:${RESET}`);
-        for (const e of missing) {
-          console.error(`  --env=${e.key}=<value>${e.description ? `  (${e.description})` : ""}`);
-        }
-        process.exit(1);
-      }
-    }
-
-    if (Object.keys(envVars).length > 0) body.env_vars = envVars;
+  if (envName) {
+    const env = await resolveEnvironment(envName);
+    body.environment_id = env.id;
+    console.log(`${DIM}Env:${RESET}      ${env.name}`);
   }
 
-  // Clean undefined values
-  for (const key of Object.keys(body)) {
-    if (body[key] === undefined) delete body[key];
-  }
-
-  console.log(`Deploying ${BOLD}${name}${RESET} from ${DIM}${repo}${RESET}...`);
+  console.log(`\nDeploying ${BOLD}${name}${RESET}...`);
 
   const { deployment_id } = await post<{ deployment_id: number }>("/api/apps/deploy", body);
 
-  // Poll for progress
   let lastSeq = 0;
   while (true) {
     const poll = await get<DeployJobPoll>(`/api/deploy-jobs/${deployment_id}?since=${lastSeq}`);
