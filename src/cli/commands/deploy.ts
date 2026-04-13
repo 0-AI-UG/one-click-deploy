@@ -122,7 +122,7 @@ ${BOLD}Options:${RESET}
   }
 
   // If a manifest is selected, apply its defaults
-  let manifest: IntrospectResult["manifests"] extends (infer T)[] | undefined ? T extends undefined ? never : T : never;
+  let manifest: NonNullable<IntrospectResult["manifests"]>[number] | undefined;
   if (flags.manifest && introspect?.manifests?.length) {
     const idx = parseInt(flags.manifest, 10) - 1;
     if (idx >= 0 && idx < introspect.manifests.length) {
