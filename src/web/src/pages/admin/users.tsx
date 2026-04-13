@@ -201,7 +201,7 @@ export function UsersPage() {
   if (loading || settingsLoading) return <div className="flex justify-center py-20"><Spinner /></div>;
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-6 animate-fade-in space-y-6">
+    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in space-y-6">
       <div className="flex items-center gap-2">
         <Settings size={18} className="text-fg" />
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Admin</h1>

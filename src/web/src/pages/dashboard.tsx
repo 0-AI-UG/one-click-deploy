@@ -87,7 +87,7 @@ export function DashboardPage() {
   const { apps, services } = data;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Dashboard</h1>

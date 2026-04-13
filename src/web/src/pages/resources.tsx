@@ -56,7 +56,7 @@ export function ResourcesPage() {
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <HardDrive size={18} className="text-fg" />

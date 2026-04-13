@@ -416,7 +416,7 @@ export function DeployPage() {
   const showReceipt = revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1);
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-10">
+    <div className="max-w-6xl mx-auto px-4 py-10">
       <div className="mb-8">
         <div className="flex items-center gap-2 mb-2">
           <Rocket size={18} className="text-fg" />
