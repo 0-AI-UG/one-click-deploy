@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, Spinner, showToast, confirm, CopyButton, Table } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
+import { LogViewer } from "../components/log-viewer.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import {
   RotateCcw, Pause, Play, Trash2, Server as ServerIcon,
@@ -378,7 +379,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
               <Btn size="xs" onClick={loadLogs}><RefreshCw size={12} /> Refresh</Btn>
             </div>
           </div>
-          <pre className="bg-fg border-2 border-fg p-3 max-h-96 overflow-auto text-[10px] font-mono text-accent/80 whitespace-pre-wrap">{logs || "Loading..."}</pre>
+          <LogViewer logs={logs} />
         </Card>
       )}
     </div>

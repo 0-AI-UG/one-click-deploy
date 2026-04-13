@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useAuth, logout } from "../stores/auth.ts";
-import { Server, Rocket, HardDrive, User, Users, LogOut, Terminal, Layers } from "lucide-react";
+import { Server, Rocket, HardDrive, User, Users, LogOut, Terminal, Layers, TerminalSquare, Check } from "lucide-react";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
@@ -8,6 +9,26 @@ const navItems = [
   { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
   { hash: "#/account", label: "Account", icon: User, match: /^#\/account/ },
 ];
+
+function CliCopyButton() {
+  const [copied, setCopied] = useState(false);
+  const installCmd = `curl -fsSL ${window.location.origin}/cli/install.sh | sh`;
+
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard.writeText(installCmd);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="flex items-center gap-1.5 px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-fg/70 hover:text-fg hover:bg-fg/10 transition-all"
+      title={installCmd}
+    >
+      {copied ? <Check size={13} className="text-green-600" /> : <TerminalSquare size={13} />}
+      {copied ? "Copied" : "CLI"}
+    </button>
+  );
+}
 
 export function Nav() {
   const { user } = useAuth();
@@ -58,6 +79,8 @@ export function Nav() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <CliCopyButton />
+          <div className="h-5 w-0.5 bg-fg/30" />
           <span className="font-mono text-[10px] text-fg/70">
             {user?.username}
             {user?.isAdmin && (

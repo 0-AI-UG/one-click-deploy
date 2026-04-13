@@ -68,6 +68,8 @@ import {
   handleGitHubStatus,
 } from "./routes/github-oauth.ts";
 import { handleLlmTxt } from "./routes/llm-txt.ts";
+import { handleDeviceCode, handleDeviceToken, handleDeviceConfirm } from "./routes/device-auth.ts";
+import { handleCliInstallSh, handleCliDownload } from "./routes/cli.ts";
 import { handleGetDeploySession, handleSaveDeploySession, handleDeleteDeploySession } from "./routes/deploy-sessions.ts";
 import {
   handleGetEnvironments,
@@ -138,6 +140,10 @@ export const apiRoutes = {
   // --- LLM-readable manifest docs (public) ---
   "/llm.txt": { GET: (req: Request) => handleLlmTxt(req) },
 
+  // --- CLI distribution (public) ---
+  "/cli/install.sh": { GET: (req: Request) => handleCliInstallSh(req) },
+  "/cli/:binary": { GET: (req: Request) => handleCliDownload(req) },
+
   // --- Setup ---
   "/api/setup/status": { GET: (req: Request) => handleSetupStatus(req) },
   "/api/setup/complete": { POST: (req: Request) => handleSetupComplete(req) },
@@ -146,6 +152,9 @@ export const apiRoutes = {
   // --- Auth ---
   "/api/auth/login": { POST: (req: Request) => handleLogin(req) },
   "/api/auth/password-reset": { POST: (req: Request) => handlePasswordReset(req) },
+  "/api/auth/device-code": { POST: () => handleDeviceCode() },
+  "/api/auth/device-token": { POST: (req: Request) => handleDeviceToken(req) },
+  "/api/auth/device-confirm": { POST: (req: Request) => handleDeviceConfirm(req) },
   "/api/auth/password-reset/webauthn-options": { POST: (req: Request) => handlePasswordResetWebAuthnOptions(req) },
   "/api/auth/password-reset/webauthn-verify": { POST: (req: Request) => handlePasswordResetWebAuthnVerify(req) },
   "/api/me": {

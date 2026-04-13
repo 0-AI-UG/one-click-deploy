@@ -1,5 +1,6 @@
 import { Card, Btn } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
+import { LogViewer } from "../../components/log-viewer.tsx";
 import { ScrollText, RefreshCw } from "lucide-react";
 import type { ReplicaData } from "../../types.ts";
 
@@ -44,7 +45,7 @@ export function LogsTab({ logs, tail, setTail, loadLogs, replicas, selectedRepli
           <Btn size="xs" onClick={loadLogs}><RefreshCw size={12} /> Refresh</Btn>
         </div>
       </div>
-      <pre className="bg-fg border-2 border-fg p-3 max-h-96 overflow-auto text-[10px] font-mono text-accent/80 whitespace-pre-wrap">{logs || "Loading..."}</pre>
+      <LogViewer logs={logs} />
     </Card>
   );
 }
