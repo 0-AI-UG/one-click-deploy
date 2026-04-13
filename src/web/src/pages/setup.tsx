@@ -189,7 +189,7 @@ export function SetupPage() {
               </div>
               <div className="flex gap-2">
                 <button onClick={() => setStep(1)} className="flex-1 flex items-center justify-center gap-2 bg-bg-raised text-fg-dim border-2 border-fg shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all">
-                  <ArrowLeft size={14} /><span>Back</span>
+                  <ArrowLeft size={14} />
                 </button>
                 <button onClick={handleSubmit} disabled={loading} className="flex-1 flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35">
                   {loading ? <Spinner /> : <><span>Complete Setup</span><ArrowRight size={14} /></>}

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { post } from "../api/client.ts";
-import { showToast, Spinner } from "../components/ui.tsx";
-import { KeyRound, ArrowRight, Fingerprint } from "lucide-react";
+import { showToast, Spinner, Btn } from "../components/ui.tsx";
+import { KeyRound, ArrowRight, Fingerprint, ArrowLeft } from "lucide-react";
 import { startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 
 type Mode = "totp" | "passkey";
@@ -172,12 +172,7 @@ export function PasswordResetPage() {
           )}
 
           <div className="mt-4 text-center">
-            <a
-              href="#/login"
-              className="font-mono text-[9px] uppercase tracking-wider text-muted hover:text-fg"
-            >
-              Back to sign in
-            </a>
+            <Btn variant="ghost" onClick={() => { window.location.hash = "#/login"; }}><ArrowLeft size={14} /></Btn>
           </div>
         </div>
       </div>

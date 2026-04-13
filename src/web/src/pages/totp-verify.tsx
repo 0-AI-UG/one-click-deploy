@@ -1,8 +1,8 @@
 import { useState, useRef } from "react";
 import { post } from "../api/client.ts";
 import { useAuth, login, setTempToken } from "../stores/auth.ts";
-import { showToast, Spinner } from "../components/ui.tsx";
-import { Shield } from "lucide-react";
+import { showToast, Spinner, Btn } from "../components/ui.tsx";
+import { Shield, ArrowLeft } from "lucide-react";
 
 export function TotpVerifyPage() {
   const { tempToken, token } = useAuth();
@@ -127,13 +127,7 @@ export function TotpVerifyPage() {
               <p className="text-[9px] text-muted font-mono uppercase tracking-wider">
                 This disables your current 2FA and requires you to set up a new authenticator immediately.
               </p>
-              <button
-                type="button"
-                onClick={() => setMode("totp")}
-                className="font-mono text-[9px] uppercase tracking-wider text-muted hover:text-fg underline"
-              >
-                Back to code entry
-              </button>
+              <Btn variant="ghost" onClick={() => setMode("totp")}><ArrowLeft size={14} /></Btn>
             </form>
           )}
         </div>

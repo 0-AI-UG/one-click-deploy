@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { get } from "../api/client.ts";
 import { Btn } from "../components/ui.tsx";
-import { Database, CheckCircle2, XCircle, Loader2, Circle, Terminal } from "lucide-react";
+import { Database, CheckCircle2, XCircle, Loader2, Circle, Terminal, ArrowLeft } from "lucide-react";
 
 type ProgressEvent = { seq: number; ts: string; step: string; detail: string };
 type DeployJobResult = { ok: boolean; error?: string; serviceId?: number } | null;
@@ -248,11 +248,10 @@ export function ServiceDeployProgressPage({ jobId }: { jobId: number | null }) {
             </>
           ) : (
             <Btn
-              variant="primary"
-              className="flex-1 !py-2.5"
+              variant="ghost"
               onClick={() => { window.location.hash = "#/deploy"; }}
             >
-              Back to form
+              <ArrowLeft size={14} />
             </Btn>
           )}
         </div>

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Btn } from "../components/ui.tsx";
-import { CheckCircle2, XCircle, Loader2, Circle, Rocket, Terminal } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Circle, Rocket, Terminal, ArrowLeft } from "lucide-react";
 import { useDeployProgress, clearDeploy, resumeDeploy, type ProgressEvent, type DeployResult } from "../stores/deploy-progress.ts";
 
 const DEPLOY_STEPS: { key: string; label: string }[] = [
@@ -214,14 +214,13 @@ export function DeployProgressPage({ jobId }: { jobId: number | null }) {
             </>
           ) : (
             <Btn
-              variant="primary"
-              className="flex-1 !py-2.5"
+              variant="ghost"
               onClick={() => {
                 clearDeploy();
                 window.location.hash = "#/deploy";
               }}
             >
-              Back to form
+              <ArrowLeft size={14} />
             </Btn>
           )}
         </div>

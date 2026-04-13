@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
 import { Card, Btn, showToast, Spinner, CopyButton } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Database, Loader2, Eye, EyeOff } from "lucide-react";
+import { Database, Loader2, Eye, EyeOff, ArrowLeft } from "lucide-react";
 
 type CatalogEntry = {
   type: string;
@@ -136,12 +136,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
 
       {selected && (
         <div className="space-y-4">
-          <a
-            href="#/deploy"
-            className="font-mono text-[10px] text-muted hover:text-fg transition-colors uppercase"
-          >
-            &larr; Back to deploy
-          </a>
+          <Btn variant="ghost" onClick={() => { window.location.hash = "#/deploy"; }}><ArrowLeft size={14} /></Btn>
 
           <Card>
             <div className="px-4 py-3 border-b-2 border-fg bg-alt flex items-center gap-3">

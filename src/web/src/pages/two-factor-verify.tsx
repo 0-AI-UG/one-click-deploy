@@ -2,8 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import { startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { post } from "../api/client.ts";
 import { useAuth, login, setTempToken } from "../stores/auth.ts";
-import { showToast, Spinner } from "../components/ui.tsx";
-import { Shield, Fingerprint, KeyRound } from "lucide-react";
+import { showToast, Spinner, Btn } from "../components/ui.tsx";
+import { Shield, Fingerprint, KeyRound, ArrowLeft } from "lucide-react";
 
 type Mode = "choose" | "webauthn" | "totp" | "recover";
 
@@ -219,13 +219,9 @@ export function TwoFactorVerifyPage() {
             </button>
           )}
           {mode === "recover" && (
-            <button
-              type="button"
-              onClick={() => setMode(hasWebauthn ? "webauthn" : "totp")}
-              className="mt-3 font-mono text-[9px] uppercase tracking-wider text-muted hover:text-fg underline"
-            >
-              Back to verification
-            </button>
+            <div className="mt-3">
+              <Btn variant="ghost" onClick={() => setMode(hasWebauthn ? "webauthn" : "totp")}><ArrowLeft size={14} /></Btn>
+            </div>
           )}
         </div>
       </div>
