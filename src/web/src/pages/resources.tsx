@@ -185,53 +185,40 @@ export function ResourcesPage() {
         </div>
 
         {showCreate && (
-          <div className="mb-4 border-2 border-fg p-3 bg-alt space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Type</label>
-                <NeoSelect
-                  value={createType}
-                  options={typeOptions(serverTypes)}
-                  onChange={(v) => { setCreateType(v); setCreateLocation(""); }}
-                  placeholder="Select type..."
-                  compact
-                />
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <NeoSelect
+              value={createType}
+              options={typeOptions(serverTypes)}
+              onChange={(v) => { setCreateType(v); setCreateLocation(""); }}
+              placeholder="Type..."
+              compact
+            />
+            <NeoSelect
+              value={createLocation}
+              options={locationOptions(serverTypes, createType)}
+              onChange={setCreateLocation}
+              placeholder="Location..."
+              compact
+            />
+            <input
+              type="text"
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
+              placeholder="Name (optional)"
+              className="font-mono text-[10px] w-36"
+            />
+            <Btn size="xs" variant="primary" onClick={handleCreateServer} disabled={creating || !createType || !createLocation}>
+              Create
+            </Btn>
+            <Btn size="xs" variant="ghost" onClick={() => setShowCreate(false)} disabled={creating}>
+              Cancel
+            </Btn>
+            {creating && createProgress && (
+              <div className="flex items-center gap-2">
+                <Spinner />
+                <span className="font-mono text-[9px] text-fg uppercase tracking-wider truncate max-w-48">{createProgress}</span>
               </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Location</label>
-                <NeoSelect
-                  value={createLocation}
-                  options={locationOptions(serverTypes, createType)}
-                  onChange={setCreateLocation}
-                  placeholder="Select location..."
-                  compact
-                />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Name (optional)</label>
-                <input
-                  type="text"
-                  value={createName}
-                  onChange={(e) => setCreateName(e.target.value)}
-                  placeholder={`ocd-server-${Date.now()}`}
-                  className="w-full font-mono text-[10px]"
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Btn size="sm" variant="primary" loading={creating} onClick={handleCreateServer} disabled={!createType || !createLocation}>
-                Create
-              </Btn>
-              <Btn size="sm" variant="ghost" onClick={() => setShowCreate(false)} disabled={creating}>
-                Cancel
-              </Btn>
-              {creating && createProgress && (
-                <div className="flex items-center gap-2 ml-2">
-                  <Spinner />
-                  <span className="font-mono text-[9px] text-fg uppercase tracking-wider truncate">{createProgress}</span>
-                </div>
-              )}
-            </div>
+            )}
           </div>
         )}
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
