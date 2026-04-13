@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "./stores/auth.ts";
+import { useAuth, updateUser } from "./stores/auth.ts";
 import { get } from "./api/client.ts";
 import { Toasts, ConfirmDialog, Spinner } from "./components/ui.tsx";
 import { Nav } from "./components/nav.tsx";
@@ -55,6 +55,19 @@ export function App() {
       setSetupChecked(true);
     });
   }, []);
+
+  // Refresh user permissions from server on app load and tab focus
+  useEffect(() => {
+    if (!token) return;
+    const refresh = () => {
+      get("/api/me").then((data: { user?: Parameters<typeof updateUser>[0] }) => {
+        if (data.user) updateUser(data.user);
+      }).catch(() => {});
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [token]);
 
   // Once a temp token appears (setup just completed, or login is mid-2FA),
   // re-check setup status so the guard below stops forcing #/setup.
