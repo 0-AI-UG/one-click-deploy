@@ -1,17 +1,35 @@
+<div align="center">
+
 # One-Click Deploy
 
-Deploy applications to the cloud with a single click.
+**An open-source, self-hosted PaaS for deploying apps to the cloud with a single click.**
 
-A self-hosted web panel that automates server provisioning, DNS configuration, TLS certificates, and container deployment — so you can go from a Git repo to a live, secured app in minutes.
+Git repo in, live HTTPS app out. No Kubernetes, no YAML, no vendor lock-in.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/0-AI-UG/one-click-deploy?style=social)](https://github.com/0-AI-UG/one-click-deploy)
+
+<!-- Add a screenshot here once available -->
+<!-- ![Dashboard Screenshot](docs/screenshots/dashboard.png) -->
+
+</div>
+
+---
+
+## What is One-Click Deploy?
+
+One-Click Deploy is a self-hosted web panel that automates server provisioning, DNS configuration, TLS certificates, and container deployment. Go from a Git repo to a live, secured app in minutes — on your own infrastructure.
+
+Think of it as a lightweight, self-hostable alternative to Heroku, Railway, or Render.
 
 ## Features
 
 - **One-click deployment** from any Git repository — with a Dockerfile or auto-detected via [Railpack](https://railpack.io)
-- **Automatic server provisioning** — Hetzner Cloud today, more providers coming
-- **TLS certificates** via Caddy (Let's Encrypt)
+- **Automatic server provisioning** on Hetzner Cloud (more providers planned)
+- **TLS certificates** via Caddy + Let's Encrypt, automatic and zero-config
 - **DNS management** through Hetzner DNS API
 - **Multi-app support** — deploy multiple apps per server with subdomain routing
-- **Horizontal scaling** — manual replica count or auto-scaling policies with CPU/memory thresholds
+- **Horizontal scaling** — manual replica count or auto-scaling policies (CPU/memory thresholds)
 - **Infrastructure services** — deploy PostgreSQL, Redis, MySQL and more alongside your apps
 - **Private networking** — services and replicas communicate over Hetzner's private network
 - **Pause & resume** — scale apps to zero to save costs, wake them back up instantly
@@ -21,12 +39,7 @@ A self-hosted web panel that automates server provisioning, DNS configuration, T
 - **Auth** — passkeys (WebAuthn), TOTP two-factor, and GitHub OAuth
 - **Self-managing** — the panel deploys and manages itself like any other app
 
-## Prerequisites
-
-- A cloud provider account — currently [Hetzner Cloud](https://www.hetzner.com/cloud) (more providers planned)
-- A DNS zone on your provider (optional, for custom domains)
-
-## Quick start
+## Quick Start
 
 ### Option A: Bash (no Docker required)
 
@@ -36,11 +49,9 @@ Copy `example.panel.json` to `panel.json`, fill in your values, and run:
 ./scripts/bootstrap.sh
 ```
 
-The script installs [Bun](https://bun.sh) if needed, installs dependencies, provisions a Hetzner server, deploys a permanent copy of the panel to it, and exits.
+The script installs [Bun](https://bun.sh) if needed, provisions a Hetzner server, deploys the panel to it, and exits.
 
 ### Option B: Docker
-
-Pass the config inline:
 
 ```bash
 docker run --rm \
@@ -54,7 +65,7 @@ docker run --rm \
   ghcr.io/0-ai-ug/one-click-deploy:latest
 ```
 
-Or load from a file:
+Or mount a config file:
 
 ```bash
 docker run --rm \
@@ -63,7 +74,10 @@ docker run --rm \
   ghcr.io/0-ai-ug/one-click-deploy:latest
 ```
 
-### Config reference
+When the process exits with code 0, open `https://<domain>`, create your admin account on the one-time setup page, and you're done.
+
+<details>
+<summary><strong>Config reference</strong></summary>
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
@@ -76,36 +90,45 @@ docker run --rm \
 | `app_name` | no | `ocd-panel` | Container/resource name for the panel |
 | `webhook_branch` | no | `main` | Git branch that triggers auto-redeploy |
 
-Progress streams to stdout. When the process exits with code 0, open `https://<domain>`, create your admin account on the one-time setup page, and you're done. From that point on, the panel manages itself: redeploy, roll back, edit env vars, and view logs from its own app-detail page.
+</details>
+
+## Prerequisites
+
+- A [Hetzner Cloud](https://www.hetzner.com/cloud) account (more providers planned)
+- A domain name (optional, for custom domains with auto-DNS)
+
+## How It Works
+
+1. **Configure** — Enter your Hetzner API token
+2. **Deploy** — Provide a Git repo URL, pick a server (or create one), and optionally set a domain
+3. **Done** — Infrastructure is provisioned, your container is built, DNS + TLS configured, and traffic is served
+
+From that point on, the panel manages itself: redeploy, roll back, edit env vars, and view logs — all from its own UI.
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Runtime | [Bun](https://bun.sh) |
+| UI | [React](https://react.dev) + [Tailwind CSS](https://tailwindcss.com) |
+| Database | [SQLite](https://www.sqlite.org/) |
+| Reverse Proxy | [Caddy](https://caddyserver.com) |
+| Terminal | [xterm.js](https://xtermjs.org/) |
 
 ## Development
 
 ```bash
 bun install
-bun run dev         # starts the panel on :3001 with hot reload and SKIP_2FA=1
-bun run typecheck
-bun run build       # builds the web bundle into src/web/dist
-bun run test        # runs unit tests
+bun run dev         # starts the panel on :3001 with hot reload
+bun run typecheck   # type-check without emitting
+bun run build       # build the web bundle
+bun run test        # run unit tests
 ```
-
-## Tech stack
-
-- [Bun](https://bun.sh) — runtime and HTTP server
-- [React](https://react.dev) — UI
-- [Tailwind CSS](https://tailwindcss.com) — styling
-- [Caddy](https://caddyserver.com) — reverse proxy & TLS on deployed servers
-- [SQLite](https://www.sqlite.org/) — local app database
-
-## How it works
-
-1. **Configure** — Enter your Hetzner API token
-2. **Deploy** — Provide a Git repo URL, pick a server (or create one), and optionally set a domain
-3. **Done** — The app provisions infrastructure, builds your container, configures DNS + TLS, and starts serving traffic
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) — 0-AI UG
