@@ -22,7 +22,6 @@ export function ResourcesPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
 
   // Create server form state
-  const [showCreate, setShowCreate] = useState(false);
   const [createType, setCreateType] = useState("");
   const [createLocation, setCreateLocation] = useState("");
   const [createName, setCreateName] = useState("");
@@ -30,6 +29,12 @@ export function ResourcesPage() {
   const [createProgress, setCreateProgress] = useState("");
   const { serverTypes } = useServerTypes();
   const aliveRef = useRef(true);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const hoverTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [showCreate, setShowCreate] = useState(false);
+
+  const openPopover = () => { clearTimeout(hoverTimeout.current); setShowCreate(true); };
+  const scheduleClose = () => { hoverTimeout.current = setTimeout(() => setShowCreate(false), 200); };
 
   useEffect(() => {
     aliveRef.current = true;
@@ -175,52 +180,42 @@ export function ResourcesPage() {
         <div className="flex items-center gap-2 mb-3">
           <Server size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Servers ({data?.servers?.length || 0})</h3>
-          <div className="ml-auto">
+          <div className="ml-auto relative" ref={popoverRef} onMouseEnter={openPopover} onMouseLeave={scheduleClose}>
             <PermissionGate permission="resources.create">
-              <Btn size="xs" onClick={() => setShowCreate(!showCreate)}>
+              <Btn size="xs" onClick={creating ? undefined : openPopover}>
                 <Plus size={11} /> Create Server
               </Btn>
             </PermissionGate>
-          </div>
-        </div>
-
-        {showCreate && (
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <NeoSelect
-              value={createType}
-              options={typeOptions(serverTypes)}
-              onChange={(v) => { setCreateType(v); setCreateLocation(""); }}
-              placeholder="Type..."
-              compact
-            />
-            <NeoSelect
-              value={createLocation}
-              options={locationOptions(serverTypes, createType)}
-              onChange={setCreateLocation}
-              placeholder="Location..."
-              compact
-            />
-            <input
-              type="text"
-              value={createName}
-              onChange={(e) => setCreateName(e.target.value)}
-              placeholder="Name (optional)"
-              className="font-mono text-[10px] w-36"
-            />
-            <Btn size="xs" variant="primary" onClick={handleCreateServer} disabled={creating || !createType || !createLocation}>
-              Create
-            </Btn>
-            <Btn size="xs" variant="ghost" onClick={() => setShowCreate(false)} disabled={creating}>
-              Cancel
-            </Btn>
-            {creating && createProgress && (
-              <div className="flex items-center gap-2">
-                <Spinner />
-                <span className="font-mono text-[9px] text-fg uppercase tracking-wider truncate max-w-48">{createProgress}</span>
+            {showCreate && (
+              <div className="absolute right-0 top-full mt-1 z-50 bg-bg-raised border-2 border-fg shadow-neo p-3 space-y-2 w-52">
+                <NeoSelect
+                  value={createType}
+                  options={typeOptions(serverTypes)}
+                  onChange={(v) => { setCreateType(v); setCreateLocation(""); }}
+                  placeholder="Type..."
+                  compact
+                />
+                <NeoSelect
+                  value={createLocation}
+                  options={locationOptions(serverTypes, createType)}
+                  onChange={setCreateLocation}
+                  placeholder="Location..."
+                  compact
+                />
+                <input
+                  type="text"
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  placeholder="Name (optional)"
+                  className="font-mono text-[10px] w-full"
+                />
+                <Btn size="xs" variant="primary" onClick={handleCreateServer} disabled={creating || !createType || !createLocation} className="w-full">
+                  {creating && createProgress ? createProgress : "Create"}
+                </Btn>
               </div>
             )}
           </div>
-        )}
+        </div>
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
           <Table headers={["Name", "IP", "Type", "CPU", "RAM", "CPU (1h)", "RAM (1h)", "Location", "Replicas", "€/mo", ""]}>
             {data.servers.map((s) => {
