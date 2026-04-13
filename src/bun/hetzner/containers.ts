@@ -40,6 +40,50 @@ type ComposeOverrideServices = {
   };
 };
 
+// --- Disk Cleanup ---
+
+/**
+ * Prune dangling Docker images and trim the git repo after a successful build.
+ * Runs in the background (fire-and-forget) so it doesn't slow down deploys.
+ */
+export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  const appDir = `/home/deploy/apps/${appName}`;
+
+  // Remove dangling (intermediate) images left over from builds, and trim the
+  // git working tree. Both are safe, non-destructive operations.
+  const cmd = [
+    // Prune dangling images (untagged layers from previous builds)
+    `docker image prune -f`,
+    // Compact the git repo
+    `cd ${appDir} && git gc --auto 2>/dev/null || true`,
+  ].join(" && ");
+
+  sshExec(ip, asUser(cmd), hostKey).catch((err) => {
+    log("prune", `Post-build cleanup on ${ip} failed (non-fatal): ${err}`);
+  });
+}
+
+/**
+ * Aggressive disk cleanup for a server: remove stopped containers, dangling
+ * images, unused networks, and build cache. Called periodically by the
+ * reconciler rather than on every build.
+ */
+export async function pruneServer(ip: string, hostKey?: string) {
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  // docker system prune removes stopped containers, dangling images, and
+  // unused networks. --filter keeps images used in the last 24h to preserve
+  // recent rollback tags.
+  const result = await sshExec(
+    ip,
+    asUser(`docker system prune -f --filter "until=24h" 2>&1 | tail -1`),
+    hostKey,
+  );
+  if (result.stdout.trim()) {
+    log("prune", `Server ${ip}: ${result.stdout.trim()}`);
+  }
+}
+
 // --- Image Transfer ---
 
 export async function transferImage(
@@ -575,6 +619,10 @@ export async function cloneAndBuild(
     throw new Error("Failed to start container — check your port configuration and environment variables");
   }
   log("build", `Container started: ${result.stdout.trim().slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
+
+  // Fire-and-forget cleanup of dangling images and git repo
+  pruneAfterBuild(ip, opts.name);
+
   return { containerId: result.stdout.trim(), dockerfilePath, imageTag };
 }
 
@@ -672,6 +720,10 @@ export async function cloneAndRailpackBuild(
     throw new Error("Failed to start container — check your port configuration and environment variables");
   }
   log("railpack", `Container started: ${result.stdout.trim().slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
+
+  // Fire-and-forget cleanup of dangling images and git repo
+  pruneAfterBuild(ip, opts.name);
+
   return { containerId: result.stdout.trim(), imageTag };
 }
 
@@ -824,6 +876,9 @@ export async function cloneAndComposeBuild(
   }
   log("compose", `Compose project started in ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
   emit("Compose project started");
+
+  // Fire-and-forget cleanup of dangling images and git repo
+  pruneAfterBuild(ip, opts.name);
 
   return { composeFile: opts.composeFile, webService: opts.webService };
 }

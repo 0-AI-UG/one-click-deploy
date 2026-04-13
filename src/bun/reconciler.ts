@@ -1,6 +1,6 @@
 import * as db from "./db.ts";
 import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } from "./db.ts";
-import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck } from "./remote/index.ts";
+import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck, pruneServer } from "./remote/index.ts";
 import { evaluateAutoScale } from "./scale.ts";
 import { getCatalogEntry } from "./services/catalog.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
@@ -17,6 +17,8 @@ const UNHEALTHY_RESTART_THRESHOLD = 2;
 
 let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
+let tickCount = 0;
+const PRUNE_EVERY_N_TICKS = 20; // ~10 minutes at 30s/tick
 
 // ---------------------------------------------------------------------------
 // Per-server batched metrics collection
@@ -371,6 +373,17 @@ async function tick(): Promise<void> {
     // --- Cleanup ---
     db.pruneOldMetrics(METRICS_RETENTION_SEC);
     db.pruneOldServerMetrics(METRICS_RETENTION_SEC);
+
+    // --- Periodic Docker prune (stopped containers, old images, build cache) ---
+    tickCount++;
+    if (tickCount % PRUNE_EVERY_N_TICKS === 0) {
+      for (const work of serverWork.values()) {
+        pruneServer(work.server.ipv4, work.server.ssh_host_key || undefined).catch((err) => {
+          log("prune", `server ${work.server.ipv4}: ${err}`);
+        });
+      }
+    }
+
     log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps, ${serviceCount} services, ${serverWork.size} servers)`);
   } catch (err) {
     log("tick", `error: ${err}`);

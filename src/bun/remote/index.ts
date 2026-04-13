@@ -45,6 +45,7 @@ export {
   pullAndRunService,
   serviceHealthCheck,
   deployConfigFile,
+  pruneServer,
 } from "../hetzner/containers.ts";
 
 // Auth proxy
