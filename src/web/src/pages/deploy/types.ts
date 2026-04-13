@@ -71,4 +71,5 @@ export type FormState = {
   compose_web_service: string;
   public: boolean;
   extra_volumes: Array<{ host_path: string; container_path: string }>;
+  server_id: string; // "" = auto
 };

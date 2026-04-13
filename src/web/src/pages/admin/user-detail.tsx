@@ -56,6 +56,7 @@ const PERMISSION_GROUPS = [
     label: "Resources",
     permissions: [
       { key: "resources.view", label: "View resources summary" },
+      { key: "resources.create", label: "Create servers" },
       { key: "resources.delete", label: "Delete orphan resources" },
     ],
   },

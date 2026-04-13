@@ -4,6 +4,9 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { destroyServer } from "../../bun/deploy/index.ts";
 import { getComputeProvider } from "../../bun/providers/index.ts";
+import { provisionServer } from "../../bun/provision-server.ts";
+import { tryAcquireLock } from "../../bun/op-lock.ts";
+import { notifyJob } from "./apps.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
@@ -165,6 +168,51 @@ export async function handleDeleteResource(request: Request, type: string, id: s
     }
 
     return Response.json({ ok: false, error: "Unknown resource type" }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleCreateServer(request: Request): Promise<Response> {
+  try {
+    await requirePermission(request, "resources.create");
+    const body = await request.json() as { server_type: string; location: string; name?: string };
+
+    if (!body.server_type || !body.location) {
+      return Response.json({ error: "server_type and location are required" }, { status: 400, headers: corsHeaders });
+    }
+
+    const lock = tryAcquireLock("create-server", "create");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: "A server is already being created" }, { status: 409, headers: corsHeaders });
+    }
+
+    const serverName = body.name || `ocd-server-${Date.now()}`;
+    const job = db.createDeployJob(serverName);
+
+    (async () => {
+      try {
+        await provisionServer({
+          serverType: body.server_type,
+          location: body.location,
+          name: serverName,
+          emit: (step, detail) => {
+            db.appendDeployJobEvent(job.id, step, detail);
+            notifyJob(job.id);
+          },
+        });
+        db.finishDeployJob(job.id, { ok: true });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        db.appendDeployJobEvent(job.id, "error", msg);
+        db.finishDeployJob(job.id, { ok: false, error: msg });
+      } finally {
+        lock.release();
+        notifyJob(job.id);
+      }
+    })();
+
+    return Response.json({ deployment_id: job.id }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

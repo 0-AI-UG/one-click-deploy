@@ -1,7 +1,9 @@
+import { useState, useRef, useEffect } from "react";
 import { get, post } from "../../api/client.ts";
-import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../components/ui.tsx";
+import { Card, Btn, StatusBadge, showToast, Spinner, Table, CopyButton } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal } from "lucide-react";
+import { NeoSelect } from "../../components/neo-select.tsx";
+import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft } from "lucide-react";
 import { Sparkline } from "./shared.tsx";
 import type { AppData, ReplicaData, MetricSample, ServerData } from "../../types.ts";
 
@@ -14,8 +16,66 @@ interface OverviewTabProps {
   setReplicas: (r: ReplicaData[]) => void;
 }
 
+type MigratePoll = {
+  status: "running" | "done" | "error";
+  events: Array<{ seq: number; ts: string; step: string; detail: string }>;
+  last_seq: number;
+  result: { ok: boolean; error?: string } | null;
+};
+
 export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas }: OverviewTabProps) {
   const internalUrl = `http://${app.name}.ocd.internal:8080`;
+  const [migratingId, setMigratingId] = useState<number | null>(null);
+  const [migrateTarget, setMigrateTarget] = useState<Record<number, string>>({});
+  const [migrateProgress, setMigrateProgress] = useState("");
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
+
+  const hasVolume = Boolean(app.volume_id);
+  const readyServers = allServers.filter((s) => s.type); // servers from resources have type
+
+  const handleMigrate = async (replicaId: number) => {
+    const targetId = migrateTarget[replicaId];
+    if (!targetId) { showToast("Select a target server", "error"); return; }
+    setMigratingId(replicaId);
+    setMigrateProgress("Starting migration...");
+    try {
+      const res = await post(`/api/apps/${appId}/replicas/${replicaId}/migrate`, {
+        target_server_id: parseInt(targetId, 10),
+      }) as { deployment_id: number };
+
+      // Poll progress
+      let since = 0;
+      while (aliveRef.current) {
+        let resp: MigratePoll;
+        try {
+          resp = await get(`/api/deploy-jobs/${res.deployment_id}?since=${since}`) as MigratePoll;
+        } catch {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        if (!aliveRef.current) return;
+        if (resp.events.length > 0) {
+          setMigrateProgress(resp.events[resp.events.length - 1].detail || resp.events[resp.events.length - 1].step);
+          since = resp.last_seq;
+        }
+        if (resp.status !== "running") {
+          if (resp.result && !resp.result.ok) throw new Error(resp.result.error || "Migration failed");
+          break;
+        }
+      }
+      showToast("Replica migrated", "success");
+      setReplicas(await get(`/api/apps/${appId}/metrics`));
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setMigratingId(null);
+      setMigrateProgress("");
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -91,16 +151,49 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
                   <td className="py-2 px-3 text-fg-dim">{r.memory_percent?.toFixed(1)}%</td>
                   <td className="py-2 px-3"><Sparkline values={series} /></td>
                   <td className="py-2 px-3">
-                    <PermissionGate permission="terminal.access">
-                      <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/replica/${r.id}`; }}>
-                        <Terminal size={12} /> Shell
-                      </Btn>
-                    </PermissionGate>
+                    <div className="flex items-center gap-1">
+                      <PermissionGate permission="terminal.access">
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/replica/${r.id}`; }}>
+                          <Terminal size={12} /> Shell
+                        </Btn>
+                      </PermissionGate>
+                      {!hasVolume && allServers.length >= 2 && (
+                        <PermissionGate permission="scaling.manage">
+                          <div className="flex items-center gap-1">
+                            <NeoSelect
+                              value={migrateTarget[r.id] || ""}
+                              onChange={(v) => setMigrateTarget((prev) => ({ ...prev, [r.id]: v }))}
+                              options={allServers
+                                .filter((s) => s.id !== r.server_id)
+                                .map((s) => ({ value: String(s.id), label: s.name.replace(/^ocd-/, "") }))}
+                              placeholder="Move to..."
+                              compact
+                            />
+                            <Btn
+                              size="xs"
+                              variant="ghost"
+                              loading={migratingId === r.id}
+                              disabled={!migrateTarget[r.id] || migratingId !== null}
+                              onClick={() => handleMigrate(r.id)}
+                              title="Migrate replica to another server"
+                            >
+                              <ArrowRightLeft size={11} />
+                            </Btn>
+                          </div>
+                        </PermissionGate>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
             })}
           </Table>
+        )}
+        {migratingId !== null && migrateProgress && (
+          <div className="mt-2 flex items-center gap-2 px-3 py-1.5 border-2 border-fg bg-alt">
+            <Spinner />
+            <span className="font-mono text-[10px] text-fg uppercase tracking-wider truncate">{migrateProgress}</span>
+          </div>
         )}
       </Card>
 

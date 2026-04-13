@@ -1,16 +1,92 @@
-import { useState, useEffect } from "react";
-import { get, del } from "../api/client.ts";
+import { useState, useEffect, useRef } from "react";
+import { get, del, post } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
+import { NeoSelect } from "../components/neo-select.tsx";
 import { Sparkline } from "./app-detail/shared.tsx";
-import { HardDrive, Server, Database, Trash2, RefreshCw, Terminal } from "lucide-react";
+import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
+import { HardDrive, Server, Database, Trash2, RefreshCw, Terminal, Plus } from "lucide-react";
 import type { ResourcesData, ServerMetricSample } from "../types.ts";
+
+type CreateJobPoll = {
+  status: "running" | "done" | "error";
+  events: Array<{ seq: number; ts: string; step: string; detail: string }>;
+  last_seq: number;
+  result: { ok: boolean; error?: string } | null;
+};
 
 export function ResourcesPage() {
   const [data, setData] = useState<ResourcesData | null>(null);
   const [metricsHistory, setMetricsHistory] = useState<ServerMetricSample[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
+
+  // Create server form state
+  const [showCreate, setShowCreate] = useState(false);
+  const [createType, setCreateType] = useState("");
+  const [createLocation, setCreateLocation] = useState("");
+  const [createName, setCreateName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createProgress, setCreateProgress] = useState("");
+  const { serverTypes } = useServerTypes();
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
+
+  const handleCreateServer = async () => {
+    if (!createType || !createLocation) {
+      showToast("Select server type and location", "error");
+      return;
+    }
+    setCreating(true);
+    setCreateProgress("Starting...");
+    try {
+      const res = await post("/api/resources/servers", {
+        server_type: createType,
+        location: createLocation,
+        name: createName || undefined,
+      }) as { deployment_id: number };
+
+      // Poll progress
+      let since = 0;
+      while (aliveRef.current) {
+        let resp: CreateJobPoll;
+        try {
+          resp = await get(`/api/deploy-jobs/${res.deployment_id}?since=${since}`) as CreateJobPoll;
+        } catch {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        if (!aliveRef.current) return;
+        if (resp.events.length > 0) {
+          const latest = resp.events[resp.events.length - 1];
+          setCreateProgress(latest.detail || latest.step);
+          since = resp.last_seq;
+        }
+        if (resp.status !== "running") {
+          if (resp.result && !resp.result.ok) {
+            throw new Error(resp.result.error || "Server creation failed");
+          }
+          break;
+        }
+      }
+
+      showToast("Server created", "success");
+      setShowCreate(false);
+      setCreateType("");
+      setCreateLocation("");
+      setCreateName("");
+      load();
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setCreating(false);
+      setCreateProgress("");
+    }
+  };
 
   const load = async () => {
     try {
@@ -99,7 +175,65 @@ export function ResourcesPage() {
         <div className="flex items-center gap-2 mb-3">
           <Server size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Servers ({data?.servers?.length || 0})</h3>
+          <div className="ml-auto">
+            <PermissionGate permission="resources.create">
+              <Btn size="xs" onClick={() => setShowCreate(!showCreate)}>
+                <Plus size={11} /> Create Server
+              </Btn>
+            </PermissionGate>
+          </div>
         </div>
+
+        {showCreate && (
+          <div className="mb-4 border-2 border-fg p-3 bg-alt space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Type</label>
+                <NeoSelect
+                  value={createType}
+                  options={typeOptions(serverTypes)}
+                  onChange={(v) => { setCreateType(v); setCreateLocation(""); }}
+                  placeholder="Select type..."
+                  compact
+                />
+              </div>
+              <div>
+                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Location</label>
+                <NeoSelect
+                  value={createLocation}
+                  options={locationOptions(serverTypes, createType)}
+                  onChange={setCreateLocation}
+                  placeholder="Select location..."
+                  compact
+                />
+              </div>
+              <div>
+                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Name (optional)</label>
+                <input
+                  type="text"
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  placeholder={`ocd-server-${Date.now()}`}
+                  className="w-full font-mono text-[10px]"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Btn size="sm" variant="primary" loading={creating} onClick={handleCreateServer} disabled={!createType || !createLocation}>
+                Create
+              </Btn>
+              <Btn size="sm" variant="ghost" onClick={() => setShowCreate(false)} disabled={creating}>
+                Cancel
+              </Btn>
+              {creating && createProgress && (
+                <div className="flex items-center gap-2 ml-2">
+                  <Spinner />
+                  <span className="font-mono text-[9px] text-fg uppercase tracking-wider truncate">{createProgress}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
           <Table headers={["Name", "IP", "Type", "CPU", "RAM", "CPU (1h)", "RAM (1h)", "Location", "Replicas", "€/mo", ""]}>
             {data.servers.map((s) => {

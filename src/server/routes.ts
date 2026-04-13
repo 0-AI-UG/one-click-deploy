@@ -43,9 +43,9 @@ import {
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
-import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource } from "./routes/resources.ts";
+import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
-import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus } from "./routes/scaling.ts";
+import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus, handleMigrateReplica } from "./routes/scaling.ts";
 import {
   handleEnableWebhook,
   handleUpdateWebhookSettings,
@@ -98,6 +98,12 @@ import {
 function appIdFrom(req: Request): number {
   const url = new URL(req.url);
   const match = url.pathname.match(/\/api\/apps\/(\d+)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function replicaIdFrom(req: Request): number {
+  const url = new URL(req.url);
+  const match = url.pathname.match(/\/replicas\/(\d+)/);
   return match ? parseInt(match[1], 10) : 0;
 }
 
@@ -239,6 +245,7 @@ export const apiRoutes = {
   "/api/apps/:appId/scale": { POST: (req: Request) => handleScaleApp(req, appIdFrom(req)) },
   "/api/apps/:appId/scaling-policy": { PUT: (req: Request) => handleUpdateScalingPolicy(req, appIdFrom(req)) },
   "/api/apps/:appId/replicas": { GET: (req: Request) => handleGetReplicas(req, appIdFrom(req)) },
+  "/api/apps/:appId/replicas/:replicaId/migrate": { POST: (req: Request) => handleMigrateReplica(req, appIdFrom(req), replicaIdFrom(req)) },
   "/api/apps/:appId/scaling-events": { GET: (req: Request) => handleGetScalingEvents(req, appIdFrom(req)) },
   "/api/apps/:appId/metrics": { GET: (req: Request) => handleGetAppMetrics(req, appIdFrom(req)) },
   "/api/apps/:appId/metrics/history": { GET: (req: Request) => handleGetAppMetricsHistory(req, appIdFrom(req)) },
@@ -288,6 +295,7 @@ export const apiRoutes = {
 
   // --- Resources ---
   "/api/resources": { GET: (req: Request) => handleGetResources(req) },
+  "/api/resources/servers": { POST: (req: Request) => handleCreateServer(req) },
   "/api/resources/metrics/history": { GET: (req: Request) => handleGetServerMetricsHistory(req) },
   "/api/resources/:type/:id": {
     DELETE: (req: Request) => {

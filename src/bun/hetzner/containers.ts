@@ -50,9 +50,12 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
   const appDir = `/home/deploy/apps/${appName}`;
 
-  // Remove dangling (intermediate) images left over from builds, and trim the
-  // git working tree. Both are safe, non-destructive operations.
+  // Remove old commit-tagged images for this app (keep only :latest which the
+  // running container uses), prune dangling images, and compact the git repo.
   const cmd = [
+    // Remove all tags for this app except :latest — old commit tags are no
+    // longer needed since rollback rebuilds from git.
+    `docker images ${appName} --format '{{.Repository}}:{{.Tag}}' | grep -v ':latest$' | xargs -r docker rmi 2>/dev/null || true`,
     // Prune dangling images (untagged layers from previous builds)
     `docker image prune -f`,
     // Compact the git repo
@@ -65,18 +68,18 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
 }
 
 /**
- * Aggressive disk cleanup for a server: remove stopped containers, dangling
- * images, unused networks, and build cache. Called periodically by the
- * reconciler rather than on every build.
+ * Aggressive disk cleanup for a server: remove stopped containers, ALL unused
+ * images (not just dangling), unused networks, and build cache.
+ * Called periodically by the reconciler.
  */
 export async function pruneServer(ip: string, hostKey?: string) {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-  // docker system prune removes stopped containers, dangling images, and
-  // unused networks. --filter keeps images used in the last 24h to preserve
-  // recent rollback tags.
+  // --all removes ALL images not referenced by a running container (not just
+  // dangling ones). This catches old tagged images that `docker image prune`
+  // and the default `docker system prune` miss entirely.
   const result = await sshExec(
     ip,
-    asUser(`docker system prune -f --filter "until=24h" 2>&1 | tail -1`),
+    asUser(`docker system prune --all -f 2>&1 | tail -1`),
     hostKey,
   );
   if (result.stdout.trim()) {
@@ -578,15 +581,6 @@ export async function cloneAndBuild(
   log("build", `Docker build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
   emit("Image built successfully");
 
-  // Tag image with git commit hash for rollback support
-  const commitResult = await sshExec(ip, asUser(`cd ${appDir} && git rev-parse --short HEAD 2>/dev/null || echo unknown`));
-  const gitCommit = commitResult.stdout.trim() || "unknown";
-  const imageTag = `${opts.name}:${gitCommit}`;
-  if (gitCommit !== "unknown") {
-    await sshExec(ip, asUser(`docker tag ${opts.name}:latest ${imageTag}`));
-    log("build", `Image tagged as ${imageTag}`);
-  }
-
   // Build succeeded — now safe to stop old container and swap
   log("build", `Removing existing container ${opts.name} (if any)`);
   await sshExec(ip, asUser(`docker rm -f ${opts.name} 2>/dev/null || true`));
@@ -623,7 +617,7 @@ export async function cloneAndBuild(
   // Fire-and-forget cleanup of dangling images and git repo
   pruneAfterBuild(ip, opts.name);
 
-  return { containerId: result.stdout.trim(), dockerfilePath, imageTag };
+  return { containerId: result.stdout.trim(), dockerfilePath, imageTag: `${opts.name}:latest` };
 }
 
 // --- Railpack (zero-config) builds ---
@@ -682,15 +676,6 @@ export async function cloneAndRailpackBuild(
   log("railpack", `Railpack build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
   emit("Image built successfully with Railpack");
 
-  // Tag image with git commit hash for rollback support
-  const commitResult = await sshExec(ip, asUser(`cd ${appDir} && git rev-parse --short HEAD 2>/dev/null || echo unknown`));
-  const gitCommit = commitResult.stdout.trim() || "unknown";
-  const imageTag = `${opts.name}:${gitCommit}`;
-  if (gitCommit !== "unknown") {
-    await sshExec(ip, asUser(`docker tag ${opts.name}:latest ${imageTag}`));
-    log("railpack", `Image tagged as ${imageTag}`);
-  }
-
   // Stop old container and swap
   log("railpack", `Removing existing container ${opts.name} (if any)`);
   await sshExec(ip, asUser(`docker rm -f ${opts.name} 2>/dev/null || true`));
@@ -724,7 +709,7 @@ export async function cloneAndRailpackBuild(
   // Fire-and-forget cleanup of dangling images and git repo
   pruneAfterBuild(ip, opts.name);
 
-  return { containerId: result.stdout.trim(), imageTag };
+  return { containerId: result.stdout.trim(), imageTag: `${opts.name}:latest` };
 }
 
 export async function removeContainer(ip: string, name: string, hostKey?: string) {

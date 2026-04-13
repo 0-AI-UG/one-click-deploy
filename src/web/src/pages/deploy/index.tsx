@@ -117,6 +117,7 @@ const EMPTY_FORM: FormState = {
   compose_web_service: "",
   public: true,
   extra_volumes: [],
+  server_id: "",
 };
 
 export function DeployPage() {
@@ -406,6 +407,7 @@ export function DeployPage() {
       extra_volumes: form.extra_volumes.length > 0
         ? form.extra_volumes.filter((v) => v.host_path && v.container_path)
         : undefined,
+      server_id: form.server_id ? parseInt(form.server_id, 10) : undefined,
     };
 
     void startDeploy(body);

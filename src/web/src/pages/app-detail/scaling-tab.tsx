@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { get, post, put } from "../../api/client.ts";
 import { Card, Btn, Checkbox, Spinner, Table, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
+import { NeoSelect } from "../../components/neo-select.tsx";
 import { Zap, Gauge, History } from "lucide-react";
 import { InfoTip } from "./shared.tsx";
-import type { AppData, ReplicaData, ScalingEvent } from "../../types.ts";
+import type { AppData, ReplicaData, ScalingEvent, ResourceServer } from "../../types.ts";
 
 type ScaleJobPoll = {
   status: "running" | "done" | "error";
@@ -75,6 +76,18 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
   const hasVolume = Boolean(app.volume_id);
   const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica — a cloud volume can only be attached to a single server at a time.";
   const [progressMessage, setProgressMessage] = useState<string>("");
+  const [selectedServer, setSelectedServer] = useState<string>("");
+  const [servers, setServers] = useState<ResourceServer[]>([]);
+
+  // Fetch available servers for the server picker
+  useEffect(() => {
+    get("/api/resources")
+      .then((res: any) => {
+        setServers((res.servers || []).filter((s: any) => s.status === "ready"));
+      })
+      .catch(() => {});
+  }, []);
+
   // Tracks whether the component is still mounted, so the long-poll loop can
   // bail out if the user switches tabs mid-scale (the server-side scale keeps
   // running regardless — they just stop watching it).
@@ -91,7 +104,9 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
 
   const runScale = async (target: number): Promise<void> => {
     setProgressMessage("Starting...");
-    const res = (await post(`/api/apps/${appId}/scale`, { replicas: target })) as { deployment_id: number };
+    const body: { replicas: number; server_id?: number } = { replicas: target };
+    if (selectedServer) body.server_id = parseInt(selectedServer, 10);
+    const res = (await post(`/api/apps/${appId}/scale`, body)) as { deployment_id: number };
     await pollScaleJob(res.deployment_id, setProgressMessage, aliveRef);
     await loadReplicas();
     await load();
@@ -133,6 +148,22 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                 {Array.from({ length: replicas.length }).map((_, i) => (
                   <div key={i} className="w-3 h-3 border border-fg bg-accent" />
                 ))}
+              </div>
+            )}
+            {servers.length >= 2 && (
+              <div className="w-36 mr-1">
+                <NeoSelect
+                  value={selectedServer}
+                  onChange={setSelectedServer}
+                  options={[
+                    { value: "", label: "Auto" },
+                    ...servers.map((s) => ({
+                      value: String(s.id),
+                      label: `${s.name.replace(/^ocd-/, "")} ${s.cpu_percent != null ? `${s.cpu_percent}%` : ""}`,
+                    })),
+                  ]}
+                  compact
+                />
               </div>
             )}
         <PermissionGate permission="scaling.manage">

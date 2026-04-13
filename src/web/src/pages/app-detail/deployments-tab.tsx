@@ -1,5 +1,5 @@
 import { post } from "../../api/client.ts";
-import { Card, Btn, StatusBadge, Table, confirm } from "../../components/ui.tsx";
+import { Card, Btn, StatusBadge, Table, CopyButton, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { Clock } from "lucide-react";
 import type { DeploymentRecord } from "../../types.ts";
@@ -29,7 +29,13 @@ export function DeploymentsTab({ appId, deployments, action }: DeploymentsTabPro
               <td className="py-2 px-3 text-fg-dim uppercase tracking-wider text-[9px]">{d.source || "manual"}</td>
               <td className="py-2 px-3"><StatusBadge status={d.status} /></td>
               <td className="py-2 px-3 text-muted">{new Date(d.created_at + "Z").toLocaleString()}</td>
-              <td className="py-2 px-3">
+              <td className="py-2 px-3 flex items-center gap-1">
+                {d.status === "failed" && d.deploy_log && (
+                  <span className="flex items-center gap-1">
+                    <span className="font-mono text-[9px] text-accent-red max-w-[200px] truncate" title={d.deploy_log}>{d.deploy_log}</span>
+                    <CopyButton text={d.deploy_log} size={10} />
+                  </span>
+                )}
                 {d.status !== "failed" && (
                   <PermissionGate permission="apps.rollback">
                     <Btn

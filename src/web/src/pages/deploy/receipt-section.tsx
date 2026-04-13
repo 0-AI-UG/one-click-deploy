@@ -1,8 +1,12 @@
+import { useState, useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Card } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { ReceiptRow } from "./shared.tsx";
+import { get } from "../../api/client.ts";
 import type { IntrospectResult, FormState } from "./types.ts";
+
+type ServerOption = { id: number; name: string; type: string; location: string; status: string };
 
 type Props = {
   form: FormState;
@@ -13,6 +17,16 @@ type Props = {
 };
 
 export function ReceiptSection({ form, set, setForm, detected, selectedManifest }: Props) {
+  const [servers, setServers] = useState<ServerOption[]>([]);
+  useEffect(() => {
+    get("/api/resources")
+      .then((res: any) => {
+        const ready = (res.servers || []).filter((s: any) => s.status === "ready");
+        setServers(ready);
+      })
+      .catch(() => {});
+  }, []);
+
   const hasBothModes = !!detected && detected.dockerfiles.length > 0 && !!detected.compose_files[0];
   const isCompose = !!(form.compose_file || (!form.dockerfile_path && detected?.compose_files[0]));
   const hasMultipleDockerfiles = !isCompose && !!detected && detected.dockerfiles.length > 1;
@@ -144,6 +158,22 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest 
             placeholder="app.example.com (we'll give you a temporary one if blank)"
           />
         </ReceiptRow>
+
+        {servers.length > 0 && (
+          <ReceiptRow label="Target Server">
+            <NeoSelect
+              value={form.server_id}
+              onChange={(v) => setForm((f) => ({ ...f, server_id: v }))}
+              options={[
+                { value: "", label: "Auto (first available)" },
+                ...servers.map((s) => ({
+                  value: String(s.id),
+                  label: `${s.name} (${s.type} · ${s.location})`,
+                })),
+              ]}
+            />
+          </ReceiptRow>
+        )}
       </div>
 
       {detected && detected.notes.length > 0 && (

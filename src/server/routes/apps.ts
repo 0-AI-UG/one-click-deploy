@@ -309,7 +309,8 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
     }
     try {
       const result = await redeployApp(appId, () => {}, body.auth_password, body.container_port, payload.userId);
-      return Response.json(result, { headers: corsHeaders });
+      const status = result.ok ? 200 : 500;
+      return Response.json(result, { status, headers: corsHeaders });
     } finally {
       lock.release();
     }

@@ -1,5 +1,5 @@
 import { post, resolveApp } from "../api.ts";
-import { GREEN, RESET } from "../format.ts";
+import { GREEN, RED, RESET } from "../format.ts";
 
 export async function redeploy(args: string[]): Promise<void> {
   const appName = args[0];
@@ -11,12 +11,16 @@ export async function redeploy(args: string[]): Promise<void> {
   const app = await resolveApp(appName);
   console.log(`Redeploying ${app.name}...`);
 
-  const result = await post<{ ok: boolean; error?: string }>(`/api/apps/${app.id}/redeploy`);
-
-  if (result.ok) {
-    console.log(`${GREEN}Redeploy triggered for ${app.name}${RESET}`);
-  } else {
-    console.error(`Failed: ${result.error || "unknown error"}`);
+  try {
+    const result = await post<{ ok: boolean; error?: string }>(`/api/apps/${app.id}/redeploy`);
+    if (result.ok) {
+      console.log(`${GREEN}Redeploy complete for ${app.name}${RESET}`);
+    } else {
+      console.error(`\n${RED}Redeploy failed: ${result.error || "unknown error"}${RESET}`);
+      process.exit(1);
+    }
+  } catch (err: any) {
+    console.error(`\n${RED}Redeploy failed: ${err.message}${RESET}`);
     process.exit(1);
   }
 }

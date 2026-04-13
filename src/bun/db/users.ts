@@ -49,6 +49,7 @@ export const ALL_PERMISSIONS = [
   "scaling.manage",
   "webhooks.manage",
   "resources.view",
+  "resources.create",
   "resources.delete",
   "environments.manage",
   "terminal.access",

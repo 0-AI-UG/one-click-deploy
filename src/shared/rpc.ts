@@ -124,6 +124,7 @@ export type DeployRequest = {
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
   public?: boolean; // Whether the app is publicly accessible (default true)
   extra_volumes?: Array<{ host_path: string; container_path: string }>; // Additional volume mounts
+  server_id?: number; // If set, deploy to this specific server instead of auto-selecting
 };
 
 export type PanelInfo = {

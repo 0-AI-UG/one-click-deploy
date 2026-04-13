@@ -1,7 +1,5 @@
 import * as db from "../db.ts";
-import { getComputeProvider } from "../providers/index.ts";
-import { getOrCreateLocalKeyPair, waitForServer, captureHostKey } from "../remote/index.ts";
-import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
+import { provisionServer } from "../provision-server.ts";
 import { type ProgressFn, type App, type Server } from "./types.ts";
 
 export async function pickTargetServer(
@@ -19,7 +17,8 @@ export async function pickTargetServer(
     return preferred;
   }
 
-  // Find servers with fewest replicas of this app
+  // Capacity-aware placement: score each server by load + affinity and pick
+  // the best candidate. Servers above 85% combined load are skipped.
   const allServers = db.getServers() as Server[];
   const appReplicas = db.getReplicas(app.id) as { server_id: number }[];
   const replicasByServer = new Map<number, number>();
@@ -27,30 +26,42 @@ export async function pickTargetServer(
     replicasByServer.set(r.server_id, (replicasByServer.get(r.server_id) || 0) + 1);
   }
 
-  // Find server with fewest replicas (prefer existing servers with 0 replicas
-  // of this app).
+  // Get recent server metrics for load scoring
+  const recentMetrics = db.getRecentServerMetrics(120); // last 2 minutes
+  const latestByServer = new Map<number, { cpu_percent: number; memory_percent: number }>();
+  for (const m of recentMetrics) {
+    latestByServer.set(m.server_id, { cpu_percent: m.cpu_percent, memory_percent: m.memory_percent });
+  }
+
+  const FULL_THRESHOLD = 0.85;
+  const AFFINITY_PENALTY = 50;
+
   let bestServer: Server | null = null;
-  let bestCount = Infinity;
+  let bestScore = Infinity;
   for (const server of allServers) {
     if (server.status !== "ready") continue;
-    const count = replicasByServer.get(server.id) || 0;
-    if (count < bestCount) {
-      bestCount = count;
+
+    const metrics = latestByServer.get(server.id);
+    // No metrics yet (new server) → treat as empty (load 0)
+    const load = metrics
+      ? (metrics.cpu_percent * 0.6 + metrics.memory_percent * 0.4) / 100
+      : 0;
+
+    // Skip servers that are above the full threshold
+    if (load > FULL_THRESHOLD) continue;
+
+    const appReplicaCount = replicasByServer.get(server.id) || 0;
+    const score = load * 100 + appReplicaCount * AFFINITY_PENALTY;
+
+    if (score < bestScore) {
+      bestScore = score;
       bestServer = server;
     }
   }
 
-  // If no server has room, or all servers already have replicas, provision new
-  if (!bestServer || bestCount > 0) {
+  // If all servers are full or skipped, provision new
+  if (!bestServer) {
     emit("scale", "Provisioning new server for replica...");
-
-    const compute = getComputeProvider();
-    const { publicKey } = await getOrCreateLocalKeyPair();
-    const [sshKey, firewallId, networkId] = await Promise.all([
-      compute.ensureSshKey("one-click-deploy", publicKey),
-      compute.ensureFirewall(),
-      ensureSharedNetwork(),
-    ]);
 
     const serverType = settings.default_server_type;
     if (!serverType) throw new Error("No default server type configured — set one in Settings");
@@ -58,42 +69,13 @@ export async function pickTargetServer(
     const replicas = db.getReplicas(app.id);
     const anyReplicaServer = replicas[0] ? db.getServer(replicas[0].server_id) : null;
     const location = anyReplicaServer?.location || settings.default_location;
-    const serverName = `ocd-${app.name}-r${Date.now()}`;
 
-    const hServer = await compute.createServer({
-      name: serverName,
+    return await provisionServer({
       serverType,
       location,
-      sshKeyName: sshKey.name,
-      firewallId,
-      networkId: networkId || undefined,
-      userData: "",
+      name: `ocd-${app.name}-r${Date.now()}`,
+      emit,
     });
-
-    const serverIp = hServer.ipv4;
-    const dbServer = db.insertServer({
-      name: serverName,
-      provider_id: hServer.providerId,
-      provider: compute.id,
-      ipv4: serverIp,
-      ipv6: hServer.ipv6 || "",
-      type: serverType,
-      location,
-      status: "provisioning",
-      private_ipv4: hServer.privateIpv4 || "",
-    });
-
-    emit("scale", `Waiting for server ${serverName}...`);
-    await waitForServer(serverIp, 30, (msg) => emit("scale", msg));
-
-    const hostKey = await captureHostKey(serverIp);
-    if (hostKey) {
-      db.updateServerHostKey(dbServer.id, hostKey);
-    }
-
-    db.updateServerStatus(dbServer.id, "ready");
-    emit("scale", `Server ${serverName} ready`);
-    return db.getServer(dbServer.id) as Server;
   }
 
   return bestServer;

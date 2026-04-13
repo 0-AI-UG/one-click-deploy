@@ -263,6 +263,22 @@ export async function redeployApp(
     log("redeployApp", `Failed:`, msg);
     // Rollback: restore previous status (env/auth were never written to DB)
     db.updateAppStatus(appId, previousStatus);
+
+    // Record the failed redeploy so it shows up in deployment history
+    try {
+      const app = db.getApp(appId);
+      db.insertDeployment({
+        app_id: appId,
+        image_tag: app ? `${app.name}:latest` : "unknown",
+        git_commit: "unknown",
+        status: "failed",
+        source: "manual",
+        deploy_log: msg,
+      });
+    } catch (insertErr) {
+      log("redeployApp", `Failed to record failed deployment:`, insertErr);
+    }
+
     return { ok: false, error: msg };
   }
 }
@@ -310,26 +326,51 @@ export async function rollbackApp(
         throw new Error("Failed to rollback compose project — the previous version may have build errors");
       }
     } else {
-      // Dockerfile rollback: restart with old image tag
-      await removeContainer(server.ipv4, app.name, hostKey);
+      // Dockerfile rollback: checkout old commit and rebuild from source
+      await sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${deployment.git_commit}`), hostKey);
 
       const envVars = await resolveAppEnvVars(app);
       const envEntries = Object.entries(envVars);
-      let envFileFlag = "";
       if (envEntries.length > 0) {
         const envFilePath = `${appDir}/.env.deploy`;
         const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
         const escapedContent = envFileContent.replace(/'/g, "'\\''");
         await sshExec(server.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, hostKey);
-        envFileFlag = `--env-file ${envFilePath}`;
       }
 
+      // Find Dockerfile (same logic as cloneAndBuild)
+      let dockerfilePath = app.dockerfile_path?.replace(/^\/+/, "");
+      if (!dockerfilePath) {
+        const findResult = await sshExec(
+          server.ipv4,
+          asUser(`cd ${appDir} && if [ -f Dockerfile ]; then echo Dockerfile; elif [ -f docker/Dockerfile ]; then echo docker/Dockerfile; else find . -maxdepth 3 -name Dockerfile -type f | head -1 | sed 's|^\\./||'; fi`),
+          hostKey,
+        );
+        dockerfilePath = findResult.stdout.trim();
+        if (!dockerfilePath) {
+          throw new Error("No Dockerfile found in repository for rollback");
+        }
+      }
+
+      const dockerContext = (app as any).docker_context || ".";
+      const buildCmd = `cd ${appDir} && docker build -t ${app.name}:latest -f ${dockerfilePath} ${dockerContext}`;
+      const buildResult = await sshExec(server.ipv4, asUser(buildCmd), hostKey);
+      if (buildResult.exitCode !== 0) {
+        throw new Error("Failed to rollback — the previous version may have build errors");
+      }
+
+      await removeContainer(server.ipv4, app.name, hostKey);
+
+      let envFileFlag = "";
+      if (envEntries.length > 0) {
+        envFileFlag = `--env-file ${appDir}/.env.deploy`;
+      }
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
       const rollbackExtraVols = parseExtraVolumes(app.extra_volumes).map((v) => `-v ${v}`).join(" ");
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${rollbackExtraVols} ${deployment.image_tag}`;
+      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${rollbackExtraVols} ${app.name}:latest`;
       const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
-        throw new Error("Failed to rollback — the previous image may no longer be available on this server");
+        throw new Error("Failed to start container after rollback rebuild");
       }
     }
 

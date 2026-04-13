@@ -2,7 +2,7 @@ import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import * as db from "../db.ts";
 import { getComputeProvider, getDnsProvider } from "../providers/index.ts";
 import {
-  sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
+  sshExec,
   cloneAndBuild, cloneAndComposeBuild,
   cloneAndRailpackBuild, detectComposeFile, detectWebService, removeContainer,
   removeCompose, healthCheck, composeHealthCheck,
@@ -17,7 +17,7 @@ import { processIncomingEnvVars, serializeEnvVars } from "../env-crypto.ts";
 import { getTokens } from "../secret-store.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { scaleApp } from "../scale.ts";
-import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
+import { provisionServer } from "../provision-server.ts";
 import { resolve4 } from "node:dns/promises";
 
 // Resolve a hostname to IPv4 addresses with a short timeout.
@@ -201,112 +201,46 @@ export async function deploy(
     log("settings", "Loaded settings");
     let serverId: number | undefined;
 
-    // Step 1: Reuse an existing ready server if one exists, otherwise
-    // provision a new Hetzner box. Replicas table is the source of truth
-    // for placement, so we don't need an explicit server selection — the
-    // first ready server is fine for a brand-new app, and scale-up uses
-    // pickTargetServer to spread further replicas.
-    const existingReady = db.getServers().find((s: Server) => s.status === "ready");
-    if (existingReady) {
-      serverIp = existingReady.ipv4;
-      serverHostKey = existingReady.ssh_host_key || "";
-      serverId = existingReady.id;
-      state.dbServerId = existingReady.id;
-      log("server", `Reusing existing ready server: ${existingReady.name} ip=${serverIp}`);
-      onProgress("server", `Using server ${existingReady.name} (${serverIp})`);
+    // Step 1: Pick a server. Priority:
+    //   1. Explicit server_id from the request (user chose a specific server)
+    //   2. Reuse an existing ready server
+    //   3. Provision a brand-new server
+    if (req.server_id) {
+      const target = db.getServer(req.server_id) as Server | null;
+      if (!target || target.status !== "ready") throw new Error("Target server not found or not ready");
+      serverIp = target.ipv4;
+      serverHostKey = target.ssh_host_key || "";
+      serverId = target.id;
+      state.dbServerId = target.id;
+      log("server", `Using user-selected server: ${target.name} ip=${serverIp}`);
+      onProgress("server", `Using server ${target.name} (${serverIp})`);
     } else {
-      const compute = getComputeProvider();
-      onProgress("server", `Creating new ${compute.name} server...`);
+      const existingReady = db.getServers().find((s: Server) => s.status === "ready");
+      if (existingReady) {
+        serverIp = existingReady.ipv4;
+        serverHostKey = existingReady.ssh_host_key || "";
+        serverId = existingReady.id;
+        state.dbServerId = existingReady.id;
+        log("server", `Reusing existing ready server: ${existingReady.name} ip=${serverIp}`);
+        onProgress("server", `Using server ${existingReady.name} (${serverIp})`);
+      } else {
+        const serverType = settings.default_server_type;
+        if (!serverType) throw new Error("No default server type configured — set one in Settings");
+        const location = settings.default_location;
+        if (!location) throw new Error("No default server location configured — set one in Settings");
 
-      log("ssh", "Ensuring SSH key, firewall, and private network exist...");
-      const { publicKey } = await getOrCreateLocalKeyPair();
-      const [sshKey, firewallId, networkId] = await Promise.all([
-        compute.ensureSshKey("one-click-deploy", publicKey),
-        compute.ensureFirewall(),
-        ensureSharedNetwork(),
-      ]);
-      log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}, network: ${networkId || "(none)"}`);
-      onProgress("server", `SSH key + firewall + network ready`);
-
-      const serverType = settings.default_server_type;
-      if (!serverType) throw new Error("No default server type configured — set one in Settings");
-      const location = settings.default_location;
-      if (!location) throw new Error("No default server location configured — set one in Settings");
-      const serverName = `ocd-${req.app_name}-${Date.now()}`;
-
-      // Insert placeholder DB record BEFORE provider API call to prevent orphans
-      const dbServer = db.insertServer({
-        name: serverName,
-        provider_id: "",
-        provider: compute.id,
-        ipv4: "",
-        ipv6: "",
-        type: serverType,
-        location,
-        status: "creating",
-      });
-      serverId = dbServer.id;
-      state.dbServerId = dbServer.id;
-
-      log("server", `Creating ${compute.name} server: name=${serverName} type=${serverType} location=${location}`);
-      const createStart = Date.now();
-      const providerServer = await compute.createServer({
-        name: serverName,
-        serverType,
-        location,
-        sshKeyName: sshKey.name,
-        firewallId,
-        networkId: networkId || undefined,
-        userData: "",
-      });
-      state.providerServerId = providerServer.providerId;
-      log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId} private=${providerServer.privateIpv4 || "(none)"}`);
-
-      // Update placeholder with real data
-      serverIp = providerServer.ipv4;
-      db.updateServer(dbServer.id, {
-        provider_id: providerServer.providerId,
-        ipv4: serverIp,
-        ipv6: providerServer.ipv6 || "",
-        private_ipv4: providerServer.privateIpv4 || "",
-        status: "provisioning",
-      });
-      log("server", `Server saved to DB: id=${dbServer.id}`);
-      onProgress("server", `Server created: ${serverName} (${serverIp})`);
-
-      // Wait for server VM to boot before attempting SSH
-      onProgress("provision", "Waiting for server to boot...");
-      await compute.waitForRunning(providerServer.providerId, (msg) => {
-        onProgress("provision", msg);
-      });
-
-      // Wait for cloud-init provisioning
-      onProgress("provision", "Waiting for server to be ready...");
-      log("provision", `Waiting for server ${serverIp} to be provisioned...`);
-      const provisionStart = Date.now();
-      await waitForServer(serverIp, 30, (msg) => {
-        onProgress("provision", msg);
-      });
-      log("provision", `Server provisioned in ${((Date.now() - provisionStart) / 1000).toFixed(1)}s`);
-
-      // Verify docker is actually installed
-      const dockerCheck = await sshExec(serverIp, "docker --version");
-      if (dockerCheck.exitCode !== 0) {
-        const initLog = await sshExec(serverIp, "tail -20 /var/log/cloud-init-deploy.log 2>/dev/null");
-        log("provision", `Docker not found. Cloud-init log:\n${initLog.stdout}`);
-        throw new Error("Server provisioned but Docker was not installed — server setup may have failed. Try deleting the server and deploying again.");
+        const newServer = await provisionServer({
+          serverType,
+          location,
+          name: `ocd-${req.app_name}-${Date.now()}`,
+          emit: onProgress,
+        });
+        serverIp = newServer.ipv4;
+        serverHostKey = newServer.ssh_host_key || "";
+        serverId = newServer.id;
+        state.dbServerId = newServer.id;
+        state.providerServerId = newServer.provider_id;
       }
-      log("provision", `Docker verified: ${dockerCheck.stdout.trim()}`);
-
-      // Capture SSH host key for future verification
-      serverHostKey = await captureHostKey(serverIp);
-      if (serverHostKey) {
-        db.updateServerHostKey(dbServer.id, serverHostKey);
-        log("provision", "SSH host key captured and stored");
-      }
-
-      db.updateServerStatus(dbServer.id, "ready");
-      onProgress("provision", "Server provisioned with Docker + Caddy");
     }
 
     // Step 2: Determine domain + create DNS record.

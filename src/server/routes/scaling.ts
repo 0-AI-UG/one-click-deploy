@@ -3,13 +3,14 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { scaleApp, wakeApp, collectMetrics } from "../../bun/scale.ts";
+import { migrateReplica } from "../../bun/scale/migrate.ts";
 import { notifyJob } from "./apps.ts";
 import { tryAcquireLock } from "../../bun/op-lock.ts";
 
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "scaling.manage");
-    const body = await request.json() as { replicas: number };
+    const body = await request.json() as { replicas: number; server_id?: number };
     const replicas = Number(body.replicas);
     if (!Number.isFinite(replicas) || replicas < 0) {
       return Response.json({ error: "replicas must be an integer >= 0" }, { status: 400, headers: corsHeaders });
@@ -40,7 +41,7 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
         const result = await scaleApp(appId, replicas, (step, detail) => {
           db.appendDeployJobEvent(job.id, step, detail);
           notifyJob(job.id);
-        });
+        }, body.server_id);
         db.finishDeployJob(job.id, result);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -188,4 +189,48 @@ export async function handleWakeStatus(request: Request, appId: number): Promise
     return Response.json({ error: "Forbidden" }, { status: 403, headers: wakeCorsHeaders });
   }
   return Response.json({ status: app.status }, { headers: wakeCorsHeaders });
+}
+
+export async function handleMigrateReplica(request: Request, appId: number, replicaId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "scaling.manage");
+    const body = await request.json() as { target_server_id: number };
+    if (!body.target_server_id) {
+      return Response.json({ error: "target_server_id is required" }, { status: 400, headers: corsHeaders });
+    }
+
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+
+    if (app.volume_id) {
+      return Response.json({ error: "Apps with persistent storage cannot be migrated." }, { status: 400, headers: corsHeaders });
+    }
+
+    const lock = tryAcquireLock(`app:${appId}`, "migrate");
+    if ("busy" in lock) {
+      return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
+    }
+
+    const job = db.createDeployJob(app.name);
+    (async () => {
+      try {
+        const result = await migrateReplica(appId, replicaId, body.target_server_id, (step, detail) => {
+          db.appendDeployJobEvent(job.id, step, detail);
+          notifyJob(job.id);
+        });
+        db.finishDeployJob(job.id, result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        db.appendDeployJobEvent(job.id, "error", msg);
+        db.finishDeployJob(job.id, { ok: false, error: msg });
+      } finally {
+        lock.release();
+        notifyJob(job.id);
+      }
+    })();
+
+    return Response.json({ deployment_id: job.id }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
 }
