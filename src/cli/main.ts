@@ -51,7 +51,8 @@ ${BOLD}Commands:${RESET}
   unpause <app>          Unpause an app
   services               List services
   servers                List servers
-  ssh <app|server>       SSH into an app or server
+  ssh <app> <cmd>        Run a command in an app container
+  ssh <app> -i           Interactive shell session
 
 ${DIM}App/server arguments accept name or numeric ID.${RESET}`);
 }

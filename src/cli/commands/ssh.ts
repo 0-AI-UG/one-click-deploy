@@ -1,6 +1,6 @@
 import { get, resolveApp } from "../api.ts";
 import { requireConfig } from "../config.ts";
-import { BOLD, DIM, RESET } from "../format.ts";
+import { BOLD, DIM, RED, RESET } from "../format.ts";
 
 interface Server {
   id: number;
@@ -32,7 +32,6 @@ async function resolveServer(nameOrId: string): Promise<Server> {
   const srv = servers.find((s) => s.name.toLowerCase() === lower);
   if (srv) return srv;
 
-  // Try matching by IP
   const byIp = servers.find((s) => s.ipv4 === nameOrId);
   if (byIp) return byIp;
 
@@ -41,51 +40,82 @@ async function resolveServer(nameOrId: string): Promise<Server> {
   process.exit(1);
 }
 
-export async function ssh(args: string[]): Promise<void> {
-  if (!args[0]) {
-    console.error(`${BOLD}Usage:${RESET} ocd ssh <app|server> [--server]
-
-  ocd ssh <app>          Connect to an app container
-  ocd ssh <server> --server  Connect to a server`);
-    process.exit(1);
-  }
-
+async function resolveTarget(args: string[]): Promise<{ wsTarget: string; label: string; isServer: boolean }> {
   const isServer = args.includes("--server");
-  const target = args.find((a) => !a.startsWith("--"))!;
-
-  const config = requireConfig();
-  const wsProto = config.panel_url.startsWith("https") ? "wss" : "ws";
-  const host = config.panel_url.replace(/^https?:\/\//, "");
-
-  let wsTarget: string;
+  const target = args.find((a) => !a.startsWith("-"))!;
 
   if (isServer) {
     const srv = await resolveServer(target);
-    wsTarget = `server:${srv.id}`;
-    console.log(`${DIM}Connecting to server ${srv.name} (${srv.ipv4})...${RESET}`);
-  } else {
-    const app = await resolveApp(target);
-    const replicas = await get<Replica[]>(`/api/apps/${app.id}/replicas`);
-    const running = replicas.filter((r) => r.status === "running");
-
-    if (running.length === 0) {
-      console.error(`No running replicas for ${app.name}`);
-      process.exit(1);
-    }
-
-    const replica = running[0];
-    wsTarget = `replica:${replica.id}`;
-    console.log(`${DIM}Connecting to ${app.name} (${replica.container_name})...${RESET}`);
+    return { wsTarget: `server:${srv.id}`, label: `${srv.name} (${srv.ipv4})`, isServer: true };
   }
 
-  const url = `${wsProto}://${host}/api/terminal/ws?target=${wsTarget}&token=${encodeURIComponent(config.token)}`;
+  const app = await resolveApp(target);
+  const replicas = await get<Replica[]>(`/api/apps/${app.id}/replicas`);
+  const running = replicas.filter((r) => r.status === "running");
+
+  if (running.length === 0) {
+    console.error(`No running replicas for ${app.name}`);
+    process.exit(1);
+  }
+
+  return { wsTarget: `replica:${running[0].id}`, label: `${app.name} (${running[0].container_name})`, isServer: false };
+}
+
+function buildWsUrl(wsTarget: string, token: string, panelUrl: string): string {
+  const wsProto = panelUrl.startsWith("https") ? "wss" : "ws";
+  const host = panelUrl.replace(/^https?:\/\//, "");
+  return `${wsProto}://${host}/api/terminal/ws?target=${wsTarget}&token=${encodeURIComponent(token)}`;
+}
+
+// Run a command and print its output, then exit.
+function execCommand(url: string, command: string): void {
+  const ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+
+  let output = Buffer.alloc(0);
+  let opened = false;
+
+  ws.addEventListener("open", () => {
+    opened = true;
+    const cols = process.stdout.columns || 200;
+    const rows = process.stdout.rows || 50;
+    ws.send(JSON.stringify({ type: "resize", cols, rows }));
+    // Send command followed by exit so the shell terminates
+    ws.send(Buffer.from(`${command}\nexit\n`));
+  });
+
+  ws.addEventListener("message", (event) => {
+    const data = event.data;
+    if (data instanceof ArrayBuffer) {
+      const buf = Buffer.from(data);
+      if (buf.length === 1 && buf[0] === 0) return; // heartbeat
+      output = Buffer.concat([output, buf]);
+    } else if (typeof data === "string") {
+      output = Buffer.concat([output, Buffer.from(data)]);
+    }
+  });
+
+  ws.addEventListener("close", () => {
+    // Strip shell prompt noise: output contains the echoed command and
+    // trailing prompt. We print raw and let the caller parse as needed.
+    process.stdout.write(output);
+    process.exit(0);
+  });
+
+  ws.addEventListener("error", () => {
+    if (!opened) console.error(`${RED}Connection failed. Check your login session.${RESET}`);
+    else console.error(`${RED}WebSocket error${RESET}`);
+    process.exit(1);
+  });
+}
+
+// Interactive terminal session.
+function interactive(url: string, label: string): void {
+  console.log(`${DIM}Connecting to ${label}...${RESET}`);
 
   const ws = new WebSocket(url);
-
-  // Track if connection was established for clean exit messaging
   let connected = false;
 
-  // Put stdin in raw mode for interactive terminal
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
   }
@@ -94,7 +124,6 @@ export async function ssh(args: string[]): Promise<void> {
 
   ws.addEventListener("open", () => {
     connected = true;
-    // Send initial terminal size
     const cols = process.stdout.columns || 80;
     const rows = process.stdout.rows || 24;
     ws.send(JSON.stringify({ type: "resize", cols, rows }));
@@ -104,7 +133,6 @@ export async function ssh(args: string[]): Promise<void> {
     const data = event.data;
     if (data instanceof ArrayBuffer) {
       const buf = Buffer.from(data);
-      // Skip heartbeat NUL bytes
       if (buf.length === 1 && buf[0] === 0) return;
       process.stdout.write(buf);
     } else if (typeof data === "string") {
@@ -130,14 +158,12 @@ export async function ssh(args: string[]): Promise<void> {
     process.exit(1);
   });
 
-  // Forward stdin to WebSocket
   process.stdin.on("data", (chunk: Buffer) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(chunk);
     }
   });
 
-  // Handle terminal resize
   process.stdout.on("resize", () => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
@@ -147,4 +173,46 @@ export async function ssh(args: string[]): Promise<void> {
       }));
     }
   });
+}
+
+export async function ssh(args: string[]): Promise<void> {
+  if (!args[0] || args[0] === "--help" || args[0] === "-h") {
+    console.error(`${BOLD}Usage:${RESET} ocd ssh <app|server> [command] [options]
+
+  ocd ssh <app> <command>       Run a command and print output
+  ocd ssh <app> -i              Interactive terminal session
+  ocd ssh <server> --server     Connect to a server (interactive)
+
+${BOLD}Options:${RESET}
+  -i, --interactive             Open an interactive shell
+  --server                      Target a server instead of an app`);
+    process.exit(1);
+  }
+
+  const isInteractive = args.includes("-i") || args.includes("--interactive");
+  const isServer = args.includes("--server");
+
+  // Collect the command: everything that isn't a flag or the target
+  const target = args.find((a) => !a.startsWith("-"))!;
+  const command = args
+    .slice(args.indexOf(target) + 1)
+    .filter((a) => a !== "-i" && a !== "--interactive" && a !== "--server")
+    .join(" ");
+
+  // Server connections are always interactive
+  if (!isInteractive && !isServer && !command) {
+    console.error(`${RED}Provide a command or use -i for interactive mode${RESET}`);
+    console.error(`Run "ocd ssh --help" for usage.`);
+    process.exit(1);
+  }
+
+  const { wsTarget, label } = await resolveTarget(args);
+  const config = requireConfig();
+  const url = buildWsUrl(wsTarget, config.token, config.panel_url);
+
+  if (isInteractive || isServer) {
+    interactive(url, label);
+  } else {
+    execCommand(url, command);
+  }
 }
