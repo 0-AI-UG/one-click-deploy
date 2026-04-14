@@ -34,7 +34,6 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
     return () => { aliveRef.current = false; };
   }, []);
 
-  const hasVolume = Boolean(app.volume_id);
   const readyServers = allServers.filter((s) => s.type); // servers from resources have type
 
   const handleMigrate = async (replicaId: number) => {
@@ -157,7 +156,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
                           <Terminal size={12} /> Shell
                         </Btn>
                       </PermissionGate>
-                      {!hasVolume && allServers.length >= 2 && (
+                      {allServers.length >= 2 && (
                         <PermissionGate permission="scaling.manage">
                           <div className="flex items-center gap-1">
                             <NeoSelect

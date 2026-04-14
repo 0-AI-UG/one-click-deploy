@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 
 export type SelectOption = { value: string; label: string };
 
@@ -10,21 +11,42 @@ export function NeoSelect({ value, options, onChange, placeholder, compact }: {
   compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const selected = options.find(o => o.value === value);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = triggerRef.current?.getBoundingClientRect();
+      if (r) setPos({ top: r.bottom, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
 
   return (
-    <div ref={ref} className="relative">
+    <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen(!open)}
         className={`w-full text-left bg-bg-raised border-2 border-fg font-mono cursor-pointer flex items-center transition-all ${
@@ -41,8 +63,12 @@ export function NeoSelect({ value, options, onChange, placeholder, compact }: {
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
-      {open && (
-        <div className="absolute top-full left-0 right-0 z-50 bg-bg-raised border-2 border-fg border-t-0 shadow-neo max-h-40 overflow-auto">
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          style={{ position: "fixed", top: pos.top, left: pos.left, minWidth: pos.width }}
+          className="z-50 bg-bg-raised border-2 border-fg shadow-neo max-h-40 overflow-auto"
+        >
           {options.map(opt => (
             <button
               key={opt.value}
@@ -55,8 +81,9 @@ export function NeoSelect({ value, options, onChange, placeholder, compact }: {
               {opt.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   );
 }

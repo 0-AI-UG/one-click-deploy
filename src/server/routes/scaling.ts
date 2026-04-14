@@ -202,10 +202,6 @@ export async function handleMigrateReplica(request: Request, appId: number, repl
     const app = db.getApp(appId);
     if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
 
-    if (app.volume_id) {
-      return Response.json({ error: "Apps with persistent storage cannot be migrated." }, { status: 400, headers: corsHeaders });
-    }
-
     const lock = tryAcquireLock(`app:${appId}`, "migrate");
     if ("busy" in lock) {
       return Response.json({ ok: false, error: `App is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });

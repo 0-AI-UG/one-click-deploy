@@ -3,12 +3,19 @@ import { sshExec, removeAuthProxy } from "../remote/index.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
 import { scaleUp } from "./scale-up.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
+import { getComputeProvider } from "../providers/index.ts";
+
+const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
 /**
  * Migrate a single replica from its current server to a target server.
  *
- * Strategy: scale up by 1 onto the target, then drain and remove the old replica.
- * Net replica count stays the same (desired_replicas is restored).
+ * Stateless apps: scale up by 1 onto the target, then drain and remove the old replica
+ * (zero downtime — net replica count stays the same).
+ *
+ * Apps with a persistent volume: stop on source, move the Hetzner volume to the target,
+ * then start a fresh replica on the target. Brief downtime is unavoidable because a
+ * volume can only be attached to one server at a time.
  */
 export async function migrateReplica(
   appId: number,
@@ -33,82 +40,200 @@ export async function migrateReplica(
       throw new Error("Target server not found or not ready");
     }
 
-    if (app.volume_id) {
-      throw new Error("Apps with persistent storage cannot be migrated — volumes are bound to a single server");
-    }
-
-    const currentCount = allReplicas.length;
-
-    // Step 1: Scale up by 1 onto the target server
-    emit("migrate", `Creating new replica on ${targetServer.name}...`);
-    await scaleUp(app, allReplicas, currentCount, currentCount + 1, emit, targetServerId);
-
-    // Step 2: Drain and remove the old replica
-    emit("migrate", `Draining old replica ${replica.container_name}...`);
     const sourceServer = db.getServer(replica.server_id);
     if (!sourceServer) throw new Error("Source server not found");
-    const hostKey = sourceServer.ssh_host_key || undefined;
 
-    // Mark draining and sync Caddy to stop sending new traffic
-    db.updateReplicaStatus(replica.id, "draining");
-    try {
-      await syncAppCaddy(app.id);
-    } catch (err) {
-      log("migrate", `Caddy sync during drain failed (continuing): ${err}`);
+    if (app.volume_id) {
+      return await migrateWithVolume(app, replica, allReplicas, sourceServer, targetServer, emit);
     }
-
-    emit("migrate", `Waiting 10s drain for ${replica.container_name}...`);
-    await Bun.sleep(10_000);
-
-    // Remove old container
-    const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-    if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-      // Primary compose instance — just stop, don't rm
-    } else {
-      await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
-    }
-
-    // Remove auth proxy if present
-    if (app.auth_password) {
-      try {
-        await removeAuthProxy(sourceServer.ipv4, replica.container_name, hostKey);
-      } catch (err) {
-        log("migrate", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
-      }
-    }
-
-    db.deleteReplica(replica.id);
-    emit("migrate", `Old replica ${replica.container_name} removed`);
-
-    // Sync Caddy with final state
-    await syncAppCaddy(app.id);
-
-    // Restore desired_replicas to the original count (net zero change)
-    db.updateAppScaling(appId, {
-      desired_replicas: currentCount,
-      last_scale_at: new Date().toISOString(),
-    });
-
-    db.insertScalingEvent({
-      app_id: appId,
-      event_type: "migrate",
-      from_count: currentCount,
-      to_count: currentCount,
-      reason: `Migrated replica from ${sourceServer.name} to ${targetServer.name}`,
-    });
-
-    // GC source server if empty
-    try {
-      await db.gcServerIfEmpty(sourceServer.id);
-    } catch (err) {
-      log("migrate", `Failed to gc server ${sourceServer.id}: ${err}`);
-    }
-
-    emit("migrate", `Migration complete — replica now on ${targetServer.name}`);
-    return { ok: true };
+    return await migrateStateless(app, replica, allReplicas, sourceServer, targetServer, emit);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log("migrate", `Failed to migrate replica ${replicaId}: ${msg}`);
     return { ok: false, error: msg };
   }
+}
+
+async function migrateStateless(
+  app: App,
+  replica: Replica,
+  allReplicas: Replica[],
+  sourceServer: ReturnType<typeof db.getServer>,
+  targetServer: ReturnType<typeof db.getServer>,
+  emit: ProgressFn,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!sourceServer || !targetServer) throw new Error("Server not found");
+  const currentCount = allReplicas.length;
+  const hostKey = sourceServer.ssh_host_key || undefined;
+
+  emit("migrate", `Creating new replica on ${targetServer.name}...`);
+  await scaleUp(app, allReplicas, currentCount, currentCount + 1, emit, targetServer.id);
+
+  emit("migrate", `Draining old replica ${replica.container_name}...`);
+  db.updateReplicaStatus(replica.id, "draining");
+  try {
+    await syncAppCaddy(app.id);
+  } catch (err) {
+    log("migrate", `Caddy sync during drain failed (continuing): ${err}`);
+  }
+
+  emit("migrate", `Waiting 10s drain for ${replica.container_name}...`);
+  await Bun.sleep(10_000);
+
+  if (app.deploy_mode === "compose" && replica.container_name === app.name) {
+    // Primary compose instance — leave the on-disk project; just stop the container.
+  } else {
+    await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
+  }
+
+  if (app.auth_password) {
+    try {
+      await removeAuthProxy(sourceServer.ipv4, replica.container_name, hostKey);
+    } catch (err) {
+      log("migrate", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
+    }
+  }
+
+  db.deleteReplica(replica.id);
+  emit("migrate", `Old replica ${replica.container_name} removed`);
+
+  await syncAppCaddy(app.id);
+
+  db.updateAppScaling(app.id, {
+    desired_replicas: currentCount,
+    last_scale_at: new Date().toISOString(),
+  });
+
+  db.insertScalingEvent({
+    app_id: app.id,
+    event_type: "migrate",
+    from_count: currentCount,
+    to_count: currentCount,
+    reason: `Migrated replica from ${sourceServer.name} to ${targetServer.name}`,
+  });
+
+  try {
+    await db.gcServerIfEmpty(sourceServer.id);
+  } catch (err) {
+    log("migrate", `Failed to gc server ${sourceServer.id}: ${err}`);
+  }
+
+  emit("migrate", `Migration complete — replica now on ${targetServer.name}`);
+  return { ok: true };
+}
+
+async function migrateWithVolume(
+  app: App,
+  replica: Replica,
+  allReplicas: Replica[],
+  sourceServer: NonNullable<ReturnType<typeof db.getServer>>,
+  targetServer: NonNullable<ReturnType<typeof db.getServer>>,
+  emit: ProgressFn,
+): Promise<{ ok: boolean; error?: string }> {
+  if (sourceServer.location !== targetServer.location) {
+    throw new Error(
+      `Cannot migrate: volume lives in ${sourceServer.location}, target server is in ${targetServer.location}. Hetzner volumes are bound to a single location.`,
+    );
+  }
+
+  const compute = getComputeProvider();
+  if (!compute.volumes) throw new Error("Compute provider does not support volumes");
+
+  const sourceHostKey = sourceServer.ssh_host_key || undefined;
+  const targetHostKey = targetServer.ssh_host_key || undefined;
+  const currentCount = allReplicas.length;
+  const volumeId = app.volume_id;
+
+  // Stop routing to the old replica and bring its container down. Volume migration
+  // requires the source container to release the mount before Hetzner will detach.
+  emit("migrate", `Stopping ${replica.container_name} on ${sourceServer.name}...`);
+  db.updateReplicaStatus(replica.id, "draining");
+  try {
+    await syncAppCaddy(app.id);
+  } catch (err) {
+    log("migrate", `Caddy sync during drain failed (continuing): ${err}`);
+  }
+
+  if (app.deploy_mode === "compose" && replica.container_name === app.name) {
+    await sshExec(sourceServer.ipv4, asUser(`cd /home/deploy/apps/${app.name} && docker compose down 2>/dev/null || true`), sourceHostKey);
+  } else {
+    await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), sourceHostKey);
+  }
+
+  if (app.auth_password) {
+    try {
+      await removeAuthProxy(sourceServer.ipv4, replica.container_name, sourceHostKey);
+    } catch (err) {
+      log("migrate", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
+    }
+  }
+
+  emit("migrate", `Detaching volume from ${sourceServer.name}...`);
+  await compute.volumes.detach(volumeId);
+
+  emit("migrate", `Attaching volume to ${targetServer.name}...`);
+  try {
+    await compute.volumes.attach(volumeId, targetServer.provider_id);
+  } catch (attachErr) {
+    log("migrate", `Attach to target failed, attempting rollback to source: ${attachErr}`);
+    try {
+      await compute.volumes.attach(volumeId, sourceServer.provider_id);
+      log("migrate", `Volume rolled back to source ${sourceServer.name}`);
+    } catch (rollbackErr) {
+      log("migrate", `Rollback attach also failed — volume left detached: ${rollbackErr}`);
+    }
+    throw attachErr;
+  }
+
+  // Ensure the host mount path exists on the target. Convention matches
+  // handleReattachVolume in src/server/routes/volumes.ts.
+  const hostMountPath = `/mnt/ocd-${app.name}-data`;
+  await sshExec(targetServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, targetHostKey);
+
+  // Persist the canonical mount string so deploy/scale paths see the same value
+  // they would after a fresh attach. Container path defaults to /data when missing
+  // (mirrors handleReattachVolume).
+  const containerPath = (app.volume_mount?.split(":")[1]) || "/data";
+  const newVolumeMount = `${hostMountPath}:${containerPath}`;
+  if (newVolumeMount !== app.volume_mount) {
+    db.updateAppVolume(app.id, volumeId, newVolumeMount);
+    app.volume_mount = newVolumeMount;
+  }
+
+  // Start the new replica on the target. We keep the old replica row in the DB
+  // until scaleUp succeeds so it can serve as the "primary" for image transfer.
+  emit("migrate", `Starting ${app.name} on ${targetServer.name}...`);
+  try {
+    await scaleUp(app, allReplicas, currentCount, currentCount + 1, emit, targetServer.id);
+  } catch (scaleErr) {
+    log("migrate", `Failed to start replica on target after volume move: ${scaleErr}`);
+    throw scaleErr;
+  }
+
+  // Now safe to drop the old replica row.
+  db.deleteReplica(replica.id);
+
+  await syncAppCaddy(app.id);
+
+  db.updateAppScaling(app.id, {
+    desired_replicas: currentCount,
+    last_scale_at: new Date().toISOString(),
+  });
+
+  db.insertScalingEvent({
+    app_id: app.id,
+    event_type: "migrate",
+    from_count: currentCount,
+    to_count: currentCount,
+    reason: `Migrated replica with volume from ${sourceServer.name} to ${targetServer.name}`,
+  });
+
+  try {
+    await db.gcServerIfEmpty(sourceServer.id);
+  } catch (err) {
+    log("migrate", `Failed to gc server ${sourceServer.id}: ${err}`);
+  }
+
+  emit("migrate", `Migration complete — replica and volume now on ${targetServer.name}`);
+  return { ok: true };
 }
