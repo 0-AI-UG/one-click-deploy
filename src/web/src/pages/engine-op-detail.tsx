@@ -1,5 +1,6 @@
+import { ArrowLeft } from "lucide-react";
 import { useOperation, cancelOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
-import { Spinner, confirm } from "../components/ui.tsx";
+import { Spinner, confirm, Btn } from "../components/ui.tsx";
 
 function fmtTs(ts: string | null): string {
   if (!ts) return "—";
@@ -38,9 +39,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
   return (
     <div className="max-w-4xl mx-auto px-6 py-8">
       <div className="mb-6">
-        <a href="#/engine" className="font-mono text-[10px] font-bold uppercase tracking-wider text-fg-dim hover:text-fg">
-          ← Engine
-        </a>
+        <Btn variant="ghost" onClick={() => { window.location.hash = "#/engine"; }}><ArrowLeft size={14} /></Btn>
       </div>
 
       <div className="flex items-start justify-between mb-6">

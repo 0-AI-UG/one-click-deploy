@@ -68,9 +68,6 @@ export function EnginePage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="font-mono text-xl font-bold uppercase tracking-wider">Engine</h1>
-          <p className="text-xs text-fg-dim mt-1">
-            Worker queue — running, pending, and recent operations.
-          </p>
         </div>
         <div className="flex items-center gap-3 text-[10px] font-mono font-bold uppercase tracking-wider">
           <span
@@ -174,7 +171,7 @@ function OpRow({ op, showProgress }: { op: OperationView; showProgress?: boolean
       </div>
       {progress && (
         <div className="mt-1 font-mono text-[10px] text-fg-dim">
-          step: {humanizeStep(progress)}
+          {humanizeStep(progress)}
         </div>
       )}
       {op.error?.message && (

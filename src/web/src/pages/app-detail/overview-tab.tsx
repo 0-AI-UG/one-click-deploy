@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { get, post } from "../../api/client.ts";
-import { Card, Btn, StatusBadge, showToast, Spinner, Table, CopyButton } from "../../components/ui.tsx";
+import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { NeoSelect } from "../../components/neo-select.tsx";
 import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft } from "lucide-react";
 import { Sparkline } from "./shared.tsx";
 import { trackOperationInToast, TERMINAL_STATUSES } from "../../hooks/useOperation.ts";
@@ -20,21 +19,20 @@ interface OverviewTabProps {
 export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas }: OverviewTabProps) {
   const internalUrl = `http://${app.name}.ocd.internal:8080`;
   const [migratingId, setMigratingId] = useState<number | null>(null);
-  const [migrateTarget, setMigrateTarget] = useState<Record<number, string>>({});
-  const [migrateProgress, setMigrateProgress] = useState("");
+  const [hoverReplicaId, setHoverReplicaId] = useState<number | null>(null);
+  const hoverTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const openMovePopover = (id: number) => { clearTimeout(hoverTimeout.current); setHoverReplicaId(id); };
+  const scheduleCloseMovePopover = () => { hoverTimeout.current = setTimeout(() => setHoverReplicaId(null), 200); };
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
     return () => { aliveRef.current = false; };
   }, []);
 
-  const readyServers = allServers.filter((s) => s.type); // servers from resources have type
-
-  const handleMigrate = async (replicaId: number) => {
-    const targetId = migrateTarget[replicaId];
+  const handleMigrate = async (replicaId: number, targetId: string) => {
     if (!targetId) { showToast("Select a target server", "error"); return; }
+    setHoverReplicaId(null);
     setMigratingId(replicaId);
-    setMigrateProgress("Starting migration...");
     try {
       const res = await post(`/api/apps/${appId}/replicas/${replicaId}/migrate`, {
         target_server_id: parseInt(targetId, 10),
@@ -42,7 +40,6 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
 
       trackOperationInToast(res.op_id, "Migrating replica");
 
-      // Poll the op until terminal so we can clear inline UI + refresh data.
       let since = 0;
       while (aliveRef.current) {
         let data: { status: string; last_step?: string | null; steps?: Array<{ seq: number; step: string; detail: string }>; error?: { message?: string } | null };
@@ -54,11 +51,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
         }
         if (!aliveRef.current) return;
         if (Array.isArray(data.steps) && data.steps.length > 0) {
-          const last = data.steps[data.steps.length - 1];
-          setMigrateProgress(last.detail || last.step);
-          since = last.seq;
-        } else if (data.last_step) {
-          setMigrateProgress(data.last_step);
+          since = data.steps[data.steps.length - 1].seq;
         }
         if (TERMINAL_STATUSES.has(data.status)) {
           if (data.status !== "done" && data.status !== "cancelled") {
@@ -73,7 +66,6 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
       showToast(err.message, "error");
     } finally {
       setMigratingId(null);
-      setMigrateProgress("");
     }
   };
 
@@ -159,26 +151,41 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
                       </PermissionGate>
                       {allServers.length >= 2 && (
                         <PermissionGate permission="scaling.manage">
-                          <div className="flex items-center gap-1">
-                            <NeoSelect
-                              value={migrateTarget[r.id] || ""}
-                              onChange={(v) => setMigrateTarget((prev) => ({ ...prev, [r.id]: v }))}
-                              options={allServers
-                                .filter((s) => s.id !== r.server_id)
-                                .map((s) => ({ value: String(s.id), label: s.name.replace(/^ocd-/, "") }))}
-                              placeholder="Move to..."
-                              compact
-                            />
+                          <div
+                            className="relative"
+                            onMouseEnter={() => openMovePopover(r.id)}
+                            onMouseLeave={scheduleCloseMovePopover}
+                          >
                             <Btn
                               size="xs"
                               variant="ghost"
                               loading={migratingId === r.id}
-                              disabled={!migrateTarget[r.id] || migratingId !== null}
-                              onClick={() => handleMigrate(r.id)}
+                              disabled={migratingId !== null}
                               title="Migrate replica to another server"
                             >
-                              <ArrowRightLeft size={11} />
+                              <ArrowRightLeft size={11} /> Move
                             </Btn>
+                            {hoverReplicaId === r.id && migratingId === null && (
+                              <div className="absolute right-0 top-full mt-1 z-50 bg-bg-raised border-2 border-fg shadow-neo min-w-40">
+                                {allServers.filter((s) => s.id !== r.server_id).length === 0 ? (
+                                  <div className="px-3 py-2 font-mono text-[10px] text-fg-dim uppercase tracking-wider">
+                                    No other servers
+                                  </div>
+                                ) : (
+                                  allServers
+                                    .filter((s) => s.id !== r.server_id)
+                                    .map((s) => (
+                                      <button
+                                        key={s.id}
+                                        onClick={() => handleMigrate(r.id, String(s.id))}
+                                        className="block w-full text-left px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-fg hover:bg-alt border-b border-fg/20 last:border-b-0"
+                                      >
+                                        {s.name.replace(/^ocd-/, "")}
+                                      </button>
+                                    ))
+                                )}
+                              </div>
+                            )}
                           </div>
                         </PermissionGate>
                       )}
@@ -188,12 +195,6 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
               );
             })}
           </Table>
-        )}
-        {migratingId !== null && migrateProgress && (
-          <div className="mt-2 flex items-center gap-2 px-3 py-1.5 border-2 border-fg bg-alt">
-            <Spinner />
-            <span className="font-mono text-[10px] text-fg uppercase tracking-wider truncate">{migrateProgress}</span>
-          </div>
         )}
       </Card>
 
