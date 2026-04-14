@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { get, post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
@@ -19,10 +20,6 @@ interface OverviewTabProps {
 export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas }: OverviewTabProps) {
   const internalUrl = `http://${app.name}.ocd.internal:8080`;
   const [migratingId, setMigratingId] = useState<number | null>(null);
-  const [hoverReplicaId, setHoverReplicaId] = useState<number | null>(null);
-  const hoverTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const openMovePopover = (id: number) => { clearTimeout(hoverTimeout.current); setHoverReplicaId(id); };
-  const scheduleCloseMovePopover = () => { hoverTimeout.current = setTimeout(() => setHoverReplicaId(null), 200); };
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
@@ -31,7 +28,6 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
 
   const handleMigrate = async (replicaId: number, targetId: string) => {
     if (!targetId) { showToast("Select a target server", "error"); return; }
-    setHoverReplicaId(null);
     setMigratingId(replicaId);
     try {
       const res = await post(`/api/apps/${appId}/replicas/${replicaId}/migrate`, {
@@ -151,42 +147,12 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
                       </PermissionGate>
                       {allServers.length >= 2 && (
                         <PermissionGate permission="scaling.manage">
-                          <div
-                            className="relative"
-                            onMouseEnter={() => openMovePopover(r.id)}
-                            onMouseLeave={scheduleCloseMovePopover}
-                          >
-                            <Btn
-                              size="xs"
-                              variant="ghost"
-                              loading={migratingId === r.id}
-                              disabled={migratingId !== null}
-                              title="Migrate replica to another server"
-                            >
-                              <ArrowRightLeft size={11} /> Move
-                            </Btn>
-                            {hoverReplicaId === r.id && migratingId === null && (
-                              <div className="absolute right-0 top-full mt-1 z-50 bg-bg-raised border-2 border-fg shadow-neo min-w-40">
-                                {allServers.filter((s) => s.id !== r.server_id).length === 0 ? (
-                                  <div className="px-3 py-2 font-mono text-[10px] text-fg-dim uppercase tracking-wider">
-                                    No other servers
-                                  </div>
-                                ) : (
-                                  allServers
-                                    .filter((s) => s.id !== r.server_id)
-                                    .map((s) => (
-                                      <button
-                                        key={s.id}
-                                        onClick={() => handleMigrate(r.id, String(s.id))}
-                                        className="block w-full text-left px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-fg hover:bg-alt border-b border-fg/20 last:border-b-0"
-                                      >
-                                        {s.name.replace(/^ocd-/, "")}
-                                      </button>
-                                    ))
-                                )}
-                              </div>
-                            )}
-                          </div>
+                          <MoveMenu
+                            targets={allServers.filter((s) => s.id !== r.server_id)}
+                            loading={migratingId === r.id}
+                            disabled={migratingId !== null}
+                            onPick={(targetId) => handleMigrate(r.id, targetId)}
+                          />
                         </PermissionGate>
                       )}
                     </div>
@@ -198,6 +164,77 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
         )}
       </Card>
 
+    </div>
+  );
+}
+
+function MoveMenu({ targets, loading, disabled, onPick }: {
+  targets: ServerData[];
+  loading: boolean;
+  disabled: boolean;
+  onPick: (targetId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const closeTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const show = () => { clearTimeout(closeTimeout.current); setOpen(true); };
+  const scheduleClose = () => { closeTimeout.current = setTimeout(() => setOpen(false), 150); };
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = triggerRef.current?.getBoundingClientRect();
+      if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
+
+  return (
+    <div ref={triggerRef} onMouseEnter={show} onMouseLeave={scheduleClose}>
+      <Btn
+        size="xs"
+        variant="ghost"
+        loading={loading}
+        disabled={disabled}
+        title="Migrate replica to another server"
+      >
+        <ArrowRightLeft size={11} /> Move
+      </Btn>
+      {open && pos && !disabled && createPortal(
+        <div
+          ref={menuRef}
+          onMouseEnter={show}
+          onMouseLeave={scheduleClose}
+          style={{ position: "fixed", top: pos.top, right: pos.right }}
+          className="z-50 bg-bg-raised border-2 border-fg shadow-neo min-w-40"
+        >
+          {targets.length === 0 ? (
+            <div className="px-3 py-2 font-mono text-[10px] text-fg-dim uppercase tracking-wider">
+              No other servers
+            </div>
+          ) : (
+            targets.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => { setOpen(false); onPick(String(s.id)); }}
+                className="block w-full text-left px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-fg hover:bg-alt border-b border-fg/20 last:border-b-0"
+              >
+                {s.name.replace(/^ocd-/, "")}
+              </button>
+            ))
+          )}
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
