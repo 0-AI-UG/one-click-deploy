@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, Spinner, showToast, confirm, CopyButton, Table } from "../components/ui.tsx";
-import { trackOperationInToast } from "../hooks/useOperation.ts";
+import { trackOperationInToast, useResourceOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { LogViewer } from "../components/log-viewer.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
@@ -21,6 +21,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const [tab, setTab] = useState<"overview" | "logs">("overview");
   const [logs, setLogs] = useState("");
   const [tail, setTail] = useState(100);
+  const ops = useResourceOperations(`service:${serviceId}`, { rehydrateToasts: true });
 
   const load = async () => {
     try {
@@ -60,6 +61,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
       }
       if (res?.op_id) {
         trackOperationInToast(res.op_id, `${label} ${service?.name ?? "service"}`);
+        ops.track(res.op_id);
       } else {
         showToast(`${label} started`, "success");
       }
@@ -131,17 +133,17 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
         </div>
         <div className="flex items-center gap-1">
           <PermissionGate permission="services.manage">
-            <Btn size="xs" variant="ghost" loading={actionLoading === "restart"} onClick={() => action("restart", "Restart")}>
+            <Btn size="xs" variant="ghost" loading={actionLoading === "restart" || ops.isBusyWith("restart_service")} disabled={ops.isBusy} onClick={() => action("restart", "Restart")}>
               <RotateCcw size={12} /> Restart
             </Btn>
           </PermissionGate>
           <PermissionGate permission="services.manage">
             {service.status === "paused" ? (
-              <Btn size="xs" variant="ghost" loading={actionLoading === "unpause"} onClick={() => action("unpause", "Unpause")}>
+              <Btn size="xs" variant="ghost" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_service")} disabled={ops.isBusy} onClick={() => action("unpause", "Unpause")}>
                 <Play size={12} /> Unpause
               </Btn>
             ) : (
-              <Btn size="xs" variant="ghost" loading={actionLoading === "pause"} onClick={() => action("pause", "Pause")}>
+              <Btn size="xs" variant="ghost" loading={actionLoading === "pause" || ops.isBusyWith("pause_service")} disabled={ops.isBusy} onClick={() => action("pause", "Pause")}>
                 <Pause size={12} /> Pause
               </Btn>
             )}
@@ -150,7 +152,8 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
             <Btn
               size="xs"
               variant="ghost"
-              loading={actionLoading === "delete"}
+              loading={actionLoading === "delete" || ops.isBusyWith("destroy_service")}
+              disabled={ops.isBusy}
               onClick={async () => {
                 if (await confirm("Destroy Service", `Permanently destroy "${service.name}"? This removes all containers, volumes, and data.`, true)) {
                   action("delete", "Destroy");

@@ -14,7 +14,7 @@ import {
   requestCancel,
 } from "../../bun/db/operations.ts";
 import { getSettings } from "../../bun/db/settings.ts";
-import { stepCount, listOps } from "../../engine/ops/registry.ts";
+import { stepCount, listOps, getOp } from "../../engine/ops/registry.ts";
 
 // Keys whose values may contain secrets (connection strings, passwords,
 // tokens, webhook secrets, env-var values). Redacted in any op input/output
@@ -48,6 +48,7 @@ function toJsonRow(op: ReturnType<typeof getOperation> & {}) {
   return {
     id: op.id,
     kind: op.kind,
+    label: getOp(op.kind)?.label ?? op.kind,
     resource_keys: resourceKeys,
     input,
     status: op.status,

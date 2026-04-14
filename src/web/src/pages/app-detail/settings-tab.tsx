@@ -1,7 +1,7 @@
 import { post, put } from "../../api/client.ts";
 import { Card, Btn, Checkbox, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { trackOperationInToast } from "../../hooks/useOperation.ts";
+import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe } from "lucide-react";
 import type { AppData } from "../../types.ts";
 
@@ -20,6 +20,7 @@ interface SettingsTabProps {
   setVolumeForm: (f: { size: number; mount_path: string }) => void;
   actionLoading: string | null;
   action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
+  ops: ResourceOpsResult;
 }
 
 export function SettingsTab({
@@ -29,7 +30,7 @@ export function SettingsTab({
   isPublic, setIsPublic,
   portEdit, setPortEdit,
   volumeForm, setVolumeForm,
-  actionLoading, action,
+  actionLoading, action, ops,
 }: SettingsTabProps) {
   return (
     <div className="space-y-4">
@@ -107,15 +108,18 @@ export function SettingsTab({
           <Btn
             size="sm"
             variant="primary"
-            loading={actionLoading === "save-settings"}
-            disabled={!portEdit}
+            loading={actionLoading === "save-settings" || ops.isBusyWith("redeploy")}
+            disabled={!portEdit || ops.isBusy}
             onClick={() => action("save-settings", async () => {
               const res = (await post(`/api/apps/${appId}/redeploy`, {
                 auth_password: authPassword || null,
                 container_port: portEdit,
                 public: isPublic,
               })) as { op_id?: number };
-              if (res?.op_id) trackOperationInToast(res.op_id, "Saving & redeploying");
+              if (res?.op_id) {
+                trackOperationInToast(res.op_id, "Saving & redeploying");
+                ops.track(res.op_id);
+              }
             })}
           >Save & Redeploy</Btn>
         </div>

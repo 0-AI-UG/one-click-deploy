@@ -5,7 +5,7 @@ import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../comp
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft } from "lucide-react";
 import { Sparkline } from "./shared.tsx";
-import { trackOperationInToast, TERMINAL_STATUSES } from "../../hooks/useOperation.ts";
+import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, MetricSample, ServerData } from "../../types.ts";
 
 interface OverviewTabProps {
@@ -15,16 +15,12 @@ interface OverviewTabProps {
   metricsHistory: MetricSample[];
   allServers: ServerData[];
   setReplicas: (r: ReplicaData[]) => void;
+  ops: ResourceOpsResult;
 }
 
-export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas }: OverviewTabProps) {
+export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas, ops }: OverviewTabProps) {
   const internalUrl = `http://${app.name}.ocd.internal:8080`;
   const [migratingId, setMigratingId] = useState<number | null>(null);
-  const aliveRef = useRef(true);
-  useEffect(() => {
-    aliveRef.current = true;
-    return () => { aliveRef.current = false; };
-  }, []);
 
   const handleMigrate = async (replicaId: number, targetId: string) => {
     if (!targetId) { showToast("Select a target server", "error"); return; }
@@ -34,27 +30,10 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
         target_server_id: parseInt(targetId, 10),
       }) as { op_id: number };
 
-      trackOperationInToast(res.op_id, "Migrating replica");
-
-      let since = 0;
-      while (aliveRef.current) {
-        let data: { status: string; last_step?: string | null; steps?: Array<{ seq: number; step: string; detail: string }>; error?: { message?: string } | null };
-        try {
-          data = await get(`/api/operations/${res.op_id}/events?since=${since}&wait=15000`);
-        } catch {
-          await new Promise((r) => setTimeout(r, 1500));
-          continue;
-        }
-        if (!aliveRef.current) return;
-        if (Array.isArray(data.steps) && data.steps.length > 0) {
-          since = data.steps[data.steps.length - 1].seq;
-        }
-        if (TERMINAL_STATUSES.has(data.status)) {
-          if (data.status !== "done" && data.status !== "cancelled") {
-            throw new Error(data.error?.message || "Migration failed");
-          }
-          break;
-        }
+      ops.track(res.op_id);
+      const terminal = await trackOperationInToast(res.op_id, "Migrating replica");
+      if (terminal && terminal !== "done" && terminal !== "cancelled") {
+        throw new Error("Migration failed");
       }
       showToast("Replica migrated", "success");
       setReplicas(await get(`/api/apps/${appId}/metrics`));
@@ -149,8 +128,13 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
                         <PermissionGate permission="scaling.manage">
                           <MoveMenu
                             targets={allServers.filter((s) => s.id !== r.server_id)}
-                            loading={migratingId === r.id}
-                            disabled={migratingId !== null}
+                            loading={
+                              migratingId === r.id ||
+                              ops.active.some(
+                                (o) => o.kind === "migrate" && (o.input as { replicaId?: number })?.replicaId === r.id,
+                              )
+                            }
+                            disabled={ops.isBusy}
                             onPick={(targetId) => handleMigrate(r.id, targetId)}
                           />
                         </PermissionGate>

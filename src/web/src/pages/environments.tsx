@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post, put, del } from "../api/client.ts";
 import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx";
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
-import { trackOperationInToast } from "../hooks/useOperation.ts";
+import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Layers, Plus, Trash2, ChevronDown, ChevronRight, Key, X } from "lucide-react";
 import type { EnvironmentData, AppData } from "../types.ts";
@@ -17,6 +17,11 @@ export function EnvironmentsPage() {
   const [loading, setLoading] = useState(false);
   const [attachedApps, setAttachedApps] = useState<Record<number, AttachedApp[]>>({});
   const [allApps, setAllApps] = useState<AppData[]>([]);
+
+  const ops = useActiveOperations(
+    (op) => op.kind === "cascade_redeploy",
+    { rehydrateToasts: true },
+  );
 
   const load = () => {
     get("/api/environments").then(setEnvironments).catch(() => {});
@@ -76,6 +81,7 @@ export function EnvironmentsPage() {
         const redeploying = res?.redeploying ?? 0;
         if (redeploying > 0 && res?.op_id) {
           trackOperationInToast(res.op_id, `Redeploying ${redeploying} app${redeploying !== 1 ? "s" : ""}`);
+          ops.track(res.op_id);
         } else {
           showToast("Environment updated", "success");
         }
@@ -115,25 +121,28 @@ export function EnvironmentsPage() {
     return allApps.filter((a) => !attached.has(a.id));
   };
 
-  const renderEditor = (id: number | "new") => (
-    <div className="px-4 pb-3 pt-1 ml-7 space-y-3">
-      <input
-        type="text"
-        value={editName}
-        onChange={(e) => setEditName(e.target.value)}
-        placeholder="Environment name"
-        className="!text-[10px] font-bold uppercase"
-        autoFocus
-      />
-      <EnvVarEditor entries={editVars} onChange={setEditVars} />
-      <div className="flex gap-2 justify-end">
-        <Btn size="xs" variant="ghost" onClick={() => setExpanded(null)}>Cancel</Btn>
-        <Btn size="xs" variant="primary" loading={loading} disabled={!editName.trim()} onClick={() => save(id)}>
-          {id === "new" ? "Create" : "Save"}
-        </Btn>
+  const renderEditor = (id: number | "new") => {
+    const envBusy = typeof id === "number" && !!ops.byResourceKey(`env:${id}`);
+    return (
+      <div className="px-4 pb-3 pt-1 ml-7 space-y-3">
+        <input
+          type="text"
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          placeholder="Environment name"
+          className="!text-[10px] font-bold uppercase"
+          autoFocus
+        />
+        <EnvVarEditor entries={editVars} onChange={setEditVars} />
+        <div className="flex gap-2 justify-end">
+          <Btn size="xs" variant="ghost" onClick={() => setExpanded(null)}>Cancel</Btn>
+          <Btn size="xs" variant="primary" loading={loading || envBusy} disabled={!editName.trim() || envBusy} onClick={() => save(id)}>
+            {id === "new" ? "Create" : envBusy ? "Redeploying…" : "Save"}
+          </Btn>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4 animate-fade-in">

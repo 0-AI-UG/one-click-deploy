@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { trackOperationInToast } from "../../hooks/useOperation.ts";
+import { trackOperationInToast, useResourceOperations } from "../../hooks/useOperation.ts";
 import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
 import { LogsTab } from "./logs-tab.tsx";
@@ -38,6 +38,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const ops = useResourceOperations(`app:${appId}`, { rehydrateToasts: true });
   const [tail, setTail] = useState(100);
   const [selectedReplicaId, setSelectedReplicaId] = useState<number | null>(null);
   const [webhookForm, setWebhookForm] = useState<{ branch: string; path: string; waitForCi: boolean }>({ branch: "main", path: "", waitForCi: false });
@@ -178,25 +179,28 @@ export function AppDetailPage({ appId }: { appId: number }) {
         </div>
         <div className="flex gap-1">
           <PermissionGate permission="apps.restart">
-            <Btn size="xs" loading={actionLoading === "restart"} onClick={() => action("restart", () => post(`/api/apps/${appId}/restart`))}>
+            <Btn size="xs" loading={actionLoading === "restart" || ops.isBusyWith("restart_app")} disabled={ops.isBusy} onClick={() => action("restart", () => post(`/api/apps/${appId}/restart`))}>
               <RotateCcw size={12} /> Restart
             </Btn>
           </PermissionGate>
           <PermissionGate permission="apps.pause">
             {app.status === "paused" ? (
-              <Btn size="xs" loading={actionLoading === "unpause"} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
+              <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
                 <Play size={12} /> Unpause
               </Btn>
             ) : (
-              <Btn size="xs" loading={actionLoading === "pause"} onClick={() => action("pause", () => post(`/api/apps/${appId}/pause`))}>
+              <Btn size="xs" loading={actionLoading === "pause" || ops.isBusyWith("pause_app")} disabled={ops.isBusy} onClick={() => action("pause", () => post(`/api/apps/${appId}/pause`))}>
                 <Pause size={12} /> Pause
               </Btn>
             )}
           </PermissionGate>
           <PermissionGate permission="apps.redeploy">
-            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy"} onClick={() => action("redeploy", async () => {
+            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", async () => {
               const res = (await post(`/api/apps/${appId}/redeploy`)) as { op_id?: number };
-              if (res?.op_id) trackOperationInToast(res.op_id, "Redeploying app");
+              if (res?.op_id) {
+                trackOperationInToast(res.op_id, "Redeploying app");
+                ops.track(res.op_id);
+              }
             })}>
               <RefreshCw size={12} /> Redeploy
             </Btn>
@@ -204,12 +208,16 @@ export function AppDetailPage({ appId }: { appId: number }) {
           <PermissionGate permission="apps.destroy">
             <Btn
               size="xs" variant="danger"
-              loading={actionLoading === "destroy"}
+              loading={actionLoading === "destroy" || ops.isBusyWith("destroy_app")}
+              disabled={ops.isBusy}
               onClick={async () => {
                 if (await confirm("Destroy App", `Permanently destroy "${app.name}"?`, true)) {
                   await action("destroy", async () => {
                     const res = (await del(`/api/apps/${appId}`)) as { op_id?: number };
-                    if (res?.op_id) trackOperationInToast(res.op_id, "Destroying app");
+                    if (res?.op_id) {
+                      trackOperationInToast(res.op_id, "Destroying app");
+                      ops.track(res.op_id);
+                    }
                   });
                   window.location.hash = "#/";
                 }
@@ -227,7 +235,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           </span>
           <div className="ml-auto">
             <PermissionGate permission="apps.pause">
-              <Btn size="xs" loading={actionLoading === "unpause"} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
+              <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
                 <Play size={12} /> Unpause
               </Btn>
             </PermissionGate>
@@ -257,6 +265,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           metricsHistory={metricsHistory}
           allServers={allServers}
           setReplicas={setReplicas}
+          ops={ops}
         />
       )}
 
@@ -277,6 +286,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           appId={appId}
           deployments={deployments}
           action={action}
+          ops={ops}
         />
       )}
 
@@ -292,6 +302,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           action={action}
           loadReplicas={loadReplicas}
           load={load}
+          ops={ops}
         />
       )}
 
@@ -322,6 +333,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           setVolumeForm={setVolumeForm}
           actionLoading={actionLoading}
           action={action}
+          ops={ops}
         />
       )}
     </div>

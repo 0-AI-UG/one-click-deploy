@@ -1,51 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { get, post, put } from "../../api/client.ts";
 import { Card, Btn, Checkbox, Spinner, Table, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { Zap, Gauge, History } from "lucide-react";
 import { InfoTip } from "./shared.tsx";
-import { trackOperationInToast, TERMINAL_STATUSES } from "../../hooks/useOperation.ts";
+import { trackOperationInToast, humanizeStep, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, ScalingEvent, ResourceServer } from "../../types.ts";
-
-// Wait for a scaling op to reach a terminal state, emitting progress strings
-// through onProgress. Used so the scale-up/-down buttons can show inline
-// progress while the op is running.
-async function pollScaleOp(
-  opId: number,
-  onProgress: (msg: string) => void,
-  alive: { current: boolean },
-): Promise<void> {
-  let since = 0;
-  while (alive.current) {
-    let data: {
-      status: string;
-      last_step?: string | null;
-      steps?: Array<{ seq: number; step: string; detail: string; status: string; phase: string }>;
-      error?: { message?: string } | null;
-    };
-    try {
-      data = await get(`/api/operations/${opId}/events?since=${since}&wait=15000`);
-    } catch {
-      await new Promise((r) => setTimeout(r, 1500));
-      continue;
-    }
-    if (!alive.current) return;
-    if (Array.isArray(data.steps) && data.steps.length > 0) {
-      const last = data.steps[data.steps.length - 1];
-      since = last.seq;
-      onProgress(last.detail || last.step);
-    } else if (data.last_step) {
-      onProgress(data.last_step);
-    }
-    if (TERMINAL_STATUSES.has(data.status)) {
-      if (data.status !== "done" && data.status !== "cancelled") {
-        throw new Error(data.error?.message || "Scaling failed");
-      }
-      return;
-    }
-  }
-}
 
 interface ScalingPolicy {
   autoscale_enabled: boolean;
@@ -68,12 +29,12 @@ interface ScalingTabProps {
   action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
   loadReplicas: () => Promise<void>;
   load: () => Promise<void>;
+  ops: ResourceOpsResult;
 }
 
-export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPolicy, actionLoading, action, loadReplicas, load }: ScalingTabProps) {
+export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPolicy, actionLoading, action, loadReplicas, load, ops }: ScalingTabProps) {
   const hasVolume = Boolean(app.volume_id);
   const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica — a cloud volume can only be attached to a single server at a time.";
-  const [progressMessage, setProgressMessage] = useState<string>("");
   const [selectedServer, setSelectedServer] = useState<string>("");
   const [servers, setServers] = useState<ResourceServer[]>([]);
 
@@ -86,22 +47,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
       .catch(() => {});
   }, []);
 
-  // Tracks whether the component is still mounted, so the long-poll loop can
-  // bail out if the user switches tabs mid-scale (the server-side scale keeps
-  // running regardless — they just stop watching it).
-  const aliveRef = useRef(true);
-  useEffect(() => {
-    aliveRef.current = true;
-    return () => { aliveRef.current = false; };
-  }, []);
-  // Clear the progress text once the action wrapper releases its lock, so
-  // stale "Re-binding container..." doesn't linger after success/failure.
-  useEffect(() => {
-    if (actionLoading === null) setProgressMessage("");
-  }, [actionLoading]);
-
   const runScale = async (target: number): Promise<void> => {
-    setProgressMessage("Starting...");
     const body: { replicas: number; server_id?: number } = { replicas: target };
     if (selectedServer) body.server_id = parseInt(selectedServer, 10);
     const res = (await post(`/api/apps/${appId}/scale`, body)) as { op_id: number | null; noop?: boolean };
@@ -110,14 +56,22 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
       await load();
       return;
     }
-    trackOperationInToast(res.op_id, target === 0 ? "Sleeping app" : target > replicas.length ? "Scaling up" : "Scaling down");
-    await pollScaleOp(res.op_id, setProgressMessage, aliveRef);
+    ops.track(res.op_id);
+    const terminal = await trackOperationInToast(
+      res.op_id,
+      target === 0 ? "Sleeping app" : target > replicas.length ? "Scaling up" : "Scaling down",
+    );
+    if (terminal && terminal !== "done" && terminal !== "cancelled") {
+      throw new Error(ops.latest?.error?.message || "Scaling failed");
+    }
     await loadReplicas();
     await load();
   };
 
-  const showProgress =
-    (actionLoading === "scale-up" || actionLoading === "scale-down" || actionLoading === "wake") && !!progressMessage;
+  const SCALING_KINDS = ["scale_up", "scale_down", "wake", "sleep"];
+  const scalingOp = ops.active.find((o) => SCALING_KINDS.includes(o.kind)) || null;
+  const progressMessage = scalingOp ? humanizeStep(scalingOp.last_step) || "Starting..." : "";
+  const showProgress = !!progressMessage;
   return (
     <div className="space-y-4">
       {(!app.domain || app.domain.endsWith(".nip.io")) && (

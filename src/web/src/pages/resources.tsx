@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { get, del, post } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
-import { trackOperationInToast } from "../hooks/useOperation.ts";
+import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Sparkline } from "./app-detail/shared.tsx";
@@ -27,6 +27,11 @@ export function ResourcesPage() {
   const hoverTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [showCreate, setShowCreate] = useState(false);
 
+  const ops = useActiveOperations(
+    (op) => op.kind === "provision_server" || op.kind === "destroy_server",
+    { rehydrateToasts: true },
+  );
+
   const openPopover = () => { clearTimeout(hoverTimeout.current); setShowCreate(true); };
   const scheduleClose = () => { hoverTimeout.current = setTimeout(() => setShowCreate(false), 200); };
 
@@ -48,6 +53,7 @@ export function ResourcesPage() {
         name: createName || undefined,
       }) as { op_id: number };
       trackOperationInToast(res.op_id, "Provisioning server");
+      ops.track(res.op_id);
       setShowCreate(false);
       setCreateType("");
       setCreateLocation("");
@@ -87,6 +93,7 @@ export function ResourcesPage() {
       if (res.ok) {
         if (type === "server" && res.op_id) {
           trackOperationInToast(res.op_id, `Destroying ${name}`);
+          ops.track(res.op_id);
         } else {
           showToast(`${name} deleted`, "success");
         }
@@ -181,8 +188,8 @@ export function ResourcesPage() {
                   placeholder="Name (optional)"
                   className="font-mono text-[10px] w-full"
                 />
-                <Btn size="xs" variant="primary" onClick={handleCreateServer} disabled={creating || !createType || !createLocation} className="w-full">
-                  {creating && createProgress ? createProgress : "Create"}
+                <Btn size="xs" variant="primary" onClick={handleCreateServer} disabled={creating || ops.isBusyWith("provision_server") || !createType || !createLocation} className="w-full">
+                  {ops.isBusyWith("provision_server") ? "Provisioning…" : (creating && createProgress ? createProgress : "Create")}
                 </Btn>
               </div>
             )}
@@ -217,7 +224,14 @@ export function ResourcesPage() {
                         </Btn>
                       </PermissionGate>
                       <PermissionGate permission="resources.delete">
-                        <Btn size="xs" variant="danger" disabled={s.replica_count > 0} title={s.replica_count > 0 ? "In use by replicas" : undefined} loading={deleting === `server-${s.provider_id}`} onClick={() => handleDelete("server", s.provider_id, s.name)}>
+                        <Btn
+                          size="xs"
+                          variant="danger"
+                          disabled={s.replica_count > 0}
+                          title={s.replica_count > 0 ? "In use by replicas" : undefined}
+                          loading={deleting === `server-${s.provider_id}` || !!ops.byResourceKey(`server:${s.id}`)}
+                          onClick={() => handleDelete("server", s.provider_id, s.name)}
+                        >
                           <Trash2 size={11} />
                         </Btn>
                       </PermissionGate>

@@ -1,7 +1,7 @@
 import { post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, Table, CopyButton, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { trackOperationInToast } from "../../hooks/useOperation.ts";
+import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { Clock } from "lucide-react";
 import type { DeploymentRecord } from "../../types.ts";
 
@@ -9,9 +9,10 @@ interface DeploymentsTabProps {
   appId: number;
   deployments: DeploymentRecord[];
   action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
+  ops: ResourceOpsResult;
 }
 
-export function DeploymentsTab({ appId, deployments, action }: DeploymentsTabProps) {
+export function DeploymentsTab({ appId, deployments, action, ops }: DeploymentsTabProps) {
   return (
     <Card className="p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -41,11 +42,16 @@ export function DeploymentsTab({ appId, deployments, action }: DeploymentsTabPro
                   <PermissionGate permission="apps.rollback">
                     <Btn
                       size="xs" variant="ghost"
+                      disabled={ops.isBusy}
+                      loading={ops.isBusyWith("rollback")}
                       onClick={async () => {
                         if (await confirm("Rollback", `Rollback to deployment #${d.id}?`)) {
                           action("rollback", async () => {
                             const res = (await post(`/api/apps/${appId}/rollback`, { deployment_id: d.id })) as { op_id?: number };
-                            if (res?.op_id) trackOperationInToast(res.op_id, "Rolling back app");
+                            if (res?.op_id) {
+                              trackOperationInToast(res.op_id, "Rolling back app");
+                              ops.track(res.op_id);
+                            }
                           });
                         }
                       }}
