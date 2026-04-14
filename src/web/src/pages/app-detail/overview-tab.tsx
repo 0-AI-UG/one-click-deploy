@@ -5,6 +5,7 @@ import { PermissionGate } from "../../components/permission-gate.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft } from "lucide-react";
 import { Sparkline } from "./shared.tsx";
+import { trackOperationInToast, TERMINAL_STATUSES } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, MetricSample, ServerData } from "../../types.ts";
 
 interface OverviewTabProps {
@@ -15,13 +16,6 @@ interface OverviewTabProps {
   allServers: ServerData[];
   setReplicas: (r: ReplicaData[]) => void;
 }
-
-type MigratePoll = {
-  status: "running" | "done" | "error";
-  events: Array<{ seq: number; ts: string; step: string; detail: string }>;
-  last_seq: number;
-  result: { ok: boolean; error?: string } | null;
-};
 
 export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas }: OverviewTabProps) {
   const internalUrl = `http://${app.name}.ocd.internal:8080`;
@@ -44,25 +38,32 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
     try {
       const res = await post(`/api/apps/${appId}/replicas/${replicaId}/migrate`, {
         target_server_id: parseInt(targetId, 10),
-      }) as { deployment_id: number };
+      }) as { op_id: number };
 
-      // Poll progress
+      trackOperationInToast(res.op_id, "Migrating replica");
+
+      // Poll the op until terminal so we can clear inline UI + refresh data.
       let since = 0;
       while (aliveRef.current) {
-        let resp: MigratePoll;
+        let data: { status: string; last_step?: string | null; steps?: Array<{ seq: number; step: string; detail: string }>; error?: { message?: string } | null };
         try {
-          resp = await get(`/api/deploy-jobs/${res.deployment_id}?since=${since}`) as MigratePoll;
+          data = await get(`/api/operations/${res.op_id}/events?since=${since}&wait=15000`);
         } catch {
           await new Promise((r) => setTimeout(r, 1500));
           continue;
         }
         if (!aliveRef.current) return;
-        if (resp.events.length > 0) {
-          setMigrateProgress(resp.events[resp.events.length - 1].detail || resp.events[resp.events.length - 1].step);
-          since = resp.last_seq;
+        if (Array.isArray(data.steps) && data.steps.length > 0) {
+          const last = data.steps[data.steps.length - 1];
+          setMigrateProgress(last.detail || last.step);
+          since = last.seq;
+        } else if (data.last_step) {
+          setMigrateProgress(data.last_step);
         }
-        if (resp.status !== "running") {
-          if (resp.result && !resp.result.ok) throw new Error(resp.result.error || "Migration failed");
+        if (TERMINAL_STATUSES.has(data.status)) {
+          if (data.status !== "done" && data.status !== "cancelled") {
+            throw new Error(data.error?.message || "Migration failed");
+          }
           break;
         }
       }

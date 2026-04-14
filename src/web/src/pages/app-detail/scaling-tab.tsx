@@ -5,44 +5,42 @@ import { PermissionGate } from "../../components/permission-gate.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { Zap, Gauge, History } from "lucide-react";
 import { InfoTip } from "./shared.tsx";
+import { trackOperationInToast, TERMINAL_STATUSES } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, ScalingEvent, ResourceServer } from "../../types.ts";
 
-type ScaleJobPoll = {
-  status: "running" | "done" | "error";
-  events: Array<{ seq: number; ts: string; step: string; detail: string }>;
-  last_seq: number;
-  result: { ok: boolean; error?: string } | null;
-};
-
-// Long-polls /api/deploy-jobs/:id (the existing job-poll endpoint) until the
-// scale job finishes. Pumps each new event's detail into onProgress so the
-// UI can show what's happening live. Throws on job error so the calling
-// `action` wrapper surfaces it as a toast.
-async function pollScaleJob(
-  jobId: number,
+// Wait for a scaling op to reach a terminal state, emitting progress strings
+// through onProgress. Used so the scale-up/-down buttons can show inline
+// progress while the op is running.
+async function pollScaleOp(
+  opId: number,
   onProgress: (msg: string) => void,
   alive: { current: boolean },
 ): Promise<void> {
   let since = 0;
   while (alive.current) {
-    let resp: ScaleJobPoll;
+    let data: {
+      status: string;
+      last_step?: string | null;
+      steps?: Array<{ seq: number; step: string; detail: string; status: string; phase: string }>;
+      error?: { message?: string } | null;
+    };
     try {
-      resp = (await get(`/api/deploy-jobs/${jobId}?since=${since}`)) as ScaleJobPoll;
+      data = await get(`/api/operations/${opId}/events?since=${since}&wait=15000`);
     } catch {
-      // Transient network blip — back off briefly and retry. The server
-      // long-poll already blocks up to 25s per request so this loop is cheap.
       await new Promise((r) => setTimeout(r, 1500));
       continue;
     }
     if (!alive.current) return;
-    if (resp.events.length > 0) {
-      const latest = resp.events[resp.events.length - 1];
-      onProgress(latest.detail || latest.step);
-      since = resp.last_seq;
+    if (Array.isArray(data.steps) && data.steps.length > 0) {
+      const last = data.steps[data.steps.length - 1];
+      since = last.seq;
+      onProgress(last.detail || last.step);
+    } else if (data.last_step) {
+      onProgress(data.last_step);
     }
-    if (resp.status !== "running") {
-      if (resp.result && !resp.result.ok) {
-        throw new Error(resp.result.error || "Scaling failed");
+    if (TERMINAL_STATUSES.has(data.status)) {
+      if (data.status !== "done" && data.status !== "cancelled") {
+        throw new Error(data.error?.message || "Scaling failed");
       }
       return;
     }
@@ -106,8 +104,14 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
     setProgressMessage("Starting...");
     const body: { replicas: number; server_id?: number } = { replicas: target };
     if (selectedServer) body.server_id = parseInt(selectedServer, 10);
-    const res = (await post(`/api/apps/${appId}/scale`, body)) as { deployment_id: number };
-    await pollScaleJob(res.deployment_id, setProgressMessage, aliveRef);
+    const res = (await post(`/api/apps/${appId}/scale`, body)) as { op_id: number | null; noop?: boolean };
+    if (!res.op_id) {
+      await loadReplicas();
+      await load();
+      return;
+    }
+    trackOperationInToast(res.op_id, target === 0 ? "Sleeping app" : target > replicas.length ? "Scaling up" : "Scaling down");
+    await pollScaleOp(res.op_id, setProgressMessage, aliveRef);
     await loadReplicas();
     await load();
   };

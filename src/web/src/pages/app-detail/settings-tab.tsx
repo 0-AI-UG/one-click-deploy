@@ -1,6 +1,7 @@
 import { post, put } from "../../api/client.ts";
 import { Card, Btn, Checkbox, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
+import { trackOperationInToast } from "../../hooks/useOperation.ts";
 import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe } from "lucide-react";
 import type { AppData } from "../../types.ts";
 
@@ -109,11 +110,12 @@ export function SettingsTab({
             loading={actionLoading === "save-settings"}
             disabled={!portEdit}
             onClick={() => action("save-settings", async () => {
-              await post(`/api/apps/${appId}/redeploy`, {
+              const res = (await post(`/api/apps/${appId}/redeploy`, {
                 auth_password: authPassword || null,
                 container_port: portEdit,
                 public: isPublic,
-              });
+              })) as { op_id?: number };
+              if (res?.op_id) trackOperationInToast(res.op_id, "Saving & redeploying");
             })}
           >Save & Redeploy</Btn>
         </div>

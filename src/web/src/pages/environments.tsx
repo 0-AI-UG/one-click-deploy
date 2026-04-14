@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post, put, del } from "../api/client.ts";
 import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx";
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
+import { trackOperationInToast } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Layers, Plus, Trash2, ChevronDown, ChevronRight, Key, X } from "lucide-react";
 import type { EnvironmentData, AppData } from "../types.ts";
@@ -73,12 +74,11 @@ export function EnvironmentsPage() {
         }
         const res = await put(`/api/environments/${id}`, { name: editName, env_vars: vars });
         const redeploying = res?.redeploying ?? 0;
-        showToast(
-          redeploying > 0
-            ? `Environment updated — redeploying ${redeploying} app(s)`
-            : "Environment updated",
-          "success",
-        );
+        if (redeploying > 0 && res?.op_id) {
+          trackOperationInToast(res.op_id, `Redeploying ${redeploying} app${redeploying !== 1 ? "s" : ""}`);
+        } else {
+          showToast("Environment updated", "success");
+        }
       }
       setExpanded(null);
       load();

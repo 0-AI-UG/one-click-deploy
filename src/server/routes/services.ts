@@ -4,45 +4,10 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { parseEnvVars, serializeEnvVars, encryptValue } from "../../bun/env-crypto.ts";
 import type { EnvVarEntry } from "../../bun/env-crypto.ts";
-import { deployService, type ServiceDeployRequest } from "../../bun/deploy/deploy-service.ts";
-import {
-  destroyService,
-  restartService,
-  pauseService,
-  unpauseService,
-  getServiceLogs,
-} from "../../bun/deploy/service-lifecycle.ts";
+import type { ServiceDeployRequest } from "../../bun/deploy/deploy-service.ts";
+import { getServiceLogs } from "../../bun/deploy/service-lifecycle.ts";
 import { getCatalogEntries, getCatalogEntry } from "../../bun/services/catalog.ts";
-import { tryAcquireLock } from "../../bun/op-lock.ts";
-
-// Long-poll notifier (same pattern as app deploy jobs)
-const jobWaiters = new Map<number, Set<() => void>>();
-
-function notifyJob(jobId: number) {
-  const set = jobWaiters.get(jobId);
-  if (!set) return;
-  for (const w of set) w();
-}
-
-function waitForJob(jobId: number, timeoutMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      jobWaiters.get(jobId)?.delete(wake);
-      if (jobWaiters.get(jobId)?.size === 0) jobWaiters.delete(jobId);
-      clearTimeout(timer);
-      resolve();
-    };
-    const wake = () => finish();
-    if (!jobWaiters.has(jobId)) jobWaiters.set(jobId, new Set());
-    jobWaiters.get(jobId)!.add(wake);
-    const timer = setTimeout(finish, timeoutMs);
-  });
-}
-
-const LONG_POLL_TIMEOUT_MS = 25_000;
+import { enqueue } from "../../bun/ipc/enqueue.ts";
 
 // --- Catalog ---
 
@@ -114,65 +79,19 @@ export async function handleGetService(request: Request, serviceId: number): Pro
 
 export async function handleDeployService(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "services.deploy");
+    const payload = await requirePermission(request, "services.deploy");
     const req: ServiceDeployRequest = await request.json();
-
-    const job = db.createServiceDeployJob(req.name);
-
-    (async () => {
-      try {
-        const result = await deployService(req, (step, detail) => {
-          db.appendServiceDeployJobEvent(job.id, step, detail);
-          notifyJob(job.id);
-        });
-        db.finishServiceDeployJob(job.id, result);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        db.appendServiceDeployJobEvent(job.id, "error", msg);
-        db.finishServiceDeployJob(job.id, { ok: false, error: msg });
-      } finally {
-        notifyJob(job.id);
-      }
-    })();
-
-    return Response.json({ deployment_id: job.id }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
-export async function handleServiceDeployJobPoll(request: Request, jobId: number): Promise<Response> {
-  try {
-    await requirePermission(request, "services.deploy");
-    const url = new URL(request.url);
-    const since = parseInt(url.searchParams.get("since") || "0", 10) || 0;
-
-    const job = db.getServiceDeployJob(jobId);
-    if (!job) {
-      return Response.json({ error: "Deploy job not found" }, { status: 404, headers: corsHeaders });
+    if (!req?.name || typeof req.name !== "string") {
+      return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });
     }
-
-    let events = db.getServiceDeployJobEvents(jobId, since);
-
-    if (events.length === 0 && job.status === "running") {
-      await Promise.race([
-        waitForJob(jobId, LONG_POLL_TIMEOUT_MS),
-        new Promise<void>((resolve) => request.signal.addEventListener("abort", () => resolve())),
-      ]);
-      events = db.getServiceDeployJobEvents(jobId, since);
-    }
-
-    const fresh = db.getServiceDeployJob(jobId)!;
-    const result = fresh.result_json ? JSON.parse(fresh.result_json) : null;
-    const lastSeq = events.length > 0 ? events[events.length - 1].seq : since;
-
-    return Response.json({
-      status: fresh.status,
-      service_name: fresh.service_name,
-      events,
-      last_seq: lastSeq,
-      result,
-    }, { headers: corsHeaders });
+    const { opId } = enqueue({
+      kind: "deploy_service",
+      resourceKeys: [`service:create:${req.name}`],
+      input: req,
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -182,17 +101,15 @@ export async function handleServiceDeployJobPoll(request: Request, jobId: number
 
 export async function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "services.destroy");
-    const lock = tryAcquireLock(`service:${serviceId}`, "destroy");
-    if ("busy" in lock) {
-      return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
-    }
-    try {
-      const result = await destroyService(serviceId);
-      return Response.json(result, { headers: corsHeaders });
-    } finally {
-      lock.release();
-    }
+    const payload = await requirePermission(request, "services.destroy");
+    const { opId } = enqueue({
+      kind: "destroy_service",
+      resourceKeys: [`service:${serviceId}`],
+      input: { serviceId },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -200,17 +117,15 @@ export async function handleDestroyService(request: Request, serviceId: number):
 
 export async function handleRestartService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "services.manage");
-    const lock = tryAcquireLock(`service:${serviceId}`, "restart");
-    if ("busy" in lock) {
-      return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
-    }
-    try {
-      const result = await restartService(serviceId);
-      return Response.json(result, { headers: corsHeaders });
-    } finally {
-      lock.release();
-    }
+    const payload = await requirePermission(request, "services.manage");
+    const { opId } = enqueue({
+      kind: "restart_service",
+      resourceKeys: [`service:${serviceId}`],
+      input: { serviceId },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -218,17 +133,15 @@ export async function handleRestartService(request: Request, serviceId: number):
 
 export async function handlePauseService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "services.manage");
-    const lock = tryAcquireLock(`service:${serviceId}`, "pause");
-    if ("busy" in lock) {
-      return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
-    }
-    try {
-      const result = await pauseService(serviceId);
-      return Response.json(result, { headers: corsHeaders });
-    } finally {
-      lock.release();
-    }
+    const payload = await requirePermission(request, "services.manage");
+    const { opId } = enqueue({
+      kind: "pause_service",
+      resourceKeys: [`service:${serviceId}`],
+      input: { serviceId },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -236,17 +149,15 @@ export async function handlePauseService(request: Request, serviceId: number): P
 
 export async function handleUnpauseService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "services.manage");
-    const lock = tryAcquireLock(`service:${serviceId}`, "unpause");
-    if ("busy" in lock) {
-      return Response.json({ ok: false, error: `Service is busy: ${lock.holder} in progress` }, { status: 409, headers: corsHeaders });
-    }
-    try {
-      const result = await unpauseService(serviceId);
-      return Response.json(result, { headers: corsHeaders });
-    } finally {
-      lock.release();
-    }
+    const payload = await requirePermission(request, "services.manage");
+    const { opId } = enqueue({
+      kind: "unpause_service",
+      resourceKeys: [`service:${serviceId}`],
+      input: { serviceId },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

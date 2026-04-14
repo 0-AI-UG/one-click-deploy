@@ -116,7 +116,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
         environment_id: environmentId || undefined,
         env_prefix: environmentId ? envPrefix : undefined,
       });
-      window.location.hash = `#/deploy/service-progress/${res.deployment_id}`;
+      window.location.hash = `#/deploy/service-progress/${res.op_id}`;
     } catch (err: any) {
       showToast(err.message, "error");
       setDeploying(false);

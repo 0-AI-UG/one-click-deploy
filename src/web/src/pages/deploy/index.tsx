@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
 import { Rocket, RotateCcw, X, Save, Loader2, Database } from "lucide-react";
-import { startDeploy } from "../../stores/deploy-progress.ts";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
 import { ReceiptSection } from "./receipt-section.tsx";
@@ -410,8 +409,15 @@ export function DeployPage() {
       server_id: form.server_id ? parseInt(form.server_id, 10) : undefined,
     };
 
-    void startDeploy(body);
-    window.location.hash = "#/deploy/progress";
+    (async () => {
+      try {
+        const res = (await post("/api/apps/deploy", body)) as { op_id: number };
+        if (!res.op_id) throw new Error("No op_id returned");
+        window.location.hash = `#/deploy/progress/${res.op_id}`;
+      } catch (err: any) {
+        showToast(err?.message || "Failed to enqueue deploy", "error");
+      }
+    })();
   };
 
   const detected = introspect?.ok === true ? introspect : null;

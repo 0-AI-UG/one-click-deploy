@@ -2,7 +2,13 @@ import React, { useState, useEffect, useCallback, type ReactNode } from "react";
 import { X, AlertTriangle, Loader2, Copy, Check } from "lucide-react";
 
 // --- Toast system ---
-type Toast = { id: number; message: string; type: "success" | "error" | "info" };
+type Toast = {
+  id: number;
+  message: string;
+  subtitle?: string;
+  type: "success" | "error" | "info";
+  sticky?: boolean;
+};
 let toastId = 0;
 let toastListeners: Array<(toasts: Toast[]) => void> = [];
 let currentToasts: Toast[] = [];
@@ -19,6 +25,34 @@ export function showToast(message: string, type: Toast["type"] = "info") {
     currentToasts = currentToasts.filter((t) => t.id !== id);
     notifyToastListeners();
   }, 4000);
+}
+
+/**
+ * Create a sticky toast whose message / subtitle / type can be updated in place
+ * and which is dismissed explicitly. Used for long-running engine operations.
+ */
+export function showLiveToast(init: { message: string; subtitle?: string; type?: Toast["type"] }): {
+  update: (patch: Partial<Pick<Toast, "message" | "subtitle" | "type">>) => void;
+  dismiss: (afterMs?: number) => void;
+} {
+  const id = ++toastId;
+  currentToasts = [
+    ...currentToasts,
+    { id, message: init.message, subtitle: init.subtitle, type: init.type ?? "info", sticky: true },
+  ];
+  notifyToastListeners();
+  return {
+    update: (patch) => {
+      currentToasts = currentToasts.map((t) => (t.id === id ? { ...t, ...patch } : t));
+      notifyToastListeners();
+    },
+    dismiss: (afterMs = 0) => {
+      setTimeout(() => {
+        currentToasts = currentToasts.filter((t) => t.id !== id);
+        notifyToastListeners();
+      }, afterMs);
+    },
+  };
 }
 
 export function Toasts() {
@@ -40,7 +74,12 @@ export function Toasts() {
             "bg-accent-blue text-white"
           }`}
         >
-          {t.message}
+          <div>{t.message}</div>
+          {t.subtitle && (
+            <div className="mt-1 text-[9px] font-normal normal-case tracking-normal opacity-80">
+              {t.subtitle}
+            </div>
+          )}
         </div>
       ))}
     </div>

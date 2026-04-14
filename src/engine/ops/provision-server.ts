@@ -1,0 +1,215 @@
+import * as db from "../../bun/db.ts";
+import { getComputeProvider } from "../../bun/providers/index.ts";
+import {
+  getOrCreateLocalKeyPair,
+  waitForServer,
+  captureHostKey,
+  sshExec,
+} from "../../bun/remote/index.ts";
+import { ensureNetwork as ensureSharedNetwork } from "../../bun/network.ts";
+import { registerOp } from "./registry.ts";
+import type { OpKindDefinition, Step } from "../types.ts";
+
+type ProvisionInput = {
+  serverType: string;
+  location: string;
+  name?: string;
+};
+
+type EnsureInfraOut = {
+  sshKeyName: string;
+  firewallId: string;
+  networkId: string | null;
+};
+
+type InsertRowOut = { serverId: number; serverName: string };
+
+type CreateCloudOut = {
+  providerId: string;
+  ipv4: string;
+  ipv6: string;
+  privateIpv4: string;
+};
+
+const ensureInfra: Step<ProvisionInput, EnsureInfraOut> = {
+  name: "ensure_infra",
+  label: "Ensure SSH key, firewall, network",
+  async run(ctx) {
+    const compute = getComputeProvider();
+    const { publicKey } = await getOrCreateLocalKeyPair();
+    const [sshKey, firewallId, networkId] = await Promise.all([
+      compute.ensureSshKey("one-click-deploy", publicKey),
+      compute.ensureFirewall(),
+      ensureSharedNetwork(),
+    ]);
+    ctx.log(`SSH key ${sshKey.name}, firewall ${firewallId}, network ${networkId || "(none)"}`);
+    return {
+      sshKeyName: sshKey.name,
+      firewallId,
+      networkId: networkId || null,
+    };
+  },
+  // No compensate — key/firewall/network are shared infra, reused across servers.
+};
+
+const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
+  name: "insert_server_row",
+  label: "Register server",
+  async run(ctx) {
+    const compute = getComputeProvider();
+    const serverName = ctx.input.name || `ocd-server-${Date.now()}`;
+    const existing = db.getServers().find((s) => s.name === serverName && s.status === "creating");
+    if (existing) {
+      // Idempotent replay: reuse the placeholder row.
+      return { serverId: existing.id, serverName };
+    }
+    const row = db.insertServer({
+      name: serverName,
+      provider_id: "",
+      provider: compute.id,
+      ipv4: "",
+      ipv6: "",
+      type: ctx.input.serverType,
+      location: ctx.input.location,
+      status: "creating",
+    });
+    return { serverId: row.id, serverName };
+  },
+  async compensate(ctx, out) {
+    if (!out) return;
+    try {
+      db.deleteServer(out.serverId);
+    } catch (err) {
+      ctx.log(`deleteServer(${out.serverId}) failed: ${err}`);
+    }
+  },
+};
+
+const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
+  name: "create_cloud_server",
+  label: "Create cloud server",
+  async run(ctx, prior) {
+    const infra = prior["ensure_infra"] as EnsureInfraOut;
+    const row = prior["insert_server_row"] as InsertRowOut;
+    const compute = getComputeProvider();
+
+    // Idempotent replay: if the row already has a provider_id, read back.
+    const current = db.getServer(row.serverId);
+    if (current && current.provider_id) {
+      return {
+        providerId: current.provider_id,
+        ipv4: current.ipv4,
+        ipv6: current.ipv6,
+        privateIpv4: current.private_ipv4 || "",
+      };
+    }
+
+    const created = await compute.createServer({
+      name: row.serverName,
+      serverType: ctx.input.serverType,
+      location: ctx.input.location,
+      sshKeyName: infra.sshKeyName,
+      firewallId: infra.firewallId,
+      networkId: infra.networkId || undefined,
+      userData: "",
+    });
+    db.updateServer(row.serverId, {
+      provider_id: created.providerId,
+      ipv4: created.ipv4,
+      ipv6: created.ipv6 || "",
+      private_ipv4: created.privateIpv4 || "",
+      status: "provisioning",
+    });
+    ctx.log(`Server created: ${row.serverName} (${created.ipv4})`);
+    return {
+      providerId: created.providerId,
+      ipv4: created.ipv4,
+      ipv6: created.ipv6 || "",
+      privateIpv4: created.privateIpv4 || "",
+    };
+  },
+  async compensate(ctx, out) {
+    if (!out?.providerId) return;
+    try {
+      const compute = getComputeProvider();
+      await compute.deleteServer(out.providerId);
+    } catch (err) {
+      ctx.log(`compute.deleteServer(${out.providerId}) failed (tolerating): ${err}`);
+    }
+  },
+};
+
+const waitForBoot: Step<ProvisionInput, { ok: true }> = {
+  name: "wait_for_boot",
+  label: "Wait for boot",
+  async run(ctx, prior) {
+    const cloud = prior["create_cloud_server"] as CreateCloudOut;
+    const compute = getComputeProvider();
+    await compute.waitForRunning(cloud.providerId, (msg) => ctx.log(msg));
+    return { ok: true };
+  },
+};
+
+const runCloudInit: Step<ProvisionInput, { ok: true }> = {
+  name: "run_cloud_init",
+  label: "Wait for cloud-init and verify Docker",
+  async run(ctx, prior) {
+    const cloud = prior["create_cloud_server"] as CreateCloudOut;
+    await waitForServer(cloud.ipv4, 30, (msg) => ctx.log(msg));
+    const dockerCheck = await sshExec(cloud.ipv4, "docker --version");
+    if (dockerCheck.exitCode !== 0) {
+      const initLog = await sshExec(cloud.ipv4, "tail -20 /var/log/cloud-init-deploy.log 2>/dev/null");
+      ctx.log(`Docker not found. Cloud-init log:\n${initLog.stdout}`);
+      throw new Error("Server provisioned but Docker was not installed — server setup may have failed.");
+    }
+    ctx.log(`Docker verified: ${dockerCheck.stdout.trim()}`);
+    return { ok: true };
+  },
+};
+
+const captureHostKeyStep: Step<ProvisionInput, { captured: boolean }> = {
+  name: "capture_host_key",
+  label: "Capture SSH host key",
+  async run(ctx, prior) {
+    const cloud = prior["create_cloud_server"] as CreateCloudOut;
+    const row = prior["insert_server_row"] as InsertRowOut;
+    const hostKey = await captureHostKey(cloud.ipv4);
+    if (hostKey) {
+      db.updateServerHostKey(row.serverId, hostKey);
+      ctx.log("SSH host key stored");
+      return { captured: true };
+    }
+    return { captured: false };
+  },
+};
+
+const markReady: Step<ProvisionInput, { serverId: number }> = {
+  name: "mark_ready",
+  label: "Mark ready",
+  async run(ctx, prior) {
+    const row = prior["insert_server_row"] as InsertRowOut;
+    db.updateServerStatus(row.serverId, "ready");
+    ctx.log(`Server ${row.serverName} ready`);
+    return { serverId: row.serverId };
+  },
+};
+
+const provisionServerOp: OpKindDefinition<ProvisionInput> = {
+  kind: "provision_server",
+  label: "Provision server",
+  resourceKeys: () => ["create-server"],
+  steps: [
+    ensureInfra,
+    insertServerRow,
+    createCloudServer,
+    waitForBoot,
+    runCloudInit,
+    captureHostKeyStep,
+    markReady,
+  ],
+};
+
+registerOp(provisionServerOp as OpKindDefinition<any>);
+
+export default provisionServerOp;
+export type { ProvisionInput };

@@ -6,10 +6,22 @@ process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-test-"));
 
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
-// Mock the redeploy worker so we never run any real SSH/build.
-const fakeRunner = mock(async (_appId: number, _sha: string) => {});
-mock.module("../../bun/deploy/redeploy.ts", () => ({
-  enqueueWebhookRedeploy: (appId: number, sha: string) => fakeRunner(appId, sha),
+// Mock the engine enqueue so we never actually schedule any op.
+const fakeRunner = mock((appId: number, sha: string) => {
+  void appId; void sha;
+  return { opId: 1 };
+});
+mock.module("../../bun/ipc/enqueue.ts", () => ({
+  enqueue: (args: { kind: string; input: { appId: number }; triggeredBy: string }) => {
+    if (args.kind === "redeploy") {
+      // triggeredBy is `github:<delivery-id>`; sha isn't here directly but the
+      // test only checks appId + a substring. Extract the short sha from the
+      // idempotency_key if present.
+      const sha = (args as any).idempotencyKey?.split(":")[2]?.slice(0, 7) || "";
+      fakeRunner(args.input.appId, sha);
+    }
+    return { opId: 1 };
+  },
 }));
 
 const fakePanelRunner = mock(async (_opts?: any) => ({ ok: true }));

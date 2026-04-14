@@ -28,7 +28,6 @@ import {
   handleGetDashboard,
   handleGetApps,
   handleDeploy,
-  handleDeployJobPoll,
   handleDestroyApp,
   handleRestartApp,
   handlePauseApp,
@@ -81,11 +80,16 @@ import {
   handleDetachAppFromEnvironment,
 } from "./routes/environments.ts";
 import {
+  handleListOperations,
+  handleGetOperation,
+  handleOperationEvents,
+  handleCancelOperation,
+} from "./routes/operations.ts";
+import {
   handleGetCatalog,
   handleGetServices,
   handleGetService,
   handleDeployService,
-  handleServiceDeployJobPoll,
   handleDestroyService,
   handleRestartService,
   handlePauseService,
@@ -236,10 +240,6 @@ export const apiRoutes = {
   "/api/apps/:appId/deploy-log": { GET: (req: Request) => handleGetDeployLog(req, appIdFrom(req)) },
   "/api/apps/:appId/deployments": { GET: (req: Request) => handleGetDeployments(req, appIdFrom(req)) },
   "/api/apps/:appId/rollback": { POST: (req: Request) => handleRollbackApp(req, appIdFrom(req)) },
-  "/api/deploy-jobs/:jobId": { GET: (req: Request) => {
-    const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
-    return handleDeployJobPoll(req, id);
-  }},
 
   // Scaling
   "/api/apps/:appId/scale": { POST: (req: Request) => handleScaleApp(req, appIdFrom(req)) },
@@ -308,10 +308,6 @@ export const apiRoutes = {
   "/api/services": { GET: (req: Request) => handleGetServices(req) },
   "/api/services/catalog": { GET: (req: Request) => handleGetCatalog(req) },
   "/api/services/deploy": { POST: (req: Request) => handleDeployService(req) },
-  "/api/services/deploy-jobs/:jobId": { GET: (req: Request) => {
-    const id = parseInt(new URL(req.url).pathname.split("/")[4], 10);
-    return handleServiceDeployJobPoll(req, id);
-  }},
   "/api/services/:id": {
     GET: (req: Request) => handleGetService(req, serviceIdFrom(req)),
     DELETE: (req: Request) => handleDestroyService(req, serviceIdFrom(req)),
@@ -347,6 +343,21 @@ export const apiRoutes = {
   "/api/environments/:id/apps/detach": {
     POST: (req: Request) => handleDetachAppFromEnvironment(req, environmentIdFrom(req)),
   },
+
+  // --- Operation Engine ---
+  "/api/operations": { GET: (req: Request) => handleListOperations(req) },
+  "/api/operations/:id": { GET: (req: Request) => {
+    const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
+    return handleGetOperation(req, id);
+  }},
+  "/api/operations/:id/events": { GET: (req: Request) => {
+    const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
+    return handleOperationEvents(req, id);
+  }},
+  "/api/operations/:id/cancel": { POST: (req: Request) => {
+    const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
+    return handleCancelOperation(req, id);
+  }},
 
   // --- Volumes ---
   "/api/volumes/attach": { POST: (req: Request) => handleAttachVolume(req) },

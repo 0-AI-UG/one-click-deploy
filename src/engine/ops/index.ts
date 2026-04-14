@@ -1,0 +1,23 @@
+// Registration point for all engine op kinds.
+// Each op kind imports this file and self-registers via registerOp.
+import "./deploy.ts";
+import "./redeploy.ts";
+import "./rollback.ts";
+import "./destroy-app.ts";
+import "./scale-up.ts";
+import "./scale-down.ts";
+import "./migrate.ts";
+import "./wake.ts";
+import "./sleep.ts";
+import "./deploy-service.ts";
+import "./destroy-service.ts";
+import "./restart-service.ts";
+import "./pause-service.ts";
+import "./unpause-service.ts";
+import "./provision-server.ts";
+import "./destroy-server.ts";
+import "./cascade-redeploy.ts";
+import "./restart-app.ts";
+import "./pause-app.ts";
+import "./unpause-app.ts";
+import "./rename-app.ts";

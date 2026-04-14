@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
+import { trackOperationInToast } from "../../hooks/useOperation.ts";
 import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
 import { LogsTab } from "./logs-tab.tsx";
@@ -193,7 +194,10 @@ export function AppDetailPage({ appId }: { appId: number }) {
             )}
           </PermissionGate>
           <PermissionGate permission="apps.redeploy">
-            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy"} onClick={() => action("redeploy", () => post(`/api/apps/${appId}/redeploy`))}>
+            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy"} onClick={() => action("redeploy", async () => {
+              const res = (await post(`/api/apps/${appId}/redeploy`)) as { op_id?: number };
+              if (res?.op_id) trackOperationInToast(res.op_id, "Redeploying app");
+            })}>
               <RefreshCw size={12} /> Redeploy
             </Btn>
           </PermissionGate>
@@ -203,7 +207,10 @@ export function AppDetailPage({ appId }: { appId: number }) {
               loading={actionLoading === "destroy"}
               onClick={async () => {
                 if (await confirm("Destroy App", `Permanently destroy "${app.name}"?`, true)) {
-                  await action("destroy", () => del(`/api/apps/${appId}`));
+                  await action("destroy", async () => {
+                    const res = (await del(`/api/apps/${appId}`)) as { op_id?: number };
+                    if (res?.op_id) trackOperationInToast(res.op_id, "Destroying app");
+                  });
                   window.location.hash = "#/";
                 }
               }}

@@ -3,9 +3,51 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import * as github from "../../bun/github.ts";
-import { enqueueWebhookRedeploy } from "../../bun/deploy/redeploy.ts";
 import { redeployPanel } from "../../bun/deploy/panel.ts";
+import { enqueue } from "../../bun/ipc/enqueue.ts";
+import { resolveGitHubToken } from "../../bun/github-token.ts";
+import { getCommitCiStatus } from "../../bun/github.ts";
 import { timingSafeEqual } from "node:crypto";
+
+const CI_POLL_INTERVAL = 15_000;
+const CI_TIMEOUT = 30 * 60_000;
+
+async function waitForCi(appId: number, sha: string): Promise<boolean> {
+  const app = db.getApp(appId);
+  if (!app) return false;
+  const token = await resolveGitHubToken(app.deployed_by || undefined);
+  if (!token) return true; // can't check, proceed
+  const deadline = Date.now() + CI_TIMEOUT;
+  while (Date.now() < deadline) {
+    try {
+      const status = await getCommitCiStatus({ gitRepo: app.git_repo, ref: sha, token });
+      if (status === "success") return true;
+      if (status === "failure") {
+        db.insertDeployment({
+          app_id: appId,
+          image_tag: `${app.name}:latest`,
+          git_commit: sha.slice(0, 7),
+          status: "failed",
+          source: "webhook",
+          deploy_log: `CI checks failed for commit ${sha.slice(0, 7)} — deploy skipped`,
+        });
+        return false;
+      }
+    } catch (err) {
+      console.error(`[webhook] CI poll error for app ${appId}:`, err);
+    }
+    await Bun.sleep(CI_POLL_INTERVAL);
+  }
+  db.insertDeployment({
+    app_id: appId,
+    image_tag: `${app.name}:latest`,
+    git_commit: sha.slice(0, 7),
+    status: "failed",
+    source: "webhook",
+    deploy_log: `CI checks timed out after 30 minutes for commit ${sha.slice(0, 7)} — deploy skipped`,
+  });
+  return false;
+}
 
 // Normalize a user-supplied repo path filter: strip leading/trailing slashes
 // and surrounding whitespace. Empty string means "no filter".
@@ -193,13 +235,29 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
     }
 
     const fullSha = payload.after ? String(payload.after) : "";
-    const sha = fullSha ? fullSha.slice(0, 7) : "unknown";
-    enqueueWebhookRedeploy(appId, sha, undefined, {
-      waitForCi: !!app.webhook_wait_for_ci,
-      fullSha,
-    }).catch((err) => {
-      console.error(`[webhook] redeploy failed for app ${appId}:`, err);
-    });
+    const deliveryId = request.headers.get("x-github-delivery") || `${appId}:${fullSha}:${Date.now()}`;
+
+    // CI-wait remains a panel-side prelude so we don't hold an engine slot
+    // for 30 minutes. Once CI passes (or is disabled), enqueue the redeploy
+    // op with a delivery-scoped idempotency key so retries collapse.
+    (async () => {
+      try {
+        if (app.webhook_wait_for_ci && fullSha) {
+          const ok = await waitForCi(appId, fullSha);
+          if (!ok) return;
+        }
+        enqueue({
+          kind: "redeploy",
+          resourceKeys: [`app:${appId}`],
+          input: { appId, userId: app.deployed_by || undefined },
+          trigger: "webhook",
+          triggeredBy: `github:${deliveryId}`,
+          idempotencyKey: `webhook-delivery:${deliveryId}`,
+        });
+      } catch (err) {
+        console.error(`[webhook] enqueue failed for app ${appId}:`, err);
+      }
+    })();
 
     return new Response("Accepted", { status: 202 });
   } catch (error) {

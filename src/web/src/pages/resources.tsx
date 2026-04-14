@@ -1,19 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { get, del, post } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
+import { trackOperationInToast } from "../hooks/useOperation.ts";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Sparkline } from "./app-detail/shared.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 import { HardDrive, Server, Database, Trash2, RefreshCw, Terminal, Plus } from "lucide-react";
 import type { ResourcesData, ServerMetricSample } from "../types.ts";
-
-type CreateJobPoll = {
-  status: "running" | "done" | "error";
-  events: Array<{ seq: number; ts: string; step: string; detail: string }>;
-  last_seq: number;
-  result: { ok: boolean; error?: string } | null;
-};
 
 export function ResourcesPage() {
   const [data, setData] = useState<ResourcesData | null>(null);
@@ -47,39 +41,13 @@ export function ResourcesPage() {
       return;
     }
     setCreating(true);
-    setCreateProgress("Starting...");
     try {
       const res = await post("/api/resources/servers", {
         server_type: createType,
         location: createLocation,
         name: createName || undefined,
-      }) as { deployment_id: number };
-
-      // Poll progress
-      let since = 0;
-      while (aliveRef.current) {
-        let resp: CreateJobPoll;
-        try {
-          resp = await get(`/api/deploy-jobs/${res.deployment_id}?since=${since}`) as CreateJobPoll;
-        } catch {
-          await new Promise((r) => setTimeout(r, 1500));
-          continue;
-        }
-        if (!aliveRef.current) return;
-        if (resp.events.length > 0) {
-          const latest = resp.events[resp.events.length - 1];
-          setCreateProgress(latest.detail || latest.step);
-          since = resp.last_seq;
-        }
-        if (resp.status !== "running") {
-          if (resp.result && !resp.result.ok) {
-            throw new Error(resp.result.error || "Server creation failed");
-          }
-          break;
-        }
-      }
-
-      showToast("Server created", "success");
+      }) as { op_id: number };
+      trackOperationInToast(res.op_id, "Provisioning server");
       setShowCreate(false);
       setCreateType("");
       setCreateLocation("");
@@ -117,7 +85,11 @@ export function ResourcesPage() {
     try {
       const res = await del(`/api/resources/${type}/${id}`);
       if (res.ok) {
-        showToast(`${name} deleted`, "success");
+        if (type === "server" && res.op_id) {
+          trackOperationInToast(res.op_id, `Destroying ${name}`);
+        } else {
+          showToast(`${name} deleted`, "success");
+        }
         load();
       } else {
         showToast(res.error || "Failed to delete", "error");

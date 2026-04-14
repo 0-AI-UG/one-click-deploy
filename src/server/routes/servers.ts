@@ -1,9 +1,9 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import { destroyServer, getServersWithApps } from "../../bun/deploy/index.ts";
+import { getServersWithApps } from "../../bun/deploy/index.ts";
 import * as db from "../../bun/db.ts";
-import { tryAcquireMulti } from "../../bun/op-lock.ts";
+import { enqueue } from "../../bun/ipc/enqueue.ts";
 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
@@ -17,7 +17,7 @@ export async function handleGetServers(request: Request): Promise<Response> {
 
 export async function handleDeleteServer(request: Request, serverId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.delete");
+    const payload = await requirePermission(request, "servers.delete");
     const apps = db.getApps(serverId);
     const services = db.getServicesOnServer(serverId);
     const keys = [
@@ -25,16 +25,14 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
       ...apps.map((a) => `app:${a.id}`),
       ...services.map((s) => `service:${s.id}`),
     ];
-    const lock = tryAcquireMulti(keys, "destroyServer");
-    if ("busy" in lock) {
-      return Response.json({ ok: false, error: `Server has a busy resource: ${lock.holder} on ${lock.resourceKey}` }, { status: 409, headers: corsHeaders });
-    }
-    try {
-      const result = await destroyServer(serverId);
-      return Response.json(result, { headers: corsHeaders });
-    } finally {
-      lock.release();
-    }
+    const { opId } = enqueue({
+      kind: "destroy_server",
+      resourceKeys: keys,
+      input: { serverId },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

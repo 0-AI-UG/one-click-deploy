@@ -2,7 +2,7 @@ import path from "path";
 import { corsHeaders, securityHeaders, htmlCsp } from "./lib/cors.ts";
 import { tryTerminalUpgrade, terminalWsHandlers } from "./routes/terminal.ts";
 import { apiRoutes } from "./routes.ts";
-import { startReconciler } from "../bun/reconciler.ts";
+import { startEngineInProcess } from "../engine/entrypoint.ts";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -114,4 +114,9 @@ export const server = Bun.serve({
 
 console.log(`[server] One-Click Deploy API running on http://localhost:${PORT}`);
 
-startReconciler();
+// Start the operation engine in-process unless disabled (for running a
+// dedicated engine process, set OCD_ENGINE=0 on the server and run
+// `bun run engine` separately).
+if (process.env.OCD_ENGINE !== "0") {
+  startEngineInProcess();
+}

@@ -41,23 +41,6 @@ export type ServiceLinkRow = {
 export type ServiceLinkWithAppRow = ServiceLinkRow & { app_name: string };
 export type ServiceLinkWithServiceRow = ServiceLinkRow & { service_name: string; service_type: string; credentials: string };
 
-export type ServiceDeployJobRow = {
-  id: number;
-  service_name: string;
-  status: string;
-  result_json: string;
-  started_at: string;
-  finished_at: string | null;
-};
-
-export type ServiceDeployJobEventRow = {
-  job_id: number;
-  seq: number;
-  ts: string;
-  step: string;
-  detail: string;
-};
-
 export function insertService(data: {
   name: string;
   service_type: string;
@@ -221,36 +204,3 @@ export function getServicesOnServer(serverId: number): ServiceRow[] {
     .all(serverId) as ServiceRow[];
 }
 
-export function createServiceDeployJob(serviceName: string): { id: number } {
-  return db
-    .query("INSERT INTO service_deploy_jobs (service_name) VALUES (?) RETURNING id")
-    .get(serviceName) as { id: number };
-}
-
-export function appendServiceDeployJobEvent(jobId: number, step: string, detail: string): number {
-  const row = db
-    .query("SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM service_deploy_job_events WHERE job_id = ?")
-    .get(jobId) as { next: number };
-  db.query(
-    "INSERT INTO service_deploy_job_events (job_id, seq, step, detail) VALUES (?, ?, ?, ?)"
-  ).run(jobId, row.next, step, detail);
-  return row.next;
-}
-
-export function finishServiceDeployJob(jobId: number, result: { ok: boolean; error?: string }): void {
-  db.query(
-    "UPDATE service_deploy_jobs SET status = ?, result_json = ?, finished_at = datetime('now') WHERE id = ?"
-  ).run(result.ok ? "done" : "error", JSON.stringify(result), jobId);
-}
-
-export function getServiceDeployJob(id: number): ServiceDeployJobRow | null {
-  return db.query("SELECT * FROM service_deploy_jobs WHERE id = ?").get(id) as ServiceDeployJobRow | null;
-}
-
-export function getServiceDeployJobEvents(jobId: number, sinceSeq: number): Pick<ServiceDeployJobEventRow, "seq" | "ts" | "step" | "detail">[] {
-  return db
-    .query(
-      "SELECT seq, ts, step, detail FROM service_deploy_job_events WHERE job_id = ? AND seq > ? ORDER BY seq ASC"
-    )
-    .all(jobId, sinceSeq) as Pick<ServiceDeployJobEventRow, "seq" | "ts" | "step" | "detail">[];
-}

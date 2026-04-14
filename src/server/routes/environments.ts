@@ -3,8 +3,7 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
 import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../bun/env-crypto.ts";
-import { cascadeRedeployEnvironment, redeployApp } from "../../bun/deploy/index.ts";
-import { acquireLock } from "../../bun/op-lock.ts";
+import { enqueue } from "../../bun/ipc/enqueue.ts";
 
 export async function handleGetEnvironments(request: Request): Promise<Response> {
   try {
@@ -45,7 +44,7 @@ export async function handleCreateEnvironment(request: Request): Promise<Respons
 
 export async function handleUpdateEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "environments.manage");
+    const payload = await requirePermission(request, "environments.manage");
     const existing = db.getEnvironment(id);
     if (!existing) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -58,18 +57,25 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
     const envVarsChanged = newSerialized !== existing.env_vars;
     db.updateEnvironment(id, name || existing.name, newSerialized);
 
-    // Cascade redeploy all attached apps if env vars changed
+    // Cascade redeploy all attached apps if env vars changed — enqueued as a
+    // single fan-out op whose children are individual app redeploys.
     const attachedApps = db.getAppsByEnvironmentId(id);
+    let opId: number | null = null;
     if (envVarsChanged && attachedApps.length > 0) {
-      // Fire in background — don't block the HTTP response
-      cascadeRedeployEnvironment(id).catch((err) => {
-        console.error(`[environments] Cascade redeploy failed for env ${id}:`, err);
+      const r = enqueue({
+        kind: "cascade_redeploy",
+        resourceKeys: [`env:${id}`],
+        input: { environmentId: id },
+        trigger: "ui",
+        triggeredBy: payload.userId,
       });
+      opId = r.opId;
     }
 
     return Response.json({
       ok: true,
       redeploying: envVarsChanged ? attachedApps.length : 0,
+      op_id: opId,
     }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -116,7 +122,7 @@ export async function handleGetEnvironmentApps(request: Request, id: number): Pr
 
 export async function handleAttachAppToEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "environments.manage");
+    const payload = await requirePermission(request, "environments.manage");
     const env = db.getEnvironment(id);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -128,14 +134,20 @@ export async function handleAttachAppToEnvironment(request: Request, id: number)
       return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
     }
     db.updateAppEnvironment(app_id, id);
-    // Redeploy the app in the background with the new environment
+    // Redeploy the app with the new environment. The engine serializes on
+    // `app:${app_id}` so this waits behind any in-flight op for the same app.
+    let opId: number | null = null;
     if (app.status !== "stopped" && app.status !== "destroying") {
-      (async () => {
-        const release = await acquireLock(`app:${app_id}`, "env-attach");
-        try { await redeployApp(app_id, () => {}); } finally { release(); }
-      })().catch((err) => console.error(`[environments] Redeploy after attach failed:`, err));
+      const r = enqueue({
+        kind: "redeploy",
+        resourceKeys: [`app:${app_id}`],
+        input: { appId: app_id, userId: payload.userId },
+        trigger: "ui",
+        triggeredBy: payload.userId,
+      });
+      opId = r.opId;
     }
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

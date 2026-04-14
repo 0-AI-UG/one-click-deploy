@@ -25,6 +25,8 @@ import { ServiceDeployProgressPage } from "./pages/service-deploy-progress.tsx";
 import { ServiceDetailPage } from "./pages/service-detail.tsx";
 import { EnvironmentsPage } from "./pages/environments.tsx";
 import { DeviceAuthPage } from "./pages/device-auth.tsx";
+import { EnginePage } from "./pages/engine.tsx";
+import { EngineOpDetailPage } from "./pages/engine-op-detail.tsx";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -134,8 +136,8 @@ export function App() {
     content = <DeployPage />;
   } else if (hash.startsWith("#/deploy/progress")) {
     const parts = hash.split("/");
-    const jobId = parts[3] ? parseInt(parts[3], 10) : null;
-    content = <DeployProgressPage jobId={jobId && !Number.isNaN(jobId) ? jobId : null} />;
+    const opId = parts[3] ? parseInt(parts[3], 10) : null;
+    content = <DeployProgressPage opId={opId && !Number.isNaN(opId) ? opId : null} />;
   } else if (hash.startsWith("#/apps/")) {
     const appId = parseInt(hash.split("/")[2], 10);
     content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;
@@ -143,13 +145,18 @@ export function App() {
     const parts = hash.replace("#/deploy-service", "").replace(/^\//, "");
     content = <DeployServicePage preselectedType={parts || undefined} />;
   } else if (hash.startsWith("#/deploy/service-progress/")) {
-    const jobId = parseInt(hash.split("/")[3], 10);
-    content = <ServiceDeployProgressPage jobId={jobId && !Number.isNaN(jobId) ? jobId : null} />;
+    const opId = parseInt(hash.split("/")[3], 10);
+    content = <ServiceDeployProgressPage opId={opId && !Number.isNaN(opId) ? opId : null} />;
   } else if (hash.startsWith("#/services/")) {
     const serviceId = parseInt(hash.split("/")[2], 10);
     content = serviceId ? <ServiceDetailPage serviceId={serviceId} /> : <DashboardPage />;
   } else if (hash === "#/cli/auth") {
     content = <DeviceAuthPage />;
+  } else if (hash === "#/engine") {
+    content = <EnginePage />;
+  } else if (hash.startsWith("#/engine/op/")) {
+    const opId = parseInt(hash.split("/")[3], 10);
+    content = opId ? <EngineOpDetailPage opId={opId} /> : <EnginePage />;
   } else if (hash === "#/environments") {
     content = <EnvironmentsPage />;
   } else if (hash === "#/resources") {

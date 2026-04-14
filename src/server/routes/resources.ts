@@ -2,11 +2,8 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../bun/db.ts";
-import { destroyServer } from "../../bun/deploy/index.ts";
 import { getComputeProvider } from "../../bun/providers/index.ts";
-import { provisionServer } from "../../bun/provision-server.ts";
-import { tryAcquireLock } from "../../bun/op-lock.ts";
-import { notifyJob } from "./apps.ts";
+import { enqueue } from "../../bun/ipc/enqueue.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
@@ -145,6 +142,7 @@ export async function handleDeleteResource(request: Request, type: string, id: s
     const compute = getComputeProvider();
 
     if (type === "server") {
+      const payload = await requirePermission(request, "resources.delete");
       const server = db.getServers().find((s) => s.provider_id === id || String(s.id) === id);
       if (server) {
         const replicas = db.getReplicasByServer(server.id);
@@ -152,8 +150,21 @@ export async function handleDeleteResource(request: Request, type: string, id: s
           const users = replicas.map((r) => `${r.container_name} (replica)`);
           return Response.json({ ok: false, error: `Server is in use by: ${users.join(", ")}` }, { headers: corsHeaders });
         }
-        const result = await destroyServer(server.id);
-        return Response.json(result, { headers: corsHeaders });
+        const apps = db.getApps(server.id);
+        const services = db.getServicesOnServer(server.id);
+        const keys = [
+          `server:${server.id}`,
+          ...apps.map((a) => `app:${a.id}`),
+          ...services.map((s) => `service:${s.id}`),
+        ];
+        const { opId } = enqueue({
+          kind: "destroy_server",
+          resourceKeys: keys,
+          input: { serverId: server.id },
+          trigger: "ui",
+          triggeredBy: payload.userId,
+        });
+        return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
       }
       await compute.deleteServer(id);
       return Response.json({ ok: true }, { headers: corsHeaders });
@@ -175,44 +186,26 @@ export async function handleDeleteResource(request: Request, type: string, id: s
 
 export async function handleCreateServer(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "resources.create");
+    const payload = await requirePermission(request, "resources.create");
     const body = await request.json() as { server_type: string; location: string; name?: string };
 
     if (!body.server_type || !body.location) {
       return Response.json({ error: "server_type and location are required" }, { status: 400, headers: corsHeaders });
     }
 
-    const lock = tryAcquireLock("create-server", "create");
-    if ("busy" in lock) {
-      return Response.json({ ok: false, error: "A server is already being created" }, { status: 409, headers: corsHeaders });
-    }
+    const { opId } = enqueue({
+      kind: "provision_server",
+      resourceKeys: ["create-server"],
+      input: {
+        serverType: body.server_type,
+        location: body.location,
+        name: body.name,
+      },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
 
-    const serverName = body.name || `ocd-server-${Date.now()}`;
-    const job = db.createDeployJob(serverName);
-
-    (async () => {
-      try {
-        await provisionServer({
-          serverType: body.server_type,
-          location: body.location,
-          name: serverName,
-          emit: (step, detail) => {
-            db.appendDeployJobEvent(job.id, step, detail);
-            notifyJob(job.id);
-          },
-        });
-        db.finishDeployJob(job.id, { ok: true });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        db.appendDeployJobEvent(job.id, "error", msg);
-        db.finishDeployJob(job.id, { ok: false, error: msg });
-      } finally {
-        lock.release();
-        notifyJob(job.id);
-      }
-    })();
-
-    return Response.json({ deployment_id: job.id }, { headers: corsHeaders });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

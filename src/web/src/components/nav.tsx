@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useAuth, logout } from "../stores/auth.ts";
-import { Server, Rocket, HardDrive, User, Users, LogOut, Terminal, Layers, TerminalSquare, Check } from "lucide-react";
+import { Server, Rocket, HardDrive, User, Users, LogOut, Terminal, Layers, TerminalSquare, Check, Cpu } from "lucide-react";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
   { hash: "#/deploy", label: "Deploy", icon: Rocket, match: /^#\/deploy/ },
   { hash: "#/environments", label: "Env", icon: Layers, match: /^#\/environments/ },
   { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
+  { hash: "#/engine", label: "Engine", icon: Cpu, match: /^#\/engine/ },
   { hash: "#/account", label: "Account", icon: User, match: /^#\/account/ },
 ];
 

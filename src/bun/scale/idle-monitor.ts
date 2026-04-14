@@ -1,8 +1,20 @@
 import * as db from "../db.ts";
 import { sshExec } from "../remote/index.ts";
 import { log } from "./types.ts";
-import { scaleApp } from "./scale-app.ts";
-import { tryAcquireLock } from "../op-lock.ts";
+import { enqueue } from "../ipc/enqueue.ts";
+
+function enqueueAutoscale(appId: number, decision: "up" | "down" | "sleep", targetReplicas: number) {
+  const bucket = Math.floor(Date.now() / 60000);
+  const kind = decision === "up" ? "scale_up" : decision === "sleep" ? "sleep" : "scale_down";
+  enqueue({
+    kind,
+    resourceKeys: [`app:${appId}`],
+    input: decision === "sleep" ? { appId } : { appId, targetReplicas },
+    trigger: "autoscaler",
+    triggeredBy: "idle-monitor",
+    idempotencyKey: `idle-monitor:${appId}:${decision}:${bucket}`,
+  });
+}
 
 // In-memory tracker: when each app first entered sustained idle state.
 // Cleared when metrics rise above idle thresholds or app scales.
@@ -79,26 +91,8 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
     (avgCpu > app.autoscale_cpu_threshold || avgMem > app.autoscale_mem_threshold) &&
     replicas.length < effectiveMax
   ) {
-    const lock = tryAcquireLock(`app:${appId}`, "autoscale");
-    if ("busy" in lock) {
-      log("autoscale", `Skipping app ${appId}: ${lock.holder} in progress`);
-      return;
-    }
-    log("autoscale", `Scaling up app ${appId}: CPU=${avgCpu.toFixed(1)}% > ${app.autoscale_cpu_threshold}% or MEM=${avgMem.toFixed(1)}% > ${app.autoscale_mem_threshold}%`);
-    try {
-      const result = await scaleApp(appId, replicas.length + 1);
-      if (result.ok) {
-        db.insertScalingEvent({
-          app_id: appId,
-          event_type: "autoscale_up",
-          from_count: replicas.length,
-          to_count: replicas.length + 1,
-          reason: `CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}% exceeded thresholds`,
-        });
-      }
-    } finally {
-      lock.release();
-    }
+    log("autoscale", `Enqueue scale_up app ${appId}: CPU=${avgCpu.toFixed(1)}% > ${app.autoscale_cpu_threshold}% or MEM=${avgMem.toFixed(1)}% > ${app.autoscale_mem_threshold}%`);
+    enqueueAutoscale(appId, "up", replicas.length + 1);
     return;
   }
 
@@ -127,50 +121,14 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
         log("autoscale", `App ${appId}: idle for ${Math.round(idleDuration)}s / ${idleTimeout}s before sleep`);
         return;
       }
-      // Sustained idle confirmed — scale to zero
-      const lock = tryAcquireLock(`app:${appId}`, "autoscale");
-      if ("busy" in lock) {
-        log("autoscale", `Skipping app ${appId}: ${lock.holder} in progress`);
-        return;
-      }
+      // Sustained idle confirmed — enqueue sleep
       idleSince.delete(appId);
-      log("autoscale", `Scaling to zero app ${appId}: idle for ${Math.round(idleDuration)}s (threshold: ${idleTimeout}s)`);
-      try {
-        const result = await scaleApp(appId, 0);
-        if (result.ok) {
-          db.insertScalingEvent({
-            app_id: appId,
-            event_type: "autoscale_sleep",
-            from_count: 1,
-            to_count: 0,
-            reason: `Idle for ${Math.round(idleDuration)}s — CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}%`,
-          });
-        }
-      } finally {
-        lock.release();
-      }
+      log("autoscale", `Enqueue sleep app ${appId}: idle for ${Math.round(idleDuration)}s (threshold: ${idleTimeout}s)`);
+      enqueueAutoscale(appId, "sleep", 0);
     } else {
       // Normal scale-down (N → N-1, where N-1 >= 1)
-      const lock = tryAcquireLock(`app:${appId}`, "autoscale");
-      if ("busy" in lock) {
-        log("autoscale", `Skipping app ${appId}: ${lock.holder} in progress`);
-        return;
-      }
-      log("autoscale", `Scaling down app ${appId}: CPU=${avgCpu.toFixed(1)}% < ${app.autoscale_cpu_threshold * 0.5}% and MEM=${avgMem.toFixed(1)}% < ${app.autoscale_mem_threshold * 0.5}%`);
-      try {
-        const result = await scaleApp(appId, replicas.length - 1);
-        if (result.ok) {
-          db.insertScalingEvent({
-            app_id: appId,
-            event_type: "autoscale_down",
-            from_count: replicas.length,
-            to_count: replicas.length - 1,
-            reason: `CPU ${avgCpu.toFixed(1)}% / MEM ${avgMem.toFixed(1)}% below thresholds`,
-          });
-        }
-      } finally {
-        lock.release();
-      }
+      log("autoscale", `Enqueue scale_down app ${appId}: CPU=${avgCpu.toFixed(1)}% < ${app.autoscale_cpu_threshold * 0.5}% and MEM=${avgMem.toFixed(1)}% < ${app.autoscale_mem_threshold * 0.5}%`);
+      enqueueAutoscale(appId, "down", replicas.length - 1);
     }
   }
 }

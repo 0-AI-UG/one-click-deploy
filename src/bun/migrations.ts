@@ -1026,6 +1026,58 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN extra_volumes TEXT NOT NULL DEFAULT '[]'");
     },
   },
+  {
+    version: 42,
+    description: "Add operations and operation_steps tables (engine)",
+    up: (db) => {
+      db.run(`CREATE TABLE operations (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind            TEXT NOT NULL,
+        resource_keys   TEXT NOT NULL,
+        input_json      TEXT NOT NULL DEFAULT '{}',
+        status          TEXT NOT NULL DEFAULT 'pending',
+        parent_id       INTEGER REFERENCES operations(id) ON DELETE SET NULL,
+        attempt         INTEGER NOT NULL DEFAULT 0,
+        scheduled_for   TEXT,
+        last_step       TEXT,
+        error_json      TEXT,
+        trigger         TEXT NOT NULL DEFAULT 'ui',
+        triggered_by    TEXT NOT NULL DEFAULT '',
+        idempotency_key TEXT,
+        enqueued_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at      TEXT,
+        finished_at     TEXT
+      )`);
+      db.run(`CREATE TABLE operation_steps (
+        op_id       INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+        seq         INTEGER NOT NULL,
+        step        TEXT NOT NULL,
+        phase       TEXT NOT NULL DEFAULT 'forward',
+        status      TEXT NOT NULL,
+        output_json TEXT,
+        detail      TEXT NOT NULL DEFAULT '',
+        started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT,
+        PRIMARY KEY (op_id, seq)
+      )`);
+      db.run("CREATE INDEX ops_status_sched ON operations(status, scheduled_for)");
+      db.run("CREATE INDEX ops_parent ON operations(parent_id)");
+      db.run("CREATE UNIQUE INDEX ops_idempotency ON operations(idempotency_key) WHERE idempotency_key IS NOT NULL");
+    },
+  },
+  {
+    version: 43,
+    description: "Drop legacy deploy_jobs/service_deploy_jobs tables (superseded by operations/operation_steps)",
+    up: (db) => {
+      // All UI polling has moved to /api/operations/:id/events. The old
+      // job tables and their event children are no longer written or read
+      // by any code path; drop them along with their FK-bound event tables.
+      db.run("DROP TABLE IF EXISTS deploy_job_events");
+      db.run("DROP TABLE IF EXISTS deploy_jobs");
+      db.run("DROP TABLE IF EXISTS service_deploy_job_events");
+      db.run("DROP TABLE IF EXISTS service_deploy_jobs");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

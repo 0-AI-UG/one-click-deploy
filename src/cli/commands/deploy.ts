@@ -5,12 +5,20 @@ import { get, post } from "../api.ts";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET } from "../format.ts";
 import type { DeployManifest, DeployRequest } from "../../shared/rpc.ts";
 
-interface DeployJobPoll {
-  status: "running" | "done" | "error";
-  events: Array<{ seq: number; step: string; detail: string }>;
-  last_seq: number;
-  result: { ok: boolean; error?: string } | null;
+interface OperationEventPoll {
+  status: "pending" | "running" | "done" | "failed" | "compensating" | "compensated" | "cancelled";
+  last_step: string | null;
+  error: { message?: string; cancelled?: boolean } | null;
+  steps: Array<{
+    seq: number;
+    step: string;
+    phase: "forward" | "compensate";
+    status: "started" | "ok" | "skipped" | "failed";
+    detail: string;
+  }>;
 }
+
+const TERMINAL = new Set(["done", "failed", "cancelled", "compensated"]);
 
 interface Environment {
   id: number;
@@ -148,32 +156,38 @@ ${BOLD}Options:${RESET}
 
   console.log(`\nDeploying ${BOLD}${name}${RESET}...`);
 
-  const { deployment_id } = await post<{ deployment_id: number }>("/api/apps/deploy", body);
+  const { op_id } = await post<{ op_id: number }>("/api/apps/deploy", body);
 
   let lastSeq = 0;
   while (true) {
-    const poll = await get<DeployJobPoll>(`/api/deploy-jobs/${deployment_id}?since=${lastSeq}`);
+    const poll = await get<OperationEventPoll>(
+      `/api/operations/${op_id}/events?since=${lastSeq}&wait=15000`,
+    );
 
-    for (const event of poll.events) {
-      const step = event.step.padEnd(14);
-      if (event.step === "error") {
-        console.log(`  ${RED}${step}${RESET} ${event.detail}`);
-      } else if (event.step === "done") {
-        console.log(`  ${GREEN}${step}${RESET} ${event.detail}`);
+    for (const event of poll.steps) {
+      // Only surface forward-phase starts once per step (mirrors prior UX).
+      if (event.phase === "compensate") {
+        const step = `rollback ${event.step}`.padEnd(22);
+        console.log(`  ${RED}${step}${RESET} ${event.detail || event.status}`);
       } else {
-        console.log(`  ${CYAN}${step}${RESET} ${event.detail}`);
+        const step = event.step.padEnd(22);
+        if (event.status === "failed") {
+          console.log(`  ${RED}${step}${RESET} ${event.detail}`);
+        } else if (event.status === "ok" || event.status === "skipped") {
+          console.log(`  ${GREEN}${step}${RESET} ${event.status === "skipped" ? "(skipped) " : ""}${event.detail}`);
+        } else {
+          console.log(`  ${CYAN}${step}${RESET} ${event.detail || "…"}`);
+        }
       }
+      lastSeq = event.seq;
     }
 
-    if (poll.events.length > 0) {
-      lastSeq = poll.last_seq;
-    }
-
-    if (poll.status !== "running") {
-      if (poll.result?.ok) {
+    if (TERMINAL.has(poll.status)) {
+      if (poll.status === "done") {
         console.log(`\n${GREEN}Deploy complete!${RESET}`);
       } else {
-        console.error(`\n${RED}Deploy failed: ${poll.result?.error || "unknown error"}${RESET}`);
+        const msg = poll.error?.message || poll.status;
+        console.error(`\n${RED}Deploy ${poll.status}: ${msg}${RESET}`);
         process.exit(1);
       }
       break;

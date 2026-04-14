@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, Spinner, showToast, confirm, CopyButton, Table } from "../components/ui.tsx";
+import { trackOperationInToast } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { LogViewer } from "../components/log-viewer.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
@@ -51,14 +52,21 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const action = async (act: string, label: string) => {
     setActionLoading(act);
     try {
+      let res: { op_id?: number };
       if (act === "delete") {
-        await del(`/api/services/${serviceId}`);
-        showToast("Service destroyed", "success");
+        res = await del(`/api/services/${serviceId}`);
+      } else {
+        res = await post(`/api/services/${serviceId}/${act}`);
+      }
+      if (res?.op_id) {
+        trackOperationInToast(res.op_id, `${label} ${service?.name ?? "service"}`);
+      } else {
+        showToast(`${label} started`, "success");
+      }
+      if (act === "delete") {
         window.location.hash = "#/";
         return;
       }
-      await post(`/api/services/${serviceId}/${act}`);
-      showToast(`${label} successful`, "success");
       load();
     } catch (err: any) {
       showToast(err.message, "error");

@@ -1,6 +1,7 @@
 import { post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, Table, CopyButton, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
+import { trackOperationInToast } from "../../hooks/useOperation.ts";
 import { Clock } from "lucide-react";
 import type { DeploymentRecord } from "../../types.ts";
 
@@ -42,7 +43,10 @@ export function DeploymentsTab({ appId, deployments, action }: DeploymentsTabPro
                       size="xs" variant="ghost"
                       onClick={async () => {
                         if (await confirm("Rollback", `Rollback to deployment #${d.id}?`)) {
-                          action("rollback", () => post(`/api/apps/${appId}/rollback`, { deployment_id: d.id }));
+                          action("rollback", async () => {
+                            const res = (await post(`/api/apps/${appId}/rollback`, { deployment_id: d.id })) as { op_id?: number };
+                            if (res?.op_id) trackOperationInToast(res.op_id, "Rolling back app");
+                          });
                         }
                       }}
                     >Rollback</Btn>

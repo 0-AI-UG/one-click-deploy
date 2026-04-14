@@ -72,7 +72,7 @@ export {
   insertScalingEvent,
   getScalingEvents,
 } from "./replicas.ts";
-export type { DeploymentRow, DeployJobRow, DeployJobEventRow } from "./deployments.ts";
+export type { DeploymentRow } from "./deployments.ts";
 export {
   insertDeployment,
   updateDeploymentStatus,
@@ -80,11 +80,6 @@ export {
   updateDeploymentGitCommit,
   getDeployments,
   getDeployment,
-  createDeployJob,
-  appendDeployJobEvent,
-  finishDeployJob,
-  getDeployJob,
-  getDeployJobEvents,
 } from "./deployments.ts";
 export type { UserRow, WebAuthnCredential, Permission } from "./users.ts";
 export {
@@ -140,8 +135,6 @@ export type {
   ServiceLinkRow,
   ServiceLinkWithAppRow,
   ServiceLinkWithServiceRow,
-  ServiceDeployJobRow,
-  ServiceDeployJobEventRow,
 } from "./services.ts";
 export {
   insertService,
@@ -169,11 +162,6 @@ export {
   getServiceLinks,
   getLinkedServices,
   getServicesOnServer,
-  createServiceDeployJob,
-  appendServiceDeployJobEvent,
-  finishServiceDeployJob,
-  getServiceDeployJob,
-  getServiceDeployJobEvents,
 } from "./services.ts";
 export type { EnvironmentRow } from "./environments.ts";
 export {
