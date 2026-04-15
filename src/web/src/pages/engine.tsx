@@ -175,11 +175,6 @@ function OpRow({ op, showProgress }: { op: OperationView; showProgress?: boolean
           {humanizeStep(progress)}
         </div>
       )}
-      {op.error?.message && (
-        <div className="mt-1 font-mono text-[10px] text-accent-red truncate">
-          {op.error.message}
-        </div>
-      )}
     </a>
   );
 }

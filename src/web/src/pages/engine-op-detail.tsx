@@ -84,12 +84,6 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
         <Meta label="Finished" value={fmtTs(op.finished_at)} />
       </div>
 
-      {op.error?.message && (
-        <div className="mb-6 border-2 border-accent-red bg-accent-red/10 p-3 text-xs font-mono text-accent-red">
-          {op.error.message}
-        </div>
-      )}
-
       <section className="mb-6">
         <h2 className="font-mono text-sm font-bold uppercase tracking-wider mb-3">Steps</h2>
         <div className="flex flex-col gap-1">
