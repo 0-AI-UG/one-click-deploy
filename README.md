@@ -35,6 +35,8 @@ Think of it as a lightweight, self-hostable alternative to Heroku, Railway, or R
 - **Pause & resume** — scale apps to zero to save costs, wake them back up instantly
 - **Web terminal** — SSH into servers, replicas, and service instances from the browser
 - **Auto-redeploy on push** via GitHub webhooks
+- **Durable operation engine** — deploys, migrations, and scaling survive panel restarts and resume where they left off
+- **CLI (`ocd`)** — deploy from a local repo, tail logs, open a shell, manage envs and rollbacks from your terminal
 - **Multi-user with RBAC** — granular permissions for deploy, scale, pause, terminal access, and more
 - **Auth** — passkeys (WebAuthn), TOTP two-factor, and GitHub OAuth
 - **Self-managing** — the panel deploys and manages itself like any other app
@@ -104,7 +106,23 @@ When the process exits with code 0, open `https://<domain>`, create your admin a
 2. **Deploy** — Provide a Git repo URL, pick a server (or create one), and optionally set a domain
 3. **Done** — Infrastructure is provisioned, your container is built, DNS + TLS configured, and traffic is served
 
-From that point on, the panel manages itself: redeploy, roll back, edit env vars, and view logs — all from its own UI.
+From that point on, the panel manages itself: redeploy, roll back, edit env vars, and view logs — all from its own UI or via the `ocd` CLI.
+
+## CLI
+
+Prebuilt `ocd` binaries are published for Linux, macOS, and Windows. Point it at your panel and deploy from any repo:
+
+```bash
+ocd login https://panel.example.com
+ocd deploy                 # deploy current repo using .ocd-deploy.json
+ocd logs my-app --tail=200
+ocd ssh my-app -i          # interactive shell in the container
+ocd envs                   # manage environments and variables
+ocd redeploy my-app
+ocd rollback my-app
+```
+
+Run `ocd help` for the full command list.
 
 ## Tech Stack
 
@@ -120,10 +138,13 @@ From that point on, the panel manages itself: redeploy, roll back, edit env vars
 
 ```bash
 bun install
-bun run dev         # starts the panel on :3001 with hot reload
-bun run typecheck   # type-check without emitting
-bun run build       # build the web bundle
-bun run test        # run unit tests
+bun run dev               # starts the panel on :3001 with hot reload
+bun run engine            # run the operation engine locally
+bun run typecheck         # type-check without emitting
+bun run build             # build the web bundle
+bun run test              # run unit tests
+bun run test:integration  # run integration tests
+bun run build:cli         # compile the `ocd` CLI for all platforms
 ```
 
 ## Contributing

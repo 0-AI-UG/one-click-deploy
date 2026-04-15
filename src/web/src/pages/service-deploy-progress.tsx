@@ -152,7 +152,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
                   className={`flex gap-2 ${isFailed ? "text-accent-red" : isCompensate ? "text-accent-amber" : "text-bg"}`}
                 >
                   <span className="text-accent-amber shrink-0">›</span>
-                  <span className="text-muted shrink-0 w-24 uppercase">
+                  <span className="text-muted shrink-0 w-56 uppercase truncate">
                     [{isCompensate ? "undo:" : ""}{ev.step}]
                   </span>
                   <span className="whitespace-pre-wrap break-all">
