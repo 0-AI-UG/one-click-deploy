@@ -1,4 +1,5 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { get, post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
@@ -157,24 +158,55 @@ function MoveMenu({ targets, loading, disabled, onPick }: {
   onPick: (targetId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const closeTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  const show = () => { clearTimeout(closeTimeout.current); setOpen(true); };
-  const scheduleClose = () => { closeTimeout.current = setTimeout(() => setOpen(false), 150); };
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = triggerRef.current?.getBoundingClientRect();
+      if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
 
   return (
-    <div className="relative" onMouseEnter={show} onMouseLeave={scheduleClose}>
+    <div ref={triggerRef} className="inline-block">
       <Btn
         size="xs"
         variant="ghost"
         loading={loading}
         disabled={disabled}
         title="Migrate replica to another server"
+        onClick={() => setOpen((o) => !o)}
       >
         <ArrowRightLeft size={11} /> Move
       </Btn>
-      {open && !disabled && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-bg-raised border-2 border-fg shadow-neo min-w-40">
+      {open && !disabled && pos && createPortal(
+        <div
+          ref={menuRef}
+          style={{ position: "fixed", top: pos.top, right: pos.right }}
+          className="z-50 bg-bg-raised border-2 border-fg shadow-neo min-w-40"
+        >
           {targets.length === 0 ? (
             <div className="px-3 py-2 font-mono text-[10px] text-fg-dim uppercase tracking-wider">
               No other servers
@@ -190,7 +222,8 @@ function MoveMenu({ targets, loading, disabled, onPick }: {
               </button>
             ))
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
