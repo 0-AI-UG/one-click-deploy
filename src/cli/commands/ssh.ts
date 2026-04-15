@@ -175,8 +175,7 @@ ${BOLD}Options:${RESET}
     .filter((a) => a !== "-i" && a !== "--interactive" && a !== "--server")
     .join(" ");
 
-  // Server connections are always interactive
-  if (!isInteractive && !isServer && !command) {
+  if (!isInteractive && !command) {
     console.error(`${RED}Provide a command or use -i for interactive mode${RESET}`);
     console.error(`Run "ocd ssh --help" for usage.`);
     process.exit(1);
@@ -184,7 +183,7 @@ ${BOLD}Options:${RESET}
 
   const { wsTarget, label } = await resolveTarget(args);
 
-  if (isInteractive || isServer) {
+  if (isInteractive) {
     const config = requireConfig();
     const url = buildWsUrl(wsTarget, config.token, config.panel_url);
     interactive(url, label);

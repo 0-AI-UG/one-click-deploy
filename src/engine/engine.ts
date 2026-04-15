@@ -79,7 +79,11 @@ function tryStart(op: OperationRow): void {
   const acq = tryAcquire(keys, op.id, op.kind);
   if (!acq.ok) return;
 
-  const promise = runOperation(op, def)
+  // Defer invocation by a microtask so inFlight.set runs first. Without this,
+  // a step that calls ctx.park() before its first await would hit parkOp while
+  // inFlight is still empty, making the park a no-op.
+  const promise = Promise.resolve()
+    .then(() => runOperation(op, def))
     .catch((err) => log(`op#${op.id} runner threw:`, err))
     .finally(() => {
       release(keys);
