@@ -92,7 +92,7 @@ export async function scaleUp(
         const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
         const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
         const escapedContent = envFileContent.replace(/'/g, "'\\''");
-        await sshExec(targetServer.ipv4, `mkdir -p /home/deploy/apps/${app.name}`, targetHostKey);
+        await sshExec(targetServer.ipv4, `mkdir -p /home/deploy/apps/${app.name} && chown deploy:deploy /home/deploy/apps /home/deploy/apps/${app.name}`, targetHostKey);
         await sshExec(targetServer.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, targetHostKey);
         envFileFlag = `--env-file ${envFilePath}`;
       }

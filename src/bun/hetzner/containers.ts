@@ -480,7 +480,10 @@ async function cloneRepo(
 
   emit?.("Cloning repository...");
   log("build", `Cloning ${gitRepo} into ${appDir} (token: ${gitToken ? "yes" : "no"})`);
-  await sshExec(ip, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps`);
+  // Ensure the app dir (if it exists) is owned by deploy so the subsequent
+  // rm -rf/git clone/pull works even if a prior root-run step (e.g. scaleUp
+  // writing .env.deploy) left root-owned files behind.
+  await sshExec(ip, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps && mkdir -p ${appDir} && chown -R deploy:deploy ${appDir}`);
   const gitEnv = gitToken ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
   const cloneResult = await sshExec(
     ip,
