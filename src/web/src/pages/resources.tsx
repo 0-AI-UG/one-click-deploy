@@ -41,7 +41,8 @@ export function ResourcesPage() {
   useEffect(() => {
     if (!showCreate) return;
     const onDown = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+      const target = e.target as HTMLElement;
+      if (popoverRef.current && !popoverRef.current.contains(target) && !target.closest("[data-neoselect-menu]")) {
         setShowCreate(false);
       }
     };

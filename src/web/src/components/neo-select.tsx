@@ -66,6 +66,7 @@ export function NeoSelect({ value, options, onChange, placeholder, compact }: {
       {open && pos && createPortal(
         <div
           ref={menuRef}
+          data-neoselect-menu
           style={{ position: "fixed", top: pos.top, left: pos.left, minWidth: pos.width }}
           className="z-50 bg-bg-raised border-2 border-fg shadow-neo max-h-40 overflow-auto"
         >
