@@ -24,7 +24,6 @@ export function ResourcesPage() {
   const { serverTypes } = useServerTypes();
   const aliveRef = useRef(true);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const hoverTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [showCreate, setShowCreate] = useState(false);
 
   const ops = useActiveOperations(
@@ -32,13 +31,23 @@ export function ResourcesPage() {
     { rehydrateToasts: true },
   );
 
-  const openPopover = () => { clearTimeout(hoverTimeout.current); setShowCreate(true); };
-  const scheduleClose = () => { hoverTimeout.current = setTimeout(() => setShowCreate(false), 200); };
+  const togglePopover = () => setShowCreate((v) => !v);
 
   useEffect(() => {
     aliveRef.current = true;
     return () => { aliveRef.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (!showCreate) return;
+    const onDown = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setShowCreate(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [showCreate]);
 
   const handleCreateServer = async () => {
     if (!createType || !createLocation) {
@@ -159,9 +168,9 @@ export function ResourcesPage() {
         <div className="flex items-center gap-2 mb-3">
           <Server size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Servers ({data?.servers?.length || 0})</h3>
-          <div className="ml-auto relative" ref={popoverRef} onMouseEnter={openPopover} onMouseLeave={scheduleClose}>
+          <div className="ml-auto relative" ref={popoverRef}>
             <PermissionGate permission="resources.create">
-              <Btn size="xs" onClick={creating ? undefined : openPopover}>
+              <Btn size="xs" onClick={creating ? undefined : togglePopover}>
                 <Plus size={11} /> Create Server
               </Btn>
             </PermissionGate>
