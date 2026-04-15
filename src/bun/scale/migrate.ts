@@ -83,6 +83,9 @@ async function migrateStateless(
   if (app.deploy_mode === "compose" && replica.container_name === app.name) {
     // Primary compose instance — leave the on-disk project; just stop the container.
   } else {
+    // Graceful stop first so SQLite WAL and other buffered writers flush.
+    // `docker stop -t 20` sends SIGTERM, waits up to 20s, then SIGKILL.
+    await sshExec(sourceServer.ipv4, asUser(`docker stop -t 20 ${replica.container_name} 2>/dev/null || true`), hostKey);
     await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
   }
 
@@ -154,9 +157,13 @@ async function migrateWithVolume(
     log("migrate", `Caddy sync during drain failed (continuing): ${err}`);
   }
 
+  // Graceful stop so SQLite WAL and other buffered writers flush before the
+  // volume is detached. compose down sends SIGTERM then SIGKILL (10s default);
+  // docker stop -t 20 gives single containers a 20s grace window.
   if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-    await sshExec(sourceServer.ipv4, asUser(`cd /home/deploy/apps/${app.name} && docker compose down 2>/dev/null || true`), sourceHostKey);
+    await sshExec(sourceServer.ipv4, asUser(`cd /home/deploy/apps/${app.name} && docker compose down -t 20 2>/dev/null || true`), sourceHostKey);
   } else {
+    await sshExec(sourceServer.ipv4, asUser(`docker stop -t 20 ${replica.container_name} 2>/dev/null || true`), sourceHostKey);
     await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), sourceHostKey);
   }
 
