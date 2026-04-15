@@ -64,7 +64,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
             </span>
           </div>
           <div className="mt-2 text-xs text-fg-dim font-mono">
-            {op.resource_keys.join(", ")} · triggered by {op.trigger}
+            {(op.resource_labels ?? op.resource_keys).join(", ")} · triggered by {op.trigger}
             {op.attempt > 1 && ` · attempt ${op.attempt}`}
           </div>
         </div>
@@ -122,7 +122,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
                     : "bg-alt text-fg"
                 }`}>{c.status}</span>
                 <span className="font-mono text-xs font-bold">{c.kind}</span>
-                <span className="font-mono text-[10px] text-fg-dim ml-auto">{c.resource_keys.join(", ")}</span>
+                <span className="font-mono text-[10px] text-fg-dim ml-auto">{(c.resource_labels ?? c.resource_keys).join(", ")}</span>
               </a>
             ))}
           </div>

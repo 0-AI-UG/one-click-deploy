@@ -147,7 +147,7 @@ function OpRow({ op, showProgress }: { op: OperationView; showProgress?: boolean
     showProgress && op.total_steps > 0 && op.last_step
       ? `${op.last_step}`
       : null;
-  const resource = op.resource_keys.join(", ");
+  const resource = (op.resource_labels ?? op.resource_keys).join(", ");
   const age = op.started_at
     ? formatDistanceToNow(new Date(op.started_at.replace(" ", "T") + "Z"), { addSuffix: true })
     : null;

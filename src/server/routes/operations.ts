@@ -14,6 +14,8 @@ import {
   requestCancel,
 } from "../../shared/db/operations.ts";
 import { getSettings } from "../../shared/db/settings.ts";
+import { getApp } from "../../shared/db/apps.ts";
+import { getServer } from "../../shared/db/servers.ts";
 import { stepCount, listOps, getOp } from "../../engine/ops/registry.ts";
 
 // Keys whose values may contain secrets (connection strings, passwords,
@@ -41,8 +43,21 @@ function redact(value: unknown): unknown {
   return value;
 }
 
+function labelForResourceKey(key: string): string {
+  const m = /^(app|server):(\d+)$/.exec(key);
+  if (!m) return key;
+  const id = parseInt(m[2], 10);
+  if (m[1] === "app") {
+    const app = getApp(id);
+    return app ? app.name : key;
+  }
+  const server = getServer(id);
+  return server ? server.name : key;
+}
+
 function toJsonRow(op: ReturnType<typeof getOperation> & {}) {
-  const resourceKeys = safeParse(op.resource_keys, []);
+  const resourceKeys: string[] = safeParse(op.resource_keys, []);
+  const resourceLabels = resourceKeys.map(labelForResourceKey);
   const input = redact(safeParse(op.input_json, {}));
   const error = op.error_json ? safeParse(op.error_json, null) : null;
   return {
@@ -50,6 +65,7 @@ function toJsonRow(op: ReturnType<typeof getOperation> & {}) {
     kind: op.kind,
     label: getOp(op.kind)?.label ?? op.kind,
     resource_keys: resourceKeys,
+    resource_labels: resourceLabels,
     input,
     status: op.status,
     parent_id: op.parent_id,

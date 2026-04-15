@@ -27,6 +27,7 @@ export type OperationView = {
   kind: string;
   label: string;
   resource_keys: string[];
+  resource_labels?: string[];
   input?: Record<string, unknown>;
   status: OperationStatus;
   last_step: string | null;
@@ -43,6 +44,7 @@ export type OperationView = {
     kind: string;
     status: OperationStatus;
     resource_keys: string[];
+    resource_labels?: string[];
   }>;
 };
 
