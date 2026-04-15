@@ -56,7 +56,7 @@ The script installs [Bun](https://bun.sh) if needed, provisions a Hetzner server
 ```bash
 docker run --rm \
   -e OCD_AUTO_DEPLOY='{
-    "hetzner_token": "your_hetzner_token",
+    "provider_token": "your_hetzner_token",
     "domain": "panel.example.com",
     "server_type": "cx22",
     "server_location": "nbg1",
@@ -81,7 +81,8 @@ When the process exits with code 0, open `https://<domain>`, create your admin a
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `hetzner_token` | yes | — | Hetzner Cloud API token |
+| `provider_token` | yes | — | Compute provider API token (Hetzner Cloud) |
+| `provider` | no | `hetzner` | Compute provider id |
 | `domain` | yes | — | Domain for the panel (e.g. `panel.example.com`) |
 | `server_type` | no | `cx23` | Hetzner server type |
 | `server_location` | no | `nbg1` | Hetzner datacenter location |

@@ -1,5 +1,5 @@
 {
-  "hetzner_token": "your_hetzner_api_token",
+  "provider_token": "your_hetzner_api_token",
   "domain": "panel.example.com",
   "dns_zone_id": "optional_hetzner_dns_zone_id",
   "server_type": "cx23",

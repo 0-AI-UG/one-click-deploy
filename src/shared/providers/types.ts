@@ -69,9 +69,24 @@ export interface NetworkOps {
   getPrivateIpv4(serverId: string, networkId: string): Promise<string>;
 }
 
+export type TokenValidation =
+  | { valid: true; value: string }
+  | { valid: false; error: string };
+
 export interface ComputeProvider {
   readonly id: ProviderId;
   readonly name: string;
+
+  /** Key under which this provider's API token is stored in secret-store. */
+  readonly tokenKey: string;
+
+  /** Shape-validate a token (length/charset) without contacting the API. */
+  validateToken(token: string): TokenValidation;
+
+  /** Verify a token against the live API. Throws with a friendly error
+   *  message on failure. Used by the setup wizard before persisting the
+   *  token. */
+  verifyToken(token: string): Promise<void>;
 
   // SSH key management (upload public key so servers can be created with it)
   ensureSshKey(

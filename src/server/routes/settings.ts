@@ -3,18 +3,19 @@ import { requireAdmin } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore, maskToken } from "../../shared/secret-store.ts";
-import { validateHetznerToken } from "../../shared/validate.ts";
 import { getComputeProvider } from "../../shared/providers/index.ts";
 
 export async function handleGetSettings(request: Request): Promise<Response> {
   try {
     await requireAdmin(request);
     const s = db.getSettings();
-    const tokens = await secretStore.getTokens();
+    const providerToken = await secretStore.getProviderToken();
     const githubOauthClientSecret = await secretStore.get("github_oauth_client_secret");
+    const provider = getComputeProvider();
     return Response.json(
       {
-        hetzner_api_token: maskToken(tokens.hetzner_api_token),
+        provider_token: maskToken(providerToken),
+        provider: { id: provider.id, name: provider.name },
         github_oauth_client_id: s.github_oauth_client_id ?? "",
         github_oauth_client_secret: maskToken(githubOauthClientSecret ?? ""),
         dns_zone_id: s.dns_zone_id ?? "",
@@ -45,23 +46,24 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
     await requireAdmin(request);
     const settings = await request.json() as Record<string, unknown>;
 
+    const provider = getComputeProvider();
     for (const [key, rawValue] of Object.entries(settings)) {
       if (key === "require_2fa") {
         db.saveSetting(key, rawValue ? "1" : "0");
         continue;
       }
       const value = String(rawValue ?? "");
-      if (key === "hetzner_api_token") {
+      if (key === "provider_token") {
         if (value.includes("...") || value === "****") continue;
         if (value) {
-          const validation = validateHetznerToken(value);
+          const validation = provider.validateToken(value);
           if (!validation.valid) {
             return Response.json(
-              { error: `${key}: ${validation.error}` },
+              { error: `${provider.name} API token: ${validation.error}` },
               { status: 400, headers: corsHeaders },
             );
           }
-          await secretStore.set(key, value);
+          await secretStore.set(provider.tokenKey, value);
         }
       } else if (key === "github_oauth_client_id") {
         db.saveSetting(key, value);

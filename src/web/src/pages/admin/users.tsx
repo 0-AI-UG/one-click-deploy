@@ -59,10 +59,11 @@ export function UsersPage() {
 
   // --- Instance Settings ---
   const [settingsForm, setSettingsForm] = useState({
-    hetzner_api_token: "",
+    provider_token: "",
     github_oauth_client_id: "", github_oauth_client_secret: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
+  const [providerName, setProviderName] = useState("Provider");
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const { serverTypes } = useServerTypes();
@@ -98,8 +99,9 @@ export function UsersPage() {
     get("/api/admin/settings")
       .then((s) => {
         setRequire2fa(s.require_2fa !== false);
+        if (s.provider?.name) setProviderName(s.provider.name);
         setSettingsForm({
-          hetzner_api_token: s.hetzner_api_token ?? "",
+          provider_token: s.provider_token ?? "",
           github_oauth_client_id: s.github_oauth_client_id ?? "",
           github_oauth_client_secret: s.github_oauth_client_secret ?? "",
           dns_zone_id: s.dns_zone_id ?? "",
@@ -211,8 +213,8 @@ export function UsersPage() {
       <Card className="p-5 space-y-4">
         <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">API Tokens</h3>
         <div>
-          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner API Token</label>
-          <input type="password" value={settingsForm.hetzner_api_token} onChange={setS("hetzner_api_token")} placeholder="Enter token" />
+          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">{providerName} API Token</label>
+          <input type="password" value={settingsForm.provider_token} onChange={setS("provider_token")} placeholder="Enter token" />
         </div>
         <GitHubOAuthSettings form={settingsForm} setS={setS} />
 
@@ -220,7 +222,7 @@ export function UsersPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">Defaults</h3>
           <div>
             <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>
-            <input type="text" value={settingsForm.dns_zone_id} onChange={setS("dns_zone_id")} placeholder="Hetzner DNS Zone ID" />
+            <input type="text" value={settingsForm.dns_zone_id} onChange={setS("dns_zone_id")} placeholder="DNS Zone ID" />
           </div>
           <div className="grid grid-cols-2 gap-3 mt-3">
             <div>

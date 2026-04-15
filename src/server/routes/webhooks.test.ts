@@ -30,7 +30,13 @@ mock.module("../../engine/deploy/panel.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import { handleGithubWebhook, handlePanelGithubWebhook } from "./webhooks.ts";
+import {
+  handleGithubWebhook,
+  handlePanelGithubWebhook,
+  normalizeWebhookPath,
+  pushTouchesPath,
+  verifyGithubSignature,
+} from "./webhooks.ts";
 
 async function sign(secret: string, body: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -184,5 +190,165 @@ describe("handleGithubWebhook", () => {
     const body = JSON.stringify({ ref: "refs/heads/main" });
     const res = await handleGithubWebhook(req(app.id, body, "sha256=00"), app.id);
     expect(res.status).toBe(404);
+  });
+
+  test("404 for an unknown app id", async () => {
+    const body = JSON.stringify({ ref: "refs/heads/main" });
+    const res = await handleGithubWebhook(req(999999, body, "sha256=00"), 999999);
+    expect(res.status).toBe(404);
+  });
+
+  test("400 on malformed JSON payload (after valid signature)", async () => {
+    const secret = "secret-json";
+    const app = makeApp(secret, "main");
+    const body = "not-json-at-all";
+    const sig = await sign(secret, body);
+    const res = await handleGithubWebhook(req(app.id, body, sig), app.id);
+    expect(res.status).toBe(400);
+    expect(fakeRunner).not.toHaveBeenCalled();
+  });
+
+  test("204 when path filter does not match any commit files", async () => {
+    const secret = "secret-path";
+    const app = makeApp(secret, "main");
+    db.updateAppWebhook(app.id, true, secret, "main", "gh-1", "services/api");
+    const body = JSON.stringify({
+      ref: "refs/heads/main",
+      after: "abcdef1",
+      commits: [{ modified: ["docs/readme.md"], added: [], removed: [] }],
+    });
+    const sig = await sign(secret, body);
+    const res = await handleGithubWebhook(req(app.id, body, sig), app.id);
+    expect(res.status).toBe(204);
+    expect(fakeRunner).not.toHaveBeenCalled();
+  });
+
+  test("202 when path filter matches at least one file", async () => {
+    const secret = "secret-path2";
+    const app = makeApp(secret, "main");
+    db.updateAppWebhook(app.id, true, secret, "main", "gh-1", "services/api");
+    const body = JSON.stringify({
+      ref: "refs/heads/main",
+      after: "abcdef2",
+      commits: [{ modified: ["services/api/server.ts"] }],
+    });
+    const sig = await sign(secret, body);
+    const res = await handleGithubWebhook(req(app.id, body, sig), app.id);
+    expect(res.status).toBe(202);
+    expect(fakeRunner).toHaveBeenCalledTimes(1);
+  });
+
+  test("signature header of wrong length fails in constant time (no throw)", async () => {
+    const app = makeApp("any-secret");
+    const body = JSON.stringify({ ref: "refs/heads/main" });
+    // Length differs from a real sha256= header → verifyGithubSignature
+    // short-circuits on length mismatch rather than throwing.
+    const res = await handleGithubWebhook(req(app.id, body, "sha256=ab"), app.id);
+    expect(res.status).toBe(401);
+  });
+
+  test("signature header entirely missing is rejected", async () => {
+    const app = makeApp("secret-missing-sig");
+    const body = JSON.stringify({ ref: "refs/heads/main" });
+    const r = new Request(`http://localhost/webhooks/github/${app.id}`, {
+      method: "POST",
+      headers: {},
+      body,
+    });
+    const res = await handleGithubWebhook(r, app.id);
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("normalizeWebhookPath", () => {
+  test("strips leading/trailing slashes", () => {
+    expect(normalizeWebhookPath("/services/api/")).toBe("services/api");
+    expect(normalizeWebhookPath("///x///")).toBe("x");
+  });
+
+  test("trims whitespace", () => {
+    expect(normalizeWebhookPath("  services/api  ")).toBe("services/api");
+  });
+
+  test("empty becomes empty", () => {
+    expect(normalizeWebhookPath("")).toBe("");
+    expect(normalizeWebhookPath("///")).toBe("");
+    expect(normalizeWebhookPath("   ")).toBe("");
+  });
+
+  test("leaves internal slashes alone", () => {
+    expect(normalizeWebhookPath("a/b/c")).toBe("a/b/c");
+  });
+});
+
+describe("pushTouchesPath", () => {
+  test("empty prefix matches anything (no-filter semantics)", () => {
+    expect(pushTouchesPath({ commits: [{ added: ["any.ts"] }] }, "")).toBe(true);
+    expect(pushTouchesPath({}, "")).toBe(true);
+  });
+
+  test("matches exact file path equal to prefix", () => {
+    expect(pushTouchesPath({ commits: [{ modified: ["services/api"] }] }, "services/api")).toBe(true);
+  });
+
+  test("matches files under the prefix", () => {
+    expect(
+      pushTouchesPath({ commits: [{ added: ["services/api/server.ts"] }] }, "services/api"),
+    ).toBe(true);
+  });
+
+  test("rejects sibling prefixes (prefix + '/' guard, not raw startsWith)", () => {
+    expect(
+      pushTouchesPath({ commits: [{ added: ["services/api-v2/server.ts"] }] }, "services/api"),
+    ).toBe(false);
+  });
+
+  test("scans added / modified / removed lists", () => {
+    expect(pushTouchesPath({ commits: [{ removed: ["app/foo"] }] }, "app")).toBe(true);
+    expect(pushTouchesPath({ commits: [{ modified: ["app/foo"] }] }, "app")).toBe(true);
+    expect(pushTouchesPath({ commits: [{ added: ["app/foo"] }] }, "app")).toBe(true);
+  });
+
+  test("returns false when no commits present and filter non-empty", () => {
+    expect(pushTouchesPath({}, "x")).toBe(false);
+    expect(pushTouchesPath({ commits: [] }, "x")).toBe(false);
+  });
+
+  test("tolerates malformed commit entries", () => {
+    // Non-array file lists, non-string entries.
+    const payload = {
+      commits: [
+        { added: null as unknown as string[] },
+        { modified: [42 as unknown as string, "valid/path"] },
+      ],
+    };
+    expect(pushTouchesPath(payload, "valid")).toBe(true);
+    expect(pushTouchesPath(payload, "other")).toBe(false);
+  });
+});
+
+describe("verifyGithubSignature", () => {
+  test("accepts a correctly-computed signature", async () => {
+    const secret = "abc";
+    const body = "hello";
+    const sig = await sign(secret, body);
+    expect(await verifyGithubSignature(body, secret, sig)).toBe(true);
+  });
+
+  test("rejects signature computed with a different secret", async () => {
+    const body = "hello";
+    const sig = await sign("wrong-secret", body);
+    expect(await verifyGithubSignature(body, "right-secret", sig)).toBe(false);
+  });
+
+  test("rejects on body tampering", async () => {
+    const secret = "k";
+    const sig = await sign(secret, "original");
+    expect(await verifyGithubSignature("modified", secret, sig)).toBe(false);
+  });
+
+  test("length mismatch short-circuits without throwing", async () => {
+    expect(await verifyGithubSignature("x", "k", "sha256=short")).toBe(false);
+    expect(await verifyGithubSignature("x", "k", "")).toBe(false);
   });
 });

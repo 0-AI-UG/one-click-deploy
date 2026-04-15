@@ -5,11 +5,13 @@
 import { readFileSync } from "fs";
 import * as db from "../shared/db.ts";
 import { secretStore } from "../shared/secret-store.ts";
+import { getComputeProvider } from "../shared/providers/index.ts";
 import { bootstrapPanel } from "./deploy/panel.ts";
 
 export type AutoDeployConfig = {
-  hetzner_token: string;
+  provider_token: string;
   domain: string;
+  provider?: string;
   server_type?: string;
   server_location?: string;
   dns_zone_id?: string;
@@ -40,8 +42,8 @@ export function loadAutoDeployConfig(raw: string): AutoDeployConfig {
   }
 
   const cfg = parsed as Record<string, unknown>;
-  if (!cfg.hetzner_token || typeof cfg.hetzner_token !== "string") {
-    throw new Error("auto-deploy config missing required field: hetzner_token");
+  if (!cfg.provider_token || typeof cfg.provider_token !== "string") {
+    throw new Error("auto-deploy config missing required field: provider_token");
   }
   if (!cfg.domain || typeof cfg.domain !== "string") {
     throw new Error("auto-deploy config missing required field: domain");
@@ -56,14 +58,16 @@ export async function runAutoDeploy(
 
   // Generate the JWT secret FIRST, then export it into the environment
   // BEFORE touching secretStore. secret-store derives its AES-GCM key from
-  // process.env.JWT_SECRET via HKDF, so this guarantees the Hetzner token
+  // process.env.JWT_SECRET via HKDF, so this guarantees the provider token
   // we're about to encrypt can be decrypted by the hosted instance (which
   // will run with the same JWT_SECRET). No re-encryption dance required.
   const jwtSecret =
     crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   process.env.JWT_SECRET = jwtSecret;
 
-  await secretStore.set("hetzner_api_token", config.hetzner_token);
+  if (config.provider) db.saveSetting("compute_provider", config.provider);
+  const provider = getComputeProvider(config.provider);
+  await secretStore.set(provider.tokenKey, config.provider_token);
   if (config.dns_zone_id) {
     db.saveSetting("dns_zone_id", config.dns_zone_id);
   }

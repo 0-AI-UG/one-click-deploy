@@ -15,9 +15,8 @@ export interface SecretStore {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
-  getTokens(): Promise<{
-    hetzner_api_token: string;
-  }>;
+  /** Read the active compute provider's API token. Returns "" when unset. */
+  getProviderToken(): Promise<string>;
 }
 
 // Shared encryption key, cached after first derivation
@@ -79,18 +78,17 @@ class DbSecretStore implements SecretStore {
     db.query("DELETE FROM encrypted_secrets WHERE key = ?").run(key);
   }
 
-  async getTokens() {
-    const hetzner_api_token = await this.get("hetzner_api_token");
-    return {
-      hetzner_api_token: hetzner_api_token ?? "",
-    };
+  async getProviderToken() {
+    const { getComputeProvider } = await import("./providers/index.ts");
+    const provider = getComputeProvider();
+    return (await this.get(provider.tokenKey)) ?? "";
   }
 }
 
 export const secretStore: SecretStore = new DbSecretStore();
 
-export function getTokens() {
-  return secretStore.getTokens();
+export function getProviderToken() {
+  return secretStore.getProviderToken();
 }
 
 export function maskToken(token: string): string {

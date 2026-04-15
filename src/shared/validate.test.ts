@@ -7,6 +7,9 @@ import {
   validateEnvVars,
   validateHetznerToken,
   validateDeployRequest,
+  validateGitHubPat,
+  validateComposeWebService,
+  validateDeployManifest,
 } from "./validate.ts";
 
 describe("validateAppName", () => {
@@ -216,5 +219,138 @@ describe("validateDeployRequest", () => {
 
   test("rejects invalid domain", () => {
     expect(validateDeployRequest({ ...validRequest, domain: "not valid" }).valid).toBe(false);
+  });
+});
+
+describe("validateGitHubPat", () => {
+  test("accepts a realistic-shaped classic PAT (40 hex chars)", () => {
+    const r = validateGitHubPat("a".repeat(40));
+    expect(r.valid).toBe(true);
+    if (r.valid) expect(r.value).toBe("a".repeat(40));
+  });
+
+  test("accepts a fine-grained token with underscores (github_pat_... form)", () => {
+    const tok = "github_pat_" + "A".repeat(22) + "_" + "B".repeat(59);
+    expect(validateGitHubPat(tok).valid).toBe(true);
+  });
+
+  test("trims surrounding whitespace", () => {
+    const r = validateGitHubPat("   " + "x".repeat(40) + "  ");
+    expect(r.valid).toBe(true);
+    if (r.valid) expect(r.value).toBe("x".repeat(40));
+  });
+
+  test("rejects empty", () => {
+    expect(validateGitHubPat("").valid).toBe(false);
+    expect(validateGitHubPat("   ").valid).toBe(false);
+  });
+
+  test("rejects too short (<30 chars)", () => {
+    expect(validateGitHubPat("x".repeat(29)).valid).toBe(false);
+  });
+
+  test("rejects too long (>256 chars)", () => {
+    expect(validateGitHubPat("x".repeat(257)).valid).toBe(false);
+  });
+
+  test("rejects embedded non-printable chars (NUL, tab)", () => {
+    expect(validateGitHubPat("x".repeat(20) + "\0" + "x".repeat(20)).valid).toBe(false);
+    expect(validateGitHubPat("x".repeat(20) + "\t" + "x".repeat(20)).valid).toBe(false);
+  });
+});
+
+describe("validateComposeWebService", () => {
+  test("accepts typical compose service names", () => {
+    expect(validateComposeWebService("web").valid).toBe(true);
+    expect(validateComposeWebService("api_v2").valid).toBe(true);
+    expect(validateComposeWebService("Worker-1").valid).toBe(true);
+  });
+
+  test("rejects empty / whitespace-only", () => {
+    expect(validateComposeWebService("").valid).toBe(false);
+    expect(validateComposeWebService("   ").valid).toBe(false);
+  });
+
+  test("rejects names starting with hyphen or underscore", () => {
+    expect(validateComposeWebService("-web").valid).toBe(false);
+    expect(validateComposeWebService("_web").valid).toBe(false);
+  });
+
+  test("rejects spaces and special chars", () => {
+    expect(validateComposeWebService("my app").valid).toBe(false);
+    expect(validateComposeWebService("my.app").valid).toBe(false);
+    expect(validateComposeWebService("my/app").valid).toBe(false);
+  });
+
+  test("rejects >63 chars", () => {
+    expect(validateComposeWebService("a".repeat(64)).valid).toBe(false);
+    expect(validateComposeWebService("a".repeat(63)).valid).toBe(true);
+  });
+});
+
+describe("validateDeployManifest", () => {
+  test("accepts a minimal manifest (just name)", () => {
+    const r = validateDeployManifest({ name: "demo" });
+    expect(r.ok).toBe(true);
+  });
+
+  test("accepts a full manifest", () => {
+    const r = validateDeployManifest({
+      $schema: 1,
+      name: "app",
+      description: "desc",
+      build: { dockerfile: "Dockerfile", context: ".", container_port: 3000 },
+      env: [{ key: "DATABASE_URL", required: true }, { key: "API_KEY", secret: true, default: "" }],
+      volume: { size: 5, path: "/data" },
+      webhook: { enabled: true, branch: "main" },
+      replicas: 3,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  test("rejects non-object raw inputs", () => {
+    expect(validateDeployManifest(null).ok).toBe(false);
+    expect(validateDeployManifest([]).ok).toBe(false);
+    expect(validateDeployManifest("string").ok).toBe(false);
+  });
+
+  test("rejects missing / empty name", () => {
+    expect(validateDeployManifest({}).ok).toBe(false);
+    expect(validateDeployManifest({ name: "" }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "   " }).ok).toBe(false);
+    expect(validateDeployManifest({ name: 42 }).ok).toBe(false);
+  });
+
+  test("rejects wrong $schema version", () => {
+    const r = validateDeployManifest({ $schema: 2, name: "x" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/schema/i);
+  });
+
+  test("rejects non-integer container_port", () => {
+    expect(validateDeployManifest({ name: "x", build: { container_port: 3.14 } }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", build: { container_port: 0 } }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", build: { container_port: 99999 } }).ok).toBe(false);
+  });
+
+  test("rejects build paths containing .. (path traversal)", () => {
+    expect(validateDeployManifest({ name: "x", build: { dockerfile: "../evil/Dockerfile" } }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", build: { compose_file: "sub/../etc/compose.yml" } }).ok).toBe(false);
+  });
+
+  test("rejects env entries with invalid keys", () => {
+    expect(validateDeployManifest({ name: "x", env: [{ key: "1BAD" }] }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", env: [{ key: "has-dash" }] }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", env: "not-an-array" }).ok).toBe(false);
+  });
+
+  test("rejects volume with invalid size / non-absolute path", () => {
+    expect(validateDeployManifest({ name: "x", volume: { size: 0 } }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", volume: { size: -1 } }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", volume: { path: "data" } }).ok).toBe(false);
+  });
+
+  test("rejects replicas <1", () => {
+    expect(validateDeployManifest({ name: "x", replicas: 0 }).ok).toBe(false);
   });
 });

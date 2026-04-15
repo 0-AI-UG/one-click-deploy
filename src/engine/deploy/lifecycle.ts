@@ -115,7 +115,7 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     if (app.volume_id) {
       try {
         const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
-        const compute = getComputeProvider(firstServer?.provider || "hetzner");
+        const compute = getComputeProvider(firstServer?.provider);
         await compute.volumes?.delete(app.volume_id);
         log("destroyApp", `Deleted volume ${app.volume_id}`);
       } catch (err) {

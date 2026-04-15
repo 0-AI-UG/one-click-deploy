@@ -142,7 +142,7 @@ const deleteVolume: Step<DestroyInput, { ok: boolean; error?: string }> = {
     const replicas = db.getReplicas(ctx.input.appId);
     const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
     const r = await softStep(ctx, "delete_volume", async () => {
-      const compute = getComputeProvider(firstServer?.provider || "hetzner");
+      const compute = getComputeProvider(firstServer?.provider);
       await compute.volumes?.delete(app.volume_id);
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };

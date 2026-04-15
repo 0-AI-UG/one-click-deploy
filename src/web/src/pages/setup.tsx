@@ -11,25 +11,27 @@ export function SetupPage() {
   const [loading, setLoading] = useState(false);
   const [serverTypes, setServerTypes] = useState<ServerType[]>([]);
   const [typesLoading, setTypesLoading] = useState(false);
-  // When the panel was handed off from a bootstrap instance, the Hetzner
+  // When the panel was handed off from a bootstrap instance, the provider
   // token is already present — skip the API-keys step and only ask for the
   // admin account.
-  const [hasHetznerToken, setHasHetznerToken] = useState(false);
+  const [hasProviderToken, setHasProviderToken] = useState(false);
+  const [providerName, setProviderName] = useState("Provider");
 
   useEffect(() => {
     get("/api/setup/status").then((res) => {
-      setHasHetznerToken(!!res.hasHetznerToken);
+      setHasProviderToken(!!res.hasProviderToken);
+      if (res.provider?.name) setProviderName(res.provider.name);
     }).catch(() => {});
   }, []);
   const [form, setForm] = useState({
     username: "", password: "", confirmPassword: "",
-    hetzner_api_token: "",
+    provider_token: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
 
-  // Debounced fetch of server types as the Hetzner token is typed.
+  // Debounced fetch of server types as the provider token is typed.
   useEffect(() => {
-    const token = form.hetzner_api_token.trim();
+    const token = form.provider_token.trim();
     if (!token) {
       setServerTypes([]);
       return;
@@ -37,7 +39,7 @@ export function SetupPage() {
     setTypesLoading(true);
     const handle = setTimeout(async () => {
       try {
-        const res = await post("/api/setup/server-types", { hetzner_api_token: token });
+        const res = await post("/api/setup/server-types", { provider_token: token });
         setServerTypes(res.server_types ?? []);
       } catch {
         setServerTypes([]);
@@ -46,7 +48,7 @@ export function SetupPage() {
       }
     }, 500);
     return () => { clearTimeout(handle); setTypesLoading(false); };
-  }, [form.hetzner_api_token]);
+  }, [form.provider_token]);
 
   useEffect(() => {
     if (serverTypes.length > 0 && !form.default_server_type) {
@@ -71,7 +73,7 @@ export function SetupPage() {
   };
 
   const handleSubmit = async () => {
-    if (!hasHetznerToken && !form.hetzner_api_token) return showToast("Hetzner API token is required", "error");
+    if (!hasProviderToken && !form.provider_token) return showToast(`${providerName} API token is required`, "error");
     setLoading(true);
     try {
       const res = await post("/api/setup/complete", form);
@@ -87,7 +89,7 @@ export function SetupPage() {
   // In handoff mode, step 1 is the only step — finish setup right from there.
   const handleStep1Submit = async () => {
     if (!validateStep1()) return;
-    if (hasHetznerToken) {
+    if (hasProviderToken) {
       await handleSubmit();
     } else {
       setStep(2);
@@ -104,7 +106,7 @@ export function SetupPage() {
         </div>
 
         {/* Progress */}
-        {!hasHetznerToken && (
+        {!hasProviderToken && (
           <div className="flex items-center gap-2 justify-center mb-6">
             {[1, 2].map((s) => (
               <div key={s} className="flex items-center gap-2">
@@ -138,7 +140,7 @@ export function SetupPage() {
               </div>
               <button onClick={handleStep1Submit} disabled={loading} className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35">
                 {loading ? <Spinner /> : (
-                  hasHetznerToken
+                  hasProviderToken
                     ? <><span>Complete Setup</span><ArrowRight size={14} /></>
                     : <><span>Next</span><ArrowRight size={14} /></>
                 )}
@@ -153,15 +155,15 @@ export function SetupPage() {
                 <h3 className="font-mono font-bold text-sm text-fg uppercase">API Keys & Defaults</h3>
               </div>
               <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner API Token *</label>
-                <input type="password" value={form.hetzner_api_token} onChange={set("hetzner_api_token")} placeholder="Required" />
+                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">{providerName} API Token *</label>
+                <input type="password" value={form.provider_token} onChange={set("provider_token")} placeholder="Required" />
               </div>
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>
                 <input type="text" value={form.dns_zone_id} onChange={set("dns_zone_id")} placeholder="Optional" />
               </div>
               <div className="text-[9px] font-mono uppercase tracking-wider text-muted -mt-1">
-                {typesLoading ? "Loading server types…" : serverTypes.length === 0 ? "Enter a valid Hetzner token to load server types" : `${serverTypes.length} server types available`}
+                {typesLoading ? "Loading server types…" : serverTypes.length === 0 ? `Enter a valid ${providerName} token to load server types` : `${serverTypes.length} server types available`}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

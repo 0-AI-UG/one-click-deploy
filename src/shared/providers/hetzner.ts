@@ -31,10 +31,25 @@ import {
   getPrivateIpv4,
 } from "../../engine/hetzner/networks.ts";
 import { cloudInitScript } from "./cloud-init.ts";
+import { validateHetznerToken } from "../validate.ts";
 
 export const hetznerCompute: ComputeProvider = {
   id: "hetzner",
   name: "Hetzner Cloud",
+  tokenKey: "hetzner_api_token",
+
+  validateToken(token) {
+    return validateHetznerToken(token);
+  },
+
+  async verifyToken(token) {
+    const res = await fetch("https://api.hetzner.cloud/v1/server_types?per_page=1", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) return;
+    if (res.status === 401) throw new Error("Invalid Hetzner API token");
+    throw new Error(`Hetzner API error (${res.status})`);
+  },
 
   async ensureSshKey(name, publicKey) {
     const existing = (await hetznerApi(

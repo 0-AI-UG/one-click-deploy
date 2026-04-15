@@ -20,7 +20,7 @@ import * as github from "../../shared/github.ts";
 import { validateDeployRequest } from "../../shared/validate.ts";
 import { createMasker } from "../../shared/mask.ts";
 import { processIncomingEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
-import { getTokens } from "../../shared/secret-store.ts";
+import { getProviderToken } from "../../shared/secret-store.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { scaleApp } from "../scale-api.ts";
 import { provisionServer } from "../provision-server.ts";
@@ -98,7 +98,7 @@ async function sshExecQuiet(ip: string, cmd: string, hostKey?: string) {
 }
 
 async function buildMasker(input: DeployInput, userId: string) {
-  const tokens = await getTokens();
+  const providerToken = await getProviderToken();
   const resolvedGitToken = await resolveGitHubToken(userId || undefined);
   const githubPat = resolvedGitToken || undefined;
   const envVarValues = input.env_vars
@@ -107,7 +107,7 @@ async function buildMasker(input: DeployInput, userId: string) {
       : Object.values(input.env_vars)
     : [];
   const secretValues = [
-    tokens.hetzner_api_token,
+    providerToken,
     ...(githubPat ? [githubPat] : []),
     ...envVarValues,
   ];

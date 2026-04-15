@@ -83,7 +83,7 @@ const deleteVolumes: Step<DestroyServiceInput, { failed: boolean }> = {
       if (!inst.volume_id) continue;
       const server = inst.server_id ? db.getServer(inst.server_id) : null;
       const r = await softStep(ctx, `delete_volume ${inst.volume_id}`, async () => {
-        const compute = getComputeProvider(server?.provider || "hetzner");
+        const compute = getComputeProvider(server?.provider);
         await compute.volumes?.delete(inst.volume_id);
       });
       if (!r.ok) failed = true;
