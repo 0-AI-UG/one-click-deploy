@@ -65,45 +65,48 @@ export async function reconcileNetwork(): Promise<void> {
  * Build /etc/hosts lines and push into /etc/hosts on every materialized
  * server:
  *
- *   - `<app>.ocd.internal`      → 127.0.0.1 (local Caddy srv_internal)
+ *   - `<app>.ocd.internal`      → this server's own private_ipv4 (local Caddy)
  *   - `<svc>.svc.ocd.internal`  → service host's private_ipv4 (direct)
  *
  * Each server runs its own Caddy srv_internal on :8080 with routes for every
  * app, so callers reach the local Caddy and it reverse-proxies to the
- * replica pool over the private network. This removes the extra panel hop
- * and the panel SPOF for internal traffic. Service direct entries stay as
- * private-IP pointers because services are single-instance and don't need
- * the local Caddy indirection.
+ * replica pool over the private network. App entries point at the *server's
+ * own* private IP rather than 127.0.0.1 because Docker containers inherit
+ * DNS from the host — a 127.0.0.1 entry would loop back to the container
+ * itself instead of hitting the host's Caddy. The server's private IP is
+ * reachable from both the host and its local containers.
+ *
+ * Service entries stay as private-IP pointers to the service host because
+ * services are single-instance and don't need the local Caddy indirection.
  *
  * Idempotent — the block is delimited by BEGIN/END markers so repeated
  * runs just overwrite the same region.
- *
- * These hosts entries are for host-level use (panel SSH, debugging,
- * container runs that opt-in via `--add-host`). App/service containers
- * themselves read the resolved private IP directly from their env vars,
- * so container-level /etc/hosts inheritance isn't required.
  */
 export async function syncInternalHosts(): Promise<void> {
   const panel = db.getPanel();
   if (!panel) return;
 
-  const lines: string[] = [];
-  for (const app of db.getApps()) {
-    lines.push(`127.0.0.1 ${app.name}.ocd.internal`);
-  }
+  const apps = db.getApps();
+  const serviceLines: string[] = [];
   for (const service of db.getServices()) {
     const instance = db.getServiceInstances(service.id)[0];
     if (!instance) continue;
     const host = db.getServer(instance.server_id);
     if (!host || !host.private_ipv4) continue;
-    lines.push(`${host.private_ipv4} ${service.name}.svc.ocd.internal`);
+    serviceLines.push(`${host.private_ipv4} ${service.name}.svc.ocd.internal`);
   }
-  const block = lines.join("\n");
 
   const servers = db.getServers().filter((s) => s.ipv4);
   for (const server of servers) {
+    const lines: string[] = [];
+    if (server.private_ipv4) {
+      for (const app of apps) {
+        lines.push(`${server.private_ipv4} ${app.name}.ocd.internal`);
+      }
+    }
+    lines.push(...serviceLines);
     try {
-      await writeHostsBlock(server.ipv4, block, server.ssh_host_key || undefined);
+      await writeHostsBlock(server.ipv4, lines.join("\n"), server.ssh_host_key || undefined);
     } catch (err) {
       log("hosts", `Failed to update /etc/hosts on ${server.name}: ${err}`);
     }

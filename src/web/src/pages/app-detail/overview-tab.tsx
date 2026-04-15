@@ -158,7 +158,7 @@ function MoveMenu({ targets, loading, disabled, onPick }: {
   onPick: (targetId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -166,7 +166,7 @@ function MoveMenu({ targets, loading, disabled, onPick }: {
     if (!open) return;
     const update = () => {
       const r = triggerRef.current?.getBoundingClientRect();
-      if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+      if (r) setPos({ top: r.bottom + 4, left: r.right });
     };
     update();
     window.addEventListener("resize", update);
@@ -204,7 +204,7 @@ function MoveMenu({ targets, loading, disabled, onPick }: {
       {open && !disabled && pos && createPortal(
         <div
           ref={menuRef}
-          style={{ position: "fixed", top: pos.top, right: pos.right }}
+          style={{ position: "fixed", top: pos.top, left: pos.left, transform: "translateX(-100%)" }}
           className="z-50 bg-bg-raised border-2 border-fg shadow-neo min-w-40"
         >
           {targets.length === 0 ? (
