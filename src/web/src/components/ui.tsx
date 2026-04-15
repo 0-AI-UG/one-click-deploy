@@ -242,12 +242,40 @@ export function Btn({
     ghost: "bg-bg-raised text-fg-dim shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none",
   };
 
+  const { node: renderedChildren, found: iconSpinning } = loading
+    ? spinFirstIcon(children)
+    : { node: children, found: false };
+
   return (
     <button type={type} onClick={onClick} disabled={disabled || loading} title={title} className={`${base} ${sizes} ${variants[variant]} ${className}`}>
-      {loading && <Spinner />}
-      {children}
+      {loading && !iconSpinning && <Spinner />}
+      {renderedChildren}
     </button>
   );
+}
+
+// Walk children and add `animate-spin` to the first Lucide-style icon element
+// (detected by a numeric `size` prop). Returns the transformed tree and whether
+// an icon was found, so Btn can skip rendering a second Spinner.
+function spinFirstIcon(node: ReactNode): { node: ReactNode; found: boolean } {
+  let found = false;
+  const visit = (child: ReactNode): ReactNode => {
+    if (found || !React.isValidElement(child)) return child;
+    const props = child.props as { size?: unknown; className?: string; children?: ReactNode };
+    if (typeof props.size === "number") {
+      found = true;
+      return React.cloneElement(child as React.ReactElement<{ className?: string }>, {
+        className: `${props.className ?? ""} animate-spin`.trim(),
+      });
+    }
+    if (props.children !== undefined) {
+      const newChildren = React.Children.map(props.children, visit);
+      if (found) return React.cloneElement(child, {}, newChildren);
+    }
+    return child;
+  };
+  const result = React.Children.map(node, visit);
+  return { node: result, found };
 }
 
 // --- Table ---

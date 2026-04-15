@@ -149,7 +149,7 @@ function OpRow({ op, showProgress }: { op: OperationView; showProgress?: boolean
       : null;
   const resource = op.resource_keys.join(", ");
   const age = op.started_at
-    ? formatDistanceToNow(new Date(op.started_at), { addSuffix: true })
+    ? formatDistanceToNow(new Date(op.started_at.replace(" ", "T") + "Z"), { addSuffix: true })
     : null;
   return (
     <a

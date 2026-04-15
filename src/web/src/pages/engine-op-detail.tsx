@@ -4,7 +4,7 @@ import { Spinner, confirm, Btn } from "../components/ui.tsx";
 
 function fmtTs(ts: string | null): string {
   if (!ts) return "—";
-  return new Date(ts).toLocaleTimeString();
+  return new Date(ts.replace(" ", "T") + "Z").toLocaleTimeString();
 }
 
 function stepStatusClass(status: string): string {
