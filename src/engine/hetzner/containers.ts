@@ -6,6 +6,12 @@ function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
+// Label applied to every image built or managed by OCD. Used by `pruneServer`
+// to scope aggressive image cleanup so we never touch images that belong to
+// other applications on the same host.
+export const OCD_IMAGE_LABEL_KEY = "ocd.managed";
+export const OCD_IMAGE_LABEL = `${OCD_IMAGE_LABEL_KEY}=true`;
+
 type CaddyHandler = {
   handler: string;
   upstreams?: Array<{ dial: string }>;
@@ -37,6 +43,7 @@ type ComposeOverrideServices = {
     ports?: string[];
     volumes?: string[];
     environment?: Record<string, string>;
+    build?: { labels?: string[] };
   };
 };
 
@@ -56,8 +63,10 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
     // Remove all tags for this app except :latest — old commit tags are no
     // longer needed since rollback rebuilds from git.
     `docker images ${appName} --format '{{.Repository}}:{{.Tag}}' | grep -v ':latest$' | xargs -r docker rmi 2>/dev/null || true`,
-    // Prune dangling images (untagged layers from previous builds)
-    `docker image prune -f`,
+    // Prune dangling images (untagged layers from previous builds). Scoped to
+    // OCD-labeled layers so we never drop intermediate layers that belong to
+    // other applications on this host.
+    `docker image prune -f --filter label=${OCD_IMAGE_LABEL}`,
     // Compact the git repo
     `cd ${appDir} && git gc --auto 2>/dev/null || true`,
   ].join(" && ");
@@ -68,22 +77,23 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
 }
 
 /**
- * Aggressive disk cleanup for a server: remove stopped containers, ALL unused
- * images (not just dangling), unused networks, and build cache.
- * Called periodically by the reconciler.
+ * Periodic disk cleanup scoped to OCD-managed images only. Removes unused
+ * images carrying our label (so tagged-but-unreferenced images from deleted
+ * apps are reclaimed) plus the global build cache (always reproducible).
+ * Deliberately does NOT run `docker system prune` — that would remove images
+ * belonging to other applications the user runs on the same host.
  */
 export async function pruneServer(ip: string, hostKey?: string) {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-  // --all removes ALL images not referenced by a running container (not just
-  // dangling ones). This catches old tagged images that `docker image prune`
-  // and the default `docker system prune` miss entirely.
-  const result = await sshExec(
-    ip,
-    asUser(`docker system prune --all -f 2>&1 | tail -1`),
-    hostKey,
-  );
+  // -a removes even tagged images (not just dangling) as long as they carry
+  // our label and aren't referenced by a running container.
+  const cmd = [
+    `docker image prune -a -f --filter label=${OCD_IMAGE_LABEL} 2>&1 | tail -1`,
+    `docker builder prune -f 2>&1 | tail -1`,
+  ].join("; ");
+  const result = await sshExec(ip, asUser(cmd), hostKey);
   if (result.stdout.trim()) {
-    log("prune", `Server ${ip}: ${result.stdout.trim()}`);
+    log("prune", `Server ${ip}: ${result.stdout.trim().replace(/\n/g, " | ")}`);
   }
 }
 
@@ -580,7 +590,7 @@ export async function cloneAndBuild(
   // Build image first (before stopping old container — build-before-destroy)
   emit("Building Docker image...");
   const dockerContext = opts.dockerContext || ".";
-  const buildCmd = `cd ${appDir} && docker build -t ${opts.name}:latest -f ${dockerfilePath} ${dockerContext}`;
+  const buildCmd = `cd ${appDir} && docker build --label ${OCD_IMAGE_LABEL} -t ${opts.name}:latest -f ${dockerfilePath} ${dockerContext}`;
   log("build", `Docker build command: ${buildCmd}`);
   const dockerBuildStart = Date.now();
   const buildResult = await sshExec(ip, asUser(buildCmd));
@@ -689,6 +699,16 @@ export async function cloneAndRailpackBuild(
   }
   log("railpack", `Railpack build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
   emit("Image built successfully with Railpack");
+
+  // Railpack doesn't expose image labels via its CLI, so wrap the output image
+  // in a single-layer rebuild that stamps our ocd.managed=true label. This
+  // lets `pruneServer` safely reclaim stale Railpack images without touching
+  // unrelated images on the host.
+  const labelCmd = `printf 'FROM ${opts.name}:latest\\n' | docker build -t ${opts.name}:latest --label ${OCD_IMAGE_LABEL} -`;
+  const labelResult = await sshExec(ip, asUser(labelCmd));
+  if (labelResult.exitCode !== 0) {
+    log("railpack", `Label injection failed (non-fatal): ${labelResult.stderr.slice(0, 300)}`);
+  }
 
   // Stop old container and swap
   log("railpack", `Removing existing container ${containerName} (if any)`);
@@ -837,6 +857,26 @@ export async function cloneAndComposeBuild(
   ];
   if (allVolumes.length > 0) {
     overrideServices[opts.webService].volumes = allVolumes;
+  }
+
+  // Stamp ocd.managed=true on every locally-built service image so
+  // `pruneServer` can safely reclaim them without touching non-OCD images.
+  // Only services with a `build:` section get the label — pulled-image
+  // services (`image:` only) are left alone and excluded from OCD prune.
+  const configResult = await sshExec(
+    ip,
+    asUser(`cd ${appDir} && docker compose -f ${opts.composeFile} config --format json 2>/dev/null`),
+  );
+  try {
+    const config = JSON.parse(configResult.stdout || "{}");
+    const services = (config.services || {}) as Record<string, { build?: unknown }>;
+    for (const [svc, def] of Object.entries(services)) {
+      if (!def.build) continue;
+      overrideServices[svc] = overrideServices[svc] || {};
+      overrideServices[svc].build = { labels: [OCD_IMAGE_LABEL] };
+    }
+  } catch (err) {
+    log("compose", `Could not parse compose config for labeling (non-fatal): ${err}`);
   }
   const override = JSON.stringify({ services: overrideServices });
   const overridePath = `${appDir}/docker-compose.ocd.yml`;
