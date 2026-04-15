@@ -89,26 +89,33 @@ const waitForChildren: Step<CascadeRedeployInput, WaitOut> = {
       return { succeeded, failed, cancelled };
     };
 
-    while (true) {
-      const children = listChildOperations(ctx.opId);
-      if (ctx.isCancelRequested()) {
-        for (const c of children) {
-          if (!TERMINAL.has(c.status)) {
-            try { requestCancel(c.id); } catch (err) { ctx.log(`requestCancel #${c.id} failed: ${err}`); }
+    // Release the engine concurrency slot while waiting, otherwise a batch of
+    // cascade parents can occupy every slot and starve their own children.
+    ctx.park();
+    try {
+      while (true) {
+        const children = listChildOperations(ctx.opId);
+        if (ctx.isCancelRequested()) {
+          for (const c of children) {
+            if (!TERMINAL.has(c.status)) {
+              try { requestCancel(c.id); } catch (err) { ctx.log(`requestCancel #${c.id} failed: ${err}`); }
+            }
           }
+          throw new Error("cascade cancelled");
         }
-        throw new Error("cascade cancelled");
-      }
-      const allDone = children.length > 0 && children.every((c) => TERMINAL.has(c.status));
-      if (children.length === 0 || allDone) {
-        const summary = summarize(children);
-        ctx.log(`children: ${summary.succeeded} succeeded, ${summary.failed} failed, ${summary.cancelled} cancelled`);
-        if (summary.failed > 0) {
-          throw new Error(`cascade: ${summary.failed} child redeploy(s) failed (succeeded=${summary.succeeded})`);
+        const allDone = children.length > 0 && children.every((c) => TERMINAL.has(c.status));
+        if (children.length === 0 || allDone) {
+          const summary = summarize(children);
+          ctx.log(`children: ${summary.succeeded} succeeded, ${summary.failed} failed, ${summary.cancelled} cancelled`);
+          if (summary.failed > 0) {
+            throw new Error(`cascade: ${summary.failed} child redeploy(s) failed (succeeded=${summary.succeeded})`);
+          }
+          return summary;
         }
-        return summary;
+        await new Promise((r) => setTimeout(r, 1000));
       }
-      await new Promise((r) => setTimeout(r, 1000));
+    } finally {
+      ctx.unpark();
     }
   },
 };

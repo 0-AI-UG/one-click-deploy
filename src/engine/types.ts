@@ -10,6 +10,11 @@ export type OpContext<Input = unknown> = {
   attempt: number;
   isCancelRequested: () => boolean;
   log: (line: string) => void;
+  // Voluntarily release the engine concurrency slot while awaiting external
+  // work (e.g. child ops). The promise keeps running; only the budget changes.
+  // Must be paired with unpark() before the step returns.
+  park: () => void;
+  unpark: () => void;
 };
 
 export type Step<Input = unknown, Out = unknown> = {

@@ -11,6 +11,7 @@ import {
 } from "../shared/db/operations.ts";
 import type { AnyOpKind, OpContext, Step } from "./types.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
+import { parkOp, unparkOp } from "./engine.ts";
 
 function log(...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [engine:step-runner]`, ...args);
@@ -40,6 +41,8 @@ export async function runOperation(op: OperationRow, def: AnyOpKind): Promise<vo
     attempt: op.attempt + 1,
     isCancelRequested: () => isCancelRequested(op.id),
     log: (line) => log(`op#${op.id}`, line),
+    park: () => parkOp(op.id),
+    unpark: () => unparkOp(op.id),
   };
 
   // Prior completed forward steps (from earlier attempt) are replayed as skips.
@@ -152,6 +155,8 @@ async function runCompensations(
         attempt: op.attempt,
         isCancelRequested: () => false, // don't short-circuit compensations
         log: (line) => log(`op#${op.id} (compensate)`, line),
+        park: () => parkOp(op.id),
+        unpark: () => unparkOp(op.id),
       }, out, priorOutputs);
       finishStep({ opId: op.id, seq, status: "ok" });
     } catch (err) {

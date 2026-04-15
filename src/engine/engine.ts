@@ -16,6 +16,21 @@ const MAX_CONCURRENT = parseInt(process.env.ENGINE_CONCURRENCY || "4", 10);
 const POLL_INTERVAL_MS = 400;
 
 const inFlight = new Map<number, Promise<void>>();
+const parked = new Set<number>();
+
+function activeCount(): number {
+  let n = 0;
+  for (const id of inFlight.keys()) if (!parked.has(id)) n++;
+  return n;
+}
+
+export function parkOp(opId: number): void {
+  if (inFlight.has(opId)) parked.add(opId);
+}
+
+export function unparkOp(opId: number): void {
+  parked.delete(opId);
+}
 
 let stopping = false;
 
@@ -44,10 +59,10 @@ async function loop(): Promise<void> {
 }
 
 async function tick(): Promise<void> {
-  if (inFlight.size >= MAX_CONCURRENT) return;
+  if (activeCount() >= MAX_CONCURRENT) return;
   const pending = listPendingOperations(MAX_CONCURRENT * 2);
   for (const op of pending) {
-    if (inFlight.size >= MAX_CONCURRENT) break;
+    if (activeCount() >= MAX_CONCURRENT) break;
     if (inFlight.has(op.id)) continue;
     tryStart(op);
   }
@@ -69,6 +84,7 @@ function tryStart(op: OperationRow): void {
     .finally(() => {
       release(keys);
       inFlight.delete(op.id);
+      parked.delete(op.id);
     });
   inFlight.set(op.id, promise);
 }
