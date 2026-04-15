@@ -10,9 +10,10 @@
 //                   domain.
 //   srv_internal  — on *every* server. Listens on :8080, auto-HTTPS disabled,
 //                   one route per app matching `<app>.ocd.internal`. Each
-//                   server's /etc/hosts points `<app>.ocd.internal` at
-//                   127.0.0.1, so internal callers hit their local Caddy
-//                   directly instead of routing through the panel. Port 8080
+//                   server's /etc/hosts points `<app>.ocd.internal` at that
+//                   server's own private IP, so internal callers (host or
+//                   container) hit their local Caddy directly instead of
+//                   routing through the panel. Port 8080
 //                   is deliberately *not* whitelisted in the Hetzner firewall
 //                   — private-network traffic bypasses the firewall,
 //                   public-network traffic is dropped at the edge, so this
