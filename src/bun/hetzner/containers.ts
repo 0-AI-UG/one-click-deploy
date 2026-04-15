@@ -488,6 +488,7 @@ async function cloneRepo(
   );
   if (cloneResult.exitCode !== 0) {
     const stderr = cloneResult.stderr;
+    log("build", `Clone failed (exit=${cloneResult.exitCode}): ${stderr.slice(0, 800)}`);
     const notFound = stderr.match(/Repository not found/i);
     const isAuthError = stderr.match(/could not read Username|Authentication failed|403/i);
     if (notFound && gitToken) {
@@ -499,7 +500,8 @@ async function cloneRepo(
     if (isAuthError && gitToken) {
       throw new Error(`Git clone failed: authentication rejected. Check that your GitHub token is valid and has the "repo" scope.`);
     }
-    throw new Error("Git clone failed — check that the repository URL is correct and accessible");
+    const detail = stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400);
+    throw new Error(`Git clone failed: ${detail || `exit ${cloneResult.exitCode} (no stderr)`}`);
   }
 
   // Strip token from git remote
