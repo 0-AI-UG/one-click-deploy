@@ -1,5 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect } from "react";
-import { createPortal } from "react-dom";
+import { useState, useRef } from "react";
 import { get, post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
@@ -159,31 +158,13 @@ function MoveMenu({ targets, loading, disabled, onPick }: {
   onPick: (targetId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
-  const triggerRef = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const closeTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const show = () => { clearTimeout(closeTimeout.current); setOpen(true); };
   const scheduleClose = () => { closeTimeout.current = setTimeout(() => setOpen(false), 150); };
 
-  useLayoutEffect(() => {
-    if (!open) return;
-    const update = () => {
-      const r = triggerRef.current?.getBoundingClientRect();
-      if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
-    };
-    update();
-    window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
-    return () => {
-      window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, true);
-    };
-  }, [open]);
-
   return (
-    <div ref={triggerRef} onMouseEnter={show} onMouseLeave={scheduleClose}>
+    <div className="relative" onMouseEnter={show} onMouseLeave={scheduleClose}>
       <Btn
         size="xs"
         variant="ghost"
@@ -193,14 +174,8 @@ function MoveMenu({ targets, loading, disabled, onPick }: {
       >
         <ArrowRightLeft size={11} /> Move
       </Btn>
-      {open && pos && !disabled && createPortal(
-        <div
-          ref={menuRef}
-          onMouseEnter={show}
-          onMouseLeave={scheduleClose}
-          style={{ position: "fixed", top: pos.top, right: pos.right }}
-          className="z-50 bg-bg-raised border-2 border-fg shadow-neo min-w-40"
-        >
+      {open && !disabled && (
+        <div className="absolute right-0 top-full mt-1 z-50 bg-bg-raised border-2 border-fg shadow-neo min-w-40">
           {targets.length === 0 ? (
             <div className="px-3 py-2 font-mono text-[10px] text-fg-dim uppercase tracking-wider">
               No other servers
@@ -216,8 +191,7 @@ function MoveMenu({ targets, loading, disabled, onPick }: {
               </button>
             ))
           )}
-        </div>,
-        document.body,
+        </div>
       )}
     </div>
   );

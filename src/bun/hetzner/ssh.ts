@@ -114,6 +114,22 @@ export function buildSshArgs(opts: {
   return { args, tmpKnownHostsPath: tmpPath };
 }
 
+/**
+ * Build a useful error message from a failed command, appending the last
+ * few lines of stderr (or stdout if stderr is empty) so the real cause
+ * surfaces instead of a generic "check your config" hint.
+ */
+export function describeFailure(
+  hint: string,
+  result: { stdout: string; stderr: string; exitCode: number },
+): string {
+  const raw = (result.stderr.trim() || result.stdout.trim());
+  const detail = raw
+    ? raw.split("\n").slice(-3).join(" | ").slice(0, 400)
+    : `exit ${result.exitCode}`;
+  return `${hint}: ${detail}`;
+}
+
 export async function sshExec(
   ip: string,
   command: string,

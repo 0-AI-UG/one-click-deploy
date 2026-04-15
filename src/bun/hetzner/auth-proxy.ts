@@ -1,4 +1,4 @@
-import { sshExec } from "./ssh.ts";
+import { sshExec, describeFailure } from "./ssh.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
@@ -138,7 +138,7 @@ export async function deployAuthProxy(
     await sshExec(ip, "apt-get update -qq && apt-get install -y -qq unzip > /dev/null 2>&1", hostKey);
     const install = await sshExec(ip, "rm -f /usr/local/bin/bun && curl -fsSL https://bun.sh/install | bash && cp /root/.bun/bin/bun /usr/local/bin/bun && chmod 755 /usr/local/bin/bun", hostKey);
     if (install.exitCode !== 0) {
-      throw new Error("Failed to install Bun runtime on server — check server connectivity");
+      throw new Error(describeFailure("Failed to install Bun runtime on server", install));
     }
   }
 
@@ -170,7 +170,8 @@ export async function deployAuthProxy(
   if (status.stdout.trim() !== "active") {
     const logs = await sshExec(ip, `journalctl -u ${serviceName} --no-pager -n 20 2>/dev/null`, hostKey);
     log("auth", `Auth proxy failed to start. Logs:\n${logs.stdout}`);
-    throw new Error("Auth proxy failed to start — check that the app port is correct and not in use");
+    const tail = logs.stdout.trim().split("\n").slice(-3).join(" | ").slice(0, 400);
+    throw new Error(`Auth proxy failed to start: ${tail || "service not active"}`);
   }
 
   log("auth", `Auth proxy for ${appName} deployed on port ${listenPort}`);

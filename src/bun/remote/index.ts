@@ -8,6 +8,7 @@ export {
   getOrCreateLocalKeyPair,
   captureHostKey,
   waitForServer,
+  describeFailure,
 } from "../hetzner/ssh.ts";
 
 // SSH PTY (interactive terminal)

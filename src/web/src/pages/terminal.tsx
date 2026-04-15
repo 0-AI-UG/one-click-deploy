@@ -141,9 +141,16 @@ export function TerminalPage({ kind, id }: Props) {
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    if (containerRef.current) {
-      term.open(containerRef.current);
-      try { fit.fit(); } catch { /* container may not be laid out yet */ }
+    const container = containerRef.current;
+    if (container) {
+      term.open(container);
+      // Defer the initial fit to the next frame so the container has its final
+      // laid-out size. Measuring before layout settles causes xterm's glyph
+      // size to be computed against the wrong box, which makes mouse
+      // selection drift by several rows from the cursor.
+      requestAnimationFrame(() => {
+        try { fit.fit(); } catch { /* disposed */ }
+      });
     }
     termRef.current = term;
     fitRef.current = fit;
@@ -171,6 +178,12 @@ export function TerminalPage({ kind, id }: Props) {
     };
     window.addEventListener("resize", onResize);
 
+    // Also react to container-level size changes (status overlay mount/unmount,
+    // error banner appearing, flex layout reflows). Without this, xterm's row
+    // math goes stale and selection lands a few rows off from the click.
+    const ro = new ResizeObserver(() => onResize());
+    if (container) ro.observe(container);
+
     // Refocus the terminal whenever the window/tab regains focus — otherwise
     // alt-tabbing back lands keystrokes on the document body.
     const onWindowFocus = () => { termRef.current?.focus(); };
@@ -182,6 +195,7 @@ export function TerminalPage({ kind, id }: Props) {
       disposedRef.current = true;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("focus", onWindowFocus);
+      ro.disconnect();
       if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);

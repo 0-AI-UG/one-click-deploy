@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
+import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box } from "lucide-react";
 
 type AppData = {
@@ -15,12 +16,51 @@ type ServiceData = {
 };
 type DashboardData = { apps: AppData[]; services: ServiceData[] };
 
+const APP_OP_KINDS = new Set([
+  "restart_app", "pause_app", "unpause_app", "redeploy", "destroy_app",
+]);
+const SVC_OP_KINDS = new Set([
+  "restart_service", "pause_service", "unpause_service", "destroy_service",
+]);
+
+const APP_OP_LABELS: Record<string, string> = {
+  restart: "Restarting app",
+  pause: "Pausing app",
+  unpause: "Unpausing app",
+  redeploy: "Redeploying app",
+  delete: "Destroying app",
+};
+const SVC_OP_LABELS: Record<string, string> = {
+  restart: "Restarting service",
+  pause: "Pausing service",
+  unpause: "Unpausing service",
+  delete: "Destroying service",
+};
+const APP_ACTION_TO_KIND: Record<string, string> = {
+  restart: "restart_app",
+  pause: "pause_app",
+  unpause: "unpause_app",
+  redeploy: "redeploy",
+  delete: "destroy_app",
+};
+const SVC_ACTION_TO_KIND: Record<string, string> = {
+  restart: "restart_service",
+  pause: "pause_service",
+  unpause: "unpause_service",
+  delete: "destroy_service",
+};
+
 export function DashboardPage() {
   const [data, setData] = useState<DashboardData>({ apps: [], services: [] });
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const confirmTimeoutRef = useRef<number | null>(null);
+
+  const ops = useActiveOperations(
+    (op) => APP_OP_KINDS.has(op.kind) || SVC_OP_KINDS.has(op.kind),
+    { rehydrateToasts: true },
+  );
 
   const armOrRun = (key: string, run: () => void) => {
     if (confirmKey === key) {
@@ -46,16 +86,24 @@ export function DashboardPage() {
 
   useEffect(() => { load(); }, []);
 
-  const appAction = async (action: string, appId: number, label: string, body?: Record<string, unknown>) => {
+  // Refetch dashboard state whenever the set of active ops changes — catches
+  // both enqueue (op appears) and terminal (op drops out after ~2s linger).
+  const activeSig = ops.active.map((o) => `${o.id}:${o.status}`).join(",");
+  useEffect(() => {
+    if (!loading) load();
+  }, [activeSig]);
+
+  const appAction = async (action: string, appId: number, body?: Record<string, unknown>) => {
     const key = `${action}-${appId}`;
     setActionLoading(key);
     try {
-      if (action === "delete") {
-        await del(`/api/apps/${appId}`);
-      } else {
-        await post(`/api/apps/${appId}/${action}`, body);
+      const res = action === "delete"
+        ? await del(`/api/apps/${appId}`) as { op_id?: number }
+        : await post(`/api/apps/${appId}/${action}`, body) as { op_id?: number };
+      if (res?.op_id) {
+        trackOperationInToast(res.op_id, APP_OP_LABELS[action] || "Operation");
+        ops.track(res.op_id);
       }
-      showToast(`${label} successful`, "success");
       load();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -64,22 +112,35 @@ export function DashboardPage() {
     }
   };
 
-  const svcAction = async (action: string, svcId: number, label: string) => {
+  const svcAction = async (action: string, svcId: number) => {
     const key = `svc-${action}-${svcId}`;
     setActionLoading(key);
     try {
-      if (action === "delete") {
-        await del(`/api/services/${svcId}`);
-      } else {
-        await post(`/api/services/${svcId}/${action}`);
+      const res = action === "delete"
+        ? await del(`/api/services/${svcId}`) as { op_id?: number }
+        : await post(`/api/services/${svcId}/${action}`) as { op_id?: number };
+      if (res?.op_id) {
+        trackOperationInToast(res.op_id, SVC_OP_LABELS[action] || "Operation");
+        ops.track(res.op_id);
       }
-      showToast(`${label} successful`, "success");
       load();
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
       setActionLoading(null);
     }
+  };
+
+  const appBusyKind = (appId: number) => ops.byResourceKey(`app:${appId}`)?.kind;
+  const svcBusyKind = (svcId: number) => ops.byResourceKey(`service:${svcId}`)?.kind;
+
+  const isAppActionLoading = (appId: number, action: string) => {
+    const k = `${action}-${appId}`;
+    return actionLoading === k || appBusyKind(appId) === APP_ACTION_TO_KIND[action];
+  };
+  const isSvcActionLoading = (svcId: number, action: string) => {
+    const k = `svc-${action}-${svcId}`;
+    return actionLoading === k || svcBusyKind(svcId) === SVC_ACTION_TO_KIND[action];
   };
 
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
@@ -117,8 +178,11 @@ export function DashboardPage() {
                 <span className="font-mono text-[10px] font-bold text-fg uppercase">Apps</span>
               </div>
               <div className="divide-y divide-fg/10">
-                {apps.map((app) => (
-                  <div key={app.id} className={`px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${app.status === "paused" ? "opacity-50" : ""}`}>
+                {apps.map((app) => {
+                  const rowBusy = !!appBusyKind(app.id);
+                  const disableRow = ops.isBusy;
+                  return (
+                  <div key={app.id} className={`px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${app.status === "paused" ? "opacity-50" : ""} ${rowBusy ? "bg-alt/30" : ""}`}>
                     <div className="flex items-center gap-4 min-w-0">
                       <a href={`#/apps/${app.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{app.name}</a>
                       {app.domain && (
@@ -144,7 +208,7 @@ export function DashboardPage() {
                           const k = `restart-${app.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("restart", app.id, "Restart"))}>
+                            <Btn size="xs" variant="ghost" loading={isAppActionLoading(app.id, "restart")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("restart", app.id))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />}
                             </Btn>
                           );
@@ -155,7 +219,7 @@ export function DashboardPage() {
                           const k = `unpause-${app.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("unpause", app.id, "Unpause"))}>
+                            <Btn size="xs" variant="ghost" loading={isAppActionLoading(app.id, "unpause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("unpause", app.id))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />}
                             </Btn>
                           );
@@ -163,7 +227,7 @@ export function DashboardPage() {
                           const k = `pause-${app.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("pause", app.id, "Pause"))}>
+                            <Btn size="xs" variant="ghost" loading={isAppActionLoading(app.id, "pause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("pause", app.id))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />}
                             </Btn>
                           );
@@ -174,7 +238,7 @@ export function DashboardPage() {
                           const k = `redeploy-${app.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => appAction("redeploy", app.id, "Redeploy"))}>
+                            <Btn size="xs" variant="ghost" loading={isAppActionLoading(app.id, "redeploy")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("redeploy", app.id))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <RefreshCw size={12} />}
                             </Btn>
                           );
@@ -184,17 +248,19 @@ export function DashboardPage() {
                         <Btn
                           size="xs"
                           variant="ghost"
-                          loading={actionLoading === `delete-${app.id}`}
+                          loading={isAppActionLoading(app.id, "delete")}
+                          disabled={disableRow}
                           onClick={async () => {
                             if (await confirm("Destroy App", `Permanently destroy "${app.name}"? This removes all containers, DNS records, and webhooks.`, true)) {
-                              appAction("delete", app.id, "Destroy");
+                              appAction("delete", app.id);
                             }
                           }}
                         ><Trash2 size={12} className="text-accent-red" /></Btn>
                       </PermissionGate>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
           )}
@@ -207,8 +273,11 @@ export function DashboardPage() {
                 <span className="font-mono text-[10px] font-bold text-fg uppercase">Services</span>
               </div>
               <div className="divide-y divide-fg/10">
-                {services.map((svc) => (
-                  <div key={svc.id} className={`px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${svc.status === "paused" ? "opacity-50" : ""}`}>
+                {services.map((svc) => {
+                  const rowBusy = !!svcBusyKind(svc.id);
+                  const disableRow = ops.isBusy;
+                  return (
+                  <div key={svc.id} className={`px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${svc.status === "paused" ? "opacity-50" : ""} ${rowBusy ? "bg-alt/30" : ""}`}>
                     <div className="flex items-center gap-4 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <Database size={10} className="text-muted" />
@@ -232,7 +301,7 @@ export function DashboardPage() {
                           const k = `svc-restart-${svc.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("restart", svc.id, "Restart"))}>
+                            <Btn size="xs" variant="ghost" loading={isSvcActionLoading(svc.id, "restart")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => svcAction("restart", svc.id))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />}
                             </Btn>
                           );
@@ -243,7 +312,7 @@ export function DashboardPage() {
                           const k = `svc-unpause-${svc.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("unpause", svc.id, "Unpause"))}>
+                            <Btn size="xs" variant="ghost" loading={isSvcActionLoading(svc.id, "unpause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => svcAction("unpause", svc.id))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />}
                             </Btn>
                           );
@@ -251,7 +320,7 @@ export function DashboardPage() {
                           const k = `svc-pause-${svc.id}`;
                           const armed = confirmKey === k;
                           return (
-                            <Btn size="xs" variant="ghost" loading={actionLoading === k} onClick={() => armOrRun(k, () => svcAction("pause", svc.id, "Pause"))}>
+                            <Btn size="xs" variant="ghost" loading={isSvcActionLoading(svc.id, "pause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => svcAction("pause", svc.id))}>
                               {armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />}
                             </Btn>
                           );
@@ -261,17 +330,19 @@ export function DashboardPage() {
                         <Btn
                           size="xs"
                           variant="ghost"
-                          loading={actionLoading === `svc-delete-${svc.id}`}
+                          loading={isSvcActionLoading(svc.id, "delete")}
+                          disabled={disableRow}
                           onClick={async () => {
                             if (await confirm("Destroy Service", `Permanently destroy "${svc.name}"? This removes all containers, volumes, and data.`, true)) {
-                              svcAction("delete", svc.id, "Destroy");
+                              svcAction("delete", svc.id);
                             }
                           }}
                         ><Trash2 size={12} className="text-accent-red" /></Btn>
                       </PermissionGate>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
           )}

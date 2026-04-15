@@ -1,6 +1,6 @@
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
-import { sshExec, getSshKeyPath } from "./ssh.ts";
+import { sshExec, getSshKeyPath, describeFailure } from "./ssh.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
@@ -110,7 +110,7 @@ export async function transferImage(
       sourceHostKey
     );
     if (saveResult.exitCode !== 0) {
-      throw new Error("Failed to export Docker image from source server");
+      throw new Error(describeFailure("Failed to export Docker image from source server", saveResult));
     }
 
     // Download to local
@@ -124,7 +124,8 @@ export async function transferImage(
     const downExit = await scpDown.exited;
     if (downExit !== 0) {
       const stderr = await new Response(scpDown.stderr).text();
-      throw new Error("Failed to download image from source server — check SSH connectivity");
+      const detail = stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400) || `exit ${downExit}`;
+      throw new Error(`Failed to download image from source server: ${detail}`);
     }
 
     // Upload to target
@@ -138,7 +139,8 @@ export async function transferImage(
     const upExit = await scpUp.exited;
     if (upExit !== 0) {
       const stderr = await new Response(scpUp.stderr).text();
-      throw new Error("Failed to upload image to target server — check SSH connectivity");
+      const detail = stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400) || `exit ${upExit}`;
+      throw new Error(`Failed to upload image to target server: ${detail}`);
     }
 
     // Load on target — run docker load as deploy, but file is owned by root
@@ -149,7 +151,7 @@ export async function transferImage(
       targetHostKey
     );
     if (loadResult.exitCode !== 0) {
-      throw new Error("Failed to import Docker image on target server");
+      throw new Error(describeFailure("Failed to import Docker image on target server", loadResult));
     }
 
     log("transfer", `Image ${imageName} transferred successfully`);
@@ -259,7 +261,7 @@ export async function deployCaddySite(
     );
     if (retry.exitCode !== 0) {
       log("caddy", `Admin API retry also failed: ${retry.stderr}`);
-      throw new Error("Failed to configure Caddy reverse proxy for " + domain);
+      throw new Error(describeFailure(`Failed to configure Caddy reverse proxy for ${domain}`, retry));
     }
   }
 
@@ -416,7 +418,7 @@ export async function deployCaddyWakePage(
       hostKey
     );
     if (retry.exitCode !== 0) {
-      throw new Error("Failed to configure Caddy wake page for " + domain);
+      throw new Error(describeFailure(`Failed to configure Caddy wake page for ${domain}`, retry));
     }
   }
 
@@ -503,8 +505,7 @@ async function cloneRepo(
     if (isAuthError && gitToken) {
       throw new Error(`Git clone failed: authentication rejected. Check that your GitHub token is valid and has the "repo" scope.`);
     }
-    const detail = stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400);
-    throw new Error(`Git clone failed: ${detail || `exit ${cloneResult.exitCode} (no stderr)`}`);
+    throw new Error(describeFailure("Git clone failed", cloneResult));
   }
 
   // Strip token from git remote
@@ -585,7 +586,7 @@ export async function cloneAndBuild(
   const buildResult = await sshExec(ip, asUser(buildCmd));
   if (buildResult.exitCode !== 0) {
     log("build", `Docker build stderr: ${buildResult.stderr.slice(0, 500)}`);
-    throw new Error("Docker build failed — check your Dockerfile and build logs for errors");
+    throw new Error(describeFailure("Docker build failed", buildResult));
   }
   log("build", `Docker build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
   emit("Image built successfully");
@@ -620,8 +621,7 @@ export async function cloneAndBuild(
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
     log("build", `Docker run stderr: ${result.stderr}`);
-    const detail = result.stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400);
-    throw new Error(`Failed to start container: ${detail || `exit ${result.exitCode}`}`);
+    throw new Error(describeFailure("Failed to start container", result));
   }
   log("build", `Container started: ${result.stdout.trim().slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
 
@@ -685,7 +685,7 @@ export async function cloneAndRailpackBuild(
     if (buildResult.stderr.includes("not found") || buildResult.stderr.includes("No such file")) {
       throw new Error("Railpack is not installed on this server. It is available on newly provisioned servers — try deploying to a new server or install it manually (curl -sSL https://railpack.com/install.sh | sh).");
     }
-    throw new Error("Railpack build failed — check the build logs for errors. You can also add a Dockerfile to your repo for more control.");
+    throw new Error(describeFailure("Railpack build failed", buildResult));
   }
   log("railpack", `Railpack build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
   emit("Image built successfully with Railpack");
@@ -716,8 +716,7 @@ export async function cloneAndRailpackBuild(
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
     log("railpack", `Docker run stderr: ${result.stderr}`);
-    const detail = result.stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400);
-    throw new Error(`Failed to start container: ${detail || `exit ${result.exitCode}`}`);
+    throw new Error(describeFailure("Failed to start container", result));
   }
   log("railpack", `Container started: ${result.stdout.trim().slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
 
@@ -872,7 +871,7 @@ export async function cloneAndComposeBuild(
   const buildResult = await sshExec(ip, asUser(composeCmd));
   if (buildResult.exitCode !== 0) {
     log("compose", `Compose build stderr: ${buildResult.stderr.slice(0, 500)}`);
-    throw new Error("Docker Compose build failed — check your compose file and build logs for errors");
+    throw new Error(describeFailure("Docker Compose build failed", buildResult));
   }
   log("compose", `Compose project started in ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
   emit("Compose project started");
@@ -893,7 +892,7 @@ export async function restartCompose(ip: string, projectName: string, hostKey?: 
     hostKey
   );
   if (result.exitCode !== 0) {
-    throw new Error("Failed to restart compose project — check container logs for details");
+    throw new Error(describeFailure("Failed to restart compose project", result));
   }
 }
 
@@ -905,7 +904,7 @@ export async function pauseCompose(ip: string, projectName: string, hostKey?: st
     hostKey
   );
   if (result.exitCode !== 0) {
-    throw new Error("Failed to pause compose project");
+    throw new Error(describeFailure("Failed to pause compose project", result));
   }
 }
 
@@ -917,7 +916,7 @@ export async function unpauseCompose(ip: string, projectName: string, hostKey?: 
     hostKey
   );
   if (result.exitCode !== 0) {
-    throw new Error("Failed to unpause compose project");
+    throw new Error(describeFailure("Failed to unpause compose project", result));
   }
 }
 
@@ -1113,7 +1112,7 @@ export async function restartContainer(
     hostKey
   );
   if (result.exitCode !== 0) {
-    throw new Error("Failed to restart container — it may have crashed, check logs for details");
+    throw new Error(describeFailure("Failed to restart container", result));
   }
 }
 
@@ -1128,7 +1127,7 @@ export async function pauseContainer(
     hostKey
   );
   if (result.exitCode !== 0) {
-    throw new Error("Failed to pause container");
+    throw new Error(describeFailure("Failed to pause container", result));
   }
 }
 
@@ -1143,7 +1142,7 @@ export async function unpauseContainer(
     hostKey
   );
   if (result.exitCode !== 0) {
-    throw new Error("Failed to unpause container");
+    throw new Error(describeFailure("Failed to unpause container", result));
   }
 }
 
@@ -1218,7 +1217,7 @@ export async function stopCompose(ip: string, projectName: string, hostKey?: str
     hostKey
   );
   if (result.exitCode !== 0) {
-    throw new Error("Failed to stop compose project");
+    throw new Error(describeFailure("Failed to stop compose project", result));
   }
 }
 
@@ -1231,7 +1230,7 @@ export async function startCompose(ip: string, projectName: string, hostKey?: st
     hostKey
   );
   if (result.exitCode !== 0) {
-    throw new Error("Failed to start compose project");
+    throw new Error(describeFailure("Failed to start compose project", result));
   }
 }
 

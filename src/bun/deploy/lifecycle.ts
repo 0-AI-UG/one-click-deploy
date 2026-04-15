@@ -14,6 +14,7 @@ import {
   unpauseCompose,
   composeHealthCheck,
   healthCheck,
+  describeFailure,
 } from "../remote/index.ts";
 import { removeAppCaddy, syncAppCaddy } from "../scale/caddy-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -307,8 +308,7 @@ export async function recreateAppContainer(
       const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${app.name}:latest`;
       const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (result.exitCode !== 0) {
-        const detail = result.stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400);
-        throw new Error(`Failed to start container: ${detail || `exit ${result.exitCode}`}`);
+        throw new Error(describeFailure("Failed to start container", result));
       }
     }
 

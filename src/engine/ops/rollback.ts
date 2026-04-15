@@ -4,6 +4,7 @@ import {
   removeContainer,
   healthCheck,
   composeHealthCheck,
+  describeFailure,
 } from "../../bun/remote/index.ts";
 import { resolveAppEnvVars } from "../../bun/env-crypto.ts";
 import { replicaBindHost } from "../../bun/scale/types.ts";
@@ -92,7 +93,7 @@ const swapContainerToTarget: Step<RollbackInput, SwapOut> = {
       const composeCmd = `cd ${appDir} && docker compose -f ${app.compose_file} -f docker-compose.ocd.yml -p ${app.name} ${envFileFlag} up -d --build`;
       const result = await sshExec(server.ipv4, asUser(composeCmd), hostKey);
       if (result.exitCode !== 0) {
-        throw new Error("Failed to rollback compose project — previous version may have build errors");
+        throw new Error(describeFailure("Failed to rollback compose project", result));
       }
     } else {
       let dockerfilePath = app.dockerfile_path?.replace(/^\/+/, "");
@@ -109,7 +110,7 @@ const swapContainerToTarget: Step<RollbackInput, SwapOut> = {
       const buildCmd = `cd ${appDir} && docker build -t ${app.name}:latest -f ${dockerfilePath} ${dockerContext}`;
       const buildResult = await sshExec(server.ipv4, asUser(buildCmd), hostKey);
       if (buildResult.exitCode !== 0) {
-        throw new Error("Failed to rollback — previous version may have build errors");
+        throw new Error(describeFailure("Failed to rollback (docker build)", buildResult));
       }
       await removeContainer(server.ipv4, app.name, hostKey);
       const envFileFlag = envEntries.length > 0 ? `--env-file ${appDir}/.env.deploy` : "";
@@ -118,7 +119,7 @@ const swapContainerToTarget: Step<RollbackInput, SwapOut> = {
       const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${app.name}:latest`;
       const runResult = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (runResult.exitCode !== 0) {
-        throw new Error("Failed to start container after rollback rebuild");
+        throw new Error(describeFailure("Failed to start container after rollback rebuild", runResult));
       }
     }
     return { containerName: app.name };

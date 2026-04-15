@@ -4,6 +4,7 @@ import {
   sshExec, cloneAndComposeBuild,
   transferImage, healthCheck, composeHealthCheck,
   deployAuthProxy, removeAuthProxy,
+  describeFailure,
 } from "../remote/index.ts";
 import { resolveGitHubToken } from "../github-token.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
@@ -101,7 +102,7 @@ export async function scaleUp(
       const cmd = `docker run -d --name ${containerName} --restart unless-stopped -p ${replicaBindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${imageName}`;
       const result = await sshExec(targetServer.ipv4, asUser(cmd), targetHostKey);
       if (result.exitCode !== 0) {
-        throw new Error("Failed to start replica on target server — check that Docker is running and the image was transferred");
+        throw new Error(describeFailure("Failed to start replica on target server", result));
       }
     }
 
