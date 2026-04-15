@@ -532,6 +532,10 @@ export async function cloneAndBuild(
      *  server's `private_ipv4` when the app is reached by the panel Caddy
      *  over the shared private network. */
     bindAddr?: string;
+    /** Override for the docker container name. Defaults to `opts.name`.
+     *  Needed when redeploying a replica whose container is named
+     *  `${app}-r${n}` (from scaleUp/migrate) rather than bare `${app}`. */
+    containerName?: string;
   },
   onLog?: (line: string) => void
 ) {
@@ -587,8 +591,9 @@ export async function cloneAndBuild(
   emit("Image built successfully");
 
   // Build succeeded — now safe to stop old container and swap
-  log("build", `Removing existing container ${opts.name} (if any)`);
-  await sshExec(ip, asUser(`docker rm -f ${opts.name} 2>/dev/null || true`));
+  const containerName = opts.containerName || opts.name;
+  log("build", `Removing existing container ${containerName} (if any)`);
+  await sshExec(ip, asUser(`docker rm -f ${containerName} 2>/dev/null || true`));
 
   // Write env file to server (avoids shell injection via env var values)
   const envFileEntries = Object.entries(opts.envVars);
@@ -610,12 +615,13 @@ export async function cloneAndBuild(
   const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
   const extraVolFlags = (opts.extraVolumes || []).map((v) => `-v ${v}`).join(" ");
   const bindAddr = opts.bindAddr || "127.0.0.1";
-  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${opts.name}:latest`;
+  const cmd = `docker run -d --name ${containerName} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${opts.name}:latest`;
   log("build", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
     log("build", `Docker run stderr: ${result.stderr}`);
-    throw new Error("Failed to start container — check your port configuration and environment variables");
+    const detail = result.stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400);
+    throw new Error(`Failed to start container: ${detail || `exit ${result.exitCode}`}`);
   }
   log("build", `Container started: ${result.stdout.trim().slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
 
@@ -650,6 +656,8 @@ export async function cloneAndRailpackBuild(
     gitToken?: string;
     /** See `cloneAndBuild` — defaults to 127.0.0.1. */
     bindAddr?: string;
+    /** See `cloneAndBuild` — defaults to `opts.name`. */
+    containerName?: string;
   },
   onLog?: (line: string) => void
 ) {
@@ -657,6 +665,7 @@ export async function cloneAndRailpackBuild(
   const emit = (msg: string) => onLog?.(msg);
   const buildStart = Date.now();
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  const containerName = opts.containerName || opts.name;
 
   // Clone or pull repo
   await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit);
@@ -682,8 +691,8 @@ export async function cloneAndRailpackBuild(
   emit("Image built successfully with Railpack");
 
   // Stop old container and swap
-  log("railpack", `Removing existing container ${opts.name} (if any)`);
-  await sshExec(ip, asUser(`docker rm -f ${opts.name} 2>/dev/null || true`));
+  log("railpack", `Removing existing container ${containerName} (if any)`);
+  await sshExec(ip, asUser(`docker rm -f ${containerName} 2>/dev/null || true`));
 
   // Write env file
   const envFileEntries = Object.entries(opts.envVars);
@@ -702,12 +711,13 @@ export async function cloneAndRailpackBuild(
   const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
   const extraVolFlags = (opts.extraVolumes || []).map((v) => `-v ${v}`).join(" ");
   const bindAddr = opts.bindAddr || "127.0.0.1";
-  const cmd = `docker run -d --name ${opts.name} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${opts.name}:latest`;
+  const cmd = `docker run -d --name ${containerName} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${opts.name}:latest`;
   log("railpack", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
     log("railpack", `Docker run stderr: ${result.stderr}`);
-    throw new Error("Failed to start container — check your port configuration and environment variables");
+    const detail = result.stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400);
+    throw new Error(`Failed to start container: ${detail || `exit ${result.exitCode}`}`);
   }
   log("railpack", `Container started: ${result.stdout.trim().slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
 

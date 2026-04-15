@@ -97,6 +97,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       extraVolumes,
       gitToken: githubPat,
       bindAddr,
+      containerName: first.container_name,
     };
     const logLine = (line: string) => {
       db.appendDeployLog(appId, `[redeploy] ${line}`);
@@ -127,9 +128,9 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     }
 
     if (authPassword) {
-      await deployAuthProxy(server.ipv4, app.name, authPassword, first.host_port, bindAddr, hostKey);
+      await deployAuthProxy(server.ipv4, first.container_name, authPassword, first.host_port, bindAddr, hostKey);
     } else if (app.auth_password && !authPassword) {
-      await removeAuthProxy(server.ipv4, app.name, hostKey);
+      await removeAuthProxy(server.ipv4, first.container_name, hostKey);
     }
 
     // Persist port/auth changes only after successful build.
@@ -194,7 +195,7 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
     const build = prior["pull_and_build"] as BuildOut;
     const health = build.deployMode === "compose"
       ? await composeHealthCheck(server.ipv4, app.name, bindAddr, first.host_port, 5, hostKey)
-      : await healthCheck(server.ipv4, app.name, bindAddr, first.host_port, 5, hostKey);
+      : await healthCheck(server.ipv4, first.container_name, bindAddr, first.host_port, 5, hostKey);
     db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
     if (!health.healthy) {
       db.appendDeployLog(ctx.input.appId, `[health] ${health.error || "Health check failed"}`);
