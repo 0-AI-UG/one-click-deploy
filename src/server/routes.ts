@@ -85,6 +85,7 @@ import {
   handleOperationEvents,
   handleCancelOperation,
 } from "./routes/operations.ts";
+import { handleTerminalExec } from "./routes/terminal-exec.ts";
 import {
   handleGetCatalog,
   handleGetServices,
@@ -358,6 +359,9 @@ export const apiRoutes = {
     const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
     return handleCancelOperation(req, id);
   }},
+
+  // --- Terminal ---
+  "/api/terminal/exec": { POST: (req: Request) => handleTerminalExec(req) },
 
   // --- Volumes ---
   "/api/volumes/attach": { POST: (req: Request) => handleAttachVolume(req) },

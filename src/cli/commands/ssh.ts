@@ -1,4 +1,4 @@
-import { get, resolveApp } from "../api.ts";
+import { get, post, resolveApp } from "../api.ts";
 import { requireConfig } from "../config.ts";
 import { BOLD, DIM, RED, RESET } from "../format.ts";
 
@@ -67,46 +67,22 @@ function buildWsUrl(wsTarget: string, token: string, panelUrl: string): string {
   return `${wsProto}://${host}/api/terminal/ws?target=${wsTarget}&token=${encodeURIComponent(token)}`;
 }
 
-// Run a command and print its output, then exit.
-function execCommand(url: string, command: string): void {
-  const ws = new WebSocket(url);
-  ws.binaryType = "arraybuffer";
-
-  let output = Buffer.alloc(0);
-  let opened = false;
-
-  ws.addEventListener("open", () => {
-    opened = true;
-    const cols = process.stdout.columns || 200;
-    const rows = process.stdout.rows || 50;
-    ws.send(JSON.stringify({ type: "resize", cols, rows }));
-    // Send command followed by exit so the shell terminates
-    ws.send(Buffer.from(`${command}\nexit\n`));
-  });
-
-  ws.addEventListener("message", (event) => {
-    const data = event.data;
-    if (data instanceof ArrayBuffer) {
-      const buf = Buffer.from(data);
-      if (buf.length === 1 && buf[0] === 0) return; // heartbeat
-      output = Buffer.concat([output, buf]);
-    } else if (typeof data === "string") {
-      output = Buffer.concat([output, Buffer.from(data)]);
-    }
-  });
-
-  ws.addEventListener("close", () => {
-    // Strip shell prompt noise: output contains the echoed command and
-    // trailing prompt. We print raw and let the caller parse as needed.
-    process.stdout.write(output);
-    process.exit(0);
-  });
-
-  ws.addEventListener("error", () => {
-    if (!opened) console.error(`${RED}Connection failed. Check your login session.${RESET}`);
-    else console.error(`${RED}WebSocket error${RESET}`);
+// Run a command via the HTTP exec endpoint and print its output, then exit
+// with the remote exit code. No PTY, no shell prompt noise.
+async function execCommand(wsTarget: string, command: string): Promise<void> {
+  try {
+    const res = await post<{ stdout: string; stderr: string; exitCode: number }>(
+      "/api/terminal/exec",
+      { target: wsTarget, command },
+    );
+    if (res.stdout) process.stdout.write(res.stdout);
+    if (res.stderr) process.stderr.write(res.stderr);
+    process.exit(res.exitCode ?? 0);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`${RED}${msg}${RESET}`);
     process.exit(1);
-  });
+  }
 }
 
 // Interactive terminal session.
@@ -207,12 +183,12 @@ ${BOLD}Options:${RESET}
   }
 
   const { wsTarget, label } = await resolveTarget(args);
-  const config = requireConfig();
-  const url = buildWsUrl(wsTarget, config.token, config.panel_url);
 
   if (isInteractive || isServer) {
+    const config = requireConfig();
+    const url = buildWsUrl(wsTarget, config.token, config.panel_url);
     interactive(url, label);
   } else {
-    execCommand(url, command);
+    await execCommand(wsTarget, command);
   }
 }
