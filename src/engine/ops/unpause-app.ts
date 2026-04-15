@@ -1,4 +1,4 @@
-import { unpauseApp } from "../../bun/deploy/lifecycle.ts";
+import { unpauseApp } from "../deploy/lifecycle.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

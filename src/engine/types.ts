@@ -1,4 +1,4 @@
-import type { OperationRow } from "../bun/db/operations.ts";
+import type { OperationRow } from "../shared/db/operations.ts";
 
 export type OpContext<Input = unknown> = {
   opId: number;

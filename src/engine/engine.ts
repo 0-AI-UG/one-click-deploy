@@ -2,11 +2,11 @@ import {
   listPendingOperations,
   listRunningOperations,
   markOperationFinished,
-} from "../bun/db/operations.ts";
+} from "../shared/db/operations.ts";
 import { tryAcquire, release } from "./scheduler.ts";
 import { getOp } from "./ops/registry.ts";
 import { runOperation } from "./step-runner.ts";
-import type { OperationRow } from "../bun/db/operations.ts";
+import type { OperationRow } from "../shared/db/operations.ts";
 
 function log(...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [engine]`, ...args);
@@ -79,7 +79,7 @@ async function resumeInterruptedOperations(): Promise<void> {
   log(`resuming ${interrupted.length} interrupted op(s) after restart`);
   // Mark them back to pending so the tick loop picks them up normally.
   for (const op of interrupted) {
-    const { default: db } = await import("../bun/db/connection.ts");
+    const { default: db } = await import("../shared/db/connection.ts");
     db.run("UPDATE operations SET status = 'pending' WHERE id = ?", [op.id]);
   }
 }

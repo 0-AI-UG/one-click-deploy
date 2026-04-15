@@ -1,9 +1,9 @@
-import * as db from "../../bun/db.ts";
-import { scaleDown } from "../../bun/scale/scale-down.ts";
-import { syncAppCaddy } from "../../bun/scale/caddy-manager.ts";
+import * as db from "../../shared/db.ts";
+import { scaleDown } from "../scale/scale-down.ts";
+import { syncAppCaddy } from "../scale/caddy-manager.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
-import type { App, Replica } from "../../bun/scale/types.ts";
+import type { App, Replica } from "../scale/types.ts";
 
 type ScaleDownInput = { appId: number; targetReplicas: number };
 

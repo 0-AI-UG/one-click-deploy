@@ -1,9 +1,9 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../bun/env-crypto.ts";
-import { enqueue } from "../../bun/ipc/enqueue.ts";
+import * as db from "../../shared/db.ts";
+import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../shared/env-crypto.ts";
+import { enqueue } from "../ipc/enqueue.ts";
 
 export async function handleGetEnvironments(request: Request): Promise<Response> {
   try {

@@ -1,7 +1,7 @@
-import * as db from "../../bun/db.ts";
-import { getComputeProvider, getDnsProvider } from "../../bun/providers/index.ts";
-import { destroyApp } from "../../bun/deploy/lifecycle.ts";
-import { destroyService } from "../../bun/deploy/service-lifecycle.ts";
+import * as db from "../../shared/db.ts";
+import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
+import { destroyApp } from "../deploy/lifecycle.ts";
+import { destroyService } from "../deploy/service-lifecycle.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

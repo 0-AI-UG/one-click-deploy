@@ -1,10 +1,10 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requireAdmin } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import { secretStore, maskToken } from "../../bun/secret-store.ts";
-import { validateHetznerToken } from "../../bun/validate.ts";
-import { getComputeProvider } from "../../bun/providers/index.ts";
+import * as db from "../../shared/db.ts";
+import { secretStore, maskToken } from "../../shared/secret-store.ts";
+import { validateHetznerToken } from "../../shared/validate.ts";
+import { getComputeProvider } from "../../shared/providers/index.ts";
 
 export async function handleGetSettings(request: Request): Promise<Response> {
   try {

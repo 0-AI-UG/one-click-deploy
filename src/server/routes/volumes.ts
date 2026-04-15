@@ -1,10 +1,10 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import { getComputeProvider } from "../../bun/providers/index.ts";
-import { sshExec } from "../../bun/remote/index.ts";
-import { recreateAppContainer } from "../../bun/deploy/index.ts";
+import * as db from "../../shared/db.ts";
+import { getComputeProvider } from "../../shared/providers/index.ts";
+import { sshExec } from "../../shared/remote/index.ts";
+import { recreateAppContainer } from "../../engine/deploy/index.ts";
 
 function parseExtraVolumes(raw: string): string[] {
   try { const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }

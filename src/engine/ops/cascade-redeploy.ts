@@ -1,11 +1,11 @@
-import * as db from "../../bun/db.ts";
+import * as db from "../../shared/db.ts";
 import {
   enqueueOperation,
   listChildOperations,
   requestCancel,
   type OperationRow,
   type OperationStatus,
-} from "../../bun/db/operations.ts";
+} from "../../shared/db/operations.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

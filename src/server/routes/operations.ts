@@ -2,7 +2,7 @@ import { corsHeaders } from "../lib/cors.ts";
 import { handleError } from "../lib/utils.ts";
 import { authenticateRequest } from "../lib/auth.ts";
 import { requirePermission } from "../lib/permissions.ts";
-import { getUserById } from "../../bun/db.ts";
+import { getUserById } from "../../shared/db.ts";
 import { PermissionError } from "../lib/errors.ts";
 import {
   getOperation,
@@ -12,8 +12,8 @@ import {
   listRecentOperations,
   listChildOperations,
   requestCancel,
-} from "../../bun/db/operations.ts";
-import { getSettings } from "../../bun/db/settings.ts";
+} from "../../shared/db/operations.ts";
+import { getSettings } from "../../shared/db/settings.ts";
 import { stepCount, listOps, getOp } from "../../engine/ops/registry.ts";
 
 // Keys whose values may contain secrets (connection strings, passwords,

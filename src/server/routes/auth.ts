@@ -4,7 +4,7 @@ import { AuthError } from "../lib/errors.ts";
 import { handleError, getClientIP } from "../lib/utils.ts";
 import { authRateLimiter } from "../lib/rate-limit.ts";
 import { verifyTotpOrBackupCode } from "./totp.ts";
-import * as db from "../../bun/db.ts";
+import * as db from "../../shared/db.ts";
 
 function checkRateLimit(request: Request): Response | null {
   const ip = getClientIP(request);

@@ -2,8 +2,8 @@ import { SignJWT, jwtVerify } from "jose";
 import { corsHeaders } from "../lib/cors.ts";
 import { authenticateRequest } from "../lib/auth.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import { secretStore } from "../../bun/secret-store.ts";
+import * as db from "../../shared/db.ts";
+import { secretStore } from "../../shared/secret-store.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [github-oauth:${context}]`, ...args);

@@ -1,8 +1,8 @@
-import * as db from "../../bun/db.ts";
-import { scaleDown } from "../../bun/scale/scale-down.ts";
+import * as db from "../../shared/db.ts";
+import { scaleDown } from "../scale/scale-down.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
-import type { App, Replica } from "../../bun/scale/types.ts";
+import type { App, Replica } from "../scale/types.ts";
 
 type SleepInput = { appId: number };
 

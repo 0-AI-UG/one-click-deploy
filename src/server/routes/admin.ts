@@ -1,7 +1,7 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requireAdmin } from "../lib/auth.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
+import * as db from "../../shared/db.ts";
 
 export async function handleListUsers(request: Request): Promise<Response> {
   try {

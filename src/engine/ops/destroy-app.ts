@@ -1,13 +1,13 @@
-import * as db from "../../bun/db.ts";
-import * as github from "../../bun/github.ts";
+import * as db from "../../shared/db.ts";
+import * as github from "../../shared/github.ts";
 import {
   sshExec,
   removeContainer,
   removeCompose,
   removeAuthProxy,
-} from "../../bun/remote/index.ts";
-import { removeAppCaddy } from "../../bun/scale/caddy-manager.ts";
-import { getComputeProvider, getDnsProvider } from "../../bun/providers/index.ts";
+} from "../../shared/remote/index.ts";
+import { removeAppCaddy } from "../scale/caddy-manager.ts";
+import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

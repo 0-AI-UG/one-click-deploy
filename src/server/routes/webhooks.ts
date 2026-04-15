@@ -1,12 +1,12 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import * as github from "../../bun/github.ts";
-import { redeployPanel } from "../../bun/deploy/panel.ts";
-import { enqueue } from "../../bun/ipc/enqueue.ts";
-import { resolveGitHubToken } from "../../bun/github-token.ts";
-import { getCommitCiStatus } from "../../bun/github.ts";
+import * as db from "../../shared/db.ts";
+import * as github from "../../shared/github.ts";
+import { redeployPanel } from "../../engine/deploy/panel.ts";
+import { enqueue } from "../ipc/enqueue.ts";
+import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { getCommitCiStatus } from "../../shared/github.ts";
 import { timingSafeEqual } from "node:crypto";
 
 const CI_POLL_INTERVAL = 15_000;

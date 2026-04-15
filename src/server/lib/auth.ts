@@ -1,6 +1,6 @@
 import { jwtVerify, SignJWT } from "jose";
 import { AuthError, ForbiddenError } from "./errors.ts";
-import { getUserById } from "../../bun/db.ts";
+import { getUserById } from "../../shared/db.ts";
 
 export interface TokenPayload {
   userId: string;

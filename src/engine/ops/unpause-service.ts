@@ -1,6 +1,6 @@
-import * as db from "../../bun/db.ts";
-import { unpauseContainer, serviceHealthCheck } from "../../bun/remote/index.ts";
-import { getCatalogEntry } from "../../bun/services/catalog.ts";
+import * as db from "../../shared/db.ts";
+import { unpauseContainer, serviceHealthCheck } from "../../shared/remote/index.ts";
+import { getCatalogEntry } from "../../shared/services/catalog.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

@@ -1,13 +1,13 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import type { AppRow } from "../../bun/db/apps.ts";
-import { getServersWithApps } from "../../bun/deploy/index.ts";
-import { getComposeLogs, getContainerLogs } from "../../bun/remote/index.ts";
-import { validateAppName } from "../../bun/validate.ts";
-import { introspectRepo } from "../../bun/github-introspect.ts";
-import { enqueue } from "../../bun/ipc/enqueue.ts";
+import * as db from "../../shared/db.ts";
+import type { AppRow } from "../../shared/db/apps.ts";
+import { getServersWithApps } from "../../engine/deploy/index.ts";
+import { getComposeLogs, getContainerLogs } from "../../shared/remote/index.ts";
+import { validateAppName } from "../../shared/validate.ts";
+import { introspectRepo } from "../../shared/github-introspect.ts";
+import { enqueue } from "../ipc/enqueue.ts";
 
 /** Enrich app row for API responses — adds environment name, drops raw env_vars. */
 function enrichAppForResponse(app: AppRow & Record<string, unknown>) {

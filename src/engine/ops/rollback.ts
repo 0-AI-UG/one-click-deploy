@@ -1,13 +1,13 @@
-import * as db from "../../bun/db.ts";
+import * as db from "../../shared/db.ts";
 import {
   sshExec,
   removeContainer,
   healthCheck,
   composeHealthCheck,
   describeFailure,
-} from "../../bun/remote/index.ts";
-import { resolveAppEnvVars } from "../../bun/env-crypto.ts";
-import { replicaBindHost } from "../../bun/scale/types.ts";
+} from "../../shared/remote/index.ts";
+import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -138,7 +138,7 @@ const syncCaddyStep: Step<RollbackInput, { ok: true }> = {
   label: "Configure Caddy",
   async run(ctx) {
     try {
-      const { syncAppCaddy } = await import("../../bun/scale/caddy-manager.ts");
+      const { syncAppCaddy } = await import("../scale/caddy-manager.ts");
       await syncAppCaddy(ctx.input.appId);
     } catch (err) {
       ctx.log(`Caddy sync warning: ${err}`);

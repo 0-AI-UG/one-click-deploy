@@ -1,13 +1,13 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import { parseEnvVars, serializeEnvVars, encryptValue } from "../../bun/env-crypto.ts";
-import type { EnvVarEntry } from "../../bun/env-crypto.ts";
-import type { ServiceDeployRequest } from "../../bun/deploy/deploy-service.ts";
-import { getServiceLogs } from "../../bun/deploy/service-lifecycle.ts";
-import { getCatalogEntries, getCatalogEntry } from "../../bun/services/catalog.ts";
-import { enqueue } from "../../bun/ipc/enqueue.ts";
+import * as db from "../../shared/db.ts";
+import { parseEnvVars, serializeEnvVars, encryptValue } from "../../shared/env-crypto.ts";
+import type { EnvVarEntry } from "../../shared/env-crypto.ts";
+import type { ServiceDeployRequest } from "../../engine/deploy/deploy-service.ts";
+import { getServiceLogs } from "../../engine/deploy/service-lifecycle.ts";
+import { getCatalogEntries, getCatalogEntry } from "../../shared/services/catalog.ts";
+import { enqueue } from "../ipc/enqueue.ts";
 
 // --- Catalog ---
 

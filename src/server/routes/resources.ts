@@ -1,9 +1,9 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import { getComputeProvider } from "../../bun/providers/index.ts";
-import { enqueue } from "../../bun/ipc/enqueue.ts";
+import * as db from "../../shared/db.ts";
+import { getComputeProvider } from "../../shared/providers/index.ts";
+import { enqueue } from "../ipc/enqueue.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");

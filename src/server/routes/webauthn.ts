@@ -15,7 +15,7 @@ import { AuthError } from "../lib/errors.ts";
 import { handleError, getClientIP } from "../lib/utils.ts";
 import { authRateLimiter } from "../lib/rate-limit.ts";
 import { generateBackupCodes } from "./totp.ts";
-import * as db from "../../bun/db.ts";
+import * as db from "../../shared/db.ts";
 
 // --- Challenge store (in-memory, single-process) ---
 

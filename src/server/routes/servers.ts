@@ -1,9 +1,9 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import { getServersWithApps } from "../../bun/deploy/index.ts";
-import * as db from "../../bun/db.ts";
-import { enqueue } from "../../bun/ipc/enqueue.ts";
+import { getServersWithApps } from "../../engine/deploy/index.ts";
+import * as db from "../../shared/db.ts";
+import { enqueue } from "../ipc/enqueue.ts";
 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {

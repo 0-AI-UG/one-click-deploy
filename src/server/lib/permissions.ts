@@ -1,6 +1,6 @@
 import { authenticateRequest, type TokenPayload } from "./auth.ts";
 import { AuthError, PermissionError } from "./errors.ts";
-import { getUserById, hasPermission } from "../../bun/db.ts";
+import { getUserById, hasPermission } from "../../shared/db.ts";
 
 export async function requirePermission(request: Request, permission: string): Promise<TokenPayload> {
   const payload = await authenticateRequest(request);

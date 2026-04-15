@@ -11,7 +11,7 @@ const fakeRunner = mock((appId: number, sha: string) => {
   void appId; void sha;
   return { opId: 1 };
 });
-mock.module("../../bun/ipc/enqueue.ts", () => ({
+mock.module("../ipc/enqueue.ts", () => ({
   enqueue: (args: { kind: string; input: { appId: number }; triggeredBy: string }) => {
     if (args.kind === "redeploy") {
       // triggeredBy is `github:<delivery-id>`; sha isn't here directly but the
@@ -25,11 +25,11 @@ mock.module("../../bun/ipc/enqueue.ts", () => ({
 }));
 
 const fakePanelRunner = mock(async (_opts?: any) => ({ ok: true }));
-mock.module("../../bun/deploy/panel.ts", () => ({
+mock.module("../../engine/deploy/panel.ts", () => ({
   redeployPanel: (_p: any, opts: any) => fakePanelRunner(opts),
 }));
 
-import * as db from "../../bun/db.ts";
+import * as db from "../../shared/db.ts";
 import { handleGithubWebhook, handlePanelGithubWebhook } from "./webhooks.ts";
 
 async function sign(secret: string, body: string): Promise<string> {

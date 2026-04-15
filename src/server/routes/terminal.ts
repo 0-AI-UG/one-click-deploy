@@ -1,6 +1,6 @@
 import { jwtVerify } from "jose";
-import * as db from "../../bun/db.ts";
-import { spawnSshPty, type PtySession } from "../../bun/remote/index.ts";
+import * as db from "../../shared/db.ts";
+import { spawnSshPty, type PtySession } from "../../shared/remote/index.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [terminal:${context}]`, ...args);

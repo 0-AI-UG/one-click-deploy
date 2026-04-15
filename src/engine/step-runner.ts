@@ -8,9 +8,9 @@ import {
   markOperationCompensating,
   markOperationFinished,
   markOperationRunning,
-} from "../bun/db/operations.ts";
+} from "../shared/db/operations.ts";
 import type { AnyOpKind, OpContext, Step } from "./types.ts";
-import type { OperationRow } from "../bun/db/operations.ts";
+import type { OperationRow } from "../shared/db/operations.ts";
 
 function log(...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [engine:step-runner]`, ...args);

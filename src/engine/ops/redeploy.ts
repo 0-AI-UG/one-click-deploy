@@ -1,4 +1,4 @@
-import * as db from "../../bun/db.ts";
+import * as db from "../../shared/db.ts";
 import {
   sshExec,
   cloneAndBuild,
@@ -10,13 +10,13 @@ import {
   removeCompose,
   healthCheck,
   composeHealthCheck,
-} from "../../bun/remote/index.ts";
-import { resolveAppEnvVars } from "../../bun/env-crypto.ts";
-import { resolveGitHubToken } from "../../bun/github-token.ts";
-import { rollingRedeploy } from "../../bun/scale.ts";
-import { wakeApp } from "../../bun/scale/wake.ts";
-import { syncAppCaddy } from "../../bun/scale/caddy-manager.ts";
-import { replicaBindHost } from "../../bun/scale/types.ts";
+} from "../../shared/remote/index.ts";
+import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { rollingRedeploy } from "../scale-api.ts";
+import { wakeApp } from "../scale/wake.ts";
+import { syncAppCaddy } from "../scale/caddy-manager.ts";
+import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

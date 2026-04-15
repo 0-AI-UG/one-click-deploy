@@ -1,6 +1,6 @@
 import type { DeployRequest, Server } from "../../shared/rpc.ts";
-import * as db from "../../bun/db.ts";
-import { getComputeProvider, getDnsProvider } from "../../bun/providers/index.ts";
+import * as db from "../../shared/db.ts";
+import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
 import {
   sshExec,
   cloneAndBuild,
@@ -13,17 +13,17 @@ import {
   composeHealthCheck,
   deployAuthProxy,
   removeAuthProxy,
-} from "../../bun/remote/index.ts";
-import { syncAppCaddy, removeAppCaddy } from "../../bun/scale/caddy-manager.ts";
-import { replicaBindHost } from "../../bun/scale/types.ts";
-import * as github from "../../bun/github.ts";
-import { validateDeployRequest } from "../../bun/validate.ts";
-import { createMasker } from "../../bun/mask.ts";
-import { processIncomingEnvVars, serializeEnvVars } from "../../bun/env-crypto.ts";
-import { getTokens } from "../../bun/secret-store.ts";
-import { resolveGitHubToken } from "../../bun/github-token.ts";
-import { scaleApp } from "../../bun/scale.ts";
-import { provisionServer } from "../../bun/provision-server.ts";
+} from "../../shared/remote/index.ts";
+import { syncAppCaddy, removeAppCaddy } from "../scale/caddy-manager.ts";
+import { replicaBindHost } from "../scale/types.ts";
+import * as github from "../../shared/github.ts";
+import { validateDeployRequest } from "../../shared/validate.ts";
+import { createMasker } from "../../shared/mask.ts";
+import { processIncomingEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
+import { getTokens } from "../../shared/secret-store.ts";
+import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { scaleApp } from "../scale-api.ts";
+import { provisionServer } from "../provision-server.ts";
 import { resolve4 } from "node:dns/promises";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
@@ -315,7 +315,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     if (environmentId) {
       const envRow = db.getEnvironment(environmentId);
       if (envRow) {
-        const { resolveEnvVarsForDeploy } = await import("../../bun/env-crypto.ts");
+        const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
         Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
       }
     } else if (

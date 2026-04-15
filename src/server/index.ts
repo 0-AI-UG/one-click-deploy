@@ -52,7 +52,7 @@ if (!IS_PROD) {
 // When OCD_AUTO_DEPLOY is set, run the self-deploy pipeline and exit
 // without ever binding the HTTP server. Used by the Docker one-liner.
 if (process.env.OCD_AUTO_DEPLOY) {
-  const { loadAutoDeployConfig, runAutoDeploy } = await import("../bun/auto-deploy.ts");
+  const { loadAutoDeployConfig, runAutoDeploy } = await import("../engine/auto-deploy.ts");
   try {
     const config = loadAutoDeployConfig(process.env.OCD_AUTO_DEPLOY);
     const result = await runAutoDeploy(config);

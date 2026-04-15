@@ -1,12 +1,12 @@
-import * as db from "../../bun/db.ts";
-import { getComputeProvider } from "../../bun/providers/index.ts";
+import * as db from "../../shared/db.ts";
+import { getComputeProvider } from "../../shared/providers/index.ts";
 import {
   getOrCreateLocalKeyPair,
   waitForServer,
   captureHostKey,
   sshExec,
-} from "../../bun/remote/index.ts";
-import { ensureNetwork as ensureSharedNetwork } from "../../bun/network.ts";
+} from "../../shared/remote/index.ts";
+import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

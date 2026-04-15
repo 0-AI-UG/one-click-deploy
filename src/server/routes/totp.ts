@@ -5,7 +5,7 @@ import { authenticateRequest, createToken, createTempToken, verifyTempToken } fr
 import { AuthError } from "../lib/errors.ts";
 import { handleError, getClientIP } from "../lib/utils.ts";
 import { authRateLimiter } from "../lib/rate-limit.ts";
-import * as db from "../../bun/db.ts";
+import * as db from "../../shared/db.ts";
 
 /**
  * Verifies a 6-digit TOTP code OR an 8-char backup code for the given user.

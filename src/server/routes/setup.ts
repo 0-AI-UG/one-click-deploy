@@ -1,9 +1,9 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { createTempToken } from "../lib/auth.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import { secretStore } from "../../bun/secret-store.ts";
-import { validateHetznerToken } from "../../bun/validate.ts";
+import * as db from "../../shared/db.ts";
+import { secretStore } from "../../shared/secret-store.ts";
+import { validateHetznerToken } from "../../shared/validate.ts";
 
 export function isSetupComplete(): boolean {
   return db.getUserCount() > 0;

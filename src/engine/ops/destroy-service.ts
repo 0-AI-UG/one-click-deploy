@@ -1,7 +1,7 @@
-import * as db from "../../bun/db.ts";
-import { parseEnvVars, serializeEnvVars } from "../../bun/env-crypto.ts";
-import { sshExec } from "../../bun/remote/index.ts";
-import { getComputeProvider } from "../../bun/providers/index.ts";
+import * as db from "../../shared/db.ts";
+import { parseEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
+import { sshExec } from "../../shared/remote/index.ts";
+import { getComputeProvider } from "../../shared/providers/index.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

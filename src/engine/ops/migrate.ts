@@ -1,6 +1,6 @@
-import * as db from "../../bun/db.ts";
-import { migrateReplica } from "../../bun/scale/migrate.ts";
-import { syncAppCaddy } from "../../bun/scale/caddy-manager.ts";
+import * as db from "../../shared/db.ts";
+import { migrateReplica } from "../scale/migrate.ts";
+import { syncAppCaddy } from "../scale/caddy-manager.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

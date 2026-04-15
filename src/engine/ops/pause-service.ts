@@ -1,5 +1,5 @@
-import * as db from "../../bun/db.ts";
-import { pauseContainer } from "../../bun/remote/index.ts";
+import * as db from "../../shared/db.ts";
+import { pauseContainer } from "../../shared/remote/index.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

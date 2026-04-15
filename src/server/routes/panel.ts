@@ -3,8 +3,8 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
-import * as db from "../../bun/db.ts";
-import { redeployPanel, getPanelContainerLogs } from "../../bun/deploy/panel.ts";
+import * as db from "../../shared/db.ts";
+import { redeployPanel, getPanelContainerLogs } from "../../engine/deploy/panel.ts";
 
 export async function handleGetPanel(request: Request): Promise<Response> {
   try {

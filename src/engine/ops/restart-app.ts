@@ -1,4 +1,4 @@
-import { restartApp } from "../../bun/deploy/lifecycle.ts";
+import { restartApp } from "../deploy/lifecycle.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 

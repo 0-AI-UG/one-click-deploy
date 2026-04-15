@@ -1,17 +1,17 @@
-import * as db from "../../bun/db.ts";
-import { getComputeProvider } from "../../bun/providers/index.ts";
-import { sshExec, pullAndRunService, serviceHealthCheck } from "../../bun/remote/index.ts";
-import { provisionServer } from "../../bun/provision-server.ts";
-import { replicaBindHost } from "../../bun/scale/types.ts";
+import * as db from "../../shared/db.ts";
+import { getComputeProvider } from "../../shared/providers/index.ts";
+import { sshExec, pullAndRunService, serviceHealthCheck } from "../../shared/remote/index.ts";
+import { provisionServer } from "../provision-server.ts";
+import { replicaBindHost } from "../scale/types.ts";
 import {
   getCatalogEntry,
   generateEnvVars,
   buildConnectionUrl,
   type ServiceDefinition,
-} from "../../bun/services/catalog.ts";
-import { parseEnvVars, serializeEnvVars, encryptValue } from "../../bun/env-crypto.ts";
-import type { EnvVarEntry } from "../../bun/env-crypto.ts";
-import type { ServiceDeployRequest } from "../../bun/deploy/deploy-service.ts";
+} from "../../shared/services/catalog.ts";
+import { parseEnvVars, serializeEnvVars, encryptValue } from "../../shared/env-crypto.ts";
+import type { EnvVarEntry } from "../../shared/env-crypto.ts";
+import type { ServiceDeployRequest } from "../deploy/deploy-service.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 import type { Server } from "../../shared/rpc.ts";

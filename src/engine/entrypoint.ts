@@ -1,7 +1,7 @@
 import { startEngine, stopEngine } from "./engine.ts";
 import "./ops/index.ts"; // register op kinds
-import { startReconciler, stopReconciler } from "../bun/reconciler.ts";
-import db from "../bun/db/connection.ts";
+import { startReconciler, stopReconciler } from "./reconciler.ts";
+import db from "../shared/db/connection.ts";
 
 function log(...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [engine:entry]`, ...args);
