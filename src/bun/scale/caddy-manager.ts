@@ -1,16 +1,20 @@
-// Caddy upstream manager — owns the panel server's Caddy admin API for every
+// Caddy upstream manager — owns every server's Caddy admin API for every
 // deployed app. Given an app id, computes the desired routes + upstream list
 // (driven by the replicas table) and PUTs them to `http://localhost:2019` on
-// the panel server via SSH. Reloads are atomic.
+// each server via SSH. Reloads are atomic.
 //
-// Two Caddy HTTP servers live on the panel:
+// Two Caddy HTTP servers live in the fleet:
 //
-//   srv0          — listens on :80 and :443 for public ingress, auto-HTTPS
-//                   enabled, one route per app matching the public domain.
-//   srv_internal  — listens on :8080 on every interface, auto-HTTPS disabled,
-//                   one route per app matching `<app>.ocd.internal`. Port
-//                   8080 is deliberately *not* whitelisted in the Hetzner
-//                   firewall — private-network traffic bypasses the firewall,
+//   srv0          — panel only. Listens on :80 and :443 for public ingress,
+//                   auto-HTTPS enabled, one route per app matching the public
+//                   domain.
+//   srv_internal  — on *every* server. Listens on :8080, auto-HTTPS disabled,
+//                   one route per app matching `<app>.ocd.internal`. Each
+//                   server's /etc/hosts points `<app>.ocd.internal` at
+//                   127.0.0.1, so internal callers hit their local Caddy
+//                   directly instead of routing through the panel. Port 8080
+//                   is deliberately *not* whitelisted in the Hetzner firewall
+//                   — private-network traffic bypasses the firewall,
 //                   public-network traffic is dropped at the edge, so this
 //                   listener is effectively private without any extra config.
 //
@@ -63,11 +67,15 @@ type CaddyRoute = {
   terminal: boolean;
 };
 
-export type PanelAccess = {
+export type ServerAccess = {
+  name: string;
   ipv4: string;
   privateIpv4: string;
   hostKey: string | undefined;
 };
+
+/** @deprecated kept for call sites that still think in panel terms. */
+export type PanelAccess = ServerAccess;
 
 function publicRouteId(appName: string): string {
   return `ocd-app-${appName}`;
@@ -89,26 +97,45 @@ export function internalAppUrl(appName: string): string {
   return `http://${internalHost(appName)}:${INTERNAL_PORT}`;
 }
 
-function getPanelAccess(): PanelAccess | null {
+function getPanelAccess(): ServerAccess | null {
   const panel = db.getPanel();
   if (!panel) return null;
   const panelServer = db.getServer(panel.server_id);
   if (!panelServer || !panelServer.ipv4) return null;
   return {
+    name: panelServer.name,
     ipv4: panelServer.ipv4,
     privateIpv4: panelServer.private_ipv4 || "",
     hostKey: panelServer.ssh_host_key || undefined,
   };
 }
 
-async function persistCaddyConfig(panel: PanelAccess): Promise<void> {
+/**
+ * Every server that can host an internal Caddy route. A server without a
+ * public IP can't be SSH'd; one without a private IP can't be an upstream
+ * target, but it *can* still run a local srv_internal for callers on that
+ * host. We require `ipv4` only.
+ */
+function getAllServerAccess(): ServerAccess[] {
+  return db
+    .getServers()
+    .filter((s) => s.ipv4)
+    .map((s) => ({
+      name: s.name,
+      ipv4: s.ipv4,
+      privateIpv4: s.private_ipv4 || "",
+      hostKey: s.ssh_host_key || undefined,
+    }));
+}
+
+async function persistCaddyConfig(server: ServerAccess): Promise<void> {
   const result = await sshExec(
-    panel.ipv4,
+    server.ipv4,
     `curl -sf http://localhost:2019/config/ | tee /etc/caddy/caddy.json > /dev/null`,
-    panel.hostKey,
+    server.hostKey,
   );
   if (result.exitCode !== 0) {
-    log("persist", `Warning: failed to persist Caddy config: ${result.stderr}`);
+    log("persist", `Warning: failed to persist Caddy config on ${server.name}: ${result.stderr}`);
   }
 }
 
@@ -130,10 +157,17 @@ async function persistCaddyConfig(panel: PanelAccess): Promise<void> {
  * probe it and take it out organically; if it stays failing, the
  * reconciler auto-restarts it.
  */
-// Cache of upstream dial strings per app — used to skip no-op Caddy syncs that
-// would otherwise mutate srv0's route array and cause Caddy to drop active
-// WebSocket connections (including the panel's terminal sessions).
-const lastUpstreamsByApp = new Map<number, string>();
+// Cache of upstream dial strings per (server, app) — used to skip no-op Caddy
+// syncs that would otherwise mutate route arrays and cause Caddy to drop
+// active WebSocket connections (including the panel's terminal sessions).
+// Keyed by `${server.ipv4}:${appId}:${serverName}` so each server's cache is
+// independent (a transient failure on one server shouldn't poison the skip
+// check on another).
+const lastUpstreamsByApp = new Map<string, string>();
+
+function cacheKey(serverIpv4: string, appId: number, srv: "srv0" | "srv_internal"): string {
+  return `${serverIpv4}:${appId}:${srv}`;
+}
 
 function upstreamsCacheKey(ups: CaddyUpstream[]): string {
   return ups.map((u) => u.dial).sort().join(",");
@@ -246,27 +280,27 @@ function buildInternalRoute(
  * blanket PUT would wipe the `routes` array on every sync, which would race
  * with other apps' routes already installed under `srv_internal`.
  */
-async function ensureInternalServer(panel: PanelAccess): Promise<void> {
+async function ensureInternalServer(server: ServerAccess): Promise<void> {
   const check = await sshExec(
-    panel.ipv4,
+    server.ipv4,
     `curl -sf -o /dev/null -w '%{http_code}' http://localhost:2019/config/apps/http/servers/srv_internal`,
-    panel.hostKey,
+    server.hostKey,
   );
   // 200 → exists; 404 → missing. Caddy returns "null" with a 200 for missing
   // config paths under /config/…, so also treat an empty body as missing.
   const body = check.stdout.trim();
   if (body === "200") {
     const getBody = await sshExec(
-      panel.ipv4,
+      server.ipv4,
       `curl -sf http://localhost:2019/config/apps/http/servers/srv_internal`,
-      panel.hostKey,
+      server.hostKey,
     );
     if (getBody.stdout.trim() !== "null" && getBody.stdout.trim() !== "") {
       return;
     }
   }
 
-  log("internal", "Creating srv_internal server on :8080");
+  log("internal", `Creating srv_internal on ${server.name} (:${INTERNAL_PORT})`);
   const serverConfig = {
     listen: [`:${INTERNAL_PORT}`],
     automatic_https: { disable: true, disable_redirects: true },
@@ -274,19 +308,19 @@ async function ensureInternalServer(panel: PanelAccess): Promise<void> {
   };
   const json = JSON.stringify(serverConfig).replace(/'/g, "'\\''");
   const put = await sshExec(
-    panel.ipv4,
+    server.ipv4,
     `curl -sf -X PUT -H 'Content-Type: application/json' -d '${json}' http://localhost:2019/config/apps/http/servers/srv_internal`,
-    panel.hostKey,
+    server.hostKey,
   );
   if (put.exitCode !== 0) {
     throw new Error(
-      `Failed to install srv_internal on panel Caddy: ${put.stderr}`,
+      `Failed to install srv_internal on ${server.name}: ${put.stderr}`,
     );
   }
 }
 
 async function upsertRoute(
-  panel: PanelAccess,
+  server: ServerAccess,
   serverName: "srv0" | "srv_internal",
   route: CaddyRoute,
 ): Promise<void> {
@@ -297,40 +331,40 @@ async function upsertRoute(
   // route against the admin API — PATCH /id/<id> silently appends a second
   // copy on mismatched paths.
   await sshExec(
-    panel.ipv4,
+    server.ipv4,
     `curl -sf -X DELETE http://localhost:2019/id/${id} 2>/dev/null || true`,
-    panel.hostKey,
+    server.hostKey,
   );
   const add = await sshExec(
-    panel.ipv4,
+    server.ipv4,
     `curl -sf -X POST -H 'Content-Type: application/json' -d '${routeJson}' http://localhost:2019/config/apps/http/servers/${serverName}/routes`,
-    panel.hostKey,
+    server.hostKey,
   );
   if (add.exitCode !== 0) {
     // Fallback: restart Caddy (loads the persisted caddy.json) and retry.
-    log("upsert", `route POST failed, restarting Caddy: ${add.stderr}`);
-    await sshExec(panel.ipv4, "systemctl restart caddy", panel.hostKey);
+    log("upsert", `route POST on ${server.name} failed, restarting Caddy: ${add.stderr}`);
+    await sshExec(server.ipv4, "systemctl restart caddy", server.hostKey);
     await Bun.sleep(1000);
     await sshExec(
-      panel.ipv4,
+      server.ipv4,
       `curl -sf -X DELETE http://localhost:2019/id/${id} 2>/dev/null || true`,
-      panel.hostKey,
+      server.hostKey,
     );
     const retry = await sshExec(
-      panel.ipv4,
+      server.ipv4,
       `curl -sf -X POST -H 'Content-Type: application/json' -d '${routeJson}' http://localhost:2019/config/apps/http/servers/${serverName}/routes`,
-      panel.hostKey,
+      server.hostKey,
     );
     if (retry.exitCode !== 0) {
       throw new Error(
-        `Failed to PUT Caddy route ${id} on ${serverName}: ${retry.stderr || add.stderr}`,
+        `Failed to PUT Caddy route ${id} on ${server.name}/${serverName}: ${retry.stderr || add.stderr}`,
       );
     }
   }
 }
 
 async function ensureNipIoTlsPolicy(
-  panel: PanelAccess,
+  panel: ServerAccess,
   domain: string,
 ): Promise<void> {
   // nip.io domains can't get Let's Encrypt certs — use the internal issuer
@@ -380,17 +414,7 @@ export async function syncAppCaddy(appId: number, force = false): Promise<void> 
   const upstreams = buildUpstreams(appId, app.auth_password);
   if (upstreams.length === 0) {
     log("sync", `app ${appId}: no upstreams available — removing routes`);
-    lastUpstreamsByApp.delete(appId);
-    await removeAppCaddy(app.name, app.domain);
-    return;
-  }
-
-  // Skip the upsert if upstreams haven't changed since the last sync.
-  // Every upsert mutates Caddy's srv0 route array (DELETE + POST), which
-  // causes Caddy to drop active WebSocket connections on that server —
-  // including the panel's terminal sessions.
-  const key = `${app.public ? "pub" : "priv"}:${upstreamsCacheKey(upstreams)}`;
-  if (!force && lastUpstreamsByApp.get(appId) === key) {
+    await removeAppCaddy(app.name, app.domain, appId);
     return;
   }
 
@@ -399,24 +423,50 @@ export async function syncAppCaddy(appId: number, force = false): Promise<void> 
     `app ${appId} (${app.name}) domain=${app.domain} upstreams=${upstreams.map((u) => u.dial).join(",")}`,
   );
 
-  await ensureInternalServer(panel);
+  const upstreamsKey = upstreamsCacheKey(upstreams);
 
-  if (app.public) {
-    await upsertRoute(panel, "srv0", buildPublicRoute(app.name, app.domain, upstreams));
-    if (app.domain && app.domain.endsWith(".nip.io")) {
-      await ensureNipIoTlsPolicy(panel, app.domain);
+  // --- Public route: panel only ---
+  const pubKey = `${app.public ? "pub" : "priv"}:${upstreamsKey}`;
+  if (force || lastUpstreamsByApp.get(cacheKey(panel.ipv4, appId, "srv0")) !== pubKey) {
+    if (app.public) {
+      await upsertRoute(panel, "srv0", buildPublicRoute(app.name, app.domain, upstreams));
+      if (app.domain && app.domain.endsWith(".nip.io")) {
+        await ensureNipIoTlsPolicy(panel, app.domain);
+      }
+    } else {
+      // Remove any existing public route when app is not public
+      await sshExec(
+        panel.ipv4,
+        `curl -sf -X DELETE http://localhost:2019/id/${publicRouteId(app.name)} 2>/dev/null || true`,
+        panel.hostKey,
+      );
     }
-  } else {
-    // Remove any existing public route when app is not public
-    await sshExec(
-      panel.ipv4,
-      `curl -sf -X DELETE http://localhost:2019/id/${publicRouteId(app.name)} 2>/dev/null || true`,
-      panel.hostKey,
-    );
+    await persistCaddyConfig(panel);
+    lastUpstreamsByApp.set(cacheKey(panel.ipv4, appId, "srv0"), pubKey);
   }
-  await upsertRoute(panel, "srv_internal", buildInternalRoute(app.name, upstreams));
-  await persistCaddyConfig(panel);
-  lastUpstreamsByApp.set(appId, key);
+
+  // --- Internal route: fan out to every server ---
+  // Each server runs its own srv_internal on :8080, and <app>.ocd.internal
+  // resolves to 127.0.0.1 via /etc/hosts. This removes the extra hop through
+  // the panel for same-host and worker-to-worker calls, and removes the
+  // panel as a SPOF for internal traffic. Partial failures are tolerated —
+  // the next reconcile tick retries the lagging servers.
+  const servers = getAllServerAccess();
+  const internalRoute = buildInternalRoute(app.name, upstreams);
+  await Promise.all(
+    servers.map(async (srv) => {
+      const key = cacheKey(srv.ipv4, appId, "srv_internal");
+      if (!force && lastUpstreamsByApp.get(key) === upstreamsKey) return;
+      try {
+        await ensureInternalServer(srv);
+        await upsertRoute(srv, "srv_internal", internalRoute);
+        await persistCaddyConfig(srv);
+        lastUpstreamsByApp.set(key, upstreamsKey);
+      } catch (err) {
+        log("sync", `app ${appId} internal route sync failed on ${srv.name}: ${err}`);
+      }
+    }),
+  );
 }
 
 /**
@@ -431,14 +481,37 @@ export async function removeAppCaddy(
 ): Promise<void> {
   const panel = getPanelAccess();
   if (!panel) return;
-  if (appId !== undefined) lastUpstreamsByApp.delete(appId);
-  for (const id of [publicRouteId(appName), internalRouteId(appName)]) {
-    await sshExec(
-      panel.ipv4,
-      `curl -sf -X DELETE http://localhost:2019/id/${id} 2>/dev/null || true`,
-      panel.hostKey,
-    );
-  }
+
+  const pubId = publicRouteId(appName);
+  const intId = internalRouteId(appName);
+
+  // Public route lives on the panel only.
+  await sshExec(
+    panel.ipv4,
+    `curl -sf -X DELETE http://localhost:2019/id/${pubId} 2>/dev/null || true`,
+    panel.hostKey,
+  );
   await persistCaddyConfig(panel);
-  log("remove", `app ${appName}: routes removed from panel Caddy`);
+  if (appId !== undefined) lastUpstreamsByApp.delete(cacheKey(panel.ipv4, appId, "srv0"));
+
+  // Internal route lives on every server — fan out the delete.
+  const servers = getAllServerAccess();
+  await Promise.all(
+    servers.map(async (srv) => {
+      try {
+        await sshExec(
+          srv.ipv4,
+          `curl -sf -X DELETE http://localhost:2019/id/${intId} 2>/dev/null || true`,
+          srv.hostKey,
+        );
+        await persistCaddyConfig(srv);
+        if (appId !== undefined) {
+          lastUpstreamsByApp.delete(cacheKey(srv.ipv4, appId, "srv_internal"));
+        }
+      } catch (err) {
+        log("remove", `app ${appName}: failed to remove internal route on ${srv.name}: ${err}`);
+      }
+    }),
+  );
+  log("remove", `app ${appName}: routes removed from ${servers.length} server(s)`);
 }

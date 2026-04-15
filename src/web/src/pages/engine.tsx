@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatDistanceToNow } from "date-fns";
 import { get } from "../api/client.ts";
 import { Spinner } from "../components/ui.tsx";
 import { humanizeStep, type OperationView } from "../hooks/useOperation.ts";
@@ -147,8 +148,8 @@ function OpRow({ op, showProgress }: { op: OperationView; showProgress?: boolean
       ? `${op.last_step}`
       : null;
   const resource = op.resource_keys.join(", ");
-  const ageSec = op.started_at
-    ? Math.max(0, Math.round((Date.now() - new Date(op.started_at).getTime()) / 1000))
+  const age = op.started_at
+    ? formatDistanceToNow(new Date(op.started_at), { addSuffix: true })
     : null;
   return (
     <a
@@ -166,7 +167,7 @@ function OpRow({ op, showProgress }: { op: OperationView; showProgress?: boolean
         <span className="font-mono text-[10px] text-fg-dim">{resource}</span>
         <span className="font-mono text-[10px] text-fg-dim ml-auto">
           {op.trigger}
-          {ageSec !== null ? ` · ${ageSec}s` : ""}
+          {age ? ` · ${age}` : ""}
         </span>
       </div>
       {progress && (

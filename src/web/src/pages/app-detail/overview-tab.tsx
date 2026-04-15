@@ -34,7 +34,6 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
       if (terminal && terminal !== "done" && terminal !== "cancelled") {
         throw new Error("Migration failed");
       }
-      showToast("Replica migrated", "success");
       setReplicas(await get(`/api/apps/${appId}/metrics`));
     } catch (err: any) {
       showToast(err.message, "error");

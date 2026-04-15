@@ -131,8 +131,16 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const action = async (name: string, fn: () => Promise<unknown>) => {
     setActionLoading(name);
     try {
-      await fn();
-      showToast(`${name} successful`, "success");
+      const result = await fn();
+      const opId = result && typeof result === "object" && "op_id" in result
+        ? (result as { op_id?: number }).op_id ?? null
+        : null;
+      if (opId) {
+        trackOperationInToast(opId, `${name.charAt(0).toUpperCase() + name.slice(1)} app`);
+        ops.track(opId);
+      } else {
+        showToast(`${name} successful`, "success");
+      }
       load();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -195,13 +203,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
             )}
           </PermissionGate>
           <PermissionGate permission="apps.redeploy">
-            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", async () => {
-              const res = (await post(`/api/apps/${appId}/redeploy`)) as { op_id?: number };
-              if (res?.op_id) {
-                trackOperationInToast(res.op_id, "Redeploying app");
-                ops.track(res.op_id);
-              }
-            })}>
+            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", () => post(`/api/apps/${appId}/redeploy`))}>
               <RefreshCw size={12} /> Redeploy
             </Btn>
           </PermissionGate>
@@ -212,13 +214,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
               disabled={ops.isBusy}
               onClick={async () => {
                 if (await confirm("Destroy App", `Permanently destroy "${app.name}"?`, true)) {
-                  await action("destroy", async () => {
-                    const res = (await del(`/api/apps/${appId}`)) as { op_id?: number };
-                    if (res?.op_id) {
-                      trackOperationInToast(res.op_id, "Destroying app");
-                      ops.track(res.op_id);
-                    }
-                  });
+                  await action("destroy", () => del(`/api/apps/${appId}`));
                   window.location.hash = "#/";
                 }
               }}

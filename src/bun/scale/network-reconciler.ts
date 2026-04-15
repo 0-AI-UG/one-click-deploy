@@ -9,8 +9,10 @@ function log(context: string, ...args: unknown[]) {
 
 /**
  * Reconciler pass that drags every server onto the shared private network
- * and keeps each server's /etc/hosts in sync with the panel's private IP for
- * the `<app>.ocd.internal` convention used by intra-app traffic.
+ * and keeps each server's /etc/hosts in sync with the `<app>.ocd.internal`
+ * convention used by intra-app traffic. App entries point at 127.0.0.1 —
+ * each server runs its own Caddy srv_internal that reverse-proxies to the
+ * replica pool over the private network.
  *
  * Runs inside the main reconciler tick, after replica/health work. Completes
  * in a few provider calls per new server and skips fast when everything is
@@ -48,11 +50,10 @@ export async function reconcileNetwork(): Promise<void> {
     }
   }
 
-  // Sync /etc/hosts for `<app>.ocd.internal` on every server. The panel owns
-  // the Caddy ingress, so every internal hostname resolves to the panel's
-  // private IP. A server with an outdated panel IP still works at the DNS
-  // level but falls back to the public path — so we treat the hosts sync as
-  // best-effort.
+  // Sync /etc/hosts for `<app>.ocd.internal` on every server. Each server
+  // runs its own Caddy srv_internal, so app entries point at 127.0.0.1;
+  // service entries still point at the service host's private IP. Best-
+  // effort — the next tick retries any server that's unreachable now.
   try {
     await syncInternalHosts();
   } catch (err) {
@@ -61,15 +62,21 @@ export async function reconcileNetwork(): Promise<void> {
 }
 
 /**
- * Build two /etc/hosts lines per entry and push into /etc/hosts on every
- * materialized server:
+ * Build /etc/hosts lines and push into /etc/hosts on every materialized
+ * server:
  *
- *   - `<app>.ocd.internal`      → panel's private_ipv4 (Caddy ingress)
+ *   - `<app>.ocd.internal`      → 127.0.0.1 (local Caddy srv_internal)
  *   - `<svc>.svc.ocd.internal`  → service host's private_ipv4 (direct)
  *
+ * Each server runs its own Caddy srv_internal on :8080 with routes for every
+ * app, so callers reach the local Caddy and it reverse-proxies to the
+ * replica pool over the private network. This removes the extra panel hop
+ * and the panel SPOF for internal traffic. Service direct entries stay as
+ * private-IP pointers because services are single-instance and don't need
+ * the local Caddy indirection.
+ *
  * Idempotent — the block is delimited by BEGIN/END markers so repeated
- * runs just overwrite the same region. Services resolve to their single
- * container's host (services are one-instance only).
+ * runs just overwrite the same region.
  *
  * These hosts entries are for host-level use (panel SSH, debugging,
  * container runs that opt-in via `--add-host`). App/service containers
@@ -79,12 +86,10 @@ export async function reconcileNetwork(): Promise<void> {
 export async function syncInternalHosts(): Promise<void> {
   const panel = db.getPanel();
   if (!panel) return;
-  const panelServer = db.getServer(panel.server_id);
-  if (!panelServer || !panelServer.private_ipv4) return; // nothing to point at yet
 
   const lines: string[] = [];
   for (const app of db.getApps()) {
-    lines.push(`${panelServer.private_ipv4} ${app.name}.ocd.internal`);
+    lines.push(`127.0.0.1 ${app.name}.ocd.internal`);
   }
   for (const service of db.getServices()) {
     const instance = db.getServiceInstances(service.id)[0];
