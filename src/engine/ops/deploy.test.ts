@@ -278,7 +278,7 @@ describe("deploy step: create_dns_record", () => {
       value: "1.2.3.4",
     };
     const { ctx } = makeCtx({});
-    await step.compensate!(ctx, out);
+    await step.compensate!(ctx, out, {});
     expect(dns._mocks.deleteRecord).toHaveBeenCalledTimes(1);
     expect(dns._mocks.deleteRecord.mock.calls[0][0]).toMatchObject({
       zoneId: "zone-x",
@@ -356,7 +356,7 @@ describe("deploy step: create_volume", () => {
 
   test("compensation detaches (best-effort) then deletes the volume", async () => {
     const { ctx } = makeCtx({});
-    await step.compensate!(ctx, { volumeId: "v-abc", volumeMount: "/mnt/x:/data", containerPath: "/data" });
+    await step.compensate!(ctx, { volumeId: "v-abc", volumeMount: "/mnt/x:/data", containerPath: "/data" }, {});
     expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete.mock.calls[0][0]).toBe("v-abc");
@@ -365,7 +365,7 @@ describe("deploy step: create_volume", () => {
   test("compensation swallows detach failure and still calls delete", async () => {
     compute._mocks.volumeDetach.mockImplementationOnce(async () => { throw new Error("already detached"); });
     const { ctx } = makeCtx({});
-    await step.compensate!(ctx, { volumeId: "v-xyz", volumeMount: "", containerPath: "/d" });
+    await step.compensate!(ctx, { volumeId: "v-xyz", volumeMount: "", containerPath: "/d" }, {});
     expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
   });
 });

@@ -13,10 +13,10 @@ mock.module("../../shared/providers/index.ts", () => ({
   getDnsProvider: () => dns,
 }));
 
-const sshExec = mock(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
-const removeContainer = mock(async () => {});
-const removeCompose = mock(async () => {});
-const removeAuthProxy = mock(async () => {});
+const sshExec = mock(async (..._args: unknown[]) => ({ exitCode: 0, stdout: "", stderr: "" }));
+const removeContainer = mock(async (..._args: unknown[]) => {});
+const removeCompose = mock(async (..._args: unknown[]) => {});
+const removeAuthProxy = mock(async (..._args: unknown[]) => {});
 mock.module("../../shared/remote/index.ts", () => ({
   sshExec,
   removeContainer,
@@ -40,8 +40,8 @@ mock.module("../scale/caddy-manager.ts", () => ({
   syncAppCaddy,
 }));
 
-const deleteGithubWebhook = mock(async () => {});
-const getGitHubPat = mock(async () => "ghp_fake");
+const deleteGithubWebhook = mock(async (..._args: unknown[]) => {});
+const getGitHubPat = mock(async (..._args: unknown[]) => "ghp_fake" as string | null);
 mock.module("../../shared/github.ts", () => ({
   getGitHubPat,
   deleteWebhook: deleteGithubWebhook,
@@ -184,7 +184,7 @@ describe("destroyApp: happy path", () => {
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
     db.updateAppWebhook(app.id, true, "wh", "main", "456");
-    getGitHubPat.mockImplementationOnce(async () => null as any);
+    getGitHubPat.mockImplementationOnce(async () => null);
     await destroyApp(app.id);
     expect(deleteGithubWebhook).not.toHaveBeenCalled();
   });
