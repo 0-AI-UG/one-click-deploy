@@ -45,7 +45,7 @@ function MobileMenu({ hash }: { hash: string }) {
   }, []);
 
   return (
-    <div ref={ref} className="relative md:hidden">
+    <div ref={ref} className="relative lg:hidden">
       <button
         onClick={() => setOpen(!open)}
         className="flex items-center gap-1.5 px-2 py-1 text-fg/70 hover:text-fg hover:bg-fg/10 transition-all"
@@ -120,8 +120,8 @@ export function Nav() {
             <span>OCD</span>
             <span className="font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5">v0.4</span>
           </a>
-          <div className="h-5 w-0.5 bg-fg/30 hidden md:block" />
-          <div className="hidden md:flex items-center gap-1">
+          <div className="h-5 w-0.5 bg-fg/30 hidden lg:block" />
+          <div className="hidden lg:flex items-center gap-1">
             {navItems.map((item) => {
               const active = item.match.test(hash);
               const Icon = item.icon;
@@ -155,7 +155,7 @@ export function Nav() {
             )}
           </div>
         </div>
-        <div className="hidden md:flex items-center gap-3">
+        <div className="hidden lg:flex items-center gap-3">
           <CliCopyButton />
           <div className="h-5 w-0.5 bg-fg/30" />
           <span className="font-mono text-[10px] text-fg/70">
