@@ -84,6 +84,9 @@ function MobileMenu({ hash }: { hash: string }) {
               Admin
             </a>
           )}
+          <div className="border-t border-fg/10 py-1">
+            <CliCopyButton />
+          </div>
           <div className="border-t border-fg/10 px-3 py-2 font-mono text-[10px] text-fg/70 flex items-center justify-between">
             <span className="truncate">
               {user?.username}
