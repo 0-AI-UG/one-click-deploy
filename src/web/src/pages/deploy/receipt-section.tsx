@@ -14,9 +14,10 @@ type Props = {
   setForm: React.Dispatch<React.SetStateAction<FormState>>;
   detected: (IntrospectResult & { ok: true }) | null;
   selectedManifest: number | null;
+  onBranchChange: (branch: string) => void;
 };
 
-export function ReceiptSection({ form, set, setForm, detected, selectedManifest }: Props) {
+export function ReceiptSection({ form, set, setForm, detected, selectedManifest, onBranchChange }: Props) {
   const [servers, setServers] = useState<ServerOption[]>([]);
   useEffect(() => {
     get("/api/resources")
@@ -150,7 +151,7 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest 
           <ReceiptRow label="Branch" detected>
             <NeoSelect
               value={form.git_branch || detected.default_branch}
-              onChange={(v) => setForm((f) => ({ ...f, git_branch: v }))}
+              onChange={onBranchChange}
               options={detected.branches.map((b) => ({
                 value: b,
                 label: b === detected.default_branch ? `${b}  ·  default` : b,
