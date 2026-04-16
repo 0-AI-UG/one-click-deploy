@@ -261,13 +261,16 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
     return { ok: false, error: `GitHub error (HTTP ${repoRes.status})`, suggested_app_name };
   }
   const repoData = await repoRes.json();
-  const default_branch: string = requestedRef || repoData.default_branch || "main";
+  // `default_branch` always reflects the repo's real default.
+  // `fetchRef` is the branch we actually read files from (honors the caller's ref).
+  const default_branch: string = repoData.default_branch || "main";
+  const fetchRef: string = requestedRef || default_branch;
 
   // 2. Fetch the recursive git tree + branch list in parallel
   const notes: string[] = [];
   const [treeRes, branchesRes] = await Promise.all([
     ghFetch(
-      `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(default_branch)}?recursive=1`,
+      `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(fetchRef)}?recursive=1`,
       token,
     ),
     ghFetch(`/repos/${owner}/${repo}/branches?per_page=100`, token),
@@ -322,7 +325,7 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
 
   const manifests: ParsedManifest[] = [];
   const manifestContents = await Promise.all(
-    manifestPaths.slice(0, 10).map((p) => fetchRawFile(owner, repo, default_branch, p, token)),
+    manifestPaths.slice(0, 10).map((p) => fetchRawFile(owner, repo, fetchRef, p, token)),
   );
   for (let i = 0; i < manifestContents.length; i++) {
     const content = manifestContents[i];
@@ -365,9 +368,9 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
 
   // 4. Read the chosen files in parallel
   const [composeContent, dockerfileContent, envContent] = await Promise.all([
-    composeFiles[0] ? fetchRawFile(owner, repo, default_branch, composeFiles[0], token) : Promise.resolve(null),
-    dockerfiles[0] ? fetchRawFile(owner, repo, default_branch, dockerfiles[0], token) : Promise.resolve(null),
-    envExampleCandidate ? fetchRawFile(owner, repo, default_branch, envExampleCandidate, token) : Promise.resolve(null),
+    composeFiles[0] ? fetchRawFile(owner, repo, fetchRef, composeFiles[0], token) : Promise.resolve(null),
+    dockerfiles[0] ? fetchRawFile(owner, repo, fetchRef, dockerfiles[0], token) : Promise.resolve(null),
+    envExampleCandidate ? fetchRawFile(owner, repo, fetchRef, envExampleCandidate, token) : Promise.resolve(null),
   ]);
 
   let compose_services: Array<{ name: string; port: number | null; has_ports: boolean }> = [];

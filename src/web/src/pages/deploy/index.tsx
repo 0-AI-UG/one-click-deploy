@@ -144,7 +144,7 @@ export function DeployPage() {
     setForm((f) => ({
       ...f,
       app_name: m.suggested_app_name || f.app_name || result.suggested_app_name,
-      git_branch: result.default_branch !== "main" ? result.default_branch : f.git_branch,
+      git_branch: f.git_branch || (result.default_branch !== "main" ? result.default_branch : ""),
       container_port: m.build?.container_port
         ? String(m.build.container_port)
         : result.detected_port
@@ -271,84 +271,96 @@ export function DeployPage() {
   }, [form, envValues, extraEnv, manifestEnvDefs]);
 
   // --- Repo introspection ---
-  useEffect(() => {
-    // After a session restore, skip the first introspect trigger
-    if (skipIntrospect.current) {
-      skipIntrospect.current = false;
-      return;
-    }
-
-    const url = form.git_repo.trim();
-    if (!url) {
-      setIntrospect(null);
-      setRevealed(false);
-      return;
-    }
+  const runIntrospect = useCallback(async (url: string, ref: string | undefined) => {
     if (!/github\.com[/:][^/]+\/[^/]+/.test(url)) {
       setIntrospect(null);
       setIntrospecting(false);
       setRevealed(true);
       return;
     }
-
     const mySeq = ++introspectSeq.current;
-    const timer = setTimeout(async () => {
-      setIntrospecting(true);
-      try {
-        const result: IntrospectResult = await get(
-          `/api/repos/introspect?url=${encodeURIComponent(url)}`,
-        );
-        if (mySeq !== introspectSeq.current) return;
-        setIntrospect(result);
-        setRevealed(true);
-        if (result.ok) {
-          if (result.manifests.length === 1) {
-            applyManifest(0, result);
-          } else if (result.manifests.length === 0) {
-            setSelectedManifest(null);
-            setManifestEnvDefs([]);
-            setForm((f) => ({
-              ...f,
-              app_name: f.app_name || result.suggested_app_name,
-              git_branch: f.git_branch || (result.default_branch !== "main" ? result.default_branch : ""),
-              container_port:
-                f.container_port === "3000" && result.detected_port
-                  ? String(result.detected_port)
-                  : f.container_port,
-              dockerfile_path: f.dockerfile_path || (result.dockerfiles[0] ?? ""),
-              compose_file: f.compose_file || (result.compose_files[0] ?? ""),
-              compose_web_service:
-                f.compose_web_service || (result.suggested_web_service ?? ""),
-              webhook_branch:
-                f.webhook_branch === "main" ? result.default_branch : f.webhook_branch,
-            }));
-            if (result.env_vars.length > 0) {
-              setEnvValues((prev) => {
-                const next = { ...prev };
-                for (const { key, value } of result.env_vars) {
-                  if (!(key in next)) next[key] = value;
-                }
-                return next;
-              });
-            }
+    setIntrospecting(true);
+    try {
+      const qs = new URLSearchParams({ url });
+      if (ref) qs.set("ref", ref);
+      const result: IntrospectResult = await get(`/api/repos/introspect?${qs.toString()}`);
+      if (mySeq !== introspectSeq.current) return;
+      setIntrospect(result);
+      setRevealed(true);
+      if (result.ok) {
+        // Manifest set can differ between branches — reset selection on every fetch.
+        setSelectedManifest(null);
+        setManifestEnvDefs([]);
+        if (result.manifests.length === 1) {
+          applyManifest(0, result);
+        } else if (result.manifests.length === 0) {
+          setForm((f) => ({
+            ...f,
+            app_name: f.app_name || result.suggested_app_name,
+            git_branch: ref || f.git_branch || (result.default_branch !== "main" ? result.default_branch : ""),
+            container_port:
+              f.container_port === "3000" && result.detected_port
+                ? String(result.detected_port)
+                : f.container_port,
+            dockerfile_path: result.dockerfiles[0] ?? f.dockerfile_path,
+            compose_file: result.compose_files[0] ?? f.compose_file,
+            compose_web_service: result.suggested_web_service ?? f.compose_web_service,
+            webhook_branch:
+              f.webhook_branch === "main" ? result.default_branch : f.webhook_branch,
+          }));
+          if (result.env_vars.length > 0) {
+            setEnvValues((prev) => {
+              const next = { ...prev };
+              for (const { key, value } of result.env_vars) {
+                if (!(key in next)) next[key] = value;
+              }
+              return next;
+            });
           }
-        } else if (result.suggested_app_name) {
-          setForm((f) => ({ ...f, app_name: f.app_name || result.suggested_app_name! }));
         }
-      } catch (err: any) {
-        if (mySeq !== introspectSeq.current) return;
-        setIntrospect({
-          ok: false,
-          error: err?.message || "We couldn't read that repo. Fill it in manually below.",
-        });
-        setRevealed(true);
-      } finally {
-        if (mySeq === introspectSeq.current) setIntrospecting(false);
+      } else if (result.suggested_app_name) {
+        setForm((f) => ({ ...f, app_name: f.app_name || result.suggested_app_name! }));
       }
-    }, 500);
+    } catch (err: any) {
+      if (mySeq !== introspectSeq.current) return;
+      setIntrospect({
+        ok: false,
+        error: err?.message || "We couldn't read that repo. Fill it in manually below.",
+      });
+      setRevealed(true);
+    } finally {
+      if (mySeq === introspectSeq.current) setIntrospecting(false);
+    }
+  }, []);
 
+  // Debounced re-introspect whenever the repo URL changes.
+  useEffect(() => {
+    if (skipIntrospect.current) {
+      skipIntrospect.current = false;
+      return;
+    }
+    const url = form.git_repo.trim();
+    if (!url) {
+      setIntrospect(null);
+      setRevealed(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      runIntrospect(url, undefined);
+    }, 500);
     return () => clearTimeout(timer);
-  }, [form.git_repo]);
+  }, [form.git_repo, runIntrospect]);
+
+  // Fired when the user picks a branch from the receipt dropdown — re-run
+  // introspection on that ref so manifests / Dockerfiles / env reflect it.
+  const handleBranchChange = useCallback(
+    (branch: string) => {
+      setForm((f) => ({ ...f, git_branch: branch }));
+      const url = form.git_repo.trim();
+      if (url) runIntrospect(url, branch);
+    },
+    [form.git_repo, runIntrospect],
+  );
 
   const set =
     (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
@@ -493,6 +505,7 @@ export function DeployPage() {
             setForm={setForm}
             detected={detected}
             selectedManifest={selectedManifest}
+            onBranchChange={handleBranchChange}
           />
         )}
 
