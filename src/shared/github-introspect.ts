@@ -16,6 +16,7 @@ export type IntrospectResult = {
   owner: string;
   repo: string;
   default_branch: string;
+  branches: string[];
   suggested_app_name: string;
   dockerfiles: string[];
   compose_files: string[];
@@ -262,18 +263,37 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
   const repoData = await repoRes.json();
   const default_branch: string = requestedRef || repoData.default_branch || "main";
 
-  // 2. Fetch the recursive git tree
+  // 2. Fetch the recursive git tree + branch list in parallel
   const notes: string[] = [];
-  const treeRes = await ghFetch(
-    `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(default_branch)}?recursive=1`,
-    token,
-  );
+  const [treeRes, branchesRes] = await Promise.all([
+    ghFetch(
+      `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(default_branch)}?recursive=1`,
+      token,
+    ),
+    ghFetch(`/repos/${owner}/${repo}/branches?per_page=100`, token),
+  ]);
+
+  let branches: string[] = [];
+  if (branchesRes.ok) {
+    try {
+      const list = (await branchesRes.json()) as Array<{ name: string }>;
+      branches = list.map((b) => b.name);
+      // Ensure the default branch is first
+      branches.sort((a, b) =>
+        a === default_branch ? -1 : b === default_branch ? 1 : a.localeCompare(b),
+      );
+    } catch {
+      branches = [];
+    }
+  }
+  if (branches.length === 0) branches = [default_branch];
   if (!treeRes.ok) {
     return {
       ok: true,
       owner,
       repo,
       default_branch,
+      branches,
       suggested_app_name,
       dockerfiles: [],
       compose_files: [],
@@ -380,6 +400,7 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
     owner,
     repo,
     default_branch,
+    branches,
     suggested_app_name,
     dockerfiles,
     compose_files: composeFiles,
