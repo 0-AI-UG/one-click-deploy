@@ -146,6 +146,19 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest 
           </ReceiptRow>
         )}
 
+        {detected && detected.branches.length > 0 && (
+          <ReceiptRow label="Branch" detected>
+            <NeoSelect
+              value={form.git_branch || detected.default_branch}
+              onChange={(v) => setForm((f) => ({ ...f, git_branch: v }))}
+              options={detected.branches.map((b) => ({
+                value: b,
+                label: b === detected.default_branch ? `${b}  ·  default` : b,
+              }))}
+            />
+          </ReceiptRow>
+        )}
+
         <ReceiptRow label="Listens On" detected={!!detected?.detected_port}>
           <input type="number" value={form.container_port} onChange={set("container_port")} />
         </ReceiptRow>

@@ -40,6 +40,7 @@ export type IntrospectResult =
       owner: string;
       repo: string;
       default_branch: string;
+      branches: string[];
       suggested_app_name: string;
       dockerfiles: string[];
       compose_files: string[];
