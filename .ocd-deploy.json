@@ -1,0 +1,51 @@
+{
+  "$schema": 1,
+  "name": "OCD Panel (SaaS)",
+  "description": "Multi-tenant deployment panel with org-based access control, member management, and granular permissions.",
+  "icon": "https://raw.githubusercontent.com/0-AI-UG/one-click-deploy/saas/src/web/public/favicon.svg",
+  "suggested_app_name": "ocd-saas",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "container_port": 3001
+  },
+  "env": [
+    {
+      "key": "JWT_SECRET",
+      "description": "Secret key for signing JWT tokens. Generate with: openssl rand -hex 32",
+      "required": true,
+      "secret": true
+    },
+    {
+      "key": "GITHUB_OAUTH_CLIENT_ID",
+      "description": "GitHub OAuth App client ID (enables repo linking and private image pulls)",
+      "required": false,
+      "secret": false
+    },
+    {
+      "key": "GITHUB_OAUTH_CLIENT_SECRET",
+      "description": "GitHub OAuth App client secret",
+      "required": false,
+      "secret": true
+    },
+    {
+      "key": "REQUIRE_2FA",
+      "description": "Require 2FA for all users. Set to 0 to disable.",
+      "default": "1",
+      "required": false
+    },
+    {
+      "key": "ENGINE_CONCURRENCY",
+      "description": "Max concurrent deploy operations per engine instance",
+      "default": "4",
+      "required": false
+    }
+  ],
+  "volume": {
+    "size": 10,
+    "path": "/app/data"
+  },
+  "webhook": {
+    "enabled": true,
+    "branch": "saas"
+  }
+}
