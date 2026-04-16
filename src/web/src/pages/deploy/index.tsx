@@ -70,7 +70,7 @@ function ServicePopover() {
         Deploy a service
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1.5 z-50 border-2 border-fg bg-bg shadow-lg min-w-[200px] animate-fade-in">
+        <div className="absolute top-full right-0 mt-1.5 z-50 border-2 border-fg bg-bg shadow-lg min-w-[200px] animate-fade-in">
           {!loaded ? (
             <div className="px-3 py-2 flex items-center justify-center">
               <Loader2 size={14} className="animate-spin text-fg-dim" />
