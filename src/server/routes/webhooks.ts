@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requireOrgPermission } from "../lib/org-context.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import * as github from "../../shared/github.ts";
@@ -109,7 +109,7 @@ export async function verifyGithubSignature(
 
 export async function handleEnableWebhook(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "webhooks.manage");
+    const ctx = await requireOrgPermission(request, "webhooks.manage");
     const body = await request.json() as { branch?: string; path?: string; wait_for_ci?: boolean };
 
     const app = db.getApp(appId);
@@ -123,7 +123,7 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
       );
     }
 
-    const pat = await github.getGitHubPat(payload.userId);
+    const pat = await github.getGitHubPat(ctx.userId);
     if (!pat) return Response.json({ ok: false, error: "No GitHub token available. Link your GitHub account in Settings first." }, { status: 400, headers: corsHeaders });
 
     const webhookBranch = body.branch || "main";
@@ -139,7 +139,7 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
     });
 
     db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath, !!body.wait_for_ci);
-    db.updateAppDeployedBy(appId, payload.userId);
+    db.updateAppDeployedBy(appId, ctx.userId);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
@@ -149,7 +149,7 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
 
 export async function handleUpdateWebhookSettings(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "webhooks.manage");
+    await requireOrgPermission(request, "webhooks.manage");
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
@@ -170,13 +170,13 @@ export async function handleUpdateWebhookSettings(request: Request, appId: numbe
 
 export async function handleDisableWebhook(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "webhooks.manage");
+    const ctx = await requireOrgPermission(request, "webhooks.manage");
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
 
     if (app.github_webhook_id) {
-      const pat = await github.getGitHubPat(payload.userId);
+      const pat = await github.getGitHubPat(ctx.userId);
       if (pat) {
         try {
           await github.deleteWebhook({
@@ -253,6 +253,7 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
           trigger: "webhook",
           triggeredBy: `github:${deliveryId}`,
           idempotencyKey: `webhook-delivery:${deliveryId}`,
+          orgId: app.org_id || "",
         });
       } catch (err) {
         console.error(`[webhook] enqueue failed for app ${appId}:`, err);
@@ -313,7 +314,7 @@ export async function handlePanelGithubWebhook(request: Request): Promise<Respon
 
 export async function handleEnablePanelWebhook(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "webhooks.manage");
+    const ctx = await requireOrgPermission(request, "webhooks.manage");
 
     const panel = db.getPanel();
     if (!panel) {
@@ -326,7 +327,7 @@ export async function handleEnablePanelWebhook(request: Request): Promise<Respon
       );
     }
 
-    const pat = await github.getGitHubPat(payload.userId);
+    const pat = await github.getGitHubPat(ctx.userId);
     if (!pat) {
       return Response.json(
         { ok: false, error: "No GitHub token available. Link your GitHub account first." },
@@ -353,7 +354,7 @@ export async function handleEnablePanelWebhook(request: Request): Promise<Respon
 
 export async function handleDisablePanelWebhook(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "webhooks.manage");
+    const ctx = await requireOrgPermission(request, "webhooks.manage");
 
     const panel = db.getPanel();
     if (!panel) {
@@ -361,7 +362,7 @@ export async function handleDisablePanelWebhook(request: Request): Promise<Respo
     }
 
     if (panel.github_webhook_id) {
-      const pat = await github.getGitHubPat(payload.userId);
+      const pat = await github.getGitHubPat(ctx.userId);
       if (pat) {
         try {
           await github.deleteWebhook({

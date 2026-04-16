@@ -4,6 +4,7 @@ export type OpContext<Input = unknown> = {
   opId: number;
   kind: string;
   input: Input;
+  orgId: string;
   trigger: string;
   triggeredBy: string;
   parentId: number | null;

@@ -99,6 +99,7 @@ export async function bootstrapPanel(
       type: opts.serverType,
       location: opts.serverLocation,
       status: "creating",
+      org_id: "",
     });
     dbServerId = dbServer.id;
 

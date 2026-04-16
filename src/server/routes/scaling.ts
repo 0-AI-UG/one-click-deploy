@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requireOrgPermission } from "../lib/org-context.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { collectMetrics } from "../../engine/scale-api.ts";
@@ -7,7 +7,7 @@ import { enqueue } from "../ipc/enqueue.ts";
 
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "scaling.manage");
+    const ctx = await requireOrgPermission(request, "scaling.manage");
     const body = await request.json() as { replicas: number; server_id?: number };
     const replicas = Number(body.replicas);
     if (!Number.isFinite(replicas) || replicas < 0) {
@@ -35,7 +35,8 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
         resourceKeys: [`app:${appId}`],
         input: { appId, targetReplicas: replicas, targetServerId: body.server_id },
         trigger: "ui",
-        triggeredBy: payload.userId,
+        triggeredBy: ctx.userId,
+        orgId: ctx.orgId,
       });
       return Response.json({ op_id: opId }, { headers: corsHeaders });
     }
@@ -45,7 +46,8 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
       resourceKeys: [`app:${appId}`],
       input: { appId, targetReplicas: replicas },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -55,7 +57,7 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
 
 export async function handleUpdateScalingPolicy(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "scaling.manage");
+    await requireOrgPermission(request, "scaling.manage");
     const { min_replicas, max_replicas, autoscale_enabled, cpu_threshold, mem_threshold, cooldown, scale_to_zero_after } = await request.json() as {
       min_replicas: number;
       max_replicas: number;
@@ -100,7 +102,7 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
 
 export async function handleGetReplicas(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requireOrgPermission(request, "servers.view");
     const replicas = db.getReplicas(appId);
     return Response.json(replicas, { headers: corsHeaders });
   } catch (error) {
@@ -110,7 +112,7 @@ export async function handleGetReplicas(request: Request, appId: number): Promis
 
 export async function handleGetScalingEvents(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requireOrgPermission(request, "servers.view");
     const events = db.getScalingEvents(appId);
     return Response.json(events, { headers: corsHeaders });
   } catch (error) {
@@ -120,7 +122,7 @@ export async function handleGetScalingEvents(request: Request, appId: number): P
 
 export async function handleGetAppMetrics(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requireOrgPermission(request, "servers.view");
     await collectMetrics(appId);
     const replicas = db.getReplicas(appId);
     return Response.json(replicas, { headers: corsHeaders });
@@ -131,7 +133,7 @@ export async function handleGetAppMetrics(request: Request, appId: number): Prom
 
 export async function handleGetAppMetricsHistory(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requireOrgPermission(request, "servers.view");
     const url = new URL(request.url);
     const sinceSec = Math.max(60, Math.min(86400, parseInt(url.searchParams.get("since") || "3600", 10)));
     const samples = db.getRecentAppMetrics(appId, sinceSec);
@@ -191,7 +193,7 @@ export async function handleWakeStatus(request: Request, appId: number): Promise
 
 export async function handleMigrateReplica(request: Request, appId: number, replicaId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "scaling.manage");
+    const ctx = await requireOrgPermission(request, "scaling.manage");
     const body = await request.json() as { target_server_id: number };
     if (!body.target_server_id) {
       return Response.json({ error: "target_server_id is required" }, { status: 400, headers: corsHeaders });
@@ -205,7 +207,8 @@ export async function handleMigrateReplica(request: Request, appId: number, repl
       resourceKeys: [`app:${appId}`],
       input: { appId, replicaId, targetServerId: body.target_server_id },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {

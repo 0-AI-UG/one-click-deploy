@@ -77,11 +77,10 @@ function credentialTransports(c: db.WebAuthnCredential): AuthenticatorTransportF
 
 /** Build the user response object consistently */
 function userResponse(user: db.UserRow) {
-  const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(user.id);
+  const permissions = db.getUserPermissions(user.id);
   return {
     id: user.id,
     username: user.username,
-    isAdmin: user.is_admin === 1,
     totpEnabled: user.totp_enabled === 1,
     webauthnEnabled: user.webauthn_enabled === 1,
     githubLinked: !!user.github_id,
@@ -568,8 +567,8 @@ export async function handleWebAuthnDelete(request: Request): Promise<Response> 
     // Check if this would leave the user with no 2FA when required
     const credCount = db.getWebAuthnCredentialCount(userId);
     const wouldHave2FA = user.totp_enabled || credCount > 1;
-    const require2fa = (db.getSettings().require_2fa ?? "1") === "1";
-    if (!wouldHave2FA && (user.is_admin || require2fa)) {
+    const require2fa = process.env.REQUIRE_2FA !== "0";
+    if (!wouldHave2FA && require2fa) {
       return Response.json(
         { error: "Cannot remove last passkey: at least one 2FA method is required" },
         { status: 403, headers: corsHeaders },

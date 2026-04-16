@@ -3,6 +3,9 @@ import { corsHeaders } from "./cors.ts";
 export function handleError(error: unknown): Response {
   if (error instanceof Error) {
     const name = error.constructor.name;
+    if (name === "BadRequestError") {
+      return Response.json({ error: error.message }, { status: 400, headers: corsHeaders });
+    }
     if (name === "AuthError") {
       return Response.json({ error: error.message }, { status: 401, headers: corsHeaders });
     }

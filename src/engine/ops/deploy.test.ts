@@ -56,6 +56,7 @@ function makeCtx(input: any) {
     ctx: {
       opId: 1,
       kind: "deploy",
+      orgId: "test-org",
       input,
       trigger: "user" as const,
       triggeredBy: "",
@@ -75,6 +76,8 @@ function stepByName(name: string) {
   if (!step) throw new Error(`step ${name} not found`);
   return step;
 }
+
+try { db.insertOrg("test-org", "Test Org", "test-org"); } catch {}
 
 beforeEach(() => {
   provisionServer.mockClear();
@@ -103,6 +106,7 @@ describe("deploy step: pick_or_provision_server", () => {
       dockerfile_path: "Dockerfile",
       container_port: 3000,
       env_vars: "{}",
+      org_id: "test-org",
     });
     const { ctx } = makeCtx(baseReq(name));
     expect(step.run(ctx, {})).rejects.toThrow(/already exists/i);
@@ -114,7 +118,7 @@ describe("deploy step: pick_or_provision_server", () => {
   });
 
   test("reuses an existing ready server when no server_id is specified", async () => {
-    for (const s of db.getServers()) db.deleteServer(s.id);
+    for (const s of db.getServers("test-org")) db.deleteServer(s.id);
     const existing = db.insertServer({
       name: `srv-${randomSuffix()}`,
       provider_id: `h-${randomSuffix()}`,
@@ -123,6 +127,7 @@ describe("deploy step: pick_or_provision_server", () => {
       type: "cx22",
       location: "fsn1",
       status: "ready",
+      org_id: "test-org",
     });
     const { ctx } = makeCtx(baseReq(`app-${randomSuffix()}`));
     const out = (await step.run(ctx, {})) as { serverId: number; serverIp: string; provisioned: boolean };
@@ -146,6 +151,7 @@ describe("deploy step: pick_or_provision_server", () => {
       type: "cx22",
       location: "fsn1",
       status: "provisioning",
+      org_id: "test-org",
     });
     const { ctx } = makeCtx({ ...baseReq(`app-${randomSuffix()}`), server_id: notReady.id });
     expect(step.run(ctx, {})).rejects.toThrow(/not found|not ready/i);
@@ -153,10 +159,10 @@ describe("deploy step: pick_or_provision_server", () => {
 
   test("provisions a new server when none exist and settings are valid", async () => {
     // Clear all existing servers first.
-    const srvs = db.getServers();
+    const srvs = db.getServers("test-org");
     for (const s of srvs) db.deleteServer(s.id);
-    db.saveSetting("default_server_type", "cx22");
-    db.saveSetting("default_location", "fsn1");
+    db.saveOrgSetting("test-org","default_server_type", "cx22");
+    db.saveOrgSetting("test-org","default_location", "fsn1");
 
     const { ctx } = makeCtx(baseReq(`app-${randomSuffix()}`));
     const out = (await step.run(ctx, {})) as { provisioned: boolean; serverIp: string };
@@ -166,9 +172,9 @@ describe("deploy step: pick_or_provision_server", () => {
   });
 
   test("requires default_server_type before provisioning", async () => {
-    const srvs = db.getServers();
+    const srvs = db.getServers("test-org");
     for (const s of srvs) db.deleteServer(s.id);
-    db.saveSetting("default_server_type", "");
+    db.saveOrgSetting("test-org","default_server_type", "");
     const { ctx } = makeCtx(baseReq(`app-${randomSuffix()}`));
     expect(step.run(ctx, {})).rejects.toThrow(/server type/i);
   });
@@ -194,7 +200,7 @@ describe("deploy step: create_dns_record", () => {
   });
 
   test("returns null when dns_zone_id is unset", async () => {
-    db.saveSetting("dns_zone_id", "");
+    db.saveOrgSetting("test-org","dns_zone_id", "");
     const { ctx } = makeCtx({ ...baseReq("x"), domain: "app.example.com" });
     const prior = {
       pick_or_provision_server: {
@@ -210,7 +216,7 @@ describe("deploy step: create_dns_record", () => {
   });
 
   test("creates record with @ subdomain for a 2-label domain (example.com)", async () => {
-    db.saveSetting("dns_zone_id", "zone-123");
+    db.saveOrgSetting("test-org","dns_zone_id", "zone-123");
     const { ctx } = makeCtx({ ...baseReq("x"), domain: "example.com" });
     const prior = {
       pick_or_provision_server: {
@@ -228,7 +234,7 @@ describe("deploy step: create_dns_record", () => {
   });
 
   test("creates record with subdomain for app.example.com", async () => {
-    db.saveSetting("dns_zone_id", "zone-xyz");
+    db.saveOrgSetting("test-org","dns_zone_id", "zone-xyz");
     const { ctx } = makeCtx({ ...baseReq("x"), domain: "my.app.example.com" });
     const prior = {
       pick_or_provision_server: {
@@ -250,7 +256,7 @@ describe("deploy step: create_dns_record", () => {
   });
 
   test("DNS failure is swallowed (best-effort) — returns null", async () => {
-    db.saveSetting("dns_zone_id", "zone-ok");
+    db.saveOrgSetting("test-org","dns_zone_id", "zone-ok");
     dns._mocks.createRecord.mockImplementationOnce(async () => {
       throw new Error("dns 500");
     });
@@ -313,7 +319,7 @@ describe("deploy step: create_volume", () => {
   });
 
   test("creates a volume and returns its providerId + mount path", async () => {
-    db.saveSetting("default_location", "fsn1");
+    db.saveOrgSetting("test-org","default_location", "fsn1");
     const req = { ...baseReq(`vol-${randomSuffix()}`), volume_size: 25, volume_path: "/var/lib/data" };
     const { ctx } = makeCtx(req);
     const prior = {

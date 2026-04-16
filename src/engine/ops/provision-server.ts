@@ -58,7 +58,7 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
   async run(ctx) {
     const compute = getComputeProvider();
     const serverName = ctx.input.name || `ocd-server-${Date.now()}`;
-    const existing = db.getServers().find((s) => s.name === serverName && s.status === "creating");
+    const existing = db.getServers(ctx.orgId).find((s) => s.name === serverName && s.status === "creating");
     if (existing) {
       // Idempotent replay: reuse the placeholder row.
       return { serverId: existing.id, serverName };
@@ -72,6 +72,7 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
       type: ctx.input.serverType,
       location: ctx.input.location,
       status: "creating",
+      org_id: ctx.orgId,
     });
     return { serverId: row.id, serverName };
   },

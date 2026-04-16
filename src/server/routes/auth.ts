@@ -60,10 +60,9 @@ export async function handleLogin(request: Request): Promise<Response> {
         );
       }
 
-      // 2FA not set up but required (admins always require 2FA;
-      // others only when the global require_2fa setting is on)
-      const require2fa = (db.getSettings().require_2fa ?? "1") === "1";
-      if (user.is_admin || require2fa) {
+      // 2FA not set up but required when the global REQUIRE_2FA env var is set
+      const require2fa = process.env.REQUIRE_2FA !== "0";
+      if (require2fa) {
         const tempToken = await createTempToken(user.id);
         return Response.json(
           { requires2FASetup: true, tempToken },
@@ -74,14 +73,13 @@ export async function handleLogin(request: Request): Promise<Response> {
 
     // No 2FA required — issue full token
     const token = await createToken({ userId: user.id, username: user.username });
-    const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(user.id);
+    const permissions = db.getUserPermissions(user.id);
     return Response.json(
       {
         token,
         user: {
           id: user.id,
           username: user.username,
-          isAdmin: user.is_admin === 1,
           totpEnabled: user.totp_enabled === 1,
           webauthnEnabled: user.webauthn_enabled === 1,
           githubLinked: !!user.github_id,
@@ -154,20 +152,45 @@ export async function handlePasswordReset(request: Request): Promise<Response> {
   }
 }
 
+export async function handleRegister(request: Request): Promise<Response> {
+  const rateLimitResponse = checkRateLimit(request);
+  if (rateLimitResponse) return rateLimitResponse;
+
+  try {
+    const { username, password } = await request.json() as { username?: string; password?: string };
+    if (!username || !password) return Response.json({ error: "Username and password required" }, { status: 400, headers: corsHeaders });
+    if (username.length < 3) return Response.json({ error: "Username must be at least 3 characters" }, { status: 400, headers: corsHeaders });
+    if (password.length < 8) return Response.json({ error: "Password must be at least 8 characters" }, { status: 400, headers: corsHeaders });
+    if (!/^[a-zA-Z0-9_-]+$/.test(username)) return Response.json({ error: "Username must be alphanumeric" }, { status: 400, headers: corsHeaders });
+
+    const existing = db.getUserByUsername(username);
+    if (existing) return Response.json({ error: "Username already taken" }, { status: 409, headers: corsHeaders });
+
+    const id = crypto.randomUUID();
+    const passwordHash = await Bun.password.hash(password, "argon2id");
+    db.insertUser({ id, username, password_hash: passwordHash });
+
+    // Create JWT token
+    const token = await createToken({ userId: id, username });
+    return Response.json({ token, user: { id, username } }, { status: 201, headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleMe(request: Request): Promise<Response> {
   try {
     const { userId } = await authenticateRequest(request);
     const user = db.getUserById(userId);
     if (!user) throw new AuthError("Unauthorized");
 
-    const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
+    const permissions = db.getUserPermissions(userId);
 
     return Response.json(
       {
         user: {
           id: user.id,
           username: user.username,
-          isAdmin: user.is_admin === 1,
           totpEnabled: user.totp_enabled === 1,
           webauthnEnabled: user.webauthn_enabled === 1,
           githubLinked: !!user.github_id,
@@ -234,14 +257,13 @@ export async function handleUpdateMe(request: Request): Promise<Response> {
 
     const user = db.getUserById(userId);
     if (!user) throw new AuthError("Unauthorized");
-    const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
+    const permissions = db.getUserPermissions(userId);
 
     return Response.json(
       {
         user: {
           id: user.id,
           username: user.username,
-          isAdmin: user.is_admin === 1,
           totpEnabled: user.totp_enabled === 1,
           webauthnEnabled: user.webauthn_enabled === 1,
           githubLinked: !!user.github_id,

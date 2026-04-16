@@ -32,6 +32,8 @@ mock.module("../../shared/services/catalog.ts", () => ({
 import * as db from "../../shared/db.ts";
 import { destroyService } from "./service-lifecycle.ts";
 
+try { db.insertOrg("test-org", "Test Org", "test-org"); } catch {}
+
 function freshServer() {
   return db.insertServer({
     name: `srv-${randomSuffix()}`,
@@ -41,6 +43,7 @@ function freshServer() {
     type: "cx22",
     location: "fsn1",
     status: "ready",
+    org_id: "test-org",
   });
 }
 
@@ -52,6 +55,7 @@ function freshService() {
     port: 5432,
     env_vars: "{}",
     credentials: "{}",
+    org_id: "test-org",
   });
 }
 
@@ -160,6 +164,7 @@ describe("destroyService", () => {
           { key: "OTHER_TOKEN", value: "keep", secret: false, updated_at: "now" },
         ],
       }),
+      "test-org",
     );
     const server = freshServer();
     const app = db.insertApp({
@@ -170,6 +175,7 @@ describe("destroyService", () => {
       container_port: 3000,
       env_vars: "{}",
       environment_id: env.id,
+      org_id: "test-org",
     });
     const service = freshService();
     db.insertServiceLink(service.id, app.id, "DATABASE");

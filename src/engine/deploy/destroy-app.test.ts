@@ -51,6 +51,8 @@ import * as db from "../../shared/db.ts";
 import rawDb from "../../shared/db.ts";
 import { destroyApp, destroyServer } from "./lifecycle.ts";
 
+try { db.insertOrg("test-org", "Test Org", "test-org"); } catch {}
+
 function freshServer() {
   return db.insertServer({
     name: `srv-${randomSuffix()}`,
@@ -60,6 +62,7 @@ function freshServer() {
     type: "cx22",
     location: "fsn1",
     status: "ready",
+    org_id: "test-org",
   });
 }
 
@@ -72,6 +75,7 @@ function freshApp(overrides: Partial<{ auth_password: string }> = {}) {
     container_port: 3000,
     env_vars: "{}",
     auth_password: overrides.auth_password,
+    org_id: "test-org",
   });
 }
 

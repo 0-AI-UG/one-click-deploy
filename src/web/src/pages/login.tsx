@@ -57,12 +57,18 @@ export function LoginPage() {
               {loading ? <Spinner /> : <><span>Sign In</span><ArrowRight size={14} /></>}
             </button>
           </form>
-          <div className="mt-4 text-center">
+          <div className="mt-4 flex items-center justify-between">
             <a
               href="#/password-reset"
               className="font-mono text-[9px] uppercase tracking-wider text-muted hover:text-fg"
             >
               Forgot password?
+            </a>
+            <a
+              href="#/register"
+              className="font-mono text-[9px] uppercase tracking-wider text-muted hover:text-fg"
+            >
+              Create account
             </a>
           </div>
         </div>

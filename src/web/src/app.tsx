@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAuth, updateUser } from "./stores/auth.ts";
+import { useAuth, updateUser, setOrgs } from "./stores/auth.ts";
 import { get } from "./api/client.ts";
 import { Toasts, ConfirmDialog, Spinner } from "./components/ui.tsx";
 import { Nav } from "./components/nav.tsx";
@@ -17,8 +17,6 @@ import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail/index.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
 import { AccountPage } from "./pages/account.tsx";
-import { UsersPage } from "./pages/admin/users.tsx";
-import { UserDetailPage } from "./pages/admin/user-detail.tsx";
 import { TerminalPage } from "./pages/terminal.tsx";
 import { DeployServicePage } from "./pages/deploy-service.tsx";
 import { ServiceDeployProgressPage } from "./pages/service-deploy-progress.tsx";
@@ -27,6 +25,11 @@ import { EnvironmentsPage } from "./pages/environments.tsx";
 import { DeviceAuthPage } from "./pages/device-auth.tsx";
 import { EnginePage } from "./pages/engine.tsx";
 import { EngineOpDetailPage } from "./pages/engine-op-detail.tsx";
+import { RegisterPage } from "./pages/register.tsx";
+import { CreateOrgPage } from "./pages/create-org.tsx";
+import { OrgOnboardingPage } from "./pages/org-onboarding.tsx";
+import { OrgSettingsPage } from "./pages/org-settings.tsx";
+import { AcceptInvitePage } from "./pages/accept-invite.tsx";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -40,7 +43,7 @@ function useHash() {
 
 export function App() {
   const hash = useHash();
-  const { token, tempToken } = useAuth();
+  const { token, tempToken, currentOrgId } = useAuth();
   const [setupChecked, setSetupChecked] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
 
@@ -70,6 +73,14 @@ export function App() {
     refresh();
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
+  }, [token]);
+
+  // Load user's organizations
+  useEffect(() => {
+    if (!token) return;
+    get("/api/orgs").then((orgs) => {
+      setOrgs(orgs);
+    }).catch(() => {});
   }, [token]);
 
   // Once a temp token appears (setup just completed, or login is mid-2FA),
@@ -112,6 +123,7 @@ export function App() {
     return <><SetupPage /><Toasts /><ConfirmDialog /></>;
   }
   if (hash === "#/login") return <><LoginPage /><Toasts /><ConfirmDialog /></>;
+  if (hash === "#/register") return <><RegisterPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/password-reset") return <><PasswordResetPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/2fa-verify") return <><TwoFactorVerifyPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/2fa-setup") return <><TwoFactorSetupPage /><Toasts /><ConfirmDialog /></>;
@@ -125,6 +137,12 @@ export function App() {
     } else {
       window.location.hash = "#/login";
     }
+    return null;
+  }
+
+  // Redirect to org creation if user has no org (but allow create-org and invite routes)
+  if (!currentOrgId && !hash.startsWith("#/create-org") && !hash.startsWith("#/invite/") && !hash.startsWith("#/org-onboarding")) {
+    window.location.hash = "#/create-org";
     return null;
   }
 
@@ -163,11 +181,6 @@ export function App() {
     content = <ResourcesPage />;
   } else if (hash === "#/account") {
     content = <AccountPage />;
-  } else if (hash === "#/admin") {
-    content = <UsersPage />;
-  } else if (hash.startsWith("#/admin/")) {
-    const userId = hash.split("/")[2];
-    content = userId ? <UserDetailPage userId={userId} /> : <UsersPage />;
   } else if (hash.startsWith("#/terminal/")) {
     const parts = hash.split("/");
     const kind = parts[2] as "server" | "replica" | "service-instance";
@@ -175,6 +188,15 @@ export function App() {
     content = (kind === "server" || kind === "replica" || kind === "service-instance") && id
       ? <TerminalPage kind={kind} id={id} />
       : <DashboardPage />;
+  } else if (hash === "#/create-org") {
+    content = <CreateOrgPage />;
+  } else if (hash === "#/org-onboarding") {
+    content = <OrgOnboardingPage />;
+  } else if (hash === "#/org-settings") {
+    content = <OrgSettingsPage />;
+  } else if (hash.startsWith("#/invite/")) {
+    const inviteToken = hash.split("/")[2];
+    content = inviteToken ? <AcceptInvitePage token={inviteToken} /> : <DashboardPage />;
   } else {
     content = <DashboardPage />;
   }

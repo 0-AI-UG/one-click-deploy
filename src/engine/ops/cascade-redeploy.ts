@@ -34,7 +34,7 @@ const resolveApps: Step<CascadeRedeployInput, ResolveOut> = {
   async run(ctx) {
     const env = db.getEnvironment(ctx.input.environmentId);
     if (!env) throw new Error(`Environment ${ctx.input.environmentId} not found`);
-    const apps = db.getAppsByEnvironmentId(ctx.input.environmentId);
+    const apps = db.getAppsByEnvironmentId(ctx.input.environmentId, ctx.orgId);
     const appIds = apps.filter((a) => isActiveApp(a.status)).map((a) => a.id);
     ctx.log(`resolved ${appIds.length} running app(s) attached to env ${env.name}`);
     return { appIds };
@@ -66,6 +66,7 @@ const enqueueChildRedeploys: Step<CascadeRedeployInput, EnqueueOut> = {
         triggeredBy: ctx.triggeredBy,
         parentId: ctx.opId,
         idempotencyKey: key,
+        orgId: ctx.orgId,
       });
       childOpIds.push(row.id);
     }

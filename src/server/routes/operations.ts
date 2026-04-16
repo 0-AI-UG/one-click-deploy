@@ -1,8 +1,6 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { handleError } from "../lib/utils.ts";
-import { authenticateRequest } from "../lib/auth.ts";
-import { requirePermission } from "../lib/permissions.ts";
-import { getUserById } from "../../shared/db.ts";
+import { requireOrgPermission } from "../lib/org-context.ts";
 import { PermissionError } from "../lib/errors.ts";
 import {
   getOperation,
@@ -106,7 +104,7 @@ function mapStep(s: ReturnType<typeof getSteps>[number]) {
 
 export async function handleListOperations(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requireOrgPermission(request, "servers.view");
     const running = listRunningOperations().map(toJsonRow);
     const pending = listPendingOperations(100).map(toJsonRow);
     const recent = listRecentOperations(50).map(toJsonRow);
@@ -131,7 +129,7 @@ export async function handleListOperations(request: Request): Promise<Response> 
 
 export async function handleGetOperation(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requireOrgPermission(request, "servers.view");
     const op = getOperation(id);
     if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     const steps = getSteps(id, 0).map(mapStep);
@@ -147,7 +145,7 @@ export async function handleGetOperation(request: Request, id: number): Promise<
 
 export async function handleOperationEvents(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requireOrgPermission(request, "servers.view");
     const url = new URL(request.url);
     const since = parseInt(url.searchParams.get("since") || "0", 10);
     const timeoutMs = Math.min(parseInt(url.searchParams.get("wait") || "15000", 10), 25000);
@@ -184,13 +182,11 @@ export async function handleOperationEvents(request: Request, id: number): Promi
 
 export async function handleCancelOperation(request: Request, id: number): Promise<Response> {
   try {
-    const payload = await authenticateRequest(request);
-    const user = getUserById(payload.userId);
-    if (!user) throw new PermissionError("Unauthorized");
+    const ctx = await requireOrgPermission(request, "servers.view");
     const op = getOperation(id);
     if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
-    // Only admins or the user who triggered the op can cancel it.
-    if (!user.is_admin && op.triggered_by !== payload.userId) {
+    // Org owners/admins or the user who triggered the op can cancel it.
+    if (ctx.orgRole === "member" && op.triggered_by !== ctx.userId) {
       throw new PermissionError("Cannot cancel another user's operation");
     }
     requestCancel(id);

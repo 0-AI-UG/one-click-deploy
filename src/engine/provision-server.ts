@@ -20,8 +20,9 @@ export async function provisionServer(opts: {
   location: string;
   name?: string;
   emit: ProgressFn;
+  orgId?: string;
 }): Promise<Server> {
-  const { serverType, location, emit } = opts;
+  const { serverType, location, emit, orgId = "" } = opts;
   const compute = getComputeProvider();
   const serverName = opts.name || `ocd-server-${Date.now()}`;
 
@@ -47,6 +48,7 @@ export async function provisionServer(opts: {
     type: serverType,
     location,
     status: "creating",
+    org_id: orgId,
   });
 
   log("server", `Creating ${compute.name} server: name=${serverName} type=${serverType} location=${location}`);

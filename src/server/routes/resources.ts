@@ -1,12 +1,12 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requireOrgPermission } from "../lib/org-context.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { getComputeProvider } from "../../shared/providers/index.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "resources.view");
+    const ctx = await requireOrgPermission(request, "resources.view");
 
     const compute = getComputeProvider();
 
@@ -30,7 +30,8 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
     const priceForServer = (type: string, location: string): number | null =>
       serverPriceMap.get(`${type}|${location}`) ?? null;
-    let dbServers = db.getServers();
+    const orgId = ctx.orgId;
+    let dbServers = db.getServers(orgId);
     try {
       const remoteServers = await compute.listServers();
       for (const rs of remoteServers) {
@@ -44,9 +45,10 @@ export async function handleGetResources(request: Request): Promise<Response> {
           type: rs.type || "",
           location: rs.location || "",
           status: rs.status || "running",
+          org_id: orgId,
         });
       }
-      dbServers = db.getServers();
+      dbServers = db.getServers(orgId);
     } catch (e) {
       console.error("resources: failed to sync servers from provider:", e);
     }
@@ -89,7 +91,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
     let volumes: VolumeResource[] = [];
     try {
       const vols = await compute.volumes?.list() ?? [];
-      const allApps = db.getApps();
+      const allApps = db.getApps(orgId);
       volumes = vols.map((v) => {
         const serverName = v.serverId ? dbServers.find((s) => s.provider_id === v.serverId)?.name || `server-${v.serverId}` : "";
         const app = allApps.find((a) => a.volume_id === v.providerId);
@@ -126,7 +128,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
 export async function handleGetServerMetricsHistory(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "resources.view");
+    await requireOrgPermission(request, "resources.view");
     const url = new URL(request.url);
     const since = parseInt(url.searchParams.get("since") || "3600", 10);
     const samples = db.getRecentServerMetrics(since);
@@ -138,19 +140,19 @@ export async function handleGetServerMetricsHistory(request: Request): Promise<R
 
 export async function handleDeleteResource(request: Request, type: string, id: string): Promise<Response> {
   try {
-    await requirePermission(request, "resources.delete");
+    const ctx = await requireOrgPermission(request, "resources.delete");
+    const orgId = ctx.orgId;
     const compute = getComputeProvider();
 
     if (type === "server") {
-      const payload = await requirePermission(request, "resources.delete");
-      const server = db.getServers().find((s) => s.provider_id === id || String(s.id) === id);
+      const server = db.getServers(orgId).find((s) => s.provider_id === id || String(s.id) === id);
       if (server) {
         const replicas = db.getReplicasByServer(server.id);
         if (replicas.length > 0) {
           const users = replicas.map((r) => `${r.container_name} (replica)`);
           return Response.json({ ok: false, error: `Server is in use by: ${users.join(", ")}` }, { headers: corsHeaders });
         }
-        const apps = db.getApps(server.id);
+        const apps = db.getApps(orgId, server.id);
         const services = db.getServicesOnServer(server.id);
         const keys = [
           `server:${server.id}`,
@@ -162,14 +164,15 @@ export async function handleDeleteResource(request: Request, type: string, id: s
           resourceKeys: keys,
           input: { serverId: server.id },
           trigger: "ui",
-          triggeredBy: payload.userId,
+          triggeredBy: ctx.userId,
+          orgId: ctx.orgId,
         });
         return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
       }
       await compute.deleteServer(id);
       return Response.json({ ok: true }, { headers: corsHeaders });
     } else if (type === "volume") {
-      const allApps = db.getApps();
+      const allApps = db.getApps(orgId);
       const using = allApps.filter((a) => a.volume_id === id);
       if (using.length > 0) {
         return Response.json({ ok: false, error: `Volume is in use by: ${using.map((a) => a.name).join(", ")}` }, { headers: corsHeaders });
@@ -186,7 +189,7 @@ export async function handleDeleteResource(request: Request, type: string, id: s
 
 export async function handleCreateServer(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "resources.create");
+    const ctx = await requireOrgPermission(request, "resources.create");
     const body = await request.json() as { server_type: string; location: string; name?: string };
 
     if (!body.server_type || !body.location) {
@@ -202,7 +205,8 @@ export async function handleCreateServer(request: Request): Promise<Response> {
         name: body.name,
       },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
 
     return Response.json({ op_id: opId }, { headers: corsHeaders });

@@ -80,15 +80,15 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
     if (!req.name || !/^[a-z0-9][a-z0-9-]*$/.test(req.name)) {
       throw new Error("Service name must start with a letter/digit and contain only lowercase letters, digits, and hyphens");
     }
-    if (db.getServiceByName(req.name)) {
+    if (db.getServiceByName(req.name, ctx.orgId)) {
       throw new Error(`A service named "${req.name}" already exists`);
     }
-    if (db.getAppByName(req.name)) {
+    if (db.getAppByName(req.name, ctx.orgId)) {
       throw new Error(`An app named "${req.name}" already exists. Choose a different name.`);
     }
     resolveCatalog(req);
 
-    const existingReady = db.getServers().find((s: Server) => s.status === "ready");
+    const existingReady = db.getServers(ctx.orgId).find((s: Server) => s.status === "ready");
     if (existingReady) {
       return {
         serverId: existingReady.id,
@@ -97,7 +97,7 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
         provisioned: false,
       };
     }
-    const settings = db.getSettings();
+    const settings = db.getOrgSettings(ctx.orgId);
     const serverType = settings.default_server_type;
     if (!serverType) throw new Error("No default server type configured — set one in Settings");
     const location = settings.default_location;
@@ -214,6 +214,7 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
       port: catalog.defaultPort,
       env_vars: JSON.stringify(envVars),
       credentials: JSON.stringify(credentials),
+      org_id: ctx.orgId,
     });
     const instance = db.insertServiceInstance({
       service_id: service.id,

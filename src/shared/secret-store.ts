@@ -12,11 +12,11 @@ export function getJwtSecret(): string {
 }
 
 export interface SecretStore {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string): Promise<void>;
-  delete(key: string): Promise<void>;
+  get(key: string, orgId?: string): Promise<string | null>;
+  set(key: string, value: string, orgId?: string): Promise<void>;
+  delete(key: string, orgId?: string): Promise<void>;
   /** Read the active compute provider's API token. Returns "" when unset. */
-  getProviderToken(): Promise<string>;
+  getProviderToken(orgId?: string): Promise<string>;
 }
 
 // Shared encryption key, cached after first derivation
@@ -43,9 +43,9 @@ class DbSecretStore implements SecretStore {
     return getEncryptionKey();
   }
 
-  async get(key: string): Promise<string | null> {
+  async get(key: string, orgId?: string): Promise<string | null> {
     const { default: db } = await import("./db.ts");
-    const row = db.query("SELECT encrypted_value, iv FROM encrypted_secrets WHERE key = ?").get(key) as { encrypted_value: string; iv: string } | null;
+    const row = db.query("SELECT encrypted_value, iv FROM encrypted_secrets WHERE key = ? AND org_id = ?").get(key, orgId ?? "") as { encrypted_value: string; iv: string } | null;
     if (!row) return null;
     try {
       const encKey = await this.getKey();
@@ -59,7 +59,7 @@ class DbSecretStore implements SecretStore {
     }
   }
 
-  async set(key: string, value: string): Promise<void> {
+  async set(key: string, value: string, orgId?: string): Promise<void> {
     const { default: db } = await import("./db.ts");
     const encKey = await this.getKey();
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -70,25 +70,25 @@ class DbSecretStore implements SecretStore {
     );
     const ivB64 = Buffer.from(iv).toString("base64");
     const ctB64 = Buffer.from(ciphertext).toString("base64");
-    db.query("INSERT OR REPLACE INTO encrypted_secrets (key, encrypted_value, iv) VALUES (?, ?, ?)").run(key, ctB64, ivB64);
+    db.query("INSERT OR REPLACE INTO encrypted_secrets (org_id, key, encrypted_value, iv) VALUES (?, ?, ?, ?)").run(orgId ?? "", key, ctB64, ivB64);
   }
 
-  async delete(key: string): Promise<void> {
+  async delete(key: string, orgId?: string): Promise<void> {
     const { default: db } = await import("./db.ts");
-    db.query("DELETE FROM encrypted_secrets WHERE key = ?").run(key);
+    db.query("DELETE FROM encrypted_secrets WHERE key = ? AND org_id = ?").run(key, orgId ?? "");
   }
 
-  async getProviderToken() {
+  async getProviderToken(orgId?: string) {
     const { getComputeProvider } = await import("./providers/index.ts");
     const provider = getComputeProvider();
-    return (await this.get(provider.tokenKey)) ?? "";
+    return (await this.get(provider.tokenKey, orgId)) ?? "";
   }
 }
 
 export const secretStore: SecretStore = new DbSecretStore();
 
-export function getProviderToken() {
-  return secretStore.getProviderToken();
+export function getProviderToken(orgId?: string) {
+  return secretStore.getProviderToken(orgId);
 }
 
 export function maskToken(token: string): string {

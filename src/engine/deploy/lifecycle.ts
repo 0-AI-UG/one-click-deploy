@@ -157,7 +157,7 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
     const server = db.getServer(serverId);
     if (!server) throw new Error("Server not found");
 
-    const apps = db.getApps(serverId);
+    const apps = db.getApps(server.org_id, serverId);
     for (const app of apps) {
       await destroyApp(app.id);
     }

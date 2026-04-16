@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAuth, logout } from "../stores/auth.ts";
-import { Server, Rocket, HardDrive, User, Users, LogOut, Terminal, Layers, TerminalSquare, Check, Cpu } from "lucide-react";
+import { OrgSwitcher } from "./org-switcher.tsx";
+import { Server, Rocket, HardDrive, User, LogOut, Terminal, Layers, TerminalSquare, Check, Cpu } from "lucide-react";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
@@ -45,6 +46,8 @@ export function Nav() {
             <span className="font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5">v0.4</span>
           </a>
           <div className="h-5 w-0.5 bg-fg/30" />
+          <OrgSwitcher />
+          <div className="h-5 w-0.5 bg-fg/30" />
           <div className="flex items-center gap-1">
             {navItems.map((item) => {
               const active = item.match.test(hash);
@@ -64,19 +67,6 @@ export function Nav() {
                 </a>
               );
             })}
-            {user?.isAdmin && (
-              <a
-                href="#/admin"
-                className={`flex items-center gap-1.5 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider transition-all ${
-                  hash.startsWith("#/admin")
-                    ? "bg-fg text-accent"
-                    : "text-fg/70 hover:text-fg hover:bg-fg/10"
-                }`}
-              >
-                <Users size={13} />
-                Admin
-              </a>
-            )}
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -84,11 +74,6 @@ export function Nav() {
           <div className="h-5 w-0.5 bg-fg/30" />
           <span className="font-mono text-[10px] text-fg/70">
             {user?.username}
-            {user?.isAdmin && (
-              <span className="ml-1.5 font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5 bg-fg text-accent">
-                admin
-              </span>
-            )}
           </span>
           <button
             onClick={() => { logout(); window.location.hash = "#/login"; }}

@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requireOrgPermission } from "../lib/org-context.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, serializeEnvVars, encryptValue } from "../../shared/env-crypto.ts";
@@ -31,8 +31,8 @@ export async function handleGetCatalog(_request: Request): Promise<Response> {
 
 export async function handleGetServices(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
-    const services = db.getServices();
+    const ctx = await requireOrgPermission(request, "servers.view");
+    const services = db.getServices(ctx.orgId);
     const result = services.map((s) => {
       const instances = db.getServiceInstances(s.id);
       const links = db.getServiceLinks(s.id);
@@ -52,7 +52,7 @@ export async function handleGetServices(request: Request): Promise<Response> {
 
 export async function handleGetService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requireOrgPermission(request, "servers.view");
     const service = db.getService(serviceId);
     if (!service) {
       return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
@@ -79,7 +79,7 @@ export async function handleGetService(request: Request, serviceId: number): Pro
 
 export async function handleDeployService(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "services.deploy");
+    const ctx = await requireOrgPermission(request, "services.deploy");
     const req: ServiceDeployRequest = await request.json();
     if (!req?.name || typeof req.name !== "string") {
       return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });
@@ -89,7 +89,8 @@ export async function handleDeployService(request: Request): Promise<Response> {
       resourceKeys: [`service:create:${req.name}`],
       input: req,
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -101,13 +102,14 @@ export async function handleDeployService(request: Request): Promise<Response> {
 
 export async function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "services.destroy");
+    const ctx = await requireOrgPermission(request, "services.destroy");
     const { opId } = enqueue({
       kind: "destroy_service",
       resourceKeys: [`service:${serviceId}`],
       input: { serviceId },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -117,13 +119,14 @@ export async function handleDestroyService(request: Request, serviceId: number):
 
 export async function handleRestartService(request: Request, serviceId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "services.manage");
+    const ctx = await requireOrgPermission(request, "services.manage");
     const { opId } = enqueue({
       kind: "restart_service",
       resourceKeys: [`service:${serviceId}`],
       input: { serviceId },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -133,13 +136,14 @@ export async function handleRestartService(request: Request, serviceId: number):
 
 export async function handlePauseService(request: Request, serviceId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "services.manage");
+    const ctx = await requireOrgPermission(request, "services.manage");
     const { opId } = enqueue({
       kind: "pause_service",
       resourceKeys: [`service:${serviceId}`],
       input: { serviceId },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -149,13 +153,14 @@ export async function handlePauseService(request: Request, serviceId: number): P
 
 export async function handleUnpauseService(request: Request, serviceId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "services.manage");
+    const ctx = await requireOrgPermission(request, "services.manage");
     const { opId } = enqueue({
       kind: "unpause_service",
       resourceKeys: [`service:${serviceId}`],
       input: { serviceId },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -167,7 +172,7 @@ export async function handleUnpauseService(request: Request, serviceId: number):
 
 export async function handleGetServiceLogs(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "services.logs");
+    await requireOrgPermission(request, "services.logs");
     const url = new URL(request.url);
     const instanceId = url.searchParams.get("instance_id")
       ? parseInt(url.searchParams.get("instance_id")!, 10)
@@ -183,7 +188,7 @@ export async function handleGetServiceLogs(request: Request, serviceId: number):
 
 export async function handleLinkService(request: Request, serviceId: number, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "services.link");
+    const ctx = await requireOrgPermission(request, "services.link");
     const body = await request.json().catch(() => ({}));
     const envPrefix = body.env_prefix || "DATABASE";
 
@@ -241,7 +246,7 @@ export async function handleLinkService(request: Request, serviceId: number, app
     } else {
       // Fallback: create an environment for the app if it doesn't have one
       const envName = app.name;
-      const envRow = db.insertEnvironment(envName, serializeEnvVars(newEntries));
+      const envRow = db.insertEnvironment(envName, serializeEnvVars(newEntries), ctx.orgId);
       db.updateAppEnvironment(appId, envRow.id);
     }
 
@@ -265,7 +270,7 @@ export async function handleLinkService(request: Request, serviceId: number, app
 
 export async function handleUnlinkService(request: Request, serviceId: number, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "services.link");
+    const ctx = await requireOrgPermission(request, "services.link");
 
     const service = db.getService(serviceId);
     if (!service) {

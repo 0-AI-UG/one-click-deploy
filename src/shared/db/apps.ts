@@ -42,6 +42,7 @@ export type AppRow = {
   environment_id: number | null;
   public: number;
   extra_volumes: string; // JSON array of "host:container" strings
+  org_id: string;
 };
 
 export type DnsRecordRow = {
@@ -54,25 +55,29 @@ export type DnsRecordRow = {
   value: string;
 };
 
-export function getApps(serverId?: number): AppRow[] {
+export function getAllApps(): AppRow[] {
+  return db.query("SELECT * FROM apps ORDER BY created_at DESC").all() as AppRow[];
+}
+
+export function getApps(orgId: string, serverId?: number): AppRow[] {
   if (serverId) {
     return db
       .query(
-        "SELECT DISTINCT a.* FROM apps a JOIN replicas r ON r.app_id = a.id WHERE r.server_id = ? ORDER BY a.created_at DESC"
+        "SELECT DISTINCT a.* FROM apps a JOIN replicas r ON r.app_id = a.id WHERE r.server_id = ? AND a.org_id = ? ORDER BY a.created_at DESC"
       )
-      .all(serverId) as AppRow[];
+      .all(serverId, orgId) as AppRow[];
   }
   return db
-    .query("SELECT * FROM apps ORDER BY created_at DESC")
-    .all() as AppRow[];
+    .query("SELECT * FROM apps WHERE org_id = ? ORDER BY created_at DESC")
+    .all(orgId) as AppRow[];
 }
 
 export function getApp(id: number): AppRow | null {
   return db.query("SELECT * FROM apps WHERE id = ?").get(id) as AppRow | null;
 }
 
-export function getAppByName(name: string): AppRow | null {
-  return db.query("SELECT * FROM apps WHERE name = ?").get(name) as AppRow | null;
+export function getAppByName(name: string, orgId: string): AppRow | null {
+  return db.query("SELECT * FROM apps WHERE name = ? AND org_id = ?").get(name, orgId) as AppRow | null;
 }
 
 export function getAppByDomain(domain: string): AppRow | null {
@@ -97,10 +102,11 @@ export function insertApp(app: {
   auth_password?: string;
   environment_id?: number;
   public?: boolean;
+  org_id: string;
 }): AppRow {
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       app.name,
@@ -113,6 +119,7 @@ export function insertApp(app: {
       app.auth_password || "",
       app.environment_id ?? null,
       (app.public ?? true) ? 1 : 0,
+      app.org_id,
     ) as AppRow;
 }
 
@@ -128,13 +135,14 @@ export function insertAppWithFirstReplica(
     auth_password?: string;
     environment_id?: number;
     public?: boolean;
+    org_id: string;
   },
   serverId: number,
 ): { app: AppRow; replica: ReplicaRow } {
   const tx = db.transaction(() => {
     const appRow = db
       .query(
-        "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+        "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
       )
       .get(
         app.name,
@@ -147,6 +155,7 @@ export function insertAppWithFirstReplica(
         app.auth_password || "",
         app.environment_id ?? null,
         (app.public ?? true) ? 1 : 0,
+        app.org_id,
       ) as AppRow;
     const hostPort = nextReplicaHostPort(serverId);
     const replicaRow = db
@@ -197,7 +206,10 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
   // (light-sleep anchors) count as "present" — those servers stay
   // materialized so the next wake is a `docker start` away.
   if (hasAnyReplicas(serverId)) return;
-  if (getApps(serverId).length > 0) return;
+  const appsOnServer = db
+    .query("SELECT DISTINCT a.* FROM apps a JOIN replicas r ON r.app_id = a.id WHERE r.server_id = ? ORDER BY a.created_at DESC")
+    .all(serverId) as AppRow[];
+  if (appsOnServer.length > 0) return;
   const { getPanel } = await import("./panel.ts");
   if (getPanel()?.server_id === serverId) return;
   const sleepingRow = db.query("SELECT COUNT(*) as c FROM apps WHERE sleeping_server_id = ?").get(serverId) as { c: number } | null;
@@ -295,8 +307,8 @@ export function updateAppEnvVars(id: number, envVars: string): void {
   db.query("UPDATE apps SET env_vars = ? WHERE id = ?").run(envVars, id);
 }
 
-export function getAppsByEnvironmentId(environmentId: number): AppRow[] {
-  return db.query("SELECT * FROM apps WHERE environment_id = ?").all(environmentId) as AppRow[];
+export function getAppsByEnvironmentId(environmentId: number, orgId: string): AppRow[] {
+  return db.query("SELECT * FROM apps WHERE environment_id = ? AND org_id = ?").all(environmentId, orgId) as AppRow[];
 }
 
 export function updateAppEnvironment(id: number, environmentId: number | null): void {

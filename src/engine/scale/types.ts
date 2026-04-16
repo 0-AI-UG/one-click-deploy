@@ -40,6 +40,7 @@ export interface App {
   environment_id: number | null;
   public: number;
   extra_volumes: string;
+  org_id: string;
 }
 
 export interface Replica {

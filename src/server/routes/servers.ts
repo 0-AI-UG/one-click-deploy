@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requireOrgPermission } from "../lib/org-context.ts";
 import { handleError } from "../lib/utils.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import * as db from "../../shared/db.ts";
@@ -7,8 +7,8 @@ import { enqueue } from "../ipc/enqueue.ts";
 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
-    const result = getServersWithApps();
+    const ctx = await requireOrgPermission(request, "servers.view");
+    const result = getServersWithApps(ctx.orgId);
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -17,8 +17,8 @@ export async function handleGetServers(request: Request): Promise<Response> {
 
 export async function handleDeleteServer(request: Request, serverId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "servers.delete");
-    const apps = db.getApps(serverId);
+    const ctx = await requireOrgPermission(request, "servers.delete");
+    const apps = db.getApps(ctx.orgId, serverId);
     const services = db.getServicesOnServer(serverId);
     const keys = [
       `server:${serverId}`,
@@ -30,7 +30,8 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
       resourceKeys: keys,
       input: { serverId },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -40,8 +41,8 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
 
 export async function handleRefreshServers(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
-    const result = getServersWithApps();
+    const ctx = await requireOrgPermission(request, "servers.view");
+    const result = getServersWithApps(ctx.orgId);
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

@@ -1,5 +1,23 @@
 import { handleSetupStatus, handleSetupComplete, handleSetupServerTypes } from "./routes/setup.ts";
-import { handleLogin, handleMe, handleUpdateMe, handlePasswordReset } from "./routes/auth.ts";
+import { handleLogin, handleMe, handleUpdateMe, handlePasswordReset, handleRegister } from "./routes/auth.ts";
+import {
+  handleListOrgs,
+  handleCreateOrg,
+  handleGetOrg,
+  handleUpdateOrg,
+  handleDeleteOrg,
+  handleGetOrgMembers,
+  handleCreateInvitation,
+  handleGetOrgInvitations,
+  handleRemoveOrgMember,
+  handleUpdateMemberRole,
+  handleGetOrgSettings,
+  handleUpdateOrgSettings,
+  handleGetMemberPermissions,
+  handleUpdateMemberPermissions,
+  handleRevokeInvitation,
+} from "./routes/orgs.ts";
+import { handleGetInvitation, handleAcceptInvitation } from "./routes/invitations.ts";
 import {
   handleTotpSetup,
   handleTotpConfirm,
@@ -22,7 +40,6 @@ import {
   handlePasswordResetWebAuthnOptions,
   handlePasswordResetWebAuthnVerify,
 } from "./routes/webauthn.ts";
-import { handleListUsers, handleCreateUser, handleUpdateUser, handleDeleteUser, handleGetUserPermissions } from "./routes/admin.ts";
 import {
   handleGetServers,
   handleGetDashboard,
@@ -41,7 +58,6 @@ import {
   handleIntrospectRepo,
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
-import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus, handleMigrateReplica } from "./routes/scaling.ts";
@@ -50,16 +66,7 @@ import {
   handleUpdateWebhookSettings,
   handleDisableWebhook,
   handleGithubWebhook,
-  handlePanelGithubWebhook,
-  handleEnablePanelWebhook,
-  handleDisablePanelWebhook,
 } from "./routes/webhooks.ts";
-import {
-  handleGetPanel,
-  handleRedeployPanel,
-  handleGetPanelLogs,
-  handleGetPanelDeployments,
-} from "./routes/panel.ts";
 import {
   handleGitHubAuthorize,
   handleGitHubCallback,
@@ -112,12 +119,6 @@ function replicaIdFrom(req: Request): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
-function userIdFrom(req: Request): string {
-  const url = new URL(req.url);
-  const match = url.pathname.match(/\/api\/admin\/users\/([^/]+)/);
-  return match ? match[1] : "";
-}
-
 function serverIdFrom(req: Request): number {
   const url = new URL(req.url);
   return parseInt(url.pathname.split("/").pop()!, 10);
@@ -162,6 +163,7 @@ export const apiRoutes = {
 
   // --- Auth ---
   "/api/auth/login": { POST: (req: Request) => handleLogin(req) },
+  "/api/auth/register": { POST: (req: Request) => handleRegister(req) },
   "/api/auth/password-reset": { POST: (req: Request) => handlePasswordReset(req) },
   "/api/auth/device-code": { POST: () => handleDeviceCode() },
   "/api/auth/device-token": { POST: (req: Request) => handleDeviceToken(req) },
@@ -199,17 +201,68 @@ export const apiRoutes = {
   "/api/auth/webauthn/credentials": { GET: (req: Request) => handleWebAuthnList(req) },
   "/api/auth/webauthn/delete": { POST: (req: Request) => handleWebAuthnDelete(req) },
 
-  // --- Admin ---
-  "/api/admin/users": {
-    GET: (req: Request) => handleListUsers(req),
-    POST: (req: Request) => handleCreateUser(req),
+  // --- Orgs ---
+  "/api/orgs": {
+    GET: (req: Request) => handleListOrgs(req),
+    POST: (req: Request) => handleCreateOrg(req),
   },
-  "/api/admin/users/:userId": {
-    PUT: (req: Request) => handleUpdateUser(req, userIdFrom(req)),
-    DELETE: (req: Request) => handleDeleteUser(req, userIdFrom(req)),
+  "/api/orgs/:orgId": {
+    GET: (req: Request) => handleGetOrg(req),
+    PUT: (req: Request) => handleUpdateOrg(req),
+    DELETE: (req: Request) => handleDeleteOrg(req),
   },
-  "/api/admin/users/:userId/permissions": {
-    GET: (req: Request) => handleGetUserPermissions(req, userIdFrom(req)),
+  "/api/orgs/:orgId/members": {
+    GET: (req: Request) => handleGetOrgMembers(req),
+  },
+  "/api/orgs/:orgId/members/:userId": {
+    DELETE: (req: Request) => {
+      const m = new URL(req.url).pathname.match(/\/api\/orgs\/[^/]+\/members\/([^/]+)$/);
+      return handleRemoveOrgMember(req, m ? m[1] : "");
+    },
+  },
+  "/api/orgs/:orgId/members/:userId/role": {
+    PUT: (req: Request) => {
+      const m = new URL(req.url).pathname.match(/\/api\/orgs\/[^/]+\/members\/([^/]+)\/role$/);
+      return handleUpdateMemberRole(req, m ? m[1] : "");
+    },
+  },
+  "/api/orgs/:orgId/members/:userId/permissions": {
+    GET: (req: Request) => {
+      const m = new URL(req.url).pathname.match(/\/api\/orgs\/[^/]+\/members\/([^/]+)\/permissions$/);
+      return handleGetMemberPermissions(req, m ? m[1] : "");
+    },
+    PUT: (req: Request) => {
+      const m = new URL(req.url).pathname.match(/\/api\/orgs\/[^/]+\/members\/([^/]+)\/permissions$/);
+      return handleUpdateMemberPermissions(req, m ? m[1] : "");
+    },
+  },
+  "/api/orgs/:orgId/invitations": {
+    GET: (req: Request) => handleGetOrgInvitations(req),
+    POST: (req: Request) => handleCreateInvitation(req),
+  },
+  "/api/orgs/:orgId/invitations/:invitationId": {
+    DELETE: (req: Request) => {
+      const m = new URL(req.url).pathname.match(/\/api\/orgs\/[^/]+\/invitations\/([^/]+)$/);
+      return handleRevokeInvitation(req, m ? m[1] : "");
+    },
+  },
+  "/api/orgs/:orgId/settings": {
+    GET: (req: Request) => handleGetOrgSettings(req),
+    PUT: (req: Request) => handleUpdateOrgSettings(req),
+  },
+
+  // --- Invitations ---
+  "/api/invitations/:token": {
+    GET: (req: Request) => {
+      const m = new URL(req.url).pathname.match(/\/api\/invitations\/([^/]+)$/);
+      return handleGetInvitation(req, m ? m[1] : "");
+    },
+  },
+  "/api/invitations/:token/accept": {
+    POST: (req: Request) => {
+      const m = new URL(req.url).pathname.match(/\/api\/invitations\/([^/]+)\/accept$/);
+      return handleAcceptInvitation(req, m ? m[1] : "");
+    },
   },
 
   // --- Dashboard ---
@@ -256,11 +309,6 @@ export const apiRoutes = {
   "/api/apps/:appId/webhook/settings": { POST: (req: Request) => handleUpdateWebhookSettings(req, appIdFrom(req)) },
   "/api/apps/:appId/webhook/disable": { POST: (req: Request) => handleDisableWebhook(req, appIdFrom(req)) },
 
-  // Public GitHub webhook receiver for the panel itself (HMAC verified)
-  "/webhooks/github/panel": {
-    POST: (req: Request) => handlePanelGithubWebhook(req),
-  },
-
   // Public GitHub webhook receiver (no auth — HMAC verified per app)
   "/webhooks/github/:appId": {
     POST: (req: Request) => {
@@ -278,21 +326,6 @@ export const apiRoutes = {
     GET: (req: Request) => handleWakeStatus(req, appIdFrom(req)),
     OPTIONS: () => new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } }),
   },
-
-  // --- Admin: Settings ---
-  "/api/admin/settings": {
-    GET: (req: Request) => handleGetSettings(req),
-    PUT: (req: Request) => handleSaveSettings(req),
-  },
-  "/api/admin/settings/server-types": { GET: (req: Request) => handleGetServerTypes(req) },
-
-  // --- Admin: Panel (hosted self) ---
-  "/api/admin/panel": { GET: (req: Request) => handleGetPanel(req) },
-  "/api/admin/panel/redeploy": { POST: (req: Request) => handleRedeployPanel(req) },
-  "/api/admin/panel/webhook/enable": { POST: (req: Request) => handleEnablePanelWebhook(req) },
-  "/api/admin/panel/webhook/disable": { POST: (req: Request) => handleDisablePanelWebhook(req) },
-  "/api/admin/panel/logs": { GET: (req: Request) => handleGetPanelLogs(req) },
-  "/api/admin/panel/deployments": { GET: (req: Request) => handleGetPanelDeployments(req) },
 
   // --- Resources ---
   "/api/resources": { GET: (req: Request) => handleGetResources(req) },

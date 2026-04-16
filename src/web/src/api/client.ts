@@ -1,3 +1,5 @@
+import { getCurrentOrgId } from "../stores/auth.ts";
+
 const API_BASE = window.location.origin;
 
 let getToken: () => string | null = () => null;
@@ -21,6 +23,8 @@ export async function apiFetch<T = any>(
     ...((options.headers as Record<string, string>) || {}),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  const orgId = getCurrentOrgId();
+  if (orgId) headers["X-Org-Id"] = orgId;
 
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,

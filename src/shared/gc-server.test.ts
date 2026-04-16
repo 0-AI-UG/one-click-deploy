@@ -23,6 +23,8 @@ mock.module("./providers/index.ts", () => ({
 
 import * as db from "./db.ts";
 
+try { db.insertOrg("test-org", "Test Org", "test-org"); } catch {}
+
 function freshServer(name: string) {
   return db.insertServer({
     name,
@@ -32,6 +34,7 @@ function freshServer(name: string) {
     type: "cx23",
     location: "nbg1",
     status: "ready",
+    org_id: "test-org",
   });
 }
 
@@ -74,6 +77,7 @@ describe("gcServerIfEmpty", () => {
       dockerfile_path: "Dockerfile",
       container_port: 3000,
       env_vars: "{}",
+      org_id: "test-org",
     });
     db.insertReplica({
       app_id: app.id,
@@ -95,6 +99,7 @@ describe("gcServerIfEmpty", () => {
       dockerfile_path: "Dockerfile",
       container_port: 3000,
       env_vars: "{}",
+      org_id: "test-org",
     });
     const replica = db.insertReplica({
       app_id: app.id,
@@ -122,6 +127,7 @@ describe("gcServerIfEmpty", () => {
       dockerfile_path: "Dockerfile",
       container_port: 3000,
       env_vars: "{}",
+      org_id: "test-org",
     });
     const replica = db.insertReplica({
       app_id: app.id,

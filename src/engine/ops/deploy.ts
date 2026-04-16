@@ -122,14 +122,14 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
   async run(ctx) {
     const req = ctx.input;
     // Pre-flight: reject duplicate app names up front.
-    const existing = db.getAppByName(req.app_name);
+    const existing = db.getAppByName(req.app_name, ctx.orgId);
     if (existing) {
       throw new Error(`An app named "${req.app_name}" already exists. Choose a different name.`);
     }
     const validation = validateDeployRequest(req);
     if (!validation.valid) throw new Error(validation.error);
 
-    const settings = db.getSettings();
+    const settings = db.getOrgSettings(ctx.orgId);
     const panel = db.getPanel();
     const panelServerRow = panel ? db.getServer(panel.server_id) : null;
 
@@ -147,7 +147,7 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
         ingressIp,
       };
     }
-    const existingReady = db.getServers().find((s: Server) => s.status === "ready");
+    const existingReady = db.getServers(ctx.orgId).find((s: Server) => s.status === "ready");
     if (existingReady) {
       const ingressIp = panelServerRow?.ipv4 || existingReady.ipv4;
       return {
@@ -195,7 +195,7 @@ const createDnsRecord: Step<DeployInput, DnsOut> = {
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
-    const settings = db.getSettings();
+    const settings = db.getOrgSettings(ctx.orgId);
     const dnsZoneId = settings.dns_zone_id;
     if (!req.domain || !dnsZoneId) return null;
 
@@ -249,7 +249,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
     if (!req.volume_size || req.volume_size <= 0) return null;
 
     const server = prior["pick_or_provision_server"] as ServerOut;
-    const settings = db.getSettings();
+    const settings = db.getOrgSettings(ctx.orgId);
     const compute = getComputeProvider();
     if (!compute.volumes) {
       throw new Error(`Provider "${compute.name}" does not support managed volumes`);
@@ -330,10 +330,10 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
 
       let envName = req.app_name;
       let suffix = 1;
-      while (db.getEnvironments().find((e) => e.name === envName)) {
+      while (db.getEnvironments(ctx.orgId).find((e) => e.name === envName)) {
         envName = `${req.app_name}-${suffix++}`;
       }
-      const envRow = db.insertEnvironment(envName, serializeEnvVars(processedEnv.entries));
+      const envRow = db.insertEnvironment(envName, serializeEnvVars(processedEnv.entries), ctx.orgId);
       environmentId = envRow.id;
     }
 
@@ -349,6 +349,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
         auth_password: req.auth_password,
         environment_id: environmentId ?? undefined,
         public: req.public,
+        org_id: ctx.orgId,
       },
       server.serverId,
     );
@@ -725,7 +726,7 @@ const finalizeStep: Step<DeployInput, { ok: true }> = {
     const appOut = prior["insert_app_row"] as InsertAppOut;
     db.appendDeployLog(appOut.appId, `[done] App deployed successfully`);
     if (ctx.triggeredBy) {
-      try { db.deleteDeploySession(ctx.triggeredBy); } catch { /* best-effort */ }
+      try { db.deleteDeploySession(ctx.triggeredBy, ctx.orgId); } catch { /* best-effort */ }
     }
     log("done", `op#${ctx.opId} completed for app ${appOut.containerName}`);
     return { ok: true };

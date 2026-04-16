@@ -19,7 +19,7 @@ export async function pickTargetServer(
 
   // Capacity-aware placement: score each server by load + affinity and pick
   // the best candidate. Servers above 85% combined load are skipped.
-  const allServers = db.getServers() as Server[];
+  const allServers = db.getServers(app.org_id) as Server[];
   const appReplicas = db.getReplicas(app.id) as { server_id: number }[];
   const replicasByServer = new Map<number, number>();
   for (const r of appReplicas) {
@@ -75,6 +75,7 @@ export async function pickTargetServer(
       location,
       name: `ocd-${app.name}-r${Date.now()}`,
       emit,
+      orgId: app.org_id,
     });
   }
 

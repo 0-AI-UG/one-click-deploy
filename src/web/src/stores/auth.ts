@@ -3,7 +3,6 @@ import { useSyncExternalStore } from "react";
 export type User = {
   id: string;
   username: string;
-  isAdmin: boolean;
   totpEnabled?: boolean;
   webauthnEnabled?: boolean;
   githubLinked?: boolean;
@@ -17,11 +16,20 @@ export type TwoFactorMethods = {
   webauthn: boolean;
 };
 
+export type OrgSummary = {
+  id: string;
+  name: string;
+  slug: string;
+  role: string;
+};
+
 type AuthState = {
   token: string | null;
   user: User | null;
   tempToken: string | null;
   twoFactorMethods: TwoFactorMethods | null;
+  currentOrgId: string | null;
+  orgs: OrgSummary[];
 };
 
 let state: AuthState = loadFromStorage();
@@ -37,17 +45,17 @@ function loadFromStorage(): AuthState {
     const stored = localStorage.getItem("ocd-auth");
     if (stored) {
       const parsed = JSON.parse(stored);
-      return { token: parsed.token || null, user: parsed.user || null, tempToken: null, twoFactorMethods: null };
+      return { token: parsed.token || null, user: parsed.user || null, currentOrgId: parsed.currentOrgId || null, orgs: [], tempToken: null, twoFactorMethods: null };
     }
   } catch (err) {
     console.error("Failed to load auth state from storage:", err);
   }
-  return { token: null, user: null, tempToken: null, twoFactorMethods: null };
+  return { token: null, user: null, currentOrgId: null, orgs: [], tempToken: null, twoFactorMethods: null };
 }
 
 function saveToStorage() {
   if (state.token && state.user) {
-    localStorage.setItem("ocd-auth", JSON.stringify({ token: state.token, user: state.user }));
+    localStorage.setItem("ocd-auth", JSON.stringify({ token: state.token, user: state.user, currentOrgId: state.currentOrgId }));
   } else {
     localStorage.removeItem("ocd-auth");
   }
@@ -60,7 +68,7 @@ export function login(token: string, user: User) {
 }
 
 export function logout() {
-  state = { token: null, user: null, tempToken: null, twoFactorMethods: null };
+  state = { token: null, user: null, currentOrgId: null, orgs: [], tempToken: null, twoFactorMethods: null };
   saveToStorage();
   notify();
 }
@@ -80,6 +88,26 @@ export function getToken(): string | null {
   return state.token;
 }
 
+export function setOrgs(orgs: OrgSummary[]) {
+  state = { ...state, orgs };
+  // Auto-select first org if none selected
+  if (!state.currentOrgId && orgs.length > 0) {
+    state = { ...state, currentOrgId: orgs[0].id };
+    saveToStorage();
+  }
+  notify();
+}
+
+export function setCurrentOrg(orgId: string) {
+  state = { ...state, currentOrgId: orgId };
+  saveToStorage();
+  notify();
+}
+
+export function getCurrentOrgId(): string | null {
+  return state.currentOrgId;
+}
+
 export function useAuth() {
   return useSyncExternalStore(
     (cb) => {
@@ -92,13 +120,11 @@ export function useAuth() {
 
 export function hasPermission(permission: string): boolean {
   if (!state.user) return false;
-  if (state.user.isAdmin) return true;
   return state.user.permissions.includes(permission);
 }
 
 export function useHasPermission(permission: string): boolean {
   const auth = useAuth();
   if (!auth.user) return false;
-  if (auth.user.isAdmin) return true;
   return auth.user.permissions.includes(permission);
 }

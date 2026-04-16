@@ -2,6 +2,7 @@ import db from "./connection.ts";
 
 export type ServiceRow = {
   id: number;
+  org_id: string;
   name: string;
   service_type: string;
   version: string;
@@ -49,23 +50,28 @@ export function insertService(data: {
   env_vars: string;
   credentials: string;
   desired_instances?: number;
+  org_id: string;
 }): ServiceRow {
   return db
     .query(
-      "INSERT INTO services (name, service_type, version, port, env_vars, credentials, desired_instances) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO services (name, service_type, version, port, env_vars, credentials, desired_instances, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
-    .get(data.name, data.service_type, data.version, data.port, data.env_vars, data.credentials, data.desired_instances ?? 1) as ServiceRow;
+    .get(data.name, data.service_type, data.version, data.port, data.env_vars, data.credentials, data.desired_instances ?? 1, data.org_id) as ServiceRow;
 }
 
 export function getService(id: number): ServiceRow | null {
   return db.query("SELECT * FROM services WHERE id = ?").get(id) as ServiceRow | null;
 }
 
-export function getServiceByName(name: string): ServiceRow | null {
-  return db.query("SELECT * FROM services WHERE name = ?").get(name) as ServiceRow | null;
+export function getServiceByName(name: string, orgId: string): ServiceRow | null {
+  return db.query("SELECT * FROM services WHERE name = ? AND org_id = ?").get(name, orgId) as ServiceRow | null;
 }
 
-export function getServices(): ServiceRow[] {
+export function getServices(orgId: string): ServiceRow[] {
+  return db.query("SELECT * FROM services WHERE org_id = ? ORDER BY created_at DESC").all(orgId) as ServiceRow[];
+}
+
+export function getAllServices(): ServiceRow[] {
   return db.query("SELECT * FROM services ORDER BY created_at DESC").all() as ServiceRow[];
 }
 

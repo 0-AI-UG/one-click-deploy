@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requireOrgPermission } from "../lib/org-context.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../shared/env-crypto.ts";
@@ -7,8 +7,8 @@ import { enqueue } from "../ipc/enqueue.ts";
 
 export async function handleGetEnvironments(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
-    const envs = db.getEnvironments();
+    const ctx = await requireOrgPermission(request, "servers.view");
+    const envs = db.getEnvironments(ctx.orgId);
     const result = envs.map((e) => ({
       ...e,
       env_vars: maskEnvVarsForResponse(parseEnvVars(e.env_vars)),
@@ -21,18 +21,18 @@ export async function handleGetEnvironments(request: Request): Promise<Response>
 
 export async function handleCreateEnvironment(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "environments.manage");
+    const ctx = await requireOrgPermission(request, "environments.manage");
     const body = await request.json();
     const { name, env_vars } = body;
     if (!name || typeof name !== "string") {
       return Response.json({ ok: false, error: "Name is required" }, { status: 400, headers: corsHeaders });
     }
-    const existing = db.getEnvironments().find((e) => e.name === name.trim());
+    const existing = db.getEnvironments(ctx.orgId).find((e) => e.name === name.trim());
     if (existing) {
       return Response.json({ ok: false, error: "An environment with that name already exists" }, { status: 409, headers: corsHeaders });
     }
     const processed = await processIncomingEnvVars(env_vars || []);
-    const env = db.insertEnvironment(name.trim(), serializeEnvVars(processed.entries));
+    const env = db.insertEnvironment(name.trim(), serializeEnvVars(processed.entries), ctx.orgId);
     return Response.json({
       ...env,
       env_vars: maskEnvVarsForResponse(parseEnvVars(env.env_vars)),
@@ -44,7 +44,7 @@ export async function handleCreateEnvironment(request: Request): Promise<Respons
 
 export async function handleUpdateEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "environments.manage");
+    const ctx = await requireOrgPermission(request, "environments.manage");
     const existing = db.getEnvironment(id);
     if (!existing) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -59,7 +59,7 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
 
     // Cascade redeploy all attached apps if env vars changed — enqueued as a
     // single fan-out op whose children are individual app redeploys.
-    const attachedApps = db.getAppsByEnvironmentId(id);
+    const attachedApps = db.getAppsByEnvironmentId(id, ctx.orgId);
     let opId: number | null = null;
     if (envVarsChanged && attachedApps.length > 0) {
       const r = enqueue({
@@ -67,7 +67,8 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
         resourceKeys: [`env:${id}`],
         input: { environmentId: id },
         trigger: "ui",
-        triggeredBy: payload.userId,
+        triggeredBy: ctx.userId,
+        orgId: ctx.orgId,
       });
       opId = r.opId;
     }
@@ -84,12 +85,12 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
 
 export async function handleDeleteEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "environments.manage");
+    const ctx = await requireOrgPermission(request, "environments.manage");
     const env = db.getEnvironment(id);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
-    const attachedApps = db.getAppsByEnvironmentId(id);
+    const attachedApps = db.getAppsByEnvironmentId(id, ctx.orgId);
     if (attachedApps.length > 0) {
       const names = attachedApps.map((a) => a.name).join(", ");
       return Response.json({
@@ -106,12 +107,12 @@ export async function handleDeleteEnvironment(request: Request, id: number): Pro
 
 export async function handleGetEnvironmentApps(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    const ctx = await requireOrgPermission(request, "servers.view");
     const env = db.getEnvironment(id);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
-    const apps = db.getAppsByEnvironmentId(id).map((a) => ({
+    const apps = db.getAppsByEnvironmentId(id, ctx.orgId).map((a) => ({
       id: a.id, name: a.name, status: a.status, domain: a.domain,
     }));
     return Response.json(apps, { headers: corsHeaders });
@@ -122,7 +123,7 @@ export async function handleGetEnvironmentApps(request: Request, id: number): Pr
 
 export async function handleAttachAppToEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "environments.manage");
+    const ctx = await requireOrgPermission(request, "environments.manage");
     const env = db.getEnvironment(id);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -141,9 +142,10 @@ export async function handleAttachAppToEnvironment(request: Request, id: number)
       const r = enqueue({
         kind: "redeploy",
         resourceKeys: [`app:${app_id}`],
-        input: { appId: app_id, userId: payload.userId },
+        input: { appId: app_id, userId: ctx.userId },
         trigger: "ui",
-        triggeredBy: payload.userId,
+        triggeredBy: ctx.userId,
+        orgId: ctx.orgId,
       });
       opId = r.opId;
     }
@@ -155,7 +157,7 @@ export async function handleAttachAppToEnvironment(request: Request, id: number)
 
 export async function handleDetachAppFromEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "environments.manage");
+    await requireOrgPermission(request, "environments.manage");
     const body = await request.json();
     const { app_id } = body;
     const app = db.getApp(app_id);

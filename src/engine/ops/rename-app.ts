@@ -14,7 +14,7 @@ const renameOnServers: Step<RenameAppInput, { ok: true }> = {
     const newName = ctx.input.newName;
     if (newName === app.name) return { ok: true };
 
-    const existing = db.getAppByName(newName);
+    const existing = db.getAppByName(newName, ctx.orgId);
     if (existing && existing.id !== app.id) {
       throw new Error(`An app named "${newName}" already exists`);
     }

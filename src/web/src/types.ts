@@ -170,25 +170,6 @@ export type ResourcesData = {
   };
 };
 
-export type AdminUser = {
-  id: string;
-  username: string;
-  isAdmin: boolean;
-  totpEnabled: boolean;
-  webauthnEnabled: boolean;
-  permissions: string[];
-  createdAt: string;
-};
-
-export type PanelApp = {
-  id: number;
-  name: string;
-  domain: string;
-  status: string;
-  git_branch: string;
-  volume_mount?: string;
-  webhook_enabled: number | boolean;
-};
 
 export type TotpStatus = {
   enabled: boolean;

@@ -60,6 +60,7 @@ function makeApp(secret: string, branch = "main") {
     dockerfile_path: "Dockerfile",
     container_port: 3000,
     env_vars: "{}",
+    org_id: "",
   });
   db.updateAppWebhook(app.id, true, secret, branch, "gh-1");
   return app;
@@ -77,6 +78,7 @@ function setupPanel(secret: string) {
     type: "cx23",
     location: "nbg1",
     status: "ready",
+    org_id: "",
   });
   db.insertPanel({
     server_id: srv.id,
@@ -186,6 +188,7 @@ describe("handleGithubWebhook", () => {
       dockerfile_path: "Dockerfile",
       container_port: 3000,
       env_vars: "{}",
+      org_id: "",
     });
     const body = JSON.stringify({ ref: "refs/heads/main" });
     const res = await handleGithubWebhook(req(app.id, body, "sha256=00"), app.id);

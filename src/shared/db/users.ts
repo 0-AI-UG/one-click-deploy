@@ -206,7 +206,6 @@ export function getUserPermissions(userId: string): string[] {
 export function hasPermission(userId: string, permission: string): boolean {
   const user = getUserById(userId);
   if (!user) return false;
-  if (user.is_admin) return true;
   const row = db.query("SELECT 1 FROM user_permissions WHERE user_id = ? AND permission = ?").get(userId, permission);
   return !!row;
 }

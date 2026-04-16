@@ -1078,6 +1078,136 @@ export const migrations: Migration[] = [
       db.run("DROP TABLE IF EXISTS service_deploy_jobs");
     },
   },
+  {
+    version: 44,
+    description: "Multi-tenant SaaS: organizations, memberships, and org-scoped resources",
+    disableForeignKeys: true,
+    up: (db) => {
+      // 1. Create new tables
+      db.run(`CREATE TABLE organizations (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      db.run(`CREATE TABLE org_memberships (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(org_id, user_id)
+      )`);
+      db.run("CREATE INDEX idx_org_memberships_user ON org_memberships(user_id)");
+      db.run("CREATE INDEX idx_org_memberships_org ON org_memberships(org_id)");
+
+      db.run(`CREATE TABLE org_invitations (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        email TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member',
+        token TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      db.run(`CREATE TABLE org_settings (
+        org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (org_id, key)
+      )`);
+
+      db.run(`CREATE TABLE org_permissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        permission TEXT NOT NULL,
+        UNIQUE(org_id, user_id, permission)
+      )`);
+      db.run("CREATE INDEX idx_org_permissions_lookup ON org_permissions(org_id, user_id)");
+
+      db.run(`CREATE TABLE resource_locks (
+        resource_key TEXT PRIMARY KEY,
+        engine_id TEXT NOT NULL,
+        op_id INTEGER NOT NULL,
+        acquired_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      db.run(`CREATE TABLE engine_instances (
+        id TEXT PRIMARY KEY,
+        heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+
+      // 2. Create a default organization and migrate existing data
+      const defaultOrgId = crypto.randomUUID();
+      db.run(`INSERT INTO organizations (id, name, slug) VALUES (?, 'Default', 'default')`, [defaultOrgId]);
+
+      const hasUsers = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
+      if (hasUsers) {
+        const users = db.query("SELECT id FROM users").all() as Array<{ id: string }>;
+        for (const user of users) {
+          db.run("INSERT INTO org_memberships (org_id, user_id, role) VALUES (?, ?, 'owner')", [defaultOrgId, user.id]);
+        }
+
+        const perms = db.query("SELECT user_id, permission FROM user_permissions").all() as Array<{ user_id: string; permission: string }>;
+        for (const perm of perms) {
+          db.run("INSERT INTO org_permissions (org_id, user_id, permission) VALUES (?, ?, ?)", [defaultOrgId, perm.user_id, perm.permission]);
+        }
+      }
+
+      // 3. Add org_id column to existing tables
+      for (const table of ['apps', 'servers', 'services', 'environments', 'operations', 'deploy_sessions']) {
+        db.run(`ALTER TABLE ${table} ADD COLUMN org_id TEXT NOT NULL DEFAULT '${defaultOrgId}'`);
+        db.run(`CREATE INDEX idx_${table}_org ON ${table}(org_id)`);
+      }
+
+      // 4. Add claimed_by column to operations
+      db.run("ALTER TABLE operations ADD COLUMN claimed_by TEXT NOT NULL DEFAULT ''");
+
+      // 5. Recreate encrypted_secrets with org_id in composite PK
+      const hasSecrets = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'encrypted_secrets'").get();
+      if (hasSecrets) {
+        db.run(`CREATE TABLE encrypted_secrets_new (
+          org_id TEXT NOT NULL DEFAULT '',
+          key TEXT NOT NULL,
+          encrypted_value TEXT NOT NULL,
+          iv TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (org_id, key)
+        )`);
+
+        db.run(`INSERT INTO encrypted_secrets_new (org_id, key, encrypted_value, iv, created_at)
+          SELECT '${defaultOrgId}', key, encrypted_value, iv, created_at FROM encrypted_secrets`);
+
+        db.run("DROP TABLE encrypted_secrets");
+        db.run("ALTER TABLE encrypted_secrets_new RENAME TO encrypted_secrets");
+      } else {
+        db.run(`CREATE TABLE encrypted_secrets (
+          org_id TEXT NOT NULL DEFAULT '',
+          key TEXT NOT NULL,
+          encrypted_value TEXT NOT NULL,
+          iv TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (org_id, key)
+        )`);
+      }
+
+      // 6. Copy settings to org_settings for the default org (settings table is
+      //    created by initSchema, not a migration, so it may not exist in tests)
+      const hasSettings = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get();
+      if (hasSettings) {
+        const orgSettingKeys = ['ssh_public_key', 'dns_zone_id', 'default_server_type', 'default_location', 'network_id'];
+        for (const key of orgSettingKeys) {
+          db.run(`INSERT OR IGNORE INTO org_settings (org_id, key, value)
+            SELECT '${defaultOrgId}', key, value FROM settings WHERE key = '${key}'`);
+        }
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

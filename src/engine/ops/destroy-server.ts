@@ -38,7 +38,7 @@ const destroyAppsOnServer: Step<DestroyServerInput, { appIds: number[]; failed: 
   name: "destroy_apps_on_server",
   label: "Destroy apps on server",
   async run(ctx) {
-    const apps = db.getApps(ctx.input.serverId);
+    const apps = db.getApps(ctx.orgId, ctx.input.serverId);
     let failed = false;
     for (const app of apps) {
       const r = await softStep(ctx, `destroy_app ${app.name}`, async () => {
@@ -141,7 +141,9 @@ const destroyServerOp: OpKindDefinition<DestroyServerInput> = {
   resourceKeys: (input) => {
     const keys: string[] = [`server:${input.serverId}`];
     try {
-      for (const app of db.getApps(input.serverId)) keys.push(`app:${app.id}`);
+      const server = db.getServer(input.serverId);
+      const orgId = server?.org_id ?? "";
+      for (const app of db.getApps(orgId, input.serverId)) keys.push(`app:${app.id}`);
       for (const svc of db.getServicesOnServer(input.serverId)) keys.push(`service:${svc.id}`);
     } catch {
       /* best-effort at enqueue time */

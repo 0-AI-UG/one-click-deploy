@@ -119,7 +119,7 @@ function getPanelAccess(): ServerAccess | null {
  */
 function getAllServerAccess(): ServerAccess[] {
   return db
-    .getServers()
+    .getAllServers()
     .filter((s) => s.ipv4)
     .map((s) => ({
       name: s.name,

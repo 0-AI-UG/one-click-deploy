@@ -42,10 +42,10 @@ export async function handleGitHubAuthorize(request: Request): Promise<Response>
   try {
     const { userId } = await authenticateRequest(request);
 
-    const clientId = db.getSettings().github_oauth_client_id;
+    const clientId = process.env.GITHUB_OAUTH_CLIENT_ID;
     if (!clientId) {
       return Response.json(
-        { error: "GitHub OAuth is not configured. Ask your admin to set up a GitHub OAuth App in Settings." },
+        { error: "GitHub OAuth is not configured. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET environment variables." },
         { status: 400, headers: corsHeaders },
       );
     }
@@ -82,9 +82,8 @@ export async function handleGitHubCallback(request: Request): Promise<Response> 
   }
 
   try {
-    const settings = db.getSettings();
-    const clientId = settings.github_oauth_client_id;
-    const clientSecret = await secretStore.get("github_oauth_client_secret");
+    const clientId = process.env.GITHUB_OAUTH_CLIENT_ID;
+    const clientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
 
     if (!clientId || !clientSecret) {
       return Response.redirect(`${origin}/#/account?github=error&reason=not_configured`);

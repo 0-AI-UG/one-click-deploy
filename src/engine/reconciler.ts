@@ -296,7 +296,7 @@ async function tick(): Promise<void> {
       if (work) work.replicas.push({ replica, app });
     }
 
-    const services = db.getServices();
+    const services = db.getAllServices();
     let serviceCount = 0;
     for (const service of services) {
       if (service.status === "paused" || service.status === "deploying") continue;
@@ -310,7 +310,7 @@ async function tick(): Promise<void> {
     }
 
     // Also ensure servers with no containers still get server-level metrics
-    const allServers = db.getServers();
+    const allServers = db.getAllServers();
     for (const server of allServers) {
       if (server.ipv4) ensureServer(server.id);
     }

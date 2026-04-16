@@ -26,6 +26,8 @@ export type OperationRow = {
   trigger: string;
   triggered_by: string;
   idempotency_key: string | null;
+  org_id: string;
+  claimed_by: string;
   enqueued_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -52,6 +54,7 @@ export type EnqueueInput = {
   parentId?: number;
   scheduledFor?: string | null;
   idempotencyKey?: string | null;
+  orgId?: string;
 };
 
 export function enqueueOperation(args: EnqueueInput): OperationRow {
@@ -64,8 +67,8 @@ export function enqueueOperation(args: EnqueueInput): OperationRow {
   return db
     .query(
       `INSERT INTO operations
-        (kind, resource_keys, input_json, trigger, triggered_by, parent_id, scheduled_for, idempotency_key)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        (kind, resource_keys, input_json, trigger, triggered_by, parent_id, scheduled_for, idempotency_key, org_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
     )
     .get(
       args.kind,
@@ -76,6 +79,7 @@ export function enqueueOperation(args: EnqueueInput): OperationRow {
       args.parentId ?? null,
       args.scheduledFor ?? null,
       args.idempotencyKey ?? null,
+      args.orgId ?? "",
     ) as OperationRow;
 }
 
@@ -101,7 +105,17 @@ export function listRunningOperations(): OperationRow[] {
     .all() as OperationRow[];
 }
 
-export function listRecentOperations(limit = 50): OperationRow[] {
+export function listRecentOperations(limit = 50, orgId?: string): OperationRow[] {
+  if (orgId) {
+    return db
+      .query(
+        `SELECT * FROM operations
+          WHERE org_id = ? AND status IN ('done','failed','cancelled','compensated')
+          ORDER BY COALESCE(finished_at, enqueued_at) DESC
+          LIMIT ?`,
+      )
+      .all(orgId, limit) as OperationRow[];
+  }
   return db
     .query(
       `SELECT * FROM operations
@@ -116,6 +130,21 @@ export function listChildOperations(parentId: number): OperationRow[] {
   return db
     .query("SELECT * FROM operations WHERE parent_id = ? ORDER BY id ASC")
     .all(parentId) as OperationRow[];
+}
+
+export function claimOperation(opId: number, engineId: string): boolean {
+  const result = db.run(
+    "UPDATE operations SET status = 'running', claimed_by = ?, started_at = datetime('now') WHERE id = ? AND status = 'pending'",
+    [engineId, opId]
+  );
+  return result.changes > 0;
+}
+
+export function resetStaleOperations(engineId: string): void {
+  db.run(
+    "UPDATE operations SET status = 'pending', claimed_by = '' WHERE claimed_by = ? AND status = 'running'",
+    [engineId]
+  );
 }
 
 export function markOperationRunning(id: number): void {

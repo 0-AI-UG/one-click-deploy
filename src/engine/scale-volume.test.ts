@@ -29,6 +29,8 @@ mock.module("./providers/index.ts", () => ({
 import * as db from "../shared/db.ts";
 import { scaleApp } from "./scale-api.ts";
 
+try { db.insertOrg("test-org", "Test Org", "test-org"); } catch {}
+
 function freshServer(suffix: string) {
   return db.insertServer({
     name: `srv-${suffix}`,
@@ -38,6 +40,7 @@ function freshServer(suffix: string) {
     type: "cx23",
     location: "nbg1",
     status: "ready",
+    org_id: "test-org",
   });
 }
 
@@ -49,6 +52,7 @@ function freshApp(name: string): db.AppRow {
     dockerfile_path: "Dockerfile",
     container_port: 3000,
     env_vars: "{}",
+    org_id: "test-org",
   });
 }
 

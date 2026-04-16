@@ -38,9 +38,6 @@ async function authFromQuery(req: Request): Promise<{ userId: string } | null> {
 }
 
 function checkPermission(userId: string): boolean {
-  const user = db.getUserById(userId);
-  if (!user) return false;
-  if (user.is_admin) return true;
   return db.hasPermission(userId, "terminal.access");
 }
 

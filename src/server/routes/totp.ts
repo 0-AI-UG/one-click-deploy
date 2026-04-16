@@ -188,9 +188,9 @@ export async function handleTotpLogin(request: Request): Promise<Response> {
 
     if (delta !== null) {
       const token = await createToken({ userId: user.id, username: user.username });
-      const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
+      const permissions = db.getUserPermissions(userId);
       return Response.json(
-        { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, githubLinked: !!user.github_id, githubUsername: user.github_username || "", githubAvatarUrl: user.github_avatar_url || "", permissions } },
+        { token, user: { id: user.id, username: user.username, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, githubLinked: !!user.github_id, githubUsername: user.github_username || "", githubAvatarUrl: user.github_avatar_url || "", permissions } },
         { headers: corsHeaders },
       );
     }
@@ -203,9 +203,9 @@ export async function handleTotpLogin(request: Request): Promise<Response> {
       if (match) {
         db.markBackupCodeUsed(bc.id);
         const token = await createToken({ userId: user.id, username: user.username });
-        const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
+        const permissions = db.getUserPermissions(userId);
         return Response.json(
-          { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, githubLinked: !!user.github_id, githubUsername: user.github_username || "", githubAvatarUrl: user.github_avatar_url || "", permissions } },
+          { token, user: { id: user.id, username: user.username, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, githubLinked: !!user.github_id, githubUsername: user.github_username || "", githubAvatarUrl: user.github_avatar_url || "", permissions } },
           { headers: corsHeaders },
         );
       }
@@ -315,10 +315,10 @@ export async function handleTotpConfirmFromLogin(request: Request): Promise<Resp
 
     // Issue real JWT since setup is complete
     const token = await createToken({ userId: user.id, username: user.username });
-    const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
+    const permissions = db.getUserPermissions(userId);
 
     return Response.json(
-      { token, user: { id: user.id, username: user.username, isAdmin: user.is_admin === 1, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions }, backupCodes },
+      { token, user: { id: user.id, username: user.username, totpEnabled: true, webauthnEnabled: user.webauthn_enabled === 1, permissions }, backupCodes },
       { headers: corsHeaders },
     );
   } catch (error) {
@@ -334,8 +334,8 @@ export async function handleTotpDisable(request: Request): Promise<Response> {
     if (!user) throw new AuthError("Unauthorized");
 
     // Block if disabling would leave user with no 2FA when required
-    const require2fa = (db.getSettings().require_2fa ?? "1") === "1";
-    if (!user.webauthn_enabled && (user.is_admin || require2fa)) {
+    const require2fa = process.env.REQUIRE_2FA !== "0";
+    if (!user.webauthn_enabled && require2fa) {
       return Response.json(
         { error: "Cannot disable authenticator app: at least one 2FA method is required" },
         { status: 403, headers: corsHeaders },
@@ -431,14 +431,13 @@ export async function handleTotpResetFromLogin(request: Request): Promise<Respon
     // If user still has webauthn, they still have 2FA — issue real JWT
     if (user.webauthn_enabled) {
       const token = await createToken({ userId: user.id, username: user.username });
-      const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
+      const permissions = db.getUserPermissions(userId);
       return Response.json(
         {
           token,
           user: {
             id: user.id,
             username: user.username,
-            isAdmin: user.is_admin === 1,
             totpEnabled: false,
             webauthnEnabled: true,
             permissions,
@@ -468,7 +467,7 @@ export async function handleTotpStatus(request: Request): Promise<Response> {
 
     const enabled = user.totp_enabled === 1;
     const webauthnEnabled = user.webauthn_enabled === 1;
-    const required = user.is_admin === 1;
+    const required = false;
     const has2FA = enabled || webauthnEnabled;
     const backupCodesRemaining = has2FA ? db.getUnusedBackupCodeCount(userId) : 0;
     const webauthnCredentialCount = webauthnEnabled ? db.getWebAuthnCredentialCount(userId) : 0;

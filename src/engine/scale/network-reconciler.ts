@@ -32,7 +32,7 @@ export async function reconcileNetwork(): Promise<void> {
   if (!networkId) return;
 
   // Attach any server that isn't on the network yet.
-  const servers = db.getServers().filter((s) => s.provider_id);
+  const servers = db.getAllServers().filter((s) => s.provider_id);
   for (const server of servers) {
     if (server.private_ipv4) continue;
     try {
@@ -86,9 +86,9 @@ export async function syncInternalHosts(): Promise<void> {
   const panel = db.getPanel();
   if (!panel) return;
 
-  const apps = db.getApps();
+  const apps = db.getAllApps();
   const serviceLines: string[] = [];
-  for (const service of db.getServices()) {
+  for (const service of db.getAllServices()) {
     const instance = db.getServiceInstances(service.id)[0];
     if (!instance) continue;
     const host = db.getServer(instance.server_id);
@@ -96,7 +96,7 @@ export async function syncInternalHosts(): Promise<void> {
     serviceLines.push(`${host.private_ipv4} ${service.name}.svc.ocd.internal`);
   }
 
-  const servers = db.getServers().filter((s) => s.ipv4);
+  const servers = db.getAllServers().filter((s) => s.ipv4);
   for (const server of servers) {
     const lines: string[] = [];
     if (server.private_ipv4) {

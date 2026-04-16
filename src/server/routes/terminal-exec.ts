@@ -60,9 +60,7 @@ export async function handleTerminalExec(request: Request): Promise<Response> {
     throw err;
   }
 
-  const user = db.getUserById(auth.userId);
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-  if (!user.is_admin && !db.hasPermission(auth.userId, "terminal.access")) {
+  if (!db.hasPermission(auth.userId, "terminal.access")) {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 

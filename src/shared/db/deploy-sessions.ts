@@ -8,21 +8,21 @@ function purgeExpired(): void {
   );
 }
 
-export function getDeploySession(userId: string): string | null {
+export function getDeploySession(userId: string, orgId: string): string | null {
   purgeExpired();
-  const row = db.query("SELECT form_data FROM deploy_sessions WHERE user_id = ?").get(userId) as {
+  const row = db.query("SELECT form_data FROM deploy_sessions WHERE user_id = ? AND org_id = ?").get(userId, orgId) as {
     form_data: string;
   } | null;
   return row?.form_data ?? null;
 }
 
-export function saveDeploySession(userId: string, formData: string): void {
+export function saveDeploySession(userId: string, formData: string, orgId: string): void {
   purgeExpired();
   db.query(
-    "INSERT OR REPLACE INTO deploy_sessions (user_id, form_data, created_at) VALUES (?, ?, datetime('now'))",
-  ).run(userId, formData);
+    "INSERT OR REPLACE INTO deploy_sessions (user_id, form_data, org_id, created_at) VALUES (?, ?, ?, datetime('now'))",
+  ).run(userId, formData, orgId);
 }
 
-export function deleteDeploySession(userId: string): void {
-  db.query("DELETE FROM deploy_sessions WHERE user_id = ?").run(userId);
+export function deleteDeploySession(userId: string, orgId: string): void {
+  db.query("DELETE FROM deploy_sessions WHERE user_id = ? AND org_id = ?").run(userId, orgId);
 }

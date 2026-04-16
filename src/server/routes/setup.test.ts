@@ -80,12 +80,11 @@ describe("isSetupComplete / handleSetupStatus", () => {
     expect(body.hasProviderToken).toBe(true);
   });
 
-  test("setupComplete flips true once an admin user exists", async () => {
+  test("setupComplete flips true once a user exists", async () => {
     db.insertUser({
       id: crypto.randomUUID(),
       username: "admin",
       password_hash: "x",
-      is_admin: true,
     });
     expect(isSetupComplete()).toBe(true);
   });
@@ -93,7 +92,7 @@ describe("isSetupComplete / handleSetupStatus", () => {
 
 describe("handleSetupServerTypes", () => {
   test("rejects with 400 once setup is complete", async () => {
-    db.insertUser({ id: "u1", username: "a", password_hash: "x", is_admin: true });
+    db.insertUser({ id: "u1", username: "a", password_hash: "x" });
     const r = await handleSetupServerTypes(jsonReq({ provider_token: "x".repeat(40) }));
     expect(r.status).toBe(400);
     expect(verifyToken).not.toHaveBeenCalled();
@@ -135,8 +134,8 @@ describe("handleSetupServerTypes", () => {
 });
 
 describe("handleSetupComplete", () => {
-  test("rejects with 400 once an admin exists", async () => {
-    db.insertUser({ id: "u1", username: "a", password_hash: "x", is_admin: true });
+  test("rejects with 400 once a user exists", async () => {
+    db.insertUser({ id: "u1", username: "a", password_hash: "x" });
     const r = await handleSetupComplete(jsonReq({ username: "b", password: "pw" }));
     expect(r.status).toBe(400);
   });
@@ -148,32 +147,16 @@ describe("handleSetupComplete", () => {
     expect(r.status).toBe(400);
   });
 
-  test("requires either a new token or an existing one", async () => {
-    const r = await handleSetupComplete(jsonReq({ username: "a", password: "pw" }));
-    expect(r.status).toBe(400);
-    const body = (await r.json()) as { error: string };
-    expect(body.error).toMatch(/token/i);
+  test("creates user without requiring provider token (SaaS mode)", async () => {
+    const r = await handleSetupComplete(jsonReq({ username: "a", password: "longpassword" }));
+    expect(r.status).toBe(201);
+    const users = db.getUsers();
+    expect(users).toHaveLength(1);
   });
 
-  test("rejects an invalid new token shape", async () => {
+  test("creates user and returns tempToken for 2FA setup", async () => {
     const r = await handleSetupComplete(
-      jsonReq({ username: "a", password: "pw", provider_token: "short" }),
-    );
-    expect(r.status).toBe(400);
-    expect(db.getUsers().length).toBe(0);
-  });
-
-  test("creates admin + persists token, DNS, server-type, location on success", async () => {
-    const tok = "z".repeat(40);
-    const r = await handleSetupComplete(
-      jsonReq({
-        username: "admin",
-        password: "correct-horse",
-        provider_token: tok,
-        dns_zone_id: "zone-abc",
-        default_server_type: "cx22",
-        default_location: "fsn1",
-      }),
+      jsonReq({ username: "admin", password: "correct-horse" }),
     );
     expect(r.status).toBe(201);
     const body = (await r.json()) as { tempToken: string; user: { username: string } };
@@ -182,32 +165,11 @@ describe("handleSetupComplete", () => {
 
     const users = db.getUsers();
     expect(users).toHaveLength(1);
-    expect(users[0].is_admin).toBeTruthy();
-    expect(await secretStore.get("hetzner_api_token")).toBe(tok);
-    const settings = db.getSettings();
-    expect(settings.dns_zone_id).toBe("zone-abc");
-    expect(settings.default_server_type).toBe("cx22");
-    expect(settings.default_location).toBe("fsn1");
-  });
-
-  test("accepts the handoff flow: existing token + no new token", async () => {
-    const existing = "h".repeat(40);
-    await secretStore.set("hetzner_api_token", existing);
-    const r = await handleSetupComplete(
-      jsonReq({ username: "admin", password: "pw" }),
-    );
-    expect(r.status).toBe(201);
-    // Token preserved, not overwritten.
-    expect(await secretStore.get("hetzner_api_token")).toBe(existing);
   });
 
   test("stores a bcrypt-hashed password (never the plaintext)", async () => {
     await handleSetupComplete(
-      jsonReq({
-        username: "admin",
-        password: "plaintext-secret",
-        provider_token: "p".repeat(40),
-      }),
+      jsonReq({ username: "admin", password: "plaintext-secret" }),
     );
     const u = db.getUserByUsername("admin");
     expect(u).not.toBeNull();

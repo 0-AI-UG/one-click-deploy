@@ -2,23 +2,24 @@ import db from "./connection.ts";
 
 export type EnvironmentRow = {
   id: number;
+  org_id: string;
   name: string;
   env_vars: string;
   created_at: string;
 };
 
-export function getEnvironments(): EnvironmentRow[] {
-  return db.query("SELECT * FROM environments ORDER BY name ASC").all() as EnvironmentRow[];
+export function getEnvironments(orgId: string): EnvironmentRow[] {
+  return db.query("SELECT * FROM environments WHERE org_id = ? ORDER BY created_at").all(orgId) as EnvironmentRow[];
 }
 
 export function getEnvironment(id: number): EnvironmentRow | null {
   return db.query("SELECT * FROM environments WHERE id = ?").get(id) as EnvironmentRow | null;
 }
 
-export function insertEnvironment(name: string, envVars: string): EnvironmentRow {
+export function insertEnvironment(name: string, envVars: string, orgId: string): EnvironmentRow {
   const result = db.query(
-    "INSERT INTO environments (name, env_vars) VALUES (?, ?) RETURNING *"
-  ).get(name, envVars) as EnvironmentRow;
+    "INSERT INTO environments (name, env_vars, org_id) VALUES (?, ?, ?) RETURNING *"
+  ).get(name, envVars, orgId) as EnvironmentRow;
   return result;
 }
 

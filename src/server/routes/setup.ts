@@ -84,40 +84,10 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
       );
     }
 
-    const provider = getComputeProvider();
-
-    // Allow skipping the provider token if one is already present (e.g.
-    // after a self-deploy handoff from a bootstrap instance).
-    const existingToken = await secretStore.get(provider.tokenKey).catch(() => null);
-    if (!provider_token && !existingToken) {
-      return Response.json(
-        { error: `${provider.name} API token is required` },
-        { status: 400, headers: corsHeaders },
-      );
-    }
-
-    if (provider_token) {
-      const validation = provider.validateToken(provider_token);
-      if (!validation.valid) {
-        return Response.json(
-          { error: `${provider.name} API token: ${validation.error}` },
-          { status: 400, headers: corsHeaders },
-        );
-      }
-    }
-
-    // Create admin user
+    // Create platform admin user (provider credentials are now per-org)
     const userId = crypto.randomUUID();
     const passwordHash = await Bun.password.hash(password, "bcrypt");
-    db.insertUser({ id: userId, username, password_hash: passwordHash, is_admin: true });
-
-    // Store secrets (only overwrite provider token if a new one was given)
-    if (provider_token) await secretStore.set(provider.tokenKey, provider_token);
-
-    // Store non-secret settings
-    if (dns_zone_id) db.saveSetting("dns_zone_id", dns_zone_id);
-    if (default_server_type) db.saveSetting("default_server_type", default_server_type);
-    if (default_location) db.saveSetting("default_location", default_location);
+    db.insertUser({ id: userId, username, password_hash: passwordHash });
 
     // Return temp token for mandatory 2FA setup
     const tempToken = await createTempToken(userId);

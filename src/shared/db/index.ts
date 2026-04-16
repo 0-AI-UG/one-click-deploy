@@ -2,6 +2,7 @@ export { createDatabase, default } from "./connection.ts";
 export type { ServerRow, ServerMetricSampleRow } from "./servers.ts";
 export {
   getServers,
+  getAllServers,
   getServer,
   getServerByProviderId,
   insertServer,
@@ -15,6 +16,7 @@ export {
 } from "./servers.ts";
 export type { AppRow, DnsRecordRow } from "./apps.ts";
 export {
+  getAllApps,
   getApps,
   getApp,
   getAppByName,
@@ -141,6 +143,7 @@ export {
   getService,
   getServiceByName,
   getServices,
+  getAllServices,
   updateServiceStatus,
   updateServiceCredentials,
   deleteService,
@@ -171,3 +174,47 @@ export {
   updateEnvironment,
   deleteEnvironment,
 } from "./environments.ts";
+export type {
+  OrganizationRow,
+  OrgMembershipRow,
+  OrgMemberWithUser,
+  OrgInvitationRow,
+  EngineInstanceRow,
+} from "./orgs.ts";
+export {
+  insertOrg,
+  getOrg,
+  getOrgBySlug,
+  getOrgs,
+  updateOrg,
+  deleteOrg,
+  getOrgsForUser,
+  getOrgMembers,
+  insertOrgMember,
+  updateOrgMemberRole,
+  removeOrgMember,
+  isOrgMember,
+  getOrgRole,
+  insertInvitation,
+  getInvitation,
+  getInvitationByToken,
+  getOrgInvitations,
+  deleteInvitation,
+  deleteExpiredInvitations,
+  getOrgSettings,
+  getOrgSetting,
+  saveOrgSetting,
+  getOrgPermissions,
+  hasOrgPermission,
+  setOrgPermissions,
+  registerEngine,
+  updateEngineHeartbeat,
+  removeEngine,
+  getLiveEngines,
+  removeStaleEngines,
+  isLeaderEngine,
+  tryAcquireResourceLock,
+  releaseResourceLocks,
+  releaseEngineResourceLocks,
+  getResourceLockHolder,
+} from "./orgs.ts";

@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requireOrgPermission, requireOrgContext } from "../lib/org-context.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
@@ -22,7 +22,7 @@ function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
 
 export async function handleIntrospectRepo(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.deploy");
+    const ctx = await requireOrgPermission(request, "apps.deploy");
     const url = new URL(request.url).searchParams.get("url") || "";
     if (!url) {
       return Response.json(
@@ -30,7 +30,7 @@ export async function handleIntrospectRepo(request: Request): Promise<Response> 
         { status: 400, headers: corsHeaders },
       );
     }
-    const result = await introspectRepo(url, payload.userId);
+    const result = await introspectRepo(url, ctx.userId);
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -39,8 +39,8 @@ export async function handleIntrospectRepo(request: Request): Promise<Response> 
 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
-    const result = getServersWithApps().map((s: any) => ({
+    const ctx = await requireOrgPermission(request, "servers.view");
+    const result = getServersWithApps(ctx.orgId).map((s: any) => ({
       ...s,
       apps: (s.apps || []).map((a: any) => enrichAppForResponse(a)),
     }));
@@ -52,12 +52,12 @@ export async function handleGetServers(request: Request): Promise<Response> {
 
 export async function handleGetDashboard(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
-    const apps = db.getApps().map((a) => {
+    const ctx = await requireOrgPermission(request, "servers.view");
+    const apps = db.getApps(ctx.orgId).map((a) => {
       const reps = db.getReplicas(a.id);
       return enrichAppForResponse({ ...a, desired_replicas: a.desired_replicas ?? reps.length });
     });
-    const services = db.getServices().map((svc) => {
+    const services = db.getServices(ctx.orgId).map((svc) => {
       const instances = db.getServiceInstances(svc.id);
       const links = db.getServiceLinks(svc.id);
       return {
@@ -74,8 +74,8 @@ export async function handleGetDashboard(request: Request): Promise<Response> {
 
 export async function handleGetApps(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
-    const apps = db.getApps();
+    const ctx = await requireOrgPermission(request, "servers.view");
+    const apps = db.getApps(ctx.orgId);
     const result = apps.map((a) => {
       const reps = db.getReplicas(a.id);
       const first = reps[0];
@@ -90,7 +90,7 @@ export async function handleGetApps(request: Request): Promise<Response> {
 
 export async function handleDeploy(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.deploy");
+    const ctx = await requireOrgPermission(request, "apps.deploy");
     const req = await request.json();
     if (!req?.app_name || typeof req.app_name !== "string") {
       return Response.json({ ok: false, error: "app_name is required" }, { status: 400, headers: corsHeaders });
@@ -100,7 +100,8 @@ export async function handleDeploy(request: Request): Promise<Response> {
       resourceKeys: [`app:create:${req.app_name}`],
       input: req,
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -110,13 +111,14 @@ export async function handleDeploy(request: Request): Promise<Response> {
 
 export async function handleDestroyApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.destroy");
+    const ctx = await requireOrgPermission(request, "apps.destroy");
     const { opId } = enqueue({
       kind: "destroy_app",
       resourceKeys: [`app:${appId}`],
       input: { appId },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -126,13 +128,14 @@ export async function handleDestroyApp(request: Request, appId: number): Promise
 
 export async function handleRestartApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.restart");
+    const ctx = await requireOrgPermission(request, "apps.restart");
     const { opId } = enqueue({
       kind: "restart_app",
       resourceKeys: [`app:${appId}`],
       input: { appId },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -142,13 +145,14 @@ export async function handleRestartApp(request: Request, appId: number): Promise
 
 export async function handlePauseApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.pause");
+    const ctx = await requireOrgPermission(request, "apps.pause");
     const { opId } = enqueue({
       kind: "pause_app",
       resourceKeys: [`app:${appId}`],
       input: { appId },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -158,13 +162,14 @@ export async function handlePauseApp(request: Request, appId: number): Promise<R
 
 export async function handleUnpauseApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.pause");
+    const ctx = await requireOrgPermission(request, "apps.pause");
     const { opId } = enqueue({
       kind: "unpause_app",
       resourceKeys: [`app:${appId}`],
       input: { appId },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -174,7 +179,7 @@ export async function handleUnpauseApp(request: Request, appId: number): Promise
 
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.redeploy");
+    const ctx = await requireOrgPermission(request, "apps.redeploy");
     const body = (await request.json().catch(() => ({}))) as {
       auth_password?: string | null;
       container_port?: number;
@@ -205,10 +210,11 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
         appId,
         auth_password: body.auth_password,
         container_port: body.container_port,
-        userId: payload.userId,
+        userId: ctx.userId,
       },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -218,7 +224,7 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
 
 export async function handleRenameApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.deploy");
+    const ctx = await requireOrgPermission(request, "apps.deploy");
     const { name } = await request.json() as { name: string };
 
     const nameResult = validateAppName(name);
@@ -234,7 +240,7 @@ export async function handleRenameApp(request: Request, appId: number): Promise<
       return Response.json({ ok: true }, { headers: corsHeaders });
     }
 
-    const existing = db.getAppByName(newName);
+    const existing = db.getAppByName(newName, ctx.orgId);
     if (existing) {
       return Response.json({ error: `An app named "${newName}" already exists` }, { status: 409, headers: corsHeaders });
     }
@@ -244,7 +250,8 @@ export async function handleRenameApp(request: Request, appId: number): Promise<
       resourceKeys: [`app:${appId}`],
       input: { appId, newName },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
   } catch (error) {
@@ -254,7 +261,7 @@ export async function handleRenameApp(request: Request, appId: number): Promise<
 
 export async function handleGetContainerLogs(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.logs");
+    await requireOrgPermission(request, "apps.logs");
     const url = new URL(request.url);
     const tail = parseInt(url.searchParams.get("tail") || "100", 10);
     const replicaIdParam = url.searchParams.get("replica_id");
@@ -286,7 +293,7 @@ export async function handleGetContainerLogs(request: Request, appId: number): P
 
 export async function handleGetDeployLog(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.logs");
+    await requireOrgPermission(request, "apps.logs");
     const log = db.getDeployLog(appId);
     return Response.json({ log }, { headers: corsHeaders });
   } catch (error) {
@@ -296,7 +303,7 @@ export async function handleGetDeployLog(request: Request, appId: number): Promi
 
 export async function handleGetDeployments(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.logs");
+    await requireOrgPermission(request, "apps.logs");
     const deployments = db.getDeployments(appId);
     return Response.json(deployments, { headers: corsHeaders });
   } catch (error) {
@@ -306,14 +313,15 @@ export async function handleGetDeployments(request: Request, appId: number): Pro
 
 export async function handleRollbackApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.rollback");
+    const ctx = await requireOrgPermission(request, "apps.rollback");
     const body = await request.json() as { deployment_id: number };
     const { opId } = enqueue({
       kind: "rollback",
       resourceKeys: [`app:${appId}`],
       input: { appId, deploymentId: body.deployment_id },
       trigger: "ui",
-      triggeredBy: payload.userId,
+      triggeredBy: ctx.userId,
+      orgId: ctx.orgId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {

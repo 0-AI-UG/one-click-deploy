@@ -44,11 +44,11 @@ type DbServiceLink = {
  *
  * Kept here for legacy callers; safe to move if this file shrinks further.
  */
-export function getServersWithApps(): any[] {
-  const servers = db.getServers() as Server[];
-  const allAppsGlobal = db.getApps() as DbApp[];
+export function getServersWithApps(orgId = ""): any[] {
+  const servers = db.getServers(orgId) as Server[];
+  const allAppsGlobal = db.getApps(orgId) as DbApp[];
   return servers.map((s) => {
-    const activeApps = db.getApps(s.id) as DbApp[];
+    const activeApps = db.getApps(orgId, s.id) as DbApp[];
     const sleepingApps = allAppsGlobal.filter(
       (a) => a.sleeping_server_id === s.id && !activeApps.some((aa) => aa.id === a.id),
     );

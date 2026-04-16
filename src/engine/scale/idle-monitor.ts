@@ -6,6 +6,7 @@ import { enqueue } from "../../server/ipc/enqueue.ts";
 function enqueueAutoscale(appId: number, decision: "up" | "down" | "sleep", targetReplicas: number) {
   const bucket = Math.floor(Date.now() / 60000);
   const kind = decision === "up" ? "scale_up" : decision === "sleep" ? "sleep" : "scale_down";
+  const app = db.getApp(appId);
   enqueue({
     kind,
     resourceKeys: [`app:${appId}`],
@@ -13,6 +14,7 @@ function enqueueAutoscale(appId: number, decision: "up" | "down" | "sleep", targ
     trigger: "autoscaler",
     triggeredBy: "idle-monitor",
     idempotencyKey: `idle-monitor:${appId}:${decision}:${bucket}`,
+    orgId: app?.org_id || "",
   });
 }
 

@@ -16,12 +16,17 @@ export type ServerRow = {
    *  DNS so traffic stays off the public NIC. */
   private_ipv4: string;
   created_at: string;
+  org_id: string;
 };
 
-export function getServers(): ServerRow[] {
+export function getServers(orgId: string): ServerRow[] {
   return db
-    .query("SELECT * FROM servers ORDER BY created_at DESC")
-    .all() as ServerRow[];
+    .query("SELECT * FROM servers WHERE org_id = ? ORDER BY created_at DESC")
+    .all(orgId) as ServerRow[];
+}
+
+export function getAllServers(): ServerRow[] {
+  return db.query("SELECT * FROM servers ORDER BY created_at DESC").all() as ServerRow[];
 }
 
 export function getServer(id: number): ServerRow | null {
@@ -44,10 +49,11 @@ export function insertServer(server: {
   location: string;
   status: string;
   private_ipv4?: string;
+  org_id: string;
 }): ServerRow {
   return db
     .query(
-      "INSERT INTO servers (name, provider_id, provider, ipv4, ipv6, type, location, status, private_ipv4) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO servers (name, provider_id, provider, ipv4, ipv6, type, location, status, private_ipv4, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       server.name,
@@ -59,6 +65,7 @@ export function insertServer(server: {
       server.location,
       server.status,
       server.private_ipv4 ?? "",
+      server.org_id,
     ) as ServerRow;
 }
 

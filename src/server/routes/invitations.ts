@@ -1,0 +1,32 @@
+import { authenticateRequest } from "../lib/auth.ts";
+import * as db from "../../shared/db.ts";
+
+// GET /api/invitations/:token — get invitation details (public)
+export async function handleGetInvitation(request: Request, token: string): Promise<Response> {
+  const invitation = db.getInvitationByToken(token);
+  if (!invitation) return Response.json({ error: "Invitation not found or expired" }, { status: 404 });
+  if (new Date(invitation.expires_at) < new Date()) {
+    db.deleteInvitation(invitation.id);
+    return Response.json({ error: "Invitation expired" }, { status: 410 });
+  }
+  const org = db.getOrg(invitation.org_id);
+  return Response.json({ invitation, org_name: org?.name });
+}
+
+// POST /api/invitations/:token/accept
+export async function handleAcceptInvitation(request: Request, token: string): Promise<Response> {
+  const auth = await authenticateRequest(request);
+  const invitation = db.getInvitationByToken(token);
+  if (!invitation) return Response.json({ error: "Invitation not found" }, { status: 404 });
+  if (new Date(invitation.expires_at) < new Date()) {
+    db.deleteInvitation(invitation.id);
+    return Response.json({ error: "Invitation expired" }, { status: 410 });
+  }
+  if (db.isOrgMember(invitation.org_id, auth.userId)) {
+    db.deleteInvitation(invitation.id);
+    return Response.json({ error: "Already a member" }, { status: 409 });
+  }
+  db.insertOrgMember(invitation.org_id, auth.userId, invitation.role);
+  db.deleteInvitation(invitation.id);
+  return Response.json({ ok: true, org_id: invitation.org_id });
+}
