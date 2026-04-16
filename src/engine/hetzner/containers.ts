@@ -477,7 +477,8 @@ async function cloneRepo(
   appName: string,
   gitRepo: string,
   gitToken?: string,
-  emit?: (msg: string) => void
+  emit?: (msg: string) => void,
+  gitBranch?: string,
 ) {
   const appDir = `/home/deploy/apps/${appName}`;
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
@@ -490,8 +491,9 @@ async function cloneRepo(
     );
   }
 
+  const branchFlag = gitBranch ? ` -b ${gitBranch}` : "";
   emit?.("Cloning repository...");
-  log("build", `Cloning ${gitRepo} into ${appDir} (token: ${gitToken ? "yes" : "no"})`);
+  log("build", `Cloning ${gitRepo} into ${appDir} (token: ${gitToken ? "yes" : "no"}, branch: ${gitBranch || "default"})`);
   // Ensure the app dir (if it exists) is owned by deploy so the subsequent
   // rm -rf/git clone/pull works even if a prior root-run step (e.g. scaleUp
   // writing .env.deploy) left root-owned files behind.
@@ -499,7 +501,7 @@ async function cloneRepo(
   const gitEnv = gitToken ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
   const cloneResult = await sshExec(
     ip,
-    asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git remote set-url origin ${cloneUrl} && git pull; else rm -rf ${appDir} && git clone ${cloneUrl} ${appDir}; fi`)
+    asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git remote set-url origin ${cloneUrl} && git fetch origin && git checkout ${gitBranch || "HEAD"} && git pull; else rm -rf ${appDir} && git clone${branchFlag} ${cloneUrl} ${appDir}; fi`)
   );
   if (cloneResult.exitCode !== 0) {
     const stderr = cloneResult.stderr;
@@ -538,6 +540,7 @@ export async function cloneAndBuild(
     dockerfilePath?: string; // explicit path to Dockerfile in repo
     dockerContext?: string; // build context path relative to repo root, defaults to "."
     gitToken?: string; // GitHub PAT for private repos
+    gitBranch?: string; // Branch to clone, defaults to repo default
     /** Host-side bind address for the published port. Defaults to 127.0.0.1
      *  so containers aren't exposed on the public interface. Pass the
      *  server's `private_ipv4` when the app is reached by the panel Caddy
@@ -556,7 +559,7 @@ export async function cloneAndBuild(
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
   // Clone or pull repo
-  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit);
+  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
 
   // Find Dockerfile
   let dockerfilePath = opts.dockerfilePath?.replace(/^\/+/, "");
@@ -664,6 +667,7 @@ export async function cloneAndRailpackBuild(
     volumeMount?: string;
     extraVolumes?: string[];
     gitToken?: string;
+    gitBranch?: string;
     /** See `cloneAndBuild` — defaults to 127.0.0.1. */
     bindAddr?: string;
     /** See `cloneAndBuild` — defaults to `opts.name`. */
@@ -678,7 +682,7 @@ export async function cloneAndRailpackBuild(
   const containerName = opts.containerName || opts.name;
 
   // Clone or pull repo
-  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit);
+  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
 
   // Ensure BuildKit is available
   await ensureBuildkit(ip);
@@ -824,6 +828,7 @@ export async function cloneAndComposeBuild(
     composeFile: string; // e.g. "docker-compose.yml"
     webService: string; // e.g. "web"
     gitToken?: string;
+    gitBranch?: string; // Branch to clone, defaults to repo default
     /** Host-side bind address for the web service's published port.
      *  Defaults to 127.0.0.1 for public-interface isolation. Pass the
      *  server's `private_ipv4` when the panel Caddy reaches this replica
@@ -838,7 +843,7 @@ export async function cloneAndComposeBuild(
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
   // Clone or pull repo (shared with cloneAndBuild)
-  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit);
+  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
 
   // Note: No explicit "docker compose down" here — "docker compose up -d --build"
   // handles stopping old containers and replacing them atomically (build-before-destroy).

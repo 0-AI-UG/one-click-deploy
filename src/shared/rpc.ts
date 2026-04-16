@@ -20,6 +20,7 @@ export type App = {
   name: string;
   domain: string;
   git_repo: string;
+  git_branch: string;
   dockerfile_path: string;
   container_port: number;
   /** Host port of the first replica (derived for display continuity). */
@@ -107,6 +108,7 @@ export type DeployRequest = {
   app_name: string;
   domain?: string;
   git_repo: string;
+  git_branch?: string; // Branch to clone/build from, defaults to repo default branch
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   environment_id?: number; // Link to an existing environment instead of providing env_vars

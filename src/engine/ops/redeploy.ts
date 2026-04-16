@@ -96,6 +96,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       volumeMount: app.volume_mount || undefined,
       extraVolumes,
       gitToken: githubPat,
+      gitBranch: app.git_branch || undefined,
       bindAddr,
       containerName: first.container_name,
     };

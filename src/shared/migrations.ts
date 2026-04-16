@@ -1078,6 +1078,13 @@ export const migrations: Migration[] = [
       db.run("DROP TABLE IF EXISTS service_deploy_jobs");
     },
   },
+  {
+    version: 44,
+    description: "Add git_branch to apps for branch-specific deployments",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN git_branch TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

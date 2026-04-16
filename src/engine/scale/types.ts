@@ -5,6 +5,7 @@ export interface App {
   name: string;
   domain: string;
   git_repo: string;
+  git_branch: string;
   dockerfile_path: string;
   docker_context: string;
   container_port: number;

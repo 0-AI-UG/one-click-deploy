@@ -342,6 +342,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
         name: req.app_name,
         domain: useDomain,
         git_repo: req.git_repo,
+        git_branch: req.git_branch,
         dockerfile_path: dockerfilePath,
         docker_context: req.docker_context,
         container_port: req.container_port,
@@ -424,7 +425,8 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
           cloneUrl = cloneUrl.replace(/^https:\/\/github\.com\//, `https://x-access-token:${githubPat}@github.com/`);
         }
         const gitEnv = githubPat ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
-        await sshExecQuiet(server.serverIp, asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git pull; else rm -rf ${appDir} && git clone ${cloneUrl} ${appDir}; fi`), server.serverHostKey || undefined);
+        const branchFlag = req.git_branch ? ` -b ${req.git_branch}` : "";
+        await sshExecQuiet(server.serverIp, asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git fetch origin && git checkout ${req.git_branch || "HEAD"} && git pull; else rm -rf ${appDir} && git clone${branchFlag} ${cloneUrl} ${appDir}; fi`), server.serverHostKey || undefined);
         if (githubPat && cloneUrl !== req.git_repo) {
           await sshExecQuiet(server.serverIp, asUser(`cd ${appDir} && git remote set-url origin ${req.git_repo}`), server.serverHostKey || undefined);
         }
@@ -459,6 +461,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
           composeFile,
           webService: composeWebService,
           gitToken: githubPat,
+          gitBranch: req.git_branch,
           bindAddr: containerBindAddr,
         },
         (line) => {
@@ -483,6 +486,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
           dockerfilePath: req.dockerfile_path,
           dockerContext: req.docker_context,
           gitToken: githubPat,
+          gitBranch: req.git_branch,
           bindAddr: containerBindAddr,
         },
         (line) => {
