@@ -34,6 +34,12 @@
       "required": false
     },
     {
+      "key": "ENGINE_WORKERS",
+      "description": "Number of dedicated engine processes. 0 = embedded engine in server (default). 2+ for horizontal scaling.",
+      "default": "0",
+      "required": false
+    },
+    {
       "key": "ENGINE_CONCURRENCY",
       "description": "Max concurrent deploy operations per engine instance",
       "default": "4",
