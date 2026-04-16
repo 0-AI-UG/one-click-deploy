@@ -23,14 +23,16 @@ function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
 export async function handleIntrospectRepo(request: Request): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "apps.deploy");
-    const url = new URL(request.url).searchParams.get("url") || "";
+    const params = new URL(request.url).searchParams;
+    const url = params.get("url") || "";
+    const ref = params.get("ref") || undefined;
     if (!url) {
       return Response.json(
         { ok: false, error: "Missing repo URL" },
         { status: 400, headers: corsHeaders },
       );
     }
-    const result = await introspectRepo(url, ctx.userId);
+    const result = await introspectRepo(url, ctx.userId, ref);
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

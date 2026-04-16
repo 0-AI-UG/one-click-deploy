@@ -68,6 +68,7 @@ export async function scaleUp(
           composeFile: app.compose_file,
           webService: app.compose_web_service,
           gitToken: githubPat,
+          gitBranch: app.git_branch || undefined,
           bindAddr: replicaBindAddr,
         },
         (line) => emit("scale", line)

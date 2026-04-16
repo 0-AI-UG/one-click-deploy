@@ -180,6 +180,7 @@ export type TotpStatus = {
 export type DeployBody = {
   app_name: string;
   git_repo: string;
+  git_branch?: string;
   domain?: string;
   container_port: number;
   env_vars?: Array<{ key: string; value: string; secret: boolean }>;

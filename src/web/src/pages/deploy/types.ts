@@ -55,6 +55,7 @@ export type IntrospectResult =
 export type FormState = {
   app_name: string;
   git_repo: string;
+  git_branch: string;
   domain: string;
   container_port: string;
   volume_size: string;

@@ -35,7 +35,14 @@ async function githubApi(
   return res.json();
 }
 
-export function parseGitHubRepo(url: string): { owner: string; repo: string } {
+export function parseGitHubRepo(url: string): { owner: string; repo: string; ref?: string } {
+  // Handle https://github.com/owner/repo/tree/branch-name
+  const treeMatch = url.match(
+    /github\.com\/([^/]+)\/([^/.]+)\/tree\/([^?#]+)/
+  );
+  if (treeMatch) {
+    return { owner: treeMatch[1], repo: treeMatch[2], ref: treeMatch[3] };
+  }
   // Handle https://github.com/owner/repo.git or https://github.com/owner/repo
   const httpsMatch = url.match(
     /github\.com\/([^/]+)\/([^/.]+)(?:\.git)?/

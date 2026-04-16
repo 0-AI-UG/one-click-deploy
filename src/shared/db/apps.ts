@@ -7,6 +7,7 @@ export type AppRow = {
   name: string;
   domain: string;
   git_repo: string;
+  git_branch: string;
   dockerfile_path: string;
   docker_context: string;
   container_port: number;
@@ -95,6 +96,7 @@ export function insertApp(app: {
   name: string;
   domain: string;
   git_repo: string;
+  git_branch?: string;
   dockerfile_path: string;
   docker_context?: string;
   container_port: number;
@@ -106,12 +108,13 @@ export function insertApp(app: {
 }): AppRow {
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       app.name,
       app.domain,
       app.git_repo,
+      app.git_branch || "",
       app.dockerfile_path,
       app.docker_context || ".",
       app.container_port,
@@ -128,6 +131,7 @@ export function insertAppWithFirstReplica(
     name: string;
     domain: string;
     git_repo: string;
+    git_branch?: string;
     dockerfile_path: string;
     docker_context?: string;
     container_port: number;
@@ -142,12 +146,13 @@ export function insertAppWithFirstReplica(
   const tx = db.transaction(() => {
     const appRow = db
       .query(
-        "INSERT INTO apps (name, domain, git_repo, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+        "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
       )
       .get(
         app.name,
         app.domain,
         app.git_repo,
+        app.git_branch || "",
         app.dockerfile_path,
         app.docker_context || ".",
         app.container_port,

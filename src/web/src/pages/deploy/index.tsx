@@ -100,6 +100,7 @@ function ServicePopover() {
 const EMPTY_FORM: FormState = {
   app_name: "",
   git_repo: "",
+  git_branch: "",
   domain: "",
   container_port: "3000",
   volume_size: "",
@@ -143,6 +144,7 @@ export function DeployPage() {
     setForm((f) => ({
       ...f,
       app_name: m.suggested_app_name || f.app_name || result.suggested_app_name,
+      git_branch: result.default_branch !== "main" ? result.default_branch : f.git_branch,
       container_port: m.build?.container_port
         ? String(m.build.container_port)
         : result.detected_port
@@ -308,6 +310,7 @@ export function DeployPage() {
             setForm((f) => ({
               ...f,
               app_name: f.app_name || result.suggested_app_name,
+              git_branch: f.git_branch || (result.default_branch !== "main" ? result.default_branch : ""),
               container_port:
                 f.container_port === "3000" && result.detected_port
                   ? String(result.detected_port)
@@ -386,6 +389,7 @@ export function DeployPage() {
     const body: DeployBody = {
       app_name: form.app_name,
       git_repo: form.git_repo,
+      git_branch: form.git_branch || undefined,
       domain: form.domain || undefined,
       container_port: parseInt(form.container_port, 10),
       env_vars: envArray,

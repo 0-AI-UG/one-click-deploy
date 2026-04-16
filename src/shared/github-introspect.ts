@@ -223,8 +223,8 @@ function pickWebService(
   return services[0].name;
 }
 
-export async function introspectRepo(url: string, userId?: string): Promise<IntrospectResult> {
-  let parsed: { owner: string; repo: string };
+export async function introspectRepo(url: string, userId?: string, ref?: string): Promise<IntrospectResult> {
+  let parsed: { owner: string; repo: string; ref?: string };
   try {
     parsed = parseGitHubRepo(url);
   } catch {
@@ -234,9 +234,11 @@ export async function introspectRepo(url: string, userId?: string): Promise<Intr
     };
   }
 
-  const { owner, repo } = parsed;
+  const { owner, repo, ref: urlRef } = parsed;
   const suggested_app_name = sanitizeAppName(repo);
   const token = await getGitHubPat(userId);
+  // Prefer explicit ref param, then branch from URL, then repo default
+  const requestedRef = ref || urlRef;
 
   // 1. Fetch repo info to get the default branch
   const repoRes = await ghFetch(`/repos/${owner}/${repo}`, token);
@@ -258,7 +260,7 @@ export async function introspectRepo(url: string, userId?: string): Promise<Intr
     return { ok: false, error: `GitHub error (HTTP ${repoRes.status})`, suggested_app_name };
   }
   const repoData = await repoRes.json();
-  const default_branch: string = repoData.default_branch || "main";
+  const default_branch: string = requestedRef || repoData.default_branch || "main";
 
   // 2. Fetch the recursive git tree
   const notes: string[] = [];
