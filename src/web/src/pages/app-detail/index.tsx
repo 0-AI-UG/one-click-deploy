@@ -3,7 +3,9 @@ import { get, post, del } from "../../api/client.ts";
 import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, useResourceOperations } from "../../hooks/useOperation.ts";
-import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2, CreditCard } from "lucide-react";
+import { orgPath } from "../../stores/auth.ts";
+import { useBilling } from "../../hooks/useBilling.ts";
 import { OverviewTab } from "./overview-tab.tsx";
 import { LogsTab } from "./logs-tab.tsx";
 import { DeploymentsTab } from "./deployments-tab.tsx";
@@ -11,8 +13,11 @@ import { ScalingTab } from "./scaling-tab.tsx";
 import { WebhooksTab } from "./webhooks-tab.tsx";
 import { SettingsTab } from "./settings-tab.tsx";
 import type { AppData, ServerData, ReplicaData, MetricSample, ScalingEvent, DeploymentRecord } from "../../types.ts";
+import { errMsg } from "../../lib/errors.ts";
 
 export function AppDetailPage({ appId }: { appId: number }) {
+  const { billing } = useBilling();
+  const billingRequired = billing?.required && billing.status !== "active";
   const [app, setApp] = useState<AppData | null>(null);
   const [server, setServer] = useState<ServerData | null>(null);
   const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
@@ -45,13 +50,13 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
   const load = async () => {
     try {
-      const servers = await get("/api/servers");
+      const servers = await get<ServerData[]>("/api/servers");
       for (const s of servers) {
-        const found = s.apps.find((a: any) => a.id === appId);
+        const found = s.apps.find((a) => a.id === appId);
         if (found) { setApp(found); setServer(s); break; }
       }
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setLoading(false);
     }
@@ -64,8 +69,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
       const qs = `tail=${tail}${selectedReplicaId != null ? `&replica_id=${selectedReplicaId}` : ""}`;
       const res = await get(`/api/apps/${appId}/logs?${qs}`);
       setLogs(res.logs || res.error || "No logs available");
-    } catch (err: any) {
-      setLogs(err.message);
+    } catch (err) {
+      setLogs(errMsg(err));
     }
   };
 
@@ -142,8 +147,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
         showToast(`${name} successful`, "success");
       }
       load();
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setActionLoading(null);
     }
@@ -173,7 +178,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
       <div className="flex items-center gap-3 mb-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = "#/"; }}><ArrowLeft size={14} /></Btn>
+        <Btn variant="ghost" onClick={() => { window.location.hash = orgPath("/"); }}><ArrowLeft size={14} /></Btn>
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="font-mono font-bold text-sm text-fg uppercase">{app.name}</h1>
@@ -203,9 +208,15 @@ export function AppDetailPage({ appId }: { appId: number }) {
             )}
           </PermissionGate>
           <PermissionGate permission="apps.redeploy">
-            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", () => post(`/api/apps/${appId}/redeploy`))}>
-              <RefreshCw size={12} /> Redeploy
-            </Btn>
+            {billingRequired ? (
+              <Btn size="xs" variant="primary" onClick={() => { window.location.hash = orgPath("/org-settings"); }}>
+                <CreditCard size={12} /> Set up billing
+              </Btn>
+            ) : (
+              <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", () => post(`/api/apps/${appId}/redeploy`))}>
+                <RefreshCw size={12} /> Redeploy
+              </Btn>
+            )}
           </PermissionGate>
           <PermissionGate permission="apps.destroy">
             <Btn
@@ -215,7 +226,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
               onClick={async () => {
                 if (await confirm("Destroy App", `Permanently destroy "${app.name}"?`, true)) {
                   await action("destroy", () => del(`/api/apps/${appId}`));
-                  window.location.hash = "#/";
+                  window.location.hash = orgPath("/");
                 }
               }}
             ><Trash2 size={12} /> Destroy</Btn>
@@ -330,6 +341,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           actionLoading={actionLoading}
           action={action}
           ops={ops}
+          billingRequired={!!billingRequired}
         />
       )}
     </div>

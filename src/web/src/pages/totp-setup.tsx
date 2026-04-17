@@ -3,6 +3,7 @@ import { post } from "../api/client.ts";
 import { useAuth, login } from "../stores/auth.ts";
 import { showToast, Spinner, Card } from "../components/ui.tsx";
 import { QrCode, Copy, Check, ArrowRight } from "lucide-react";
+import { errMsg } from "../lib/errors.ts";
 
 export function TotpSetupPage() {
   const { tempToken, token } = useAuth();
@@ -20,7 +21,7 @@ export function TotpSetupPage() {
     post("/api/auth/totp/setup-from-login", { tempToken }).then((res) => {
       setQrCode(res.qrCode);
       setSecret(res.secret);
-    }).catch((err) => showToast(err.message, "error"));
+    }).catch((err) => showToast(errMsg(err), "error"));
   }, [tempToken]);
 
   const handleChange = (idx: number, val: string) => {
@@ -46,8 +47,8 @@ export function TotpSetupPage() {
       setBackupCodes(res.backupCodes);
       login(res.token, res.user);
       setStep("backup");
-    } catch (err: any) {
-      showToast(err.message || "Invalid code", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Invalid code", "error");
       setDigits(["", "", "", "", "", ""]);
       refs.current[0]?.focus();
     } finally {

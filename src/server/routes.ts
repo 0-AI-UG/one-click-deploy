@@ -1,4 +1,4 @@
-import { handleSetupStatus, handleSetupComplete, handleSetupServerTypes } from "./routes/setup.ts";
+import { handleSetupStatus, handleSetupComplete } from "./routes/setup.ts";
 import { handleLogin, handleMe, handleUpdateMe, handlePasswordReset, handleRegister } from "./routes/auth.ts";
 import {
   handleListOrgs,
@@ -10,12 +10,12 @@ import {
   handleCreateInvitation,
   handleGetOrgInvitations,
   handleRemoveOrgMember,
-  handleUpdateMemberRole,
   handleGetOrgSettings,
   handleUpdateOrgSettings,
   handleGetMemberPermissions,
   handleUpdateMemberPermissions,
   handleRevokeInvitation,
+  handleOrgServerTypes,
 } from "./routes/orgs.ts";
 import { handleGetInvitation, handleAcceptInvitation } from "./routes/invitations.ts";
 import {
@@ -93,6 +93,7 @@ import {
   handleCancelOperation,
 } from "./routes/operations.ts";
 import { handleTerminalExec } from "./routes/terminal-exec.ts";
+import { handleGetBilling, handleSubscribe, handleCancelSubscription, handleStripeWebhook, handleCreateSetupIntent, handleAttachPaymentMethod, handleListInvoices, handleAppleDomainAssociation } from "./routes/billing.ts";
 import {
   handleGetCatalog,
   handleGetServices,
@@ -159,7 +160,6 @@ export const apiRoutes = {
   // --- Setup ---
   "/api/setup/status": { GET: (req: Request) => handleSetupStatus(req) },
   "/api/setup/complete": { POST: (req: Request) => handleSetupComplete(req) },
-  "/api/setup/server-types": { POST: (req: Request) => handleSetupServerTypes(req) },
 
   // --- Auth ---
   "/api/auth/login": { POST: (req: Request) => handleLogin(req) },
@@ -220,12 +220,6 @@ export const apiRoutes = {
       return handleRemoveOrgMember(req, m ? m[1] : "");
     },
   },
-  "/api/orgs/:orgId/members/:userId/role": {
-    PUT: (req: Request) => {
-      const m = new URL(req.url).pathname.match(/\/api\/orgs\/[^/]+\/members\/([^/]+)\/role$/);
-      return handleUpdateMemberRole(req, m ? m[1] : "");
-    },
-  },
   "/api/orgs/:orgId/members/:userId/permissions": {
     GET: (req: Request) => {
       const m = new URL(req.url).pathname.match(/\/api\/orgs\/[^/]+\/members\/([^/]+)\/permissions$/);
@@ -250,6 +244,9 @@ export const apiRoutes = {
     GET: (req: Request) => handleGetOrgSettings(req),
     PUT: (req: Request) => handleUpdateOrgSettings(req),
   },
+  "/api/orgs/:orgId/server-types": {
+    POST: (req: Request) => handleOrgServerTypes(req),
+  },
 
   // --- Invitations ---
   "/api/invitations/:token": {
@@ -264,6 +261,16 @@ export const apiRoutes = {
       return handleAcceptInvitation(req, m ? m[1] : "");
     },
   },
+
+  // --- Billing ---
+  "/api/billing": { GET: (req: Request) => handleGetBilling(req) },
+  "/api/billing/subscribe": { POST: (req: Request) => handleSubscribe(req) },
+  "/api/billing/cancel": { POST: (req: Request) => handleCancelSubscription(req) },
+  "/api/billing/payment-method/setup": { POST: (req: Request) => handleCreateSetupIntent(req) },
+  "/api/billing/payment-method/attach": { POST: (req: Request) => handleAttachPaymentMethod(req) },
+  "/api/billing/invoices": { GET: (req: Request) => handleListInvoices(req) },
+  "/.well-known/apple-developer-merchantid-domain-association": { GET: (req: Request) => handleAppleDomainAssociation(req) },
+  "/webhooks/stripe": { POST: (req: Request) => handleStripeWebhook(req) },
 
   // --- Dashboard ---
   "/api/dashboard": { GET: (req: Request) => handleGetDashboard(req) },

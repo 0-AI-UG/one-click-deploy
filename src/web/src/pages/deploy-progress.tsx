@@ -3,13 +3,14 @@ import { Btn } from "../components/ui.tsx";
 import { CheckCircle2, XCircle, Loader2, Circle, Rocket, Terminal, ArrowLeft } from "lucide-react";
 import { useOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
 import type { OperationStep } from "../hooks/useOperation.ts";
+import { orgPath } from "../stores/auth.ts";
 
 export function DeployProgressPage({ opId }: { opId: number | null }) {
   const op = useOperation(opId);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!opId) window.location.hash = "#/deploy";
+    if (!opId) window.location.hash = orgPath("/deploy");
   }, [opId]);
 
   const steps: OperationStep[] = op?.steps || [];
@@ -23,8 +24,9 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
   const succeeded = status === "done";
   const failed = terminal && !succeeded;
   const errorMessage = op?.error?.message ?? null;
-  const appName = (op as any)?.input?.app_name ?? "";
-  const domain = (op as any)?.input?.domain ?? "";
+  const opInput = op?.input as { app_name?: string; domain?: string } | undefined;
+  const appName = opInput?.app_name ?? "";
+  const domain = opInput?.domain ?? "";
 
   // Redirect to app detail on success. We need an appId — pull it from the
   // insert_app_row step output.
@@ -35,7 +37,7 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
       ? (insertStep.output as { appId?: number }).appId
       : undefined;
     const t = setTimeout(() => {
-      window.location.hash = appId ? `#/apps/${appId}` : "#/";
+      window.location.hash = appId ? orgPath(`/apps/${appId}`) : orgPath("/");
     }, 1200);
     return () => clearTimeout(t);
   }, [succeeded, steps.length]);
@@ -188,7 +190,7 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
               variant="primary"
               className="flex-1 !py-2.5"
               onClick={() => {
-                window.location.hash = "#/";
+                window.location.hash = orgPath("/");
               }}
             >
               Go to Dashboard
@@ -197,7 +199,7 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
             <Btn
               variant="ghost"
               onClick={() => {
-                window.location.hash = "#/deploy";
+                window.location.hash = orgPath("/deploy");
               }}
             >
               <ArrowLeft size={14} /> Back

@@ -377,7 +377,7 @@ const deployServiceOp: OpKindDefinition<DeployServiceInput> = {
   ],
 };
 
-registerOp(deployServiceOp as OpKindDefinition<any>);
+registerOp(deployServiceOp);
 
 export default deployServiceOp;
 export type { DeployServiceInput };

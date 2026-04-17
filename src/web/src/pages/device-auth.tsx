@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { post } from "../api/client.ts";
 import { showToast, Spinner } from "../components/ui.tsx";
 import { Terminal, Check } from "lucide-react";
+import { errMsg } from "../lib/errors.ts";
 
 export function DeviceAuthPage() {
   const [code, setCode] = useState(["", "", "", "", "", "", "", ""]);
@@ -51,8 +52,8 @@ export function DeviceAuthPage() {
     try {
       await post("/api/auth/device-confirm", { user_code: fullCode });
       setConfirmed(true);
-    } catch (err: any) {
-      showToast(err.message || "Invalid or expired code", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Invalid or expired code", "error");
     } finally {
       setLoading(false);
     }

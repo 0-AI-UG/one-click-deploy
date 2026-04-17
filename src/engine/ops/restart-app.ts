@@ -21,7 +21,7 @@ const restartAppOp: OpKindDefinition<RestartAppInput> = {
   steps: [restartReplicas],
 };
 
-registerOp(restartAppOp as OpKindDefinition<any>);
+registerOp(restartAppOp);
 
 export default restartAppOp;
 export type { RestartAppInput };

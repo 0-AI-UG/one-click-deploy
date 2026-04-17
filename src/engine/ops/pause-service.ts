@@ -32,7 +32,7 @@ const pauseServiceOp: OpKindDefinition<PauseServiceInput> = {
   steps: [pauseAllInstances],
 };
 
-registerOp(pauseServiceOp as OpKindDefinition<any>);
+registerOp(pauseServiceOp);
 
 export default pauseServiceOp;
 export type { PauseServiceInput };

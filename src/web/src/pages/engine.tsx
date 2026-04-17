@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { get } from "../api/client.ts";
 import { Spinner } from "../components/ui.tsx";
+import { orgPath } from "../stores/auth.ts";
 import { humanizeStep, type OperationView } from "../hooks/useOperation.ts";
 
 type Snapshot = {
@@ -153,7 +154,7 @@ function OpRow({ op, showProgress }: { op: OperationView; showProgress?: boolean
     : null;
   return (
     <a
-      href={`#/engine/op/${op.id}`}
+      href={orgPath(`/engine/op/${op.id}`)}
       className="block border-2 border-fg bg-bg-raised shadow-neo-sm hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-neo-none transition-all px-3 py-2"
     >
       <div className="flex items-center gap-3">

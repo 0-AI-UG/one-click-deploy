@@ -88,7 +88,17 @@ export const hetznerCompute: ComputeProvider = {
       "/server_types?per_page=50",
     )) as Record<string, unknown>;
     const types: ServerType[] = [];
-    for (const t of ((data.server_types as any[]) ?? [])) {
+    type HetznerServerType = {
+      name: string;
+      description: string;
+      cores: number;
+      memory: number;
+      disk: number;
+      deprecation?: { announced?: string } | null;
+      prices?: Array<{ location: string }>;
+    };
+    const rawTypes = (data.server_types as HetznerServerType[] | undefined) ?? [];
+    for (const t of rawTypes) {
       if (t.deprecation?.announced) continue;
       types.push({
         name: t.name,
@@ -96,9 +106,7 @@ export const hetznerCompute: ComputeProvider = {
         cores: t.cores,
         memory: t.memory,
         disk: t.disk,
-        locations: (t.prices ?? []).map(
-          (p: { location: string }) => p.location,
-        ),
+        locations: (t.prices ?? []).map((p) => p.location),
       });
     }
     types.sort((a, b) => a.memory - b.memory || a.cores - b.cores);
@@ -173,7 +181,14 @@ export const hetznerCompute: ComputeProvider = {
       return { providerId: String(v.id), linuxDevice: v.linux_device };
     },
     async get(volumeId) {
-      const data = await hetznerApi(`/volumes/${volumeId}`) as any;
+      type HetznerVolume = {
+        id: number | string;
+        name: string;
+        size: number;
+        location?: { name?: string } | null;
+        server?: number | string | null;
+      };
+      const data = await hetznerApi(`/volumes/${volumeId}`) as { volume: HetznerVolume };
       const v = data.volume;
       return {
         providerId: String(v.id),
@@ -184,8 +199,15 @@ export const hetznerCompute: ComputeProvider = {
       };
     },
     async list() {
-      const data = await hetznerApi("/volumes?label_selector=managed_by%3Done-click-deploy&per_page=50") as any;
-      return (data.volumes ?? []).map((v: any) => ({
+      type HetznerVolume = {
+        id: number | string;
+        name: string;
+        size: number;
+        location?: { name?: string } | null;
+        server?: number | string | null;
+      };
+      const data = await hetznerApi("/volumes?label_selector=managed_by%3Done-click-deploy&per_page=50") as { volumes?: HetznerVolume[] };
+      return (data.volumes ?? []).map((v) => ({
         providerId: String(v.id),
         name: v.name,
         sizeGb: v.size,
@@ -222,8 +244,18 @@ export const hetznerCompute: ComputeProvider = {
 
   async getPricing() {
     try {
-      const data = await hetznerApi("/pricing");
-      const pricing = data.pricing as any;
+      type HetznerPricing = {
+        server_types?: Array<{
+          name: string;
+          prices?: Array<{
+            location: string;
+            price_monthly?: { gross?: string };
+          }>;
+        }>;
+        volume?: { price_per_gb_month?: { gross?: string } };
+      };
+      const data = await hetznerApi("/pricing") as { pricing?: HetznerPricing };
+      const pricing = data.pricing;
       const servers: Record<string, number> = {};
       for (const st of pricing?.server_types ?? []) {
         for (const price of st.prices ?? []) {
@@ -246,7 +278,7 @@ export const hetznerDns: DnsProvider = {
 
   async listZones() {
     const zones = await listDnsZones();
-    return (zones ?? []).map((z: any) => ({ id: z.id, name: z.name }));
+    return (zones ?? []).map((z: { id: string; name: string }) => ({ id: z.id, name: z.name }));
   },
 
   async createRecord(opts) {

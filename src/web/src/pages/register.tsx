@@ -3,6 +3,7 @@ import { post } from "../api/client.ts";
 import { login } from "../stores/auth.ts";
 import { showToast } from "../components/ui.tsx";
 import { Spinner } from "../components/ui.tsx";
+import { errMsg } from "../lib/errors.ts";
 
 export function RegisterPage() {
   const [username, setUsername] = useState("");
@@ -25,8 +26,8 @@ export function RegisterPage() {
       const res = await post("/api/auth/register", { username, password });
       login(res.token, res.user);
       window.location.hash = "#/create-org";
-    } catch (err: any) {
-      showToast(err.message || "Registration failed", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Registration failed", "error");
     } finally {
       setLoading(false);
     }

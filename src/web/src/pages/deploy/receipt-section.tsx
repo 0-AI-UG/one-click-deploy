@@ -20,9 +20,9 @@ type Props = {
 export function ReceiptSection({ form, set, setForm, detected, selectedManifest, onBranchChange }: Props) {
   const [servers, setServers] = useState<ServerOption[]>([]);
   useEffect(() => {
-    get("/api/resources")
-      .then((res: any) => {
-        const ready = (res.servers || []).filter((s: any) => s.status === "ready");
+    get<{ servers?: ServerOption[] }>("/api/resources")
+      .then((res) => {
+        const ready = (res.servers || []).filter((s) => s.status === "ready");
         setServers(ready);
       })
       .catch(() => {});

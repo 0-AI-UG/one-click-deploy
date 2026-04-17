@@ -3,7 +3,10 @@ import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
-import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box } from "lucide-react";
+import { orgPath } from "../stores/auth.ts";
+import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box, CreditCard } from "lucide-react";
+import { useBilling } from "../hooks/useBilling.ts";
+import { errMsg } from "../lib/errors.ts";
 
 type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
@@ -56,6 +59,10 @@ export function DashboardPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const confirmTimeoutRef = useRef<number | null>(null);
+  const { billing } = useBilling();
+  const billingBlocked = !!billing && billing.status !== "active";
+  const deployBlocked = billingBlocked && billing!.appCount >= 1;
+  const redeployBlocked = billingBlocked && billing!.appCount > 1;
 
   const ops = useActiveOperations(
     (op) => APP_OP_KINDS.has(op.kind) || SVC_OP_KINDS.has(op.kind),
@@ -77,8 +84,8 @@ export function DashboardPage() {
   const load = async () => {
     try {
       setData(await get("/api/dashboard"));
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setLoading(false);
     }
@@ -105,8 +112,8 @@ export function DashboardPage() {
         ops.track(res.op_id);
       }
       load();
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setActionLoading(null);
     }
@@ -124,8 +131,8 @@ export function DashboardPage() {
         ops.track(res.op_id);
       }
       load();
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setActionLoading(null);
     }
@@ -160,8 +167,14 @@ export function DashboardPage() {
         <div className="flex gap-2">
           <Btn onClick={load} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>
           <PermissionGate permission="apps.deploy">
-            <Btn onClick={() => { window.location.hash = "#/deploy"; }} variant="ghost"><Database size={13} /> New Service</Btn>
-            <Btn onClick={() => { window.location.hash = "#/deploy"; }} variant="primary">Deploy New App</Btn>
+            {deployBlocked ? (
+              <Btn onClick={() => { window.location.hash = orgPath("/org-settings"); }} variant="primary"><CreditCard size={13} /> Set up billing to deploy</Btn>
+            ) : (
+              <>
+                <Btn onClick={() => { window.location.hash = orgPath("/deploy"); }} variant="ghost"><Database size={13} /> New Service</Btn>
+                <Btn onClick={() => { window.location.hash = orgPath("/deploy"); }} variant="primary">Deploy New App</Btn>
+              </>
+            )}
           </PermissionGate>
         </div>
       </div>
@@ -184,7 +197,7 @@ export function DashboardPage() {
                   return (
                   <div key={app.id} className={`px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${app.status === "paused" ? "opacity-50" : ""} ${rowBusy ? "bg-alt/30" : ""}`}>
                     <div className="flex items-center gap-4 min-w-0">
-                      <a href={`#/apps/${app.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{app.name}</a>
+                      <a href={orgPath(`/apps/${app.id}`)} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{app.name}</a>
                       {app.domain && (
                         <span className="flex items-center gap-1 text-[9px] font-mono text-muted">
                           <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="flex items-center gap-1 hover:text-fg transition-colors">
@@ -201,7 +214,7 @@ export function DashboardPage() {
                     </div>
                     <div className="flex items-center gap-1">
                       <PermissionGate permission="apps.logs">
-                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/apps/${app.id}`; }}><ScrollText size={12} /></Btn>
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = orgPath(`/apps/${app.id}`); }}><ScrollText size={12} /></Btn>
                       </PermissionGate>
                       <PermissionGate permission="apps.restart">
                         {(() => {
@@ -234,7 +247,11 @@ export function DashboardPage() {
                         })()}
                       </PermissionGate>
                       <PermissionGate permission="apps.redeploy">
-                        {(() => {
+                        {redeployBlocked ? (
+                          <Btn size="xs" variant="ghost" title="Subscription required" onClick={() => { window.location.hash = orgPath("/org-settings"); }}>
+                            <CreditCard size={12} className="text-fg-dim" />
+                          </Btn>
+                        ) : (() => {
                           const k = `redeploy-${app.id}`;
                           const armed = confirmKey === k;
                           return (
@@ -281,7 +298,7 @@ export function DashboardPage() {
                     <div className="flex items-center gap-4 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <Database size={10} className="text-muted" />
-                        <a href={`#/services/${svc.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{svc.name}</a>
+                        <a href={orgPath(`/services/${svc.id}`)} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{svc.name}</a>
                       </div>
                       <span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{svc.service_type}</span>
                       <span className="font-mono text-[9px] text-muted">{svc.version}</span>
@@ -294,7 +311,7 @@ export function DashboardPage() {
                     </div>
                     <div className="flex items-center gap-1">
                       <PermissionGate permission="services.logs">
-                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/services/${svc.id}`; }}><ScrollText size={12} /></Btn>
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = orgPath(`/services/${svc.id}`); }}><ScrollText size={12} /></Btn>
                       </PermissionGate>
                       <PermissionGate permission="services.manage">
                         {(() => {

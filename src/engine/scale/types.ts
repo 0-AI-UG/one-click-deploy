@@ -74,7 +74,7 @@ export interface Server {
   created_at: string;
 }
 
-export function log(context: string, ...args: any[]) {
+export function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [scale:${context}]`, ...args);
 }
 

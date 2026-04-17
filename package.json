@@ -5,8 +5,8 @@
   "scripts": {
     "start": "OCD_MODE=server bun run src/server/index.ts",
     "engine": "OCD_MODE=engine bun run src/engine/entrypoint.ts",
-    "engine:dev": "OCD_MODE=engine bun run src/engine/entrypoint.ts",
-    "dev": "OCD_MODE=server SKIP_2FA=1 bun --watch run src/server/index.ts",
+    "engine:dev": "OCD_DATA_DIR=./data OCD_MODE=engine bun run src/engine/entrypoint.ts",
+    "dev": "OCD_DATA_DIR=./data OCD_MODE=server SKIP_2FA=1 bun --watch run src/server/index.ts",
     "build": "bun build src/web/index.html --outdir=src/web/dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test src/",
@@ -17,6 +17,8 @@
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.0",
+    "@stripe/react-stripe-js": "^6.2.0",
+    "@stripe/stripe-js": "^9.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
@@ -26,6 +28,7 @@
     "qrcode": "^1.5.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "stripe": "^22.0.2",
     "tailwind-merge": "^3.5.0",
     "xterm": "5.3.0",
     "xterm-addon-fit": "0.8.0"

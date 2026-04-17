@@ -20,7 +20,7 @@ import { removeAppCaddy, syncAppCaddy } from "../scale/caddy-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [deploy:${context}]`, ...args);
 }
 

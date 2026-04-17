@@ -48,9 +48,11 @@ mock.module("../../shared/github.ts", () => ({
 
 import * as db from "../../shared/db.ts";
 import deployOp from "./deploy.ts";
+import type { DeployRequest } from "../../shared/rpc.ts";
+import type { OpContext } from "../types.ts";
 
 // Synthetic op context. Steps that don't call park/unpark can use this shape.
-function makeCtx(input: any) {
+function makeCtx(input: DeployRequest) {
   const logLines: string[] = [];
   return {
     ctx: {
@@ -58,7 +60,7 @@ function makeCtx(input: any) {
       kind: "deploy",
       orgId: "test-org",
       input,
-      trigger: "user" as const,
+      trigger: "user",
       triggeredBy: "",
       parentId: null,
       attempt: 1,
@@ -66,7 +68,7 @@ function makeCtx(input: any) {
       log: (line: string) => logLines.push(line),
       park: () => {},
       unpark: () => {},
-    } as any,
+    } satisfies OpContext<DeployRequest>,
     logLines,
   };
 }
@@ -283,7 +285,7 @@ describe("deploy step: create_dns_record", () => {
       type: "A",
       value: "1.2.3.4",
     };
-    const { ctx } = makeCtx({});
+    const { ctx } = makeCtx({} as unknown as DeployRequest);
     await step.compensate!(ctx, out, {});
     expect(dns._mocks.deleteRecord).toHaveBeenCalledTimes(1);
     expect(dns._mocks.deleteRecord.mock.calls[0][0]).toMatchObject({
@@ -361,7 +363,7 @@ describe("deploy step: create_volume", () => {
   });
 
   test("compensation detaches (best-effort) then deletes the volume", async () => {
-    const { ctx } = makeCtx({});
+    const { ctx } = makeCtx({} as unknown as DeployRequest);
     await step.compensate!(ctx, { volumeId: "v-abc", volumeMount: "/mnt/x:/data", containerPath: "/data" }, {});
     expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
@@ -370,7 +372,7 @@ describe("deploy step: create_volume", () => {
 
   test("compensation swallows detach failure and still calls delete", async () => {
     compute._mocks.volumeDetach.mockImplementationOnce(async () => { throw new Error("already detached"); });
-    const { ctx } = makeCtx({});
+    const { ctx } = makeCtx({} as unknown as DeployRequest);
     await step.compensate!(ctx, { volumeId: "v-xyz", volumeMount: "", containerPath: "/d" }, {});
     expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
   });
@@ -397,6 +399,6 @@ describe("deploy op: structure", () => {
 
   test("kind + resource key format", () => {
     expect(deployOp.kind).toBe("deploy");
-    expect(deployOp.resourceKeys({ app_name: "foo" } as any)).toEqual(["app:create:foo"]);
+    expect(deployOp.resourceKeys({ app_name: "foo" } as unknown as DeployRequest)).toEqual(["app:create:foo"]);
   });
 });

@@ -2,7 +2,8 @@ import { post, put } from "../../api/client.ts";
 import { Card, Btn, Checkbox, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
-import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe } from "lucide-react";
+import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe, CreditCard } from "lucide-react";
+import { orgPath } from "../../stores/auth.ts";
 import type { AppData } from "../../types.ts";
 
 interface SettingsTabProps {
@@ -21,6 +22,7 @@ interface SettingsTabProps {
   actionLoading: string | null;
   action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
   ops: ResourceOpsResult;
+  billingRequired: boolean;
 }
 
 export function SettingsTab({
@@ -31,6 +33,7 @@ export function SettingsTab({
   portEdit, setPortEdit,
   volumeForm, setVolumeForm,
   actionLoading, action, ops,
+  billingRequired,
 }: SettingsTabProps) {
   return (
     <div className="space-y-4">
@@ -105,23 +108,29 @@ export function SettingsTab({
 
       <PermissionGate permission="apps.redeploy">
         <div className="flex justify-end">
-          <Btn
-            size="sm"
-            variant="primary"
-            loading={actionLoading === "save-settings" || ops.isBusyWith("redeploy")}
-            disabled={!portEdit || ops.isBusy}
-            onClick={() => action("save-settings", async () => {
-              const res = (await post(`/api/apps/${appId}/redeploy`, {
-                auth_password: authPassword || null,
-                container_port: portEdit,
-                public: isPublic,
-              })) as { op_id?: number };
-              if (res?.op_id) {
-                trackOperationInToast(res.op_id, "Saving & redeploying");
-                ops.track(res.op_id);
-              }
-            })}
-          >Save & Redeploy</Btn>
+          {billingRequired ? (
+            <Btn size="sm" variant="primary" onClick={() => { window.location.hash = orgPath("/org-settings"); }}>
+              <CreditCard size={12} /> Set up billing to redeploy
+            </Btn>
+          ) : (
+            <Btn
+              size="sm"
+              variant="primary"
+              loading={actionLoading === "save-settings" || ops.isBusyWith("redeploy")}
+              disabled={!portEdit || ops.isBusy}
+              onClick={() => action("save-settings", async () => {
+                const res = (await post(`/api/apps/${appId}/redeploy`, {
+                  auth_password: authPassword || null,
+                  container_port: portEdit,
+                  public: isPublic,
+                })) as { op_id?: number };
+                if (res?.op_id) {
+                  trackOperationInToast(res.op_id, "Saving & redeploying");
+                  ops.track(res.op_id);
+                }
+              })}
+            >Save & Redeploy</Btn>
+          )}
         </div>
       </PermissionGate>
 

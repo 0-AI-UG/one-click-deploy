@@ -128,7 +128,7 @@ const cascadeRedeployOp: OpKindDefinition<CascadeRedeployInput> = {
   steps: [resolveApps, enqueueChildRedeploys, waitForChildren],
 };
 
-registerOp(cascadeRedeployOp as OpKindDefinition<any>);
+registerOp(cascadeRedeployOp);
 
 export default cascadeRedeployOp;
 export type { CascadeRedeployInput };

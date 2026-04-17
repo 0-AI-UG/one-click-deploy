@@ -135,6 +135,7 @@ export type ResourceServer = {
   ipv4: string;
   type: string;
   location: string;
+  status: string;
   cpu_percent: number | null;
   memory_percent: number | null;
   replica_count: number;

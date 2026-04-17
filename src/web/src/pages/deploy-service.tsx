@@ -3,6 +3,8 @@ import { get, post } from "../api/client.ts";
 import { Card, Btn, showToast, Spinner, CopyButton } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Database, Loader2, Eye, EyeOff, ArrowLeft } from "lucide-react";
+import { orgPath } from "../stores/auth.ts";
+import { errMsg } from "../lib/errors.ts";
 
 type CatalogEntry = {
   type: string;
@@ -72,8 +74,8 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
         }
         setLoading(false);
       })
-      .catch((err: any) => {
-        showToast(err.message, "error");
+      .catch((err: unknown) => {
+        showToast(errMsg(err), "error");
         setLoading(false);
       });
   }, []);
@@ -116,9 +118,9 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
         environment_id: environmentId || undefined,
         env_prefix: environmentId ? envPrefix : undefined,
       });
-      window.location.hash = `#/deploy/service-progress/${res.op_id}`;
-    } catch (err: any) {
-      showToast(err.message, "error");
+      window.location.hash = orgPath(`/deploy/service-progress/${res.op_id}`);
+    } catch (err) {
+      showToast(errMsg(err), "error");
       setDeploying(false);
     }
   };
@@ -136,7 +138,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
 
       {selected && (
         <div className="space-y-4">
-          <Btn variant="ghost" onClick={() => { window.location.hash = "#/deploy"; }}><ArrowLeft size={14} /></Btn>
+          <Btn variant="ghost" onClick={() => { window.location.hash = orgPath("/deploy"); }}><ArrowLeft size={14} /></Btn>
 
           <Card>
             <div className="px-4 py-3 border-b-2 border-fg bg-alt flex items-center gap-3">

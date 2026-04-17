@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { get, post, del } from "../../api/client.ts";
-import { Btn, showToast } from "../../components/ui.tsx";
+import { Btn, Spinner, showToast } from "../../components/ui.tsx";
 import { Rocket, RotateCcw, X, Save, Loader2, Database } from "lucide-react";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
@@ -8,7 +8,11 @@ import { ReceiptSection } from "./receipt-section.tsx";
 import { EnvSection } from "./env-section.tsx";
 import { AdvancedSection } from "./advanced-section.tsx";
 import type { IntrospectResult, ManifestEnvDef, FormState } from "./types.ts";
+import { orgPath } from "../../stores/auth.ts";
+import { useBilling } from "../../hooks/useBilling.ts";
+import { BillingWall } from "../../components/billing-wall.tsx";
 import type { DeployBody } from "../../types.ts";
+import { errMsg } from "../../lib/errors.ts";
 
 const SERVICE_ICONS: Record<string, string> = {
   postgresql: "PG",
@@ -81,7 +85,7 @@ function ServicePopover() {
             catalog.map((entry) => (
               <a
                 key={entry.type}
-                href={`#/deploy-service/${entry.type}`}
+                href={orgPath(`/deploy-service/${entry.type}`)}
                 className="flex items-center gap-2.5 px-3 py-2 hover:bg-alt transition-colors"
               >
                 <div className={`w-5 h-5 ${SERVICE_COLORS[entry.type] || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[7px] font-bold shrink-0`}>
@@ -121,6 +125,8 @@ const EMPTY_FORM: FormState = {
 };
 
 export function DeployPage() {
+  const { billing, loading: billingLoading, reload: reloadBilling } = useBilling();
+
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [extraEnv, setExtraEnv] = useState<Array<{ key: string; value: string }>>([]);
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<number | null>(null);
@@ -225,9 +231,9 @@ export function DeployPage() {
 
   // Check for a saved deploy session on mount
   useEffect(() => {
-    get("/api/deploy-session")
-      .then((res: any) => {
-        if (res.session) setPendingSession(res.session);
+    get<{ session?: unknown }>("/api/deploy-session")
+      .then((res) => {
+        if (res.session) setPendingSession(res.session as typeof pendingSession);
       })
       .catch(() => {});
   }, []);
@@ -321,11 +327,11 @@ export function DeployPage() {
       } else if (result.suggested_app_name) {
         setForm((f) => ({ ...f, app_name: f.app_name || result.suggested_app_name! }));
       }
-    } catch (err: any) {
+    } catch (err) {
       if (mySeq !== introspectSeq.current) return;
       setIntrospect({
         ok: false,
-        error: err?.message || "We couldn't read that repo. Fill it in manually below.",
+        error: errMsg(err) || "We couldn't read that repo. Fill it in manually below.",
       });
       setRevealed(true);
     } finally {
@@ -429,15 +435,28 @@ export function DeployPage() {
       try {
         const res = (await post("/api/apps/deploy", body)) as { op_id: number };
         if (!res.op_id) throw new Error("No op_id returned");
-        window.location.hash = `#/deploy/progress/${res.op_id}`;
-      } catch (err: any) {
-        showToast(err?.message || "Failed to enqueue deploy", "error");
+        window.location.hash = orgPath(`/deploy/progress/${res.op_id}`);
+      } catch (err) {
+        if (errMsg(err) === "Billing required") {
+          showToast("Subscription required to deploy additional apps", "error");
+          window.location.hash = orgPath("/org-settings");
+          return;
+        }
+        showToast(errMsg(err) || "Failed to enqueue deploy", "error");
       }
     })();
   };
 
   const detected = introspect?.ok === true ? introspect : null;
   const showReceipt = revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1);
+
+  if (billingLoading) {
+    return <div className="flex justify-center py-20"><Spinner /></div>;
+  }
+
+  if (billing && billing.appCount >= 1 && billing.status !== "active") {
+    return <BillingWall appCount={billing.appCount} seatCount={billing.seatCount} pricePerSeat={billing.pricePerSeat} onActivated={reloadBilling} />;
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-10">

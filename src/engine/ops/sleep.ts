@@ -77,7 +77,7 @@ const sleepOp: OpKindDefinition<SleepInput> = {
   steps: [checkRunning, stopContainers, markSleeping],
 };
 
-registerOp(sleepOp as OpKindDefinition<any>);
+registerOp(sleepOp);
 
 export default sleepOp;
 export type { SleepInput };

@@ -5,13 +5,14 @@ import {
 } from "lucide-react";
 import { useOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
 import type { OperationStep } from "../hooks/useOperation.ts";
+import { orgPath } from "../stores/auth.ts";
 
 export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
   const op = useOperation(opId);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!opId) window.location.hash = "#/deploy";
+    if (!opId) window.location.hash = orgPath("/deploy");
   }, [opId]);
 
   const steps: OperationStep[] = op?.steps || [];
@@ -24,7 +25,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
   const succeeded = status === "done";
   const failed = terminal && !succeeded;
   const errorMessage = op?.error?.message ?? null;
-  const serviceName = (op as any)?.input?.name ?? "";
+  const serviceName = (op?.input as { name?: string } | undefined)?.name ?? "";
 
   // Redirect to service detail on success via insert_service_and_instance.
   useEffect(() => {
@@ -34,7 +35,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
       ? (insertStep.output as { serviceId?: number }).serviceId
       : undefined;
     const t = setTimeout(() => {
-      window.location.hash = serviceId ? `#/services/${serviceId}` : "#/";
+      window.location.hash = serviceId ? orgPath(`/services/${serviceId}`) : orgPath("/");
     }, 1200);
     return () => clearTimeout(t);
   }, [succeeded, steps.length]);
@@ -186,14 +187,14 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
             <Btn
               variant="primary"
               className="flex-1 !py-2.5"
-              onClick={() => { window.location.hash = "#/"; }}
+              onClick={() => { window.location.hash = orgPath("/"); }}
             >
               Go to Dashboard
             </Btn>
           ) : (
             <Btn
               variant="ghost"
-              onClick={() => { window.location.hash = "#/deploy"; }}
+              onClick={() => { window.location.hash = orgPath("/deploy"); }}
             >
               <ArrowLeft size={14} /> Back
             </Btn>

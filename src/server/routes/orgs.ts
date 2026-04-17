@@ -1,7 +1,9 @@
 import { authenticateRequest } from "../lib/auth.ts";
-import { requireOrgContext, requireOrgAdmin } from "../lib/org-context.ts";
+import { requireOrgContext, requireOrgOwner } from "../lib/org-context.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore, maskToken } from "../../shared/secret-store.ts";
+import { syncSubscriptionSeats } from "./billing.ts";
+import { getComputeProvider } from "../../shared/providers/index.ts";
 
 // GET /api/orgs — list user's orgs
 export async function handleListOrgs(request: Request): Promise<Response> {
@@ -34,7 +36,7 @@ export async function handleGetOrg(request: Request): Promise<Response> {
 
 // PUT /api/orgs/:orgId — update org
 export async function handleUpdateOrg(request: Request): Promise<Response> {
-  const ctx = await requireOrgAdmin(request);
+  const ctx = await requireOrgOwner(request);
   const { name, slug } = await request.json();
   if (!name || !slug) return Response.json({ error: "Name and slug required" }, { status: 400 });
   if (!/^[a-z0-9-]+$/.test(slug)) return Response.json({ error: "Invalid slug format" }, { status: 400 });
@@ -61,11 +63,10 @@ export async function handleGetOrgMembers(request: Request): Promise<Response> {
 
 // POST /api/orgs/:orgId/invitations — send invite
 export async function handleCreateInvitation(request: Request): Promise<Response> {
-  const ctx = await requireOrgAdmin(request);
-  const { email, role } = await request.json();
+  const ctx = await requireOrgOwner(request);
+  const { email } = await request.json();
   if (!email) return Response.json({ error: "Email required" }, { status: 400 });
-  const validRoles = ["admin", "member"];
-  const inviteRole = validRoles.includes(role) ? role : "member";
+  const inviteRole = "member";
   const id = crypto.randomUUID();
   const token = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
@@ -76,37 +77,28 @@ export async function handleCreateInvitation(request: Request): Promise<Response
 
 // GET /api/orgs/:orgId/invitations — list invitations
 export async function handleGetOrgInvitations(request: Request): Promise<Response> {
-  const ctx = await requireOrgAdmin(request);
+  const ctx = await requireOrgOwner(request);
   const invitations = db.getOrgInvitations(ctx.orgId);
   return Response.json(invitations);
 }
 
 // DELETE /api/orgs/:orgId/members/:userId — remove member
 export async function handleRemoveOrgMember(request: Request, userId: string): Promise<Response> {
-  const ctx = await requireOrgAdmin(request);
+  const ctx = await requireOrgOwner(request);
   if (userId === ctx.userId) return Response.json({ error: "Cannot remove yourself" }, { status: 400 });
   const targetRole = db.getOrgRole(ctx.orgId, userId);
   if (!targetRole) return Response.json({ error: "User is not a member" }, { status: 404 });
   if (targetRole === "owner") return Response.json({ error: "Cannot remove the owner" }, { status: 403 });
   db.removeOrgMember(ctx.orgId, userId);
-  return Response.json({ ok: true });
-}
-
-// PUT /api/orgs/:orgId/members/:userId/role — change role
-export async function handleUpdateMemberRole(request: Request, userId: string): Promise<Response> {
-  const ctx = await requireOrgContext(request);
-  if (ctx.orgRole !== "owner") return Response.json({ error: "Only the owner can change roles" }, { status: 403 });
-  const { role } = await request.json();
-  const validRoles = ["admin", "member"];
-  if (!validRoles.includes(role)) return Response.json({ error: "Invalid role" }, { status: 400 });
-  if (!db.isOrgMember(ctx.orgId, userId)) return Response.json({ error: "User is not a member" }, { status: 404 });
-  db.updateOrgMemberRole(ctx.orgId, userId, role);
+  syncSubscriptionSeats(ctx.orgId).catch((err) => {
+    console.error(`[billing] seat sync failed after removing member from org ${ctx.orgId}:`, err);
+  });
   return Response.json({ ok: true });
 }
 
 // GET /api/orgs/:orgId/settings
 export async function handleGetOrgSettings(request: Request): Promise<Response> {
-  const ctx = await requireOrgAdmin(request);
+  const ctx = await requireOrgOwner(request);
   const settings = db.getOrgSettings(ctx.orgId);
   // Also include masked provider token
   const provider = await secretStore.getProviderToken(ctx.orgId);
@@ -115,7 +107,7 @@ export async function handleGetOrgSettings(request: Request): Promise<Response> 
 
 // PUT /api/orgs/:orgId/settings — update org settings (credentials + defaults)
 export async function handleUpdateOrgSettings(request: Request): Promise<Response> {
-  const ctx = await requireOrgAdmin(request);
+  const ctx = await requireOrgOwner(request);
   const body = await request.json();
   const settingKeys = ["dns_zone_id", "default_server_type", "default_location", "ssh_public_key", "network_id"];
   for (const key of settingKeys) {
@@ -129,9 +121,39 @@ export async function handleUpdateOrgSettings(request: Request): Promise<Respons
   return Response.json({ ok: true });
 }
 
+// POST /api/orgs/:orgId/server-types — fetch server types using a provider token
+// If no token in body, uses the org's stored token.
+export async function handleOrgServerTypes(request: Request): Promise<Response> {
+  const ctx = await requireOrgOwner(request);
+  const body = await request.json() as { provider_token?: string };
+  let token = body.provider_token?.trim() || "";
+
+  // Fall back to the org's stored token
+  if (!token) {
+    token = await secretStore.getProviderToken(ctx.orgId);
+  }
+  if (!token) return Response.json({ server_types: [], locations: [] });
+
+  const provider = getComputeProvider();
+  const validation = provider.validateToken(token);
+  if (!validation.valid) {
+    return Response.json({ error: `Invalid token: ${validation.error}` }, { status: 400 });
+  }
+  try {
+    await provider.verifyToken(token);
+  } catch (err) {
+    return Response.json({ error: (err as Error).message }, { status: 400 });
+  }
+  // Temporarily set the global token so listServerTypes() can authenticate
+  await secretStore.set(provider.tokenKey, token);
+  const types = await provider.listServerTypes();
+  const allLocations = [...new Set(types.flatMap((t) => t.locations))].sort();
+  return Response.json({ server_types: types, locations: allLocations });
+}
+
 // GET /api/orgs/:orgId/members/:userId/permissions
 export async function handleGetMemberPermissions(request: Request, userId: string): Promise<Response> {
-  await requireOrgAdmin(request);
+  await requireOrgOwner(request);
   const ctx = await requireOrgContext(request);
   const permissions = db.getOrgPermissions(ctx.orgId, userId);
   return Response.json(permissions);
@@ -139,13 +161,13 @@ export async function handleGetMemberPermissions(request: Request, userId: strin
 
 // PUT /api/orgs/:orgId/members/:userId/permissions
 export async function handleUpdateMemberPermissions(request: Request, userId: string): Promise<Response> {
-  const ctx = await requireOrgAdmin(request);
+  const ctx = await requireOrgOwner(request);
   const { permissions } = await request.json();
   if (!Array.isArray(permissions)) return Response.json({ error: "permissions must be an array" }, { status: 400 });
   if (!db.isOrgMember(ctx.orgId, userId)) return Response.json({ error: "User is not a member" }, { status: 404 });
   const targetRole = db.getOrgRole(ctx.orgId, userId);
-  if (targetRole === "owner" || targetRole === "admin") {
-    return Response.json({ error: "Owners and admins bypass permissions" }, { status: 400 });
+  if (targetRole === "owner") {
+    return Response.json({ error: "Owners bypass permissions" }, { status: 400 });
   }
   db.setOrgPermissions(ctx.orgId, userId, permissions);
   return Response.json({ ok: true });
@@ -153,7 +175,7 @@ export async function handleUpdateMemberPermissions(request: Request, userId: st
 
 // DELETE /api/orgs/:orgId/invitations/:invitationId — revoke invitation
 export async function handleRevokeInvitation(request: Request, invitationId: string): Promise<Response> {
-  const ctx = await requireOrgAdmin(request);
+  const ctx = await requireOrgOwner(request);
   const invitation = db.getInvitation(invitationId);
   if (!invitation || invitation.org_id !== ctx.orgId) {
     return Response.json({ error: "Invitation not found" }, { status: 404 });

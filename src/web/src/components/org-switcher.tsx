@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useAuth, setCurrentOrg } from "../stores/auth.ts";
+import { useAuth, setCurrentOrg, orgPath } from "../stores/auth.ts";
 import { Building2, ChevronDown, Settings, Plus } from "lucide-react";
 
 export function OrgSwitcher() {
@@ -20,6 +20,7 @@ export function OrgSwitcher() {
   const handleSwitch = (orgId: string) => {
     setCurrentOrg(orgId);
     setOpen(false);
+    window.location.hash = `#/orgs/${orgId}`;
     window.location.reload();
   };
 
@@ -51,7 +52,7 @@ export function OrgSwitcher() {
           ))}
           <div className="border-t border-fg/10">
             <a
-              href="#/org-settings"
+              href={orgPath("/org-settings")}
               onClick={() => setOpen(false)}
               className="w-full text-left px-3 py-2 font-mono text-xs hover:bg-fg/5 transition-all flex items-center gap-2 text-fg/60"
             >

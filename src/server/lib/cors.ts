@@ -36,9 +36,10 @@ export const htmlCsp =
   "default-src 'self'; " +
   "img-src 'self' data: blob:; " +
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://esm.sh; " +
-  "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh; " +
+  "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh https://js.stripe.com; " +
   "font-src 'self' data: https://fonts.gstatic.com; " +
-  "connect-src 'self' ws: wss:; " +
+  "connect-src 'self' ws: wss: https://api.stripe.com; " +
+  "frame-src https://js.stripe.com; " +
   "frame-ancestors 'none'; " +
   "base-uri 'self'; " +
   "object-src 'none'; " +

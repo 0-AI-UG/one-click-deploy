@@ -92,7 +92,7 @@ export function makeFakeComputeProvider(
     },
     ...overrides,
   };
-  return Object.assign(provider, { _mocks }) as any;
+  return Object.assign(provider, { _mocks });
 }
 
 export function makeFakeDnsProvider(
@@ -119,5 +119,5 @@ export function makeFakeDnsProvider(
     deleteRecord: _mocks.deleteRecord,
     ...overrides,
   };
-  return Object.assign(provider, { _mocks }) as any;
+  return Object.assign(provider, { _mocks });
 }

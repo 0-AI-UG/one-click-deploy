@@ -154,21 +154,23 @@ export async function getCommitCiStatus(opts: {
     `/repos/${owner}/${repo}/commits/${opts.ref}/status`,
     opts.token,
   );
-  const combinedState = String((statusData as any)?.state ?? "pending");
+  const combinedState = String(statusData?.state ?? "pending");
 
   // Check Runs (GitHub Actions, etc.)
   const checksData = await githubApi(
     `/repos/${owner}/${repo}/commits/${opts.ref}/check-runs`,
     opts.token,
   );
-  const checkRuns = Array.isArray((checksData as any)?.check_runs)
-    ? (checksData as any).check_runs as Array<{ status: string; conclusion: string | null }>
+  const rawCheckRuns = checksData?.check_runs;
+  const checkRuns = Array.isArray(rawCheckRuns)
+    ? rawCheckRuns as Array<{ status: string; conclusion: string | null }>
     : [];
 
   // If there are no checks at all, treat as pending (no CI configured yet
   // for this commit — the run hasn't been picked up by GitHub yet).
-  const statusContexts = Array.isArray((statusData as any)?.statuses)
-    ? (statusData as any).statuses as Array<{ state: string }>
+  const rawStatuses = statusData?.statuses;
+  const statusContexts = Array.isArray(rawStatuses)
+    ? rawStatuses as Array<{ state: string }>
     : [];
   if (statusContexts.length === 0 && checkRuns.length === 0) {
     return "pending";

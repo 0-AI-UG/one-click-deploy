@@ -58,7 +58,7 @@ const renameAppOp: OpKindDefinition<RenameAppInput> = {
   steps: [renameOnServers],
 };
 
-registerOp(renameAppOp as OpKindDefinition<any>);
+registerOp(renameAppOp);
 
 export default renameAppOp;
 export type { RenameAppInput };

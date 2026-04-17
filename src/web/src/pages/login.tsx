@@ -3,6 +3,7 @@ import { post } from "../api/client.ts";
 import { login, setTempToken } from "../stores/auth.ts";
 import { showToast, Spinner } from "../components/ui.tsx";
 import { Terminal, ArrowRight } from "lucide-react";
+import { errMsg } from "../lib/errors.ts";
 
 export function LoginPage() {
   const [username, setUsername] = useState("");
@@ -24,8 +25,8 @@ export function LoginPage() {
         login(res.token, res.user);
         window.location.hash = "#/";
       }
-    } catch (err: any) {
-      showToast(err.message || "Login failed", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Login failed", "error");
     } finally {
       setLoading(false);
     }

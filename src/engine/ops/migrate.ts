@@ -85,7 +85,7 @@ const migrateOp: OpKindDefinition<MigrateInput> = {
   steps: [loadAndValidate, performMigration, syncCaddyStep, gcEmptyServers],
 };
 
-registerOp(migrateOp as OpKindDefinition<any>);
+registerOp(migrateOp);
 
 export default migrateOp;
 export type { MigrateInput };

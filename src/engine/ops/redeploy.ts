@@ -252,7 +252,7 @@ const redeployOp: OpKindDefinition<RedeployInput> = {
   ],
 };
 
-registerOp(redeployOp as OpKindDefinition<any>);
+registerOp(redeployOp);
 
 export default redeployOp;
 export type { RedeployInput };

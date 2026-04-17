@@ -37,15 +37,15 @@ describe("runMigrations", () => {
   test("creates schema_version table", () => {
     const db = freshDb();
     runMigrations(db);
-    const row = db.query("SELECT version FROM schema_version").get() as any;
+    const row = db.query("SELECT version FROM schema_version").get() as { version: number } | null;
     expect(row).toBeTruthy();
-    expect(row.version).toBeGreaterThanOrEqual(0);
+    expect(row!.version).toBeGreaterThanOrEqual(0);
   });
 
   test("applies all migrations", () => {
     const db = freshDb();
     runMigrations(db);
-    const row = db.query("SELECT version FROM schema_version").get() as any;
+    const row = db.query("SELECT version FROM schema_version").get() as { version: number };
     expect(row.version).toBeGreaterThan(0);
   });
 
@@ -54,7 +54,7 @@ describe("runMigrations", () => {
     runMigrations(db);
     // Should not throw when querying the new column
     db.run("INSERT INTO servers (name, provider_id, ssh_host_key) VALUES ('test', '123', 'key-data')");
-    const server = db.query("SELECT ssh_host_key FROM servers WHERE provider_id = '123'").get() as any;
+    const server = db.query("SELECT ssh_host_key FROM servers WHERE provider_id = '123'").get() as { ssh_host_key: string };
     expect(server.ssh_host_key).toBe("key-data");
   });
 
@@ -65,7 +65,7 @@ describe("runMigrations", () => {
     db.run("INSERT INTO servers (name, provider_id) VALUES ('s1', 'h1')");
     db.run("INSERT INTO apps (name, domain, git_repo) VALUES ('app1', 'app.com', 'https://x.git')");
     db.run("INSERT INTO deployment_history (app_id, image_tag, git_commit) VALUES (1, 'app:latest', 'abc123')");
-    const dep = db.query("SELECT * FROM deployment_history WHERE app_id = 1").get() as any;
+    const dep = db.query("SELECT * FROM deployment_history WHERE app_id = 1").get() as { image_tag: string; git_commit: string };
     expect(dep.image_tag).toBe("app:latest");
     expect(dep.git_commit).toBe("abc123");
   });
@@ -75,7 +75,7 @@ describe("runMigrations", () => {
     runMigrations(db);
     db.run("INSERT INTO servers (name, provider_id) VALUES ('s1', 'h1')");
     db.run("INSERT INTO apps (name, domain, git_repo, volume_id, volume_mount) VALUES ('app1', 'app.com', 'https://x.git', 'vol-123', '/mnt/data:/data')");
-    const app = db.query("SELECT volume_id, volume_mount FROM apps WHERE name = 'app1'").get() as any;
+    const app = db.query("SELECT volume_id, volume_mount FROM apps WHERE name = 'app1'").get() as { volume_id: string; volume_mount: string };
     expect(app.volume_id).toBe("vol-123");
     expect(app.volume_mount).toBe("/mnt/data:/data");
   });
@@ -84,7 +84,7 @@ describe("runMigrations", () => {
     const db = freshDb();
     runMigrations(db);
     runMigrations(db); // Should not throw
-    const row = db.query("SELECT version FROM schema_version").get() as any;
+    const row = db.query("SELECT version FROM schema_version").get() as { version: number };
     expect(row.version).toBeGreaterThan(0);
   });
 
@@ -95,17 +95,17 @@ describe("runMigrations", () => {
     db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'app1', 'a.com', 'https://x.git')");
     runMigrations(db);
     // After migration 14, server_id/host_port should not exist on apps.
-    const cols = db.query("PRAGMA table_info(apps)").all() as any[];
+    const cols = db.query("PRAGMA table_info(apps)").all() as Array<{ name: string }>;
     const colNames = cols.map((c) => c.name);
     expect(colNames).not.toContain("server_id");
     expect(colNames).not.toContain("host_port");
     // App row preserved.
-    const app = db.query("SELECT id, name FROM apps WHERE id = 1").get() as any;
+    const app = db.query("SELECT id, name FROM apps WHERE id = 1").get() as { id: number; name: string } | null;
     expect(app?.name).toBe("app1");
     // Migration 8 should have created a corresponding replica for the app.
-    const replica = db.query("SELECT * FROM replicas WHERE app_id = 1").get() as any;
+    const replica = db.query("SELECT * FROM replicas WHERE app_id = 1").get() as { server_id: number } | null;
     expect(replica).toBeTruthy();
-    expect(replica.server_id).toBe(1);
+    expect(replica!.server_id).toBe(1);
   });
 
   test("migration 15 adds panel webhook columns and rewrites self-redeploy source", () => {
@@ -119,7 +119,7 @@ describe("runMigrations", () => {
     // Pretend a legacy row got written before migration 15 ran (we can't
     // actually re-rerun the migration, but we can validate the columns + a
     // forward-write of a webhook-source row works post-migration).
-    const cols = db.query("PRAGMA table_info(panel)").all() as any[];
+    const cols = db.query("PRAGMA table_info(panel)").all() as Array<{ name: string }>;
     const colNames = cols.map((c) => c.name);
     expect(colNames).toContain("webhook_secret");
     expect(colNames).toContain("webhook_enabled");
@@ -128,16 +128,16 @@ describe("runMigrations", () => {
     db.run(
       "INSERT INTO panel_deployments (image_tag, git_commit, status, source) VALUES ('p:latest', 'abc', 'deployed', 'webhook')",
     );
-    const row = db.query("SELECT source FROM panel_deployments WHERE git_commit = 'abc'").get() as any;
+    const row = db.query("SELECT source FROM panel_deployments WHERE git_commit = 'abc'").get() as { source: string };
     expect(row.source).toBe("webhook");
   });
 
   test("skips already applied migrations", () => {
     const db = freshDb();
     runMigrations(db);
-    const v1 = (db.query("SELECT version FROM schema_version").get() as any).version;
+    const v1 = (db.query("SELECT version FROM schema_version").get() as { version: number }).version;
     runMigrations(db);
-    const v2 = (db.query("SELECT version FROM schema_version").get() as any).version;
+    const v2 = (db.query("SELECT version FROM schema_version").get() as { version: number }).version;
     expect(v1).toBe(v2);
   });
 });

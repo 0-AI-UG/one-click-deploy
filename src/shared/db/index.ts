@@ -218,3 +218,13 @@ export {
   releaseEngineResourceLocks,
   getResourceLockHolder,
 } from "./orgs.ts";
+export type { SubscriptionRow } from "./subscriptions.ts";
+export {
+  getSubscription,
+  upsertSubscription,
+  updateSubscriptionStatus,
+  applySubscriptionEvent,
+  setSubscriptionCancelAtPeriodEnd,
+  updateSubscriptionSeats,
+  markStripeEventProcessed,
+} from "./subscriptions.ts";

@@ -21,7 +21,7 @@ const unpauseAppOp: OpKindDefinition<UnpauseAppInput> = {
   steps: [unpauseReplicas],
 };
 
-registerOp(unpauseAppOp as OpKindDefinition<any>);
+registerOp(unpauseAppOp);
 
 export default unpauseAppOp;
 export type { UnpauseAppInput };

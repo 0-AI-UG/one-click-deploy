@@ -1,6 +1,7 @@
 import { ArrowLeft } from "lucide-react";
 import { useOperation, cancelOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
 import { Spinner, confirm, Btn } from "../components/ui.tsx";
+import { orgPath } from "../stores/auth.ts";
 
 function fmtTs(ts: string | null): string {
   if (!ts) return "—";
@@ -39,7 +40,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
   return (
     <div className="max-w-4xl mx-auto px-6 py-8">
       <div className="mb-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = "#/engine"; }}><ArrowLeft size={14} /></Btn>
+        <Btn variant="ghost" onClick={() => { window.location.hash = orgPath("/engine"); }}><ArrowLeft size={14} /></Btn>
       </div>
 
       <div className="flex items-start justify-between mb-6">
@@ -105,7 +106,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
             {op.children.map((c) => (
               <a
                 key={c.id}
-                href={`#/engine/op/${c.id}`}
+                href={orgPath(`/engine/op/${c.id}`)}
                 className="border-2 border-fg bg-bg-raised shadow-neo-sm px-3 py-2 flex items-center gap-2 hover:bg-alt transition-colors"
               >
                 <span className="font-mono text-[9px] text-fg-dim">#{c.id}</span>

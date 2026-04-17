@@ -3,6 +3,7 @@ import { post } from "../api/client.ts";
 import { useAuth, login, setTempToken } from "../stores/auth.ts";
 import { showToast, Spinner, Btn } from "../components/ui.tsx";
 import { Shield, ArrowLeft } from "lucide-react";
+import { errMsg } from "../lib/errors.ts";
 
 export function TotpVerifyPage() {
   const { tempToken, token } = useAuth();
@@ -34,8 +35,8 @@ export function TotpVerifyPage() {
       const res = await post("/api/auth/totp/login", { tempToken, code });
       login(res.token, res.user);
       window.location.hash = "#/";
-    } catch (err: any) {
-      showToast(err.message || "Invalid code", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Invalid code", "error");
       setDigits(["", "", "", "", "", ""]);
       refs.current[0]?.focus();
     } finally {
@@ -56,8 +57,8 @@ export function TotpVerifyPage() {
       setTempToken(res.tempToken);
       showToast("2FA disabled. Please set up a new authenticator.", "success");
       window.location.hash = "#/totp-setup";
-    } catch (err: any) {
-      showToast(err.message || "Invalid backup code", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Invalid backup code", "error");
     } finally {
       setLoading(false);
     }

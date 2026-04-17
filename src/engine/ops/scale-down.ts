@@ -120,7 +120,7 @@ const scaleDownOp: OpKindDefinition<ScaleDownInput> = {
   steps: [computeTarget, removeReplicas, syncCaddyStep, gcEmptyServers, recordEvent],
 };
 
-registerOp(scaleDownOp as OpKindDefinition<any>);
+registerOp(scaleDownOp);
 
 export default scaleDownOp;
 export type { ScaleDownInput };

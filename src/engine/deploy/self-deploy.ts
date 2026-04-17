@@ -20,7 +20,7 @@ import path from "path";
 import localDb from "../../shared/db.ts";
 import { sshExec, getSshKeyPath } from "../../shared/remote/index.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [handoff:${context}]`, ...args);
 }
 

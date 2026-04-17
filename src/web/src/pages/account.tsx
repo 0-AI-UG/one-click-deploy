@@ -5,6 +5,7 @@ import { User, Shield, Fingerprint, KeyRound, Trash2, LogOut, GitBranch, LinkIco
 import { startRegistration, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { logout, useAuth, updateUser } from "../stores/auth.ts";
 import type { TotpStatus } from "../types.ts";
+import { errMsg } from "../lib/errors.ts";
 
 type PasskeyInfo = { id: string; name: string; deviceType: string; backedUp: boolean; createdAt: string };
 
@@ -39,9 +40,9 @@ function SecuritySection() {
         showToast("Passkey added", "success");
       }
       refresh();
-    } catch (err: any) {
-      if (err.name !== "NotAllowedError") {
-        showToast(err.message || "Failed to add passkey", "error");
+    } catch (err) {
+      if ((err instanceof Error && err.name !== "NotAllowedError")) {
+        showToast(errMsg(err) || "Failed to add passkey", "error");
       }
     } finally {
       setBusy(false);
@@ -55,8 +56,8 @@ function SecuritySection() {
       await post("/api/auth/webauthn/delete", { credentialId: id });
       showToast("Passkey removed", "success");
       refresh();
-    } catch (err: any) {
-      showToast(err.message || "Failed to remove passkey", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Failed to remove passkey", "error");
     } finally {
       setBusy(false);
     }
@@ -196,8 +197,8 @@ function GitHubSection() {
     try {
       const { url } = await get("/api/auth/github/authorize") as { url: string };
       window.location.href = url;
-    } catch (err: any) {
-      showToast(err.message || "Failed to start GitHub OAuth", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Failed to start GitHub OAuth", "error");
       setBusy(false);
     }
   };
@@ -210,8 +211,8 @@ function GitHubSection() {
       setStatus({ linked: false, githubUsername: "", avatarUrl: "" });
       // Refresh user data
       get("/api/me").then((data: { user?: Parameters<typeof updateUser>[0] }) => { if (data.user) updateUser(data.user); }).catch(() => {});
-    } catch (err: any) {
-      showToast(err.message || "Failed to unlink", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Failed to unlink", "error");
     } finally {
       setBusy(false);
     }

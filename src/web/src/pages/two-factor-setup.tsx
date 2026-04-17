@@ -4,6 +4,7 @@ import { post } from "../api/client.ts";
 import { useAuth, login } from "../stores/auth.ts";
 import { showToast, Spinner, Card } from "../components/ui.tsx";
 import { QrCode, Fingerprint, Copy, Check, ArrowRight, Shield } from "lucide-react";
+import { errMsg } from "../lib/errors.ts";
 
 type Step = "choose" | "totp-qr" | "passkey-register" | "backup";
 
@@ -38,8 +39,8 @@ export function TwoFactorSetupPage() {
       const res = await post("/api/auth/totp/setup-from-login", { tempToken });
       setQrCode(res.qrCode);
       setSecret(res.secret);
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     }
   };
 
@@ -55,11 +56,11 @@ export function TwoFactorSetupPage() {
       setBackupCodes(res.backupCodes);
       login(res.token, res.user);
       setStep("backup");
-    } catch (err: any) {
-      if (err.name === "NotAllowedError") {
+    } catch (err) {
+      if ((err instanceof Error && err.name === "NotAllowedError")) {
         setPasskeyError("Passkey registration was cancelled.");
       } else {
-        setPasskeyError(err.message || "Passkey registration failed");
+        setPasskeyError(errMsg(err) || "Passkey registration failed");
       }
     } finally {
       setLoading(false);
@@ -89,8 +90,8 @@ export function TwoFactorSetupPage() {
       setBackupCodes(res.backupCodes);
       login(res.token, res.user);
       setStep("backup");
-    } catch (err: any) {
-      showToast(err.message || "Invalid code", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Invalid code", "error");
       setDigits(["", "", "", "", "", ""]);
       digitRefs.current[0]?.focus();
     } finally {

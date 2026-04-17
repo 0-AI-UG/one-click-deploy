@@ -154,7 +154,7 @@ const scaleUpOp: OpKindDefinition<ScaleUpInput> = {
   steps: [computeTarget, addReplicas, syncCaddyStep, recordEvent],
 };
 
-registerOp(scaleUpOp as OpKindDefinition<any>);
+registerOp(scaleUpOp);
 
 export default scaleUpOp;
 export type { ScaleUpInput };

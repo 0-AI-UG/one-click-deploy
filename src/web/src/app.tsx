@@ -146,56 +146,65 @@ export function App() {
     return null;
   }
 
-  // Parse route
+  // Redirect bare root to org-scoped dashboard
+  if ((hash === "#/" || hash === "") && currentOrgId) {
+    window.location.hash = `#/orgs/${currentOrgId}`;
+    return null;
+  }
+
+  // Parse route — extract org-scoped path
+  const orgMatch = hash.match(/^#\/orgs\/([^/]+)(\/.*)?$/);
+  const route = orgMatch ? (orgMatch[2] || "/") : hash.replace("#", "");
+
   let content;
-  if (hash === "#/" || hash === "") {
+  if (orgMatch && route === "/") {
     content = <DashboardPage />;
-  } else if (hash === "#/deploy") {
+  } else if (route === "/deploy") {
     content = <DeployPage />;
-  } else if (hash.startsWith("#/deploy/progress")) {
-    const parts = hash.split("/");
+  } else if (route.startsWith("/deploy/progress")) {
+    const parts = route.split("/");
     const opId = parts[3] ? parseInt(parts[3], 10) : null;
     content = <DeployProgressPage opId={opId && !Number.isNaN(opId) ? opId : null} />;
-  } else if (hash.startsWith("#/apps/")) {
-    const appId = parseInt(hash.split("/")[2], 10);
+  } else if (route.startsWith("/apps/")) {
+    const appId = parseInt(route.split("/")[2], 10);
     content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;
-  } else if (hash.startsWith("#/deploy-service")) {
-    const parts = hash.replace("#/deploy-service", "").replace(/^\//, "");
+  } else if (route.startsWith("/deploy-service")) {
+    const parts = route.replace("/deploy-service", "").replace(/^\//, "");
     content = <DeployServicePage preselectedType={parts || undefined} />;
-  } else if (hash.startsWith("#/deploy/service-progress/")) {
-    const opId = parseInt(hash.split("/")[3], 10);
+  } else if (route.startsWith("/deploy/service-progress/")) {
+    const opId = parseInt(route.split("/")[3], 10);
     content = <ServiceDeployProgressPage opId={opId && !Number.isNaN(opId) ? opId : null} />;
-  } else if (hash.startsWith("#/services/")) {
-    const serviceId = parseInt(hash.split("/")[2], 10);
+  } else if (route.startsWith("/services/")) {
+    const serviceId = parseInt(route.split("/")[2], 10);
     content = serviceId ? <ServiceDetailPage serviceId={serviceId} /> : <DashboardPage />;
-  } else if (hash === "#/cli/auth") {
+  } else if (route === "/cli/auth") {
     content = <DeviceAuthPage />;
-  } else if (hash === "#/engine") {
+  } else if (route === "/engine") {
     content = <EnginePage />;
-  } else if (hash.startsWith("#/engine/op/")) {
-    const opId = parseInt(hash.split("/")[3], 10);
+  } else if (route.startsWith("/engine/op/")) {
+    const opId = parseInt(route.split("/")[3], 10);
     content = opId ? <EngineOpDetailPage opId={opId} /> : <EnginePage />;
-  } else if (hash === "#/environments") {
+  } else if (route === "/environments") {
     content = <EnvironmentsPage />;
-  } else if (hash === "#/resources") {
+  } else if (route === "/resources") {
     content = <ResourcesPage />;
-  } else if (hash === "#/account") {
+  } else if (route === "/account") {
     content = <AccountPage />;
-  } else if (hash.startsWith("#/terminal/")) {
-    const parts = hash.split("/");
+  } else if (route.startsWith("/terminal/")) {
+    const parts = route.split("/");
     const kind = parts[2] as "server" | "replica" | "service-instance";
     const id = parseInt(parts[3], 10);
     content = (kind === "server" || kind === "replica" || kind === "service-instance") && id
       ? <TerminalPage kind={kind} id={id} />
       : <DashboardPage />;
-  } else if (hash === "#/create-org") {
+  } else if (route === "/create-org" || hash === "#/create-org") {
     content = <CreateOrgPage />;
-  } else if (hash === "#/org-onboarding") {
+  } else if (route === "/org-onboarding" || hash === "#/org-onboarding") {
     content = <OrgOnboardingPage />;
-  } else if (hash === "#/org-settings") {
+  } else if (route === "/org-settings") {
     content = <OrgSettingsPage />;
-  } else if (hash.startsWith("#/invite/")) {
-    const inviteToken = hash.split("/")[2];
+  } else if (route.startsWith("/invite/")) {
+    const inviteToken = route.split("/")[2];
     content = inviteToken ? <AcceptInvitePage token={inviteToken} /> : <DashboardPage />;
   } else {
     content = <DashboardPage />;

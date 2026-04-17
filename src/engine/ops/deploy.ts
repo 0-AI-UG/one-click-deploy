@@ -759,7 +759,7 @@ const deployOp: OpKindDefinition<DeployInput> = {
   ],
 };
 
-registerOp(deployOp as OpKindDefinition<any>);
+registerOp(deployOp);
 
 export default deployOp;
 export type { DeployInput };

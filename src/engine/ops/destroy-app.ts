@@ -207,7 +207,7 @@ const destroyAppOp: OpKindDefinition<DestroyInput> = {
   ],
 };
 
-registerOp(destroyAppOp as OpKindDefinition<any>);
+registerOp(destroyAppOp);
 
 export default destroyAppOp;
 export type { DestroyInput };

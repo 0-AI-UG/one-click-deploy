@@ -145,7 +145,7 @@ const destroyServiceOp: OpKindDefinition<DestroyServiceInput> = {
   ],
 };
 
-registerOp(destroyServiceOp as OpKindDefinition<any>);
+registerOp(destroyServiceOp);
 
 export default destroyServiceOp;
 export type { DestroyServiceInput };

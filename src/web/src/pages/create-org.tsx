@@ -3,6 +3,7 @@ import { post } from "../api/client.ts";
 import { setOrgs, setCurrentOrg } from "../stores/auth.ts";
 import { showToast } from "../components/ui.tsx";
 import { Spinner } from "../components/ui.tsx";
+import { errMsg } from "../lib/errors.ts";
 
 export function CreateOrgPage() {
   const [name, setName] = useState("");
@@ -27,8 +28,8 @@ export function CreateOrgPage() {
       setOrgs([{ ...org, role: "owner" }]);
       setCurrentOrg(org.id);
       window.location.hash = "#/org-onboarding";
-    } catch (err: any) {
-      showToast(err.message || "Failed to create organization", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Failed to create organization", "error");
     } finally {
       setLoading(false);
     }

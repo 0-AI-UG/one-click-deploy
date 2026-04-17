@@ -4,9 +4,11 @@ import { get, post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft } from "lucide-react";
+import { orgPath } from "../../stores/auth.ts";
 import { Sparkline } from "./shared.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, MetricSample, ServerData } from "../../types.ts";
+import { errMsg } from "../../lib/errors.ts";
 
 interface OverviewTabProps {
   app: AppData;
@@ -36,8 +38,8 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
         throw new Error("Migration failed");
       }
       setReplicas(await get(`/api/apps/${appId}/metrics`));
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setMigratingId(null);
     }
@@ -58,7 +60,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
             {app.volume_id && <div className="flex justify-between"><span className="text-muted">Volume</span><span className="text-fg">{app.volume_mount}</span></div>}
             {app.auth_password && <div className="flex justify-between"><span className="text-muted">Auth</span><span className="text-accent-amber font-bold">Password protected</span></div>}
             {app.deployed_by_username && <div className="flex justify-between"><span className="text-muted">Last deployed by</span><span className="text-fg">{app.deployed_by_username}</span></div>}
-            {app.environment_name && <div className="flex justify-between"><span className="text-muted">Environment</span><a href="#/environments" className="text-fg font-bold hover:underline">{app.environment_name}</a></div>}
+            {app.environment_name && <div className="flex justify-between"><span className="text-muted">Environment</span><a href={orgPath("/environments")} className="text-fg font-bold hover:underline">{app.environment_name}</a></div>}
           </div>
         </Card>
         <Card className="p-4 space-y-3">
@@ -119,7 +121,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
                   <td className="py-2 px-3">
                     <div className="flex items-center gap-1">
                       <PermissionGate permission="terminal.access">
-                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/replica/${r.id}`; }}>
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = orgPath(`/terminal/replica/${r.id}`); }}>
                           <Terminal size={12} /> Shell
                         </Btn>
                       </PermissionGate>

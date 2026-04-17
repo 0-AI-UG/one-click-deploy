@@ -5,7 +5,9 @@ import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Layers, Plus, Trash2, ChevronDown, ChevronRight, Key, X } from "lucide-react";
+import { orgPath } from "../stores/auth.ts";
 import type { EnvironmentData, AppData } from "../types.ts";
+import { errMsg } from "../lib/errors.ts";
 
 type AttachedApp = { id: number; name: string; status: string; domain: string };
 
@@ -88,8 +90,8 @@ export function EnvironmentsPage() {
       }
       setExpanded(null);
       load();
-    } catch (err: any) {
-      showToast(err.message || "Failed to save", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Failed to save", "error");
     } finally {
       setLoading(false);
     }
@@ -100,8 +102,8 @@ export function EnvironmentsPage() {
       await post(`/api/environments/${envId}/apps`, { app_id: appId });
       showToast("App attached — redeploying", "success");
       load();
-    } catch (err: any) {
-      showToast(err.message || "Failed to attach", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Failed to attach", "error");
     }
   };
 
@@ -110,8 +112,8 @@ export function EnvironmentsPage() {
       await post(`/api/environments/${envId}/apps/detach`, { app_id: appId });
       showToast("App detached", "success");
       load();
-    } catch (err: any) {
-      showToast(err.message || "Failed to detach", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Failed to detach", "error");
     }
   };
 
@@ -204,8 +206,8 @@ export function EnvironmentsPage() {
                             try {
                               await del(`/api/environments/${env.id}`);
                               load();
-                            } catch (err: any) {
-                              showToast(err.message || "Failed to delete", "error");
+                            } catch (err) {
+                              showToast(errMsg(err) || "Failed to delete", "error");
                             }
                           }
                         }}
@@ -221,7 +223,7 @@ export function EnvironmentsPage() {
                         <span className="font-mono text-[9px] text-muted uppercase">Apps:</span>
                         {apps.map((a) => (
                           <span key={a.id} className="inline-flex items-center gap-1 font-mono text-[9px] px-1.5 py-0.5 bg-alt text-fg">
-                            <a href={`#/apps/${a.id}`} className="hover:underline">{a.name}</a>
+                            <a href={orgPath(`/apps/${a.id}`)} className="hover:underline">{a.name}</a>
                             <button
                               onClick={() => detachApp(env.id, a.id)}
                               className="text-muted hover:text-accent-red transition-colors"

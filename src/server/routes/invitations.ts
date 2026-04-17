@@ -1,5 +1,6 @@
 import { authenticateRequest } from "../lib/auth.ts";
 import * as db from "../../shared/db.ts";
+import { syncSubscriptionSeats } from "./billing.ts";
 
 // GET /api/invitations/:token — get invitation details (public)
 export async function handleGetInvitation(request: Request, token: string): Promise<Response> {
@@ -28,5 +29,8 @@ export async function handleAcceptInvitation(request: Request, token: string): P
   }
   db.insertOrgMember(invitation.org_id, auth.userId, invitation.role);
   db.deleteInvitation(invitation.id);
+  syncSubscriptionSeats(invitation.org_id).catch((err) => {
+    console.error(`[billing] seat sync failed after invitation accept for org ${invitation.org_id}:`, err);
+  });
   return Response.json({ ok: true, org_id: invitation.org_id });
 }

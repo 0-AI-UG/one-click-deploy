@@ -9,7 +9,9 @@ import {
   RotateCcw, Pause, Play, Trash2, Server as ServerIcon,
   Link2, Unlink, ScrollText, ArrowLeft, RefreshCw, Terminal,
 } from "lucide-react";
+import { errMsg } from "../lib/errors.ts";
 import type { ServiceData, AppData, ServiceInstance, LinkedApp } from "../types.ts";
+import { orgPath } from "../stores/auth.ts";
 
 export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const [service, setService] = useState<ServiceData | null>(null);
@@ -31,8 +33,8 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
       ]);
       setService(svc);
       setApps(appList);
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setLoading(false);
     }
@@ -42,8 +44,8 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
     try {
       const data = await get(`/api/services/${serviceId}/logs?tail=${tail}`);
       setLogs(data.logs || "No logs available");
-    } catch (err: any) {
-      setLogs(err.message);
+    } catch (err) {
+      setLogs(errMsg(err));
     }
   };
 
@@ -66,12 +68,12 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
         showToast(`${label} started`, "success");
       }
       if (act === "delete") {
-        window.location.hash = "#/";
+        window.location.hash = orgPath("/");
         return;
       }
       load();
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setActionLoading(null);
     }
@@ -85,8 +87,8 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
       showToast("Service linked to app", "success");
       setLinkAppId("");
       load();
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setActionLoading(null);
     }
@@ -98,8 +100,8 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
       await del(`/api/services/${serviceId}/link/${appId}`);
       showToast("Service unlinked", "success");
       load();
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setActionLoading(null);
     }
@@ -122,7 +124,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
     <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = "#/"; }}><ArrowLeft size={14} /></Btn>
+        <Btn variant="ghost" onClick={() => { window.location.hash = orgPath("/"); }}><ArrowLeft size={14} /></Btn>
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="font-mono font-bold text-sm text-fg uppercase">{service.name}</h1>
@@ -290,7 +292,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                     <td className="py-2 px-3 text-fg-dim">{inst.memory_percent?.toFixed(1)}%</td>
                     <td className="py-2 px-3">
                       <PermissionGate permission="terminal.access">
-                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/service-instance/${inst.id}`; }}>
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = orgPath(`/terminal/service-instance/${inst.id}`); }}>
                           <Terminal size={12} /> Shell
                         </Btn>
                       </PermissionGate>
@@ -313,7 +315,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                     <div key={link.id} className="px-3 py-2 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Link2 size={12} className="text-accent-blue" />
-                        <a href={`#/apps/${link.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">
+                        <a href={orgPath(`/apps/${link.id}`)} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">
                           {link.name}
                         </a>
                         <span className="font-mono text-[8px] text-muted uppercase">prefix: {link.env_prefix}</span>

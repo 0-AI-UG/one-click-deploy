@@ -160,7 +160,7 @@ const destroyServerOp: OpKindDefinition<DestroyServerInput> = {
   ],
 };
 
-registerOp(destroyServerOp as OpKindDefinition<any>);
+registerOp(destroyServerOp);
 
 export default destroyServerOp;
 export type { DestroyServerInput };

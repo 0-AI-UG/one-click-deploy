@@ -13,6 +13,9 @@ export function configureClient(opts: {
   onUnauthorized = opts.onUnauthorized;
 }
 
+// Default `any` keeps the ergonomic `await get("/x").then(res => res.field)`
+// pattern across ~30 call sites. Callers that care pass an explicit `<T>`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function apiFetch<T = any>(
   path: string,
   options: RequestInit = {},
@@ -51,14 +54,18 @@ export async function apiFetch<T = any>(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function api(method: string, path: string, body?: unknown): Promise<any> {
-  return apiFetch(path, {
+export function api<T = any>(method: string, path: string, body?: unknown): Promise<T> {
+  return apiFetch<T>(path, {
     method,
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
 }
 
-export const get = (path: string) => api("GET", path);
-export const post = (path: string, body?: unknown) => api("POST", path, body);
-export const put = (path: string, body?: unknown) => api("PUT", path, body);
-export const del = (path: string) => api("DELETE", path);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const get = <T = any>(path: string) => api<T>("GET", path);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const post = <T = any>(path: string, body?: unknown) => api<T>("POST", path, body);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const put = <T = any>(path: string, body?: unknown) => api<T>("PUT", path, body);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const del = <T = any>(path: string) => api<T>("DELETE", path);

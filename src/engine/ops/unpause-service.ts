@@ -39,7 +39,7 @@ const unpauseServiceOp: OpKindDefinition<UnpauseServiceInput> = {
   steps: [unpauseAllInstances],
 };
 
-registerOp(unpauseServiceOp as OpKindDefinition<any>);
+registerOp(unpauseServiceOp);
 
 export default unpauseServiceOp;
 export type { UnpauseServiceInput };

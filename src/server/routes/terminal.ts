@@ -2,7 +2,7 @@ import { jwtVerify } from "jose";
 import * as db from "../../shared/db.ts";
 import { spawnSshPty, type PtySession } from "../../shared/remote/index.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [terminal:${context}]`, ...args);
 }
 

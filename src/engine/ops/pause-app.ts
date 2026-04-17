@@ -21,7 +21,7 @@ const pauseAppOp: OpKindDefinition<PauseAppInput> = {
   steps: [pauseReplicas],
 };
 
-registerOp(pauseAppOp as OpKindDefinition<any>);
+registerOp(pauseAppOp);
 
 export default pauseAppOp;
 export type { PauseAppInput };

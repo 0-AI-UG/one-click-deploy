@@ -5,7 +5,7 @@ import { sshExec } from "../shared/remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "./network.ts";
 import type { ProgressFn, Server } from "./scale/types.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [provision:${context}]`, ...args);
 }
 

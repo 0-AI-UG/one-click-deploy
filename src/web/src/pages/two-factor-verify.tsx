@@ -4,6 +4,7 @@ import { post } from "../api/client.ts";
 import { useAuth, login, setTempToken } from "../stores/auth.ts";
 import { showToast, Spinner, Btn } from "../components/ui.tsx";
 import { Shield, Fingerprint, KeyRound, ArrowLeft } from "lucide-react";
+import { errMsg } from "../lib/errors.ts";
 
 type Mode = "choose" | "webauthn" | "totp" | "recover";
 
@@ -37,11 +38,11 @@ export function TwoFactorVerifyPage() {
       const res = await post("/api/auth/webauthn/login-verify", { tempToken, credential });
       login(res.token, res.user);
       window.location.hash = "#/";
-    } catch (err: any) {
-      if (err.name === "NotAllowedError") {
+    } catch (err) {
+      if ((err instanceof Error && err.name === "NotAllowedError")) {
         setWebauthnError("Passkey verification was cancelled.");
       } else {
-        setWebauthnError(err.message || "Passkey verification failed");
+        setWebauthnError(errMsg(err) || "Passkey verification failed");
       }
     } finally {
       setLoading(false);
@@ -70,8 +71,8 @@ export function TwoFactorVerifyPage() {
       const res = await post("/api/auth/totp/login", { tempToken, code });
       login(res.token, res.user);
       window.location.hash = "#/";
-    } catch (err: any) {
-      showToast(err.message || "Invalid code", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Invalid code", "error");
       setDigits(["", "", "", "", "", ""]);
       refs.current[0]?.focus();
     } finally {
@@ -98,8 +99,8 @@ export function TwoFactorVerifyPage() {
         showToast("2FA reset. Please set up a new method.", "success");
         window.location.hash = "#/2fa-setup";
       }
-    } catch (err: any) {
-      showToast(err.message || "Invalid backup code", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Invalid backup code", "error");
     } finally {
       setLoading(false);
     }

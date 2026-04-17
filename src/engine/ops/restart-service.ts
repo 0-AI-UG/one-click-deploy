@@ -42,7 +42,7 @@ const restartServiceOp: OpKindDefinition<RestartServiceInput> = {
   steps: [restartAllInstances],
 };
 
-registerOp(restartServiceOp as OpKindDefinition<any>);
+registerOp(restartServiceOp);
 
 export default restartServiceOp;
 export type { RestartServiceInput };

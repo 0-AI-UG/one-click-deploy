@@ -185,7 +185,7 @@ export async function handleCancelOperation(request: Request, id: number): Promi
     const ctx = await requireOrgPermission(request, "servers.view");
     const op = getOperation(id);
     if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
-    // Org owners/admins or the user who triggered the op can cancel it.
+    // Org owners or the user who triggered the op can cancel it.
     if (ctx.orgRole === "member" && op.triggered_by !== ctx.userId) {
       throw new PermissionError("Cannot cancel another user's operation");
     }

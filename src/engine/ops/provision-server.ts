@@ -210,7 +210,7 @@ const provisionServerOp: OpKindDefinition<ProvisionInput> = {
   ],
 };
 
-registerOp(provisionServerOp as OpKindDefinition<any>);
+registerOp(provisionServerOp);
 
 export default provisionServerOp;
 export type { ProvisionInput };

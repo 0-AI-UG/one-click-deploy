@@ -3,6 +3,7 @@ import { post } from "../api/client.ts";
 import { showToast, Spinner, Btn } from "../components/ui.tsx";
 import { KeyRound, ArrowRight, Fingerprint, ArrowLeft } from "lucide-react";
 import { startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/browser";
+import { errMsg } from "../lib/errors.ts";
 
 type Mode = "totp" | "passkey";
 
@@ -40,8 +41,8 @@ export function PasswordResetPage() {
       });
       showToast("Password reset. You can now sign in.", "success");
       window.location.hash = "#/login";
-    } catch (err: any) {
-      showToast(err.message || "Password reset failed", "error");
+    } catch (err) {
+      showToast(errMsg(err) || "Password reset failed", "error");
     } finally {
       setLoading(false);
     }
@@ -66,11 +67,11 @@ export function PasswordResetPage() {
       setPasskeyDone(true);
       showToast("Password reset. You can now sign in.", "success");
       window.location.hash = "#/login";
-    } catch (err: any) {
-      if (err.name === "NotAllowedError") {
+    } catch (err) {
+      if ((err instanceof Error && err.name === "NotAllowedError")) {
         showToast("Passkey verification was cancelled.", "error");
       } else {
-        showToast(err.message || "Password reset failed", "error");
+        showToast(errMsg(err) || "Password reset failed", "error");
       }
     } finally {
       setLoading(false);

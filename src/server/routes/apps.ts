@@ -8,6 +8,7 @@ import { getComposeLogs, getContainerLogs } from "../../shared/remote/index.ts";
 import { validateAppName } from "../../shared/validate.ts";
 import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
+import { canCreateApp, canRedeployApp } from "./billing.ts";
 
 /** Enrich app row for API responses — adds environment name, drops raw env_vars. */
 function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
@@ -42,9 +43,9 @@ export async function handleIntrospectRepo(request: Request): Promise<Response> 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "servers.view");
-    const result = getServersWithApps(ctx.orgId).map((s: any) => ({
+    const result = getServersWithApps(ctx.orgId).map((s) => ({
       ...s,
-      apps: (s.apps || []).map((a: any) => enrichAppForResponse(a)),
+      apps: (s.apps || []).map((a) => enrichAppForResponse(a)),
     }));
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
@@ -93,6 +94,9 @@ export async function handleGetApps(request: Request): Promise<Response> {
 export async function handleDeploy(request: Request): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "apps.deploy");
+    if (!canCreateApp(ctx.orgId)) {
+      return Response.json({ ok: false, error: "Billing required", code: "BILLING_REQUIRED" }, { status: 402, headers: corsHeaders });
+    }
     const req = await request.json();
     if (!req?.app_name || typeof req.app_name !== "string") {
       return Response.json({ ok: false, error: "app_name is required" }, { status: 400, headers: corsHeaders });
@@ -182,6 +186,9 @@ export async function handleUnpauseApp(request: Request, appId: number): Promise
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "apps.redeploy");
+    if (!canRedeployApp(ctx.orgId)) {
+      return Response.json({ ok: false, error: "Billing required", code: "BILLING_REQUIRED" }, { status: 402, headers: corsHeaders });
+    }
     const body = (await request.json().catch(() => ({}))) as {
       auth_password?: string | null;
       container_port?: number;

@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
-import { useAuth, setOrgs, setCurrentOrg } from "../stores/auth.ts";
+import { useAuth, setOrgs, setCurrentOrg, orgPath } from "../stores/auth.ts";
 import { showToast, Spinner } from "../components/ui.tsx";
+import { errMsg } from "../lib/errors.ts";
 
 export function AcceptInvitePage({ token }: { token: string }) {
   const { token: authToken } = useAuth();
@@ -12,7 +13,7 @@ export function AcceptInvitePage({ token }: { token: string }) {
 
   useEffect(() => {
     get(`/api/invitations/${token}`).then(setInvitation).catch((err) => {
-      setError(err.message);
+      setError(errMsg(err));
     }).finally(() => setLoading(false));
   }, [token]);
 
@@ -29,9 +30,9 @@ export function AcceptInvitePage({ token }: { token: string }) {
       setOrgs(orgs);
       setCurrentOrg(res.org_id);
       showToast("Joined organization!");
-      window.location.hash = "#/";
-    } catch (err: any) {
-      showToast(err.message, "error");
+      window.location.hash = orgPath("/");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally { setAccepting(false); }
   };
 
@@ -40,7 +41,7 @@ export function AcceptInvitePage({ token }: { token: string }) {
     <div className="min-h-screen flex items-center justify-center bg-bg p-4">
       <div className="bg-white border-2 border-fg shadow-neo p-8 max-w-sm text-center">
         <p className="font-mono text-sm text-fg mb-4">{error}</p>
-        <a href="#/" className="font-mono text-xs text-fg underline">Go to Dashboard</a>
+        <a href={orgPath("/")} className="font-mono text-xs text-fg underline">Go to Dashboard</a>
       </div>
     </div>
   );

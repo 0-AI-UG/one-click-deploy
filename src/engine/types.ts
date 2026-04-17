@@ -29,9 +29,18 @@ export type OpKindDefinition<Input = unknown> = {
   kind: string;
   label: string;
   resourceKeys: (input: Input) => string[];
+  // Out is invariant on Step (appears in both run's return and compensate's
+  // input), so we use `any` here to hold heterogeneous steps in one array.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   steps: Step<Input, any>[];
 };
 
+// Heterogeneous registry entry. Individual ops are parameterised by their own
+// Input shape, but the registry and step runner dispatch by kind and need a
+// single container type. Input appears in both covariant (step.run's ctx) and
+// contravariant (resourceKeys) positions, so no sound narrow type works; this
+// is the canonical place where `any` is correct.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyOpKind = OpKindDefinition<any>;
 
 export type Operation = OperationRow;

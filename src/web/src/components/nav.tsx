@@ -1,15 +1,15 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
-import { useAuth, logout } from "../stores/auth.ts";
+import { useAuth, logout, orgPath } from "../stores/auth.ts";
 import { OrgSwitcher } from "./org-switcher.tsx";
 import { Server, Rocket, HardDrive, User, LogOut, Terminal, Layers, TerminalSquare, Check, Cpu, Menu } from "lucide-react";
 
-const navItems = [
-  { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
-  { hash: "#/deploy", label: "Deploy", icon: Rocket, match: /^#\/deploy/ },
-  { hash: "#/environments", label: "Env", icon: Layers, match: /^#\/environments/ },
-  { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
-  { hash: "#/engine", label: "Engine", icon: Cpu, match: /^#\/engine/ },
-  { hash: "#/account", label: "Account", icon: User, match: /^#\/account/ },
+const navItemDefs = [
+  { path: "/", label: "Dashboard", icon: Server, matchSuffix: /\/$/ },
+  { path: "/deploy", label: "Deploy", icon: Rocket, matchSuffix: /\/deploy/ },
+  { path: "/environments", label: "Env", icon: Layers, matchSuffix: /\/environments/ },
+  { path: "/resources", label: "Resources", icon: HardDrive, matchSuffix: /\/resources/ },
+  { path: "/engine", label: "Engine", icon: Cpu, matchSuffix: /\/engine/ },
+  { path: "/account", label: "Account", icon: User, matchSuffix: /\/account/ },
 ];
 
 function CliCopyButton() {
@@ -56,13 +56,14 @@ function MobileMenu({ hash }: { hash: string }) {
       </button>
       {open && (
         <div className="absolute top-full right-0 mt-1 w-56 bg-white border-2 border-fg shadow-neo z-50">
-          {navItems.map((item) => {
-            const active = item.match.test(hash);
+          {navItemDefs.map((item) => {
+            const href = orgPath(item.path);
+            const active = item.matchSuffix.test(hash);
             const Icon = item.icon;
             return (
               <a
-                key={item.hash}
-                href={item.hash}
+                key={item.path}
+                href={href}
                 onClick={() => setOpen(false)}
                 className={`flex items-center gap-2 px-3 py-2 font-mono text-xs font-bold uppercase tracking-wider transition-all ${
                   active ? "bg-fg text-accent" : "text-fg/70 hover:bg-fg/5"
@@ -96,7 +97,7 @@ function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; 
   return (
     <>
       <div className="flex items-center gap-5 min-w-0">
-        <a href="#/" className="flex items-center gap-2 text-fg font-mono font-bold text-sm tracking-wider shrink-0">
+        <a href={orgPath("/")} className="flex items-center gap-2 text-fg font-mono font-bold text-sm tracking-wider shrink-0">
           <Terminal size={18} />
           <span>OCD</span>
           <span className="font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5">v0.4</span>
@@ -105,13 +106,14 @@ function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; 
         <OrgSwitcher />
         <div className="h-5 w-0.5 bg-fg/30" />
         <div className="flex items-center gap-1">
-          {navItems.map((item) => {
-            const active = item.match.test(hash);
+          {navItemDefs.map((item) => {
+            const href = orgPath(item.path);
+            const active = item.matchSuffix.test(hash);
             const Icon = item.icon;
             return (
               <a
-                key={item.hash}
-                href={item.hash}
+                key={item.path}
+                href={href}
                 className={`flex items-center gap-1.5 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider transition-all ${
                   active ? "bg-fg text-accent" : "text-fg/70 hover:text-fg hover:bg-fg/10"
                 }`}
@@ -145,7 +147,7 @@ function CompactNav({ hash }: { hash: string }) {
   return (
     <>
       <div className="flex items-center gap-3 min-w-0">
-        <a href="#/" className="flex items-center gap-2 text-fg font-mono font-bold text-sm tracking-wider shrink-0">
+        <a href={orgPath("/")} className="flex items-center gap-2 text-fg font-mono font-bold text-sm tracking-wider shrink-0">
           <Terminal size={18} />
           <span>OCD</span>
           <span className="font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5">v0.4</span>

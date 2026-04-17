@@ -108,6 +108,11 @@ export function getCurrentOrgId(): string | null {
   return state.currentOrgId;
 }
 
+export function orgPath(path: string): string {
+  const orgId = state.currentOrgId;
+  return orgId ? `#/orgs/${orgId}${path}` : `#${path}`;
+}
+
 export function useAuth() {
   return useSyncExternalStore(
     (cb) => {
@@ -118,13 +123,22 @@ export function useAuth() {
   );
 }
 
+function currentOrgRole(s: AuthState): string | null {
+  if (!s.currentOrgId) return null;
+  return s.orgs.find((o) => o.id === s.currentOrgId)?.role ?? null;
+}
+
 export function hasPermission(permission: string): boolean {
   if (!state.user) return false;
+  const role = currentOrgRole(state);
+  if (role === "owner") return true;
   return state.user.permissions.includes(permission);
 }
 
 export function useHasPermission(permission: string): boolean {
   const auth = useAuth();
   if (!auth.user) return false;
+  const role = currentOrgRole(auth);
+  if (role === "owner") return true;
   return auth.user.permissions.includes(permission);
 }

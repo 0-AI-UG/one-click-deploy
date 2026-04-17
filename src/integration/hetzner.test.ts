@@ -101,7 +101,7 @@ d("hetzner integration (requires RUN_INTEGRATION=1 + HCLOUD_TOKEN)", () => {
     // Delete the per-suite SSH key (firewall + network are project-shared — leave them).
     try {
       const { hetznerApi } = await import("../engine/hetzner/api.ts");
-      const list = await hetznerApi(`/ssh_keys?name=${encodeURIComponent(sshKeyName)}`) as any;
+      const list = await hetznerApi(`/ssh_keys?name=${encodeURIComponent(sshKeyName)}`) as { ssh_keys?: Array<{ id: number | string }> };
       for (const k of list.ssh_keys ?? []) {
         await hetznerApi(`/ssh_keys/${k.id}`, { method: "DELETE" });
       }

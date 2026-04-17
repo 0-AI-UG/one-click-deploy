@@ -6,7 +6,7 @@ export type OrgContext = {
   userId: string;
   username: string;
   orgId: string;
-  orgRole: string; // 'owner' | 'admin' | 'member'
+  orgRole: string; // 'owner' | 'member'
 };
 
 /**
@@ -27,23 +27,23 @@ export async function requireOrgContext(request: Request): Promise<OrgContext> {
 }
 
 /**
- * Require org admin (owner or admin role).
+ * Require org owner role.
  */
-export async function requireOrgAdmin(request: Request): Promise<OrgContext> {
+export async function requireOrgOwner(request: Request): Promise<OrgContext> {
   const ctx = await requireOrgContext(request);
-  if (ctx.orgRole !== "owner" && ctx.orgRole !== "admin") {
-    throw new ForbiddenError("Org admin access required");
+  if (ctx.orgRole !== "owner") {
+    throw new ForbiddenError("Org owner access required");
   }
   return ctx;
 }
 
 /**
  * Require a specific org-scoped permission.
- * Org owners and admins bypass permission checks.
+ * Org owners bypass permission checks.
  */
 export async function requireOrgPermission(request: Request, permission: string): Promise<OrgContext> {
   const ctx = await requireOrgContext(request);
-  if (ctx.orgRole === "owner" || ctx.orgRole === "admin") return ctx;
+  if (ctx.orgRole === "owner") return ctx;
   if (!dbHasOrgPermission(ctx.orgId, ctx.userId, permission)) {
     throw new ForbiddenError(`Missing permission: ${permission}`);
   }

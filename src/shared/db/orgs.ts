@@ -12,7 +12,7 @@ export type OrgMembershipRow = {
   id: number;
   org_id: string;
   user_id: string;
-  role: string; // 'owner' | 'admin' | 'member'
+  role: string; // 'owner' | 'member'
   created_at: string;
 };
 

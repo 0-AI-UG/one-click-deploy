@@ -7,7 +7,9 @@ import { NeoSelect } from "../components/neo-select.tsx";
 import { Sparkline } from "./app-detail/shared.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 import { HardDrive, Server, Database, Trash2, RefreshCw, Terminal, Plus } from "lucide-react";
+import { orgPath } from "../stores/auth.ts";
 import type { ResourcesData, ServerMetricSample } from "../types.ts";
+import { errMsg } from "../lib/errors.ts";
 
 export function ResourcesPage() {
   const [data, setData] = useState<ResourcesData | null>(null);
@@ -69,8 +71,8 @@ export function ResourcesPage() {
       setCreateLocation("");
       setCreateName("");
       load();
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setCreating(false);
       setCreateProgress("");
@@ -85,8 +87,8 @@ export function ResourcesPage() {
       ]);
       setData(resources);
       setMetricsHistory(history);
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setLoading(false);
     }
@@ -111,8 +113,8 @@ export function ResourcesPage() {
       } else {
         showToast(res.error || "Failed to delete", "error");
       }
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMsg(err), "error");
     } finally {
       setDeleting(null);
     }
@@ -229,7 +231,7 @@ export function ResourcesPage() {
                   <td className="py-2 px-3">
                     <div className="flex items-center gap-1">
                       <PermissionGate permission="terminal.access">
-                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/server/${s.id}`; }}>
+                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = orgPath(`/terminal/server/${s.id}`); }}>
                           <Terminal size={11} /> Shell
                         </Btn>
                       </PermissionGate>

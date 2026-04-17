@@ -11,22 +11,28 @@ const fakeRunner = mock((appId: number, sha: string) => {
   void appId; void sha;
   return { opId: 1 };
 });
+type EnqueueArgs = {
+  kind: string;
+  input: { appId: number };
+  triggeredBy: string;
+  idempotencyKey?: string;
+};
 mock.module("../ipc/enqueue.ts", () => ({
-  enqueue: (args: { kind: string; input: { appId: number }; triggeredBy: string }) => {
+  enqueue: (args: EnqueueArgs) => {
     if (args.kind === "redeploy") {
       // triggeredBy is `github:<delivery-id>`; sha isn't here directly but the
       // test only checks appId + a substring. Extract the short sha from the
       // idempotency_key if present.
-      const sha = (args as any).idempotencyKey?.split(":")[2]?.slice(0, 7) || "";
+      const sha = args.idempotencyKey?.split(":")[2]?.slice(0, 7) || "";
       fakeRunner(args.input.appId, sha);
     }
     return { opId: 1 };
   },
 }));
 
-const fakePanelRunner = mock(async (_opts?: any) => ({ ok: true }));
+const fakePanelRunner = mock(async (_opts?: unknown) => ({ ok: true }));
 mock.module("../../engine/deploy/panel.ts", () => ({
-  redeployPanel: (_p: any, opts: any) => fakePanelRunner(opts),
+  redeployPanel: (_p: unknown, opts: unknown) => fakePanelRunner(opts),
 }));
 
 import * as db from "../../shared/db.ts";
@@ -68,7 +74,9 @@ function makeApp(secret: string, branch = "main") {
 
 function setupPanel(secret: string) {
   // Wipe any prior panel + server rows so each test starts clean.
-  try { (db as any).deletePanel?.(); } catch { /* deletePanel may not exist in all DB versions */ }
+  try {
+    (db as { deletePanel?: () => void }).deletePanel?.();
+  } catch { /* deletePanel may not exist in all DB versions */ }
   // Insert a fresh server + panel pointing at it.
   const srv = db.insertServer({
     name: `panel-host-${Date.now()}`,

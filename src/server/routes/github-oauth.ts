@@ -5,7 +5,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore } from "../../shared/secret-store.ts";
 
-function log(context: string, ...args: any[]) {
+function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [github-oauth:${context}]`, ...args);
 }
 

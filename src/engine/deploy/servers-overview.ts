@@ -1,15 +1,8 @@
 import type { Server } from "../../shared/rpc.ts";
 import * as db from "../../shared/db.ts";
+import type { AppRow } from "../../shared/db/apps.ts";
 
-type DbApp = {
-  id: number;
-  name: string;
-  domain: string;
-  git_repo: string;
-  container_port: number;
-  env_vars: string;
-  status: string;
-  deploy_mode: string;
+type DbApp = AppRow & {
   sleeping_server_id: number | null;
   sleeping_host_port: number | null;
   deployed_by: string | null;
@@ -37,6 +30,18 @@ type DbServiceLink = {
   app_name: string;
 };
 
+export type ServerWithApps = Server & {
+  apps: Array<DbApp & {
+    host_port: number;
+    servers: number[];
+    deployed_by_username: string | null;
+  }>;
+  services: Array<DbService & {
+    instance_count: number;
+    linked_apps: Array<{ id: number; name: string }>;
+  }>;
+};
+
 /**
  * Aggregated view used by the dashboard and /api/servers. Per-server listing
  * of apps (active + sleeping) and services; enriched with host_port + the
@@ -44,7 +49,7 @@ type DbServiceLink = {
  *
  * Kept here for legacy callers; safe to move if this file shrinks further.
  */
-export function getServersWithApps(orgId = ""): any[] {
+export function getServersWithApps(orgId = ""): ServerWithApps[] {
   const servers = db.getServers(orgId) as Server[];
   const allAppsGlobal = db.getApps(orgId) as DbApp[];
   return servers.map((s) => {

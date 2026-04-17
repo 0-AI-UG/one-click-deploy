@@ -40,9 +40,9 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
 
   // Fetch available servers for the server picker
   useEffect(() => {
-    get("/api/resources")
-      .then((res: any) => {
-        setServers((res.servers || []).filter((s: any) => s.status === "ready"));
+    get<{ servers?: ResourceServer[] }>("/api/resources")
+      .then((res) => {
+        setServers((res.servers || []).filter((s) => s.status === "ready"));
       })
       .catch(() => {});
   }, []);

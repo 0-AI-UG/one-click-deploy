@@ -80,7 +80,7 @@ const wakeOp: OpKindDefinition<WakeInput> = {
   steps: [checkSleeping, startContainers, syncCaddyStep, markAwake],
 };
 
-registerOp(wakeOp as OpKindDefinition<any>);
+registerOp(wakeOp);
 
 export default wakeOp;
 export type { WakeInput };

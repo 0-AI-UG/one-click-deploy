@@ -106,7 +106,7 @@ const swapContainerToTarget: Step<RollbackInput, SwapOut> = {
         dockerfilePath = findResult.stdout.trim();
         if (!dockerfilePath) throw new Error("No Dockerfile found in repository for rollback");
       }
-      const dockerContext = (app as any).docker_context || ".";
+      const dockerContext = app.docker_context || ".";
       const buildCmd = `cd ${appDir} && docker build -t ${app.name}:latest -f ${dockerfilePath} ${dockerContext}`;
       const buildResult = await sshExec(server.ipv4, asUser(buildCmd), hostKey);
       if (buildResult.exitCode !== 0) {
@@ -199,7 +199,7 @@ const rollbackOp: OpKindDefinition<RollbackInput> = {
   ],
 };
 
-registerOp(rollbackOp as OpKindDefinition<any>);
+registerOp(rollbackOp);
 
 export default rollbackOp;
 export type { RollbackInput };

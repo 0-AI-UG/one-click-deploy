@@ -1215,10 +1215,46 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN git_branch TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 46,
+    description: "Add subscriptions table for Stripe billing",
+    up: (db) => {
+      db.run(`CREATE TABLE IF NOT EXISTS subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id TEXT NOT NULL UNIQUE,
+        stripe_customer_id TEXT NOT NULL DEFAULT '',
+        stripe_subscription_id TEXT NOT NULL DEFAULT '',
+        stripe_item_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'none',
+        seat_count INTEGER NOT NULL DEFAULT 0,
+        current_period_end TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+    },
+  },
+  {
+    version: 47,
+    description: "Stripe webhook idempotency + cancel-at-period-end + last event timestamp",
+    up: (db) => {
+      // Dedup table: Stripe retries webhook deliveries; processing the same
+      // event twice can cause duplicated side effects. Key on event.id.
+      db.run(`CREATE TABLE IF NOT EXISTS stripe_processed_events (
+        event_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL DEFAULT '',
+        processed_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      // Track cancel_at_period_end so the UI can show "canceling" distinctly
+      // from "active", and keep a last-seen event.created to reject stale
+      // out-of-order subscription.updated deliveries.
+      db.run("ALTER TABLE subscriptions ADD COLUMN cancel_at_period_end INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE subscriptions ADD COLUMN last_event_at INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */
-function parseEntriesFromRaw(raw: string | null | undefined): Array<{ key: string; [k: string]: any }> {
+function parseEntriesFromRaw(raw: string | null | undefined): Array<{ key: string; [k: string]: unknown }> {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
