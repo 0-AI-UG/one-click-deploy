@@ -1,17 +1,12 @@
 import { jwtVerify } from "jose";
 import * as db from "../../shared/db.ts";
+import { getOrgsForUser } from "../../shared/db/orgs.ts";
 import { spawnSshPty, type PtySession } from "../../shared/remote/index.ts";
+import { JWT_SECRET } from "../lib/auth.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [terminal:${context}]`, ...args);
 }
-
-const rawSecret = new TextEncoder().encode(
-  process.env.JWT_SECRET ?? "one-click-deploy-dev-secret",
-);
-const JWT_SECRET = new Uint8Array(
-  await crypto.subtle.digest("SHA-256", rawSecret),
-);
 
 const MAX_SESSIONS_PER_USER = 3;
 const sessionsByUser = new Map<string, number>();
@@ -110,9 +105,11 @@ export const terminalWsHandlers = {
     let hostKey: string | undefined;
     let remoteCommand: string | undefined;
 
+    const userOrgIds = new Set(getOrgsForUser(data.userId).map((o) => o.id));
+
     if (data.target.kind === "server") {
-      const srv = db.getServer(data.target.id);
-      if (!srv) {
+      const srv = db.getServerUnscoped(data.target.id);
+      if (!srv || !userOrgIds.has(srv.org_id)) {
         ws.send("server not found\r\n");
         ws.close();
         return;
@@ -121,13 +118,19 @@ export const terminalWsHandlers = {
       hostKey = srv.ssh_host_key || undefined;
       log("open", `user=${data.userId} server=${srv.id} ip=${ip}`);
     } else if (data.target.kind === "replica") {
-      const replica = db.getReplica(data.target.id);
+      const replica = db.getReplicaUnscoped(data.target.id);
       if (!replica) {
         ws.send("replica not found\r\n");
         ws.close();
         return;
       }
-      const srv = db.getServer(replica.server_id);
+      const app = db.getAppUnscoped(replica.app_id);
+      if (!app || !userOrgIds.has(app.org_id)) {
+        ws.send("replica not found\r\n");
+        ws.close();
+        return;
+      }
+      const srv = db.getServerUnscoped(replica.server_id);
       if (!srv) {
         ws.send("replica's server not found\r\n");
         ws.close();
@@ -146,7 +149,13 @@ export const terminalWsHandlers = {
         ws.close();
         return;
       }
-      const srv = db.getServer(instance.server_id);
+      const service = db.getServiceUnscoped(instance.service_id);
+      if (!service || !userOrgIds.has(service.org_id)) {
+        ws.send("service instance not found\r\n");
+        ws.close();
+        return;
+      }
+      const srv = db.getServerUnscoped(instance.server_id);
       if (!srv) {
         ws.send("service instance's server not found\r\n");
         ws.close();

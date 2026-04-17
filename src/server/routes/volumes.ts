@@ -12,16 +12,17 @@ function parseExtraVolumes(raw: string): string[] {
 
 export async function handleAttachVolume(request: Request): Promise<Response> {
   try {
-    await requireOrgPermission(request, "volumes.create");
+    const ctx = await requireOrgPermission(request, "volumes.create");
     const { app_id, size, mount_path } = await request.json() as { app_id: number; size: number; mount_path?: string };
 
-    const app = db.getApp(app_id);
+    const app = db.getApp(app_id, ctx.orgId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
     if (app.volume_id) return Response.json({ ok: false, error: "App already has a volume attached" }, { headers: corsHeaders });
     const reps = db.getReplicas(app_id);
     if (reps.length === 0) return Response.json({ ok: false, error: "App has no replicas" }, { headers: corsHeaders });
     if (reps.length > 1) return Response.json({ ok: false, error: "Cannot attach a volume to an app with more than 1 replica. Scale down to 1 first." }, { headers: corsHeaders });
-    const server = db.getServer(reps[0].server_id);
+    // server_id comes from a replica belonging to our org's app — safe to look up unscoped
+    const server = db.getServerUnscoped(reps[0].server_id);
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
 
@@ -55,16 +56,17 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
 
 export async function handleAttachExistingVolume(request: Request): Promise<Response> {
   try {
-    await requireOrgPermission(request, "volumes.manage");
+    const ctx = await requireOrgPermission(request, "volumes.manage");
     const { app_id, volume_id, mount_path } = await request.json() as { app_id: number; volume_id: string; mount_path?: string };
 
-    const app = db.getApp(app_id);
+    const app = db.getApp(app_id, ctx.orgId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
     if (app.volume_id) return Response.json({ ok: false, error: "App already has a volume attached" }, { headers: corsHeaders });
     const reps = db.getReplicas(app_id);
     if (reps.length === 0) return Response.json({ ok: false, error: "App has no replicas" }, { headers: corsHeaders });
     if (reps.length > 1) return Response.json({ ok: false, error: "Cannot attach a volume to an app with more than 1 replica. Scale down to 1 first." }, { headers: corsHeaders });
-    const server = db.getServer(reps[0].server_id);
+    // server_id comes from a replica belonging to our org's app — safe to look up unscoped
+    const server = db.getServerUnscoped(reps[0].server_id);
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
 
@@ -94,10 +96,10 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
 
 export async function handleDetachVolume(request: Request): Promise<Response> {
   try {
-    await requireOrgPermission(request, "volumes.manage");
+    const ctx = await requireOrgPermission(request, "volumes.manage");
     const { app_id } = await request.json() as { app_id: number };
 
-    const app = db.getApp(app_id);
+    const app = db.getApp(app_id, ctx.orgId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
     if (!app.volume_id) return Response.json({ ok: false, error: "App has no volume attached" }, { headers: corsHeaders });
 
@@ -115,21 +117,22 @@ export async function handleDetachVolume(request: Request): Promise<Response> {
 
 export async function handleReattachVolume(request: Request): Promise<Response> {
   try {
-    await requireOrgPermission(request, "volumes.manage");
+    const ctx = await requireOrgPermission(request, "volumes.manage");
     const { volume_id, from_app_id, to_app_id, mount_path } = await request.json() as {
       volume_id: string; from_app_id: number; to_app_id: number; mount_path?: string;
     };
 
-    const fromApp = db.getApp(from_app_id);
+    const fromApp = db.getApp(from_app_id, ctx.orgId);
     if (!fromApp) return Response.json({ ok: false, error: "Source app not found" }, { headers: corsHeaders });
-    const toApp = db.getApp(to_app_id);
+    const toApp = db.getApp(to_app_id, ctx.orgId);
     if (!toApp) return Response.json({ ok: false, error: "Target app not found" }, { headers: corsHeaders });
     if (toApp.volume_id) return Response.json({ ok: false, error: "Target app already has a volume" }, { headers: corsHeaders });
 
     const fromReps = db.getReplicas(from_app_id);
     const toReps = db.getReplicas(to_app_id);
-    const fromServer = fromReps[0] ? db.getServer(fromReps[0].server_id) : null;
-    const toServer = toReps[0] ? db.getServer(toReps[0].server_id) : null;
+    // server_ids come from replicas belonging to our org's apps — safe to look up unscoped
+    const fromServer = fromReps[0] ? db.getServerUnscoped(fromReps[0].server_id) : null;
+    const toServer = toReps[0] ? db.getServerUnscoped(toReps[0].server_id) : null;
     if (!fromServer || !toServer) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     if (fromServer.location !== toServer.location) {
       return Response.json({ ok: false, error: `Cannot reattach: volume in ${fromServer.location}, target in ${toServer.location}` }, { headers: corsHeaders });

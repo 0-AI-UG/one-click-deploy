@@ -339,7 +339,7 @@ export async function redeployPanel(
   if (!panel) {
     return { ok: false, error: "Panel is not configured in this DB" };
   }
-  const server = db.getServer(panel.server_id);
+  const server = db.getServerUnscoped(panel.server_id);
   if (!server) {
     return { ok: false, error: "Panel server not found" };
   }
@@ -420,7 +420,7 @@ export async function redeployPanel(
 export async function getPanelContainerLogs(tail = 200): Promise<string> {
   const panel = db.getPanel();
   if (!panel) return "";
-  const server = db.getServer(panel.server_id);
+  const server = db.getServerUnscoped(panel.server_id);
   if (!server) return "";
   return getContainerLogs(
     server.ipv4,

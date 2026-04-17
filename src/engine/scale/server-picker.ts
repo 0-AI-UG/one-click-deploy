@@ -10,7 +10,7 @@ export async function pickTargetServer(
 ): Promise<Server> {
   // Explicit placement: caller chose a specific server
   if (preferredServerId) {
-    const preferred = db.getServer(preferredServerId) as Server | null;
+    const preferred = db.getServerUnscoped(preferredServerId) as Server | null;
     if (!preferred) throw new Error(`Target server ${preferredServerId} not found`);
     if (preferred.status !== "ready") throw new Error(`Target server ${preferred.name} is not ready (status: ${preferred.status})`);
     emit("scale", `Placing replica on ${preferred.name} (user-selected)`);
@@ -67,7 +67,7 @@ export async function pickTargetServer(
     if (!serverType) throw new Error("No default server type configured — set one in Settings");
     // Default location: any existing replica's server, else configured default.
     const replicas = db.getReplicas(app.id);
-    const anyReplicaServer = replicas[0] ? db.getServer(replicas[0].server_id) : null;
+    const anyReplicaServer = replicas[0] ? db.getServerUnscoped(replicas[0].server_id) : null;
     const location = anyReplicaServer?.location || settings.default_location;
 
     return await provisionServer({

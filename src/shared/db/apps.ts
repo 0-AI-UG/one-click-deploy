@@ -73,7 +73,15 @@ export function getApps(orgId: string, serverId?: number): AppRow[] {
     .all(orgId) as AppRow[];
 }
 
-export function getApp(id: number): AppRow | null {
+export function getApp(id: number, orgId: string): AppRow | null {
+  return db.query("SELECT * FROM apps WHERE id = ? AND org_id = ?").get(id, orgId) as AppRow | null;
+}
+
+/** Engine-internal: look up an app by id without org scoping.
+ * Use only in engine ops/reconciler where the orgId is not available from
+ * a request context (e.g. background workers operating on their own records).
+ * Route handlers MUST use getApp(id, orgId) instead. */
+export function getAppUnscoped(id: number): AppRow | null {
   return db.query("SELECT * FROM apps WHERE id = ?").get(id) as AppRow | null;
 }
 
@@ -220,8 +228,9 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
   const sleepingRow = db.query("SELECT COUNT(*) as c FROM apps WHERE sleeping_server_id = ?").get(serverId) as { c: number } | null;
   const sleepingCount = sleepingRow?.c ?? 0;
   if (sleepingCount > 0) return;
-  const { getServer, deleteServer } = await import("./servers.ts");
-  const server = getServer(serverId);
+  const { getServerUnscoped, deleteServer } = await import("./servers.ts");
+  // gcServerIfEmpty runs without org context — server id comes from DB scan, not caller input
+  const server = getServerUnscoped(serverId);
   if (!server) return;
   const { getComputeProvider } = await import("../providers/index.ts");
   let compute;

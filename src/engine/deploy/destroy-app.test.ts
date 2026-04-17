@@ -134,8 +134,8 @@ describe("destroyApp: happy path", () => {
     expect(dns._mocks.deleteRecord).toHaveBeenCalledTimes(1);
 
     // DB rows gone.
-    expect(db.getApp(app.id)).toBeNull();
-    expect(db.getReplica(replica.id)).toBeNull();
+    expect(db.getAppUnscoped(app.id)).toBeNull();
+    expect(db.getReplicaUnscoped(replica.id)).toBeNull();
     expect(db.getDnsRecords(app.id)).toEqual([]);
   });
 
@@ -236,7 +236,7 @@ describe("destroyApp: partial failure handling", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/cleanup/i);
     // App row NOT deleted on failure — so user can retry.
-    const appRow = db.getApp(app.id);
+    const appRow = db.getAppUnscoped(app.id);
     expect(appRow).not.toBeNull();
     expect(appRow?.status).toBe("cleanup_failed");
   });
@@ -248,7 +248,7 @@ describe("destroyApp: partial failure handling", () => {
     removeContainer.mockImplementationOnce(async () => { throw new Error("ssh down"); });
     const result = await destroyApp(app.id);
     expect(result.ok).toBe(false);
-    expect(db.getApp(app.id)?.status).toBe("cleanup_failed");
+    expect(db.getAppUnscoped(app.id)?.status).toBe("cleanup_failed");
   });
 
   test("marks app cleanup_failed when volume deletion fails", async () => {
@@ -259,7 +259,7 @@ describe("destroyApp: partial failure handling", () => {
     compute._mocks.volumeDelete.mockImplementationOnce(async () => { throw new Error("still attached"); });
     const result = await destroyApp(app.id);
     expect(result.ok).toBe(false);
-    expect(db.getApp(app.id)?.status).toBe("cleanup_failed");
+    expect(db.getAppUnscoped(app.id)?.status).toBe("cleanup_failed");
   });
 
   test("Caddy removal failure is logged but does NOT mark cleanup_failed", async () => {
@@ -270,7 +270,7 @@ describe("destroyApp: partial failure handling", () => {
     removeAppCaddy.mockImplementationOnce(async () => { throw new Error("caddy 503"); });
     const result = await destroyApp(app.id);
     expect(result.ok).toBe(true);
-    expect(db.getApp(app.id)).toBeNull();
+    expect(db.getAppUnscoped(app.id)).toBeNull();
   });
 });
 
@@ -290,8 +290,8 @@ describe("destroyApp: multi-server GC", () => {
 
     // Both servers gone, because each became empty and the mocked provider's
     // deleteServer succeeds.
-    expect(db.getServer(s1.id)).toBeFalsy();
-    expect(db.getServer(s2.id)).toBeFalsy();
+    expect(db.getServerUnscoped(s1.id)).toBeFalsy();
+    expect(db.getServerUnscoped(s2.id)).toBeFalsy();
     expect(compute._mocks.deleteServer).toHaveBeenCalledTimes(2);
   });
 
@@ -311,7 +311,7 @@ describe("destroyApp: multi-server GC", () => {
 
     await destroyApp(app.id);
 
-    expect(db.getServer(panelSrv.id)).toBeTruthy();
+    expect(db.getServerUnscoped(panelSrv.id)).toBeTruthy();
     expect(compute._mocks.deleteServer).not.toHaveBeenCalled();
     db.deletePanel();
   });
@@ -328,7 +328,7 @@ describe("destroyServer", () => {
     expect(result.ok).toBe(true);
     expect(compute._mocks.deleteServer).toHaveBeenCalledTimes(1);
     expect(compute._mocks.deleteServer.mock.calls[0][0]).toBe(server.provider_id);
-    expect(db.getServer(server.id)).toBeFalsy();
+    expect(db.getServerUnscoped(server.id)).toBeFalsy();
   });
 
   test("refuses to destroy the panel's server", async () => {
@@ -346,7 +346,7 @@ describe("destroyServer", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/panel/i);
     expect(compute._mocks.deleteServer).not.toHaveBeenCalled();
-    expect(db.getServer(panelSrv.id)).toBeTruthy();
+    expect(db.getServerUnscoped(panelSrv.id)).toBeTruthy();
     db.deletePanel();
   });
 
@@ -362,9 +362,9 @@ describe("destroyServer", () => {
     expect(result.ok).toBe(true);
     // Two app containers + server itself removed.
     expect(removeContainer).toHaveBeenCalledTimes(2);
-    expect(db.getApp(appA.id)).toBeNull();
-    expect(db.getApp(appB.id)).toBeNull();
-    expect(db.getServer(server.id)).toBeFalsy();
+    expect(db.getAppUnscoped(appA.id)).toBeNull();
+    expect(db.getAppUnscoped(appB.id)).toBeNull();
+    expect(db.getServerUnscoped(server.id)).toBeFalsy();
   });
 
   test("returns error for unknown server id", async () => {

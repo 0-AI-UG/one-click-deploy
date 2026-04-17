@@ -11,7 +11,7 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
   log("wake", `Waking app ${appId}`);
 
   try {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) return { ok: false, error: "App not found" };
     if (app.status !== "sleeping") return { ok: true }; // already awake or waking
 
@@ -19,7 +19,7 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     const hostPort = app.sleeping_host_port;
     if (!serverId || !hostPort) return { ok: false, error: "Missing sleeping state" };
 
-    const server = db.getServer(serverId);
+    const server = db.getServerUnscoped(serverId);
     if (!server) return { ok: false, error: "Server not found" };
 
     db.updateAppStatus(appId, "waking");

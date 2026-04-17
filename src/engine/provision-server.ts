@@ -110,5 +110,5 @@ export async function provisionServer(opts: {
   db.updateServerStatus(dbServer.id, "ready");
   emit("provision", `Server ${serverName} ready`);
 
-  return db.getServer(dbServer.id) as Server;
+  return db.getServerUnscoped(dbServer.id) as Server;
 }

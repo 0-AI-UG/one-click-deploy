@@ -48,7 +48,7 @@ describe("gcServerIfEmpty", () => {
     const server = freshServer("empty");
     await db.gcServerIfEmpty(server.id);
     expect(deleteServer).toHaveBeenCalledTimes(1);
-    expect(db.getServer(server.id)).toBeFalsy();
+    expect(db.getServerUnscoped(server.id)).toBeFalsy();
   });
 
   test("does NOT delete the panel's server even when empty", async () => {
@@ -63,7 +63,7 @@ describe("gcServerIfEmpty", () => {
     });
     await db.gcServerIfEmpty(server.id);
     expect(deleteServer).not.toHaveBeenCalled();
-    expect(db.getServer(server.id)).toBeTruthy();
+    expect(db.getServerUnscoped(server.id)).toBeTruthy();
     db.deletePanel();
   });
 
@@ -87,7 +87,7 @@ describe("gcServerIfEmpty", () => {
     });
     await db.gcServerIfEmpty(server.id);
     expect(deleteServer).not.toHaveBeenCalled();
-    expect(db.getServer(server.id)).toBeTruthy();
+    expect(db.getServerUnscoped(server.id)).toBeTruthy();
   });
 
   test("does NOT delete a server whose only replica is status=stopped (light sleep anchor)", async () => {
@@ -115,7 +115,7 @@ describe("gcServerIfEmpty", () => {
 
     await db.gcServerIfEmpty(server.id);
     expect(deleteServer).not.toHaveBeenCalled();
-    expect(db.getServer(server.id)).toBeTruthy();
+    expect(db.getServerUnscoped(server.id)).toBeTruthy();
   });
 
   test("markReplicaStopped sets stopped_at and markReplicaRunning clears it", () => {
@@ -137,12 +137,12 @@ describe("gcServerIfEmpty", () => {
       status: "running",
     });
     db.markReplicaStopped(replica.id);
-    const after1 = db.getReplica(replica.id);
+    const after1 = db.getReplicaUnscoped(replica.id);
     expect(after1?.status).toBe("stopped");
     expect(after1?.stopped_at).toBeTruthy();
 
     db.markReplicaRunning(replica.id);
-    const after2 = db.getReplica(replica.id);
+    const after2 = db.getReplicaUnscoped(replica.id);
     expect(after2?.status).toBe("running");
     expect(after2?.stopped_at).toBeNull();
   });

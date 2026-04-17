@@ -13,7 +13,7 @@ export async function scaleApp(
   log("scale", `Scaling app ${appId} to ${targetReplicas} replicas`);
 
   try {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) throw new Error("App not found");
 
     const currentReplicas = db.getReplicas(appId);

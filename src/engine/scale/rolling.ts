@@ -14,7 +14,7 @@ export async function rollingRedeploy(
   const emit = onProgress || (() => {});
 
   try {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) throw new Error("App not found");
 
     const replicas = db.getReplicas(appId);
@@ -23,7 +23,7 @@ export async function rollingRedeploy(
     }
 
     // Use the first replica's server as the image source for transferImage.
-    const primaryServer = db.getServer(replicas[0].server_id);
+    const primaryServer = db.getServerUnscoped(replicas[0].server_id);
     if (!primaryServer) throw new Error("First replica's server not found");
 
     const imageName = `${app.name}:latest`;
@@ -31,7 +31,7 @@ export async function rollingRedeploy(
 
     for (let i = 0; i < replicas.length; i++) {
       const replica = replicas[i];
-      const server = db.getServer(replica.server_id);
+      const server = db.getServerUnscoped(replica.server_id);
       if (!server) continue;
 
       const hostKey = server.ssh_host_key || undefined;

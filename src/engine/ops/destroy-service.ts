@@ -28,9 +28,9 @@ const removeEnvFromLinkedApps: Step<DestroyServiceInput, { ok: true }> = {
     const links = db.getServiceLinks(ctx.input.serviceId);
     for (const link of links) {
       await softStep(ctx, `unlink_env app#${link.app_id}`, async () => {
-        const app = db.getApp(link.app_id);
+        const app = db.getAppUnscoped(link.app_id);
         if (!app?.environment_id) return;
-        const envRow = db.getEnvironment(app.environment_id);
+        const envRow = db.getEnvironmentUnscoped(app.environment_id);
         if (!envRow) return;
         const parsed = parseEnvVars(envRow.env_vars);
         const prefix = link.env_prefix || "DATABASE";
@@ -46,13 +46,13 @@ const stopAndRemoveContainers: Step<DestroyServiceInput, { affectedServerIds: nu
   name: "stop_and_remove_instance_container",
   label: "Stop and remove containers",
   async run(ctx) {
-    const service = db.getService(ctx.input.serviceId);
+    const service = db.getServiceUnscoped(ctx.input.serviceId);
     const instances = db.getServiceInstances(ctx.input.serviceId);
     const affected = new Set<number>();
     let failed = false;
     for (const inst of instances) {
       affected.add(inst.server_id);
-      const server = db.getServer(inst.server_id);
+      const server = db.getServerUnscoped(inst.server_id);
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
       const r = await softStep(ctx, `rm ${inst.container_name}`, async () => {
@@ -81,7 +81,7 @@ const deleteVolumes: Step<DestroyServiceInput, { failed: boolean }> = {
     let failed = false;
     for (const inst of instances) {
       if (!inst.volume_id) continue;
-      const server = inst.server_id ? db.getServer(inst.server_id) : null;
+      const server = inst.server_id ? db.getServerUnscoped(inst.server_id) : null;
       const r = await softStep(ctx, `delete_volume ${inst.volume_id}`, async () => {
         const compute = getComputeProvider(server?.provider);
         await compute.volumes?.delete(inst.volume_id);

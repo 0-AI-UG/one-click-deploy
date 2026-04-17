@@ -6,7 +6,7 @@ import { enqueue } from "../../server/ipc/enqueue.ts";
 function enqueueAutoscale(appId: number, decision: "up" | "down" | "sleep", targetReplicas: number) {
   const bucket = Math.floor(Date.now() / 60000);
   const kind = decision === "up" ? "scale_up" : decision === "sleep" ? "sleep" : "scale_down";
-  const app = db.getApp(appId);
+  const app = db.getAppUnscoped(appId);
   enqueue({
     kind,
     resourceKeys: [`app:${appId}`],
@@ -28,7 +28,7 @@ export async function collectMetrics(appId: number): Promise<void> {
   for (const replica of replicas) {
     // Skip light-sleep anchors — they have no running container to stat.
     if (replica.status === "stopped") continue;
-    const server = db.getServer(replica.server_id);
+    const server = db.getServerUnscoped(replica.server_id);
     if (!server) continue;
 
     try {
@@ -52,7 +52,7 @@ export async function collectMetrics(appId: number): Promise<void> {
 }
 
 export async function evaluateAutoScale(appId: number): Promise<void> {
-  const app = db.getApp(appId);
+  const app = db.getAppUnscoped(appId);
   if (!app || !app.autoscale_enabled) return;
 
   // Sleeping / waking apps are off-limits to the autoscaler — their replicas

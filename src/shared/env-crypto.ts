@@ -177,6 +177,6 @@ export async function processIncomingEnvVars(
 /** Convenience: resolve all env vars for an app from its linked environment. */
 export async function resolveAppEnvVars(app: AppRow): Promise<Record<string, string>> {
   const db = await import("./db.ts");
-  const envRow = app.environment_id ? db.getEnvironment(app.environment_id) : null;
+  const envRow = app.environment_id ? db.getEnvironmentUnscoped(app.environment_id) : null;
   return resolveEnvVarsForDeploy(envRow?.env_vars);
 }

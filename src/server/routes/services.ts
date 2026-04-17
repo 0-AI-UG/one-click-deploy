@@ -52,15 +52,16 @@ export async function handleGetServices(request: Request): Promise<Response> {
 
 export async function handleGetService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "servers.view");
-    const service = db.getService(serviceId);
+    const ctx = await requireOrgPermission(request, "servers.view");
+    const service = db.getService(serviceId, ctx.orgId);
     if (!service) {
       return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
     }
     // Join the hosting server's name onto each instance so the detail page
     // can show a meaningful "Server" column without a second fetch.
+    // server_id comes from service_instances — safe to look up unscoped.
     const instances = db.getServiceInstances(serviceId).map((inst) => {
-      const srv = db.getServer(inst.server_id);
+      const srv = db.getServerUnscoped(inst.server_id);
       return { ...inst, server_name: srv?.name ?? `srv#${inst.server_id}` };
     });
     const links = db.getServiceLinks(serviceId);
@@ -103,6 +104,9 @@ export async function handleDeployService(request: Request): Promise<Response> {
 export async function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "services.destroy");
+    if (!db.getService(serviceId, ctx.orgId)) {
+      return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
+    }
     const { opId } = enqueue({
       kind: "destroy_service",
       resourceKeys: [`service:${serviceId}`],
@@ -120,6 +124,9 @@ export async function handleDestroyService(request: Request, serviceId: number):
 export async function handleRestartService(request: Request, serviceId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "services.manage");
+    if (!db.getService(serviceId, ctx.orgId)) {
+      return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
+    }
     const { opId } = enqueue({
       kind: "restart_service",
       resourceKeys: [`service:${serviceId}`],
@@ -137,6 +144,9 @@ export async function handleRestartService(request: Request, serviceId: number):
 export async function handlePauseService(request: Request, serviceId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "services.manage");
+    if (!db.getService(serviceId, ctx.orgId)) {
+      return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
+    }
     const { opId } = enqueue({
       kind: "pause_service",
       resourceKeys: [`service:${serviceId}`],
@@ -154,6 +164,9 @@ export async function handlePauseService(request: Request, serviceId: number): P
 export async function handleUnpauseService(request: Request, serviceId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "services.manage");
+    if (!db.getService(serviceId, ctx.orgId)) {
+      return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
+    }
     const { opId } = enqueue({
       kind: "unpause_service",
       resourceKeys: [`service:${serviceId}`],
@@ -172,7 +185,10 @@ export async function handleUnpauseService(request: Request, serviceId: number):
 
 export async function handleGetServiceLogs(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "services.logs");
+    const ctx = await requireOrgPermission(request, "services.logs");
+    if (!db.getService(serviceId, ctx.orgId)) {
+      return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
+    }
     const url = new URL(request.url);
     const instanceId = url.searchParams.get("instance_id")
       ? parseInt(url.searchParams.get("instance_id")!, 10)
@@ -192,11 +208,11 @@ export async function handleLinkService(request: Request, serviceId: number, app
     const body = await request.json().catch(() => ({}));
     const envPrefix = body.env_prefix || "DATABASE";
 
-    const service = db.getService(serviceId);
+    const service = db.getService(serviceId, ctx.orgId);
     if (!service) {
       return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
     }
-    const app = db.getApp(appId);
+    const app = db.getApp(appId, ctx.orgId);
     if (!app) {
       return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
     }
@@ -236,7 +252,7 @@ export async function handleLinkService(request: Request, serviceId: number, app
 
     // Write service env vars to the app's linked environment
     if (app.environment_id) {
-      const envRow = db.getEnvironment(app.environment_id);
+      const envRow = db.getEnvironment(app.environment_id, ctx.orgId);
       if (envRow) {
         const envParsed = parseEnvVars(envRow.env_vars);
         const newKeys = new Set(newEntries.map((e) => e.key));
@@ -272,11 +288,11 @@ export async function handleUnlinkService(request: Request, serviceId: number, a
   try {
     const ctx = await requireOrgPermission(request, "services.link");
 
-    const service = db.getService(serviceId);
+    const service = db.getService(serviceId, ctx.orgId);
     if (!service) {
       return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
     }
-    const app = db.getApp(appId);
+    const app = db.getApp(appId, ctx.orgId);
     if (!app) {
       return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
     }
@@ -292,7 +308,7 @@ export async function handleUnlinkService(request: Request, serviceId: number, a
 
     // Remove injected env vars from the app's linked environment
     if (app.environment_id) {
-      const envRow = db.getEnvironment(app.environment_id);
+      const envRow = db.getEnvironment(app.environment_id, ctx.orgId);
       if (envRow) {
         const envParsed = parseEnvVars(envRow.env_vars);
         const filtered = envParsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));

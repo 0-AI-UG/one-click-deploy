@@ -27,7 +27,7 @@ function log(context: string, ...args: unknown[]) {
 export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("destroyApp", `Destroying app id=${appId}`);
   try {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) {
       log("destroyApp", `App id=${appId} not found`);
       throw new Error("App not found");
@@ -56,7 +56,7 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     const affectedServerIds = new Set<number>();
     for (const replica of replicas) {
       affectedServerIds.add(replica.server_id);
-      const replicaServer = db.getServer(replica.server_id);
+      const replicaServer = db.getServerUnscoped(replica.server_id);
       if (replicaServer) {
         const hostKey = replicaServer.ssh_host_key || undefined;
         try {
@@ -114,7 +114,7 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     // Delete volume if attached
     if (app.volume_id) {
       try {
-        const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
+        const firstServer = replicas.length > 0 ? db.getServerUnscoped(replicas[0].server_id) : null;
         const compute = getComputeProvider(firstServer?.provider);
         await compute.volumes?.delete(app.volume_id);
         log("destroyApp", `Deleted volume ${app.volume_id}`);
@@ -154,7 +154,7 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
     if (db.getPanel()?.server_id === serverId) {
       throw new Error("Cannot destroy the panel's server");
     }
-    const server = db.getServer(serverId);
+    const server = db.getServerUnscoped(serverId);
     if (!server) throw new Error("Server not found");
 
     const apps = db.getApps(server.org_id, serverId);
@@ -212,7 +212,7 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
 export async function restartApp(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("restartApp", `Restarting app id=${appId}`);
   try {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) throw new Error("App not found");
 
     const replicas = db.getReplicas(appId);
@@ -220,7 +220,7 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
 
     let allHealthy = true;
     for (const replica of replicas) {
-      const server = db.getServer(replica.server_id);
+      const server = db.getServerUnscoped(replica.server_id);
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
@@ -255,12 +255,12 @@ export async function recreateAppContainer(
 ): Promise<{ ok: boolean; error?: string }> {
   log("recreateContainer", `Recreating container for app id=${appId} volumeMount=${volumeMount || "none"}`);
   try {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) throw new Error("App not found");
     const replicas = db.getReplicas(appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
     const firstReplica = replicas[0];
-    const server = db.getServer(firstReplica.server_id);
+    const server = db.getServerUnscoped(firstReplica.server_id);
     if (!server) throw new Error("Server not found");
     const hostKey = server.ssh_host_key || undefined;
     const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
@@ -331,14 +331,14 @@ export async function recreateAppContainer(
 export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("pauseApp", `Pausing app id=${appId}`);
   try {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) throw new Error("App not found");
 
     const replicas = db.getReplicas(appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
 
     for (const replica of replicas) {
-      const server = db.getServer(replica.server_id);
+      const server = db.getServerUnscoped(replica.server_id);
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
 
@@ -372,7 +372,7 @@ export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: st
 export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("unpauseApp", `Unpausing app id=${appId}`);
   try {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) throw new Error("App not found");
 
     const replicas = db.getReplicas(appId);
@@ -380,7 +380,7 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
 
     let allHealthy = true;
     for (const replica of replicas) {
-      const server = db.getServer(replica.server_id);
+      const server = db.getServerUnscoped(replica.server_id);
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 

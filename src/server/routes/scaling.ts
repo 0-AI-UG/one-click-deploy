@@ -13,7 +13,7 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
     if (!Number.isFinite(replicas) || replicas < 0) {
       return Response.json({ error: "replicas must be an integer >= 0" }, { status: 400, headers: corsHeaders });
     }
-    const app = db.getApp(appId);
+    const app = db.getApp(appId, ctx.orgId);
     if (!app) {
       return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
     }
@@ -57,7 +57,7 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
 
 export async function handleUpdateScalingPolicy(request: Request, appId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "scaling.manage");
+    const ctx = await requireOrgPermission(request, "scaling.manage");
     const { min_replicas, max_replicas, autoscale_enabled, cpu_threshold, mem_threshold, cooldown, scale_to_zero_after } = await request.json() as {
       min_replicas: number;
       max_replicas: number;
@@ -72,14 +72,18 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
       return Response.json({ error: "Require 0 <= min_replicas <= max_replicas" }, { status: 400, headers: corsHeaders });
     }
 
+    const app = db.getApp(appId, ctx.orgId);
+    if (!app) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
+
     if (max_replicas > 1) {
-      const app = db.getApp(appId);
-      if (app && (!app.domain || app.domain.endsWith(".nip.io"))) {
+      if (!app.domain || app.domain.endsWith(".nip.io")) {
         return Response.json({ error: "Scaling requires a custom domain. Add a domain in app settings first." }, { status: 400, headers: corsHeaders });
       }
       // Volume apps cannot scale beyond 1 replica — a cloud volume can only be
       // attached to a single server.
-      if (app && app.volume_id) {
+      if (app.volume_id) {
         return Response.json({ error: "Apps with persistent storage cannot have more than 1 replica." }, { status: 400, headers: corsHeaders });
       }
     }
@@ -102,7 +106,10 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
 
 export async function handleGetReplicas(request: Request, appId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "servers.view");
+    const ctx = await requireOrgPermission(request, "servers.view");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const replicas = db.getReplicas(appId);
     return Response.json(replicas, { headers: corsHeaders });
   } catch (error) {
@@ -112,7 +119,10 @@ export async function handleGetReplicas(request: Request, appId: number): Promis
 
 export async function handleGetScalingEvents(request: Request, appId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "servers.view");
+    const ctx = await requireOrgPermission(request, "servers.view");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const events = db.getScalingEvents(appId);
     return Response.json(events, { headers: corsHeaders });
   } catch (error) {
@@ -122,7 +132,10 @@ export async function handleGetScalingEvents(request: Request, appId: number): P
 
 export async function handleGetAppMetrics(request: Request, appId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "servers.view");
+    const ctx = await requireOrgPermission(request, "servers.view");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     await collectMetrics(appId);
     const replicas = db.getReplicas(appId);
     return Response.json(replicas, { headers: corsHeaders });
@@ -133,7 +146,10 @@ export async function handleGetAppMetrics(request: Request, appId: number): Prom
 
 export async function handleGetAppMetricsHistory(request: Request, appId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "servers.view");
+    const ctx = await requireOrgPermission(request, "servers.view");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const url = new URL(request.url);
     const sinceSec = Math.max(60, Math.min(86400, parseInt(url.searchParams.get("since") || "3600", 10)));
     const samples = db.getRecentAppMetrics(appId, sinceSec);
@@ -149,10 +165,11 @@ const wakeCorsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-/** Token-authenticated — called by the wake page served from the app's domain. */
+/** Token-authenticated — called by the wake page served from the app's domain.
+ * Uses unscoped lookup because the caller authenticates via wake_token, not X-Org-Id. */
 export async function handleWakeApp(request: Request, appId: number): Promise<Response> {
   try {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) return Response.json({ error: "Not found" }, { status: 404, headers: wakeCorsHeaders });
     const token = new URL(request.url).searchParams.get("token");
     if (!token || token !== app.wake_token) {
@@ -176,9 +193,10 @@ export async function handleWakeApp(request: Request, appId: number): Promise<Re
   }
 }
 
-/** Token-authenticated — polled by the wake page to check when the app is ready. */
+/** Token-authenticated — polled by the wake page to check when the app is ready.
+ * Uses unscoped lookup because the caller authenticates via wake_token, not X-Org-Id. */
 export async function handleWakeStatus(request: Request, appId: number): Promise<Response> {
-  const app = db.getApp(appId);
+  const app = db.getAppUnscoped(appId);
   if (!app) return Response.json({ error: "Not found" }, { status: 404, headers: wakeCorsHeaders });
   const token = new URL(request.url).searchParams.get("token");
   // If wake_token was cleared, the app already woke — return current status
@@ -199,7 +217,7 @@ export async function handleMigrateReplica(request: Request, appId: number, repl
       return Response.json({ error: "target_server_id is required" }, { status: 400, headers: corsHeaders });
     }
 
-    const app = db.getApp(appId);
+    const app = db.getApp(appId, ctx.orgId);
     if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
 
     const { opId } = enqueue({

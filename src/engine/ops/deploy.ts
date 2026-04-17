@@ -131,10 +131,10 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
 
     const settings = db.getOrgSettings(ctx.orgId);
     const panel = db.getPanel();
-    const panelServerRow = panel ? db.getServer(panel.server_id) : null;
+    const panelServerRow = panel ? db.getServerUnscoped(panel.server_id) : null;
 
     if (req.server_id) {
-      const target = db.getServer(req.server_id) as Server | null;
+      const target = db.getServerUnscoped(req.server_id) as Server | null;
       if (!target || target.status !== "ready") {
         throw new Error("Target server not found or not ready");
       }
@@ -257,7 +257,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
 
     let providerServerId = server.providerServerId;
     if (!providerServerId) {
-      const existingServer = db.getServer(server.serverId);
+      const existingServer = db.getServerUnscoped(server.serverId);
       if (!existingServer) throw new Error(`Server ${server.serverId} not found`);
       providerServerId = existingServer.provider_id;
     }
@@ -313,7 +313,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const flatEnvVars: Record<string, string> = {};
 
     if (environmentId) {
-      const envRow = db.getEnvironment(environmentId);
+      const envRow = db.getEnvironmentUnscoped(environmentId);
       if (envRow) {
         const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
         Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
@@ -443,7 +443,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
       }
     }
 
-    const tenantServerRow = db.getServer(server.serverId);
+    const tenantServerRow = db.getServerUnscoped(server.serverId);
     if (!tenantServerRow) throw new Error(`Server ${server.serverId} not found`);
     const containerBindAddr = replicaBindHost(tenantServerRow);
 
@@ -525,7 +525,7 @@ const deployAuthProxyStep: Step<DeployInput, AuthProxyOut> = {
     if (!req.auth_password) return null;
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
-    const tenantServerRow = db.getServer(server.serverId);
+    const tenantServerRow = db.getServerUnscoped(server.serverId);
     if (!tenantServerRow) throw new Error(`Server ${server.serverId} not found`);
     const containerBindAddr = replicaBindHost(tenantServerRow);
     const caddyPort = await deployAuthProxy(
@@ -599,7 +599,7 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
     const build = prior["build_and_run_container"] as BuildOut;
-    const tenantServerRow = db.getServer(server.serverId);
+    const tenantServerRow = db.getServerUnscoped(server.serverId);
     if (!tenantServerRow) throw new Error(`Server ${server.serverId} not found`);
     const containerBindAddr = replicaBindHost(tenantServerRow);
 

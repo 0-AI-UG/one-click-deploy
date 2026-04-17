@@ -13,7 +13,8 @@ const CI_POLL_INTERVAL = 15_000;
 const CI_TIMEOUT = 30 * 60_000;
 
 async function waitForCi(appId: number, sha: string): Promise<boolean> {
-  const app = db.getApp(appId);
+  // Webhook CI check runs without org context — app is known via its ID from the webhook URL
+  const app = db.getAppUnscoped(appId);
   if (!app) return false;
   const token = await resolveGitHubToken(app.deployed_by || undefined);
   if (!token) return true; // can't check, proceed
@@ -112,7 +113,7 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
     const ctx = await requireOrgPermission(request, "webhooks.manage");
     const body = await request.json() as { branch?: string; path?: string; wait_for_ci?: boolean };
 
-    const app = db.getApp(appId);
+    const app = db.getApp(appId, ctx.orgId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
 
     const panel = db.getPanel();
@@ -149,9 +150,9 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
 
 export async function handleUpdateWebhookSettings(request: Request, appId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "webhooks.manage");
+    const ctx = await requireOrgPermission(request, "webhooks.manage");
 
-    const app = db.getApp(appId);
+    const app = db.getApp(appId, ctx.orgId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
     if (!app.webhook_enabled) {
       return Response.json({ ok: false, error: "Webhook is not enabled" }, { status: 400, headers: corsHeaders });
@@ -172,7 +173,7 @@ export async function handleDisableWebhook(request: Request, appId: number): Pro
   try {
     const ctx = await requireOrgPermission(request, "webhooks.manage");
 
-    const app = db.getApp(appId);
+    const app = db.getApp(appId, ctx.orgId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
 
     if (app.github_webhook_id) {
@@ -205,7 +206,8 @@ export async function handleDisableWebhook(request: Request, appId: number): Pro
 // not time out (the redeploy runs in the background).
 export async function handleGithubWebhook(request: Request, appId: number): Promise<Response> {
   try {
-    const app = db.getApp(appId);
+    // Public endpoint authenticated by HMAC webhook secret — no org context available.
+    const app = db.getAppUnscoped(appId);
     if (!app || !app.webhook_enabled || !app.webhook_secret) {
       return new Response("Not found", { status: 404 });
     }

@@ -144,9 +144,29 @@ export async function handleOrgServerTypes(request: Request): Promise<Response> 
   } catch (err) {
     return Response.json({ error: (err as Error).message }, { status: 400 });
   }
-  // Temporarily set the global token so listServerTypes() can authenticate
-  await secretStore.set(provider.tokenKey, token);
-  const types = await provider.listServerTypes();
+  // Fetch server types directly with the in-hand token — avoids writing to
+  // secretStore at all (global or org-scoped) for this one-off preview request.
+  // provider.listServerTypes() sources its token via secretStore.get without
+  // an orgId, which would create a cross-tenant race if we wrote here first.
+  const res = await fetch("https://api.hetzner.cloud/v1/server_types?per_page=50", {
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    return Response.json({ error: "Failed to fetch server types from provider" }, { status: 502 });
+  }
+  const data = await res.json() as { server_types?: Array<{ name: string; description: string; cores: number; memory: number; disk: number; deprecation?: { announced?: string } | null; prices?: Array<{ location: string }> }> };
+  const rawTypes = data.server_types ?? [];
+  const types = rawTypes
+    .filter((t) => !t.deprecation?.announced)
+    .map((t) => ({
+      name: t.name,
+      description: t.description,
+      cores: t.cores,
+      memory: t.memory,
+      disk: t.disk,
+      locations: (t.prices ?? []).map((p) => p.location),
+    }))
+    .sort((a, b) => a.memory - b.memory || a.cores - b.cores);
   const allLocations = [...new Set(types.flatMap((t) => t.locations))].sort();
   return Response.json({ server_types: types, locations: allLocations });
 }

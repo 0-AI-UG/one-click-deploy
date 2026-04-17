@@ -86,7 +86,7 @@ describe("destroyService", () => {
     expect(sshExec).toHaveBeenCalled();
     expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete.mock.calls[0][0]).toBe("v-abc");
-    expect(db.getService(service.id)).toBeNull();
+    expect(db.getServiceUnscoped(service.id)).toBeNull();
     expect(db.getServiceInstance(inst.id)).toBeNull();
   });
 
@@ -126,7 +126,7 @@ describe("destroyService", () => {
     const result = await destroyService(service.id);
 
     expect(result.ok).toBe(false);
-    expect(db.getService(service.id)?.status).toBe("cleanup_failed");
+    expect(db.getServiceUnscoped(service.id)?.status).toBe("cleanup_failed");
   });
 
   test("marks service cleanup_failed when volume delete fails", async () => {
@@ -145,7 +145,7 @@ describe("destroyService", () => {
     const result = await destroyService(service.id);
 
     expect(result.ok).toBe(false);
-    expect(db.getService(service.id)?.status).toBe("cleanup_failed");
+    expect(db.getServiceUnscoped(service.id)?.status).toBe("cleanup_failed");
     // Even in failure, the instance row is deleted in this lifecycle (note: it
     // happens BEFORE the cleanupFailed short-circuit). This test pins the
     // current behaviour so future refactors are explicit.
@@ -189,7 +189,7 @@ describe("destroyService", () => {
 
     await destroyService(service.id);
 
-    const updated = db.getEnvironment(env.id);
+    const updated = db.getEnvironmentUnscoped(env.id);
     const parsed = JSON.parse(updated!.env_vars) as { entries: Array<{ key: string }> };
     expect(parsed.entries.map((e) => e.key)).toEqual(["OTHER_TOKEN"]);
   });

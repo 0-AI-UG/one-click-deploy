@@ -188,7 +188,7 @@ async function checkServiceInstanceHealth(
 
 async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<void> {
   for (const [appId] of byApp) {
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app || !app.domain) continue;
     if (app.status !== "running" && app.status !== "unhealthy") continue;
     try {
@@ -274,7 +274,7 @@ async function tick(): Promise<void> {
     const ensureServer = (serverId: number): ServerWorkItem | null => {
       let item = serverWork.get(serverId);
       if (item) return item;
-      const server = db.getServer(serverId);
+      const server = db.getServerUnscoped(serverId);
       if (!server) return null;
       item = { server, replicas: [], serviceInstances: [] };
       serverWork.set(serverId, item);
@@ -290,7 +290,7 @@ async function tick(): Promise<void> {
       // Skip non-live replicas for metrics/health (but still include in byApp)
       if (replica.status === "stopped" || replica.status === "paused" || replica.status === "sleeping" || replica.status === "waking") continue;
 
-      const app = db.getApp(replica.app_id);
+      const app = db.getAppUnscoped(replica.app_id);
       if (!app) continue;
       const work = ensureServer(replica.server_id);
       if (work) work.replicas.push({ replica, app });
@@ -322,12 +322,12 @@ async function tick(): Promise<void> {
 
     // --- Status propagation (app + service level) ---
     for (const [appId, list] of byApp) {
-      const app = db.getApp(appId);
+      const app = db.getAppUnscoped(appId);
       if (!app) continue;
 
       if (app.status === "running" || app.status === "unhealthy") {
         const freshReplicas = list
-          .map((r) => db.getReplica(r.id))
+          .map((r) => db.getReplicaUnscoped(r.id))
           .filter((r): r is NonNullable<typeof r> => r !== null && r.status !== "stopped");
         const allHealthy = freshReplicas.length > 0 && freshReplicas.every((r) => r.status === "running");
         const newStatus = allHealthy ? "running" : "unhealthy";

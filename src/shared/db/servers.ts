@@ -29,7 +29,15 @@ export function getAllServers(): ServerRow[] {
   return db.query("SELECT * FROM servers ORDER BY created_at DESC").all() as ServerRow[];
 }
 
-export function getServer(id: number): ServerRow | null {
+export function getServer(id: number, orgId: string): ServerRow | null {
+  return db.query("SELECT * FROM servers WHERE id = ? AND org_id = ?").get(id, orgId) as ServerRow | null;
+}
+
+/** Engine-internal: look up a server by id without org scoping.
+ * Use only in engine ops/reconciler where no request context is available
+ * (e.g. the server_id comes from a replica row, not from the caller's org).
+ * Route handlers MUST use getServer(id, orgId) instead. */
+export function getServerUnscoped(id: number): ServerRow | null {
   return db.query("SELECT * FROM servers WHERE id = ?").get(id) as ServerRow | null;
 }
 

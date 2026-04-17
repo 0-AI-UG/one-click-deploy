@@ -59,7 +59,14 @@ export function insertService(data: {
     .get(data.name, data.service_type, data.version, data.port, data.env_vars, data.credentials, data.desired_instances ?? 1, data.org_id) as ServiceRow;
 }
 
-export function getService(id: number): ServiceRow | null {
+export function getService(id: number, orgId: string): ServiceRow | null {
+  return db.query("SELECT * FROM services WHERE id = ? AND org_id = ?").get(id, orgId) as ServiceRow | null;
+}
+
+/** Engine-internal: look up a service by id without org scoping.
+ * Use only in engine ops/reconciler where no request context is available.
+ * Route handlers MUST use getService(id, orgId) instead. */
+export function getServiceUnscoped(id: number): ServiceRow | null {
   return db.query("SELECT * FROM services WHERE id = ?").get(id) as ServiceRow | null;
 }
 

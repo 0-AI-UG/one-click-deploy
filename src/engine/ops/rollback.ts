@@ -36,7 +36,7 @@ const loadTargetDeployment: Step<RollbackInput, TargetOut> = {
   name: "load_target_deployment",
   label: "Load target deployment",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) throw new Error("App not found");
     const replicas = db.getReplicas(ctx.input.appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
@@ -61,9 +61,9 @@ const swapContainerToTarget: Step<RollbackInput, SwapOut> = {
   label: "Swap to target",
   async run(ctx, prior) {
     const target = prior["load_target_deployment"] as TargetOut;
-    const app = db.getApp(target.appId);
+    const app = db.getAppUnscoped(target.appId);
     if (!app) throw new Error("App not found");
-    const server = db.getServer(target.serverId);
+    const server = db.getServerUnscoped(target.serverId);
     if (!server) throw new Error("Server not found");
     const replicas = db.getReplicas(target.appId);
     const first = replicas[0];
@@ -152,9 +152,9 @@ const healthCheckStep: Step<RollbackInput, { healthy: boolean }> = {
   label: "Health check",
   async run(ctx, prior) {
     const target = prior["load_target_deployment"] as TargetOut;
-    const app = db.getApp(target.appId);
+    const app = db.getAppUnscoped(target.appId);
     if (!app) throw new Error("App not found");
-    const server = db.getServer(target.serverId);
+    const server = db.getServerUnscoped(target.serverId);
     if (!server) throw new Error("Server not found");
     const replicas = db.getReplicas(target.appId);
     const first = replicas[0];

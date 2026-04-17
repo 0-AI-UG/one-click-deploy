@@ -21,7 +21,7 @@ const checkSleeping: Step<WakeInput, CheckOut> = {
   name: "check_sleeping",
   label: "Check sleep state",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) throw new Error("App not found");
     return { wasSleeping: app.status === "sleeping" };
   },
@@ -34,7 +34,7 @@ const startContainers: Step<WakeInput, { ok: boolean; skipped?: boolean; error?:
     const check = prior["check_sleeping"] as CheckOut;
     if (!check.wasSleeping) return { ok: true, skipped: true };
     // Re-read current state: a concurrent wake may have already flipped it.
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) throw new Error("App not found");
     if (app.status !== "sleeping" && app.status !== "waking") {
       return { ok: true, skipped: true };
@@ -62,7 +62,7 @@ const markAwake: Step<WakeInput, { ok: true }> = {
   name: "mark_awake",
   label: "Mark awake",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) return { ok: true };
     if (app.status === "sleeping" || app.status === "waking") {
       // wakeApp() above already clears this, but guard anyway.

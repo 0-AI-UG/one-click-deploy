@@ -32,7 +32,7 @@ const resolveApps: Step<CascadeRedeployInput, ResolveOut> = {
   name: "resolve_apps",
   label: "Resolve apps",
   async run(ctx) {
-    const env = db.getEnvironment(ctx.input.environmentId);
+    const env = db.getEnvironmentUnscoped(ctx.input.environmentId);
     if (!env) throw new Error(`Environment ${ctx.input.environmentId} not found`);
     const apps = db.getAppsByEnvironmentId(ctx.input.environmentId, ctx.orgId);
     const appIds = apps.filter((a) => isActiveApp(a.status)).map((a) => a.id);

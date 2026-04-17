@@ -9,7 +9,7 @@ const renameOnServers: Step<RenameAppInput, { ok: true }> = {
   name: "rename_app",
   label: "Rename app",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) throw new Error("App not found");
     const newName = ctx.input.newName;
     if (newName === app.name) return { ok: true };
@@ -22,7 +22,7 @@ const renameOnServers: Step<RenameAppInput, { ok: true }> = {
     // Rename container and directory on each server hosting a replica.
     const replicas = db.getReplicas(ctx.input.appId);
     for (const replica of replicas) {
-      const server = db.getServer(replica.server_id);
+      const server = db.getServerUnscoped(replica.server_id);
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
 

@@ -1,4 +1,5 @@
 import * as db from "../../shared/db.ts";
+import { getOrgsForUser } from "../../shared/db/orgs.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { authenticateRequest } from "../lib/auth.ts";
 import { AuthError } from "../lib/errors.ts";
@@ -18,22 +19,31 @@ function parseTarget(raw: unknown): { kind: TargetKind; id: number } | null {
   return { kind: m[1] as TargetKind, id: parseInt(m[2], 10) };
 }
 
-function resolveTarget(kind: TargetKind, id: number): { ip: string; hostKey?: string; container?: string } | { error: string } {
+function resolveTarget(
+  kind: TargetKind,
+  id: number,
+  userOrgIds: Set<string>,
+): { ip: string; hostKey?: string; container?: string } | { error: string } {
   if (kind === "server") {
-    const srv = db.getServer(id);
+    const srv = db.getServerUnscoped(id);
     if (!srv) return { error: "server not found" };
+    if (!userOrgIds.has(srv.org_id)) return { error: "server not found" };
     return { ip: srv.ipv4, hostKey: srv.ssh_host_key || undefined };
   }
   if (kind === "replica") {
-    const replica = db.getReplica(id);
+    const replica = db.getReplicaUnscoped(id);
     if (!replica) return { error: "replica not found" };
-    const srv = db.getServer(replica.server_id);
+    const app = db.getAppUnscoped(replica.app_id);
+    if (!app || !userOrgIds.has(app.org_id)) return { error: "replica not found" };
+    const srv = db.getServerUnscoped(replica.server_id);
     if (!srv) return { error: "replica's server not found" };
     return { ip: srv.ipv4, hostKey: srv.ssh_host_key || undefined, container: replica.container_name };
   }
   const instance = db.getServiceInstance(id);
   if (!instance) return { error: "service instance not found" };
-  const srv = db.getServer(instance.server_id);
+  const service = db.getServiceUnscoped(instance.service_id);
+  if (!service || !userOrgIds.has(service.org_id)) return { error: "service instance not found" };
+  const srv = db.getServerUnscoped(instance.server_id);
   if (!srv) return { error: "service instance's server not found" };
   return { ip: srv.ipv4, hostKey: srv.ssh_host_key || undefined, container: instance.container_name };
 }
@@ -77,7 +87,8 @@ export async function handleTerminalExec(request: Request): Promise<Response> {
     return Response.json({ error: "command too large" }, { status: 413 });
   }
 
-  const resolved = resolveTarget(target.kind, target.id);
+  const userOrgIds = new Set(getOrgsForUser(auth.userId).map((o) => o.id));
+  const resolved = resolveTarget(target.kind, target.id, userOrgIds);
   if ("error" in resolved) return Response.json({ error: resolved.error }, { status: 404 });
 
   log("exec", `user=${auth.userId} target=${target.kind}:${target.id} ip=${resolved.ip} bytes=${body.command.length}`);

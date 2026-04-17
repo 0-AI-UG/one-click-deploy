@@ -23,7 +23,7 @@ export async function scaleUp(
   const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
   // The "primary" is just whichever server hosts the first (oldest) replica.
   const firstReplica = currentReplicas[0];
-  const primaryServer = db.getServer(firstReplica.server_id);
+  const primaryServer = db.getServerUnscoped(firstReplica.server_id);
   if (!primaryServer) throw new Error("First replica's server not found");
   const primaryHostPort = firstReplica.host_port;
 
@@ -148,7 +148,7 @@ export async function rollbackScaleUp(
   originalReplicas: Replica[],
   emit: ProgressFn
 ): Promise<void> {
-  const freshApp = db.getApp(app.id);
+  const freshApp = db.getAppUnscoped(app.id);
   if (!freshApp) return;
 
   // Find replicas that were added (not in the original set)
@@ -158,7 +158,7 @@ export async function rollbackScaleUp(
 
   // Remove new replicas
   for (const replica of newReplicas) {
-    const server = db.getServer(replica.server_id);
+    const server = db.getServerUnscoped(replica.server_id);
     if (server) {
       const hostKey = server.ssh_host_key || undefined;
       try {

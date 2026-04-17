@@ -24,7 +24,7 @@ const computeTarget: Step<ScaleUpInput, ComputeOut> = {
   name: "compute_target",
   label: "Compute scale target",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId) as App | null;
+    const app = db.getAppUnscoped(ctx.input.appId) as App | null;
     if (!app) throw new Error("App not found");
     if (app.volume_id && ctx.input.targetReplicas > 1) {
       throw new Error("Apps with persistent storage cannot have more than 1 replica.");
@@ -56,7 +56,7 @@ const addReplicas: Step<ScaleUpInput, AddOut> = {
     if (compute.toAdd === 0) {
       return { originalReplicaIds: compute.originalReplicaIds, newReplicaIds: [], touchedServerIds: [] };
     }
-    const app = db.getApp(ctx.input.appId) as App | null;
+    const app = db.getAppUnscoped(ctx.input.appId) as App | null;
     if (!app) throw new Error("App not found");
     const currentReplicas = db.getReplicas(ctx.input.appId) as Replica[];
     const currentCount = currentReplicas.length;
@@ -95,7 +95,7 @@ const addReplicas: Step<ScaleUpInput, AddOut> = {
   },
   async compensate(ctx, out, prior) {
     const compute = (prior["compute_target"] as ComputeOut | undefined);
-    const app = db.getApp(ctx.input.appId) as App | null;
+    const app = db.getAppUnscoped(ctx.input.appId) as App | null;
     if (!app) return;
     const originalReplicas: Replica[] = (compute
       ? db.getReplicas(ctx.input.appId).filter((r: Replica) => compute.originalReplicaIds.includes(r.id))

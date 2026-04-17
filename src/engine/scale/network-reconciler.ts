@@ -91,7 +91,7 @@ export async function syncInternalHosts(): Promise<void> {
   for (const service of db.getAllServices()) {
     const instance = db.getServiceInstances(service.id)[0];
     if (!instance) continue;
-    const host = db.getServer(instance.server_id);
+    const host = db.getServerUnscoped(instance.server_id);
     if (!host || !host.private_ipv4) continue;
     serviceLines.push(`${host.private_ipv4} ${service.name}.svc.ocd.internal`);
   }

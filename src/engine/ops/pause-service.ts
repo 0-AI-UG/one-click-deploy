@@ -9,11 +9,11 @@ const pauseAllInstances: Step<PauseServiceInput, { ok: true }> = {
   name: "pause_container",
   label: "Pause containers",
   async run(ctx) {
-    const service = db.getService(ctx.input.serviceId);
+    const service = db.getServiceUnscoped(ctx.input.serviceId);
     if (!service) throw new Error("Service not found");
     const instances = db.getServiceInstances(ctx.input.serviceId);
     for (const inst of instances) {
-      const server = db.getServer(inst.server_id);
+      const server = db.getServerUnscoped(inst.server_id);
       if (!server) continue;
       // Docker pause is idempotent enough: `docker pause` on an already paused
       // container exits non-zero — pauseContainer handles that gracefully.

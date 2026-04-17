@@ -11,8 +11,8 @@ import { enqueue } from "../ipc/enqueue.ts";
 import { canCreateApp, canRedeployApp } from "./billing.ts";
 
 /** Enrich app row for API responses — adds environment name, drops raw env_vars. */
-function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
-  const envRow = app.environment_id ? db.getEnvironment(app.environment_id as number) : null;
+function enrichAppForResponse(app: AppRow & Record<string, unknown>, orgId: string) {
+  const envRow = app.environment_id ? db.getEnvironment(app.environment_id as number, orgId) : null;
   return {
     ...app,
     env_vars: [],
@@ -45,7 +45,7 @@ export async function handleGetServers(request: Request): Promise<Response> {
     const ctx = await requireOrgPermission(request, "servers.view");
     const result = getServersWithApps(ctx.orgId).map((s) => ({
       ...s,
-      apps: (s.apps || []).map((a) => enrichAppForResponse(a)),
+      apps: (s.apps || []).map((a) => enrichAppForResponse(a, ctx.orgId)),
     }));
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
@@ -58,7 +58,7 @@ export async function handleGetDashboard(request: Request): Promise<Response> {
     const ctx = await requireOrgPermission(request, "servers.view");
     const apps = db.getApps(ctx.orgId).map((a) => {
       const reps = db.getReplicas(a.id);
-      return enrichAppForResponse({ ...a, desired_replicas: a.desired_replicas ?? reps.length });
+      return enrichAppForResponse({ ...a, desired_replicas: a.desired_replicas ?? reps.length }, ctx.orgId);
     });
     const services = db.getServices(ctx.orgId).map((svc) => {
       const instances = db.getServiceInstances(svc.id);
@@ -83,7 +83,7 @@ export async function handleGetApps(request: Request): Promise<Response> {
       const reps = db.getReplicas(a.id);
       const first = reps[0];
       const servers = db.getServersForApp(a.id).map((s) => s.id);
-      return enrichAppForResponse({ ...a, host_port: first?.host_port ?? 0, servers });
+      return enrichAppForResponse({ ...a, host_port: first?.host_port ?? 0, servers }, ctx.orgId);
     });
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
@@ -118,6 +118,9 @@ export async function handleDeploy(request: Request): Promise<Response> {
 export async function handleDestroyApp(request: Request, appId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "apps.destroy");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const { opId } = enqueue({
       kind: "destroy_app",
       resourceKeys: [`app:${appId}`],
@@ -135,6 +138,9 @@ export async function handleDestroyApp(request: Request, appId: number): Promise
 export async function handleRestartApp(request: Request, appId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "apps.restart");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const { opId } = enqueue({
       kind: "restart_app",
       resourceKeys: [`app:${appId}`],
@@ -152,6 +158,9 @@ export async function handleRestartApp(request: Request, appId: number): Promise
 export async function handlePauseApp(request: Request, appId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "apps.pause");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const { opId } = enqueue({
       kind: "pause_app",
       resourceKeys: [`app:${appId}`],
@@ -169,6 +178,9 @@ export async function handlePauseApp(request: Request, appId: number): Promise<R
 export async function handleUnpauseApp(request: Request, appId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "apps.pause");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const { opId } = enqueue({
       kind: "unpause_app",
       resourceKeys: [`app:${appId}`],
@@ -188,6 +200,9 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
     const ctx = await requireOrgPermission(request, "apps.redeploy");
     if (!canRedeployApp(ctx.orgId)) {
       return Response.json({ ok: false, error: "Billing required", code: "BILLING_REQUIRED" }, { status: 402, headers: corsHeaders });
+    }
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
     }
     const body = (await request.json().catch(() => ({}))) as {
       auth_password?: string | null;
@@ -242,7 +257,7 @@ export async function handleRenameApp(request: Request, appId: number): Promise<
     }
     const newName = nameResult.value;
 
-    const app = db.getApp(appId);
+    const app = db.getApp(appId, ctx.orgId);
     if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
 
     if (newName === app.name) {
@@ -270,12 +285,12 @@ export async function handleRenameApp(request: Request, appId: number): Promise<
 
 export async function handleGetContainerLogs(request: Request, appId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "apps.logs");
+    const ctx = await requireOrgPermission(request, "apps.logs");
     const url = new URL(request.url);
     const tail = parseInt(url.searchParams.get("tail") || "100", 10);
     const replicaIdParam = url.searchParams.get("replica_id");
 
-    const app = db.getApp(appId);
+    const app = db.getApp(appId, ctx.orgId);
     if (!app) return Response.json({ logs: "", error: "App not found" }, { headers: corsHeaders });
     const replicas = db.getReplicas(appId);
     if (replicas.length === 0) return Response.json({ logs: "", error: "App has no replicas" }, { headers: corsHeaders });
@@ -287,7 +302,8 @@ export async function handleGetContainerLogs(request: Request, appId: number): P
       replica = requested;
     }
 
-    const server = db.getServer(replica.server_id);
+    // server_id comes from a replica belonging to our org's app — safe to look up unscoped
+    const server = db.getServerUnscoped(replica.server_id);
     if (!server) return Response.json({ logs: "", error: "Server not found" }, { headers: corsHeaders });
 
     const logs = app.deploy_mode === "compose"
@@ -302,7 +318,10 @@ export async function handleGetContainerLogs(request: Request, appId: number): P
 
 export async function handleGetDeployLog(request: Request, appId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "apps.logs");
+    const ctx = await requireOrgPermission(request, "apps.logs");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const log = db.getDeployLog(appId);
     return Response.json({ log }, { headers: corsHeaders });
   } catch (error) {
@@ -312,7 +331,10 @@ export async function handleGetDeployLog(request: Request, appId: number): Promi
 
 export async function handleGetDeployments(request: Request, appId: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "apps.logs");
+    const ctx = await requireOrgPermission(request, "apps.logs");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const deployments = db.getDeployments(appId);
     return Response.json(deployments, { headers: corsHeaders });
   } catch (error) {
@@ -323,6 +345,9 @@ export async function handleGetDeployments(request: Request, appId: number): Pro
 export async function handleRollbackApp(request: Request, appId: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "apps.rollback");
+    if (!db.getApp(appId, ctx.orgId)) {
+      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    }
     const body = await request.json() as { deployment_id: number };
     const { opId } = enqueue({
       kind: "rollback",

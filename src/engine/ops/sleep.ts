@@ -17,7 +17,7 @@ const checkRunning: Step<SleepInput, CheckOut> = {
   name: "check_running",
   label: "Check running state",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId) as App | null;
+    const app = db.getAppUnscoped(ctx.input.appId) as App | null;
     if (!app) throw new Error("App not found");
     const replicas = db.getReplicas(ctx.input.appId) as Replica[];
     if (app.status === "sleeping") {
@@ -33,7 +33,7 @@ const stopContainers: Step<SleepInput, { ok: true; skipped?: boolean }> = {
   async run(ctx, prior) {
     const check = prior["check_running"] as CheckOut;
     if (check.alreadySleeping) return { ok: true, skipped: true };
-    const app = db.getApp(ctx.input.appId) as App | null;
+    const app = db.getAppUnscoped(ctx.input.appId) as App | null;
     if (!app) throw new Error("App not found");
     const replicas = db.getReplicas(ctx.input.appId) as Replica[];
     if (replicas.length === 0) return { ok: true, skipped: true };

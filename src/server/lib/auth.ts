@@ -6,11 +6,28 @@ export interface TokenPayload {
   username: string;
 }
 
-const rawSecret = new TextEncoder().encode(
-  process.env.JWT_SECRET ?? "one-click-deploy-dev-secret",
-);
-const JWT_SECRET = new Uint8Array(
-  await crypto.subtle.digest("SHA-256", rawSecret),
+const isProd = process.env.NODE_ENV === "production" || process.env.BUN_ENV === "production";
+const rawJwtSecret = process.env.JWT_SECRET;
+
+if (isProd) {
+  if (!rawJwtSecret || rawJwtSecret.length < 32) {
+    console.error(
+      "[auth] FATAL: JWT_SECRET must be set to at least 32 characters in production. " +
+      "Generate one with: openssl rand -hex 32",
+    );
+    process.exit(1);
+  }
+} else if (!rawJwtSecret) {
+  console.warn(
+    "⚠️  JWT_SECRET not set — using insecure dev default. DO NOT run this in production.",
+  );
+}
+
+export const JWT_SECRET = new Uint8Array(
+  await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(rawJwtSecret ?? "one-click-deploy-dev-secret"),
+  ),
 );
 
 export async function authenticateRequest(request: Request): Promise<TokenPayload> {

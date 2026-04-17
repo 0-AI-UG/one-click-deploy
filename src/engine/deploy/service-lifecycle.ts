@@ -23,7 +23,7 @@ function log(context: string, ...args: unknown[]) {
 export async function destroyService(serviceId: number): Promise<{ ok: boolean; error?: string }> {
   log("destroy", `Destroying service id=${serviceId}`);
   try {
-    const service = db.getService(serviceId);
+    const service = db.getServiceUnscoped(serviceId);
     if (!service) throw new Error("Service not found");
 
     let cleanupFailed = false;
@@ -33,9 +33,9 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
     const links = db.getServiceLinks(serviceId);
     for (const link of links) {
       try {
-        const app = db.getApp(link.app_id);
+        const app = db.getAppUnscoped(link.app_id);
         if (app?.environment_id) {
-          const envRow = db.getEnvironment(app.environment_id);
+          const envRow = db.getEnvironmentUnscoped(app.environment_id);
           if (envRow) {
             const parsed = parseEnvVars(envRow.env_vars);
             const prefix = link.env_prefix || "DATABASE";
@@ -52,7 +52,7 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
     const instances = db.getServiceInstances(serviceId);
     for (const instance of instances) {
       affectedServerIds.add(instance.server_id);
-      const server = db.getServer(instance.server_id);
+      const server = db.getServerUnscoped(instance.server_id);
       if (server) {
         const hostKey = server.ssh_host_key || undefined;
         try {
@@ -119,7 +119,7 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
 export async function restartService(serviceId: number): Promise<{ ok: boolean; error?: string }> {
   log("restart", `Restarting service id=${serviceId}`);
   try {
-    const service = db.getService(serviceId);
+    const service = db.getServiceUnscoped(serviceId);
     if (!service) throw new Error("Service not found");
     const catalog = getCatalogEntry(service.service_type);
     if (!catalog) throw new Error("Unknown service type");
@@ -129,7 +129,7 @@ export async function restartService(serviceId: number): Promise<{ ok: boolean; 
 
     let allHealthy = true;
     for (const instance of instances) {
-      const server = db.getServer(instance.server_id);
+      const server = db.getServerUnscoped(instance.server_id);
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
@@ -155,12 +155,12 @@ export async function restartService(serviceId: number): Promise<{ ok: boolean; 
 export async function pauseService(serviceId: number): Promise<{ ok: boolean; error?: string }> {
   log("pause", `Pausing service id=${serviceId}`);
   try {
-    const service = db.getService(serviceId);
+    const service = db.getServiceUnscoped(serviceId);
     if (!service) throw new Error("Service not found");
 
     const instances = db.getServiceInstances(serviceId);
     for (const instance of instances) {
-      const server = db.getServer(instance.server_id);
+      const server = db.getServerUnscoped(instance.server_id);
       if (!server) continue;
       await pauseContainer(server.ipv4, instance.container_name, server.ssh_host_key || undefined);
       db.updateServiceInstanceStatus(instance.id, "paused");
@@ -179,7 +179,7 @@ export async function pauseService(serviceId: number): Promise<{ ok: boolean; er
 export async function unpauseService(serviceId: number): Promise<{ ok: boolean; error?: string }> {
   log("unpause", `Unpausing service id=${serviceId}`);
   try {
-    const service = db.getService(serviceId);
+    const service = db.getServiceUnscoped(serviceId);
     if (!service) throw new Error("Service not found");
     const catalog = getCatalogEntry(service.service_type);
     if (!catalog) throw new Error("Unknown service type");
@@ -187,7 +187,7 @@ export async function unpauseService(serviceId: number): Promise<{ ok: boolean; 
     const instances = db.getServiceInstances(serviceId);
     let allHealthy = true;
     for (const instance of instances) {
-      const server = db.getServer(instance.server_id);
+      const server = db.getServerUnscoped(instance.server_id);
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
@@ -215,7 +215,7 @@ export async function getServiceLogs(
   instanceId?: number,
   tail = 100
 ): Promise<string> {
-  const service = db.getService(serviceId);
+  const service = db.getServiceUnscoped(serviceId);
   if (!service) throw new Error("Service not found");
 
   let instance: ServiceInstance;
@@ -227,7 +227,7 @@ export async function getServiceLogs(
     if (!instance) throw new Error("No primary instance");
   }
 
-  const server = db.getServer(instance.server_id);
+  const server = db.getServerUnscoped(instance.server_id);
   if (!server) throw new Error("Server not found");
 
   return getContainerLogs(server.ipv4, instance.container_name, tail, server.ssh_host_key || undefined);

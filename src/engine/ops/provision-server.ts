@@ -95,7 +95,7 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
     const compute = getComputeProvider();
 
     // Idempotent replay: if the row already has a provider_id, read back.
-    const current = db.getServer(row.serverId);
+    const current = db.getServerUnscoped(row.serverId);
     if (current && current.provider_id) {
       return {
         providerId: current.provider_id,

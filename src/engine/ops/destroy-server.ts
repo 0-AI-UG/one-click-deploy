@@ -28,7 +28,7 @@ const preflight: Step<DestroyServerInput, { ok: true }> = {
     if (db.getPanel()?.server_id === ctx.input.serverId) {
       throw new Error("Cannot destroy the panel's server");
     }
-    const server = db.getServer(ctx.input.serverId);
+    const server = db.getServerUnscoped(ctx.input.serverId);
     if (!server) throw new Error("Server not found");
     return { ok: true };
   },
@@ -73,7 +73,7 @@ const cleanupPanelRow: Step<DestroyServerInput, { ok: true }> = {
   label: "Cleanup panel row",
   async run(ctx) {
     const panel = db.getPanel();
-    const server = db.getServer(ctx.input.serverId);
+    const server = db.getServerUnscoped(ctx.input.serverId);
     if (!panel || panel.server_id !== ctx.input.serverId || !server) return { ok: true };
     if (panel.dns_zone_id && panel.dns_name && panel.dns_type && panel.dns_value) {
       await softStep(ctx, "delete_panel_dns", async () => {
@@ -103,7 +103,7 @@ const deleteCloudServer: Step<DestroyServerInput, { ok: boolean; error?: string 
   name: "delete_cloud_server",
   label: "Delete cloud server",
   async run(ctx) {
-    const server = db.getServer(ctx.input.serverId);
+    const server = db.getServerUnscoped(ctx.input.serverId);
     if (!server || !server.provider_id) return { ok: true };
     const r = await softStep(ctx, "delete_cloud_server", async () => {
       const compute = getComputeProvider(server.provider);
@@ -141,7 +141,7 @@ const destroyServerOp: OpKindDefinition<DestroyServerInput> = {
   resourceKeys: (input) => {
     const keys: string[] = [`server:${input.serverId}`];
     try {
-      const server = db.getServer(input.serverId);
+      const server = db.getServerUnscoped(input.serverId);
       const orgId = server?.org_id ?? "";
       for (const app of db.getApps(orgId, input.serverId)) keys.push(`app:${app.id}`);
       for (const svc of db.getServicesOnServer(input.serverId)) keys.push(`service:${svc.id}`);

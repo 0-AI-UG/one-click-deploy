@@ -24,7 +24,7 @@ const loadAndValidate: Step<MigrateInput, RunOut> = {
   async run(ctx) {
     const replica = db.getReplicas(ctx.input.appId).find((r) => r.id === ctx.input.replicaId);
     if (!replica) throw new Error("Replica not found");
-    const target = db.getServer(ctx.input.targetServerId);
+    const target = db.getServerUnscoped(ctx.input.targetServerId);
     if (!target || target.status !== "ready") {
       throw new Error("Target server not found or not ready");
     }

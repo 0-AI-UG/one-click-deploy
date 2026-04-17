@@ -46,7 +46,7 @@ const wakeIfSleeping: Step<RedeployInput, WakeOut> = {
   name: "wake_if_sleeping",
   label: "Wake app",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) throw new Error("App not found");
     if (app.status !== "sleeping") return { woke: false };
     const result = await wakeApp(ctx.input.appId);
@@ -60,12 +60,12 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
   label: "Pull and build",
   async run(ctx) {
     const { appId } = ctx.input;
-    const app = db.getApp(appId);
+    const app = db.getAppUnscoped(appId);
     if (!app) throw new Error("App not found");
     const replicas = db.getReplicas(appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
     const first = replicas[0];
-    const server = db.getServer(first.server_id);
+    const server = db.getServerUnscoped(first.server_id);
     if (!server) throw new Error("Server not found");
 
     const previousStatus = app.status;
@@ -152,7 +152,7 @@ const swapContainer: Step<RedeployInput, SwapOut> = {
   name: "swap_container",
   label: "Swap container",
   async run(ctx, prior) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) throw new Error("App not found");
     const build = prior["pull_and_build"] as BuildOut;
     return { containerName: app.name, oldImageTag: `${app.name}:previous` };
@@ -184,12 +184,12 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
   name: "health_check",
   label: "Health check",
   async run(ctx, prior) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) throw new Error("App not found");
     const replicas = db.getReplicas(ctx.input.appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
     const first = replicas[0];
-    const server = db.getServer(first.server_id);
+    const server = db.getServerUnscoped(first.server_id);
     if (!server) throw new Error("Server not found");
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
@@ -209,11 +209,11 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
   name: "record_deployment_history",
   label: "Record deployment",
   async run(ctx, prior) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) throw new Error("App not found");
     const replicas = db.getReplicas(ctx.input.appId);
     const first = replicas[0];
-    const server = first ? db.getServer(first.server_id) : null;
+    const server = first ? db.getServerUnscoped(first.server_id) : null;
     const build = prior["pull_and_build"] as BuildOut;
     let gitCommit = "unknown";
     if (server) {

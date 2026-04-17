@@ -4,6 +4,7 @@ import { requireOrgPermission } from "../lib/org-context.ts";
 import { PermissionError } from "../lib/errors.ts";
 import {
   getOperation,
+  getOperationUnscoped,
   getSteps,
   listPendingOperations,
   listRunningOperations,
@@ -12,8 +13,8 @@ import {
   requestCancel,
 } from "../../shared/db/operations.ts";
 import { getSettings } from "../../shared/db/settings.ts";
-import { getApp } from "../../shared/db/apps.ts";
-import { getServer } from "../../shared/db/servers.ts";
+import { getAppUnscoped } from "../../shared/db/apps.ts";
+import { getServerUnscoped } from "../../shared/db/servers.ts";
 import { stepCount, listOps, getOp } from "../../engine/ops/registry.ts";
 
 // Keys whose values may contain secrets (connection strings, passwords,
@@ -46,10 +47,10 @@ function labelForResourceKey(key: string): string {
   if (!m) return key;
   const id = parseInt(m[2], 10);
   if (m[1] === "app") {
-    const app = getApp(id);
+    const app = getAppUnscoped(id);
     return app ? app.name : key;
   }
-  const server = getServer(id);
+  const server = getServerUnscoped(id);
   return server ? server.name : key;
 }
 
@@ -129,8 +130,8 @@ export async function handleListOperations(request: Request): Promise<Response> 
 
 export async function handleGetOperation(request: Request, id: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "servers.view");
-    const op = getOperation(id);
+    const ctx = await requireOrgPermission(request, "servers.view");
+    const op = getOperation(id, ctx.orgId);
     if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     const steps = getSteps(id, 0).map(mapStep);
     const children = listChildOperations(id).map(toJsonRow);
@@ -145,14 +146,14 @@ export async function handleGetOperation(request: Request, id: number): Promise<
 
 export async function handleOperationEvents(request: Request, id: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "servers.view");
+    const ctx = await requireOrgPermission(request, "servers.view");
     const url = new URL(request.url);
     const since = parseInt(url.searchParams.get("since") || "0", 10);
     const timeoutMs = Math.min(parseInt(url.searchParams.get("wait") || "15000", 10), 25000);
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
-      const op = getOperation(id);
+      const op = getOperation(id, ctx.orgId);
       if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
       const steps = getSteps(id, since);
       const terminal = ["done", "failed", "cancelled", "compensated"].includes(op.status);
@@ -170,7 +171,7 @@ export async function handleOperationEvents(request: Request, id: number): Promi
       await new Promise((r) => setTimeout(r, 400));
     }
     // Timed out with no new events — client re-polls.
-    const op = getOperation(id)!;
+    const op = getOperation(id, ctx.orgId)!;
     return Response.json(
       { status: op.status, last_step: op.last_step, steps: [] },
       { headers: corsHeaders },
@@ -183,7 +184,7 @@ export async function handleOperationEvents(request: Request, id: number): Promi
 export async function handleCancelOperation(request: Request, id: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "servers.view");
-    const op = getOperation(id);
+    const op = getOperation(id, ctx.orgId);
     if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     // Org owners or the user who triggered the op can cancel it.
     if (ctx.orgRole === "member" && op.triggered_by !== ctx.userId) {

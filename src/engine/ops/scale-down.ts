@@ -17,7 +17,7 @@ const computeTarget: Step<ScaleDownInput, ComputeOut> = {
   name: "compute_target",
   label: "Compute scale target",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId) as App | null;
+    const app = db.getAppUnscoped(ctx.input.appId) as App | null;
     if (!app) throw new Error("App not found");
     const current = db.getReplicas(ctx.input.appId) as Replica[];
     const currentCount = current.length;
@@ -40,7 +40,7 @@ const removeReplicas: Step<ScaleDownInput, { removed: boolean }> = {
   async run(ctx, prior) {
     const compute = prior["compute_target"] as ComputeOut;
     if (compute.toRemove === 0) return { removed: false };
-    const app = db.getApp(ctx.input.appId) as App | null;
+    const app = db.getAppUnscoped(ctx.input.appId) as App | null;
     if (!app) throw new Error("App not found");
     const currentReplicas = db.getReplicas(ctx.input.appId) as Replica[];
     const currentCount = currentReplicas.length;

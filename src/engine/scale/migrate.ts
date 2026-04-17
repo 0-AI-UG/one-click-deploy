@@ -24,7 +24,7 @@ export async function migrateReplica(
   emit: ProgressFn,
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    const app = db.getApp(appId) as App | null;
+    const app = db.getAppUnscoped(appId) as App | null;
     if (!app) throw new Error("App not found");
 
     const allReplicas = db.getReplicas(appId) as Replica[];
@@ -35,12 +35,12 @@ export async function migrateReplica(
       throw new Error("Replica is already on the target server");
     }
 
-    const targetServer = db.getServer(targetServerId);
+    const targetServer = db.getServerUnscoped(targetServerId);
     if (!targetServer || targetServer.status !== "ready") {
       throw new Error("Target server not found or not ready");
     }
 
-    const sourceServer = db.getServer(replica.server_id);
+    const sourceServer = db.getServerUnscoped(replica.server_id);
     if (!sourceServer) throw new Error("Source server not found");
 
     if (app.volume_id) {
@@ -58,8 +58,8 @@ async function migrateStateless(
   app: App,
   replica: Replica,
   allReplicas: Replica[],
-  sourceServer: ReturnType<typeof db.getServer>,
-  targetServer: ReturnType<typeof db.getServer>,
+  sourceServer: ReturnType<typeof db.getServerUnscoped>,
+  targetServer: ReturnType<typeof db.getServerUnscoped>,
   emit: ProgressFn,
 ): Promise<{ ok: boolean; error?: string }> {
   if (!sourceServer || !targetServer) throw new Error("Server not found");
@@ -129,8 +129,8 @@ async function migrateWithVolume(
   app: App,
   replica: Replica,
   allReplicas: Replica[],
-  sourceServer: NonNullable<ReturnType<typeof db.getServer>>,
-  targetServer: NonNullable<ReturnType<typeof db.getServer>>,
+  sourceServer: NonNullable<ReturnType<typeof db.getServerUnscoped>>,
+  targetServer: NonNullable<ReturnType<typeof db.getServerUnscoped>>,
   emit: ProgressFn,
 ): Promise<{ ok: boolean; error?: string }> {
   if (sourceServer.location !== targetServer.location) {

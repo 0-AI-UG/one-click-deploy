@@ -101,7 +101,7 @@ export function internalAppUrl(appName: string): string {
 function getPanelAccess(): ServerAccess | null {
   const panel = db.getPanel();
   if (!panel) return null;
-  const panelServer = db.getServer(panel.server_id);
+  const panelServer = db.getServerUnscoped(panel.server_id);
   if (!panelServer || !panelServer.ipv4) return null;
   return {
     name: panelServer.name,
@@ -183,7 +183,7 @@ function buildUpstreams(
   );
   const ups: CaddyUpstream[] = [];
   for (const replica of replicas) {
-    const server = db.getServer(replica.server_id);
+    const server = db.getServerUnscoped(replica.server_id);
     if (!server) continue;
     // Only servers attached to the shared private network can serve this
     // app — the container is bound to the private IP. A server without one
@@ -403,7 +403,7 @@ async function ensureNipIoTlsPolicy(
  * call on every lifecycle event.
  */
 export async function syncAppCaddy(appId: number, force = false): Promise<void> {
-  const app = db.getApp(appId);
+  const app = db.getAppUnscoped(appId);
   if (!app) return;
 
   const panel = getPanelAccess();

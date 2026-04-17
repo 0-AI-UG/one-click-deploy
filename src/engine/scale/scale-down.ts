@@ -37,7 +37,7 @@ export async function scaleDown(
     try {
       emit("scale", `Draining replica ${replica.container_name}...`);
 
-      const server = db.getServer(replica.server_id);
+      const server = db.getServerUnscoped(replica.server_id);
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
 
@@ -115,7 +115,7 @@ export async function scaleDown(
   // If going to 0, deploy wake page so HTTP requests auto-wake the app.
   if (targetCount === 0) {
     const lastRemoved = toRemove[toRemove.length - 1];
-    const lastServer = db.getServer(lastRemoved.server_id);
+    const lastServer = db.getServerUnscoped(lastRemoved.server_id);
     if (lastServer) {
       const wakeToken = crypto.randomUUID();
       db.updateAppSleepingState(app.id, lastServer.id, lastRemoved.host_port, wakeToken);
@@ -131,7 +131,7 @@ export async function scaleDown(
       }
       // Install the wake page on the panel server — since DNS now points
       // at the panel, the wake page must live where the traffic lands.
-      const panelServer = panel ? db.getServer(panel.server_id) : null;
+      const panelServer = panel ? db.getServerUnscoped(panel.server_id) : null;
       if (panelServer?.ipv4) {
         const useInternalTls = !app.domain || app.domain.endsWith(".nip.io");
         await deployCaddyWakePage(
@@ -170,9 +170,9 @@ export async function scaleDown(
   }
   for (const serverId of candidateServerIds) {
     try {
-      const before = db.getServer(serverId);
+      const before = db.getServerUnscoped(serverId);
       await db.gcServerIfEmpty(serverId);
-      const after = db.getServer(serverId);
+      const after = db.getServerUnscoped(serverId);
       if (before && !after) emit("scale", `Server ${before.name} deleted`);
     } catch (err) {
       log("scale", `Failed to gc server ${serverId}: ${err}`);

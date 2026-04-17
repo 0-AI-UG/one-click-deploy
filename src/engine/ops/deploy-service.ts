@@ -140,11 +140,11 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
 
     let providerServerId = server.providerServerId;
     if (!providerServerId) {
-      const existing = db.getServer(server.serverId);
+      const existing = db.getServerUnscoped(server.serverId);
       if (!existing) throw new Error(`Server ${server.serverId} not found`);
       providerServerId = existing.provider_id;
     }
-    const serverLocation = db.getServer(server.serverId)?.location || "nbg1";
+    const serverLocation = db.getServerUnscoped(server.serverId)?.location || "nbg1";
     const vol = await compute.volumes.create({
       name: `ocd-svc-${req.name}-data`,
       sizeGb: volumeSize,
@@ -193,7 +193,7 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
     const hostPort = db.nextServiceHostPort(server.serverId);
     const containerName = req.name;
 
-    const serverRow = db.getServer(server.serverId);
+    const serverRow = db.getServerUnscoped(server.serverId);
     if (!serverRow) throw new Error(`Server ${server.serverId} not found`);
     const bindAddress = replicaBindHost(serverRow);
 
@@ -321,7 +321,7 @@ const injectCredentials: Step<DeployServiceInput, { ok: true; injected: boolean 
       }
     }
 
-    const envRow = db.getEnvironment(req.environment_id);
+    const envRow = db.getEnvironmentUnscoped(req.environment_id);
     if (envRow) {
       const parsed = parseEnvVars(envRow.env_vars);
       const newKeys = new Set(newEntries.map((e) => e.key));

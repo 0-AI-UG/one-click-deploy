@@ -83,7 +83,14 @@ export function enqueueOperation(args: EnqueueInput): OperationRow {
     ) as OperationRow;
 }
 
-export function getOperation(id: number): OperationRow | null {
+export function getOperation(id: number, orgId: string): OperationRow | null {
+  return db.query("SELECT * FROM operations WHERE id = ? AND org_id = ?").get(id, orgId) as OperationRow | null;
+}
+
+/** Engine-internal: look up an operation by id without org scoping.
+ * Use only in the engine/step-runner where no request context is available.
+ * Route handlers MUST use getOperation(id, orgId) instead. */
+export function getOperationUnscoped(id: number): OperationRow | null {
   return db.query("SELECT * FROM operations WHERE id = ?").get(id) as OperationRow | null;
 }
 

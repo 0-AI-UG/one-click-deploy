@@ -12,7 +12,15 @@ export function getEnvironments(orgId: string): EnvironmentRow[] {
   return db.query("SELECT * FROM environments WHERE org_id = ? ORDER BY created_at").all(orgId) as EnvironmentRow[];
 }
 
-export function getEnvironment(id: number): EnvironmentRow | null {
+export function getEnvironment(id: number, orgId: string): EnvironmentRow | null {
+  return db.query("SELECT * FROM environments WHERE id = ? AND org_id = ?").get(id, orgId) as EnvironmentRow | null;
+}
+
+/** Engine-internal: look up an environment by id without org scoping.
+ * Use only in engine ops where the environment id comes from an app row
+ * and no request context is available.
+ * Route handlers MUST use getEnvironment(id, orgId) instead. */
+export function getEnvironmentUnscoped(id: number): EnvironmentRow | null {
   return db.query("SELECT * FROM environments WHERE id = ?").get(id) as EnvironmentRow | null;
 }
 

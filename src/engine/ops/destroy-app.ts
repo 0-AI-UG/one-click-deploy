@@ -32,7 +32,7 @@ const removeGithubWebhook: Step<DestroyInput, { ok: boolean; error?: string }> =
   name: "remove_github_webhook",
   label: "Remove GitHub webhook",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) return { ok: true };
     if (!app.webhook_enabled || !app.github_webhook_id) return { ok: true };
     const r = await softStep(ctx, "remove_github_webhook", async () => {
@@ -52,14 +52,14 @@ const stopAndRemoveContainers: Step<DestroyInput, { affectedServerIds: number[];
   name: "stop_and_remove_containers",
   label: "Stop and remove containers",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) return { affectedServerIds: [], failed: false };
     const replicas = db.getReplicas(ctx.input.appId);
     const affected = new Set<number>();
     let failed = false;
     for (const replica of replicas) {
       affected.add(replica.server_id);
-      const server = db.getServer(replica.server_id);
+      const server = db.getServerUnscoped(replica.server_id);
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
       const r = await softStep(ctx, `rm ${replica.container_name}`, async () => {
@@ -82,12 +82,12 @@ const removeAuthProxyStep: Step<DestroyInput, { ok: boolean }> = {
   name: "remove_auth_proxy",
   label: "Remove auth proxy",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) return { ok: true };
     if (!app.auth_password) return { ok: true };
     const replicas = db.getReplicas(ctx.input.appId);
     for (const replica of replicas) {
-      const server = db.getServer(replica.server_id);
+      const server = db.getServerUnscoped(replica.server_id);
       if (!server) continue;
       await softStep(ctx, `remove_auth_proxy ${replica.container_name}`, async () => {
         await removeAuthProxy(server.ipv4, replica.container_name, server.ssh_host_key || undefined);
@@ -101,7 +101,7 @@ const removeCaddyRoute: Step<DestroyInput, { ok: boolean; error?: string }> = {
   name: "remove_caddy_route",
   label: "Remove Caddy route",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app) return { ok: true };
     const r = await softStep(ctx, "remove_caddy_route", async () => {
       await removeAppCaddy(app.name, app.domain);
@@ -137,10 +137,10 @@ const deleteVolume: Step<DestroyInput, { ok: boolean; error?: string }> = {
   name: "delete_volume",
   label: "Delete volume",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
+    const app = db.getAppUnscoped(ctx.input.appId);
     if (!app || !app.volume_id) return { ok: true };
     const replicas = db.getReplicas(ctx.input.appId);
-    const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
+    const firstServer = replicas.length > 0 ? db.getServerUnscoped(replicas[0].server_id) : null;
     const r = await softStep(ctx, "delete_volume", async () => {
       const compute = getComputeProvider(firstServer?.provider);
       await compute.volumes?.delete(app.volume_id);

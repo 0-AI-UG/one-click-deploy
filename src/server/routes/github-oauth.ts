@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { corsHeaders } from "../lib/cors.ts";
-import { authenticateRequest } from "../lib/auth.ts";
+import { authenticateRequest, JWT_SECRET } from "../lib/auth.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore } from "../../shared/secret-store.ts";
@@ -9,12 +9,7 @@ function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [github-oauth:${context}]`, ...args);
 }
 
-const rawSecret = new TextEncoder().encode(
-  process.env.JWT_SECRET ?? "one-click-deploy-dev-secret",
-);
-const OAUTH_STATE_SECRET = new Uint8Array(
-  await crypto.subtle.digest("SHA-256", rawSecret),
-);
+const OAUTH_STATE_SECRET = JWT_SECRET;
 
 async function createStateToken(userId: string): Promise<string> {
   return new SignJWT({ userId, purpose: "github-oauth" } as Record<string, unknown>)

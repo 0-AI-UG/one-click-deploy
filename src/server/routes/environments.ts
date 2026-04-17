@@ -45,7 +45,7 @@ export async function handleCreateEnvironment(request: Request): Promise<Respons
 export async function handleUpdateEnvironment(request: Request, id: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "environments.manage");
-    const existing = db.getEnvironment(id);
+    const existing = db.getEnvironment(id, ctx.orgId);
     if (!existing) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
@@ -86,7 +86,7 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
 export async function handleDeleteEnvironment(request: Request, id: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "environments.manage");
-    const env = db.getEnvironment(id);
+    const env = db.getEnvironment(id, ctx.orgId);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
@@ -108,7 +108,7 @@ export async function handleDeleteEnvironment(request: Request, id: number): Pro
 export async function handleGetEnvironmentApps(request: Request, id: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "servers.view");
-    const env = db.getEnvironment(id);
+    const env = db.getEnvironment(id, ctx.orgId);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
@@ -124,13 +124,13 @@ export async function handleGetEnvironmentApps(request: Request, id: number): Pr
 export async function handleAttachAppToEnvironment(request: Request, id: number): Promise<Response> {
   try {
     const ctx = await requireOrgPermission(request, "environments.manage");
-    const env = db.getEnvironment(id);
+    const env = db.getEnvironment(id, ctx.orgId);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
     const body = await request.json();
     const { app_id } = body;
-    const app = db.getApp(app_id);
+    const app = db.getApp(app_id, ctx.orgId);
     if (!app) {
       return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
     }
@@ -157,10 +157,10 @@ export async function handleAttachAppToEnvironment(request: Request, id: number)
 
 export async function handleDetachAppFromEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requireOrgPermission(request, "environments.manage");
+    const ctx = await requireOrgPermission(request, "environments.manage");
     const body = await request.json();
     const { app_id } = body;
-    const app = db.getApp(app_id);
+    const app = db.getApp(app_id, ctx.orgId);
     if (!app) {
       return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
     }

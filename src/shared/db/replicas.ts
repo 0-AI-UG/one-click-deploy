@@ -60,7 +60,17 @@ export function getReplicas(appId: number): ReplicaRow[] {
     .all(appId) as ReplicaRow[];
 }
 
-export function getReplica(id: number): ReplicaRow | null {
+export function getReplica(id: number, orgId: string): ReplicaRow | null {
+  // replicas table has no org_id; verify ownership via JOIN with apps.
+  return db.query(
+    "SELECT r.* FROM replicas r JOIN apps a ON a.id = r.app_id WHERE r.id = ? AND a.org_id = ?"
+  ).get(id, orgId) as ReplicaRow | null;
+}
+
+/** Engine-internal: look up a replica by id without org scoping.
+ * Use only in engine ops/reconciler where no request context is available.
+ * Route handlers MUST use getReplica(id, orgId) instead. */
+export function getReplicaUnscoped(id: number): ReplicaRow | null {
   return db.query("SELECT * FROM replicas WHERE id = ?").get(id) as ReplicaRow | null;
 }
 

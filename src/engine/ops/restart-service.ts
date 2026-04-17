@@ -10,7 +10,7 @@ const restartAllInstances: Step<RestartServiceInput, { allHealthy: boolean }> = 
   name: "restart_container",
   label: "Restart containers",
   async run(ctx) {
-    const service = db.getService(ctx.input.serviceId);
+    const service = db.getServiceUnscoped(ctx.input.serviceId);
     if (!service) throw new Error("Service not found");
     const catalog = getCatalogEntry(service.service_type);
     if (!catalog) throw new Error("Unknown service type");
@@ -20,7 +20,7 @@ const restartAllInstances: Step<RestartServiceInput, { allHealthy: boolean }> = 
 
     let allHealthy = true;
     for (const inst of instances) {
-      const server = db.getServer(inst.server_id);
+      const server = db.getServerUnscoped(inst.server_id);
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
       await restartContainer(server.ipv4, inst.container_name, hostKey);
