@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { mock } from "bun:test";
 import type { ComputeProvider, DnsProvider } from "./providers/types.ts";
+import type { OperationRow } from "./db/operations.ts";
 
 /** Create a fresh temp data dir and set OCD_DATA_DIR to it. Must run before
  *  any db.ts import. Returns the path so tests can inspect/cleanup. */
@@ -120,4 +121,80 @@ export function makeFakeDnsProvider(
     ...overrides,
   };
   return Object.assign(provider, { _mocks });
+}
+
+export type EnqueueAndWaitOpts = {
+  /** Override org_id on the enqueued operation (default: ""). */
+  orgId?: string;
+  /** How long to poll before throwing (default: 5 minutes). */
+  timeoutMs?: number;
+};
+
+export type EnqueueAndWaitResult = {
+  status: string;
+  error?: string;
+  /** The database row id of the created operation. */
+  opId: number;
+};
+
+/**
+ * Enqueue an operation and poll the `operations` table until it reaches a
+ * terminal status (`done`, `failed`, `cancelled`, `compensated`).
+ *
+ * Suitable for both Layer-1 (temp-SQLite, fake providers) and Layer-2
+ * (real Hetzner) tests.
+ *
+ * @example
+ *   const { status } = await enqueueAndWait("fast-noop", {}, { timeoutMs: 2000 });
+ *   expect(status).toBe("done");
+ */
+export async function enqueueAndWait(
+  kind: string,
+  input: unknown,
+  opts: EnqueueAndWaitOpts = {},
+): Promise<EnqueueAndWaitResult> {
+  const { enqueueOperation, getOperationUnscoped } = await import("./db/operations.ts");
+  const row = enqueueOperation({
+    kind,
+    resourceKeys: [],
+    input,
+    trigger: "test-helper",
+    orgId: opts.orgId ?? "",
+  });
+  const timeout = opts.timeoutMs ?? 5 * 60_000;
+  const deadline = Date.now() + timeout;
+  const terminal = ["done", "failed", "cancelled", "compensated"] as const;
+  while (Date.now() < deadline) {
+    const op = getOperationUnscoped(row.id) as OperationRow | null;
+    if (!op) throw new Error(`enqueueAndWait: op ${row.id} disappeared`);
+    if ((terminal as readonly string[]).includes(op.status)) {
+      const error = op.error_json
+        ? (JSON.parse(op.error_json) as { message?: string })?.message
+        : undefined;
+      return { status: op.status, error, opId: op.id };
+    }
+    await Bun.sleep(200);
+  }
+  throw new Error(`enqueueAndWait: op ${row.id} (${kind}) timed out after ${timeout}ms`);
+}
+
+/**
+ * Poll the `replicas` table until the given replica has `status = 'running'`.
+ *
+ * Useful in Layer-2 tests that wait for a container to come up after a deploy
+ * or restart.
+ */
+export async function waitForReplicaHealthy(
+  replicaId: number,
+  opts: { timeoutMs?: number } = {},
+): Promise<void> {
+  const { getReplicaUnscoped } = await import("./db/replicas.ts");
+  const timeout = opts.timeoutMs ?? 2 * 60_000;
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const r = getReplicaUnscoped(replicaId);
+    if (r?.status === "running") return;
+    await Bun.sleep(500);
+  }
+  throw new Error(`waitForReplicaHealthy: replica ${replicaId} did not become healthy within ${timeout}ms`);
 }
