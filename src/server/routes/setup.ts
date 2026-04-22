@@ -39,7 +39,8 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     db.insertUser({ id: userId, username, password_hash: passwordHash });
 
     // Return temp token for mandatory 2FA setup
-    const tempToken = await createTempToken(userId);
+    const createdUser = db.getUserById(userId)!;
+    const tempToken = await createTempToken(userId, createdUser.token_version);
 
     return Response.json(
       { tempToken, requires2FASetup: true, user: { id: userId, username } },

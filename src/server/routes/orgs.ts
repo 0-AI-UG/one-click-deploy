@@ -4,6 +4,7 @@ import * as db from "../../shared/db.ts";
 import { secretStore, maskToken } from "../../shared/secret-store.ts";
 import { syncSubscriptionSeats } from "./billing.ts";
 import { getComputeProvider } from "../../shared/providers/index.ts";
+import { getStripeClient } from "../lib/stripe.ts";
 
 // GET /api/orgs — list user's orgs
 export async function handleListOrgs(request: Request): Promise<Response> {
@@ -50,6 +51,31 @@ export async function handleUpdateOrg(request: Request): Promise<Response> {
 export async function handleDeleteOrg(request: Request): Promise<Response> {
   const ctx = await requireOrgContext(request);
   if (ctx.orgRole !== "owner") return Response.json({ error: "Only the owner can delete an org" }, { status: 403 });
+
+  // Cancel the Stripe subscription before removing the org row so we don't
+  // leave a billing zombie.  Tolerate "already canceled" / "not found" errors
+  // (the sub may have been canceled out-of-band).  Any other Stripe failure
+  // propagates as a 500 so the caller can retry — we must not delete the org
+  // while billing is in an unknown state.
+  const sub = db.getSubscription(ctx.orgId);
+  if (sub?.stripe_subscription_id) {
+    try {
+      const stripe = getStripeClient();
+      await stripe.subscriptions.cancel(sub.stripe_subscription_id);
+    } catch (err: unknown) {
+      const stripeErr = err as { code?: string; statusCode?: number };
+      const tolerated =
+        stripeErr?.code === "resource_missing" ||
+        stripeErr?.code === "subscription_already_canceled" ||
+        stripeErr?.statusCode === 404;
+      if (!tolerated) {
+        console.error(`[orgs] stripe.subscriptions.cancel failed for org ${ctx.orgId}:`, err);
+        return Response.json({ error: "Failed to cancel Stripe subscription; org not deleted" }, { status: 500 });
+      }
+      console.warn(`[orgs] Stripe subscription ${sub.stripe_subscription_id} already gone (tolerated):`, stripeErr?.code);
+    }
+  }
+
   db.deleteOrg(ctx.orgId);
   return Response.json({ ok: true });
 }

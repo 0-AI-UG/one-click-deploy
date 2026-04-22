@@ -13,6 +13,7 @@ export type UserRow = {
   github_avatar_url: string;
   github_linked_at: string | null;
   created_at: string;
+  token_version: number;
 };
 
 export type WebAuthnCredential = {
@@ -216,4 +217,8 @@ export function setUserPermissions(userId: string, permissions: string[]): void 
   for (const perm of permissions) {
     stmt.run(userId, perm);
   }
+}
+
+export function incrementTokenVersion(userId: string): void {
+  db.run("UPDATE users SET token_version = token_version + 1 WHERE id = ?", [userId]);
 }

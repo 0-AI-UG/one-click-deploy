@@ -117,6 +117,7 @@ export {
   getUserPermissions,
   hasPermission,
   setUserPermissions,
+  incrementTokenVersion,
 } from "./users.ts";
 export { getSettings, saveSetting } from "./settings.ts";
 export { getDeploySession, saveDeploySession, deleteDeploySession } from "./deploy-sessions.ts";

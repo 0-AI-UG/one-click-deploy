@@ -1251,6 +1251,96 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE subscriptions ADD COLUMN last_event_at INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 48,
+    description: "Add token_version to users for session revocation",
+    up: (db) => {
+      db.run("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
+    },
+  },
+  {
+    version: 49,
+    description: "Persist WebAuthn challenges and device-auth codes to SQLite",
+    up: (db) => {
+      db.run(`CREATE TABLE IF NOT EXISTS webauthn_challenges (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        challenge TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      )`);
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user_kind ON webauthn_challenges(user_id, kind)",
+      );
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires ON webauthn_challenges(expires_at)",
+      );
+
+      db.run(`CREATE TABLE IF NOT EXISTS device_auth_codes (
+        device_code TEXT PRIMARY KEY,
+        user_code TEXT NOT NULL UNIQUE,
+        user_id TEXT,
+        status TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      )`);
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_device_auth_codes_user_code ON device_auth_codes(user_code)",
+      );
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_device_auth_codes_expires ON device_auth_codes(expires_at)",
+      );
+    },
+  },
+  {
+    version: 50,
+    description: "Add FK CASCADE on subscriptions.org_id → organizations.id",
+    disableForeignKeys: true,
+    up: (db) => {
+      // SQLite cannot add a foreign key to an existing table — we must rebuild.
+      // The four org-scoped tables created in migration 44 (org_memberships,
+      // org_invitations, org_settings, org_permissions) already carry
+      //   REFERENCES organizations(id) ON DELETE CASCADE
+      // in their original CREATE TABLE statements, so they need no changes.
+      //
+      // The subscriptions table (migration 46 + 47) was created with a bare
+      //   org_id TEXT NOT NULL UNIQUE
+      // and needs the FK added via the create-new / copy / rename dance.
+
+      // Columns preserved (migrations 46 + 47):
+      //   id, org_id, stripe_customer_id, stripe_subscription_id,
+      //   stripe_item_id, status, seat_count, current_period_end,
+      //   created_at, updated_at, cancel_at_period_end, last_event_at
+      db.run(`CREATE TABLE subscriptions_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id TEXT NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
+        stripe_customer_id TEXT NOT NULL DEFAULT '',
+        stripe_subscription_id TEXT NOT NULL DEFAULT '',
+        stripe_item_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'none',
+        seat_count INTEGER NOT NULL DEFAULT 0,
+        current_period_end TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
+        last_event_at INTEGER NOT NULL DEFAULT 0
+      )`);
+
+      db.run(`INSERT INTO subscriptions_new
+        (id, org_id, stripe_customer_id, stripe_subscription_id,
+         stripe_item_id, status, seat_count, current_period_end,
+         created_at, updated_at, cancel_at_period_end, last_event_at)
+        SELECT
+          id, org_id, stripe_customer_id, stripe_subscription_id,
+          stripe_item_id, status, seat_count, current_period_end,
+          created_at, updated_at, cancel_at_period_end, last_event_at
+        FROM subscriptions`);
+
+      db.run("DROP TABLE subscriptions");
+      db.run("ALTER TABLE subscriptions_new RENAME TO subscriptions");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */
