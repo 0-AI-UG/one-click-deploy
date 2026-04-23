@@ -1085,6 +1085,48 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN git_branch TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 45,
+    description: "Add token_version to users for session revocation",
+    up: (db) => {
+      db.run("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
+    },
+  },
+  {
+    version: 46,
+    description: "Persist WebAuthn challenges and device-auth codes to SQLite",
+    up: (db) => {
+      db.run(`CREATE TABLE IF NOT EXISTS webauthn_challenges (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        challenge TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      )`);
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user_kind ON webauthn_challenges(user_id, kind)",
+      );
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires ON webauthn_challenges(expires_at)",
+      );
+
+      db.run(`CREATE TABLE IF NOT EXISTS device_auth_codes (
+        device_code TEXT PRIMARY KEY,
+        user_code TEXT NOT NULL UNIQUE,
+        user_id TEXT,
+        status TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      )`);
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_device_auth_codes_user_code ON device_auth_codes(user_code)",
+      );
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_device_auth_codes_expires ON device_auth_codes(expires_at)",
+      );
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

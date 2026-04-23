@@ -5,6 +5,7 @@ import { getUserById } from "../../shared/db.ts";
 export interface TokenPayload {
   userId: string;
   username: string;
+  v?: number; // token_version for session revocation (optional for backward compat)
 }
 
 const rawSecret = new TextEncoder().encode(
@@ -23,7 +24,14 @@ export async function authenticateRequest(request: Request): Promise<TokenPayloa
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
     if ((payload as Record<string, unknown>).purpose) throw new AuthError("Unauthorized");
-    return payload as unknown as TokenPayload;
+    const p = payload as unknown as TokenPayload;
+    // Validate token_version to support sign-out-all / password-reset revocation
+    const user = getUserById(p.userId);
+    if (!user) throw new AuthError("Unauthorized");
+    if (typeof p.v === "number" && user.token_version !== undefined && p.v < user.token_version) {
+      throw new AuthError("Unauthorized");
+    }
+    return p;
   } catch (err) {
     if (err instanceof AuthError) throw err;
     throw new AuthError("Unauthorized");
@@ -38,8 +46,8 @@ export async function createToken(payload: TokenPayload): Promise<string> {
     .sign(JWT_SECRET);
 }
 
-export async function createTempToken(userId: string): Promise<string> {
-  return new SignJWT({ userId, purpose: "2fa" } as unknown as Record<string, unknown>)
+export async function createTempToken(userId: string, v: number): Promise<string> {
+  return new SignJWT({ userId, purpose: "2fa", v } as unknown as Record<string, unknown>)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("5m")
@@ -51,7 +59,14 @@ export async function verifyTempToken(token: string): Promise<string> {
     const { payload } = await jwtVerify(token, JWT_SECRET);
     const p = payload as Record<string, unknown>;
     if (p.purpose !== "2fa") throw new AuthError("Invalid token");
-    return p.userId as string;
+    const userId = p.userId as string;
+    // Validate token_version to kill in-flight 2FA flows after a bump
+    const user = getUserById(userId);
+    if (!user) throw new AuthError("Invalid token");
+    if (typeof p.v === "number" && user.token_version !== undefined && p.v < user.token_version) {
+      throw new AuthError("Invalid token");
+    }
+    return userId;
   } catch (err) {
     if (err instanceof AuthError) throw err;
     throw new AuthError("Invalid or expired token");
