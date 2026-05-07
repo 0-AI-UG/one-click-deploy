@@ -16,21 +16,7 @@ import { handleError, getClientIP } from "../lib/utils.ts";
 import { authRateLimiter } from "../lib/rate-limit.ts";
 import { generateBackupCodes } from "./totp.ts";
 import * as db from "../../shared/db.ts";
-
-// --- Challenge store (in-memory, single-process) ---
-
-const challenges = new Map<string, { challenge: string; expiresAt: number }>();
-
-function setChallenge(userId: string, challenge: string) {
-  challenges.set(userId, { challenge, expiresAt: Date.now() + 60_000 });
-}
-
-function getAndDeleteChallenge(userId: string): string | null {
-  const entry = challenges.get(userId);
-  challenges.delete(userId);
-  if (!entry || entry.expiresAt < Date.now()) return null;
-  return entry.challenge;
-}
+import { saveChallenge, fetchAndDeleteChallenge } from "../../shared/db/webauthn-challenges.ts";
 
 // --- RP config ---
 
@@ -51,20 +37,37 @@ function getRpConfig(request: Request) {
   };
 }
 
-function checkRateLimit(request: Request): Response | null {
+function rateLimitKeys(request: Request, username?: string): string[] {
   const ip = getClientIP(request);
-  const { limited, retryAfterSeconds } = authRateLimiter.isLimited(ip);
-  if (limited) {
-    return Response.json(
-      { error: "Too many attempts. Please try again later." },
-      { status: 429, headers: { ...corsHeaders, "Retry-After": String(retryAfterSeconds) } },
-    );
+  const keys: string[] = [];
+  if (ip) keys.push("ip:" + ip);
+  if (username) keys.push("user:" + username.toLowerCase());
+  return keys;
+}
+
+function checkRateLimitKeys(keys: string[]): Response | null {
+  for (const key of keys) {
+    const { limited, retryAfterSeconds } = authRateLimiter.isLimited(key);
+    if (limited) {
+      return Response.json(
+        { error: "Too many attempts. Please try again later." },
+        { status: 429, headers: { ...corsHeaders, "Retry-After": String(retryAfterSeconds) } },
+      );
+    }
   }
   return null;
 }
 
+function checkRateLimit(request: Request): Response | null {
+  return checkRateLimitKeys(rateLimitKeys(request));
+}
+
+function recordFailureKeys(keys: string[]): void {
+  for (const key of keys) authRateLimiter.recordFailure(key);
+}
+
 function recordFailure(request: Request): void {
-  authRateLimiter.recordFailure(getClientIP(request));
+  recordFailureKeys(rateLimitKeys(request));
 }
 
 function credentialTransports(c: db.WebAuthnCredential): AuthenticatorTransportFuture[] {
@@ -121,7 +124,7 @@ export async function handleWebAuthnRegisterOptions(request: Request): Promise<R
       })),
     });
 
-    setChallenge(userId, options.challenge);
+    saveChallenge(userId, options.challenge, "register");
     return Response.json(options, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -140,7 +143,7 @@ export async function handleWebAuthnRegisterVerify(request: Request): Promise<Re
       return Response.json({ error: "credential is required" }, { status: 400, headers: corsHeaders });
     }
 
-    const challenge = getAndDeleteChallenge(userId);
+    const challenge = fetchAndDeleteChallenge(userId, "register");
     if (!challenge) {
       return Response.json({ error: "Challenge expired. Please try again." }, { status: 400, headers: corsHeaders });
     }
@@ -227,7 +230,7 @@ export async function handleWebAuthnRegisterOptionsFromLogin(request: Request): 
       })),
     });
 
-    setChallenge(userId, options.challenge);
+    saveChallenge(userId, options.challenge, "register_from_login");
     return Response.json(options, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -249,7 +252,7 @@ export async function handleWebAuthnRegisterVerifyFromLogin(request: Request): P
     const user = db.getUserById(userId);
     if (!user) throw new AuthError("Unauthorized");
 
-    const challenge = getAndDeleteChallenge(userId);
+    const challenge = fetchAndDeleteChallenge(userId, "register_from_login");
     if (!challenge) {
       return Response.json({ error: "Challenge expired. Please try again." }, { status: 400, headers: corsHeaders });
     }
@@ -287,12 +290,14 @@ export async function handleWebAuthnRegisterVerifyFromLogin(request: Request): P
       backupCodes.map((code) => Bun.password.hash(code.replace("-", ""), "bcrypt")),
     );
     db.insertBackupCodes(userId, codeHashes);
+    db.incrementTokenVersion(userId);
+    const freshUser = db.getUserById(userId)!;
 
     // Issue real JWT
-    const token = await createToken({ userId: user.id, username: user.username });
+    const token = await createToken({ userId: freshUser.id, username: freshUser.username, v: freshUser.token_version });
 
     return Response.json(
-      { token, user: userResponse(db.getUserById(userId)!), backupCodes },
+      { token, user: userResponse(freshUser), backupCodes },
       { headers: corsHeaders },
     );
   } catch (error) {
@@ -331,7 +336,7 @@ export async function handleWebAuthnLoginOptions(request: Request): Promise<Resp
       })),
     });
 
-    setChallenge(userId, options.challenge);
+    saveChallenge(userId, options.challenge, "login");
     return Response.json(options, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -353,7 +358,7 @@ export async function handleWebAuthnLoginVerify(request: Request): Promise<Respo
     const user = db.getUserById(userId);
     if (!user) throw new AuthError("Unauthorized");
 
-    const challenge = getAndDeleteChallenge(userId);
+    const challenge = fetchAndDeleteChallenge(userId, "login");
     if (!challenge) {
       return Response.json({ error: "Challenge expired. Please try again." }, { status: 400, headers: corsHeaders });
     }
@@ -385,7 +390,7 @@ export async function handleWebAuthnLoginVerify(request: Request): Promise<Respo
 
     db.updateWebAuthnCounter(storedCredential.id, verification.authenticationInfo.newCounter);
 
-    const token = await createToken({ userId: user.id, username: user.username });
+    const token = await createToken({ userId: user.id, username: user.username, v: user.token_version });
     return Response.json(
       { token, user: userResponse(user) },
       { headers: corsHeaders },
@@ -401,8 +406,9 @@ export async function handleWebAuthnLoginVerify(request: Request): Promise<Respo
 
 /** POST /api/auth/password-reset/webauthn-options */
 export async function handlePasswordResetWebAuthnOptions(request: Request): Promise<Response> {
-  const rateLimitResponse = checkRateLimit(request);
-  if (rateLimitResponse) return rateLimitResponse;
+  // Initial IP-only check; we need the username for full dual-key check
+  const ipOnlyResp = checkRateLimit(request);
+  if (ipOnlyResp) return ipOnlyResp;
 
   try {
     const body = await request.json() as { username?: string };
@@ -411,20 +417,26 @@ export async function handlePasswordResetWebAuthnOptions(request: Request): Prom
       { error: "Unable to initiate passkey verification. Check your username." },
       { status: 400, headers: corsHeaders },
     );
+
+    const ipKeys = rateLimitKeys(request);
     if (!body.username) {
-      recordFailure(request);
+      recordFailureKeys(ipKeys);
       return genericError;
     }
 
+    const keys = rateLimitKeys(request, body.username);
+    const rateLimitResponse = checkRateLimitKeys(keys);
+    if (rateLimitResponse) return rateLimitResponse;
+
     const user = db.getUserByUsername(body.username);
     if (!user || !user.webauthn_enabled) {
-      recordFailure(request);
+      recordFailureKeys(keys);
       return genericError;
     }
 
     const credentials = db.getWebAuthnCredentials(user.id);
     if (credentials.length === 0) {
-      recordFailure(request);
+      recordFailureKeys(keys);
       return genericError;
     }
 
@@ -438,7 +450,7 @@ export async function handlePasswordResetWebAuthnOptions(request: Request): Prom
       })),
     });
 
-    setChallenge(user.id, options.challenge);
+    saveChallenge(user.id, options.challenge, "password_reset");
     return Response.json(options, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -447,8 +459,9 @@ export async function handlePasswordResetWebAuthnOptions(request: Request): Prom
 
 /** POST /api/auth/password-reset/webauthn-verify */
 export async function handlePasswordResetWebAuthnVerify(request: Request): Promise<Response> {
-  const rateLimitResponse = checkRateLimit(request);
-  if (rateLimitResponse) return rateLimitResponse;
+  // Initial IP-only check; full dual-key check happens after parsing username
+  const ipOnlyResp = checkRateLimit(request);
+  if (ipOnlyResp) return ipOnlyResp;
 
   try {
     const body = await request.json() as {
@@ -473,13 +486,17 @@ export async function handlePasswordResetWebAuthnVerify(request: Request): Promi
       );
     }
 
+    const keys = rateLimitKeys(request, body.username);
+    const rateLimitResponse = checkRateLimitKeys(keys);
+    if (rateLimitResponse) return rateLimitResponse;
+
     const user = db.getUserByUsername(body.username);
     if (!user || !user.webauthn_enabled) {
-      recordFailure(request);
+      recordFailureKeys(keys);
       return genericError;
     }
 
-    const challenge = getAndDeleteChallenge(user.id);
+    const challenge = fetchAndDeleteChallenge(user.id, "password_reset");
     if (!challenge) {
       return Response.json(
         { error: "Challenge expired. Please try again." },
@@ -489,7 +506,7 @@ export async function handlePasswordResetWebAuthnVerify(request: Request): Promi
 
     const storedCredential = db.getWebAuthnCredentialById(body.credential.id);
     if (!storedCredential || storedCredential.user_id !== user.id) {
-      recordFailure(request);
+      recordFailureKeys(keys);
       return genericError;
     }
 
@@ -508,7 +525,7 @@ export async function handlePasswordResetWebAuthnVerify(request: Request): Promi
     });
 
     if (!verification.verified) {
-      recordFailure(request);
+      recordFailureKeys(keys);
       return genericError;
     }
 
@@ -516,6 +533,7 @@ export async function handlePasswordResetWebAuthnVerify(request: Request): Promi
 
     const hash = await Bun.password.hash(body.newPassword, "bcrypt");
     db.updateUserPassword(user.id, hash);
+    db.incrementTokenVersion(user.id);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
@@ -582,7 +600,11 @@ export async function handleWebAuthnDelete(request: Request): Promise<Response> 
       db.disableWebAuthn(userId);
     }
 
-    return Response.json({ deleted: true }, { headers: corsHeaders });
+    db.incrementTokenVersion(userId);
+    const freshUser = db.getUserById(userId)!;
+    const token = await createToken({ userId: freshUser.id, username: freshUser.username, v: freshUser.token_version });
+
+    return Response.json({ deleted: true, token }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

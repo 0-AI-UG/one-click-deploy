@@ -6,26 +6,33 @@ import { authRateLimiter } from "../lib/rate-limit.ts";
 import { verifyTotpOrBackupCode } from "./totp.ts";
 import * as db from "../../shared/db.ts";
 
-function checkRateLimit(request: Request): Response | null {
+/** Build rate-limit keys for IP and/or username. */
+function rateLimitKeys(request: Request, username?: string): string[] {
   const ip = getClientIP(request);
-  const { limited, retryAfterSeconds } = authRateLimiter.isLimited(ip);
-  if (limited) {
-    return Response.json(
-      { error: "Too many attempts. Please try again later." },
-      { status: 429, headers: { ...corsHeaders, "Retry-After": String(retryAfterSeconds) } },
-    );
+  const keys: string[] = [];
+  if (ip) keys.push("ip:" + ip);
+  if (username) keys.push("user:" + username.toLowerCase());
+  return keys;
+}
+
+function checkRateLimitKeys(keys: string[]): Response | null {
+  for (const key of keys) {
+    const { limited, retryAfterSeconds } = authRateLimiter.isLimited(key);
+    if (limited) {
+      return Response.json(
+        { error: "Too many attempts. Please try again later." },
+        { status: 429, headers: { ...corsHeaders, "Retry-After": String(retryAfterSeconds) } },
+      );
+    }
   }
   return null;
 }
 
-function recordFailure(request: Request): void {
-  authRateLimiter.recordFailure(getClientIP(request));
+function recordFailureKeys(keys: string[]): void {
+  for (const key of keys) authRateLimiter.recordFailure(key);
 }
 
 export async function handleLogin(request: Request): Promise<Response> {
-  const rateLimitResponse = checkRateLimit(request);
-  if (rateLimitResponse) return rateLimitResponse;
-
   try {
     const body = await request.json() as { username?: string; password?: string };
     if (!body.username || !body.password) {
@@ -35,18 +42,28 @@ export async function handleLogin(request: Request): Promise<Response> {
       );
     }
 
+    const keys = rateLimitKeys(request, body.username);
+    const rateLimitResponse = checkRateLimitKeys(keys);
+    if (rateLimitResponse) return rateLimitResponse;
+
     const user = db.getUserByUsername(body.username);
-    if (!user) throw new AuthError("Invalid username or password");
+    if (!user) {
+      recordFailureKeys(keys);
+      throw new AuthError("Invalid username or password");
+    }
 
     const valid = await Bun.password.verify(body.password, user.password_hash);
-    if (!valid) throw new AuthError("Invalid username or password");
+    if (!valid) {
+      recordFailureKeys(keys);
+      throw new AuthError("Invalid username or password");
+    }
 
     // Skip 2FA in dev mode
     if (process.env.SKIP_2FA !== "1") {
       // 2FA enabled: require verification
       const has2FA = user.totp_enabled || user.webauthn_enabled;
       if (has2FA) {
-        const tempToken = await createTempToken(user.id);
+        const tempToken = await createTempToken(user.id, user.token_version);
         return Response.json(
           {
             requires2FA: true,
@@ -64,7 +81,7 @@ export async function handleLogin(request: Request): Promise<Response> {
       // others only when the global require_2fa setting is on)
       const require2fa = (db.getSettings().require_2fa ?? "1") === "1";
       if (user.is_admin || require2fa) {
-        const tempToken = await createTempToken(user.id);
+        const tempToken = await createTempToken(user.id, user.token_version);
         return Response.json(
           { requires2FASetup: true, tempToken },
           { headers: corsHeaders },
@@ -73,7 +90,7 @@ export async function handleLogin(request: Request): Promise<Response> {
     }
 
     // No 2FA required — issue full token
-    const token = await createToken({ userId: user.id, username: user.username });
+    const token = await createToken({ userId: user.id, username: user.username, v: user.token_version });
     const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(user.id);
     return Response.json(
       {
@@ -93,7 +110,6 @@ export async function handleLogin(request: Request): Promise<Response> {
       { headers: corsHeaders },
     );
   } catch (error) {
-    if (error instanceof AuthError) recordFailure(request);
     return handleError(error);
   }
 }
@@ -105,9 +121,6 @@ export async function handleLogin(request: Request): Promise<Response> {
  * Only works for users with TOTP enabled (no email delivery in this system).
  */
 export async function handlePasswordReset(request: Request): Promise<Response> {
-  const rateLimitResponse = checkRateLimit(request);
-  if (rateLimitResponse) return rateLimitResponse;
-
   try {
     const body = await request.json() as {
       username?: string;
@@ -127,6 +140,10 @@ export async function handlePasswordReset(request: Request): Promise<Response> {
       );
     }
 
+    const keys = rateLimitKeys(request, body.username);
+    const rateLimitResponse = checkRateLimitKeys(keys);
+    if (rateLimitResponse) return rateLimitResponse;
+
     const user = db.getUserByUsername(body.username);
     // Return the same error for unknown user / no TOTP / bad code so we
     // don't leak which usernames exist or which accounts have 2FA.
@@ -135,18 +152,19 @@ export async function handlePasswordReset(request: Request): Promise<Response> {
       { status: 400, headers: corsHeaders },
     );
     if (!user || !user.totp_enabled) {
-      recordFailure(request);
+      recordFailureKeys(keys);
       return genericError;
     }
 
     const ok = await verifyTotpOrBackupCode(user, body.totpCode);
     if (!ok) {
-      recordFailure(request);
+      recordFailureKeys(keys);
       return genericError;
     }
 
     const hash = await Bun.password.hash(body.newPassword, "bcrypt");
     db.updateUserPassword(user.id, hash);
+    db.incrementTokenVersion(user.id);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
@@ -252,6 +270,19 @@ export async function handleUpdateMe(request: Request): Promise<Response> {
       },
       { headers: corsHeaders },
     );
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/** POST /api/auth/sign-out-all — revoke all sessions by bumping token_version */
+export async function handleSignOutAll(request: Request): Promise<Response> {
+  try {
+    const { userId } = await authenticateRequest(request);
+    db.incrementTokenVersion(userId);
+    const freshUser = db.getUserById(userId)!;
+    const token = await createToken({ userId: freshUser.id, username: freshUser.username, v: freshUser.token_version });
+    return Response.json({ ok: true, token }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
