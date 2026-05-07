@@ -57,7 +57,7 @@ let ctx: Ctx | null = null;
 
 const ORG_ID = "itest-org";
 const LOCATION = "fsn1";
-const SERVER_TYPE = "cx22";
+const SERVER_TYPE = "cx23";
 
 // ---- Helpers ---------------------------------------------------------------
 
@@ -98,8 +98,11 @@ d(
       // Seed Hetzner token in secret store (no org scoping, same as hetzner.test.ts).
       await secretStore.set("hetzner_api_token", process.env.HCLOUD_TOKEN!);
 
-      // Seed org settings: DNS zone (if provided), default server type/location.
+      // Seed org row (FK target for org_settings & other org-scoped tables).
       const db = await import("../shared/db.ts");
+      if (!db.getOrg(ORG_ID)) db.insertOrg(ORG_ID, "itest-org", "itest-org");
+
+      // Seed org settings: DNS zone (if provided), default server type/location.
       if (dnsZone) db.saveOrgSetting(ORG_ID, "dns_zone_id", dnsZone);
       db.saveOrgSetting(ORG_ID, "default_server_type", SERVER_TYPE);
       db.saveOrgSetting(ORG_ID, "default_location", LOCATION);
@@ -242,7 +245,9 @@ d(
           {
             app_name: ctx!.appName,
             git_repo: ctx!.gitRepo,
+            git_branch: "saas", // TEMP: fixture lives on saas until merged to main
             docker_context: ctx!.dockerContext,
+            dockerfile_path: `${ctx!.dockerContext}/Dockerfile`,
             container_port: 8080,
             server_id: ctx!.serverId,
           },
@@ -282,7 +287,7 @@ d(
           "deploy_service",
           {
             name: ctx!.serviceName,
-            service_type: "postgres",
+            service_type: "postgresql",
           },
           { orgId: ctx!.orgId, timeoutMs: 5 * 60_000 },
         );
@@ -303,7 +308,8 @@ d(
     );
 
     // ---- 4. scale-up -------------------------------------------------------
-    appTest(
+    // Scaling requires a custom domain (nip.io can't spread replicas — same IP/port).
+    dnsTest(
       "4. scale-up: 3 replicas running",
       async () => {
         expect(ctx).not.toBeNull();
@@ -325,7 +331,8 @@ d(
     );
 
     // ---- 5. scale-down -----------------------------------------------------
-    appTest(
+    // Depends on scale-up having produced 3 replicas; gated on DNS too.
+    dnsTest(
       "5. scale-down: 1 replica",
       async () => {
         expect(ctx).not.toBeNull();
@@ -620,7 +627,9 @@ d(
           {
             app_name: badAppName,
             git_repo: ctx!.gitRepo,
+            git_branch: "saas", // TEMP: fixture lives on saas until merged to main
             docker_context: ctx!.dockerContext,
+            dockerfile_path: `${ctx!.dockerContext}/Dockerfile`,
             container_port: 8080,
             server_id: ctx!.serverId,
             domain: `bad-dns-${ctx!.tag}.invalid.example.com`,
