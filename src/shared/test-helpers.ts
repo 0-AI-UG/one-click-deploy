@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { mock } from "bun:test";
 import type { ComputeProvider, DnsProvider } from "./providers/types.ts";
+import type { OperationRow } from "./db/operations.ts";
 
 /** Create a fresh temp data dir and set OCD_DATA_DIR to it. Must run before
  *  any db.ts import. Returns the path so tests can inspect/cleanup. */
@@ -93,6 +94,71 @@ export function makeFakeComputeProvider(
     ...overrides,
   };
   return Object.assign(provider, { _mocks }) as any;
+}
+
+export type EnqueueAndWaitOpts = {
+  /** How long to poll before throwing (default: 5 minutes). */
+  timeoutMs?: number;
+};
+
+export type EnqueueAndWaitResult = {
+  status: string;
+  error?: string;
+  /** The database row id of the created operation. */
+  opId: number;
+};
+
+/**
+ * Enqueue an operation and poll the `operations` table until it reaches a
+ * terminal status (`done`, `failed`, `cancelled`, `compensated`).
+ */
+export async function enqueueAndWait(
+  kind: string,
+  input: unknown,
+  opts: EnqueueAndWaitOpts = {},
+): Promise<EnqueueAndWaitResult> {
+  const { enqueueOperation, getOperation } = await import("./db/operations.ts");
+  const row = enqueueOperation({
+    kind,
+    resourceKeys: [],
+    input,
+    trigger: "test-helper",
+  });
+  const timeout = opts.timeoutMs ?? 5 * 60_000;
+  const deadline = Date.now() + timeout;
+  const terminal = ["done", "failed", "cancelled", "compensated"] as const;
+  while (Date.now() < deadline) {
+    const op = getOperation(row.id) as OperationRow | null;
+    if (!op) throw new Error(`enqueueAndWait: op ${row.id} disappeared`);
+    if ((terminal as readonly string[]).includes(op.status)) {
+      const error = op.error_json
+        ? (JSON.parse(op.error_json) as { message?: string })?.message
+        : undefined;
+      return { status: op.status, error, opId: op.id };
+    }
+    await Bun.sleep(200);
+  }
+  throw new Error(`enqueueAndWait: op ${row.id} (${kind}) timed out after ${timeout}ms`);
+}
+
+/**
+ * Poll the `replicas` table until the given replica has `status = 'running'`.
+ */
+export async function waitForReplicaHealthy(
+  replicaId: number,
+  opts: { timeoutMs?: number } = {},
+): Promise<void> {
+  const { getReplica } = await import("./db/replicas.ts");
+  const timeout = opts.timeoutMs ?? 2 * 60_000;
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const r = getReplica(replicaId);
+    if (r?.status === "running") return;
+    await Bun.sleep(500);
+  }
+  throw new Error(
+    `waitForReplicaHealthy: replica ${replicaId} did not become healthy within ${timeout}ms`,
+  );
 }
 
 export function makeFakeDnsProvider(
