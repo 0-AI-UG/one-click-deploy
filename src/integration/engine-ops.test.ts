@@ -9,6 +9,9 @@
 //     — defaults to this repo (github.com/0-AI-UG/one-click-deploy) which ships
 //       a small nginx fixture at test/fixtures/hello-app. Override if you want
 //       to point at a different public repo.
+//   OCD_TEST_GIT_BRANCH=<branch>
+//     — defaults to "main". Set when validating from a feature branch whose
+//       fixture has not yet been merged.
 //   OCD_TEST_DOCKER_CONTEXT=<path>
 //     — defaults to "test/fixtures/hello-app" (the shipped nginx fixture).
 //   OCD_TEST_DNS_ZONE=<zone-id-in-hetzner-dns> e.g. "a1b2c3d4"
@@ -53,11 +56,12 @@ type Ctx = {
   domain: string;
   dnsZone: string;
   gitRepo: string;
+  gitBranch: string;
   dockerContext: string;
 };
 let ctx: Ctx | null = null;
 
-const LOCATION = "fsn1";
+const LOCATION = "nbg1";
 const SERVER_TYPE = "cx23";
 
 // ---- Helpers ---------------------------------------------------------------
@@ -87,6 +91,7 @@ d(
       const tag = randomSuffix();
       const dnsZone = process.env.OCD_TEST_DNS_ZONE ?? "";
       const gitRepo = process.env.OCD_TEST_GIT_REPO || DEFAULT_GIT_REPO;
+      const gitBranch = process.env.OCD_TEST_GIT_BRANCH || "main";
       const dockerContext = process.env.OCD_TEST_DOCKER_CONTEXT || DEFAULT_DOCKER_CONTEXT;
       const appName = `ocd-itest-${tag}`;
       const serviceName = `ocd-itest-svc-${tag}`;
@@ -139,6 +144,7 @@ d(
         domain,
         dnsZone,
         gitRepo,
+        gitBranch,
         dockerContext,
       };
 
@@ -240,7 +246,7 @@ d(
           {
             app_name: ctx!.appName,
             git_repo: ctx!.gitRepo,
-            git_branch: "main",
+            git_branch: ctx!.gitBranch,
             docker_context: ctx!.dockerContext,
             dockerfile_path: `${ctx!.dockerContext}/Dockerfile`,
             container_port: 8080,
@@ -609,7 +615,7 @@ d(
           {
             app_name: badAppName,
             git_repo: ctx!.gitRepo,
-            git_branch: "main",
+            git_branch: ctx!.gitBranch,
             docker_context: ctx!.dockerContext,
             dockerfile_path: `${ctx!.dockerContext}/Dockerfile`,
             container_port: 8080,
