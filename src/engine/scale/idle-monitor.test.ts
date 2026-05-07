@@ -27,7 +27,7 @@ mock.module("../../shared/remote/index.ts", () => ({
 
 // Stub enqueue so evaluateAutoScale doesn't need the IPC server.
 const enqueueMock = mock((_args: unknown) => ({ opId: 42 }));
-mock.module("/Users/anton/Dev/one-click-deploy/src/server/ipc/enqueue.ts", () => ({
+mock.module("../../server/ipc/enqueue.ts", () => ({
   enqueue: enqueueMock,
 }));
 

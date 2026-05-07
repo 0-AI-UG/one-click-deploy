@@ -33,10 +33,9 @@ mock.module("./scale/network-reconciler.ts", () => ({
   reconcileNetwork: mock(async () => {}),
 }));
 
-// Stub enqueue so autoscale doesn't need the IPC server. Use the absolute
-// path so the dynamic-import resolves to our mock regardless of caller cwd.
+// Stub enqueue so autoscale doesn't need the IPC server.
 const enqueueMock = mock((_args: unknown) => ({ opId: 999 }));
-mock.module("/Users/anton/Dev/one-click-deploy/src/server/ipc/enqueue.ts", () => ({
+mock.module("../server/ipc/enqueue.ts", () => ({
   enqueue: enqueueMock,
 }));
 
