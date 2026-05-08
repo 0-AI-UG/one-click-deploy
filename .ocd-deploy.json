@@ -1,7 +1,7 @@
 {
   "$schema": 1,
   "name": "OCD Panel (SaaS)",
-  "description": "Multi-tenant deployment panel with org-based access control, member management, and granular permissions.",
+  "description": "Multi-tenant deployment panel with org-based access control, member management, billing, and granular permissions.",
   "icon": "https://raw.githubusercontent.com/0-AI-UG/one-click-deploy/saas/src/web/public/favicon.svg",
   "suggested_app_name": "ocd-saas",
   "build": {
@@ -16,14 +16,61 @@
       "secret": true
     },
     {
+      "key": "APP_PUBLIC_HOST",
+      "description": "Public origin of this deployment (e.g. https://saas.example.com). Used for Stripe return URLs and absolute links.",
+      "required": true
+    },
+    {
+      "key": "WEBAUTHN_RP_ID",
+      "description": "WebAuthn Relying Party ID — the bare hostname (e.g. saas.example.com), no scheme or port.",
+      "required": true
+    },
+    {
+      "key": "WEBAUTHN_ORIGIN",
+      "description": "WebAuthn expected origin (e.g. https://saas.example.com). Must match APP_PUBLIC_HOST.",
+      "required": true
+    },
+    {
+      "key": "TRUST_PROXY",
+      "description": "Set to 1 when running behind a trusted reverse proxy (Caddy in front of the container). Enables X-Forwarded-For for rate limiting.",
+      "default": "1",
+      "required": false
+    },
+    {
+      "key": "CORS_ORIGIN",
+      "description": "Explicit CORS origin. Leave empty for same-origin only.",
+      "required": false
+    },
+    {
       "key": "GITHUB_OAUTH_CLIENT_ID",
-      "description": "GitHub OAuth App client ID (enables repo linking and private image pulls)",
-      "required": false,
-      "secret": false
+      "description": "GitHub OAuth App client ID (enables repo linking and private image pulls).",
+      "required": false
     },
     {
       "key": "GITHUB_OAUTH_CLIENT_SECRET",
-      "description": "GitHub OAuth App client secret",
+      "description": "GitHub OAuth App client secret.",
+      "required": false,
+      "secret": true
+    },
+    {
+      "key": "STRIPE_SECRET_KEY",
+      "description": "Stripe secret key (sk_live_... or sk_test_...). Required for billing.",
+      "required": false,
+      "secret": true
+    },
+    {
+      "key": "STRIPE_PUBLISHABLE_KEY",
+      "description": "Stripe publishable key (pk_live_... or pk_test_...). Exposed to the browser.",
+      "required": false
+    },
+    {
+      "key": "STRIPE_PRICE_ID",
+      "description": "Stripe Price ID for the per-seat subscription plan.",
+      "required": false
+    },
+    {
+      "key": "STRIPE_WEBHOOK_SECRET",
+      "description": "Stripe webhook signing secret (whsec_...). Required to verify incoming webhook events.",
       "required": false,
       "secret": true
     },
@@ -41,7 +88,7 @@
     },
     {
       "key": "ENGINE_CONCURRENCY",
-      "description": "Max concurrent deploy operations per engine instance",
+      "description": "Max concurrent deploy operations per engine instance.",
       "default": "4",
       "required": false
     }
