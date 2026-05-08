@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { post } from "../api/client.ts";
+import { get, post } from "../api/client.ts";
 import { setOrgs, setCurrentOrg } from "../stores/auth.ts";
 import { showToast } from "../components/ui.tsx";
 import { Spinner } from "../components/ui.tsx";
@@ -25,7 +25,8 @@ export function CreateOrgPage() {
     setLoading(true);
     try {
       const org = await post("/api/orgs", { name, slug });
-      setOrgs([{ ...org, role: "owner" }]);
+      const orgs = await get("/api/orgs");
+      setOrgs(orgs);
       setCurrentOrg(org.id);
       window.location.hash = "#/org-onboarding";
     } catch (err) {
