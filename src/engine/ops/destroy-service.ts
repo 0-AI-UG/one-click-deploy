@@ -25,7 +25,7 @@ const removeEnvFromLinkedApps: Step<DestroyServiceInput, { ok: true }> = {
   name: "remove_env_vars_from_linked_apps",
   label: "Remove env vars from linked apps",
   async run(ctx) {
-    const links = db.getServiceLinks(ctx.input.serviceId);
+    const links = db.getServiceLinksUnscoped(ctx.input.serviceId);
     for (const link of links) {
       await softStep(ctx, `unlink_env app#${link.app_id}`, async () => {
         const app = db.getAppUnscoped(link.app_id);
@@ -47,7 +47,7 @@ const stopAndRemoveContainers: Step<DestroyServiceInput, { affectedServerIds: nu
   label: "Stop and remove containers",
   async run(ctx) {
     const service = db.getServiceUnscoped(ctx.input.serviceId);
-    const instances = db.getServiceInstances(ctx.input.serviceId);
+    const instances = db.getServiceInstancesUnscoped(ctx.input.serviceId);
     const affected = new Set<number>();
     let failed = false;
     for (const inst of instances) {
@@ -77,7 +77,7 @@ const deleteVolumes: Step<DestroyServiceInput, { failed: boolean }> = {
   name: "delete_volume",
   label: "Delete volume",
   async run(ctx) {
-    const instances = db.getServiceInstances(ctx.input.serviceId);
+    const instances = db.getServiceInstancesUnscoped(ctx.input.serviceId);
     let failed = false;
     for (const inst of instances) {
       if (!inst.volume_id) continue;
@@ -104,7 +104,7 @@ const deleteDbRows: Step<DestroyServiceInput, { ok: true }> = {
       ctx.log("Some resources could not be cleaned up — service marked cleanup_failed");
       return { ok: true };
     }
-    const instances = db.getServiceInstances(ctx.input.serviceId);
+    const instances = db.getServiceInstancesUnscoped(ctx.input.serviceId);
     for (const inst of instances) {
       await softStep(ctx, `delete_instance ${inst.id}`, async () => {
         db.deleteServiceInstance(inst.id);

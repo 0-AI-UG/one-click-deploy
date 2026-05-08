@@ -89,7 +89,7 @@ export async function syncInternalHosts(): Promise<void> {
   const apps = db.getAllApps();
   const serviceLines: string[] = [];
   for (const service of db.getAllServices()) {
-    const instance = db.getServiceInstances(service.id)[0];
+    const instance = db.getServiceInstancesUnscoped(service.id)[0];
     if (!instance) continue;
     const host = db.getServerUnscoped(instance.server_id);
     if (!host || !host.private_ipv4) continue;

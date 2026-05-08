@@ -15,7 +15,7 @@ const restartAllInstances: Step<RestartServiceInput, { allHealthy: boolean }> = 
     const catalog = getCatalogEntry(service.service_type);
     if (!catalog) throw new Error("Unknown service type");
 
-    const instances = db.getServiceInstances(ctx.input.serviceId);
+    const instances = db.getServiceInstancesUnscoped(ctx.input.serviceId);
     if (instances.length === 0) throw new Error("Service has no instances");
 
     let allHealthy = true;

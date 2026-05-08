@@ -30,7 +30,7 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
     const affectedServerIds = new Set<number>();
 
     // Remove all linked apps' service env vars from their environments
-    const links = db.getServiceLinks(serviceId);
+    const links = db.getServiceLinksUnscoped(serviceId);
     for (const link of links) {
       try {
         const app = db.getAppUnscoped(link.app_id);
@@ -49,7 +49,7 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
     }
 
     // Destroy all instances
-    const instances = db.getServiceInstances(serviceId);
+    const instances = db.getServiceInstancesUnscoped(serviceId);
     for (const instance of instances) {
       affectedServerIds.add(instance.server_id);
       const server = db.getServerUnscoped(instance.server_id);
@@ -124,7 +124,7 @@ export async function restartService(serviceId: number): Promise<{ ok: boolean; 
     const catalog = getCatalogEntry(service.service_type);
     if (!catalog) throw new Error("Unknown service type");
 
-    const instances = db.getServiceInstances(serviceId);
+    const instances = db.getServiceInstancesUnscoped(serviceId);
     if (instances.length === 0) throw new Error("Service has no instances");
 
     let allHealthy = true;
@@ -158,7 +158,7 @@ export async function pauseService(serviceId: number): Promise<{ ok: boolean; er
     const service = db.getServiceUnscoped(serviceId);
     if (!service) throw new Error("Service not found");
 
-    const instances = db.getServiceInstances(serviceId);
+    const instances = db.getServiceInstancesUnscoped(serviceId);
     for (const instance of instances) {
       const server = db.getServerUnscoped(instance.server_id);
       if (!server) continue;
@@ -184,7 +184,7 @@ export async function unpauseService(serviceId: number): Promise<{ ok: boolean; 
     const catalog = getCatalogEntry(service.service_type);
     if (!catalog) throw new Error("Unknown service type");
 
-    const instances = db.getServiceInstances(serviceId);
+    const instances = db.getServiceInstancesUnscoped(serviceId);
     let allHealthy = true;
     for (const instance of instances) {
       const server = db.getServerUnscoped(instance.server_id);

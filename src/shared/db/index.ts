@@ -22,7 +22,6 @@ export {
   getApp,
   getAppUnscoped,
   getAppByName,
-  getAppByDomain,
   renameApp,
   insertApp,
   insertAppWithFirstReplica,
@@ -85,6 +84,7 @@ export {
   updateDeploymentGitCommit,
   getDeployments,
   getDeployment,
+  getDeploymentUnscoped,
 } from "./deployments.ts";
 export type { UserRow, WebAuthnCredential, Permission } from "./users.ts";
 export {
@@ -154,6 +154,7 @@ export {
   deleteService,
   insertServiceInstance,
   getServiceInstances,
+  getServiceInstancesUnscoped,
   getServiceInstance,
   getPrimaryInstance,
   getAllServiceInstances,
@@ -168,6 +169,7 @@ export {
   insertServiceLink,
   deleteServiceLink,
   getServiceLinks,
+  getServiceLinksUnscoped,
   getLinkedServices,
   getServicesOnServer,
 } from "./services.ts";

@@ -34,8 +34,8 @@ export async function handleGetServices(request: Request): Promise<Response> {
     const ctx = await requireOrgPermission(request, "servers.view");
     const services = db.getServices(ctx.orgId);
     const result = services.map((s) => {
-      const instances = db.getServiceInstances(s.id);
-      const links = db.getServiceLinks(s.id);
+      const instances = db.getServiceInstances(s.id, ctx.orgId);
+      const links = db.getServiceLinks(s.id, ctx.orgId);
       return {
         ...s,
         primary_instance: instances[0] || null,
@@ -60,11 +60,11 @@ export async function handleGetService(request: Request, serviceId: number): Pro
     // Join the hosting server's name onto each instance so the detail page
     // can show a meaningful "Server" column without a second fetch.
     // server_id comes from service_instances — safe to look up unscoped.
-    const instances = db.getServiceInstances(serviceId).map((inst) => {
+    const instances = db.getServiceInstances(serviceId, ctx.orgId).map((inst) => {
       const srv = db.getServerUnscoped(inst.server_id);
       return { ...inst, server_name: srv?.name ?? `srv#${inst.server_id}` };
     });
-    const links = db.getServiceLinks(serviceId);
+    const links = db.getServiceLinks(serviceId, ctx.orgId);
     return Response.json({
       ...service,
       credentials: JSON.parse(service.credentials || "{}"),
@@ -298,7 +298,7 @@ export async function handleUnlinkService(request: Request, serviceId: number, a
     }
 
     // Get the link to find env prefix
-    const links = db.getServiceLinks(serviceId);
+    const links = db.getServiceLinks(serviceId, ctx.orgId);
     const link = links.find((l) => l.app_id === appId);
     if (!link) {
       return Response.json({ error: "Link not found" }, { status: 404, headers: corsHeaders });

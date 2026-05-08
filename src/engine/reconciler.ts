@@ -300,7 +300,7 @@ async function tick(): Promise<void> {
     let serviceCount = 0;
     for (const service of services) {
       if (service.status === "paused" || service.status === "deploying") continue;
-      const instances = db.getServiceInstances(service.id);
+      const instances = db.getServiceInstancesUnscoped(service.id);
       for (const instance of instances) {
         if (instance.status === "paused" || instance.status === "stopped") continue;
         const work = ensureServer(instance.server_id);
@@ -349,7 +349,7 @@ async function tick(): Promise<void> {
     for (const service of services) {
       if (service.status === "paused" || service.status === "deploying") continue;
       if (service.status === "running" || service.status === "unhealthy") {
-        const instances = db.getServiceInstances(service.id);
+        const instances = db.getServiceInstancesUnscoped(service.id);
         const freshInstances = instances.map((i) => db.getServiceInstance(i.id)).filter((i): i is NonNullable<typeof i> => i !== null);
         const allHealthy = freshInstances.length > 0 && freshInstances.every((i) => i.status === "running");
         const newStatus = allHealthy ? "running" : "unhealthy";

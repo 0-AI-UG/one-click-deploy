@@ -89,12 +89,6 @@ export function getAppByName(name: string, orgId: string): AppRow | null {
   return db.query("SELECT * FROM apps WHERE name = ? AND org_id = ?").get(name, orgId) as AppRow | null;
 }
 
-export function getAppByDomain(domain: string): AppRow | null {
-  return db
-    .query("SELECT * FROM apps WHERE domain = ? LIMIT 1")
-    .get(domain) as AppRow | null;
-}
-
 export function renameApp(id: number, newName: string): void {
   db.query("UPDATE apps SET name = ? WHERE id = ?").run(newName, id);
   db.query("UPDATE replicas SET container_name = ? WHERE app_id = ?").run(newName, id);

@@ -65,15 +65,26 @@ export function updateDeploymentGitCommit(id: number, gitCommit: string): void {
   db.query("UPDATE deployment_history SET git_commit = ? WHERE id = ?").run(gitCommit, id);
 }
 
-export function getDeployments(appId: number): DeploymentRow[] {
+export function getDeployments(appId: number, orgId: string): DeploymentRow[] {
   return db
     .query(
-      "SELECT * FROM deployment_history WHERE app_id = ? ORDER BY created_at DESC"
+      "SELECT d.* FROM deployment_history d JOIN apps a ON a.id = d.app_id WHERE d.app_id = ? AND a.org_id = ? ORDER BY d.created_at DESC"
     )
-    .all(appId) as DeploymentRow[];
+    .all(appId, orgId) as DeploymentRow[];
 }
 
-export function getDeployment(id: number): DeploymentRow | null {
+export function getDeployment(id: number, orgId: string): DeploymentRow | null {
+  return db
+    .query(
+      "SELECT d.* FROM deployment_history d JOIN apps a ON a.id = d.app_id WHERE d.id = ? AND a.org_id = ?"
+    )
+    .get(id, orgId) as DeploymentRow | null;
+}
+
+/** Engine-internal: look up a deployment by id without org scoping.
+ * Use only in engine ops/reconciler where no request context is available.
+ * Route handlers MUST use getDeployment(id, orgId) instead. */
+export function getDeploymentUnscoped(id: number): DeploymentRow | null {
   return db
     .query("SELECT * FROM deployment_history WHERE id = ?")
     .get(id) as DeploymentRow | null;

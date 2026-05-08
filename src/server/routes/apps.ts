@@ -61,8 +61,8 @@ export async function handleGetDashboard(request: Request): Promise<Response> {
       return enrichAppForResponse({ ...a, desired_replicas: a.desired_replicas ?? reps.length }, ctx.orgId);
     });
     const services = db.getServices(ctx.orgId).map((svc) => {
-      const instances = db.getServiceInstances(svc.id);
-      const links = db.getServiceLinks(svc.id);
+      const instances = db.getServiceInstances(svc.id, ctx.orgId);
+      const links = db.getServiceLinks(svc.id, ctx.orgId);
       return {
         ...svc,
         instance_count: instances.length,
@@ -335,7 +335,7 @@ export async function handleGetDeployments(request: Request, appId: number): Pro
     if (!db.getApp(appId, ctx.orgId)) {
       return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
     }
-    const deployments = db.getDeployments(appId);
+    const deployments = db.getDeployments(appId, ctx.orgId);
     return Response.json(deployments, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

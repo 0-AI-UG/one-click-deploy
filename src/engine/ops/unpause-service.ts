@@ -14,7 +14,7 @@ const unpauseAllInstances: Step<UnpauseServiceInput, { allHealthy: boolean }> = 
     if (!service) throw new Error("Service not found");
     const catalog = getCatalogEntry(service.service_type);
     if (!catalog) throw new Error("Unknown service type");
-    const instances = db.getServiceInstances(ctx.input.serviceId);
+    const instances = db.getServiceInstancesUnscoped(ctx.input.serviceId);
     let allHealthy = true;
     for (const inst of instances) {
       const server = db.getServerUnscoped(inst.server_id);

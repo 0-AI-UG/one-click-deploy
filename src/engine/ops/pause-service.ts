@@ -11,7 +11,7 @@ const pauseAllInstances: Step<PauseServiceInput, { ok: true }> = {
   async run(ctx) {
     const service = db.getServiceUnscoped(ctx.input.serviceId);
     if (!service) throw new Error("Service not found");
-    const instances = db.getServiceInstances(ctx.input.serviceId);
+    const instances = db.getServiceInstancesUnscoped(ctx.input.serviceId);
     for (const inst of instances) {
       const server = db.getServerUnscoped(inst.server_id);
       if (!server) continue;

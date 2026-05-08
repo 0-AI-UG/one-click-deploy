@@ -73,8 +73,8 @@ export function getServersWithApps(orgId = ""): ServerWithApps[] {
         };
       }),
       services: (db.getServicesOnServer(s.id) as DbService[]).map((svc) => {
-        const instances = db.getServiceInstances(svc.id);
-        const links = db.getServiceLinks(svc.id) as DbServiceLink[];
+        const instances = db.getServiceInstancesUnscoped(svc.id);
+        const links = db.getServiceLinksUnscoped(svc.id) as DbServiceLink[];
         return {
           ...svc,
           instance_count: instances.length,

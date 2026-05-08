@@ -41,7 +41,7 @@ const loadTargetDeployment: Step<RollbackInput, TargetOut> = {
     const replicas = db.getReplicas(ctx.input.appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
     const first = replicas[0];
-    const deployment = db.getDeployment(ctx.input.deploymentId);
+    const deployment = db.getDeploymentUnscoped(ctx.input.deploymentId);
     if (!deployment) throw new Error("Deployment not found");
     if (deployment.app_id !== ctx.input.appId) throw new Error("Deployment does not belong to this app");
     return {

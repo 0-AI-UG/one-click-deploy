@@ -297,7 +297,7 @@ d(
         expect(service).not.toBeNull();
         ctx!.serviceId = service!.id;
 
-        const instances = db.getServiceInstances(ctx!.serviceId);
+        const instances = db.getServiceInstances(ctx!.serviceId, ctx!.orgId);
         expect(instances.length).toBeGreaterThan(0);
         expect(instances[0].status).toBe("running");
         expect(instances[0].volume_id).not.toBe("");
@@ -450,7 +450,7 @@ d(
         expect(ctx).not.toBeNull();
         const db = await import("../shared/db.ts");
 
-        const before = db.getDeployments(ctx!.appId);
+        const before = db.getDeployments(ctx!.appId, ctx!.orgId);
         const result = await enqueueAndWait(
           "redeploy",
           { appId: ctx!.appId },
@@ -458,7 +458,7 @@ d(
         );
         expect(result.status).toBe("done");
 
-        const after = db.getDeployments(ctx!.appId);
+        const after = db.getDeployments(ctx!.appId, ctx!.orgId);
         expect(after.length).toBeGreaterThan(before.length);
 
         assertStepsOk(await getStepsForOp(result.opId));
@@ -516,7 +516,7 @@ d(
         expect(ctx).not.toBeNull();
         const db = await import("../shared/db.ts");
 
-        const deployments = db.getDeployments(ctx!.appId);
+        const deployments = db.getDeployments(ctx!.appId, ctx!.orgId);
         // Need at least 2 deployments to roll back.
         expect(deployments.length).toBeGreaterThanOrEqual(2);
         const target = deployments[deployments.length - 1]; // oldest

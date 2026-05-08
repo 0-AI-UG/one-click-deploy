@@ -333,11 +333,12 @@ export async function handleCancelSubscription(request: Request): Promise<Respon
     }
 
     const stripe = getStripeClient();
+    // Update Stripe first; only mirror to DB after Stripe confirms. If we
+    // wrote the DB eagerly and Stripe failed, the user would see "canceled"
+    // while billing continued.
     await stripe.subscriptions.update(sub.stripe_subscription_id, {
       cancel_at_period_end: true,
     });
-    // Reflect eagerly; the subsequent customer.subscription.updated webhook
-    // will confirm but we want the UI to update immediately.
     db.setSubscriptionCancelAtPeriodEnd(ctx.orgId, true);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
@@ -428,6 +429,36 @@ export async function handleStripeWebhook(request: Request): Promise<Response> {
 
   const eventCreated: number = typeof event.created === "number" ? event.created : Math.floor(Date.now() / 1000);
 
+  // Apply a subscription event to local state, validating the metadata→org binding.
+  // Skipping silently on missing org_id or deleted org would let Stripe state
+  // drift unnoticed, so log a warning before bailing.
+  const apply = (
+    subscription: ExpandedSubscription,
+    status: string,
+    eventType: string,
+  ) => {
+    const orgId = subscription.metadata?.org_id;
+    if (!orgId) {
+      console.warn(
+        `[billing] webhook ${eventType} for subscription ${subscription.id} has no metadata.org_id — skipping`,
+      );
+      return;
+    }
+    if (!db.getOrg(orgId)) {
+      console.warn(
+        `[billing] webhook ${eventType} references unknown org_id=${orgId} (subscription ${subscription.id}) — skipping`,
+      );
+      return;
+    }
+    db.applySubscriptionEvent(
+      orgId,
+      status,
+      !!subscription.cancel_at_period_end,
+      periodEndIso(subscription),
+      eventCreated,
+    );
+  };
+
   try {
     switch (event.type) {
       case "invoice.payment_succeeded": {
@@ -435,16 +466,7 @@ export async function handleStripeWebhook(request: Request): Promise<Response> {
         const subId = invoiceSubscriptionId(invoice);
         if (subId) {
           const subscription = await stripe.subscriptions.retrieve(subId) as unknown as ExpandedSubscription;
-          const orgId = subscription.metadata?.org_id;
-          if (orgId) {
-            db.applySubscriptionEvent(
-              orgId,
-              "active",
-              !!subscription.cancel_at_period_end,
-              periodEndIso(subscription),
-              eventCreated,
-            );
-          }
+          apply(subscription, "active", event.type);
         }
         break;
       }
@@ -453,46 +475,19 @@ export async function handleStripeWebhook(request: Request): Promise<Response> {
         const subId = invoiceSubscriptionId(invoice);
         if (subId) {
           const subscription = await stripe.subscriptions.retrieve(subId) as unknown as ExpandedSubscription;
-          const orgId = subscription.metadata?.org_id;
-          if (orgId) {
-            db.applySubscriptionEvent(
-              orgId,
-              "past_due",
-              !!subscription.cancel_at_period_end,
-              periodEndIso(subscription),
-              eventCreated,
-            );
-          }
+          apply(subscription, "past_due", event.type);
         }
         break;
       }
       case "customer.subscription.created":
       case "customer.subscription.updated": {
         const subscription = event.data.object as unknown as ExpandedSubscription;
-        const orgId = subscription.metadata?.org_id;
-        if (orgId) {
-          db.applySubscriptionEvent(
-            orgId,
-            subscription.status,
-            !!subscription.cancel_at_period_end,
-            periodEndIso(subscription),
-            eventCreated,
-          );
-        }
+        apply(subscription, subscription.status, event.type);
         break;
       }
       case "customer.subscription.deleted": {
         const subscription = event.data.object as unknown as ExpandedSubscription;
-        const orgId = subscription.metadata?.org_id;
-        if (orgId) {
-          db.applySubscriptionEvent(
-            orgId,
-            "canceled",
-            !!subscription.cancel_at_period_end,
-            periodEndIso(subscription),
-            eventCreated,
-          );
-        }
+        apply(subscription, "canceled", event.type);
         break;
       }
     }

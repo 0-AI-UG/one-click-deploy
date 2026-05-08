@@ -149,7 +149,7 @@ describe("destroyService", () => {
     // Even in failure, the instance row is deleted in this lifecycle (note: it
     // happens BEFORE the cleanupFailed short-circuit). This test pins the
     // current behaviour so future refactors are explicit.
-    const remaining = db.getServiceInstances(service.id);
+    const remaining = db.getServiceInstancesUnscoped(service.id);
     expect(remaining).toEqual([]);
   });
 

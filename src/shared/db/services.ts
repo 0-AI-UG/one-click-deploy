@@ -120,7 +120,18 @@ export function insertServiceInstance(data: {
     ) as ServiceInstanceRow;
 }
 
-export function getServiceInstances(serviceId: number): ServiceInstanceRow[] {
+export function getServiceInstances(serviceId: number, orgId: string): ServiceInstanceRow[] {
+  return db
+    .query(
+      "SELECT si.* FROM service_instances si JOIN services s ON s.id = si.service_id WHERE si.service_id = ? AND s.org_id = ? ORDER BY si.created_at ASC"
+    )
+    .all(serviceId, orgId) as ServiceInstanceRow[];
+}
+
+/** Engine-internal: list service instances without org scoping.
+ * Use only in engine ops/reconciler where no request context is available.
+ * Route handlers MUST use getServiceInstances(serviceId, orgId) instead. */
+export function getServiceInstancesUnscoped(serviceId: number): ServiceInstanceRow[] {
   return db
     .query("SELECT * FROM service_instances WHERE service_id = ? ORDER BY created_at ASC")
     .all(serviceId) as ServiceInstanceRow[];
@@ -194,7 +205,18 @@ export function deleteServiceLink(serviceId: number, appId: number): void {
   db.query("DELETE FROM service_links WHERE service_id = ? AND app_id = ?").run(serviceId, appId);
 }
 
-export function getServiceLinks(serviceId: number): ServiceLinkWithAppRow[] {
+export function getServiceLinks(serviceId: number, orgId: string): ServiceLinkWithAppRow[] {
+  return db
+    .query(
+      "SELECT sl.*, a.name as app_name FROM service_links sl JOIN apps a ON sl.app_id = a.id JOIN services s ON s.id = sl.service_id WHERE sl.service_id = ? AND s.org_id = ?"
+    )
+    .all(serviceId, orgId) as ServiceLinkWithAppRow[];
+}
+
+/** Engine-internal: list service links without org scoping.
+ * Use only in engine ops/reconciler where no request context is available.
+ * Route handlers MUST use getServiceLinks(serviceId, orgId) instead. */
+export function getServiceLinksUnscoped(serviceId: number): ServiceLinkWithAppRow[] {
   return db
     .query("SELECT sl.*, a.name as app_name FROM service_links sl JOIN apps a ON sl.app_id = a.id WHERE sl.service_id = ?")
     .all(serviceId) as ServiceLinkWithAppRow[];
