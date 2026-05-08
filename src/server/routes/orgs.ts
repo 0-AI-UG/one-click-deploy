@@ -87,18 +87,31 @@ export async function handleGetOrgMembers(request: Request): Promise<Response> {
   return Response.json(members);
 }
 
-// POST /api/orgs/:orgId/invitations — send invite
+// POST /api/orgs/:orgId/invitations — create an invite for a known user
 export async function handleCreateInvitation(request: Request): Promise<Response> {
   const ctx = await requireOrgOwner(request);
-  const { email } = await request.json();
-  if (!email) return Response.json({ error: "Email required" }, { status: 400 });
+  const { username } = await request.json();
+  if (!username || typeof username !== "string") {
+    return Response.json({ error: "Username required" }, { status: 400 });
+  }
+  const user = db.getUserByUsername(username.trim());
+  if (!user) return Response.json({ error: "User not found" }, { status: 404 });
+  if (user.id === ctx.userId) {
+    return Response.json({ error: "You are already a member" }, { status: 400 });
+  }
+  if (db.isOrgMember(ctx.orgId, user.id)) {
+    return Response.json({ error: "User is already a member" }, { status: 409 });
+  }
+  db.deleteExpiredInvitations();
+  if (db.getInvitationForUserInOrg(ctx.orgId, user.id)) {
+    return Response.json({ error: "An invitation for this user already exists" }, { status: 409 });
+  }
   const inviteRole = "member";
   const id = crypto.randomUUID();
   const token = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
-  db.deleteExpiredInvitations();
-  const invitation = db.insertInvitation(id, ctx.orgId, email, inviteRole, token, expiresAt, ctx.userId);
-  return Response.json(invitation, { status: 201 });
+  const invitation = db.insertInvitation(id, ctx.orgId, user.id, inviteRole, token, expiresAt, ctx.userId);
+  return Response.json({ ...invitation, invitee_username: user.username }, { status: 201 });
 }
 
 // GET /api/orgs/:orgId/invitations — list invitations

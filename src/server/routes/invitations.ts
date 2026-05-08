@@ -11,7 +11,12 @@ export async function handleGetInvitation(request: Request, token: string): Prom
     return Response.json({ error: "Invitation expired" }, { status: 410 });
   }
   const org = db.getOrg(invitation.org_id);
-  return Response.json({ invitation, org_name: org?.name });
+  const invitee = db.getUserById(invitation.invitee_user_id);
+  return Response.json({
+    invitation,
+    org_name: org?.name,
+    invitee_username: invitee?.username ?? null,
+  });
 }
 
 // POST /api/invitations/:token/accept
@@ -22,6 +27,16 @@ export async function handleAcceptInvitation(request: Request, token: string): P
   if (new Date(invitation.expires_at) < new Date()) {
     db.deleteInvitation(invitation.id);
     return Response.json({ error: "Invitation expired" }, { status: 410 });
+  }
+  // The token is the only credential, so the authenticated identity must
+  // match the user the invite was issued to — otherwise anyone with the
+  // link could claim the seat.
+  if (invitation.invitee_user_id !== auth.userId) {
+    const invitee = db.getUserById(invitation.invitee_user_id);
+    return Response.json(
+      { error: `This invitation is for ${invitee?.username ?? "another user"}` },
+      { status: 403 },
+    );
   }
   if (db.isOrgMember(invitation.org_id, auth.userId)) {
     db.deleteInvitation(invitation.id);

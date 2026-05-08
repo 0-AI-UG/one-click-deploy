@@ -10,7 +10,7 @@ import { Building2, Users, Shield, Key, UserMinus, Mail, X, ChevronDown, Chevron
 import { errMsg } from "../lib/errors.ts";
 
 type Member = { user_id: string; username: string; role: string };
-type Invitation = { id: string; email: string; role: string; expires_at: string };
+type Invitation = { id: string; invitee_username: string; role: string; expires_at: string; token: string };
 type OrgInfo = { id: string; name: string; slug: string };
 
 const ALL_PERMISSIONS = [
@@ -223,11 +223,16 @@ function MembersSection({ orgId, currentUserId }: { orgId: string; currentUserId
   );
 }
 
+function inviteLinkFor(token: string): string {
+  return `${window.location.origin}/#/invite/${token}`;
+}
+
 function InviteSection({ orgId }: { orgId: string }) {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
-  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteUsername, setInviteUsername] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -244,12 +249,18 @@ function InviteSection({ orgId }: { orgId: string }) {
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inviteEmail) return;
+    if (!inviteUsername.trim()) return;
     setSending(true);
     try {
-      await post(`/api/orgs/${orgId}/invitations`, { email: inviteEmail });
-      showToast("Invitation sent");
-      setInviteEmail("");
+      const created: Invitation = await post(`/api/orgs/${orgId}/invitations`, { username: inviteUsername.trim() });
+      showToast("Invite link created");
+      setInviteUsername("");
+      // Auto-copy the freshly minted link so the owner can paste it directly.
+      try {
+        await navigator.clipboard.writeText(inviteLinkFor(created.token));
+        setCopiedToken(created.token);
+        setTimeout(() => setCopiedToken((t) => (t === created.token ? null : t)), 2000);
+      } catch { /* clipboard may be unavailable; user can copy manually */ }
       load();
     } catch (err) {
       showToast(errMsg(err), "error");
@@ -258,8 +269,18 @@ function InviteSection({ orgId }: { orgId: string }) {
     }
   };
 
-  const handleRevoke = async (invId: string, email: string) => {
-    const ok = await confirm("Revoke invitation", `Revoke the invitation for ${email}?`, true);
+  const handleCopy = async (token: string) => {
+    try {
+      await navigator.clipboard.writeText(inviteLinkFor(token));
+      setCopiedToken(token);
+      setTimeout(() => setCopiedToken((t) => (t === token ? null : t)), 2000);
+    } catch {
+      showToast("Could not copy to clipboard", "error");
+    }
+  };
+
+  const handleRevoke = async (invId: string, username: string) => {
+    const ok = await confirm("Revoke invitation", `Revoke the invitation for ${username}?`, true);
     if (!ok) return;
     try {
       await del(`/api/orgs/${orgId}/invitations/${invId}`);
@@ -279,12 +300,15 @@ function InviteSection({ orgId }: { orgId: string }) {
 
       <form onSubmit={handleInvite} className="flex gap-2 items-end">
         <div className="flex-1">
-          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Email</label>
+          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Username</label>
           <input
             type="text"
-            value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.target.value)}
-            placeholder="user@example.com"
+            value={inviteUsername}
+            onChange={(e) => setInviteUsername(e.target.value)}
+            placeholder="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
           />
         </div>
         <Btn type="submit" variant="primary" loading={sending}>Invite</Btn>
@@ -297,21 +321,31 @@ function InviteSection({ orgId }: { orgId: string }) {
           <span className="font-mono text-[9px] font-bold uppercase tracking-wider text-muted block mb-2">Pending</span>
           <div className="space-y-1">
             {invitations.map((inv) => (
-              <div key={inv.id} className="flex items-center justify-between bg-alt border-2 border-fg px-3 py-2">
-                <div>
-                  <span className="font-mono text-[10px] text-fg font-bold">{inv.email}</span>
-                  <span className="font-mono text-[9px] text-muted ml-2">{inv.role}</span>
-                  <span className="font-mono text-[9px] text-muted ml-2">
-                    expires {new Date(inv.expires_at).toLocaleDateString()}
-                  </span>
+              <div key={inv.id} className="bg-alt border-2 border-fg px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="font-mono text-[10px] text-fg font-bold">{inv.invitee_username}</span>
+                    <span className="font-mono text-[9px] text-muted ml-2">{inv.role}</span>
+                    <span className="font-mono text-[9px] text-muted ml-2">
+                      expires {new Date(inv.expires_at).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Btn size="xs" variant="default" onClick={() => handleCopy(inv.token)}>
+                      {copiedToken === inv.token ? "Copied" : "Copy link"}
+                    </Btn>
+                    <button
+                      onClick={() => handleRevoke(inv.id, inv.invitee_username)}
+                      className="text-muted hover:text-accent-red transition-colors"
+                      title="Revoke invitation"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
                 </div>
-                <button
-                  onClick={() => handleRevoke(inv.id, inv.email)}
-                  className="text-muted hover:text-accent-red transition-colors"
-                  title="Revoke invitation"
-                >
-                  <X size={14} />
-                </button>
+                <div className="mt-1.5 font-mono text-[9px] text-muted break-all select-all">
+                  {inviteLinkFor(inv.token)}
+                </div>
               </div>
             ))}
           </div>

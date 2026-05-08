@@ -24,12 +24,16 @@ export type OrgMemberWithUser = OrgMembershipRow & {
 export type OrgInvitationRow = {
   id: string;
   org_id: string;
-  email: string;
+  invitee_user_id: string;
   role: string;
   token: string;
   expires_at: string;
   created_by: string;
   created_at: string;
+};
+
+export type OrgInvitationWithUser = OrgInvitationRow & {
+  invitee_username: string;
 };
 
 // Organization CRUD
@@ -108,15 +112,15 @@ export function getOrgRole(orgId: string, userId: string): string | null {
 export function insertInvitation(
   id: string,
   orgId: string,
-  email: string,
+  inviteeUserId: string,
   role: string,
   token: string,
   expiresAt: string,
   createdBy: string,
 ): OrgInvitationRow {
   db.query(
-    "INSERT INTO org_invitations (id, org_id, email, role, token, expires_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(id, orgId, email, role, token, expiresAt, createdBy);
+    "INSERT INTO org_invitations (id, org_id, invitee_user_id, role, token, expires_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(id, orgId, inviteeUserId, role, token, expiresAt, createdBy);
   return getInvitation(id)!;
 }
 
@@ -128,10 +132,21 @@ export function getInvitationByToken(token: string): OrgInvitationRow | null {
   return db.query("SELECT * FROM org_invitations WHERE token = ?").get(token) as OrgInvitationRow | null;
 }
 
-export function getOrgInvitations(orgId: string): OrgInvitationRow[] {
+export function getOrgInvitations(orgId: string): OrgInvitationWithUser[] {
   return db
-    .query("SELECT * FROM org_invitations WHERE org_id = ? ORDER BY created_at DESC")
-    .all(orgId) as OrgInvitationRow[];
+    .query(
+      "SELECT i.*, u.username AS invitee_username FROM org_invitations i JOIN users u ON u.id = i.invitee_user_id WHERE i.org_id = ? ORDER BY i.created_at DESC",
+    )
+    .all(orgId) as OrgInvitationWithUser[];
+}
+
+export function getInvitationForUserInOrg(
+  orgId: string,
+  inviteeUserId: string,
+): OrgInvitationRow | null {
+  return db
+    .query("SELECT * FROM org_invitations WHERE org_id = ? AND invitee_user_id = ?")
+    .get(orgId, inviteeUserId) as OrgInvitationRow | null;
 }
 
 export function deleteInvitation(id: string): void {

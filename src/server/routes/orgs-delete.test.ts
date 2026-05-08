@@ -109,8 +109,10 @@ describe("handleDeleteOrg — Stripe cancel + cascade", () => {
 
   test("cascade: org_invitations removed with org", async () => {
     const { orgId, token, userId } = await makeOrgWithOwnerToken();
+    const inviteeId = crypto.randomUUID();
+    db.insertUser({ id: inviteeId, username: `inv-${inviteeId.slice(0, 6)}`, password_hash: "x" });
     db.insertInvitation(
-      crypto.randomUUID(), orgId, "inv@example.com", "member",
+      crypto.randomUUID(), orgId, inviteeId, "member",
       crypto.randomUUID(), new Date(Date.now() + 86400_000).toISOString(), userId,
     );
 

@@ -185,6 +185,7 @@ export type {
   OrgMembershipRow,
   OrgMemberWithUser,
   OrgInvitationRow,
+  OrgInvitationWithUser,
   EngineInstanceRow,
 } from "./orgs.ts";
 export {
@@ -204,6 +205,7 @@ export {
   insertInvitation,
   getInvitation,
   getInvitationByToken,
+  getInvitationForUserInOrg,
   getOrgInvitations,
   deleteInvitation,
   deleteExpiredInvitations,

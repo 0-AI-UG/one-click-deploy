@@ -1341,6 +1341,28 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE subscriptions_new RENAME TO subscriptions");
     },
   },
+  {
+    version: 51,
+    description: "Rework org_invitations: invitee_user_id replaces email",
+    up: (db) => {
+      // Prior invitation system was inert (email column was never matched at
+      // accept time, no delivery mechanism existed). Drop any orphan rows and
+      // rebuild the table keyed on invitee_user_id so invites bind to a real
+      // account and the accept link can verify identity.
+      db.run("DROP TABLE IF EXISTS org_invitations");
+      db.run(`CREATE TABLE org_invitations (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        invitee_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        token TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(org_id, invitee_user_id)
+      )`);
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */
