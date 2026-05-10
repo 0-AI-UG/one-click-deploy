@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
 import { useAuth, logout } from "../stores/auth.ts";
-import { Server, Rocket, HardDrive, User, Users, LogOut, Terminal, Layers, TerminalSquare, Check, Cpu, Menu } from "lucide-react";
+import { Server, Rocket, HardDrive, Users, LogOut, Terminal, Layers, TerminalSquare, Check, Cpu, Menu } from "lucide-react";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
@@ -8,7 +8,6 @@ const navItems = [
   { hash: "#/environments", label: "Env", icon: Layers, match: /^#\/environments/ },
   { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
   { hash: "#/engine", label: "Engine", icon: Cpu, match: /^#\/engine/ },
-  { hash: "#/account", label: "Account", icon: User, match: /^#\/account/ },
 ];
 
 function CliCopyButton() {
@@ -88,14 +87,18 @@ function MobileMenu({ hash }: { hash: string }) {
             <CliCopyButton />
           </div>
           <div className="border-t border-fg/10 px-3 py-2 font-mono text-[10px] text-fg/70 flex items-center justify-between">
-            <span className="truncate">
+            <a
+              href="#/account"
+              onClick={() => setOpen(false)}
+              className="truncate hover:text-fg transition-all"
+            >
               {user?.username}
               {user?.isAdmin && (
                 <span className="ml-1.5 font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5 bg-fg text-accent">
                   admin
                 </span>
               )}
-            </span>
+            </a>
             <button
               onClick={() => { logout(); window.location.hash = "#/login"; }}
               className="p-1 text-fg/60 hover:text-accent-red transition-all"
@@ -153,14 +156,19 @@ function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; 
       <div className="flex items-center gap-3">
         <CliCopyButton />
         <div className="h-5 w-0.5 bg-fg/30" />
-        <span className="font-mono text-[10px] text-fg/70 whitespace-nowrap">
+        <a
+          href="#/account"
+          className={`font-mono text-[10px] whitespace-nowrap px-2 py-1 transition-all ${
+            hash.startsWith("#/account") ? "bg-fg text-accent" : "text-fg/70 hover:text-fg hover:bg-fg/10"
+          }`}
+        >
           {user?.username}
           {user?.isAdmin && (
             <span className="ml-1.5 font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5 bg-fg text-accent">
               admin
             </span>
           )}
-        </span>
+        </a>
         <button
           onClick={() => { logout(); window.location.hash = "#/login"; }}
           className="p-1.5 text-fg/60 hover:text-accent-red transition-all"
