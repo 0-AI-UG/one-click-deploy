@@ -85,6 +85,16 @@ export async function scaleUp(
 
     const containerName = `${app.name}-r${replicaNum}`;
 
+    // Defensive cleanup: a previous failed scale-up or migration may have left
+    // a same-named container on the target, which would squat on the
+    // private-IP host port and make `docker run` fail with
+    // "port is already allocated". Removing it here makes retries idempotent.
+    // (Auth proxy is a systemd unit handled by deployAuthProxy itself.)
+    {
+      const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+      await sshExec(targetServer.ipv4, asUser(`docker rm -f ${containerName} 2>/dev/null || true`), targetHostKey);
+    }
+
     if (app.deploy_mode !== "compose") {
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
       const envVars = await resolveAppEnvVars(app);
