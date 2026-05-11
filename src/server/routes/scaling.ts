@@ -24,6 +24,22 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
       return Response.json({ error: "Apps with persistent storage cannot have more than 1 replica." }, { status: 400, headers: corsHeaders });
     }
 
+    // Sleeping/waking apps keep one replica row as a "stopped anchor" so
+    // count comparisons against `replicas` are misleading — scaling to 1
+    // looks like a no-op even though the app is asleep. Route any scale-up
+    // request through the wake op instead.
+    if ((app.status === "sleeping" || app.status === "waking") && replicas >= 1) {
+      const { opId } = enqueue({
+        kind: "wake",
+        resourceKeys: [`app:${appId}`],
+        input: { appId },
+        trigger: "ui",
+        triggeredBy: payload.userId,
+        idempotencyKey: app.wake_token ? `wake:${appId}:${app.wake_token}` : undefined,
+      });
+      return Response.json({ op_id: opId }, { headers: corsHeaders });
+    }
+
     const current = db.getReplicas(appId).length;
     if (replicas === current) {
       return Response.json({ ok: true, op_id: null, noop: true }, { headers: corsHeaders });

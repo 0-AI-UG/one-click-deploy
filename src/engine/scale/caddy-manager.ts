@@ -23,7 +23,7 @@
 // traffic between Caddy and the backends never touches the public internet.
 
 import * as db from "../../shared/db.ts";
-import { sshExec, authProxyPort } from "../../shared/remote/index.ts";
+import { sshExec, authProxyPort, removeCaddyWakePage } from "../../shared/remote/index.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [caddy-mgr:${context}]`, ...args);
@@ -477,7 +477,7 @@ export async function syncAppCaddy(appId: number, force = false): Promise<void> 
  */
 export async function removeAppCaddy(
   appName: string,
-  _appDomain: string,
+  appDomain: string,
   appId?: number,
 ): Promise<void> {
   const panel = getPanelAccess();
@@ -492,6 +492,16 @@ export async function removeAppCaddy(
     `curl -sf -X DELETE http://localhost:2019/id/${pubId} 2>/dev/null || true`,
     panel.hostKey,
   );
+  // A wake-page route may also be present on srv0 from a previous sleep —
+  // remove it so a redeploy/teardown doesn't leave a stale 503 shadowing
+  // any future route for this domain.
+  if (appDomain) {
+    try {
+      await removeCaddyWakePage(panel.ipv4, appDomain, panel.hostKey);
+    } catch (err) {
+      log("remove", `app ${appName}: wake-page cleanup failed: ${err}`);
+    }
+  }
   await persistCaddyConfig(panel);
   if (appId !== undefined) lastUpstreamsByApp.delete(cacheKey(panel.ipv4, appId, "srv0"));
 

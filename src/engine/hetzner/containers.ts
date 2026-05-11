@@ -446,6 +446,23 @@ export async function deployCaddyWakePage(
   log("caddy", "Wake page configured via admin API (persisted to disk)");
 }
 
+/**
+ * Remove the Caddy wake-page route for a domain. Called when the app wakes
+ * so the (terminal) wake-page route stops shadowing the real app route in
+ * srv0/routes. Best-effort — a missing route is treated as success.
+ */
+export async function removeCaddyWakePage(
+  ip: string,
+  domain: string,
+  hostKey?: string,
+) {
+  if (!domain) return;
+  const routeId = `ocd-${domain.replace(/\./g, "-")}`;
+  await sshExec(ip, `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`, hostKey);
+  await persistCaddyConfig(ip, hostKey);
+  log("caddy", `Wake page removed: domain=${domain}`);
+}
+
 // --- Registry Auth ---
 
 async function dockerLoginGhcr(
