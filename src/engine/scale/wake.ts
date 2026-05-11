@@ -3,7 +3,6 @@ import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
   sshExec, composeHealthCheck, healthCheck, deployAuthProxy,
   startContainer, startCompose, containerExists, composeProjectExists,
-  removeCaddyWakePage,
 } from "../../shared/remote/index.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
 import { log, replicaBindHost } from "./types.ts";
@@ -126,25 +125,13 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
 
     // Reinstall the panel Caddy vhost so public traffic is routed back to
     // the replica (instead of the wake page that was serving 503s while
-    // the app was asleep).
+    // the app was asleep). syncAppCaddy also drops the stale wake-page
+    // route under `ocd-<domain>` that would otherwise keep shadowing the
+    // app route after wake.
     try {
       await syncAppCaddy(appId);
     } catch (err) {
       log("wake", `syncAppCaddy after wake failed: ${err}`);
-    }
-
-    // The wake page route lives in srv0/routes under a different @id than
-    // the app route (`ocd-<domain>` vs `ocd-app-<name>`). syncAppCaddy
-    // doesn't touch it; since wake-page is `terminal: true` and was POSTed
-    // first, it would keep shadowing the app route after wake. Drop it.
-    try {
-      const panel = db.getPanel();
-      const panelServer = panel ? db.getServer(panel.server_id) : null;
-      if (panelServer?.ipv4 && app.domain) {
-        await removeCaddyWakePage(panelServer.ipv4, app.domain, panelServer.ssh_host_key || undefined);
-      }
-    } catch (err) {
-      log("wake", `removeCaddyWakePage after wake failed: ${err}`);
     }
 
     log("wake", `App ${appId} woken successfully`);

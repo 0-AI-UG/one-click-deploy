@@ -446,6 +446,17 @@ export async function syncAppCaddy(appId: number, force = false): Promise<void> 
     lastUpstreamsByApp.set(cacheKey(panel.ipv4, appId, "srv0"), pubKey);
   }
 
+  // Any wake-page route under `ocd-<domain>` is a leftover from a previous
+  // sleep — it's `terminal: true` and was POSTed first, so it would shadow
+  // the app route forever. Drop it on every sync (idempotent if absent).
+  if (app.domain) {
+    try {
+      await removeCaddyWakePage(panel.ipv4, app.domain, panel.hostKey);
+    } catch (err) {
+      log("sync", `app ${appId}: wake-page cleanup failed (non-fatal): ${err}`);
+    }
+  }
+
   // --- Internal route: fan out to every server ---
   // Each server runs its own srv_internal on :8080, and <app>.ocd.internal
   // resolves to 127.0.0.1 via /etc/hosts. This removes the extra hop through
