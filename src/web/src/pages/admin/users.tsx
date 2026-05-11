@@ -43,7 +43,7 @@ function GitHubOAuthSettings({ form, setS }: { form: Record<string, string>; set
 }
 
 type User = {
-  id: string; username: string; isAdmin: boolean; totpEnabled: boolean;
+  id: string; username: string; isAdmin: boolean;
   webauthnEnabled: boolean; permissions: string[]; createdAt: string;
 };
 
@@ -402,11 +402,7 @@ export function UsersPage() {
                 )}
               </td>
               <td className="py-2.5 px-3">
-                {u.totpEnabled && u.webauthnEnabled ? (
-                  <span className="text-fg text-[9px] font-mono font-bold uppercase">Both</span>
-                ) : u.totpEnabled ? (
-                  <span className="text-fg text-[9px] font-mono font-bold uppercase">TOTP</span>
-                ) : u.webauthnEnabled ? (
+                {u.webauthnEnabled ? (
                   <span className="text-fg text-[9px] font-mono font-bold uppercase">Passkey</span>
                 ) : (
                   <span className="text-muted text-[9px] font-mono uppercase">None</span>

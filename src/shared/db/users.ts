@@ -5,8 +5,6 @@ export type UserRow = {
   username: string;
   password_hash: string;
   is_admin: number;
-  totp_secret: string | null;
-  totp_enabled: number;
   webauthn_enabled: number;
   github_id: number | null;
   github_username: string;
@@ -72,7 +70,7 @@ export function getUserById(id: string): UserRow | null {
 }
 
 export function getUsers(): UserRow[] {
-  return db.query("SELECT id, username, is_admin, totp_enabled, webauthn_enabled, created_at FROM users ORDER BY created_at").all() as UserRow[];
+  return db.query("SELECT id, username, is_admin, webauthn_enabled, created_at FROM users ORDER BY created_at").all() as UserRow[];
 }
 
 export function insertUser(user: { id: string; username: string; password_hash: string; is_admin?: boolean }): void {
@@ -104,45 +102,6 @@ export function clearUserGitHub(userId: string): void {
   db.query(
     "UPDATE users SET github_id = NULL, github_username = '', github_avatar_url = '', github_linked_at = NULL WHERE id = ?"
   ).run(userId);
-}
-
-export function setTotpSecret(userId: string, secret: string): void {
-  db.query("UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?").run(secret, userId);
-}
-
-export function enableTotp(userId: string): void {
-  db.query("UPDATE users SET totp_enabled = 1 WHERE id = ?").run(userId);
-}
-
-export function disableTotp(userId: string): void {
-  db.query("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?").run(userId);
-  db.query("DELETE FROM totp_backup_codes WHERE user_id = ?").run(userId);
-}
-
-export function getTotpSecret(userId: string): string | null {
-  const row = db.query("SELECT totp_secret FROM users WHERE id = ?").get(userId) as { totp_secret: string | null } | null;
-  return row?.totp_secret ?? null;
-}
-
-export function insertBackupCodes(userId: string, codeHashes: string[]): void {
-  db.query("DELETE FROM totp_backup_codes WHERE user_id = ?").run(userId);
-  const stmt = db.prepare("INSERT INTO totp_backup_codes (id, user_id, code_hash) VALUES (?, ?, ?)");
-  for (const hash of codeHashes) {
-    stmt.run(crypto.randomUUID(), userId, hash);
-  }
-}
-
-export function getUnusedBackupCodes(userId: string): Array<{ id: string; code_hash: string }> {
-  return db.query("SELECT id, code_hash FROM totp_backup_codes WHERE user_id = ? AND used = 0").all(userId) as Array<{ id: string; code_hash: string }>;
-}
-
-export function markBackupCodeUsed(codeId: string): void {
-  db.query("UPDATE totp_backup_codes SET used = 1 WHERE id = ?").run(codeId);
-}
-
-export function getUnusedBackupCodeCount(userId: string): number {
-  const row = db.query("SELECT COUNT(*) as count FROM totp_backup_codes WHERE user_id = ? AND used = 0").get(userId) as { count: number } | null;
-  return row?.count ?? 0;
 }
 
 export function insertWebAuthnCredential(data: {

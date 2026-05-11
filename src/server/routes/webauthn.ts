@@ -14,7 +14,6 @@ import { authenticateRequest, createToken, createTempToken, verifyTempToken } fr
 import { AuthError } from "../lib/errors.ts";
 import { handleError, getClientIP } from "../lib/utils.ts";
 import { authRateLimiter } from "../lib/rate-limit.ts";
-import { generateBackupCodes } from "./totp.ts";
 import * as db from "../../shared/db.ts";
 import { saveChallenge, fetchAndDeleteChallenge } from "../../shared/db/webauthn-challenges.ts";
 
@@ -85,7 +84,6 @@ function userResponse(user: db.UserRow) {
     id: user.id,
     username: user.username,
     isAdmin: user.is_admin === 1,
-    totpEnabled: user.totp_enabled === 1,
     webauthnEnabled: user.webauthn_enabled === 1,
     githubLinked: !!user.github_id,
     githubUsername: user.github_username || "",
@@ -175,18 +173,7 @@ export async function handleWebAuthnRegisterVerify(request: Request): Promise<Re
     });
     db.enableWebAuthn(userId);
 
-    // Generate backup codes if this is the user's first 2FA method
-    const isFirst2FA = !user.totp_enabled && db.getUnusedBackupCodeCount(userId) === 0;
-    let backupCodes: string[] | undefined;
-    if (isFirst2FA) {
-      backupCodes = generateBackupCodes(8);
-      const codeHashes = await Promise.all(
-        backupCodes.map((code) => Bun.password.hash(code.replace("-", ""), "bcrypt")),
-      );
-      db.insertBackupCodes(userId, codeHashes);
-    }
-
-    return Response.json({ verified: true, backupCodes }, { headers: corsHeaders });
+    return Response.json({ verified: true }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -283,13 +270,6 @@ export async function handleWebAuthnRegisterVerifyFromLogin(request: Request): P
       name: body.name || "Passkey",
     });
     db.enableWebAuthn(userId);
-
-    // Generate backup codes
-    const backupCodes = generateBackupCodes(8);
-    const codeHashes = await Promise.all(
-      backupCodes.map((code) => Bun.password.hash(code.replace("-", ""), "bcrypt")),
-    );
-    db.insertBackupCodes(userId, codeHashes);
     db.incrementTokenVersion(userId);
     const freshUser = db.getUserById(userId)!;
 
@@ -297,7 +277,7 @@ export async function handleWebAuthnRegisterVerifyFromLogin(request: Request): P
     const token = await createToken({ userId: freshUser.id, username: freshUser.username, v: freshUser.token_version });
 
     return Response.json(
-      { token, user: userResponse(freshUser), backupCodes },
+      { token, user: userResponse(freshUser) },
       { headers: corsHeaders },
     );
   } catch (error) {
@@ -585,7 +565,7 @@ export async function handleWebAuthnDelete(request: Request): Promise<Response> 
 
     // Check if this would leave the user with no 2FA when required
     const credCount = db.getWebAuthnCredentialCount(userId);
-    const wouldHave2FA = user.totp_enabled || credCount > 1;
+    const wouldHave2FA = credCount > 1;
     const require2fa = (db.getSettings().require_2fa ?? "1") === "1";
     if (!wouldHave2FA && (user.is_admin || require2fa)) {
       return Response.json(

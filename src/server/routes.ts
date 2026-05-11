@@ -1,15 +1,5 @@
 import { handleSetupStatus, handleSetupComplete, handleSetupServerTypes } from "./routes/setup.ts";
-import { handleLogin, handleMe, handleUpdateMe, handlePasswordReset } from "./routes/auth.ts";
-import {
-  handleTotpSetup,
-  handleTotpConfirm,
-  handleTotpLogin,
-  handleTotpSetupFromLogin,
-  handleTotpConfirmFromLogin,
-  handleTotpDisable,
-  handleTotpStatus,
-  handleTotpResetFromLogin,
-} from "./routes/totp.ts";
+import { handleLogin, handleMe, handleUpdateMe } from "./routes/auth.ts";
 import {
   handleWebAuthnRegisterOptions,
   handleWebAuthnRegisterVerify,
@@ -162,7 +152,6 @@ export const apiRoutes = {
 
   // --- Auth ---
   "/api/auth/login": { POST: (req: Request) => handleLogin(req) },
-  "/api/auth/password-reset": { POST: (req: Request) => handlePasswordReset(req) },
   "/api/auth/device-code": { POST: () => handleDeviceCode() },
   "/api/auth/device-token": { POST: (req: Request) => handleDeviceToken(req) },
   "/api/auth/device-confirm": { POST: (req: Request) => handleDeviceConfirm(req) },
@@ -178,16 +167,6 @@ export const apiRoutes = {
   "/api/auth/github/callback": { GET: (req: Request) => handleGitHubCallback(req) },
   "/api/auth/github/unlink": { POST: (req: Request) => handleGitHubUnlink(req) },
   "/api/auth/github/status": { GET: (req: Request) => handleGitHubStatus(req) },
-
-  // --- TOTP ---
-  "/api/auth/totp/setup": { POST: (req: Request) => handleTotpSetup(req) },
-  "/api/auth/totp/confirm": { POST: (req: Request) => handleTotpConfirm(req) },
-  "/api/auth/totp/login": { POST: (req: Request) => handleTotpLogin(req) },
-  "/api/auth/totp/setup-from-login": { POST: (req: Request) => handleTotpSetupFromLogin(req) },
-  "/api/auth/totp/confirm-from-login": { POST: (req: Request) => handleTotpConfirmFromLogin(req) },
-  "/api/auth/totp/disable": { POST: (req: Request) => handleTotpDisable(req) },
-  "/api/auth/totp/reset-from-login": { POST: (req: Request) => handleTotpResetFromLogin(req) },
-  "/api/auth/totp/status": { GET: (req: Request) => handleTotpStatus(req) },
 
   // --- WebAuthn ---
   "/api/auth/webauthn/register-options": { POST: (req: Request) => handleWebAuthnRegisterOptions(req) },

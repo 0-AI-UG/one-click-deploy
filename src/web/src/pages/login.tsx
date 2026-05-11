@@ -15,7 +15,7 @@ export function LoginPage() {
     try {
       const res = await post("/api/auth/login", { username, password });
       if (res.requires2FA) {
-        setTempToken(res.tempToken, res.methods);
+        setTempToken(res.tempToken);
         window.location.hash = "#/2fa-verify";
       } else if (res.requires2FASetup) {
         setTempToken(res.tempToken);

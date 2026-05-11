@@ -5,8 +5,6 @@ import { Toasts, ConfirmDialog, Spinner } from "./components/ui.tsx";
 import { Nav } from "./components/nav.tsx";
 import { ProtectedRoute } from "./components/protected-route.tsx";
 import { LoginPage } from "./pages/login.tsx";
-import { TotpVerifyPage } from "./pages/totp-verify.tsx";
-import { TotpSetupPage } from "./pages/totp-setup.tsx";
 import { TwoFactorVerifyPage } from "./pages/two-factor-verify.tsx";
 import { TwoFactorSetupPage } from "./pages/two-factor-setup.tsx";
 import { PasswordResetPage } from "./pages/password-reset.tsx";
@@ -115,8 +113,6 @@ export function App() {
   if (hash === "#/password-reset") return <><PasswordResetPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/2fa-verify") return <><TwoFactorVerifyPage /><Toasts /><ConfirmDialog /></>;
   if (hash === "#/2fa-setup") return <><TwoFactorSetupPage /><Toasts /><ConfirmDialog /></>;
-  if (hash === "#/totp-verify") return <><TwoFactorVerifyPage /><Toasts /><ConfirmDialog /></>;
-  if (hash === "#/totp-setup") return <><TwoFactorSetupPage /><Toasts /><ConfirmDialog /></>;
 
   // Redirect to login if not authenticated
   if (!token) {

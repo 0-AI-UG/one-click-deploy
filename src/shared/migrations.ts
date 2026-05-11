@@ -1127,6 +1127,29 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 47,
+    description: "Remove TOTP: drop totp_secret/totp_enabled columns and totp_backup_codes table",
+    up: (db) => {
+      db.run("DROP TABLE IF EXISTS totp_backup_codes");
+      const cols = db.query("PRAGMA table_info(users)").all() as { name: string }[];
+      const colNames = new Set(cols.map((c) => c.name));
+      if (colNames.has("totp_enabled")) {
+        try {
+          db.run("ALTER TABLE users DROP COLUMN totp_enabled");
+        } catch {
+          // Old SQLite fallback handled by the secret-drop branch below
+        }
+      }
+      if (colNames.has("totp_secret")) {
+        try {
+          db.run("ALTER TABLE users DROP COLUMN totp_secret");
+        } catch {
+          // ignore
+        }
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

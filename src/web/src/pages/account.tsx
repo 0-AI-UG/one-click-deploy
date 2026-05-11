@@ -1,28 +1,23 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
 import { Card, Btn, Spinner, showToast } from "../components/ui.tsx";
-import { User, Shield, Fingerprint, KeyRound, Trash2, LogOut, GitBranch, LinkIcon, Unlink } from "lucide-react";
+import { User, Shield, Fingerprint, Trash2, LogOut, GitBranch, LinkIcon, Unlink } from "lucide-react";
 import { startRegistration, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { logout, useAuth, updateUser } from "../stores/auth.ts";
-import type { TotpStatus } from "../types.ts";
 
 type PasskeyInfo = { id: string; name: string; deviceType: string; backedUp: boolean; createdAt: string };
 
 function SecuritySection() {
-  const [status, setStatus] = useState<TotpStatus | null>(null);
   const [passkeys, setPasskeys] = useState<PasskeyInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const supportsWebAuthn = browserSupportsWebAuthn();
 
   const refresh = () => {
-    Promise.all([
-      get("/api/auth/totp/status"),
-      get("/api/auth/webauthn/credentials"),
-    ]).then(([s, p]) => {
-      setStatus(s);
-      setPasskeys(p);
-    }).catch(() => {}).finally(() => setLoading(false));
+    get("/api/auth/webauthn/credentials")
+      .then(setPasskeys)
+      .catch(() => {})
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => { refresh(); }, []);
@@ -32,12 +27,8 @@ function SecuritySection() {
     try {
       const options = await post("/api/auth/webauthn/register-options");
       const credential = await startRegistration({ optionsJSON: options });
-      const res = await post("/api/auth/webauthn/register-verify", { credential });
-      if (res.backupCodes) {
-        showToast(`Passkey added. Save your backup codes: ${res.backupCodes.join(", ")}`, "success");
-      } else {
-        showToast("Passkey added", "success");
-      }
+      await post("/api/auth/webauthn/register-verify", { credential });
+      showToast("Passkey added", "success");
       refresh();
     } catch (err: any) {
       if (err.name !== "NotAllowedError") {
@@ -63,7 +54,6 @@ function SecuritySection() {
   };
 
   if (loading) return <Card className="p-5 mt-6"><div className="flex justify-center"><Spinner /></div></Card>;
-  if (!status) return null;
 
   return (
     <Card className="p-5 space-y-4">
@@ -72,19 +62,7 @@ function SecuritySection() {
         <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Security</h3>
       </div>
 
-      {/* TOTP Status */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <KeyRound size={14} className="text-muted" />
-          <span className="font-mono text-[11px] text-fg font-bold">Authenticator App</span>
-        </div>
-        <span className={`font-mono text-[9px] font-bold uppercase px-2 py-0.5 border-2 border-fg ${status.enabled ? "bg-green-200" : "bg-alt"}`}>
-          {status.enabled ? "Enabled" : "Disabled"}
-        </span>
-      </div>
-
-      {/* Passkeys */}
-      <div className="border-t-2 border-fg pt-3">
+      <div>
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <Fingerprint size={14} className="text-muted" />
@@ -127,17 +105,6 @@ function SecuritySection() {
         )}
       </div>
 
-      {/* Backup codes */}
-      {(status.enabled || status.webauthnEnabled) && (
-        <div className="border-t-2 border-fg pt-3">
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-[11px] text-fg font-bold">Backup Codes</span>
-            <span className="font-mono text-[10px] text-muted">{status.backupCodesRemaining} remaining</span>
-          </div>
-        </div>
-      )}
-
-      {/* Change password */}
       <div className="border-t-2 border-fg pt-3">
         <div className="flex items-center justify-between">
           <div>
