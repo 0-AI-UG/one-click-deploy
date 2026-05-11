@@ -53,6 +53,7 @@ ${BOLD}Commands:${RESET}
   servers                List servers
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session
+  ssh <server> --server  Interactive shell on a server
 
 ${DIM}App/server arguments accept name or numeric ID.${RESET}`);
 }

@@ -77,22 +77,62 @@ async function createEnv(name: string, varArgs: string[]): Promise<void> {
 }
 
 async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
+  const replace = varArgs.includes("--replace");
+  const filtered = varArgs.filter((a) => a !== "--replace");
   const env = await resolveEnv(nameOrId);
-  const env_vars = parseVarArgs(varArgs);
+  const incoming = parseVarArgs(filtered);
 
-  if (env_vars.length === 0) {
+  if (incoming.length === 0) {
     console.error(`${RED}No variables provided. Use KEY=VALUE or --secret KEY=VALUE${RESET}`);
     process.exit(1);
   }
+
+  // Merge with existing vars by default — the API PUT replaces the whole set,
+  // so we have to send everything we want to keep. Use `--replace` to opt out.
+  const env_vars = replace ? incoming : mergeWithExisting(env.env_vars || [], incoming);
 
   const result = await put<{ ok: boolean; redeploying: number }>(`/api/environments/${env.id}`, {
     env_vars,
   });
 
-  console.log(`${GREEN}Updated ${env.name}${RESET}`);
+  console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(${incoming.map((v) => v.key).join(", ")})${RESET}`);
   if (result.redeploying > 0) {
     console.log(`${YELLOW}Redeploying ${result.redeploying} linked app(s)${RESET}`);
   }
+}
+
+async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
+  const env = await resolveEnv(nameOrId);
+  const remove = new Set(keys);
+  const existing = env.env_vars || [];
+  const missing = keys.filter((k) => !existing.find((v) => v.key === k));
+  if (missing.length) {
+    console.error(`${YELLOW}Not set: ${missing.join(", ")}${RESET}`);
+  }
+  const kept = existing.filter((v) => !remove.has(v.key));
+
+  if (kept.length === existing.length) {
+    console.log(`${DIM}No changes${RESET}`);
+    return;
+  }
+
+  const result = await put<{ ok: boolean; redeploying: number }>(`/api/environments/${env.id}`, {
+    env_vars: kept,
+  });
+
+  console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(removed ${keys.filter((k) => !missing.includes(k)).join(", ")})${RESET}`);
+  if (result.redeploying > 0) {
+    console.log(`${YELLOW}Redeploying ${result.redeploying} linked app(s)${RESET}`);
+  }
+}
+
+function mergeWithExisting(
+  existing: Array<{ key: string; value: string; secret: boolean }>,
+  incoming: Array<{ key: string; value: string; secret: boolean }>,
+): Array<{ key: string; value: string; secret: boolean }> {
+  const byKey = new Map(existing.map((v) => [v.key, v]));
+  for (const item of incoming) byKey.set(item.key, item);
+  return Array.from(byKey.values());
 }
 
 function parseVarArgs(args: string[]): Array<{ key: string; value: string; secret: boolean }> {
@@ -142,10 +182,19 @@ export async function envs(args: string[]): Promise<void> {
 
   if (sub === "set") {
     if (!args[1]) {
-      console.error("Usage: ocd envs set <name|id> KEY=VALUE [--secret KEY=VALUE] ...");
+      console.error("Usage: ocd envs set <name|id> KEY=VALUE [--secret KEY=VALUE] ... [--replace]");
       process.exit(1);
     }
     await setVars(args[1], args.slice(2));
+    return;
+  }
+
+  if (sub === "unset") {
+    if (!args[1] || args.length < 3) {
+      console.error("Usage: ocd envs unset <name|id> KEY [KEY...]");
+      process.exit(1);
+    }
+    await unsetVars(args[1], args.slice(2));
     return;
   }
 
@@ -155,10 +204,12 @@ ${BOLD}Commands:${RESET}
   list                       List all environments
   show <name|id>             Show environment details and variables
   create <name> [vars...]    Create a new environment
-  set <name|id> [vars...]    Set variables (redeploys linked apps)
+  set <name|id> [vars...]    Merge variables into env (redeploys linked apps)
+  unset <name|id> KEY...     Remove variables from env (redeploys linked apps)
 
 ${BOLD}Variable format:${RESET}
   KEY=VALUE                  Plain variable
-  --secret KEY=VALUE         Secret variable (encrypted, not retrievable)`);
+  --secret KEY=VALUE         Secret variable (encrypted, not retrievable)
+  --replace                  With set: replace all vars instead of merging`);
   process.exit(1);
 }

@@ -1,4 +1,4 @@
-import { get, post, resolveApp } from "../api.ts";
+import { get, getApps, post, resolveApp, type App } from "../api.ts";
 import { requireConfig } from "../config.ts";
 import { BOLD, DIM, RED, RESET } from "../format.ts";
 
@@ -19,7 +19,7 @@ interface Replica {
   status: string;
 }
 
-async function resolveServer(nameOrId: string): Promise<Server> {
+async function findServer(nameOrId: string): Promise<Server | null> {
   const servers = await get<Server[]>("/api/servers");
 
   const id = parseInt(nameOrId, 10);
@@ -35,9 +35,31 @@ async function resolveServer(nameOrId: string): Promise<Server> {
   const byIp = servers.find((s) => s.ipv4 === nameOrId);
   if (byIp) return byIp;
 
+  return null;
+}
+
+async function resolveServer(nameOrId: string): Promise<Server> {
+  const srv = await findServer(nameOrId);
+  if (srv) return srv;
+
+  const servers = await get<Server[]>("/api/servers");
   console.error(`Server not found: ${nameOrId}`);
   console.error(`Available servers: ${servers.map((s) => s.name).join(", ") || "(none)"}`);
   process.exit(1);
+}
+
+async function findApp(nameOrId: string): Promise<App | null> {
+  const apps = await getApps();
+
+  const id = parseInt(nameOrId, 10);
+  if (!isNaN(id)) {
+    const app = apps.find((a) => a.id === id);
+    if (app) return app;
+  }
+
+  const lower = nameOrId.toLowerCase();
+  const app = apps.find((a) => a.name.toLowerCase() === lower);
+  return app || null;
 }
 
 async function resolveTarget(args: string[]): Promise<{ wsTarget: string; label: string; isServer: boolean }> {
@@ -49,7 +71,16 @@ async function resolveTarget(args: string[]): Promise<{ wsTarget: string; label:
     return { wsTarget: `server:${srv.id}`, label: `${srv.name} (${srv.ipv4})`, isServer: true };
   }
 
-  const app = await resolveApp(target);
+  // Auto-fallback: if there's no app by this name but a server matches, use it.
+  const appMatch = await findApp(target);
+  if (!appMatch) {
+    const srv = await findServer(target);
+    if (srv) {
+      return { wsTarget: `server:${srv.id}`, label: `${srv.name} (${srv.ipv4})`, isServer: true };
+    }
+  }
+
+  const app = appMatch ?? await resolveApp(target);
   const replicas = await get<Replica[]>(`/api/apps/${app.id}/replicas`);
   const running = replicas.filter((r) => r.status === "running");
 
@@ -157,7 +188,8 @@ export async function ssh(args: string[]): Promise<void> {
 
   ocd ssh <app> <command>       Run a command and print output
   ocd ssh <app> -i              Interactive terminal session
-  ocd ssh <server> --server     Connect to a server (interactive)
+  ocd ssh <server> -i           Interactive session on a server
+  ocd ssh <server> --server     Force server target (disambiguates name collisions)
 
 ${BOLD}Options:${RESET}
   -i, --interactive             Open an interactive shell

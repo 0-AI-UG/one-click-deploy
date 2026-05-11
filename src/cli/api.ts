@@ -38,7 +38,7 @@ async function apiRequest<T>(method: string, path: string, body?: unknown): Prom
   return res.json() as Promise<T>;
 }
 
-interface App {
+export interface App {
   id: number;
   name: string;
   status: string;
