@@ -1,5 +1,5 @@
 import type { DeployRequest, Server } from "../../shared/rpc.ts";
-import * as db from "../../shared/db.ts";
+import dbInstance, * as db from "../../shared/db.ts";
 import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
 import {
   sshExec,
@@ -337,44 +337,48 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       environmentId = envRow.id;
     }
 
-    const { app, replica } = db.insertAppWithFirstReplica(
-      {
-        name: req.app_name,
-        domain: useDomain,
-        git_repo: req.git_repo,
-        git_branch: req.git_branch,
-        dockerfile_path: dockerfilePath,
-        docker_context: req.docker_context,
-        container_port: req.container_port,
-        env_vars: serializeEnvVars([]),
-        auth_password: req.auth_password,
-        environment_id: environmentId ?? undefined,
-        public: req.public,
-      },
-      server.serverId,
-    );
-    if (ctx.triggeredBy) db.updateAppDeployedBy(app.id, ctx.triggeredBy);
-
-    if (dns) {
-      db.insertDnsRecord({
-        app_id: app.id,
-        zone_id: dns.zoneId,
-        record_id: `${dns.name}/${dns.type}/${dns.value}`,
-        name: dns.name,
-        type: dns.type,
-        value: dns.value,
-      });
-    }
-
-    if (volume) {
-      db.updateAppVolume(app.id, volume.volumeId, volume.volumeMount);
-    }
     const extraVolumes = (req.extra_volumes || []).map(
       (v) => `${v.host_path}:${v.container_path}`,
     );
-    if (extraVolumes.length > 0) {
-      db.updateAppExtraVolumes(app.id, extraVolumes);
-    }
+    // Single atomic commit: app row + first replica + DNS record + volume
+    // metadata. Without the transaction a mid-step crash could leave the DB
+    // with an app but no DNS / volume / extra-volume rows.
+    const { app, replica } = dbInstance.transaction(() => {
+      const result = db.insertAppWithFirstReplica(
+        {
+          name: req.app_name,
+          domain: useDomain,
+          git_repo: req.git_repo,
+          git_branch: req.git_branch,
+          dockerfile_path: dockerfilePath,
+          docker_context: req.docker_context,
+          container_port: req.container_port,
+          env_vars: serializeEnvVars([]),
+          auth_password: req.auth_password,
+          environment_id: environmentId ?? undefined,
+          public: req.public,
+        },
+        server.serverId,
+      );
+      if (ctx.triggeredBy) db.updateAppDeployedBy(result.app.id, ctx.triggeredBy);
+      if (dns) {
+        db.insertDnsRecord({
+          app_id: result.app.id,
+          zone_id: dns.zoneId,
+          record_id: `${dns.name}/${dns.type}/${dns.value}`,
+          name: dns.name,
+          type: dns.type,
+          value: dns.value,
+        });
+      }
+      if (volume) {
+        db.updateAppVolume(result.app.id, volume.volumeId, volume.volumeMount);
+      }
+      if (extraVolumes.length > 0) {
+        db.updateAppExtraVolumes(result.app.id, extraVolumes);
+      }
+      return result;
+    })();
 
     return {
       appId: app.id,
