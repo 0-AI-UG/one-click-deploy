@@ -47,6 +47,35 @@ export function validateGitRepo(repo: string): ValidationResult<string> {
   return { valid: true, value: trimmed };
 }
 
+/**
+ * Validate a git ref / branch name. Subset of git's ref rules, intentionally
+ * strict because the value is interpolated into a shell command on the build
+ * host (see deploy.ts `git checkout ${branch}`). Anything that doesn't match
+ * this pattern is rejected before reaching the shell.
+ *
+ * Allowed: ASCII letters, digits, and `_./-` (no leading `-`, `/`, `.`; no
+ * `..`; no whitespace or shell metacharacters; <= 244 chars).
+ */
+export function validateGitBranch(branch: string): ValidationResult<string> {
+  const trimmed = branch.trim();
+  if (!trimmed) return { valid: false, error: "Branch is required" };
+  if (trimmed.length > 244)
+    return { valid: false, error: "Branch must be 244 characters or fewer" };
+  if (trimmed.startsWith("-") || trimmed.startsWith("/") || trimmed.startsWith("."))
+    return { valid: false, error: "Branch must not start with '-', '/', or '.'" };
+  if (trimmed.endsWith("/") || trimmed.endsWith("."))
+    return { valid: false, error: "Branch must not end with '/' or '.'" };
+  if (trimmed.includes(".."))
+    return { valid: false, error: "Branch must not contain '..'" };
+  if (!/^[A-Za-z0-9_./-]+$/.test(trimmed))
+    return {
+      valid: false,
+      error:
+        "Branch may only contain letters, digits, and '_./-'",
+    };
+  return { valid: true, value: trimmed };
+}
+
 export function validateDomain(domain: string): ValidationResult<string> {
   const trimmed = domain.trim().toLowerCase();
   if (!trimmed) return { valid: false, error: "Domain is required" };
@@ -246,6 +275,7 @@ export function validateDeployRequest(req: {
   app_name: string;
   domain?: string;
   git_repo: string;
+  git_branch?: string;
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
 }): ValidationResult<void> {
@@ -254,6 +284,11 @@ export function validateDeployRequest(req: {
 
   const repoResult = validateGitRepo(req.git_repo);
   if (!repoResult.valid) return { valid: false, error: `Git repo: ${repoResult.error}` };
+
+  if (req.git_branch) {
+    const branchResult = validateGitBranch(req.git_branch);
+    if (!branchResult.valid) return { valid: false, error: `Git branch: ${branchResult.error}` };
+  }
 
   if (req.domain) {
     const domainResult = validateDomain(req.domain);
