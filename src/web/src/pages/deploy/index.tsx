@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
-import { Rocket, RotateCcw, X, Save, Loader2, Database } from "lucide-react";
+import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown } from "lucide-react";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
 import { ReceiptSection } from "./receipt-section.tsx";
@@ -19,6 +19,7 @@ type CatalogEntry = {
   color?: string;
   category?: string;
   http?: boolean;
+  description?: string;
 };
 
 function groupByCategory(entries: CatalogEntry[]): [string, CatalogEntry[]][] {
@@ -39,76 +40,89 @@ function groupByCategory(entries: CatalogEntry[]): [string, CatalogEntry[]][] {
   });
 }
 
-function ServicePopover() {
-  const [open, setOpen] = useState(false);
+function ServiceToggleButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+        open ? "text-fg" : "text-fg-dim hover:text-fg"
+      }`}
+    >
+      <Database size={12} />
+      Deploy a service
+      <ChevronDown size={12} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+    </button>
+  );
+}
+
+function ServicesGridSection({ onClose }: { onClose: () => void }) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const handleEnter = () => {
-    clearTimeout(closeTimer.current);
-    setOpen(true);
-    if (!loaded) {
-      get("/api/services/catalog")
-        .then((data: CatalogEntry[]) => {
-          setCatalog(data);
-          setLoaded(true);
-        })
-        .catch(() => setLoaded(true));
-    }
-  };
-
-  const handleLeave = () => {
-    closeTimer.current = setTimeout(() => setOpen(false), 150);
-  };
+  useEffect(() => {
+    get("/api/services/catalog")
+      .then((data: CatalogEntry[]) => {
+        setCatalog(data);
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  }, []);
 
   return (
-    <div
-      className="relative"
-      onMouseEnter={handleEnter}
-      onMouseLeave={handleLeave}
-    >
-      <button
-        type="button"
-        className="flex items-center gap-1.5 font-mono text-[10px] text-fg-dim hover:text-fg uppercase tracking-wider transition-colors"
-      >
-        <Database size={12} />
-        Deploy a service
-      </button>
-      {open && (
-        <div
-          className="absolute top-full right-0 mt-1.5 z-50 border-2 border-fg bg-bg shadow-lg min-w-[220px] overflow-y-auto animate-fade-in"
-          style={{ maxHeight: "min(420px, calc(100vh - 120px))" }}
+    <div className="border-2 border-fg bg-bg animate-fade-in">
+      <div className="px-4 py-2 border-b-2 border-fg bg-alt flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Database size={12} className="text-fg" />
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-fg">Deploy a service</span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-fg-dim hover:text-fg transition-colors"
+          aria-label="Close"
         >
-          {!loaded ? (
-            <div className="px-3 py-2 flex items-center justify-center">
-              <Loader2 size={14} className="animate-spin text-fg-dim" />
-            </div>
-          ) : catalog.length === 0 ? (
-            <div className="px-3 py-2 font-mono text-[10px] text-fg-dim">No services available</div>
-          ) : (
-            groupByCategory(catalog).map(([category, entries]) => (
+          <X size={14} />
+        </button>
+      </div>
+      <div className="p-4">
+        {!loaded ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 size={16} className="animate-spin text-fg-dim" />
+          </div>
+        ) : catalog.length === 0 ? (
+          <div className="font-mono text-[10px] text-fg-dim text-center py-6">No services available</div>
+        ) : (
+          <div className="space-y-5">
+            {groupByCategory(catalog).map(([category, entries]) => (
               <div key={category}>
-                <div className="px-3 pt-2 pb-1 font-mono text-[8px] font-bold uppercase tracking-wider text-fg-dim border-t border-fg/20 first:border-t-0">
+                <div className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg-dim mb-2">
                   {category}
                 </div>
-                {entries.map((entry) => (
-                  <a
-                    key={entry.type}
-                    href={`#/deploy-service/${entry.type}`}
-                    className="flex items-center gap-2.5 px-3 py-2 hover:bg-alt transition-colors"
-                  >
-                    <div className={`w-5 h-5 ${entry.color || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[7px] font-bold shrink-0`}>
-                      {entry.icon || entry.label.slice(0, 2)}
-                    </div>
-                    <span className="font-mono text-[10px] font-bold text-fg uppercase">{entry.label}</span>
-                  </a>
-                ))}
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {entries.map((entry) => (
+                    <a
+                      key={entry.type}
+                      href={`#/deploy-service/${entry.type}`}
+                      className="flex items-start gap-2 border-2 border-fg/20 hover:border-fg bg-bg hover:bg-alt p-2.5 transition-colors"
+                    >
+                      <div className={`w-7 h-7 ${entry.color || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[9px] font-bold shrink-0`}>
+                        {entry.icon || entry.label.slice(0, 2)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-mono text-[10px] font-bold text-fg uppercase truncate">{entry.label}</div>
+                        {entry.description && (
+                          <div className="font-mono text-[9px] text-fg-dim mt-0.5 line-clamp-2">{entry.description}</div>
+                        )}
+                      </div>
+                    </a>
+                  ))}
+                </div>
               </div>
-            ))
-          )}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -140,6 +154,7 @@ export function DeployPage() {
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [extraEnv, setExtraEnv] = useState<Array<{ key: string; value: string }>>([]);
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<number | null>(null);
+  const [servicesOpen, setServicesOpen] = useState(false);
 
   const [introspect, setIntrospect] = useState<IntrospectResult | null>(null);
   const [introspecting, setIntrospecting] = useState(false);
@@ -502,8 +517,12 @@ export function DeployPage() {
           set={set}
           introspecting={introspecting}
           introspect={introspect}
-          extra={<ServicePopover />}
+          extra={<ServiceToggleButton open={servicesOpen} onToggle={() => setServicesOpen((v) => !v)} />}
         />
+
+        {servicesOpen && (
+          <ServicesGridSection onClose={() => setServicesOpen(false)} />
+        )}
 
         {revealed && detected && detected.manifests.length > 0 && (
           <ManifestSection
