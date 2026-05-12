@@ -15,5 +15,7 @@
   "defaultVolumeSize": 50,
   "connectionUrlTemplate": "http://{CLICKHOUSE_USER}:{CLICKHOUSE_PASSWORD}@{host}:{port}/?database={CLICKHOUSE_DB}",
   "icon": "Ch",
-  "color": "bg-yellow-500"
+  "color": "bg-yellow-500",
+  "category": "database",
+  "description": "Columnar analytics database"
 }

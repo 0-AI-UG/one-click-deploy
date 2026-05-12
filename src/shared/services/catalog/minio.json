@@ -14,5 +14,7 @@
   "defaultVolumeSize": 50,
   "connectionUrlTemplate": "http://{MINIO_ROOT_USER}:{MINIO_ROOT_PASSWORD}@{host}:{port}",
   "icon": "Mn",
-  "color": "bg-amber-600"
+  "color": "bg-amber-600",
+  "category": "storage",
+  "description": "S3-compatible object storage"
 }

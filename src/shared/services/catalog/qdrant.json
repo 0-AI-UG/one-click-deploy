@@ -12,5 +12,7 @@
   "defaultVolumeSize": 20,
   "connectionUrlTemplate": "http://{host}:{port}",
   "icon": "Qd",
-  "color": "bg-rose-600"
+  "color": "bg-rose-600",
+  "category": "ai",
+  "description": "Vector database for embeddings"
 }

@@ -13,5 +13,7 @@
   "defaultVolumeSize": 10,
   "connectionUrlTemplate": "mongodb://{MONGO_INITDB_ROOT_USERNAME}:{MONGO_INITDB_ROOT_PASSWORD}@{host}:{port}/?authSource=admin",
   "icon": "Mo",
-  "color": "bg-green-600"
+  "color": "bg-green-600",
+  "category": "database",
+  "description": "Document database"
 }

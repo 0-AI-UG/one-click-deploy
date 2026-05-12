@@ -15,5 +15,7 @@
   "defaultVolumeSize": 10,
   "connectionUrlTemplate": "mysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{host}:{port}/{MYSQL_DATABASE}",
   "icon": "My",
-  "color": "bg-orange-500"
+  "color": "bg-orange-500",
+  "category": "database",
+  "description": "Relational database"
 }

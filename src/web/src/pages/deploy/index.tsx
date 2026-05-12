@@ -17,7 +17,27 @@ type CatalogEntry = {
   defaultPort: number;
   icon?: string;
   color?: string;
+  category?: string;
+  http?: boolean;
 };
+
+function groupByCategory(entries: CatalogEntry[]): [string, CatalogEntry[]][] {
+  const buckets = new Map<string, CatalogEntry[]>();
+  for (const e of entries) {
+    const key = e.category || "other";
+    const list = buckets.get(key) || [];
+    list.push(e);
+    buckets.set(key, list);
+  }
+  for (const list of buckets.values()) {
+    list.sort((a, b) => a.label.localeCompare(b.label));
+  }
+  return Array.from(buckets.entries()).sort(([a], [b]) => {
+    if (a === "other") return 1;
+    if (b === "other") return -1;
+    return a.localeCompare(b);
+  });
+}
 
 function ServicePopover() {
   const [open, setOpen] = useState(false);
@@ -56,7 +76,7 @@ function ServicePopover() {
         Deploy a service
       </button>
       {open && (
-        <div className="absolute top-full right-0 mt-1.5 z-50 border-2 border-fg bg-bg shadow-lg min-w-[200px] animate-fade-in">
+        <div className="absolute top-full right-0 mt-1.5 z-50 border-2 border-fg bg-bg shadow-lg min-w-[220px] max-h-[70vh] overflow-y-auto animate-fade-in">
           {!loaded ? (
             <div className="px-3 py-2 flex items-center justify-center">
               <Loader2 size={14} className="animate-spin text-fg-dim" />
@@ -64,17 +84,24 @@ function ServicePopover() {
           ) : catalog.length === 0 ? (
             <div className="px-3 py-2 font-mono text-[10px] text-fg-dim">No services available</div>
           ) : (
-            catalog.map((entry) => (
-              <a
-                key={entry.type}
-                href={`#/deploy-service/${entry.type}`}
-                className="flex items-center gap-2.5 px-3 py-2 hover:bg-alt transition-colors"
-              >
-                <div className={`w-5 h-5 ${entry.color || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[7px] font-bold shrink-0`}>
-                  {entry.icon || entry.label.slice(0, 2)}
+            groupByCategory(catalog).map(([category, entries]) => (
+              <div key={category}>
+                <div className="px-3 pt-2 pb-1 font-mono text-[8px] font-bold uppercase tracking-wider text-fg-dim bg-alt/50 sticky top-0">
+                  {category}
                 </div>
-                <span className="font-mono text-[10px] font-bold text-fg uppercase">{entry.label}</span>
-              </a>
+                {entries.map((entry) => (
+                  <a
+                    key={entry.type}
+                    href={`#/deploy-service/${entry.type}`}
+                    className="flex items-center gap-2.5 px-3 py-2 hover:bg-alt transition-colors"
+                  >
+                    <div className={`w-5 h-5 ${entry.color || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[7px] font-bold shrink-0`}>
+                      {entry.icon || entry.label.slice(0, 2)}
+                    </div>
+                    <span className="font-mono text-[10px] font-bold text-fg uppercase">{entry.label}</span>
+                  </a>
+                ))}
+              </div>
             ))
           )}
         </div>

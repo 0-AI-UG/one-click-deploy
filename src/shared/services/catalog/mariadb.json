@@ -15,5 +15,7 @@
   "defaultVolumeSize": 10,
   "connectionUrlTemplate": "mysql://{MARIADB_USER}:{MARIADB_PASSWORD}@{host}:{port}/{MARIADB_DATABASE}",
   "icon": "Ma",
-  "color": "bg-teal-600"
+  "color": "bg-teal-600",
+  "category": "database",
+  "description": "MySQL-compatible relational database"
 }
