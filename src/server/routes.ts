@@ -138,6 +138,15 @@ function environmentIdFrom(req: Request): number {
 
 
 export const apiRoutes = {
+  // --- Health probe (public, used by Docker HEALTHCHECK and reverse proxies) ---
+  "/api/health": {
+    GET: () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  },
+
   // --- LLM-readable manifest docs (public) ---
   "/llm.txt": { GET: (req: Request) => handleLlmTxt(req) },
 
