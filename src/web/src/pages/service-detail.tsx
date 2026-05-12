@@ -211,7 +211,18 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                 <div className="px-4 py-2 flex items-center justify-between gap-2">
                   <span className="font-mono text-[9px] text-muted uppercase shrink-0">URL</span>
                   <div className="flex items-center gap-1 min-w-0">
-                    <code className="font-mono text-[10px] text-fg truncate">{credentials.connection_url}</code>
+                    {credentials.domain ? (
+                      <a
+                        href={credentials.connection_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-[10px] text-accent-blue hover:underline truncate"
+                      >
+                        {credentials.connection_url}
+                      </a>
+                    ) : (
+                      <code className="font-mono text-[10px] text-fg truncate">{credentials.connection_url}</code>
+                    )}
                     <CopyButton text={credentials.connection_url} />
                   </div>
                 </div>

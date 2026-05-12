@@ -82,6 +82,10 @@ function publicRouteId(appName: string): string {
   return `ocd-app-${appName}`;
 }
 
+function servicePublicRouteId(serviceName: string): string {
+  return `ocd-svc-${serviceName}`;
+}
+
 function internalRouteId(appName: string): string {
   return `ocd-internal-${appName}`;
 }
@@ -536,4 +540,83 @@ export async function removeAppCaddy(
     }),
   );
   log("remove", `app ${appName}: routes removed from ${servers.length} server(s)`);
+}
+
+// --- HTTP services ---------------------------------------------------------
+//
+// HTTP-facing services (n8n, Ollama, …) get a single public route on the
+// panel pointing at the service's host port on its server's private IP — the
+// same shape as an app with one replica. Services don't have replicas or
+// scale state, so there is no internal route and no upstream pool — just a
+// 1-upstream public vhost.
+
+type ServiceIngressOptions = {
+  serviceName: string;
+  domain: string;
+  serverPrivateIpv4: string;
+  hostPort: number;
+};
+
+export function getPanelIngressIpv4(): string | null {
+  const panel = getPanelAccess();
+  return panel?.ipv4 || null;
+}
+
+export async function syncServiceCaddy(opts: ServiceIngressOptions): Promise<void> {
+  const panel = getPanelAccess();
+  if (!panel) {
+    throw new Error(
+      "No panel server is registered; HTTP services need a panel to route ingress through. Deploy the panel first.",
+    );
+  }
+  if (!opts.serverPrivateIpv4) {
+    throw new Error(
+      "Service server has no private IP — HTTP services require the shared private network. Wait for the network reconciler to attach the server and retry.",
+    );
+  }
+
+  const upstreams: CaddyUpstream[] = [
+    { dial: `${opts.serverPrivateIpv4}:${opts.hostPort}` },
+  ];
+  const route: CaddyRoute = {
+    "@id": servicePublicRouteId(opts.serviceName),
+    match: [{ host: [opts.domain] }],
+    handle: [
+      {
+        handler: "headers",
+        response: {
+          set: {
+            "X-Content-Type-Options": ["nosniff"],
+            "Referrer-Policy": ["strict-origin-when-cross-origin"],
+          },
+          deferred: true,
+        },
+      },
+      reverseProxyHandler(upstreams),
+    ],
+    terminal: true,
+  };
+
+  await upsertRoute(panel, "srv0", route);
+  if (opts.domain.endsWith(".nip.io")) {
+    await ensureNipIoTlsPolicy(panel, opts.domain);
+  }
+  await persistCaddyConfig(panel);
+  log("svc-sync", `service ${opts.serviceName} → ${opts.domain} (upstream ${upstreams[0].dial})`);
+}
+
+export async function removeServiceCaddy(
+  serviceName: string,
+  _domain?: string,
+): Promise<void> {
+  const panel = getPanelAccess();
+  if (!panel) return;
+  const id = servicePublicRouteId(serviceName);
+  await sshExec(
+    panel.ipv4,
+    `curl -sf -X DELETE http://localhost:2019/id/${id} 2>/dev/null || true`,
+    panel.hostKey,
+  );
+  await persistCaddyConfig(panel);
+  log("svc-remove", `service ${serviceName}: route removed`);
 }

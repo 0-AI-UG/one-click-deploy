@@ -11,27 +11,17 @@ type CatalogEntry = {
   defaultPort: number;
   requiredEnvVars: Array<{ key: string; label: string; generate?: string; default?: string }>;
   defaultVolumeSize: number;
+  icon?: string;
+  color?: string;
+  http?: boolean;
+  stateless?: boolean;
+  description?: string;
+  category?: string;
 };
 
 type Environment = {
   id: number;
   name: string;
-};
-
-const SERVICE_ICONS: Record<string, string> = {
-  postgresql: "PG",
-  mysql: "My",
-  mariadb: "Ma",
-  redis: "Re",
-  mongodb: "Mo",
-};
-
-const SERVICE_COLORS: Record<string, string> = {
-  postgresql: "bg-blue-600",
-  mysql: "bg-orange-500",
-  mariadb: "bg-teal-600",
-  redis: "bg-red-500",
-  mongodb: "bg-green-600",
 };
 
 function randomPassword(len = 24): string {
@@ -57,6 +47,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
   const [environmentId, setEnvironmentId] = useState<number | null>(null);
   const [envPrefix, setEnvPrefix] = useState("DATABASE");
   const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
+  const [customDomain, setCustomDomain] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -111,10 +102,11 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
         name,
         service_type: selected.type,
         version,
-        volume_size: volumeSize,
+        volume_size: selected.stateless ? undefined : volumeSize,
         env_overrides: generatedEnv,
         environment_id: environmentId || undefined,
         env_prefix: environmentId ? envPrefix : undefined,
+        domain: selected.http && customDomain ? customDomain.trim() : undefined,
       });
       window.location.hash = `#/deploy/service-progress/${res.op_id}`;
     } catch (err: any) {
@@ -140,8 +132,8 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
 
           <Card>
             <div className="px-4 py-3 border-b-2 border-fg bg-alt flex items-center gap-3">
-              <div className={`w-8 h-8 ${SERVICE_COLORS[selected.type] || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[10px] font-bold`}>
-                {SERVICE_ICONS[selected.type] || "??"}
+              <div className={`w-8 h-8 ${selected.color || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[10px] font-bold`}>
+                {selected.icon || selected.label.slice(0, 2)}
               </div>
               <div>
                 <span className="font-mono text-[11px] font-bold text-fg uppercase">{selected.label}</span>
@@ -171,18 +163,40 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
               </div>
 
               {/* Volume */}
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Volume Size (GB)</label>
-                <input
-                  type="number"
-                  value={volumeSize}
-                  onChange={(e) => setVolumeSize(parseInt(e.target.value, 10) || 10)}
-                  min={10}
-                  className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
-                />
-              </div>
+              {!selected.stateless && (
+                <div>
+                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Volume Size (GB)</label>
+                  <input
+                    type="number"
+                    value={volumeSize}
+                    onChange={(e) => setVolumeSize(parseInt(e.target.value, 10) || 10)}
+                    min={10}
+                    className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {/* Custom domain (HTTP services only) */}
+              {selected.http && (
+                <div>
+                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">
+                    Custom Domain <span className="font-normal text-muted ml-1">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={customDomain}
+                    placeholder={`${name || "service"}.<server-ip>.nip.io (auto)`}
+                    onChange={(e) => setCustomDomain(e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ""))}
+                    className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
+                  />
+                  <p className="font-mono text-[9px] text-muted mt-1">
+                    Leave blank to use an auto-generated nip.io subdomain. For a real domain, point its A record at the server first.
+                  </p>
+                </div>
+              )}
 
               {/* Generated Credentials */}
+              {Object.keys(generatedEnv).length > 0 && (
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Credentials</label>
                 <div className="bg-alt border-2 border-fg/30 divide-y divide-fg/10">
@@ -212,6 +226,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
                   })}
                 </div>
               </div>
+              )}
 
               {/* Environment */}
               <div>

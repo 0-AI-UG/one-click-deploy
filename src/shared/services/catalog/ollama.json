@@ -1,0 +1,17 @@
+{
+  "type": "ollama",
+  "label": "Ollama",
+  "image": "ollama/ollama",
+  "versions": ["latest", "0.5.4", "0.4.7"],
+  "defaultPort": 11434,
+  "requiredEnvVars": [],
+  "volumePath": "/root/.ollama",
+  "healthCmd": "ollama --version",
+  "defaultVolumeSize": 100,
+  "connectionUrlTemplate": "http://{host}:{port}",
+  "icon": "Ol",
+  "color": "bg-zinc-800",
+  "http": true,
+  "description": "Run large language models locally",
+  "category": "ai"
+}

@@ -1,0 +1,18 @@
+{
+  "type": "postgresql",
+  "label": "PostgreSQL",
+  "image": "postgres",
+  "versions": ["17-alpine", "16-alpine", "15-alpine", "14-alpine"],
+  "defaultPort": 5432,
+  "requiredEnvVars": [
+    { "key": "POSTGRES_USER", "label": "Username", "generate": "username" },
+    { "key": "POSTGRES_PASSWORD", "label": "Password", "generate": "password" },
+    { "key": "POSTGRES_DB", "label": "Database", "default": "app" }
+  ],
+  "volumePath": "/var/lib/postgresql/data",
+  "healthCmd": "pg_isready",
+  "defaultVolumeSize": 10,
+  "connectionUrlTemplate": "postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{host}:{port}/{POSTGRES_DB}",
+  "icon": "PG",
+  "color": "bg-blue-600"
+}

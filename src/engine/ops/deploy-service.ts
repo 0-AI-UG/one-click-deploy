@@ -4,6 +4,11 @@ import { sshExec, pullAndRunService, serviceHealthCheck } from "../../shared/rem
 import { provisionServer } from "../provision-server.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import {
+  syncServiceCaddy,
+  removeServiceCaddy,
+  getPanelIngressIpv4,
+} from "../scale/caddy-manager.ts";
+import {
   getCatalogEntry,
   generateEnvVars,
   buildConnectionUrl,
@@ -24,6 +29,8 @@ type ServerOut = {
   serverHostKey: string;
   provisioned: boolean;
   providerServerId?: string;
+  /** Panel ipv4 used for HTTP service ingress; falls back to serverIp on single-server setups. */
+  ingressIp: string;
 };
 
 type VolumeOut = {
@@ -32,6 +39,7 @@ type VolumeOut = {
   hostMountPath: string;
   containerPath: string;
   volumeSize: number;
+  skipped: boolean;
 };
 
 type InsertOut = {
@@ -86,7 +94,19 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
     if (db.getAppByName(req.name)) {
       throw new Error(`An app named "${req.name}" already exists. Choose a different name.`);
     }
-    resolveCatalog(req);
+    const catalog = resolveCatalog(req);
+
+    // HTTP services need a panel for ingress — fail early with a clear message
+    // rather than provisioning a server we'll have to throw away.
+    let ingressIp: string | null = null;
+    if (catalog.http) {
+      ingressIp = getPanelIngressIpv4();
+      if (!ingressIp) {
+        throw new Error(
+          `HTTP service "${catalog.label}" requires a panel server. Deploy the panel first, then try again.`,
+        );
+      }
+    }
 
     const existingReady = db.getServers().find((s: Server) => s.status === "ready");
     if (existingReady) {
@@ -95,6 +115,7 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
         serverIp: existingReady.ipv4,
         serverHostKey: existingReady.ssh_host_key || "",
         provisioned: false,
+        ingressIp: ingressIp || existingReady.ipv4,
       };
     }
     const settings = db.getSettings();
@@ -115,6 +136,7 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
       serverHostKey: newServer.ssh_host_key || "",
       provisioned: true,
       providerServerId: newServer.provider_id,
+      ingressIp: ingressIp || newServer.ipv4,
     };
   },
   async compensate(ctx, out) {
@@ -131,6 +153,18 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
     const catalog = resolveCatalog(req);
+    // Stateless services (no volumePath) skip volume provisioning.
+    if (!catalog.volumePath) {
+      ctx.log("Stateless service — skipping volume");
+      return {
+        volumeId: "",
+        volumeMount: "",
+        hostMountPath: "",
+        containerPath: "",
+        volumeSize: 0,
+        skipped: true,
+      };
+    }
     const volumeSize = req.volume_size || catalog.defaultVolumeSize;
 
     const compute = getComputeProvider();
@@ -162,10 +196,11 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
       hostMountPath,
       containerPath,
       volumeSize,
+      skipped: false,
     };
   },
   async compensate(ctx, out) {
-    if (!out) return;
+    if (!out || out.skipped) return;
     try {
       const compute = getComputeProvider();
       try { await compute.volumes?.detach(out.volumeId); } catch { /* already detached */ }
@@ -195,9 +230,22 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
 
     const serverRow = db.getServer(server.serverId);
     if (!serverRow) throw new Error(`Server ${server.serverId} not found`);
+    // All services bind on the private network — DB-protocol clients reach
+    // them directly across the fleet, HTTP services are proxied by the
+    // panel's Caddy via the same address.
     const bindAddress = replicaBindHost(serverRow);
 
-    const connectionUrl = buildConnectionUrl(catalog, envVars, bindAddress, hostPort);
+    let connectionUrl: string;
+    let httpDomain: string | undefined;
+    if (catalog.http) {
+      // HTTP ingress lives on the panel server, so the public hostname must
+      // resolve to the panel's IP, not the service server's. The nip.io
+      // fallback uses the panel ipv4 captured in pick_or_provision_server.
+      httpDomain = req.domain || `${req.name}.${server.ingressIp}.nip.io`;
+      connectionUrl = `https://${httpDomain}`;
+    } else {
+      connectionUrl = buildConnectionUrl(catalog, envVars, bindAddress, hostPort);
+    }
     const credentials: Record<string, string | number> = {
       host: bindAddress,
       port: hostPort,
@@ -206,6 +254,10 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
       ...extractCredentialFields(catalog, envVars),
       connection_url: connectionUrl,
     };
+    if (httpDomain) {
+      credentials.url = `https://${httpDomain}`;
+      credentials.domain = httpDomain;
+    }
 
     const service = db.insertService({
       name: req.name,
@@ -264,8 +316,9 @@ const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
         port: catalog.defaultPort,
         hostPort: svc.hostPort,
         envVars: svc.envVars,
-        volumeMount: volume.volumeMount,
+        volumeMount: volume.skipped ? undefined : volume.volumeMount,
         bindAddress: svc.bindAddress,
+        cmd: catalog.cmd,
       },
       server.serverHostKey || undefined,
     );
@@ -284,6 +337,41 @@ const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
       );
     } catch (err) {
       ctx.log(`Failed to remove container ${svc.containerName}: ${err}`);
+    }
+  },
+};
+
+const configureHttpIngress: Step<DeployServiceInput, { ok: true; domain?: string }> = {
+  name: "configure_http_ingress",
+  label: "Configure ingress",
+  async run(ctx, prior) {
+    const req = ctx.input;
+    const catalog = resolveCatalog(req);
+    if (!catalog.http) return { ok: true };
+    const server = prior["pick_or_provision_server"] as ServerOut;
+    const svc = prior["insert_service_and_instance"] as InsertOut;
+    const domain = String(svc.credentials.domain || "");
+    if (!domain) return { ok: true };
+
+    const serverRow = db.getServer(server.serverId);
+    const privateIp = serverRow?.private_ipv4 || "";
+
+    await syncServiceCaddy({
+      serviceName: svc.containerName,
+      domain,
+      serverPrivateIpv4: privateIp,
+      hostPort: svc.hostPort,
+    });
+    ctx.log(`Ingress configured: https://${domain}`);
+    return { ok: true, domain };
+  },
+  async compensate(ctx, _out, prior) {
+    const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
+    if (!svc) return;
+    try {
+      await removeServiceCaddy(svc.containerName);
+    } catch (err) {
+      ctx.log(`Failed to remove Caddy route: ${err}`);
     }
   },
 };
@@ -371,6 +459,7 @@ const deployServiceOp: OpKindDefinition<DeployServiceInput> = {
     createVolume,
     insertServiceAndInstance,
     pullAndRunContainer,
+    configureHttpIngress,
     injectCredentials,
     healthCheckStep,
   ],

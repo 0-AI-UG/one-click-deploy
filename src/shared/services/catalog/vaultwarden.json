@@ -1,0 +1,20 @@
+{
+  "type": "vaultwarden",
+  "label": "Vaultwarden",
+  "image": "vaultwarden/server",
+  "versions": ["latest", "1.32.5", "1.31.0"],
+  "defaultPort": 80,
+  "requiredEnvVars": [
+    { "key": "ADMIN_TOKEN", "label": "Admin Token", "generate": "password" },
+    { "key": "SIGNUPS_ALLOWED", "label": "Signups Allowed", "default": "true" }
+  ],
+  "volumePath": "/data",
+  "healthCmd": "curl -fs http://127.0.0.1/alive",
+  "defaultVolumeSize": 10,
+  "connectionUrlTemplate": "http://{host}:{port}",
+  "icon": "Vw",
+  "color": "bg-blue-800",
+  "http": true,
+  "description": "Self-hosted Bitwarden-compatible password manager",
+  "category": "tools"
+}

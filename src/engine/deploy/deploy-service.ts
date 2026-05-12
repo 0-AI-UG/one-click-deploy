@@ -11,4 +11,6 @@ export type ServiceDeployRequest = {
   env_overrides?: Record<string, string>;
   environment_id?: number;
   env_prefix?: string;
+  /** Optional custom domain for HTTP-facing services; falls back to nip.io. */
+  domain?: string;
 };

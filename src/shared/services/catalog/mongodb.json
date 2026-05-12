@@ -1,0 +1,17 @@
+{
+  "type": "mongodb",
+  "label": "MongoDB",
+  "image": "mongo",
+  "versions": ["7", "6"],
+  "defaultPort": 27017,
+  "requiredEnvVars": [
+    { "key": "MONGO_INITDB_ROOT_USERNAME", "label": "Root Username", "generate": "username" },
+    { "key": "MONGO_INITDB_ROOT_PASSWORD", "label": "Root Password", "generate": "password" }
+  ],
+  "volumePath": "/data/db",
+  "healthCmd": "mongosh --quiet --eval \"db.runCommand('ping').ok\"",
+  "defaultVolumeSize": 10,
+  "connectionUrlTemplate": "mongodb://{MONGO_INITDB_ROOT_USERNAME}:{MONGO_INITDB_ROOT_PASSWORD}@{host}:{port}/?authSource=admin",
+  "icon": "Mo",
+  "color": "bg-green-600"
+}

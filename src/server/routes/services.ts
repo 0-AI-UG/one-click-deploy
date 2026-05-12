@@ -20,6 +20,12 @@ export async function handleGetCatalog(_request: Request): Promise<Response> {
       defaultPort: e.defaultPort,
       requiredEnvVars: e.requiredEnvVars,
       defaultVolumeSize: e.defaultVolumeSize,
+      icon: e.icon,
+      color: e.color,
+      http: e.http,
+      stateless: !e.volumePath,
+      description: e.description,
+      category: e.category,
     }));
     return Response.json(entries, { headers: corsHeaders });
   } catch (error) {

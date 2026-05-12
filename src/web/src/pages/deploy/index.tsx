@@ -10,27 +10,13 @@ import { AdvancedSection } from "./advanced-section.tsx";
 import type { IntrospectResult, ManifestEnvDef, FormState } from "./types.ts";
 import type { DeployBody } from "../../types.ts";
 
-const SERVICE_ICONS: Record<string, string> = {
-  postgresql: "PG",
-  mysql: "My",
-  mariadb: "Ma",
-  redis: "Re",
-  mongodb: "Mo",
-};
-
-const SERVICE_COLORS: Record<string, string> = {
-  postgresql: "bg-blue-600",
-  mysql: "bg-orange-500",
-  mariadb: "bg-teal-600",
-  redis: "bg-red-500",
-  mongodb: "bg-green-600",
-};
-
 type CatalogEntry = {
   type: string;
   label: string;
   versions: string[];
   defaultPort: number;
+  icon?: string;
+  color?: string;
 };
 
 function ServicePopover() {
@@ -84,8 +70,8 @@ function ServicePopover() {
                 href={`#/deploy-service/${entry.type}`}
                 className="flex items-center gap-2.5 px-3 py-2 hover:bg-alt transition-colors"
               >
-                <div className={`w-5 h-5 ${SERVICE_COLORS[entry.type] || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[7px] font-bold shrink-0`}>
-                  {SERVICE_ICONS[entry.type] || "??"}
+                <div className={`w-5 h-5 ${entry.color || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[7px] font-bold shrink-0`}>
+                  {entry.icon || entry.label.slice(0, 2)}
                 </div>
                 <span className="font-mono text-[10px] font-bold text-fg uppercase">{entry.label}</span>
               </a>

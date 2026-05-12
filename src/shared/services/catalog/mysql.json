@@ -1,0 +1,19 @@
+{
+  "type": "mysql",
+  "label": "MySQL",
+  "image": "mysql",
+  "versions": ["8.4", "8.0", "5.7"],
+  "defaultPort": 3306,
+  "requiredEnvVars": [
+    { "key": "MYSQL_ROOT_PASSWORD", "label": "Root Password", "generate": "password" },
+    { "key": "MYSQL_DATABASE", "label": "Database", "default": "app" },
+    { "key": "MYSQL_USER", "label": "Username", "generate": "username" },
+    { "key": "MYSQL_PASSWORD", "label": "Password", "generate": "password" }
+  ],
+  "volumePath": "/var/lib/mysql",
+  "healthCmd": "mysqladmin ping -h localhost",
+  "defaultVolumeSize": 10,
+  "connectionUrlTemplate": "mysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{host}:{port}/{MYSQL_DATABASE}",
+  "icon": "My",
+  "color": "bg-orange-500"
+}

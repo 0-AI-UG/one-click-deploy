@@ -1,0 +1,18 @@
+{
+  "type": "rabbitmq",
+  "label": "RabbitMQ",
+  "image": "rabbitmq",
+  "versions": ["4-management", "3.13-management", "3.12-management"],
+  "defaultPort": 5672,
+  "requiredEnvVars": [
+    { "key": "RABBITMQ_DEFAULT_USER", "label": "Username", "generate": "username" },
+    { "key": "RABBITMQ_DEFAULT_PASS", "label": "Password", "generate": "password" },
+    { "key": "RABBITMQ_DEFAULT_VHOST", "label": "Virtual Host", "default": "/" }
+  ],
+  "volumePath": "/var/lib/rabbitmq",
+  "healthCmd": "rabbitmq-diagnostics -q ping",
+  "defaultVolumeSize": 10,
+  "connectionUrlTemplate": "amqp://{RABBITMQ_DEFAULT_USER}:{RABBITMQ_DEFAULT_PASS}@{host}:{port}/",
+  "icon": "Rb",
+  "color": "bg-orange-600"
+}

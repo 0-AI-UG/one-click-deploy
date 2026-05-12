@@ -1,0 +1,16 @@
+{
+  "type": "qdrant",
+  "label": "Qdrant",
+  "image": "qdrant/qdrant",
+  "versions": ["v1.12.4", "v1.11.5", "latest"],
+  "defaultPort": 6333,
+  "requiredEnvVars": [
+    { "key": "QDRANT__SERVICE__API_KEY", "label": "API Key", "generate": "password" }
+  ],
+  "volumePath": "/qdrant/storage",
+  "healthCmd": "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'",
+  "defaultVolumeSize": 20,
+  "connectionUrlTemplate": "http://{host}:{port}",
+  "icon": "Qd",
+  "color": "bg-rose-600"
+}

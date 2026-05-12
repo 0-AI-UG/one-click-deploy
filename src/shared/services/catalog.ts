@@ -1,3 +1,7 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
 export type ServiceEnvVar = {
   key: string;
   label: string;
@@ -12,10 +16,20 @@ export type ServiceDefinition = {
   versions: string[];
   defaultPort: number;
   requiredEnvVars: ServiceEnvVar[];
+  /** Path inside the container to back with a persistent volume. Empty/omitted = stateless. */
   volumePath: string;
   healthCmd: string;
   defaultVolumeSize: number;
   connectionUrlTemplate: string;
+  icon?: string;
+  color?: string;
+  cmd?: string[];
+  /** When true, expose this service via Caddy on a public domain (HTTP-facing). */
+  http?: boolean;
+  /** Brief description shown in the UI. */
+  description?: string;
+  /** Free-form category tag (e.g. "ai", "database", "search"). */
+  category?: string;
 };
 
 function randomPassword(len = 24): string {
@@ -47,107 +61,32 @@ export function buildConnectionUrl(
   let url = def.connectionUrlTemplate;
   url = url.replace("{host}", host);
   url = url.replace("{port}", String(port));
-  // Replace any {ENV_VAR_NAME} placeholders with actual env var values
   for (const [k, v] of Object.entries(env)) {
     url = url.replace(`{${k}}`, encodeURIComponent(v));
   }
   return url;
 }
 
-export const SERVICE_CATALOG: Record<string, ServiceDefinition> = {
-  postgresql: {
-    type: "postgresql",
-    label: "PostgreSQL",
-    image: "postgres",
-    versions: ["17-alpine", "16-alpine", "15-alpine", "14-alpine"],
-    defaultPort: 5432,
-    requiredEnvVars: [
-      { key: "POSTGRES_USER", label: "Username", generate: "username" },
-      { key: "POSTGRES_PASSWORD", label: "Password", generate: "password" },
-      { key: "POSTGRES_DB", label: "Database", default: "app" },
-    ],
-    volumePath: "/var/lib/postgresql/data",
-    healthCmd: "pg_isready",
-    defaultVolumeSize: 10,
-    connectionUrlTemplate:
-      "postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{host}:{port}/{POSTGRES_DB}",
-  },
+function loadCatalog(): Record<string, ServiceDefinition> {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), "catalog");
+  const entries: Record<string, ServiceDefinition> = {};
+  const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+  for (const file of files) {
+    const raw = readFileSync(join(dir, file), "utf8");
+    const def = JSON.parse(raw) as ServiceDefinition;
+    if (!def.type) throw new Error(`Service catalog entry ${file} missing "type" field`);
+    if (entries[def.type]) throw new Error(`Duplicate service type "${def.type}" (in ${file})`);
+    entries[def.type] = def;
+  }
+  return entries;
+}
 
-  mysql: {
-    type: "mysql",
-    label: "MySQL",
-    image: "mysql",
-    versions: ["8.4", "8.0", "5.7"],
-    defaultPort: 3306,
-    requiredEnvVars: [
-      { key: "MYSQL_ROOT_PASSWORD", label: "Root Password", generate: "password" },
-      { key: "MYSQL_DATABASE", label: "Database", default: "app" },
-      { key: "MYSQL_USER", label: "Username", generate: "username" },
-      { key: "MYSQL_PASSWORD", label: "Password", generate: "password" },
-    ],
-    volumePath: "/var/lib/mysql",
-    healthCmd: "mysqladmin ping -h localhost",
-    defaultVolumeSize: 10,
-    connectionUrlTemplate:
-      "mysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{host}:{port}/{MYSQL_DATABASE}",
-  },
-
-  mariadb: {
-    type: "mariadb",
-    label: "MariaDB",
-    image: "mariadb",
-    versions: ["11", "10.11", "10.6"],
-    defaultPort: 3306,
-    requiredEnvVars: [
-      { key: "MARIADB_ROOT_PASSWORD", label: "Root Password", generate: "password" },
-      { key: "MARIADB_DATABASE", label: "Database", default: "app" },
-      { key: "MARIADB_USER", label: "Username", generate: "username" },
-      { key: "MARIADB_PASSWORD", label: "Password", generate: "password" },
-    ],
-    volumePath: "/var/lib/mysql",
-    healthCmd: "healthcheck.sh --connect --innodb_initialized",
-    defaultVolumeSize: 10,
-    connectionUrlTemplate:
-      "mysql://{MARIADB_USER}:{MARIADB_PASSWORD}@{host}:{port}/{MARIADB_DATABASE}",
-  },
-
-  redis: {
-    type: "redis",
-    label: "Redis",
-    image: "redis",
-    versions: ["7-alpine", "7", "6-alpine"],
-    defaultPort: 6379,
-    requiredEnvVars: [
-      { key: "REDIS_PASSWORD", label: "Password", generate: "password" },
-    ],
-    volumePath: "/data",
-    healthCmd: "redis-cli ping",
-    defaultVolumeSize: 5,
-    connectionUrlTemplate: "redis://:{REDIS_PASSWORD}@{host}:{port}",
-  },
-
-  mongodb: {
-    type: "mongodb",
-    label: "MongoDB",
-    image: "mongo",
-    versions: ["7", "6"],
-    defaultPort: 27017,
-    requiredEnvVars: [
-      { key: "MONGO_INITDB_ROOT_USERNAME", label: "Root Username", generate: "username" },
-      { key: "MONGO_INITDB_ROOT_PASSWORD", label: "Root Password", generate: "password" },
-    ],
-    volumePath: "/data/db",
-    healthCmd: "mongosh --quiet --eval \"db.runCommand('ping').ok\"",
-    defaultVolumeSize: 10,
-    connectionUrlTemplate:
-      "mongodb://{MONGO_INITDB_ROOT_USERNAME}:{MONGO_INITDB_ROOT_PASSWORD}@{host}:{port}/?authSource=admin",
-  },
-};
+export const SERVICE_CATALOG: Record<string, ServiceDefinition> = loadCatalog();
 
 export function getCatalogEntry(type: string): ServiceDefinition | undefined {
   return SERVICE_CATALOG[type];
 }
 
 export function getCatalogEntries(): ServiceDefinition[] {
-  return Object.values(SERVICE_CATALOG);
+  return Object.values(SERVICE_CATALOG).sort((a, b) => a.label.localeCompare(b.label));
 }

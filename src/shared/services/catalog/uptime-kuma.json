@@ -1,0 +1,17 @@
+{
+  "type": "uptime-kuma",
+  "label": "Uptime Kuma",
+  "image": "louislam/uptime-kuma",
+  "versions": ["1", "1.23.16"],
+  "defaultPort": 3001,
+  "requiredEnvVars": [],
+  "volumePath": "/app/data",
+  "healthCmd": "node extra/healthcheck.js",
+  "defaultVolumeSize": 5,
+  "connectionUrlTemplate": "http://{host}:{port}",
+  "icon": "Uk",
+  "color": "bg-emerald-600",
+  "http": true,
+  "description": "Self-hosted uptime monitoring",
+  "category": "tools"
+}

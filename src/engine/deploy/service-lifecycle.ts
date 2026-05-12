@@ -3,6 +3,7 @@ import { parseEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
 import { sshExec, restartContainer, serviceHealthCheck, pauseContainer, unpauseContainer, getContainerLogs } from "../../shared/remote/index.ts";
 import { getComputeProvider } from "../../shared/providers/index.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
+import { removeServiceCaddy } from "../scale/caddy-manager.ts";
 
 type ServiceInstance = {
   id: number;
@@ -89,6 +90,18 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
       }
 
       db.deleteServiceInstance(instance.id);
+    }
+
+    // Remove Caddy route on the panel for HTTP-facing services. Best-effort —
+    // a missing route is a no-op so this is safe to call unconditionally.
+    try {
+      const creds = JSON.parse(service.credentials || "{}");
+      if (creds.domain) {
+        await removeServiceCaddy(service.name);
+        log("destroy", `Removed Caddy route for ${creds.domain}`);
+      }
+    } catch (err) {
+      log("destroy", `Failed to remove Caddy route: ${err}`);
     }
 
     if (cleanupFailed) {

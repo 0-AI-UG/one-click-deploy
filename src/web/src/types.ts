@@ -126,6 +126,8 @@ export type ServiceData = {
     username?: string;
     password?: string;
     database?: string;
+    domain?: string;
+    url?: string;
   };
 };
 

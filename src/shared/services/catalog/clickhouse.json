@@ -1,0 +1,19 @@
+{
+  "type": "clickhouse",
+  "label": "ClickHouse",
+  "image": "clickhouse/clickhouse-server",
+  "versions": ["24.10", "24.8", "24.3"],
+  "defaultPort": 8123,
+  "requiredEnvVars": [
+    { "key": "CLICKHOUSE_USER", "label": "Username", "generate": "username" },
+    { "key": "CLICKHOUSE_PASSWORD", "label": "Password", "generate": "password" },
+    { "key": "CLICKHOUSE_DB", "label": "Database", "default": "default" },
+    { "key": "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "label": "Access Management", "default": "1" }
+  ],
+  "volumePath": "/var/lib/clickhouse",
+  "healthCmd": "clickhouse-client --password $CLICKHOUSE_PASSWORD --query 'SELECT 1'",
+  "defaultVolumeSize": 50,
+  "connectionUrlTemplate": "http://{CLICKHOUSE_USER}:{CLICKHOUSE_PASSWORD}@{host}:{port}/?database={CLICKHOUSE_DB}",
+  "icon": "Ch",
+  "color": "bg-yellow-500"
+}
