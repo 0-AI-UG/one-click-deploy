@@ -12,6 +12,9 @@ import { WebhooksTab } from "./webhooks-tab.tsx";
 import { SettingsTab } from "./settings-tab.tsx";
 import type { AppData, ServerData, ReplicaData, MetricSample, ScalingEvent, DeploymentRecord } from "../../types.ts";
 
+const errMessage = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err);
+
 export function AppDetailPage({ appId }: { appId: number }) {
   const [app, setApp] = useState<AppData | null>(null);
   const [server, setServer] = useState<ServerData | null>(null);
@@ -45,13 +48,13 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
   const load = async () => {
     try {
-      const servers = await get("/api/servers");
+      const servers: ServerData[] = await get("/api/servers");
       for (const s of servers) {
-        const found = s.apps.find((a: any) => a.id === appId);
+        const found = s.apps.find((a) => a.id === appId);
         if (found) { setApp(found); setServer(s); break; }
       }
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMessage(err), "error");
     } finally {
       setLoading(false);
     }
@@ -64,8 +67,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
       const qs = `tail=${tail}${selectedReplicaId != null ? `&replica_id=${selectedReplicaId}` : ""}`;
       const res = await get(`/api/apps/${appId}/logs?${qs}`);
       setLogs(res.logs || res.error || "No logs available");
-    } catch (err: any) {
-      setLogs(err.message);
+    } catch (err) {
+      setLogs(errMessage(err));
     }
   };
 
@@ -142,8 +145,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
         showToast(`${name} successful`, "success");
       }
       load();
-    } catch (err: any) {
-      showToast(err.message, "error");
+    } catch (err) {
+      showToast(errMessage(err), "error");
     } finally {
       setActionLoading(null);
     }

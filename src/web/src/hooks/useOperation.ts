@@ -64,6 +64,23 @@ export function humanizeStep(step: string | null | undefined): string {
   return step.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// The step stream contains one event per state change (started, then ok/skipped/failed).
+// For the progress UI we want one row per step name, reflecting its latest state.
+// Order is preserved by first-seen seq so rows don't jump as later events arrive.
+export function collapseForwardSteps(steps: OperationStep[]): OperationStep[] {
+  const latest = new Map<string, OperationStep>();
+  const firstSeq = new Map<string, number>();
+  for (const s of steps) {
+    if (s.phase !== "forward") continue;
+    if (!firstSeq.has(s.step)) firstSeq.set(s.step, s.seq);
+    const prev = latest.get(s.step);
+    if (!prev || s.seq > prev.seq) latest.set(s.step, s);
+  }
+  return Array.from(latest.values()).sort(
+    (a, b) => (firstSeq.get(a.step)! - firstSeq.get(b.step)!),
+  );
+}
+
 // Ops that already have a sticky toast attached. Guards against double-toasts
 // when multiple hooks (or remounts) discover the same running op.
 const rehydratedToastIds = new Set<number>();

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Btn } from "../components/ui.tsx";
 import { CheckCircle2, XCircle, Loader2, Circle, Rocket, Terminal, ArrowLeft } from "lucide-react";
-import { useOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
+import { useOperation, humanizeStep, collapseForwardSteps, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
 import type { OperationStep } from "../hooks/useOperation.ts";
 
 export function DeployProgressPage({ opId }: { opId: number | null }) {
@@ -75,9 +75,7 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
               </span>
             </div>
           )}
-          {steps
-            .filter((s) => s.phase === "forward")
-            .map((s, i) => {
+          {collapseForwardSteps(steps).map((s, i) => {
               const isActive = s.status === "started";
               const isOk = s.status === "ok" || s.status === "skipped";
               const isFailed = s.status === "failed";
