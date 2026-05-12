@@ -37,7 +37,7 @@ type Ctx = {
 let ctx: Ctx | null = null;
 
 const LOCATION = "fsn1";
-const SERVER_TYPE = "cx22";
+const SERVER_TYPE = "cx23";
 
 // Minimal ed25519 public key for tests — the private half is unused because
 // we never SSH in.
@@ -117,20 +117,20 @@ d("hetzner integration (requires RUN_INTEGRATION=1 + HCLOUD_TOKEN)", () => {
     await expect(ctx!.provider.verifyToken("bad-token")).rejects.toThrow(/token|401/i);
   });
 
-  test("listServerTypes includes cx22 and returns sorted-by-memory results", async () => {
+  test("listServerTypes includes cx23 and returns sorted-by-memory results", async () => {
     const types = await ctx!.provider.listServerTypes();
     expect(types.length).toBeGreaterThan(3);
-    const cx22 = types.find((t) => t.name === "cx22");
-    expect(cx22).toBeDefined();
-    expect(cx22!.cores).toBeGreaterThanOrEqual(2);
-    expect(cx22!.locations).toContain(LOCATION);
+    const cx23 = types.find((t) => t.name === "cx23");
+    expect(cx23).toBeDefined();
+    expect(cx23!.cores).toBeGreaterThanOrEqual(2);
+    expect(cx23!.locations).toContain(LOCATION);
     // Sorted ascending by memory.
     for (let i = 1; i < types.length; i++) {
       expect(types[i].memory).toBeGreaterThanOrEqual(types[i - 1].memory);
     }
   });
 
-  test("getPricing returns EUR pricing for cx22 in fsn1", async () => {
+  test("getPricing returns EUR pricing for cx23 in fsn1", async () => {
     const pricing = await ctx!.provider.getPricing!();
     expect(pricing).not.toBeNull();
     expect(pricing!.currency).toBe("EUR");
