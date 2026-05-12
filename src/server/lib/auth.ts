@@ -1,6 +1,7 @@
 import { jwtVerify, SignJWT } from "jose";
 import { AuthError, ForbiddenError } from "./errors.ts";
 import { getUserById } from "../../shared/db.ts";
+import { getJwtSecret } from "../../shared/secret-store.ts";
 
 export interface TokenPayload {
   userId: string;
@@ -8,9 +9,7 @@ export interface TokenPayload {
   v?: number; // token_version for session revocation (optional for backward compat)
 }
 
-const rawSecret = new TextEncoder().encode(
-  process.env.JWT_SECRET ?? "one-click-deploy-dev-secret",
-);
+const rawSecret = new TextEncoder().encode(getJwtSecret());
 const JWT_SECRET = new Uint8Array(
   await crypto.subtle.digest("SHA-256", rawSecret),
 );

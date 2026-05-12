@@ -2,13 +2,34 @@ function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [secrets:${context}]`, ...args);
 }
 
-// Default JWT secret used when the env var is absent. Must stay identical
-// across all call sites so that encrypted_secrets rows remain decryptable
-// during the self-deploy handoff.
+// Dev-only fallback. Never used in production: getJwtSecret() throws if
+// JWT_SECRET is unset when NODE_ENV=production. The constant exists so dev
+// runs (`bun run dev`) and the test suite have a stable key — encrypted_secrets
+// rows written under one process keep decrypting in the next.
 export const DEFAULT_JWT_SECRET = "ocd-dev-default-secret-change-in-production";
 
+let _warnedDevSecret = false;
+
 export function getJwtSecret(): string {
-  return process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+  const fromEnv = process.env.JWT_SECRET;
+  if (fromEnv && fromEnv.length >= 32) return fromEnv;
+
+  if (process.env.NODE_ENV === "production") {
+    if (!fromEnv) {
+      throw new Error(
+        "JWT_SECRET is required in production. Set the JWT_SECRET environment variable to a random string of at least 32 characters (e.g., `openssl rand -hex 32`).",
+      );
+    }
+    throw new Error(
+      `JWT_SECRET must be at least 32 characters (got ${fromEnv.length}).`,
+    );
+  }
+
+  if (!_warnedDevSecret) {
+    _warnedDevSecret = true;
+    log("warn", "JWT_SECRET is unset — using insecure dev default. Set JWT_SECRET before deploying to production.");
+  }
+  return fromEnv || DEFAULT_JWT_SECRET;
 }
 
 export interface SecretStore {

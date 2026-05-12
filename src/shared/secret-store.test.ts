@@ -110,11 +110,38 @@ describe("secret-store: encryption properties", () => {
     expect(k1).toBe(k2);
   });
 
-  test("getJwtSecret falls back to DEFAULT_JWT_SECRET when env var unset", () => {
+  test("getJwtSecret falls back to DEFAULT_JWT_SECRET in dev when env var unset", () => {
     const prev = process.env.JWT_SECRET;
+    const prevNodeEnv = process.env.NODE_ENV;
     delete process.env.JWT_SECRET;
+    process.env.NODE_ENV = "development";
     expect(getJwtSecret()).toBe(DEFAULT_JWT_SECRET);
     if (prev !== undefined) process.env.JWT_SECRET = prev;
+    if (prevNodeEnv !== undefined) process.env.NODE_ENV = prevNodeEnv;
+    else delete process.env.NODE_ENV;
+  });
+
+  test("getJwtSecret throws in production when env var unset", () => {
+    const prev = process.env.JWT_SECRET;
+    const prevNodeEnv = process.env.NODE_ENV;
+    delete process.env.JWT_SECRET;
+    process.env.NODE_ENV = "production";
+    expect(() => getJwtSecret()).toThrow(/JWT_SECRET is required/);
+    if (prev !== undefined) process.env.JWT_SECRET = prev;
+    if (prevNodeEnv !== undefined) process.env.NODE_ENV = prevNodeEnv;
+    else delete process.env.NODE_ENV;
+  });
+
+  test("getJwtSecret throws in production when env var too short", () => {
+    const prev = process.env.JWT_SECRET;
+    const prevNodeEnv = process.env.NODE_ENV;
+    process.env.JWT_SECRET = "too-short";
+    process.env.NODE_ENV = "production";
+    expect(() => getJwtSecret()).toThrow(/at least 32 characters/);
+    if (prev !== undefined) process.env.JWT_SECRET = prev;
+    else delete process.env.JWT_SECRET;
+    if (prevNodeEnv !== undefined) process.env.NODE_ENV = prevNodeEnv;
+    else delete process.env.NODE_ENV;
   });
 });
 

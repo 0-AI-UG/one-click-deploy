@@ -1,14 +1,13 @@
 import { jwtVerify } from "jose";
 import * as db from "../../shared/db.ts";
 import { spawnSshPty, type PtySession } from "../../shared/remote/index.ts";
+import { getJwtSecret } from "../../shared/secret-store.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [terminal:${context}]`, ...args);
 }
 
-const rawSecret = new TextEncoder().encode(
-  process.env.JWT_SECRET ?? "one-click-deploy-dev-secret",
-);
+const rawSecret = new TextEncoder().encode(getJwtSecret());
 const JWT_SECRET = new Uint8Array(
   await crypto.subtle.digest("SHA-256", rawSecret),
 );
