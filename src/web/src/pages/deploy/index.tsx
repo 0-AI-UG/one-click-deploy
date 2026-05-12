@@ -76,7 +76,10 @@ function ServicePopover() {
         Deploy a service
       </button>
       {open && (
-        <div className="absolute top-full right-0 mt-1.5 z-50 border-2 border-fg bg-bg shadow-lg min-w-[220px] max-h-[70vh] overflow-y-auto animate-fade-in">
+        <div
+          className="absolute top-full right-0 mt-1.5 z-50 border-2 border-fg bg-bg shadow-lg min-w-[220px] overflow-y-auto animate-fade-in"
+          style={{ maxHeight: "min(420px, calc(100vh - 120px))" }}
+        >
           {!loaded ? (
             <div className="px-3 py-2 flex items-center justify-center">
               <Loader2 size={14} className="animate-spin text-fg-dim" />
@@ -86,7 +89,7 @@ function ServicePopover() {
           ) : (
             groupByCategory(catalog).map(([category, entries]) => (
               <div key={category}>
-                <div className="px-3 pt-2 pb-1 font-mono text-[8px] font-bold uppercase tracking-wider text-fg-dim bg-alt/50 sticky top-0">
+                <div className="px-3 pt-2 pb-1 font-mono text-[8px] font-bold uppercase tracking-wider text-fg-dim border-t border-fg/20 first:border-t-0">
                   {category}
                 </div>
                 {entries.map((entry) => (
