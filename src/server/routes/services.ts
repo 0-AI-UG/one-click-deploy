@@ -45,7 +45,7 @@ export async function handleGetServices(request: Request): Promise<Response> {
       return {
         ...s,
         primary_instance: instances[0] || null,
-        linked_apps: links.map((l) => ({ id: l.app_id, name: l.app_name })),
+        linked_environments: links.map((l) => ({ id: l.environment_id, name: l.environment_name, env_prefix: l.env_prefix })),
       };
     });
     return Response.json(result, { headers: corsHeaders });
@@ -74,7 +74,7 @@ export async function handleGetService(request: Request, serviceId: number): Pro
       ...service,
       credentials: JSON.parse(service.credentials || "{}"),
       instances,
-      linked_apps: links.map((l) => ({ id: l.app_id, name: l.app_name, env_prefix: l.env_prefix })),
+      linked_environments: links.map((l) => ({ id: l.environment_id, name: l.environment_name, env_prefix: l.env_prefix })),
     }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -185,9 +185,9 @@ export async function handleGetServiceLogs(request: Request, serviceId: number):
   }
 }
 
-// --- Linking ---
+// --- Inject service credentials into an environment ---
 
-export async function handleLinkService(request: Request, serviceId: number, appId: number): Promise<Response> {
+export async function handleInjectService(request: Request, serviceId: number, environmentId: number): Promise<Response> {
   try {
     await requirePermission(request, "services.link");
     const body = await request.json().catch(() => ({}));
@@ -197,24 +197,17 @@ export async function handleLinkService(request: Request, serviceId: number, app
     if (!service) {
       return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
     }
-    const app = db.getApp(appId);
-    if (!app) {
-      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    const envRow = db.getEnvironment(environmentId);
+    if (!envRow) {
+      return Response.json({ error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
-
-    const catalog = getCatalogEntry(service.service_type);
-    if (!catalog) {
+    if (!getCatalogEntry(service.service_type)) {
       return Response.json({ error: "Unknown service type" }, { status: 400, headers: corsHeaders });
     }
 
-    // Parse credentials
     const credentials = JSON.parse(service.credentials || "{}");
-
-    // Build new env var entries for the service link
     const now = new Date().toISOString();
     const newEntries: EnvVarEntry[] = [];
-
-    // Helper: create entry, marking URL and password as secrets
     const secretKeys = new Set([`${envPrefix}_URL`, `${envPrefix}_PASSWORD`]);
     const pairs: [string, string][] = [
       [`${envPrefix}_URL`, credentials.connection_url || ""],
@@ -226,8 +219,7 @@ export async function handleLinkService(request: Request, serviceId: number, app
     if (credentials.database) pairs.push([`${envPrefix}_NAME`, credentials.database]);
 
     for (const [key, value] of pairs) {
-      const isSecret = secretKeys.has(key);
-      if (isSecret) {
+      if (secretKeys.has(key)) {
         const { encrypted_value, iv } = await encryptValue(value);
         newEntries.push({ key, value: "", encrypted_value, iv, secret: true, updated_at: now });
       } else {
@@ -235,33 +227,12 @@ export async function handleLinkService(request: Request, serviceId: number, app
       }
     }
 
-    // Write service env vars to the app's linked environment
-    if (app.environment_id) {
-      const envRow = db.getEnvironment(app.environment_id);
-      if (envRow) {
-        const envParsed = parseEnvVars(envRow.env_vars);
-        const newKeys = new Set(newEntries.map((e) => e.key));
-        const filtered = envParsed.entries.filter((e) => !newKeys.has(e.key));
-        db.updateEnvironment(app.environment_id, envRow.name, serializeEnvVars([...filtered, ...newEntries]));
-      }
-    } else {
-      // Fallback: create an environment for the app if it doesn't have one
-      const envName = app.name;
-      const envRow = db.insertEnvironment(envName, serializeEnvVars(newEntries));
-      db.updateAppEnvironment(appId, envRow.id);
-    }
+    const envParsed = parseEnvVars(envRow.env_vars);
+    const newKeys = new Set(newEntries.map((e) => e.key));
+    const filtered = envParsed.entries.filter((e) => !newKeys.has(e.key));
+    db.updateEnvironment(environmentId, envRow.name, serializeEnvVars([...filtered, ...newEntries]));
 
-    // Create link record
-    try {
-      db.insertServiceLink(serviceId, appId, envPrefix);
-    } catch {
-      // UNIQUE constraint — link already exists, just update env vars
-    }
-
-    // No per-host Docker-bridge hack needed: with services bound to
-    // their server's private IPv4 on the shared ocd-net Hetzner network,
-    // the app reaches the DB directly via its DATABASE_URL / _HOST env
-    // vars regardless of whether they're colocated on the same server.
+    db.insertServiceLink(serviceId, environmentId, envPrefix);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
@@ -269,7 +240,7 @@ export async function handleLinkService(request: Request, serviceId: number, app
   }
 }
 
-export async function handleUnlinkService(request: Request, serviceId: number, appId: number): Promise<Response> {
+export async function handleUninjectService(request: Request, serviceId: number, environmentId: number): Promise<Response> {
   try {
     await requirePermission(request, "services.link");
 
@@ -277,31 +248,23 @@ export async function handleUnlinkService(request: Request, serviceId: number, a
     if (!service) {
       return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
     }
-    const app = db.getApp(appId);
-    if (!app) {
-      return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    const envRow = db.getEnvironment(environmentId);
+    if (!envRow) {
+      return Response.json({ error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
 
-    // Get the link to find env prefix
     const links = db.getServiceLinks(serviceId);
-    const link = links.find((l) => l.app_id === appId);
+    const link = links.find((l) => l.environment_id === environmentId);
     if (!link) {
       return Response.json({ error: "Link not found" }, { status: 404, headers: corsHeaders });
     }
 
     const prefix = link.env_prefix || "DATABASE";
+    const envParsed = parseEnvVars(envRow.env_vars);
+    const filtered = envParsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
+    db.updateEnvironment(environmentId, envRow.name, serializeEnvVars(filtered));
 
-    // Remove injected env vars from the app's linked environment
-    if (app.environment_id) {
-      const envRow = db.getEnvironment(app.environment_id);
-      if (envRow) {
-        const envParsed = parseEnvVars(envRow.env_vars);
-        const filtered = envParsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
-        db.updateEnvironment(app.environment_id, envRow.name, serializeEnvVars(filtered));
-      }
-    }
-
-    db.deleteServiceLink(serviceId, appId);
+    db.deleteServiceLink(serviceId, environmentId);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {

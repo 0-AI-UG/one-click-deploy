@@ -21,21 +21,19 @@ async function softStep<T>(
   }
 }
 
-const removeEnvFromLinkedApps: Step<DestroyServiceInput, { ok: true }> = {
-  name: "remove_env_vars_from_linked_apps",
-  label: "Remove env vars from linked apps",
+const removeEnvFromLinkedEnvironments: Step<DestroyServiceInput, { ok: true }> = {
+  name: "remove_env_vars_from_linked_environments",
+  label: "Remove env vars from linked environments",
   async run(ctx) {
     const links = db.getServiceLinks(ctx.input.serviceId);
     for (const link of links) {
-      await softStep(ctx, `unlink_env app#${link.app_id}`, async () => {
-        const app = db.getApp(link.app_id);
-        if (!app?.environment_id) return;
-        const envRow = db.getEnvironment(app.environment_id);
+      await softStep(ctx, `uninject_env env#${link.environment_id}`, async () => {
+        const envRow = db.getEnvironment(link.environment_id);
         if (!envRow) return;
         const parsed = parseEnvVars(envRow.env_vars);
         const prefix = link.env_prefix || "DATABASE";
         const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
-        db.updateEnvironment(app.environment_id, envRow.name, serializeEnvVars(filtered));
+        db.updateEnvironment(link.environment_id, envRow.name, serializeEnvVars(filtered));
       });
     }
     return { ok: true };
@@ -137,7 +135,7 @@ const destroyServiceOp: OpKindDefinition<DestroyServiceInput> = {
   label: "Destroy service",
   resourceKeys: (input) => [`service:${input.serviceId}`],
   steps: [
-    removeEnvFromLinkedApps,
+    removeEnvFromLinkedEnvironments,
     stopAndRemoveContainers,
     deleteVolumes,
     deleteDbRows,

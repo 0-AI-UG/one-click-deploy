@@ -126,8 +126,7 @@ export type {
   ServiceRow,
   ServiceInstanceRow,
   ServiceLinkRow,
-  ServiceLinkWithAppRow,
-  ServiceLinkWithServiceRow,
+  ServiceLinkWithEnvironmentRow,
 } from "./services.ts";
 export {
   insertService,
@@ -153,7 +152,6 @@ export {
   insertServiceLink,
   deleteServiceLink,
   getServiceLinks,
-  getLinkedServices,
   getServicesOnServer,
 } from "./services.ts";
 export type { EnvironmentRow } from "./environments.ts";

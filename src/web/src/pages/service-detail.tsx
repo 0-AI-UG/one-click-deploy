@@ -9,15 +9,17 @@ import {
   RotateCcw, Pause, Play, Trash2, Server as ServerIcon,
   Link2, Unlink, ScrollText, ArrowLeft, RefreshCw, Terminal,
 } from "lucide-react";
-import type { ServiceData, AppData, ServiceInstance, LinkedApp } from "../types.ts";
+import type { ServiceData, ServiceInstance, LinkedEnvironment } from "../types.ts";
+
+type EnvironmentRef = { id: number; name: string };
 
 export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const [service, setService] = useState<ServiceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [apps, setApps] = useState<AppData[]>([]);
-  const [linkAppId, setLinkAppId] = useState("");
-  const [linkPrefix, setLinkPrefix] = useState("DATABASE");
+  const [environments, setEnvironments] = useState<EnvironmentRef[]>([]);
+  const [injectEnvId, setInjectEnvId] = useState("");
+  const [injectPrefix, setInjectPrefix] = useState("DATABASE");
   const [tab, setTab] = useState<"overview" | "logs">("overview");
   const [logs, setLogs] = useState("");
   const [tail, setTail] = useState(100);
@@ -25,12 +27,12 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
 
   const load = async () => {
     try {
-      const [svc, appList] = await Promise.all([
+      const [svc, envList] = await Promise.all([
         get(`/api/services/${serviceId}`),
-        get("/api/apps"),
+        get("/api/environments"),
       ]);
       setService(svc);
-      setApps(appList);
+      setEnvironments(envList);
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
@@ -77,13 +79,13 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
     }
   };
 
-  const linkApp = async () => {
-    if (!linkAppId) return;
-    setActionLoading("link");
+  const injectEnv = async () => {
+    if (!injectEnvId) return;
+    setActionLoading("inject");
     try {
-      await post(`/api/services/${serviceId}/link/${linkAppId}`, { env_prefix: linkPrefix });
-      showToast("Service linked to app", "success");
-      setLinkAppId("");
+      await post(`/api/services/${serviceId}/inject/${injectEnvId}`, { env_prefix: injectPrefix });
+      showToast("Credentials injected into environment", "success");
+      setInjectEnvId("");
       load();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -92,11 +94,11 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
     }
   };
 
-  const unlinkApp = async (appId: number) => {
-    setActionLoading(`unlink-${appId}`);
+  const uninjectEnv = async (envId: number) => {
+    setActionLoading(`uninject-${envId}`);
     try {
-      await del(`/api/services/${serviceId}/link/${appId}`);
-      showToast("Service unlinked", "success");
+      await del(`/api/services/${serviceId}/inject/${envId}`);
+      showToast("Credentials removed from environment", "success");
       load();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -110,8 +112,8 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
 
   const credentials = service.credentials || {};
   const instances = service.instances || [];
-  const linkedApps = service.linked_apps || [];
-  const unlinkedApps = apps.filter((a: AppData) => !linkedApps.some((l: LinkedApp) => l.id === a.id));
+  const linkedEnvs = service.linked_environments || [];
+  const availableEnvs = environments.filter((e) => !linkedEnvs.some((l) => l.id === e.id));
 
   const tabs = [
     { key: "overview", label: "Overview" },
@@ -312,19 +314,19 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
             )}
           </Card>
 
-          {/* Linked Apps */}
+          {/* Injected Environments */}
           <Card>
             <div className="px-4 py-2 border-b-2 border-fg bg-alt">
-              <span className="font-mono text-[10px] font-bold text-fg uppercase">Linked Apps</span>
+              <span className="font-mono text-[10px] font-bold text-fg uppercase">Injected Environments</span>
             </div>
             <div className="p-4 space-y-3">
-              {linkedApps.length > 0 ? (
+              {linkedEnvs.length > 0 ? (
                 <div className="divide-y divide-fg/10 border-2 border-fg/20">
-                  {linkedApps.map((link: LinkedApp) => (
+                  {linkedEnvs.map((link: LinkedEnvironment) => (
                     <div key={link.id} className="px-3 py-2 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Link2 size={12} className="text-accent-blue" />
-                        <a href={`#/apps/${link.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">
+                        <a href="#/environments" className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">
                           {link.name}
                         </a>
                         <span className="font-mono text-[8px] text-muted uppercase">prefix: {link.env_prefix}</span>
@@ -333,8 +335,8 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                         <Btn
                           size="xs"
                           variant="ghost"
-                          loading={actionLoading === `unlink-${link.id}`}
-                          onClick={() => unlinkApp(link.id)}
+                          loading={actionLoading === `uninject-${link.id}`}
+                          onClick={() => uninjectEnv(link.id)}
                         >
                           <Unlink size={12} className="text-accent-red" />
                         </Btn>
@@ -343,24 +345,24 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                   ))}
                 </div>
               ) : (
-                <p className="font-mono text-[10px] text-muted text-center py-2">No apps linked yet</p>
+                <p className="font-mono text-[10px] text-muted text-center py-2">Not injected into any environment</p>
               )}
 
               <PermissionGate permission="services.link">
                 <div className="flex items-center gap-2">
                   <div className="flex-1">
                     <NeoSelect
-                      value={linkAppId}
-                      onChange={setLinkAppId}
-                      options={unlinkedApps.map((a) => ({ value: String(a.id), label: a.name }))}
-                      placeholder="Select an app to link..."
+                      value={injectEnvId}
+                      onChange={setInjectEnvId}
+                      options={availableEnvs.map((e) => ({ value: String(e.id), label: e.name }))}
+                      placeholder="Select an environment..."
                     />
                   </div>
                   <div className="w-28">
                     <input
                       type="text"
-                      value={linkPrefix}
-                      onChange={(e) => setLinkPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
+                      value={injectPrefix}
+                      onChange={(e) => setInjectPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
                       className="w-full bg-bg border-2 border-fg px-2 py-[7px] font-mono text-[10px] text-fg"
                       placeholder="PREFIX"
                       title="Environment variable prefix"
@@ -369,11 +371,11 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                   <Btn
                     size="xs"
                     variant="primary"
-                    loading={actionLoading === "link"}
-                    onClick={linkApp}
-                    disabled={!linkAppId}
+                    loading={actionLoading === "inject"}
+                    onClick={injectEnv}
+                    disabled={!injectEnvId}
                   >
-                    <Link2 size={12} /> Link
+                    <Link2 size={12} /> Inject
                   </Btn>
                 </div>
               </PermissionGate>

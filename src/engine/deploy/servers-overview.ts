@@ -33,8 +33,8 @@ type DbService = {
 };
 
 type DbServiceLink = {
-  app_id: number;
-  app_name: string;
+  environment_id: number;
+  environment_name: string;
 };
 
 /**
@@ -73,7 +73,7 @@ export function getServersWithApps(): any[] {
         return {
           ...svc,
           instance_count: instances.length,
-          linked_apps: links.map((l) => ({ id: l.app_id, name: l.app_name })),
+          linked_environments: links.map((l) => ({ id: l.environment_id, name: l.environment_name })),
         };
       }),
     };

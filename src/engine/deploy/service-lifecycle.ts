@@ -30,22 +30,19 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
     let cleanupFailed = false;
     const affectedServerIds = new Set<number>();
 
-    // Remove all linked apps' service env vars from their environments
+    // Remove injected service env vars from every environment this service was linked to
     const links = db.getServiceLinks(serviceId);
     for (const link of links) {
       try {
-        const app = db.getApp(link.app_id);
-        if (app?.environment_id) {
-          const envRow = db.getEnvironment(app.environment_id);
-          if (envRow) {
-            const parsed = parseEnvVars(envRow.env_vars);
-            const prefix = link.env_prefix || "DATABASE";
-            const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
-            db.updateEnvironment(app.environment_id, envRow.name, serializeEnvVars(filtered));
-          }
+        const envRow = db.getEnvironment(link.environment_id);
+        if (envRow) {
+          const parsed = parseEnvVars(envRow.env_vars);
+          const prefix = link.env_prefix || "DATABASE";
+          const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
+          db.updateEnvironment(link.environment_id, envRow.name, serializeEnvVars(filtered));
         }
       } catch (err) {
-        log("destroy", `Failed to unlink from app ${link.app_id}: ${err}`);
+        log("destroy", `Failed to uninject from environment ${link.environment_id}: ${err}`);
       }
     }
 

@@ -1150,6 +1150,29 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 52,
+    description: "service_links: key on environment_id instead of app_id",
+    up: (db) => {
+      db.run(`CREATE TABLE service_links_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_id INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+        environment_id INTEGER NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+        env_prefix TEXT NOT NULL DEFAULT 'DATABASE',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(service_id, environment_id)
+      )`);
+      db.run(`
+        INSERT OR IGNORE INTO service_links_new (service_id, environment_id, env_prefix, created_at)
+        SELECT sl.service_id, a.environment_id, sl.env_prefix, sl.created_at
+        FROM service_links sl
+        JOIN apps a ON sl.app_id = a.id
+        WHERE a.environment_id IS NOT NULL
+      `);
+      db.run("DROP TABLE service_links");
+      db.run("ALTER TABLE service_links_new RENAME TO service_links");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

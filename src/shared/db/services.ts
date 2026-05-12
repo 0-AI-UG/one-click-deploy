@@ -33,13 +33,12 @@ export type ServiceInstanceRow = {
 export type ServiceLinkRow = {
   id: number;
   service_id: number;
-  app_id: number;
+  environment_id: number;
   env_prefix: string;
   created_at: string;
 };
 
-export type ServiceLinkWithAppRow = ServiceLinkRow & { app_name: string };
-export type ServiceLinkWithServiceRow = ServiceLinkRow & { service_name: string; service_type: string; credentials: string };
+export type ServiceLinkWithEnvironmentRow = ServiceLinkRow & { environment_name: string };
 
 export function insertService(data: {
   name: string;
@@ -171,26 +170,23 @@ export function nextServiceHostPort(serverId: number): number {
   return (maxPort && maxPort >= SERVICE_BASE_PORT) ? maxPort + 1 : SERVICE_BASE_PORT;
 }
 
-export function insertServiceLink(serviceId: number, appId: number, envPrefix: string): ServiceLinkRow {
+export function insertServiceLink(serviceId: number, environmentId: number, envPrefix: string): ServiceLinkRow {
   return db
-    .query("INSERT INTO service_links (service_id, app_id, env_prefix) VALUES (?, ?, ?) RETURNING *")
-    .get(serviceId, appId, envPrefix) as ServiceLinkRow;
+    .query(
+      "INSERT INTO service_links (service_id, environment_id, env_prefix) VALUES (?, ?, ?) " +
+      "ON CONFLICT(service_id, environment_id) DO UPDATE SET env_prefix = excluded.env_prefix RETURNING *"
+    )
+    .get(serviceId, environmentId, envPrefix) as ServiceLinkRow;
 }
 
-export function deleteServiceLink(serviceId: number, appId: number): void {
-  db.query("DELETE FROM service_links WHERE service_id = ? AND app_id = ?").run(serviceId, appId);
+export function deleteServiceLink(serviceId: number, environmentId: number): void {
+  db.query("DELETE FROM service_links WHERE service_id = ? AND environment_id = ?").run(serviceId, environmentId);
 }
 
-export function getServiceLinks(serviceId: number): ServiceLinkWithAppRow[] {
+export function getServiceLinks(serviceId: number): ServiceLinkWithEnvironmentRow[] {
   return db
-    .query("SELECT sl.*, a.name as app_name FROM service_links sl JOIN apps a ON sl.app_id = a.id WHERE sl.service_id = ?")
-    .all(serviceId) as ServiceLinkWithAppRow[];
-}
-
-export function getLinkedServices(appId: number): ServiceLinkWithServiceRow[] {
-  return db
-    .query("SELECT sl.*, s.name as service_name, s.service_type, s.credentials FROM service_links sl JOIN services s ON sl.service_id = s.id WHERE sl.app_id = ?")
-    .all(appId) as ServiceLinkWithServiceRow[];
+    .query("SELECT sl.*, e.name as environment_name FROM service_links sl JOIN environments e ON sl.environment_id = e.id WHERE sl.service_id = ?")
+    .all(serviceId) as ServiceLinkWithEnvironmentRow[];
 }
 
 export function getServicesOnServer(serverId: number): ServiceRow[] {

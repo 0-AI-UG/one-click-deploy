@@ -414,6 +414,7 @@ const injectCredentials: Step<DeployServiceInput, { ok: true; injected: boolean 
       const newKeys = new Set(newEntries.map((e) => e.key));
       const filtered = parsed.entries.filter((e) => !newKeys.has(e.key));
       db.updateEnvironment(req.environment_id, envRow.name, serializeEnvVars([...filtered, ...newEntries]));
+      db.insertServiceLink(svc.serviceId, req.environment_id, envPrefix);
       ctx.log(`Credentials added to environment "${envRow.name}"`);
     }
     return { ok: true, injected: true };

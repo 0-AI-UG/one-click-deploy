@@ -162,17 +162,8 @@ describe("destroyService", () => {
       }),
     );
     const server = freshServer();
-    const app = db.insertApp({
-      name: `app-${randomSuffix()}`,
-      domain: "x.example.com",
-      git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile",
-      container_port: 3000,
-      env_vars: "{}",
-      environment_id: env.id,
-    });
     const service = freshService();
-    db.insertServiceLink(service.id, app.id, "DATABASE");
+    db.insertServiceLink(service.id, env.id, "DATABASE");
     db.insertServiceInstance({
       service_id: service.id,
       server_id: server.id,

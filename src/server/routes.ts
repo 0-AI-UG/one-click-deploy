@@ -86,8 +86,8 @@ import {
   handlePauseService,
   handleUnpauseService,
   handleGetServiceLogs,
-  handleLinkService,
-  handleUnlinkService,
+  handleInjectService,
+  handleUninjectService,
 } from "./routes/services.ts";
 
 function appIdFrom(req: Request): number {
@@ -124,10 +124,10 @@ function serviceIdFrom(req: Request): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
-function serviceLinkPartsFrom(req: Request): { serviceId: number; appId: number } {
+function serviceInjectPartsFrom(req: Request): { serviceId: number; environmentId: number } {
   const url = new URL(req.url);
-  const match = url.pathname.match(/\/api\/services\/(\d+)\/link\/(\d+)/);
-  return match ? { serviceId: parseInt(match[1], 10), appId: parseInt(match[2], 10) } : { serviceId: 0, appId: 0 };
+  const match = url.pathname.match(/\/api\/services\/(\d+)\/inject\/(\d+)/);
+  return match ? { serviceId: parseInt(match[1], 10), environmentId: parseInt(match[2], 10) } : { serviceId: 0, environmentId: 0 };
 }
 
 function environmentIdFrom(req: Request): number {
@@ -296,14 +296,14 @@ export const apiRoutes = {
   "/api/services/:id/pause": { POST: (req: Request) => handlePauseService(req, serviceIdFrom(req)) },
   "/api/services/:id/unpause": { POST: (req: Request) => handleUnpauseService(req, serviceIdFrom(req)) },
   "/api/services/:id/logs": { GET: (req: Request) => handleGetServiceLogs(req, serviceIdFrom(req)) },
-  "/api/services/:id/link/:appId": {
+  "/api/services/:id/inject/:envId": {
     POST: (req: Request) => {
-      const { serviceId, appId } = serviceLinkPartsFrom(req);
-      return handleLinkService(req, serviceId, appId);
+      const { serviceId, environmentId } = serviceInjectPartsFrom(req);
+      return handleInjectService(req, serviceId, environmentId);
     },
     DELETE: (req: Request) => {
-      const { serviceId, appId } = serviceLinkPartsFrom(req);
-      return handleUnlinkService(req, serviceId, appId);
+      const { serviceId, environmentId } = serviceInjectPartsFrom(req);
+      return handleUninjectService(req, serviceId, environmentId);
     },
   },
 

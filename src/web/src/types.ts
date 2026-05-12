@@ -103,7 +103,7 @@ export type ServiceInstance = {
   memory_percent?: number;
 };
 
-export type LinkedApp = {
+export type LinkedEnvironment = {
   id: number;
   name: string;
   env_prefix?: string;
@@ -116,7 +116,7 @@ export type ServiceData = {
   version: string;
   status: string;
   instances?: ServiceInstance[];
-  linked_apps: LinkedApp[];
+  linked_environments: LinkedEnvironment[];
   credentials?: {
     connection_url?: string;
     host?: string;

@@ -12,7 +12,7 @@ type AppData = {
 };
 type ServiceData = {
   id: number; name: string; service_type: string; version: string; status: string;
-  linked_apps: Array<{ id: number; name: string }>;
+  linked_environments: Array<{ id: number; name: string }>;
 };
 type DashboardData = { apps: AppData[]; services: ServiceData[] };
 
@@ -286,9 +286,9 @@ export function DashboardPage() {
                       <span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{svc.service_type}</span>
                       <span className="font-mono text-[9px] text-muted">{svc.version}</span>
                       <StatusBadge status={svc.status} />
-                      {svc.linked_apps.length > 0 && (
+                      {svc.linked_environments.length > 0 && (
                         <span className="font-mono text-[8px] text-muted">
-                          linked to {svc.linked_apps.map((a) => a.name).join(", ")}
+                          injected into {svc.linked_environments.map((e) => e.name).join(", ")}
                         </span>
                       )}
                     </div>

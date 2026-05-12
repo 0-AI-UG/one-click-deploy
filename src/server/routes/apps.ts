@@ -65,7 +65,7 @@ export async function handleGetDashboard(request: Request): Promise<Response> {
       return {
         ...svc,
         instance_count: instances.length,
-        linked_apps: links.map((l) => ({ id: l.app_id, name: l.app_name })),
+        linked_environments: links.map((l) => ({ id: l.environment_id, name: l.environment_name })),
       };
     });
     return Response.json({ apps, services }, { headers: corsHeaders });
