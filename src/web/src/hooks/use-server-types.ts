@@ -16,7 +16,7 @@ export function useServerTypes() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // The endpoint requires auth and a configured Hetzner token, so skip during
+    // The endpoint requires auth and a configured provider token, so skip during
     // initial setup — otherwise the 401 triggers a redirect loop on /setup.
     if (!getToken()) {
       setLoading(false);

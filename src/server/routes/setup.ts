@@ -3,7 +3,12 @@ import { createTempToken } from "../lib/auth.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore } from "../../shared/secret-store.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { getComputeProvider, listComputeProviders } from "../../shared/providers/index.ts";
+
+const DNS_PROVIDER_FOR_COMPUTE: Record<string, string> = {
+  hetzner: "hetzner-dns",
+  digitalocean: "digitalocean-dns",
+};
 
 export function isSetupComplete(): boolean {
   return db.getUserCount() > 0;
@@ -15,11 +20,13 @@ export async function handleSetupStatus(_request: Request): Promise<Response> {
   // prompt for the admin account.
   const provider = getComputeProvider();
   const existingToken = await secretStore.get(provider.tokenKey).catch(() => null);
+  const providers = listComputeProviders().map((p) => ({ id: p.id, name: p.name }));
   return Response.json(
     {
       setupComplete: isSetupComplete(),
       hasProviderToken: !!existingToken,
       provider: { id: provider.id, name: provider.name },
+      providers,
     },
     { headers: corsHeaders },
   );
@@ -33,12 +40,12 @@ export async function handleSetupServerTypes(request: Request): Promise<Response
         { status: 400, headers: corsHeaders },
       );
     }
-    const body = await request.json() as { provider_token?: string };
+    const body = await request.json() as { provider_token?: string; provider_id?: string };
     const token = body.provider_token?.trim();
     if (!token) {
       return Response.json({ server_types: [] }, { headers: corsHeaders });
     }
-    const provider = getComputeProvider();
+    const provider = getComputeProvider(body.provider_id);
     const validation = provider.validateToken(token);
     if (!validation.valid) {
       return Response.json(
@@ -75,7 +82,7 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     }
 
     const body = await request.json() as Record<string, string>;
-    const { username, password, provider_token, dns_zone_id, default_server_type, default_location } = body;
+    const { username, password, provider_token, provider_id, dns_zone_id, default_server_type, default_location } = body;
 
     if (!username || !password) {
       return Response.json(
@@ -84,7 +91,7 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
       );
     }
 
-    const provider = getComputeProvider();
+    const provider = getComputeProvider(provider_id);
 
     // Allow skipping the provider token if one is already present (e.g.
     // after a self-deploy handoff from a bootstrap instance).
@@ -113,6 +120,12 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
 
     // Store secrets (only overwrite provider token if a new one was given)
     if (provider_token) await secretStore.set(provider.tokenKey, provider_token);
+
+    // Persist provider selection so future getComputeProvider() / getDnsProvider()
+    // calls resolve to the chosen provider.
+    db.saveSetting("compute_provider", provider.id);
+    const dnsId = DNS_PROVIDER_FOR_COMPUTE[provider.id];
+    if (dnsId) db.saveSetting("dns_provider", dnsId);
 
     // Store non-secret settings
     if (dns_zone_id) db.saveSetting("dns_zone_id", dns_zone_id);

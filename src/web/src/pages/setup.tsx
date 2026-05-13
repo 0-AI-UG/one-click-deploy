@@ -15,19 +15,24 @@ export function SetupPage() {
   // token is already present — skip the API-keys step and only ask for the
   // admin account.
   const [hasProviderToken, setHasProviderToken] = useState(false);
-  const [providerName, setProviderName] = useState("Provider");
+  const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     get("/api/setup/status").then((res) => {
       setHasProviderToken(!!res.hasProviderToken);
-      if (res.provider?.name) setProviderName(res.provider.name);
+      if (Array.isArray(res.providers)) setProviders(res.providers);
+      if (res.provider?.id) {
+        setForm((f) => f.provider_id ? f : { ...f, provider_id: res.provider.id });
+      }
     }).catch(() => {});
   }, []);
   const [form, setForm] = useState({
     username: "", password: "", confirmPassword: "",
+    provider_id: "",
     provider_token: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
+  const providerName = providers.find((p) => p.id === form.provider_id)?.name ?? "Provider";
 
   // Debounced fetch of server types as the provider token is typed.
   useEffect(() => {
@@ -39,7 +44,7 @@ export function SetupPage() {
     setTypesLoading(true);
     const handle = setTimeout(async () => {
       try {
-        const res = await post("/api/setup/server-types", { provider_token: token });
+        const res = await post("/api/setup/server-types", { provider_token: token, provider_id: form.provider_id });
         setServerTypes(res.server_types ?? []);
       } catch {
         setServerTypes([]);
@@ -48,7 +53,13 @@ export function SetupPage() {
       }
     }, 500);
     return () => { clearTimeout(handle); setTypesLoading(false); };
-  }, [form.provider_token]);
+  }, [form.provider_token, form.provider_id]);
+
+  // Reset server-type selection when the provider changes — slugs aren't cross-provider.
+  useEffect(() => {
+    setForm((f) => ({ ...f, default_server_type: "", default_location: "" }));
+    setServerTypes([]);
+  }, [form.provider_id]);
 
   useEffect(() => {
     if (serverTypes.length > 0 && !form.default_server_type) {
@@ -154,6 +165,16 @@ export function SetupPage() {
                 <Server size={16} className="text-fg" />
                 <h3 className="font-mono font-bold text-sm text-fg uppercase">API Keys & Defaults</h3>
               </div>
+              {providers.length > 1 && (
+                <div>
+                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Cloud Provider</label>
+                  <NeoSelect
+                    value={form.provider_id}
+                    onChange={(v) => setForm((f) => ({ ...f, provider_id: v, provider_token: "" }))}
+                    options={providers.map((p) => ({ value: p.id, label: p.name }))}
+                  />
+                </div>
+              )}
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">{providerName} API Token *</label>
                 <input type="password" value={form.provider_token} onChange={set("provider_token")} placeholder="Required" />

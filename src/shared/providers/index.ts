@@ -3,10 +3,13 @@ import {
   registerDnsProvider,
 } from "./registry.ts";
 import { hetznerCompute, hetznerDns } from "./hetzner.ts";
+import { digitaloceanCompute, digitaloceanDns } from "./digitalocean.ts";
 
 // Register built-in providers
 registerComputeProvider(hetznerCompute);
 registerDnsProvider(hetznerDns);
+registerComputeProvider(digitaloceanCompute);
+registerDnsProvider(digitaloceanDns);
 
 // Re-export the public API
 export {

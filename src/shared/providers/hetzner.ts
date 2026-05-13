@@ -106,7 +106,7 @@ export const hetznerCompute: ComputeProvider = {
   },
 
   async createServer(opts) {
-    const userData = cloudInitScript({
+    const userData = opts.userData || cloudInitScript({
       extraPackages: ["hc-utils"],
       extraCommands: ["systemctl enable hc-agent && systemctl start hc-agent"],
     });
@@ -117,6 +117,7 @@ export const hetznerCompute: ComputeProvider = {
       ssh_key_name: opts.sshKeyName,
       firewall_id: parseInt(opts.firewallId, 10),
       network_id: opts.networkId ? parseInt(opts.networkId, 10) : undefined,
+      user_data: userData,
     });
     const networkId = opts.networkId ? parseInt(opts.networkId, 10) : 0;
     const privateEntry = networkId

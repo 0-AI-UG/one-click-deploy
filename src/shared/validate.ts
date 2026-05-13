@@ -156,6 +156,20 @@ export function validateHetznerToken(token: string): ValidationResult<string> {
   return { valid: true, value: trimmed };
 }
 
+export function validateDigitalOceanToken(token: string): ValidationResult<string> {
+  const trimmed = token.trim();
+  if (!trimmed) return { valid: false, error: "Token is required" };
+  // DO Personal Access Tokens are typically 64-char hex strings, optionally
+  // prefixed with `dop_v1_`. Be lenient on length to allow future formats.
+  if (trimmed.length < 32)
+    return { valid: false, error: "Token is too short (minimum 32 characters)" };
+  if (trimmed.length > 256)
+    return { valid: false, error: "Token is too long (maximum 256 characters)" };
+  if (!/^[\x20-\x7e]+$/.test(trimmed))
+    return { valid: false, error: "Token contains invalid characters" };
+  return { valid: true, value: trimmed };
+}
+
 export function validateGitHubPat(token: string): ValidationResult<string> {
   const trimmed = token.trim();
   if (!trimmed) return { valid: false, error: "Token is required" };
