@@ -252,7 +252,10 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
           input: { appId, userId: app.deployed_by || undefined },
           trigger: "webhook",
           triggeredBy: `github:${deliveryId}`,
-          idempotencyKey: `webhook-delivery:${deliveryId}`,
+          // GitHub uses one delivery GUID per push across all webhooks on a
+          // repo. Without app scoping, sibling apps sharing a repo collide on
+          // this key and all but one get dropped.
+          idempotencyKey: `webhook-delivery:${appId}:${deliveryId}`,
         });
       } catch (err) {
         console.error(`[webhook] enqueue failed for app ${appId}:`, err);

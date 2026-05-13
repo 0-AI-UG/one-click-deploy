@@ -232,6 +232,7 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
       app_id: ctx.input.appId,
       image_tag: build.imageTag,
       git_commit: gitCommit,
+      source: ctx.trigger === "ui" ? "manual" : ctx.trigger,
     });
     db.appendDeployLog(ctx.input.appId, `[done] Redeployed successfully`);
     return { deploymentId: row.id, gitCommit };

@@ -14,10 +14,10 @@ const fakeRunner = mock((appId: number, sha: string) => {
 mock.module("../ipc/enqueue.ts", () => ({
   enqueue: (args: { kind: string; input: { appId: number }; triggeredBy: string }) => {
     if (args.kind === "redeploy") {
-      // triggeredBy is `github:<delivery-id>`; sha isn't here directly but the
-      // test only checks appId + a substring. Extract the short sha from the
-      // idempotency_key if present.
-      const sha = (args as any).idempotencyKey?.split(":")[2]?.slice(0, 7) || "";
+      // idempotency_key is `webhook-delivery:<appId>:<delivery-id>`, and when
+      // there's no x-github-delivery header the synthesized delivery-id is
+      // `<appId>:<fullSha>:<ts>`. The short sha lives at split index [3].
+      const sha = (args as any).idempotencyKey?.split(":")[3]?.slice(0, 7) || "";
       fakeRunner(args.input.appId, sha);
     }
     return { opId: 1 };
