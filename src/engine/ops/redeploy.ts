@@ -1,13 +1,12 @@
 import * as db from "../../shared/db.ts";
 import {
   sshExec,
+  cloneRepo,
   cloneAndBuild,
   cloneAndComposeBuild,
   cloneAndRailpackBuild,
   deployAuthProxy,
   removeAuthProxy,
-  removeContainer,
-  removeCompose,
   healthCheck,
   composeHealthCheck,
 } from "../../shared/remote/index.ts";
@@ -35,7 +34,6 @@ type BuildOut = {
   previousAuthPassword: string;
   previousContainerPort: number;
 };
-type SwapOut = { containerName: string; oldImageTag: string };
 type HealthOut = { healthy: boolean; statusCode?: number };
 
 function parseExtraVolumes(raw: string): string[] {
@@ -55,9 +53,28 @@ const wakeIfSleeping: Step<RedeployInput, WakeOut> = {
   },
 };
 
+const cloneRepoStep: Step<RedeployInput, { ok: true }> = {
+  name: "clone_repo",
+  label: "Clone repository",
+  async run(ctx) {
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App not found");
+    const replicas = db.getReplicas(ctx.input.appId);
+    if (replicas.length === 0) throw new Error("App has no replicas");
+    const server = db.getServer(replicas[0].server_id);
+    if (!server) throw new Error("Server not found");
+    const githubPat = (await resolveGitHubToken(ctx.input.userId)) || undefined;
+    await cloneRepo(server.ipv4, app.name, app.git_repo, githubPat, (line) => {
+      db.appendDeployLog(ctx.input.appId, `[clone] ${line}`);
+      ctx.log(`[clone] ${line}`);
+    }, app.git_branch || undefined);
+    return { ok: true };
+  },
+};
+
 const pullAndBuild: Step<RedeployInput, BuildOut> = {
   name: "pull_and_build",
-  label: "Pull and build",
+  label: "Build container",
   async run(ctx) {
     const { appId } = ctx.input;
     const app = db.getApp(appId);
@@ -72,12 +89,8 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     const previousAuthPassword = app.auth_password;
     const previousContainerPort = app.container_port;
 
-    const authPassword = ctx.input.auth_password !== undefined
-      ? (ctx.input.auth_password || "")
-      : app.auth_password;
     const containerPort = ctx.input.container_port ?? app.container_port;
     const envVars = await resolveAppEnvVars(app);
-    const hostKey = server.ssh_host_key || undefined;
     const githubPat = (await resolveGitHubToken(ctx.input.userId)) || undefined;
     const bindAddr = replicaBindHost(server);
     const extraVolumes = parseExtraVolumes(app.extra_volumes);
@@ -99,6 +112,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       gitBranch: app.git_branch || undefined,
       bindAddr,
       containerName: first.container_name,
+      skipClone: true,
     };
     const logLine = (line: string) => {
       db.appendDeployLog(appId, `[redeploy] ${line}`);
@@ -123,39 +137,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       if (r.imageTag) imageTag = r.imageTag;
     }
 
-    if (replicas.length > 1) {
-      const rolling = await rollingRedeploy(appId, (step, detail) => ctx.log(`[${step}] ${detail}`));
-      if (!rolling.ok) db.appendDeployLog(appId, `[redeploy] Rolling update warning: ${rolling.error}`);
-    }
-
-    if (authPassword) {
-      await deployAuthProxy(server.ipv4, first.container_name, authPassword, first.host_port, bindAddr, hostKey);
-    } else if (app.auth_password && !authPassword) {
-      await removeAuthProxy(server.ipv4, first.container_name, hostKey);
-    }
-
-    // Persist port/auth changes only after successful build.
-    if (ctx.input.auth_password !== undefined) {
-      db.updateAppAuthPassword(appId, ctx.input.auth_password || "");
-    }
-    if (ctx.input.container_port !== undefined && ctx.input.container_port !== app.container_port) {
-      db.updateAppContainerPort(appId, ctx.input.container_port);
-    }
-
     return { imageTag, deployMode, previousStatus, previousAuthPassword, previousContainerPort };
-  },
-};
-
-// Swap is effectively done inside pull_and_build for the primary replica (via
-// docker run in cloneAndBuild/etc.); we keep a marker step for the audit log.
-const swapContainer: Step<RedeployInput, SwapOut> = {
-  name: "swap_container",
-  label: "Swap container",
-  async run(ctx, prior) {
-    const app = db.getApp(ctx.input.appId);
-    if (!app) throw new Error("App not found");
-    const build = prior["pull_and_build"] as BuildOut;
-    return { containerName: app.name, oldImageTag: `${app.name}:previous` };
   },
   async compensate(ctx, _out, prior) {
     const build = prior["pull_and_build"] as BuildOut | undefined;
@@ -163,6 +145,52 @@ const swapContainer: Step<RedeployInput, SwapOut> = {
     try { db.updateAppStatus(ctx.input.appId, build.previousStatus); } catch (err) {
       ctx.log(`Failed to restore previous status: ${err}`);
     }
+  },
+};
+
+const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
+  name: "roll_extra_replicas",
+  label: "Roll extra replicas",
+  async run(ctx) {
+    const replicas = db.getReplicas(ctx.input.appId);
+    if (replicas.length <= 1) return { ok: true };
+    const rolling = await rollingRedeploy(ctx.input.appId, (step, detail) => ctx.log(`[${step}] ${detail}`));
+    if (!rolling.ok) db.appendDeployLog(ctx.input.appId, `[redeploy] Rolling update warning: ${rolling.error}`);
+    return { ok: true };
+  },
+};
+
+const manageAuthProxy: Step<RedeployInput, { ok: true }> = {
+  name: "manage_auth_proxy",
+  label: "Manage auth proxy",
+  async run(ctx) {
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App not found");
+    const replicas = db.getReplicas(ctx.input.appId);
+    if (replicas.length === 0) return { ok: true };
+    const first = replicas[0];
+    const server = db.getServer(first.server_id);
+    if (!server) throw new Error("Server not found");
+    const hostKey = server.ssh_host_key || undefined;
+    const bindAddr = replicaBindHost(server);
+
+    const desired = ctx.input.auth_password !== undefined
+      ? (ctx.input.auth_password || "")
+      : app.auth_password;
+    if (desired) {
+      await deployAuthProxy(server.ipv4, first.container_name, desired, first.host_port, bindAddr, hostKey);
+    } else if (app.auth_password && !desired) {
+      await removeAuthProxy(server.ipv4, first.container_name, hostKey);
+    }
+
+    // Persist port/auth changes after the proxy state is in place.
+    if (ctx.input.auth_password !== undefined) {
+      db.updateAppAuthPassword(ctx.input.appId, ctx.input.auth_password || "");
+    }
+    if (ctx.input.container_port !== undefined && ctx.input.container_port !== app.container_port) {
+      db.updateAppContainerPort(ctx.input.appId, ctx.input.container_port);
+    }
+    return { ok: true };
   },
 };
 
@@ -245,8 +273,10 @@ const redeployOp: OpKindDefinition<RedeployInput> = {
   resourceKeys: (input) => [`app:${input.appId}`],
   steps: [
     wakeIfSleeping,
+    cloneRepoStep,
     pullAndBuild,
-    swapContainer,
+    rollExtraReplicas,
+    manageAuthProxy,
     syncCaddyStep,
     healthCheckStep,
     recordDeploymentHistory,

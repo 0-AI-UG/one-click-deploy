@@ -26,6 +26,8 @@ type TargetOut = {
   deployMode: string;
 };
 
+type CheckoutOut = { envFilePath: string | null };
+type RebuildOut = { dockerfilePath: string | null };
 type SwapOut = { containerName: string };
 
 function parseExtraVolumes(raw: string): string[] {
@@ -56,11 +58,81 @@ const loadTargetDeployment: Step<RollbackInput, TargetOut> = {
   },
 };
 
-const swapContainerToTarget: Step<RollbackInput, SwapOut> = {
-  name: "swap_container_to_target",
-  label: "Swap to target",
+const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+const checkoutTarget: Step<RollbackInput, CheckoutOut> = {
+  name: "checkout_target",
+  label: "Checkout target commit",
   async run(ctx, prior) {
     const target = prior["load_target_deployment"] as TargetOut;
+    const app = db.getApp(target.appId);
+    if (!app) throw new Error("App not found");
+    const server = db.getServer(target.serverId);
+    if (!server) throw new Error("Server not found");
+    const hostKey = server.ssh_host_key || undefined;
+    const appDir = `/home/deploy/apps/${app.name}`;
+
+    await sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${target.gitCommit}`), hostKey);
+
+    const envVars = await resolveAppEnvVars(app);
+    const envEntries = Object.entries(envVars);
+    let envFilePath: string | null = null;
+    if (envEntries.length > 0) {
+      envFilePath = `${appDir}/.env.deploy`;
+      const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
+      const escapedContent = envFileContent.replace(/'/g, "'\\''");
+      await sshExec(
+        server.ipv4,
+        `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`,
+        hostKey,
+      );
+    }
+    return { envFilePath };
+  },
+};
+
+const rebuildImage: Step<RollbackInput, RebuildOut> = {
+  name: "rebuild_image",
+  label: "Rebuild image",
+  async run(ctx, prior) {
+    const target = prior["load_target_deployment"] as TargetOut;
+    if (target.deployMode === "compose") {
+      // Compose build happens together with `up -d --build` in swap_container.
+      return { dockerfilePath: null };
+    }
+    const app = db.getApp(target.appId);
+    if (!app) throw new Error("App not found");
+    const server = db.getServer(target.serverId);
+    if (!server) throw new Error("Server not found");
+    const hostKey = server.ssh_host_key || undefined;
+    const appDir = `/home/deploy/apps/${app.name}`;
+
+    let dockerfilePath = app.dockerfile_path?.replace(/^\/+/, "");
+    if (!dockerfilePath) {
+      const findResult = await sshExec(
+        server.ipv4,
+        asUser(`cd ${appDir} && if [ -f Dockerfile ]; then echo Dockerfile; elif [ -f docker/Dockerfile ]; then echo docker/Dockerfile; else find . -maxdepth 3 -name Dockerfile -type f | head -1 | sed 's|^\\./||'; fi`),
+        hostKey,
+      );
+      dockerfilePath = findResult.stdout.trim();
+      if (!dockerfilePath) throw new Error("No Dockerfile found in repository for rollback");
+    }
+    const dockerContext = (app as any).docker_context || ".";
+    const buildCmd = `cd ${appDir} && docker build -t ${app.name}:latest -f ${dockerfilePath} ${dockerContext}`;
+    const buildResult = await sshExec(server.ipv4, asUser(buildCmd), hostKey);
+    if (buildResult.exitCode !== 0) {
+      throw new Error(describeFailure("Failed to rollback (docker build)", buildResult));
+    }
+    return { dockerfilePath };
+  },
+};
+
+const swapContainer: Step<RollbackInput, SwapOut> = {
+  name: "swap_container",
+  label: "Swap container",
+  async run(ctx, prior) {
+    const target = prior["load_target_deployment"] as TargetOut;
+    const checkout = prior["checkout_target"] as CheckoutOut;
     const app = db.getApp(target.appId);
     if (!app) throw new Error("App not found");
     const server = db.getServer(target.serverId);
@@ -70,50 +142,17 @@ const swapContainerToTarget: Step<RollbackInput, SwapOut> = {
     const hostPort = first.host_port;
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
-    const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
     const appDir = `/home/deploy/apps/${app.name}`;
-
-    await sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${target.gitCommit}`), hostKey);
-
-    const envVars = await resolveAppEnvVars(app);
-    const envEntries = Object.entries(envVars);
-    if (envEntries.length > 0) {
-      const envFilePath = `${appDir}/.env.deploy`;
-      const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
-      const escapedContent = envFileContent.replace(/'/g, "'\\''");
-      await sshExec(
-        server.ipv4,
-        `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`,
-        hostKey,
-      );
-    }
+    const envFileFlag = checkout.envFilePath ? `--env-file ${checkout.envFilePath}` : "";
 
     if (target.deployMode === "compose") {
-      const envFileFlag = envEntries.length > 0 ? `--env-file ${appDir}/.env.deploy` : "";
       const composeCmd = `cd ${appDir} && docker compose -f ${app.compose_file} -f docker-compose.ocd.yml -p ${app.name} ${envFileFlag} up -d --build`;
       const result = await sshExec(server.ipv4, asUser(composeCmd), hostKey);
       if (result.exitCode !== 0) {
         throw new Error(describeFailure("Failed to rollback compose project", result));
       }
     } else {
-      let dockerfilePath = app.dockerfile_path?.replace(/^\/+/, "");
-      if (!dockerfilePath) {
-        const findResult = await sshExec(
-          server.ipv4,
-          asUser(`cd ${appDir} && if [ -f Dockerfile ]; then echo Dockerfile; elif [ -f docker/Dockerfile ]; then echo docker/Dockerfile; else find . -maxdepth 3 -name Dockerfile -type f | head -1 | sed 's|^\\./||'; fi`),
-          hostKey,
-        );
-        dockerfilePath = findResult.stdout.trim();
-        if (!dockerfilePath) throw new Error("No Dockerfile found in repository for rollback");
-      }
-      const dockerContext = (app as any).docker_context || ".";
-      const buildCmd = `cd ${appDir} && docker build -t ${app.name}:latest -f ${dockerfilePath} ${dockerContext}`;
-      const buildResult = await sshExec(server.ipv4, asUser(buildCmd), hostKey);
-      if (buildResult.exitCode !== 0) {
-        throw new Error(describeFailure("Failed to rollback (docker build)", buildResult));
-      }
       await removeContainer(server.ipv4, app.name, hostKey);
-      const envFileFlag = envEntries.length > 0 ? `--env-file ${appDir}/.env.deploy` : "";
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
       const extraVolFlags = parseExtraVolumes(app.extra_volumes).map((v) => `-v ${v}`).join(" ");
       const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${app.name}:latest`;
@@ -192,7 +231,9 @@ const rollbackOp: OpKindDefinition<RollbackInput> = {
   resourceKeys: (input) => [`app:${input.appId}`],
   steps: [
     loadTargetDeployment,
-    swapContainerToTarget,
+    checkoutTarget,
+    rebuildImage,
+    swapContainer,
     syncCaddyStep,
     healthCheckStep,
     recordRollback,

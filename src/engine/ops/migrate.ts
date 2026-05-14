@@ -1,24 +1,22 @@
 import * as db from "../../shared/db.ts";
-import { migrateReplica } from "../scale/migrate.ts";
+import { migrateReplica, type MigrateResult } from "../scale/migrate.ts";
 import { syncAppCaddy } from "../scale/caddy-manager.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
 type MigrateInput = { appId: number; replicaId: number; targetServerId: number };
 
-// NOTE: The existing migrateReplica() helper is a single atomic routine that
-// handles both stateless and volume-bound migration end-to-end: pull image,
-// start on target, stop on source, swap replica rows, sync Caddy, and gc.
-// Faithful per-step decomposition would require rewriting that function,
-// which the spec explicitly forbids. We wrap it as one primary step that
-// delegates to migrateReplica, plus pre/post audit steps. Partial failures
-// roll back via migrateReplica's own internal rollback (volume reattach, etc.).
+// migrateReplica() is the core routine: it pulls the image, starts on target,
+// stops on source, swaps replica rows, and (for volume apps) detaches/attaches
+// the Hetzner volume with its own internal rollback. We bracket it with
+// `mark_draining` and `record_event` steps so those bookkeeping concerns are
+// visible in the audit log; the transfer itself stays atomic.
 
-type RunOut = {
-  sourceServerId: number;
-};
+type ValidateOut = { sourceServerId: number };
+type DrainOut = { ok: true };
+type TransferOut = Extract<MigrateResult, { ok: true }>;
 
-const loadAndValidate: Step<MigrateInput, RunOut> = {
+const loadAndValidate: Step<MigrateInput, ValidateOut> = {
   name: "load_and_validate",
   label: "Validate migration",
   async run(ctx) {
@@ -35,7 +33,26 @@ const loadAndValidate: Step<MigrateInput, RunOut> = {
   },
 };
 
-const performMigration: Step<MigrateInput, { ok: true }> = {
+const markDraining: Step<MigrateInput, DrainOut> = {
+  name: "mark_draining",
+  label: "Drain replica",
+  async run(ctx) {
+    db.updateReplicaStatus(ctx.input.replicaId, "draining");
+    try {
+      await syncAppCaddy(ctx.input.appId);
+    } catch (err) {
+      ctx.log(`Caddy sync during drain failed (continuing): ${err}`);
+    }
+    return { ok: true };
+  },
+  async compensate(ctx) {
+    // Best-effort: if the transfer failed, restore the replica's routing.
+    try { db.updateReplicaStatus(ctx.input.replicaId, "running"); } catch { /* ignore */ }
+    try { await syncAppCaddy(ctx.input.appId); } catch { /* ignore */ }
+  },
+};
+
+const performMigration: Step<MigrateInput, TransferOut> = {
   name: "perform_migration",
   label: "Migrate replica",
   async run(ctx) {
@@ -46,7 +63,7 @@ const performMigration: Step<MigrateInput, { ok: true }> = {
       (step, detail) => ctx.log(`[${step}] ${detail}`),
     );
     if (!result.ok) throw new Error(result.error || "Migration failed");
-    return { ok: true };
+    return result;
   },
 };
 
@@ -63,11 +80,30 @@ const syncCaddyStep: Step<MigrateInput, { ok: true }> = {
   },
 };
 
+const recordEvent: Step<MigrateInput, { ok: true }> = {
+  name: "record_event",
+  label: "Record migration event",
+  async run(ctx, prior) {
+    const out = prior["perform_migration"] as TransferOut | undefined;
+    if (!out) return { ok: true };
+    db.insertScalingEvent({
+      app_id: ctx.input.appId,
+      event_type: "migrate",
+      from_count: out.fromCount,
+      to_count: out.toCount,
+      reason: out.withVolume
+        ? `Migrated replica with volume from ${out.sourceServerName} to ${out.targetServerName}`
+        : `Migrated replica from ${out.sourceServerName} to ${out.targetServerName}`,
+    });
+    return { ok: true };
+  },
+};
+
 const gcEmptyServers: Step<MigrateInput, { ok: true }> = {
   name: "gc_empty_servers",
   label: "GC empty servers",
   async run(ctx, prior) {
-    const r = prior["load_and_validate"] as RunOut | undefined;
+    const r = prior["load_and_validate"] as ValidateOut | undefined;
     if (!r) return { ok: true };
     try {
       await db.gcServerIfEmpty(r.sourceServerId);
@@ -82,7 +118,7 @@ const migrateOp: OpKindDefinition<MigrateInput> = {
   kind: "migrate",
   label: "Migrate replica",
   resourceKeys: (input) => [`app:${input.appId}`],
-  steps: [loadAndValidate, performMigration, syncCaddyStep, gcEmptyServers],
+  steps: [loadAndValidate, markDraining, performMigration, syncCaddyStep, recordEvent, gcEmptyServers],
 };
 
 registerOp(migrateOp as OpKindDefinition<any>);

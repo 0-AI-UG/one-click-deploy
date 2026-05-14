@@ -378,14 +378,15 @@ describe("deploy op: structure", () => {
       "create_dns_record",
       "create_volume",
       "insert_app_row",
+      "clone_repo",
       "build_and_run_container",
       "deploy_auth_proxy",
       "sync_caddy",
       "health_check",
       "record_deployment_history",
       "setup_github_webhook",
-      "scale_to_replicas",
-      "finalize",
+      "enqueue_scale_child",
+      "wait_for_scale",
     ]);
   });
 

@@ -3,6 +3,7 @@ import dbInstance, * as db from "../../shared/db.ts";
 import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
 import {
   sshExec,
+  cloneRepo,
   cloneAndBuild,
   cloneAndComposeBuild,
   detectComposeFile,
@@ -22,10 +23,15 @@ import { createMasker } from "../../shared/mask.ts";
 import { processIncomingEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
 import { getProviderToken } from "../../shared/secret-store.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
-import { scaleApp } from "../scale-api.ts";
 import { provisionServer } from "../provision-server.ts";
 import { resolve4 } from "node:dns/promises";
 import { registerOp } from "./registry.ts";
+import {
+  enqueueOperation,
+  listChildOperations,
+  requestCancel,
+  type OperationStatus,
+} from "../../shared/db/operations.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 
 type DeployInput = DeployRequest;
@@ -65,6 +71,8 @@ type InsertAppOut = {
   dockerfilePath: string;
 };
 
+type CloneOut = { ok: true };
+
 type BuildOut = {
   deployMode: "dockerfile" | "compose";
   imageTag: string;
@@ -86,14 +94,6 @@ async function resolveDomainIps(domain: string, timeoutMs = 3000): Promise<strin
     ]);
   } catch {
     return [];
-  }
-}
-
-async function sshExecQuiet(ip: string, cmd: string, hostKey?: string) {
-  try {
-    return await sshExec(ip, cmd, hostKey);
-  } catch {
-    return { stdout: "", stderr: "", exitCode: 1 };
   }
 }
 
@@ -403,6 +403,22 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
   },
 };
 
+const cloneRepoStep: Step<DeployInput, CloneOut> = {
+  name: "clone_repo",
+  label: "Clone repository",
+  async run(ctx, prior) {
+    const req = ctx.input;
+    const server = prior["pick_or_provision_server"] as ServerOut;
+    const appOut = prior["insert_app_row"] as InsertAppOut;
+    const { mask, githubPat } = await buildMasker(req, ctx.triggeredBy);
+    await cloneRepo(server.serverIp, req.app_name, req.git_repo, githubPat, (line) => {
+      db.appendDeployLog(appOut.appId, mask(`[clone] ${line}`));
+      ctx.log(`[clone] ${mask(line)}`);
+    }, req.git_branch);
+    return { ok: true };
+  },
+};
+
 const buildAndRunContainer: Step<DeployInput, BuildOut> = {
   name: "build_and_run_container",
   label: "Build and run container",
@@ -420,23 +436,8 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     let composeWebService = "";
 
     if (!req.dockerfile_path) {
-      const detected = req.compose_file || await (async () => {
-        await sshExec(server.serverIp, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps`, server.serverHostKey || undefined);
-        const appDir = `/home/deploy/apps/${req.app_name}`;
-        const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-        let cloneUrl = req.git_repo;
-        if (githubPat && cloneUrl.match(/^https:\/\/github\.com\//)) {
-          cloneUrl = cloneUrl.replace(/^https:\/\/github\.com\//, `https://x-access-token:${githubPat}@github.com/`);
-        }
-        const gitEnv = githubPat ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
-        const branchFlag = req.git_branch ? ` -b ${req.git_branch}` : "";
-        await sshExecQuiet(server.serverIp, asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git fetch origin && git checkout ${req.git_branch || "HEAD"} && git pull; else rm -rf ${appDir} && git clone${branchFlag} ${cloneUrl} ${appDir}; fi`), server.serverHostKey || undefined);
-        if (githubPat && cloneUrl !== req.git_repo) {
-          await sshExecQuiet(server.serverIp, asUser(`cd ${appDir} && git remote set-url origin ${req.git_repo}`), server.serverHostKey || undefined);
-        }
-        return await detectComposeFile(server.serverIp, req.app_name, server.serverHostKey || undefined);
-      })();
-
+      const detected = req.compose_file
+        || await detectComposeFile(server.serverIp, req.app_name, server.serverHostKey || undefined);
       if (detected) {
         deployMode = "compose";
         composeFile = detected;
@@ -467,6 +468,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
           gitToken: githubPat,
           gitBranch: req.git_branch,
           bindAddr: containerBindAddr,
+          skipClone: true,
         },
         (line) => {
           maskedLog(`[build] ${line}`);
@@ -492,6 +494,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
           gitToken: githubPat,
           gitBranch: req.git_branch,
           bindAddr: containerBindAddr,
+          skipClone: true,
         },
         (line) => {
           maskedLog(`[build] ${line}`);
@@ -693,44 +696,79 @@ const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string }> = {
   },
 };
 
-const scaleToReplicas: Step<DeployInput, { scaled: boolean; error?: string }> = {
-  name: "scale_to_replicas",
-  label: "Scale replicas",
+const TERMINAL: ReadonlySet<OperationStatus> = new Set([
+  "done",
+  "failed",
+  "cancelled",
+  "compensated",
+]);
+
+const enqueueScaleChild: Step<DeployInput, { childOpId: number | null }> = {
+  name: "enqueue_scale_child",
+  label: "Enqueue scale",
   async run(ctx, prior) {
     const req = ctx.input;
-    if (!req.replicas || req.replicas <= 1 || !req.domain) return { scaled: false };
     const appOut = prior["insert_app_row"] as InsertAppOut;
-
-    try {
-      db.updateAppScaling(appOut.appId, {
-        desired_replicas: req.replicas,
-        min_replicas: 1,
-        max_replicas: req.replicas,
-      });
-      const result = await scaleApp(appOut.appId, req.replicas, (step, detail) => {
-        ctx.log(`[${step}] ${detail}`);
-      });
-      if (!result.ok) {
-        db.appendDeployLog(appOut.appId, `[scale] Warning: scaling failed: ${result.error}`);
-        return { scaled: false, error: result.error };
-      }
-      return { scaled: true };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      db.appendDeployLog(appOut.appId, `[scale] Warning: scaling failed: ${msg}`);
-      ctx.log(`Scaling failed (non-fatal): ${msg}`);
-      return { scaled: false, error: msg };
+    if (!req.replicas || req.replicas <= 1 || !req.domain) {
+      return { childOpId: null };
     }
+    db.updateAppScaling(appOut.appId, {
+      desired_replicas: req.replicas,
+      min_replicas: 1,
+      max_replicas: req.replicas,
+    });
+
+    const key = `deploy:${ctx.opId}:scale`;
+    const existing = listChildOperations(ctx.opId).find((c) => c.idempotency_key === key);
+    if (existing) return { childOpId: existing.id };
+
+    const row = enqueueOperation({
+      kind: "scale_up",
+      resourceKeys: [`app:${appOut.appId}`],
+      input: { appId: appOut.appId, targetReplicas: req.replicas },
+      trigger: "deploy",
+      triggeredBy: ctx.triggeredBy,
+      parentId: ctx.opId,
+      idempotencyKey: key,
+    });
+    return { childOpId: row.id };
   },
 };
 
-// --- Finalizer: success log entry. No compensation; deploy success already
-// persisted via the steps above. Kept as a step so it shows in the audit.
-const finalizeStep: Step<DeployInput, { ok: true }> = {
-  name: "finalize",
-  label: "Finalize",
+const waitForScale: Step<DeployInput, { ok: true }> = {
+  name: "wait_for_scale",
+  label: "Wait for scale",
   async run(ctx, prior) {
+    const enq = prior["enqueue_scale_child"] as { childOpId: number | null };
     const appOut = prior["insert_app_row"] as InsertAppOut;
+
+    if (enq.childOpId != null) {
+      ctx.park();
+      try {
+        while (true) {
+          const children = listChildOperations(ctx.opId);
+          const child = children.find((c) => c.id === enq.childOpId);
+          if (ctx.isCancelRequested()) {
+            if (child && !TERMINAL.has(child.status)) {
+              try { requestCancel(child.id); } catch { /* best-effort */ }
+            }
+            throw new Error("deploy cancelled");
+          }
+          if (child && TERMINAL.has(child.status)) {
+            if (child.status !== "done") {
+              // Treat scaling as best-effort: surface the warning but don't
+              // fail the parent deploy (mirrors the previous inline behavior).
+              db.appendDeployLog(appOut.appId, `[scale] Warning: scaling did not complete (status=${child.status})`);
+            }
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      } finally {
+        ctx.unpark();
+      }
+    }
+
     db.appendDeployLog(appOut.appId, `[done] App deployed successfully`);
     if (ctx.triggeredBy) {
       try { db.deleteDeploySession(ctx.triggeredBy); } catch { /* best-effort */ }
@@ -751,14 +789,15 @@ const deployOp: OpKindDefinition<DeployInput> = {
     createDnsRecord,
     createVolume,
     insertAppRow,
+    cloneRepoStep,
     buildAndRunContainer,
     deployAuthProxyStep,
     syncCaddyStep,
     healthCheckStep,
     recordDeploymentHistory,
     setupGithubWebhook,
-    scaleToReplicas,
-    finalizeStep,
+    enqueueScaleChild,
+    waitForScale,
   ],
 };
 

@@ -489,7 +489,7 @@ async function dockerLoginGhcr(
 // --- Clone & Build ---
 
 // Shared git clone/pull logic used by both cloneAndBuild and cloneAndComposeBuild
-async function cloneRepo(
+export async function cloneRepo(
   ip: string,
   appName: string,
   gitRepo: string,
@@ -567,6 +567,9 @@ export async function cloneAndBuild(
      *  Needed when redeploying a replica whose container is named
      *  `${app}-r${n}` (from scaleUp/migrate) rather than bare `${app}`. */
     containerName?: string;
+    /** When true, assume the repo is already cloned (the engine `clone_repo`
+     *  step ran first). Skips the in-helper clone. */
+    skipClone?: boolean;
   },
   onLog?: (line: string) => void
 ) {
@@ -575,8 +578,9 @@ export async function cloneAndBuild(
   const buildStart = Date.now();
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
-  // Clone or pull repo
-  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
+  if (!opts.skipClone) {
+    await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
+  }
 
   // Find Dockerfile
   let dockerfilePath = opts.dockerfilePath?.replace(/^\/+/, "");
@@ -689,6 +693,8 @@ export async function cloneAndRailpackBuild(
     bindAddr?: string;
     /** See `cloneAndBuild` — defaults to `opts.name`. */
     containerName?: string;
+    /** See `cloneAndBuild`. */
+    skipClone?: boolean;
   },
   onLog?: (line: string) => void
 ) {
@@ -698,8 +704,9 @@ export async function cloneAndRailpackBuild(
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
   const containerName = opts.containerName || opts.name;
 
-  // Clone or pull repo
-  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
+  if (!opts.skipClone) {
+    await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
+  }
 
   // Ensure BuildKit is available
   await ensureBuildkit(ip);
@@ -851,6 +858,8 @@ export async function cloneAndComposeBuild(
      *  server's `private_ipv4` when the panel Caddy reaches this replica
      *  over the shared private network. */
     bindAddr?: string;
+    /** See `cloneAndBuild`. */
+    skipClone?: boolean;
   },
   onLog?: (line: string) => void
 ) {
@@ -859,8 +868,9 @@ export async function cloneAndComposeBuild(
   const buildStart = Date.now();
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
-  // Clone or pull repo (shared with cloneAndBuild)
-  await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
+  if (!opts.skipClone) {
+    await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
+  }
 
   // Note: No explicit "docker compose down" here — "docker compose up -d --build"
   // handles stopping old containers and replacing them atomically (build-before-destroy).

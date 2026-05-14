@@ -17,12 +17,16 @@ const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
  * then start a fresh replica on the target. Brief downtime is unavoidable because a
  * volume can only be attached to one server at a time.
  */
+export type MigrateResult =
+  | { ok: true; sourceServerName: string; targetServerName: string; fromCount: number; toCount: number; withVolume?: boolean }
+  | { ok: false; error: string };
+
 export async function migrateReplica(
   appId: number,
   replicaId: number,
   targetServerId: number,
   emit: ProgressFn,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<MigrateResult> {
   try {
     const app = db.getApp(appId) as App | null;
     if (!app) throw new Error("App not found");
@@ -61,7 +65,7 @@ async function migrateStateless(
   sourceServer: ReturnType<typeof db.getServer>,
   targetServer: ReturnType<typeof db.getServer>,
   emit: ProgressFn,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<MigrateResult> {
   if (!sourceServer || !targetServer) throw new Error("Server not found");
   const currentCount = allReplicas.length;
   const hostKey = sourceServer.ssh_host_key || undefined;
@@ -107,14 +111,6 @@ async function migrateStateless(
     last_scale_at: new Date().toISOString(),
   });
 
-  db.insertScalingEvent({
-    app_id: app.id,
-    event_type: "migrate",
-    from_count: currentCount,
-    to_count: currentCount,
-    reason: `Migrated replica from ${sourceServer.name} to ${targetServer.name}`,
-  });
-
   try {
     await db.gcServerIfEmpty(sourceServer.id);
   } catch (err) {
@@ -122,7 +118,7 @@ async function migrateStateless(
   }
 
   emit("migrate", `Migration complete — replica now on ${targetServer.name}`);
-  return { ok: true };
+  return { ok: true, sourceServerName: sourceServer.name, targetServerName: targetServer.name, fromCount: currentCount, toCount: currentCount };
 }
 
 async function migrateWithVolume(
@@ -132,7 +128,7 @@ async function migrateWithVolume(
   sourceServer: NonNullable<ReturnType<typeof db.getServer>>,
   targetServer: NonNullable<ReturnType<typeof db.getServer>>,
   emit: ProgressFn,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<MigrateResult> {
   if (sourceServer.location !== targetServer.location) {
     throw new Error(
       `Cannot migrate: volume lives in ${sourceServer.location}, target server is in ${targetServer.location}. Hetzner volumes are bound to a single location.`,
@@ -227,14 +223,6 @@ async function migrateWithVolume(
     last_scale_at: new Date().toISOString(),
   });
 
-  db.insertScalingEvent({
-    app_id: app.id,
-    event_type: "migrate",
-    from_count: currentCount,
-    to_count: currentCount,
-    reason: `Migrated replica with volume from ${sourceServer.name} to ${targetServer.name}`,
-  });
-
   try {
     await db.gcServerIfEmpty(sourceServer.id);
   } catch (err) {
@@ -242,5 +230,5 @@ async function migrateWithVolume(
   }
 
   emit("migrate", `Migration complete — replica and volume now on ${targetServer.name}`);
-  return { ok: true };
+  return { ok: true, sourceServerName: sourceServer.name, targetServerName: targetServer.name, fromCount: currentCount, toCount: currentCount, withVolume: true };
 }

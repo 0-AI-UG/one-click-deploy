@@ -8,13 +8,10 @@ type WakeInput = { appId: number };
 
 type CheckOut = { wasSleeping: boolean };
 
-// NOTE: wakeApp() is a single routine that starts containers, health-checks,
+// wakeApp() is itself the recovery routine: starts containers, health-checks,
 // upserts replica rows, clears sleeping state, syncs Caddy, and records an
-// event. The spec's split into check_sleeping / start_containers / sync_caddy
-// / mark_awake is structurally inside wakeApp; rewriting it would duplicate
-// all the fast-path/slow-path logic. We wrap it and skip on replay if the
-// app is no longer sleeping (which is the same idempotency guarantee).
-// No compensations — wake is itself recovery; a partial wake is resolved by
+// event. We wrap it as a single step and skip on replay if the app is no
+// longer sleeping. No compensations — a partial wake is resolved by
 // re-enqueueing another wake op.
 
 const checkSleeping: Step<WakeInput, CheckOut> = {
@@ -27,7 +24,7 @@ const checkSleeping: Step<WakeInput, CheckOut> = {
   },
 };
 
-const startContainers: Step<WakeInput, { ok: boolean; skipped?: boolean; error?: string }> = {
+const startContainers: Step<WakeInput, { ok: boolean; skipped?: boolean }> = {
   name: "start_containers",
   label: "Start containers",
   async run(ctx, prior) {
@@ -58,26 +55,11 @@ const syncCaddyStep: Step<WakeInput, { ok: true }> = {
   },
 };
 
-const markAwake: Step<WakeInput, { ok: true }> = {
-  name: "mark_awake",
-  label: "Mark awake",
-  async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
-    if (!app) return { ok: true };
-    if (app.status === "sleeping" || app.status === "waking") {
-      // wakeApp() above already clears this, but guard anyway.
-      db.clearAppSleepingState(ctx.input.appId);
-      db.updateAppStatus(ctx.input.appId, "running");
-    }
-    return { ok: true };
-  },
-};
-
 const wakeOp: OpKindDefinition<WakeInput> = {
   kind: "wake",
   label: "Wake app",
   resourceKeys: (input) => [`app:${input.appId}`],
-  steps: [checkSleeping, startContainers, syncCaddyStep, markAwake],
+  steps: [checkSleeping, startContainers, syncCaddyStep],
 };
 
 registerOp(wakeOp as OpKindDefinition<any>);

@@ -19,6 +19,7 @@ export {
   deployCaddySite,
   deployCaddyWakePage,
   removeCaddyWakePage,
+  cloneRepo,
   cloneAndBuild,
   cloneAndRailpackBuild,
   removeContainer,
