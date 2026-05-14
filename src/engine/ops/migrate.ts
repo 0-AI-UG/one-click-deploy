@@ -1,6 +1,7 @@
 import * as db from "../../shared/db.ts";
-import { migrateReplica, type MigrateResult } from "../scale/migrate.ts";
+import { migrateReplica, type MigrateResult, rollbackMigrateWithVolume, type VolumeMigrationContext } from "../scale/migrate.ts";
 import { syncAppCaddy } from "../scale/caddy-manager.ts";
+import { sshExec } from "../../shared/remote/index.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -15,6 +16,7 @@ type MigrateInput = { appId: number; replicaId: number; targetServerId: number }
 type ValidateOut = { sourceServerId: number };
 type DrainOut = { ok: true };
 type TransferOut = Extract<MigrateResult, { ok: true }>;
+type PreflightOut = { ok: true };
 
 const loadAndValidate: Step<MigrateInput, ValidateOut> = {
   name: "load_and_validate",
@@ -30,6 +32,35 @@ const loadAndValidate: Step<MigrateInput, ValidateOut> = {
       throw new Error("Replica is already on the target server");
     }
     return { sourceServerId: replica.server_id };
+  },
+};
+
+// For volume-backed apps we must verify the source can rebuild/serve the image
+// BEFORE anything destructive runs. Otherwise a failed scaleUp on target leaves
+// the app with no running container (image gone from source, volume detached).
+const preflightImage: Step<MigrateInput, PreflightOut> = {
+  name: "preflight_image",
+  label: "Preflight image availability",
+  async run(ctx) {
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App not found");
+    if (!app.volume_id) return { ok: true }; // stateless path is safe
+    if (app.git_repo) {
+      ctx.log(`Volume-backed app has git_repo; rebuild on target is available as fallback`);
+      return { ok: true };
+    }
+    const replica = db.getReplicas(ctx.input.appId).find((r) => r.id === ctx.input.replicaId);
+    if (!replica) throw new Error("Replica not found");
+    const sourceServer = db.getServer(replica.server_id);
+    if (!sourceServer) throw new Error("Source server not found");
+    const probe = `su - deploy -c ${JSON.stringify(`docker image inspect ${app.name}:latest >/dev/null 2>&1`)}`;
+    const res = await sshExec(sourceServer.ipv4, probe, sourceServer.ssh_host_key || undefined);
+    if (res.exitCode !== 0) {
+      throw new Error(
+        `Cannot migrate volume-backed app: image '${app.name}:latest' is missing on source server '${sourceServer.name}' and no git_repo is configured for rebuild. Redeploy first.`,
+      );
+    }
+    return { ok: true };
   },
 };
 
@@ -56,14 +87,36 @@ const performMigration: Step<MigrateInput, TransferOut> = {
   name: "perform_migration",
   label: "Migrate replica",
   async run(ctx) {
-    const result = await migrateReplica(
-      ctx.input.appId,
-      ctx.input.replicaId,
-      ctx.input.targetServerId,
-      (step, detail) => ctx.log(`[${step}] ${detail}`),
-    );
-    if (!result.ok) throw new Error(result.error || "Migration failed");
-    return result;
+    // Volume migrations destroy the source container before the new one comes
+    // up. If anything past that point fails, the engine's compensate path
+    // can't help us — only forward steps with status='ok' have their
+    // compensate hooks invoked. So we handle rollback inline here.
+    const rb: VolumeMigrationContext = {};
+    try {
+      const result = await migrateReplica(
+        ctx.input.appId,
+        ctx.input.replicaId,
+        ctx.input.targetServerId,
+        (step, detail) => ctx.log(`[${step}] ${detail}`),
+        rb,
+      );
+      if (!result.ok) throw new Error(result.error || "Migration failed");
+      return result;
+    } catch (err) {
+      if (rb.withVolume) {
+        try {
+          await rollbackMigrateWithVolume(rb, (line) => ctx.log(line));
+        } catch (rbErr) {
+          ctx.log(`MANUAL RECOVERY NEEDED: volume migration rollback threw: ${rbErr}`);
+        }
+        try {
+          await syncAppCaddy(ctx.input.appId);
+        } catch (caddyErr) {
+          ctx.log(`Caddy resync during rollback failed: ${caddyErr}`);
+        }
+      }
+      throw err;
+    }
   },
 };
 
@@ -118,7 +171,7 @@ const migrateOp: OpKindDefinition<MigrateInput> = {
   kind: "migrate",
   label: "Migrate replica",
   resourceKeys: (input) => [`app:${input.appId}`],
-  steps: [loadAndValidate, markDraining, performMigration, syncCaddyStep, recordEvent, gcEmptyServers],
+  steps: [loadAndValidate, preflightImage, markDraining, performMigration, syncCaddyStep, recordEvent, gcEmptyServers],
 };
 
 registerOp(migrateOp as OpKindDefinition<any>);
