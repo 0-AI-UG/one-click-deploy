@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  sshExec, cloneAndComposeBuild,
+  sshExec, cloneAndComposeBuild, cloneAndBuild, cloneAndRailpackBuild,
   transferImage, healthCheck, composeHealthCheck,
   deployAuthProxy, removeAuthProxy,
   describeFailure,
@@ -53,6 +53,10 @@ export async function scaleUp(
 
     let scaleExtraVols: string[] = [];
     try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) scaleExtraVols = ev; } catch {}
+    // Set when transferImage fails and we successfully rebuild from git on the
+    // target — the build helper runs the replica container itself, so the
+    // manual env-file/docker-run block below is skipped.
+    let rebuildFallback = false;
     if (app.deploy_mode === "compose") {
       // For compose, clone repo and build on target
       await cloneAndComposeBuild(
@@ -74,13 +78,53 @@ export async function scaleUp(
         (line) => emit("scale", line)
       );
     } else {
-      await transferImage(
-        primaryServer.ipv4,
-        targetServer.ipv4,
-        imageName,
-        primaryServer.ssh_host_key || undefined,
-        targetHostKey
-      );
+      try {
+        await transferImage(
+          primaryServer.ipv4,
+          targetServer.ipv4,
+          imageName,
+          primaryServer.ssh_host_key || undefined,
+          targetHostKey
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        emit("scale", `Image transfer from primary failed: ${msg}`);
+        if (!app.git_repo) {
+          throw new Error(`Image '${imageName}' missing on source server and app has no git_repo configured for rebuild fallback.`);
+        }
+        // Rebuild on the target from git. Match the dispatch in
+        // ops/redeploy.ts so the rebuilt image is identical to what an
+        // initial deploy would produce.
+        emit("scale", `Falling back to rebuild from git on ${targetServer.name}...`);
+        rebuildFallback = true;
+      }
+    }
+
+    if (rebuildFallback) {
+      const containerNameForBuild = `${app.name}-r${replicaNum}`;
+      const buildOpts = {
+        name: app.name,
+        gitRepo: app.git_repo,
+        port: app.container_port,
+        hostPort,
+        envVars: await resolveAppEnvVars(app),
+        volumeMount: app.volume_mount || undefined,
+        extraVolumes: scaleExtraVols,
+        gitToken: githubPat,
+        gitBranch: app.git_branch || undefined,
+        bindAddr: replicaBindAddr,
+        containerName: containerNameForBuild,
+      };
+      const logLine = (line: string) => emit("scale", line);
+      if (app.deploy_mode === "railpack") {
+        await cloneAndRailpackBuild(targetServer.ipv4, buildOpts, logLine);
+      } else {
+        await cloneAndBuild(targetServer.ipv4, {
+          ...buildOpts,
+          dockerfilePath: app.dockerfile_path || undefined,
+          dockerContext: app.docker_context || undefined,
+        }, logLine);
+      }
     }
 
     const containerName = `${app.name}-r${replicaNum}`;
@@ -90,12 +134,14 @@ export async function scaleUp(
     // private-IP host port and make `docker run` fail with
     // "port is already allocated". Removing it here makes retries idempotent.
     // (Auth proxy is a systemd unit handled by deployAuthProxy itself.)
-    {
+    // Skipped on rebuildFallback: cloneAndBuild/cloneAndRailpackBuild already
+    // started the replica container above; removing it here would undo that.
+    if (!rebuildFallback) {
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
       await sshExec(targetServer.ipv4, asUser(`docker rm -f ${containerName} 2>/dev/null || true`), targetHostKey);
     }
 
-    if (app.deploy_mode !== "compose") {
+    if (app.deploy_mode !== "compose" && !rebuildFallback) {
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
       const envVars = await resolveAppEnvVars(app);
       const envEntries = Object.entries(envVars);
