@@ -44,8 +44,8 @@ function parseDockerStats(stdout: string): Map<string, { cpu: number; mem: numbe
   return result;
 }
 
-/** Parse server-level CPU and memory from top + /proc/meminfo output */
-function parseServerMetrics(stdout: string): { cpu: number; mem: number } | null {
+/** Parse server-level CPU, memory, and root-fs disk from top + /proc/meminfo + df output */
+function parseServerMetrics(stdout: string): { cpu: number; mem: number; diskUsedGb: number; diskTotalGb: number } | null {
   const lines = stdout.split("\n");
   const cpuLine = lines.find((l) => l.includes("Cpu"));
   let cpuPercent: number | null = null;
@@ -61,7 +61,19 @@ function parseServerMetrics(stdout: string): { cpu: number; mem: number } | null
     if (availMatch) memAvailable = parseInt(availMatch[1]);
   }
   const memPercent = memTotal > 0 ? Math.round((1 - memAvailable / memTotal) * 1000) / 10 : null;
-  if (cpuPercent != null && memPercent != null) return { cpu: cpuPercent, mem: memPercent };
+
+  // df line format: "DISK <used_kib> <total_kib>"
+  let diskUsedGb = 0, diskTotalGb = 0;
+  const dfLine = lines.find((l) => l.startsWith("DISK "));
+  if (dfLine) {
+    const parts = dfLine.trim().split(/\s+/);
+    const usedK = parseInt(parts[1] || "0", 10);
+    const totalK = parseInt(parts[2] || "0", 10);
+    if (usedK > 0) diskUsedGb = Math.round((usedK / 1024 / 1024) * 10) / 10;
+    if (totalK > 0) diskTotalGb = Math.round((totalK / 1024 / 1024) * 10) / 10;
+  }
+
+  if (cpuPercent != null && memPercent != null) return { cpu: cpuPercent, mem: memPercent, diskUsedGb, diskTotalGb };
   return null;
 }
 
@@ -71,13 +83,14 @@ function parseServerMetrics(stdout: string): { cpu: number; mem: number } | null
  */
 async function collectServerMetrics(
   server: ServerRow,
-): Promise<{ containerStats: Map<string, { cpu: number; mem: number }>; serverMetrics: { cpu: number; mem: number } | null }> {
+): Promise<{ containerStats: Map<string, { cpu: number; mem: number }>; serverMetrics: { cpu: number; mem: number; diskUsedGb: number; diskTotalGb: number } | null }> {
   const hostKey = server.ssh_host_key || undefined;
   const cmd = [
     `su - deploy -c "docker stats --no-stream --format '{{json .}}' 2>/dev/null"`,
     `echo '---SEPARATOR---'`,
     `top -bn1 | grep '%Cpu' | head -1`,
     `grep -E '^(MemTotal|MemAvailable):' /proc/meminfo`,
+    `df -Pk / | awk 'NR==2 {print "DISK", $3, $2}'`,
   ].join(" && ");
 
   try {
@@ -239,7 +252,13 @@ async function processServer(work: ServerWorkItem): Promise<void> {
 
   // Apply server-level metrics
   if (serverMetrics) {
-    db.insertServerMetricSample(server.id, serverMetrics.cpu, serverMetrics.mem);
+    db.insertServerMetricSample(
+      server.id,
+      serverMetrics.cpu,
+      serverMetrics.mem,
+      serverMetrics.diskUsedGb,
+      serverMetrics.diskTotalGb,
+    );
   }
 
   // --- Phase 2: Health checks in parallel for all containers on this server ---

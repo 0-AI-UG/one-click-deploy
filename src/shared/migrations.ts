@@ -1187,6 +1187,14 @@ export const migrations: Migration[] = [
       db.run("CREATE INDEX op_logs_op_id ON operation_logs(op_id, id)");
     },
   },
+  {
+    version: 54,
+    description: "Add disk usage columns to server_metrics_samples",
+    up: (db) => {
+      db.run("ALTER TABLE server_metrics_samples ADD COLUMN disk_used_gb REAL NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE server_metrics_samples ADD COLUMN disk_total_gb REAL NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

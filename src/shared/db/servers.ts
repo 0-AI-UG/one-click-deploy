@@ -100,24 +100,32 @@ export type ServerMetricSampleRow = {
   server_id: number;
   cpu_percent: number;
   memory_percent: number;
+  disk_used_gb: number;
+  disk_total_gb: number;
   sampled_at: string;
 };
 
-export function insertServerMetricSample(serverId: number, cpuPercent: number, memPercent: number): void {
+export function insertServerMetricSample(
+  serverId: number,
+  cpuPercent: number,
+  memPercent: number,
+  diskUsedGb = 0,
+  diskTotalGb = 0,
+): void {
   db.query(
-    "INSERT INTO server_metrics_samples (server_id, cpu_percent, memory_percent) VALUES (?, ?, ?)"
-  ).run(serverId, cpuPercent, memPercent);
+    "INSERT INTO server_metrics_samples (server_id, cpu_percent, memory_percent, disk_used_gb, disk_total_gb) VALUES (?, ?, ?, ?, ?)"
+  ).run(serverId, cpuPercent, memPercent, diskUsedGb, diskTotalGb);
 }
 
-export function getRecentServerMetrics(sinceSeconds: number): Pick<ServerMetricSampleRow, "server_id" | "cpu_percent" | "memory_percent" | "sampled_at">[] {
+export function getRecentServerMetrics(sinceSeconds: number): Pick<ServerMetricSampleRow, "server_id" | "cpu_percent" | "memory_percent" | "disk_used_gb" | "disk_total_gb" | "sampled_at">[] {
   return db
     .query(
-      `SELECT server_id, cpu_percent, memory_percent, sampled_at
+      `SELECT server_id, cpu_percent, memory_percent, disk_used_gb, disk_total_gb, sampled_at
        FROM server_metrics_samples
        WHERE sampled_at >= datetime('now', ?)
        ORDER BY sampled_at ASC`
     )
-    .all(`-${sinceSeconds} seconds`) as Pick<ServerMetricSampleRow, "server_id" | "cpu_percent" | "memory_percent" | "sampled_at">[];
+    .all(`-${sinceSeconds} seconds`) as Pick<ServerMetricSampleRow, "server_id" | "cpu_percent" | "memory_percent" | "disk_used_gb" | "disk_total_gb" | "sampled_at">[];
 }
 
 export function pruneOldServerMetrics(olderThanSeconds: number): void {

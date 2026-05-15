@@ -206,7 +206,7 @@ export function ResourcesPage() {
           </div>
         </div>
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
-          <Table headers={["Name", "IP", "Type", "CPU", "RAM", "CPU (1h)", "RAM (1h)", "Location", "Replicas", "€/mo", ""]}>
+          <Table headers={["Name", "IP", "Type", "CPU", "RAM", "Disk", "CPU (1h)", "RAM (1h)", "Location", "Replicas", "€/mo", ""]}>
             {data.servers.map((s) => {
               const cpuSeries = metricsHistory
                 .filter((m) => m.server_id === s.id)
@@ -221,6 +221,22 @@ export function ResourcesPage() {
                   <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.type}</span></td>
                   <td className="py-2 px-3 font-mono text-xs">{s.cpu_percent != null ? `${s.cpu_percent}%` : "—"}</td>
                   <td className="py-2 px-3 font-mono text-xs">{s.memory_percent != null ? `${s.memory_percent}%` : "—"}</td>
+                  <td className="py-2 px-3 font-mono text-xs">
+                    {s.disk_free_gb != null && s.disk_total_gb != null ? (
+                      <span
+                        className={
+                          s.disk_free_gb < 2
+                            ? "text-accent-red font-bold"
+                            : s.disk_free_gb < 5
+                              ? "text-accent-amber font-bold"
+                              : "text-fg-dim"
+                        }
+                        title={`${s.disk_used_gb} / ${s.disk_total_gb} GB used`}
+                      >
+                        {s.disk_free_gb} GB free
+                      </span>
+                    ) : "—"}
+                  </td>
                   <td className="py-2 px-3"><Sparkline values={cpuSeries} /></td>
                   <td className="py-2 px-3"><Sparkline values={memSeries} color="#f59e0b" /></td>
                   <td className="py-2 px-3 text-fg-dim">{s.location}</td>

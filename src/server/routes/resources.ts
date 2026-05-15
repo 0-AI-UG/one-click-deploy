@@ -54,9 +54,14 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
     // Get latest metric sample per server from the reconciler-collected history
     const recentMetrics = db.getRecentServerMetrics(120); // last 2 minutes
-    const latestByServer = new Map<number, { cpu_percent: number; memory_percent: number }>();
+    const latestByServer = new Map<number, { cpu_percent: number; memory_percent: number; disk_used_gb: number; disk_total_gb: number }>();
     for (const m of recentMetrics) {
-      latestByServer.set(m.server_id, { cpu_percent: m.cpu_percent, memory_percent: m.memory_percent });
+      latestByServer.set(m.server_id, {
+        cpu_percent: m.cpu_percent,
+        memory_percent: m.memory_percent,
+        disk_used_gb: m.disk_used_gb,
+        disk_total_gb: m.disk_total_gb,
+      });
     }
 
     const servers = dbServers.map((s) => {
@@ -71,6 +76,11 @@ export async function handleGetResources(request: Request): Promise<Response> {
         status: s.status,
         cpu_percent: usage?.cpu_percent ?? null,
         memory_percent: usage?.memory_percent ?? null,
+        disk_used_gb: usage?.disk_used_gb && usage.disk_used_gb > 0 ? usage.disk_used_gb : null,
+        disk_total_gb: usage?.disk_total_gb && usage.disk_total_gb > 0 ? usage.disk_total_gb : null,
+        disk_free_gb: usage?.disk_total_gb && usage.disk_total_gb > 0
+          ? Math.round((usage.disk_total_gb - usage.disk_used_gb) * 10) / 10
+          : null,
         replica_count: db.getReplicasByServer(s.id).length,
         monthly_eur: priceForServer(s.type, s.location),
       };

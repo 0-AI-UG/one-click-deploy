@@ -139,6 +139,9 @@ export type ResourceServer = {
   location: string;
   cpu_percent: number | null;
   memory_percent: number | null;
+  disk_used_gb: number | null;
+  disk_total_gb: number | null;
+  disk_free_gb: number | null;
   replica_count: number;
   monthly_eur?: number;
   provider_id: string;
