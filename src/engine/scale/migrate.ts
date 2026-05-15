@@ -211,10 +211,12 @@ async function migrateWithVolume(
     rollbackCtx.replica = replica;
     rollbackCtx.sourceServer = sourceServer;
     rollbackCtx.targetServer = targetServer;
-    // If the volume is already on target, this is a retry: app.volume_mount may
-    // already be the rewritten canonical form, not the true original. Signal
-    // "can't safely restore" by leaving originalVolumeMount undefined.
-    rollbackCtx.originalVolumeMount = volumeAlreadyOnTarget ? undefined : app.volume_mount;
+    // Always preserve the mount string. Even on retries where app.volume_mount
+    // may already be in canonical post-migration form, in practice the pre/post
+    // strings are identical for normally-deployed apps, and a missing -v flag
+    // would silently strand the container on an anonymous Docker volume —
+    // strictly worse than restoring a slightly-stale mount path.
+    rollbackCtx.originalVolumeMount = app.volume_mount;
   }
 
   // Phase A — Stop source container. Probe for the container; if already gone,
