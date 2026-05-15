@@ -378,6 +378,7 @@ describe("deploy op: structure", () => {
       "create_dns_record",
       "create_volume",
       "insert_app_row",
+      "setup_volume_bind_mount",
       "clone_repo",
       "build_and_run_container",
       "deploy_auth_proxy",

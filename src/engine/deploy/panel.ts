@@ -168,11 +168,24 @@ export async function bootstrapPanel(
     });
     volumeId = vol.providerId;
     const hostMountPath = `/mnt/ocd-${opts.appName}-data`;
-    await sshExec(
-      serverIp,
-      `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`,
-      hostKey || undefined,
-    );
+    if (compute.id === "hetzner") {
+      const { ensureVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+      // Wait briefly so automount settles before we bind on top.
+      await new Promise((r) => setTimeout(r, 3000));
+      await ensureVolumeBindMount({
+        serverIp,
+        hostKey: hostKey || undefined,
+        hetznerVolumeId: volumeId,
+        hostMountPath,
+        blockName: `panel`,
+      });
+    } else {
+      await sshExec(
+        serverIp,
+        `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`,
+        hostKey || undefined,
+      );
+    }
     const volumeMount = `${hostMountPath}:${opts.volumePath}`;
     onProgress("build", `Volume ready (${volumeMount})`);
 

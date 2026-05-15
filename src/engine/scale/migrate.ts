@@ -269,6 +269,21 @@ async function migrateWithVolume(
     }
   } else if (onSource || detached) {
     if (onSource) {
+      // Tear down the source bind mount (if any) before Hetzner pulls the
+      // device — otherwise we leave a dangling bind on the source server.
+      if (compute.id === "hetzner") {
+        try {
+          const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+          await removeVolumeBindMount({
+            serverIp: sourceServer.ipv4,
+            hostKey: sourceHostKey,
+            hostMountPath: `/mnt/ocd-${app.name}-data`,
+            blockName: `app-${app.id}`,
+          });
+        } catch (err) {
+          log("migrate", `removeVolumeBindMount on source failed (continuing): ${err}`);
+        }
+      }
       emit("migrate", `Detaching volume from ${sourceServer.name}...`);
       await volumeOps.detach(volumeId);
       if (rollbackCtx) rollbackCtx.volumeDetachedFromSource = true;
@@ -298,10 +313,34 @@ async function migrateWithVolume(
     );
   }
 
-  // Phase C — Mount path + volume_mount DB row. mkdir -p is already idempotent.
-  // Convention matches handleReattachVolume in src/server/routes/volumes.ts.
+  // Phase C — Mount path + volume_mount DB row. Convention matches
+  // handleReattachVolume in src/server/routes/volumes.ts.
   const hostMountPath = `/mnt/ocd-${app.name}-data`;
-  await sshExec(targetServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, targetHostKey);
+  if (compute.id === "hetzner") {
+    const { ensureVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+    // Allow automount to settle after attach.
+    await Bun.sleep(3000);
+    let lastErr: unknown = null;
+    for (let i = 0; i < 5; i++) {
+      try {
+        await ensureVolumeBindMount({
+          serverIp: targetServer.ipv4,
+          hostKey: targetHostKey,
+          hetznerVolumeId: volumeId,
+          hostMountPath,
+          blockName: `app-${app.id}`,
+        });
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        await Bun.sleep(3000);
+      }
+    }
+    if (lastErr) throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  } else {
+    await sshExec(targetServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, targetHostKey);
+  }
 
   // Persist the canonical mount string so deploy/scale paths see the same value
   // they would after a fresh attach. Container path defaults to /data when missing.

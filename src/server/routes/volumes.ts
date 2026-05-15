@@ -5,6 +5,10 @@ import * as db from "../../shared/db.ts";
 import { getComputeProvider } from "../../shared/providers/index.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { recreateAppContainer } from "../../engine/deploy/index.ts";
+import {
+  ensureVolumeBindMount,
+  removeVolumeBindMount,
+} from "../../engine/hetzner/host-mounts.ts";
 
 function parseExtraVolumes(raw: string): string[] {
   try { const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }
@@ -37,7 +41,18 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
 
     const hostMountPath = `/mnt/${volName}`;
     const containerPath = mount_path || "/data";
-    await sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
+    if (compute.id === "hetzner") {
+      await Bun.sleep(3000);
+      await ensureVolumeBindMount({
+        serverIp: server.ipv4,
+        hostKey,
+        hetznerVolumeId: String(vol.providerId),
+        hostMountPath,
+        blockName: `app-${app.id}`,
+      });
+    } else {
+      await sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
+    }
     const volumeMount = `${hostMountPath}:${containerPath}`;
 
     db.updateAppVolume(app_id, String(vol.providerId), volumeMount);
@@ -77,7 +92,18 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
     await compute.volumes!.attach(volume_id, server.provider_id);
     const hostMountPath = `/mnt/vol-${volume_id}`;
     const containerPath = mount_path || "/data";
-    await sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
+    if (compute.id === "hetzner") {
+      await Bun.sleep(3000);
+      await ensureVolumeBindMount({
+        serverIp: server.ipv4,
+        hostKey,
+        hetznerVolumeId: volume_id,
+        hostMountPath,
+        blockName: `app-${app.id}`,
+      });
+    } else {
+      await sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
+    }
     const volumeMount = `${hostMountPath}:${containerPath}`;
 
     db.updateAppVolume(app_id, volume_id, volumeMount);
@@ -102,6 +128,23 @@ export async function handleDetachVolume(request: Request): Promise<Response> {
     if (!app.volume_id) return Response.json({ ok: false, error: "App has no volume attached" }, { headers: corsHeaders });
 
     const compute = getComputeProvider();
+    // Tear down the bind mount before Hetzner pulls the device so we don't
+    // leave a dangling /mnt/ocd-*-data behind.
+    if (compute.id === "hetzner") {
+      const reps = db.getReplicas(app_id);
+      const server = reps[0] ? db.getServer(reps[0].server_id) : null;
+      if (server) {
+        const hostMountPath = (app.volume_mount?.split(":")[0]) || `/mnt/ocd-${app.name}-data`;
+        try {
+          await removeVolumeBindMount({
+            serverIp: server.ipv4,
+            hostKey: server.ssh_host_key || undefined,
+            hostMountPath,
+            blockName: `app-${app.id}`,
+          });
+        } catch { /* best-effort */ }
+      }
+    }
     await compute.volumes!.detach(app.volume_id);
     db.updateAppVolume(app_id, "", "");
     const result = await recreateAppContainer(app_id, undefined, parseExtraVolumes(app.extra_volumes));
@@ -136,6 +179,18 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
     }
 
     const compute = getComputeProvider();
+    // Source-side cleanup before detach (Hetzner only).
+    if (compute.id === "hetzner") {
+      const fromHostMount = (fromApp.volume_mount?.split(":")[0]) || `/mnt/ocd-${fromApp.name}-data`;
+      try {
+        await removeVolumeBindMount({
+          serverIp: fromServer.ipv4,
+          hostKey: fromServer.ssh_host_key || undefined,
+          hostMountPath: fromHostMount,
+          blockName: `app-${fromApp.id}`,
+        });
+      } catch { /* best-effort */ }
+    }
     await compute.volumes!.detach(volume_id);
     db.updateAppVolume(from_app_id, "", "");
     await recreateAppContainer(from_app_id, undefined, parseExtraVolumes(fromApp.extra_volumes));
@@ -144,7 +199,18 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
     const hostMountPath = `/mnt/ocd-${toApp.name}-data`;
     const containerPath = mount_path || "/data";
     const toHostKey = toServer.ssh_host_key || undefined;
-    await sshExec(toServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, toHostKey);
+    if (compute.id === "hetzner") {
+      await Bun.sleep(3000);
+      await ensureVolumeBindMount({
+        serverIp: toServer.ipv4,
+        hostKey: toHostKey,
+        hetznerVolumeId: volume_id,
+        hostMountPath,
+        blockName: `app-${toApp.id}`,
+      });
+    } else {
+      await sshExec(toServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, toHostKey);
+    }
     const volumeMount = `${hostMountPath}:${containerPath}`;
     db.updateAppVolume(to_app_id, volume_id, volumeMount);
     await recreateAppContainer(to_app_id, volumeMount, parseExtraVolumes(toApp.extra_volumes));

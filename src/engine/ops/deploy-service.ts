@@ -298,6 +298,67 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
   },
 };
 
+const setupVolumeBindMount: Step<DeployServiceInput, { ok: true }> = {
+  name: "setup_volume_bind_mount",
+  label: "Bind volume mount",
+  async run(ctx, prior) {
+    const volume = prior["create_volume"] as VolumeOut;
+    if (!volume || volume.skipped) return { ok: true };
+    const server = prior["pick_or_provision_server"] as ServerOut;
+    const svc = prior["insert_service_and_instance"] as InsertOut;
+    const compute = getComputeProvider();
+    if (compute.id !== "hetzner") {
+      // Fallback for non-Hetzner: at least ensure the directory exists, so
+      // Docker doesn't bind-mount over a non-existent path.
+      await sshExec(
+        server.serverIp,
+        `mkdir -p ${volume.hostMountPath} && chown deploy:deploy ${volume.hostMountPath}`,
+        server.serverHostKey || undefined,
+      );
+      return { ok: true };
+    }
+    const { ensureVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+    let lastErr: unknown = null;
+    for (let i = 0; i < 5; i++) {
+      try {
+        await ensureVolumeBindMount({
+          serverIp: server.serverIp,
+          hostKey: server.serverHostKey || undefined,
+          hetznerVolumeId: volume.volumeId,
+          hostMountPath: volume.hostMountPath,
+          blockName: `svc-${svc.serviceId}`,
+        });
+        ctx.log(`Bind mount ready: ${volume.hostMountPath} -> /mnt/HC_Volume_${volume.volumeId}`);
+        return { ok: true };
+      } catch (err) {
+        lastErr = err;
+        await Bun.sleep(3000);
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  },
+  async compensate(ctx, _out, prior) {
+    const volume = prior["create_volume"] as VolumeOut | undefined;
+    if (!volume || volume.skipped) return;
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
+    if (!server || !svc) return;
+    const compute = getComputeProvider();
+    if (compute.id !== "hetzner") return;
+    try {
+      const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+      await removeVolumeBindMount({
+        serverIp: server.serverIp,
+        hostKey: server.serverHostKey || undefined,
+        hostMountPath: volume.hostMountPath,
+        blockName: `svc-${svc.serviceId}`,
+      });
+    } catch (err) {
+      ctx.log(`Failed to remove bind mount: ${err}`);
+    }
+  },
+};
+
 const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
   name: "pull_and_run_container",
   label: "Pull and run container",
@@ -459,6 +520,7 @@ const deployServiceOp: OpKindDefinition<DeployServiceInput> = {
     pickOrProvisionServer,
     createVolume,
     insertServiceAndInstance,
+    setupVolumeBindMount,
     pullAndRunContainer,
     configureHttpIngress,
     injectCredentials,

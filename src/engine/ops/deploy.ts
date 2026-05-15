@@ -270,11 +270,16 @@ const createVolume: Step<DeployInput, VolumeOut> = {
     });
     const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
     const containerPath = req.volume_path || "/data";
-    await sshExec(
-      server.serverIp,
-      `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`,
-      server.serverHostKey || undefined,
-    );
+    // Host bind-mount setup happens in a later step (setup_volume_bind_mount)
+    // once we have an app.id to tag the fstab block with. For non-Hetzner
+    // providers we still need the directory to exist before docker run.
+    if (compute.id !== "hetzner") {
+      await sshExec(
+        server.serverIp,
+        `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`,
+        server.serverHostKey || undefined,
+      );
+    }
     ctx.log(`Volume ready (${req.volume_size}GB at ${containerPath})`);
     return {
       volumeId: vol.providerId,
@@ -399,6 +404,62 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     }
     try { db.deleteApp(out.appId); } catch (err) {
       ctx.log(`Failed to delete app ${out.appId}: ${err}`);
+    }
+  },
+};
+
+const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
+  name: "setup_volume_bind_mount",
+  label: "Bind volume mount",
+  async run(ctx, prior) {
+    const volume = prior["create_volume"] as VolumeOut;
+    if (!volume) return { ok: true };
+    const compute = getComputeProvider();
+    if (compute.id !== "hetzner") return { ok: true };
+    const server = prior["pick_or_provision_server"] as ServerOut;
+    const appOut = prior["insert_app_row"] as InsertAppOut;
+    const hostMountPath = volume.volumeMount.split(":")[0];
+    const { ensureVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+    // Hetzner's automount can lag a few seconds after volume create; retry
+    // a small handful of times before giving up.
+    let lastErr: unknown = null;
+    for (let i = 0; i < 5; i++) {
+      try {
+        await ensureVolumeBindMount({
+          serverIp: server.serverIp,
+          hostKey: server.serverHostKey || undefined,
+          hetznerVolumeId: volume.volumeId,
+          hostMountPath,
+          blockName: `app-${appOut.appId}`,
+        });
+        ctx.log(`Bind mount ready: ${hostMountPath} -> /mnt/HC_Volume_${volume.volumeId}`);
+        return { ok: true };
+      } catch (err) {
+        lastErr = err;
+        await Bun.sleep(3000);
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  },
+  async compensate(ctx, _out, prior) {
+    const volume = prior["create_volume"] as VolumeOut;
+    if (!volume) return;
+    const compute = getComputeProvider();
+    if (compute.id !== "hetzner") return;
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
+    if (!server || !appOut) return;
+    const hostMountPath = volume.volumeMount.split(":")[0];
+    try {
+      const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+      await removeVolumeBindMount({
+        serverIp: server.serverIp,
+        hostKey: server.serverHostKey || undefined,
+        hostMountPath,
+        blockName: `app-${appOut.appId}`,
+      });
+    } catch (err) {
+      ctx.log(`Failed to remove bind mount: ${err}`);
     }
   },
 };
@@ -789,6 +850,7 @@ const deployOp: OpKindDefinition<DeployInput> = {
     createDnsRecord,
     createVolume,
     insertAppRow,
+    setupVolumeBindMount,
     cloneRepoStep,
     buildAndRunContainer,
     deployAuthProxyStep,
