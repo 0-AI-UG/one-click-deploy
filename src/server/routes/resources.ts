@@ -4,6 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { getComputeProvider } from "../../shared/providers/index.ts";
 import { enqueue } from "../ipc/enqueue.ts";
+import { sshExec } from "../../shared/remote/index.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
@@ -179,6 +180,180 @@ export async function handleDeleteResource(request: Request, type: string, id: s
     }
 
     return Response.json({ ok: false, error: "Unknown resource type" }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/**
+ * Resolve the host mount path for a Hetzner-style volume given its provider id.
+ * Returns null when the volume is unattached or we can't find any app using it
+ * (i.e. no record of where it was mounted).
+ */
+async function resolveVolumeMount(volumeId: string): Promise<
+  | { ok: true; server: ReturnType<typeof db.getServer> & {}; hostPath: string; volume: { providerId: string; name: string; sizeGb: number; location: string; serverId: string | null } }
+  | { ok: false; error: string; status?: number; volume?: { providerId: string; name: string; sizeGb: number; location: string; serverId: string | null } }
+> {
+  const compute = getComputeProvider();
+  let volume;
+  try {
+    volume = await compute.volumes!.get(volumeId);
+  } catch {
+    return { ok: false, error: "Volume not found", status: 404 };
+  }
+  if (!volume.serverId) {
+    return { ok: false, error: "Volume is not attached to a server", status: 409, volume };
+  }
+  const server = db.getServers().find((s) => s.provider_id === volume.serverId);
+  if (!server) {
+    return { ok: false, error: "Volume's server is not tracked locally", status: 404, volume };
+  }
+  // Prefer the host-path recorded on the consuming app's volume_mount.
+  const app = db.getApps().find((a) => a.volume_id === volumeId);
+  const hostPath = app?.volume_mount?.split(":")[0] || `/mnt/ocd-${volume.name}-data`;
+  return { ok: true, server, hostPath, volume };
+}
+
+function safeJoin(base: string, sub: string): string | null {
+  // Normalize: collapse repeated slashes, strip leading slash from sub, reject .. parts.
+  const cleaned = (sub || "").replace(/^\/+/, "").split("/").filter(Boolean);
+  for (const p of cleaned) {
+    if (p === "..") return null;
+  }
+  return cleaned.length ? `${base}/${cleaned.join("/")}` : base;
+}
+
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+export async function handleGetVolumeDetail(request: Request, volumeId: string): Promise<Response> {
+  try {
+    await requirePermission(request, "resources.view");
+    const compute = getComputeProvider();
+    let volume;
+    try {
+      volume = await compute.volumes!.get(volumeId);
+    } catch {
+      return Response.json({ error: "Volume not found" }, { status: 404, headers: corsHeaders });
+    }
+    const dbServers = db.getServers();
+    const server = volume.serverId ? dbServers.find((s) => s.provider_id === volume.serverId) || null : null;
+    const app = db.getApps().find((a) => a.volume_id === volumeId) || null;
+    const hostPath = app?.volume_mount?.split(":")[0] || (volume.serverId ? `/mnt/ocd-${volume.name}-data` : null);
+    let pricing;
+    try { pricing = await compute.getPricing?.(); } catch { /* ignore */ }
+    const monthly_eur = pricing?.volumePerGbMonth != null ? pricing.volumePerGbMonth * volume.sizeGb : null;
+    return Response.json({
+      id: volume.providerId,
+      name: volume.name,
+      size: volume.sizeGb,
+      location: volume.location,
+      server_name: server?.name || null,
+      server_id: server?.id || null,
+      app_name: app?.name || null,
+      app_id: app?.id || null,
+      host_path: hostPath,
+      monthly_eur,
+      attached: !!volume.serverId,
+    }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleListVolumeFiles(request: Request, volumeId: string): Promise<Response> {
+  try {
+    await requirePermission(request, "resources.view");
+    const url = new URL(request.url);
+    const subPath = url.searchParams.get("path") || "";
+
+    const resolved = await resolveVolumeMount(volumeId);
+    if (!resolved.ok) {
+      return Response.json({ error: resolved.error }, { status: resolved.status || 400, headers: corsHeaders });
+    }
+    const target = safeJoin(resolved.hostPath, subPath);
+    if (!target) {
+      return Response.json({ error: "Invalid path" }, { status: 400, headers: corsHeaders });
+    }
+    // Print one entry per line: type|size|mtime|name. Use stat for portability.
+    const cmd = `cd ${shellQuote(target)} && ls -A1 | while IFS= read -r f; do
+  if [ -L "$f" ]; then t=l; elif [ -d "$f" ]; then t=d; elif [ -f "$f" ]; then t=f; else t=o; fi
+  sz=$(stat -c%s -- "$f" 2>/dev/null || echo 0)
+  mt=$(stat -c%Y -- "$f" 2>/dev/null || echo 0)
+  printf '%s|%s|%s|%s\\n' "$t" "$sz" "$mt" "$f"
+done`;
+    const { stdout, stderr, exitCode } = await sshExec(resolved.server.ipv4, cmd, resolved.server.ssh_host_key || undefined);
+    if (exitCode !== 0) {
+      return Response.json({ error: stderr.trim() || "Failed to list directory" }, { status: 500, headers: corsHeaders });
+    }
+    const entries = stdout.split("\n").filter(Boolean).map((line) => {
+      const idx1 = line.indexOf("|");
+      const idx2 = line.indexOf("|", idx1 + 1);
+      const idx3 = line.indexOf("|", idx2 + 1);
+      const type = line.slice(0, idx1);
+      const size = parseInt(line.slice(idx1 + 1, idx2), 10) || 0;
+      const mtime = parseInt(line.slice(idx2 + 1, idx3), 10) || 0;
+      const name = line.slice(idx3 + 1);
+      return { name, type, size, mtime };
+    });
+    entries.sort((a, b) => {
+      if ((a.type === "d") !== (b.type === "d")) return a.type === "d" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return Response.json({ host_path: resolved.hostPath, path: subPath, entries }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+const FILE_VIEW_MAX_BYTES = 256 * 1024;
+
+export async function handleGetVolumeFile(request: Request, volumeId: string): Promise<Response> {
+  try {
+    await requirePermission(request, "resources.view");
+    const url = new URL(request.url);
+    const subPath = url.searchParams.get("path") || "";
+    if (!subPath) {
+      return Response.json({ error: "path required" }, { status: 400, headers: corsHeaders });
+    }
+    const resolved = await resolveVolumeMount(volumeId);
+    if (!resolved.ok) {
+      return Response.json({ error: resolved.error }, { status: resolved.status || 400, headers: corsHeaders });
+    }
+    const target = safeJoin(resolved.hostPath, subPath);
+    if (!target) {
+      return Response.json({ error: "Invalid path" }, { status: 400, headers: corsHeaders });
+    }
+    // First stat: only read regular files within size limit.
+    const cmd = `if [ ! -f ${shellQuote(target)} ]; then echo NOTFILE; exit 0; fi
+size=$(stat -c%s -- ${shellQuote(target)} 2>/dev/null || echo 0)
+echo "SIZE:$size"
+head -c ${FILE_VIEW_MAX_BYTES + 1} -- ${shellQuote(target)} | base64`;
+    const { stdout, stderr, exitCode } = await sshExec(resolved.server.ipv4, cmd, resolved.server.ssh_host_key || undefined);
+    if (exitCode !== 0) {
+      return Response.json({ error: stderr.trim() || "Failed to read file" }, { status: 500, headers: corsHeaders });
+    }
+    if (stdout.startsWith("NOTFILE")) {
+      return Response.json({ error: "Not a regular file" }, { status: 400, headers: corsHeaders });
+    }
+    const firstNl = stdout.indexOf("\n");
+    const sizeLine = stdout.slice(0, firstNl);
+    const b64 = stdout.slice(firstNl + 1).replace(/\s+/g, "");
+    const size = parseInt(sizeLine.replace("SIZE:", ""), 10) || 0;
+    const buf = Buffer.from(b64, "base64");
+    const truncated = size > FILE_VIEW_MAX_BYTES;
+    const slice = truncated ? buf.subarray(0, FILE_VIEW_MAX_BYTES) : buf;
+    // Detect binary by NUL byte presence.
+    const isBinary = slice.includes(0);
+    return Response.json({
+      path: subPath,
+      size,
+      truncated,
+      binary: isBinary,
+      content: isBinary ? null : slice.toString("utf8"),
+      max_bytes: FILE_VIEW_MAX_BYTES,
+    }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

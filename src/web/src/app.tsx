@@ -14,6 +14,7 @@ import { DeployPage } from "./pages/deploy/index.tsx";
 import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail/index.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
+import { VolumeDetailPage } from "./pages/volume-detail.tsx";
 import { AccountPage } from "./pages/account.tsx";
 import { UsersPage } from "./pages/admin/users.tsx";
 import { UserDetailPage } from "./pages/admin/user-detail.tsx";
@@ -25,6 +26,7 @@ import { EnvironmentsPage } from "./pages/environments.tsx";
 import { DeviceAuthPage } from "./pages/device-auth.tsx";
 import { EnginePage } from "./pages/engine.tsx";
 import { EngineOpDetailPage } from "./pages/engine-op-detail.tsx";
+import { EngineOpLogsPage } from "./pages/engine-op-logs.tsx";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -151,10 +153,18 @@ export function App() {
   } else if (hash === "#/engine") {
     content = <EnginePage />;
   } else if (hash.startsWith("#/engine/op/")) {
-    const opId = parseInt(hash.split("/")[3], 10);
-    content = opId ? <EngineOpDetailPage opId={opId} /> : <EnginePage />;
+    const parts = hash.split("/");
+    const opId = parseInt(parts[3], 10);
+    if (opId && parts[4] === "logs") {
+      content = <EngineOpLogsPage opId={opId} />;
+    } else {
+      content = opId ? <EngineOpDetailPage opId={opId} /> : <EnginePage />;
+    }
   } else if (hash === "#/environments") {
     content = <EnvironmentsPage />;
+  } else if (hash.startsWith("#/resources/volumes/")) {
+    const volumeId = decodeURIComponent(hash.split("/")[3] || "");
+    content = volumeId ? <VolumeDetailPage volumeId={volumeId} /> : <ResourcesPage />;
   } else if (hash === "#/resources") {
     content = <ResourcesPage />;
   } else if (hash === "#/account") {

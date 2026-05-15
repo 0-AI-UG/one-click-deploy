@@ -1,6 +1,7 @@
 import { startEngine, stopEngine } from "./engine.ts";
 import "./ops/index.ts"; // register op kinds
 import { startReconciler, stopReconciler } from "./reconciler.ts";
+import { patchConsoleForOpLogs } from "./op-logger.ts";
 import db from "../shared/db/connection.ts";
 
 function log(...args: unknown[]) {
@@ -27,6 +28,7 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 export function startEngineInProcess(): void {
   if (started) return;
   started = true;
+  patchConsoleForOpLogs();
   heartbeat();
   heartbeatTimer = setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
   log("engine starting in-process");

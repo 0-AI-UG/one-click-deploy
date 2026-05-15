@@ -1,4 +1,4 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ScrollText } from "lucide-react";
 import { useOperation, cancelOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
 import { Spinner, confirm, Btn } from "../components/ui.tsx";
 
@@ -84,6 +84,15 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
         <Meta label="Finished" value={fmtTs(op.finished_at)} />
       </div>
 
+      <div className="mb-4">
+        <a
+          href={`#/engine/op/${op.id}/logs`}
+          className="inline-flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg bg-bg-raised text-fg px-3 py-1.5 shadow-neo-sm hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-neo-none transition-all"
+        >
+          <ScrollText size={12} /> View Logs
+        </a>
+      </div>
+
       <section className="mb-6">
         <h2 className="font-mono text-sm font-bold uppercase tracking-wider mb-3">Steps</h2>
         <div className="flex flex-col gap-1">
@@ -147,6 +156,7 @@ function Meta({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
 
 function StepRow({ step }: { step: NonNullable<ReturnType<typeof useOperation>>["steps"] extends (infer T)[] | undefined ? T : never }) {
   return (

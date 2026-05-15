@@ -12,6 +12,7 @@ import {
 import type { AnyOpKind, OpContext, Step } from "./types.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
 import { parkOp, unparkOp } from "./engine.ts";
+import { withOpContext } from "./op-logger.ts";
 
 function log(...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [engine:step-runner]`, ...args);
@@ -29,6 +30,10 @@ class CancelledError extends Error {
  * actually completed in this or prior attempts.
  */
 export async function runOperation(op: OperationRow, def: AnyOpKind): Promise<void> {
+  return withOpContext(op.id, () => runOperationInner(op, def));
+}
+
+async function runOperationInner(op: OperationRow, def: AnyOpKind): Promise<void> {
   markOperationRunning(op.id);
   const input = JSON.parse(op.input_json || "{}");
   const ctx: OpContext = {

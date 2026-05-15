@@ -6,7 +6,7 @@ import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Sparkline } from "./app-detail/shared.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
-import { HardDrive, Server, Database, Trash2, RefreshCw, Terminal, Plus } from "lucide-react";
+import { HardDrive, Server, Database, Trash2, RefreshCw, Terminal, Plus, FolderOpen } from "lucide-react";
 import type { ResourcesData, ServerMetricSample } from "../types.ts";
 
 export function ResourcesPage() {
@@ -264,18 +264,30 @@ export function ResourcesPage() {
           <Table headers={["Name", "Size", "Location", "Server", "App", "€/mo", ""]}>
             {data.volumes.map((v) => (
               <tr key={v.id} className="hover:bg-alt/50">
-                <td className="py-2 px-3 text-fg font-bold">{v.name}</td>
+                <td className="py-2 px-3">
+                  <a
+                    href={`#/resources/volumes/${encodeURIComponent(v.id)}`}
+                    className="text-fg font-bold hover:text-accent-blue hover:underline"
+                  >
+                    {v.name}
+                  </a>
+                </td>
                 <td className="py-2 px-3 text-fg-dim">{v.size} GB</td>
                 <td className="py-2 px-3 text-fg-dim">{v.location}</td>
                 <td className="py-2 px-3 text-fg-dim">{v.server_name || "—"}</td>
                 <td className="py-2 px-3 text-accent-blue font-bold">{v.app_name || "—"}</td>
                 <td className="py-2 px-3 text-fg font-bold">{fmtPrice(v.monthly_eur)}</td>
                 <td className="py-2 px-3">
-                  <PermissionGate permission="resources.delete">
-                    <Btn size="xs" variant="danger" disabled={!!v.app_name} title={v.app_name ? `In use by ${v.app_name}` : undefined} loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>
-                      <Trash2 size={11} />
+                  <div className="flex items-center gap-1">
+                    <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/resources/volumes/${encodeURIComponent(v.id)}`; }} title="Inspect contents">
+                      <FolderOpen size={11} /> Inspect
                     </Btn>
-                  </PermissionGate>
+                    <PermissionGate permission="resources.delete">
+                      <Btn size="xs" variant="danger" disabled={!!v.app_name} title={v.app_name ? `In use by ${v.app_name}` : undefined} loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>
+                        <Trash2 size={11} />
+                      </Btn>
+                    </PermissionGate>
+                  </div>
                 </td>
               </tr>
             ))}

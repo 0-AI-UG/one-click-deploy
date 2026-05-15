@@ -1173,6 +1173,20 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE service_links_new RENAME TO service_links");
     },
   },
+  {
+    version: 53,
+    description: "Add operation_logs table for per-operation engine log capture",
+    up: (db) => {
+      db.run(`CREATE TABLE operation_logs (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        op_id   INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+        ts      TEXT NOT NULL DEFAULT (datetime('now')),
+        level   TEXT NOT NULL DEFAULT 'info',
+        message TEXT NOT NULL
+      )`);
+      db.run("CREATE INDEX op_logs_op_id ON operation_logs(op_id, id)");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

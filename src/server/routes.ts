@@ -32,7 +32,7 @@ import {
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
-import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer } from "./routes/resources.ts";
+import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus, handleMigrateReplica } from "./routes/scaling.ts";
 import {
@@ -73,6 +73,7 @@ import {
   handleListOperations,
   handleGetOperation,
   handleOperationEvents,
+  handleGetOperationLogs,
   handleCancelOperation,
 } from "./routes/operations.ts";
 import { handleTerminalExec } from "./routes/terminal-exec.ts";
@@ -286,6 +287,24 @@ export const apiRoutes = {
   "/api/resources": { GET: (req: Request) => handleGetResources(req) },
   "/api/resources/servers": { POST: (req: Request) => handleCreateServer(req) },
   "/api/resources/metrics/history": { GET: (req: Request) => handleGetServerMetricsHistory(req) },
+  "/api/resources/volumes/:id": {
+    GET: (req: Request) => {
+      const id = new URL(req.url).pathname.split("/")[4];
+      return handleGetVolumeDetail(req, id);
+    },
+  },
+  "/api/resources/volumes/:id/files": {
+    GET: (req: Request) => {
+      const id = new URL(req.url).pathname.split("/")[4];
+      return handleListVolumeFiles(req, id);
+    },
+  },
+  "/api/resources/volumes/:id/file": {
+    GET: (req: Request) => {
+      const id = new URL(req.url).pathname.split("/")[4];
+      return handleGetVolumeFile(req, id);
+    },
+  },
   "/api/resources/:type/:id": {
     DELETE: (req: Request) => {
       const { type, id } = resourcePartsFrom(req);
@@ -342,6 +361,10 @@ export const apiRoutes = {
   "/api/operations/:id/events": { GET: (req: Request) => {
     const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
     return handleOperationEvents(req, id);
+  }},
+  "/api/operations/:id/logs": { GET: (req: Request) => {
+    const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
+    return handleGetOperationLogs(req, id);
   }},
   "/api/operations/:id/cancel": { POST: (req: Request) => {
     const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);

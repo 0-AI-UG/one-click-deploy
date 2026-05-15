@@ -17,6 +17,7 @@ import { getSettings } from "../../shared/db/settings.ts";
 import { getApp } from "../../shared/db/apps.ts";
 import { getServer } from "../../shared/db/servers.ts";
 import { stepCount, listOps, getOp } from "../../engine/ops/registry.ts";
+import { getOpLogs } from "../../engine/op-logger.ts";
 
 // Keys whose values may contain secrets (connection strings, passwords,
 // tokens, webhook secrets, env-var values). Redacted in any op input/output
@@ -177,6 +178,41 @@ export async function handleOperationEvents(request: Request, id: number): Promi
       { status: op.status, last_step: op.last_step, steps: [] },
       { headers: corsHeaders },
     );
+  } catch (err) {
+    return handleError(err);
+  }
+}
+
+export async function handleGetOperationLogs(request: Request, id: number): Promise<Response> {
+  try {
+    await requirePermission(request, "servers.view");
+    const op = getOperation(id);
+    if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
+    const url = new URL(request.url);
+    const since = parseInt(url.searchParams.get("since") || "0", 10);
+    const wait = parseInt(url.searchParams.get("wait") || "0", 10);
+    const timeoutMs = Math.min(Math.max(wait, 0), 25000);
+
+    if (timeoutMs > 0) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const logs = getOpLogs(id, since, 1000);
+        const cur = getOperation(id)!;
+        const terminal = ["done", "failed", "cancelled", "compensated"].includes(cur.status);
+        if (logs.length > 0 || terminal) {
+          return Response.json(
+            { status: cur.status, logs },
+            { headers: corsHeaders },
+          );
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      const cur = getOperation(id)!;
+      return Response.json({ status: cur.status, logs: [] }, { headers: corsHeaders });
+    }
+
+    const logs = getOpLogs(id, since, 1000);
+    return Response.json({ status: op.status, logs }, { headers: corsHeaders });
   } catch (err) {
     return handleError(err);
   }
