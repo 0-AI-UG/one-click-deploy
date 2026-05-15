@@ -212,7 +212,7 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       trigger: "ui",
       triggeredBy: payload.userId,
     });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
+    return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

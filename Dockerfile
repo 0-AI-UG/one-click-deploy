@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY src/ src/
+COPY scripts/ scripts/
 RUN bun build src/web/index.html --outdir=src/web/dist
 RUN bun build src/cli/main.ts --compile --target=bun-linux-x64 --outfile=dist/cli/ocd-linux-x64 \
  && bun build src/cli/main.ts --compile --target=bun-linux-arm64 --outfile=dist/cli/ocd-linux-arm64 \

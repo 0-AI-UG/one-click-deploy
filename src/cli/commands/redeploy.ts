@@ -12,9 +12,9 @@ export async function redeploy(args: string[]): Promise<void> {
   console.log(`Redeploying ${app.name}...`);
 
   try {
-    const result = await post<{ ok: boolean; error?: string }>(`/api/apps/${app.id}/redeploy`);
+    const result = await post<{ ok: boolean; op_id?: number; error?: string }>(`/api/apps/${app.id}/redeploy`);
     if (result.ok) {
-      console.log(`${GREEN}Redeploy complete for ${app.name}${RESET}`);
+      console.log(`${GREEN}Redeploy queued for ${app.name}${RESET}`);
     } else {
       console.error(`\n${RED}Redeploy failed: ${result.error || "unknown error"}${RESET}`);
       process.exit(1);
