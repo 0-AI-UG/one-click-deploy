@@ -221,7 +221,7 @@ export function ResourcesPage() {
                   <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.type}</span></td>
                   <td className="py-2 px-3 font-mono text-xs">{s.cpu_percent != null ? `${s.cpu_percent}%` : "—"}</td>
                   <td className="py-2 px-3 font-mono text-xs">{s.memory_percent != null ? `${s.memory_percent}%` : "—"}</td>
-                  <td className="py-2 px-3 font-mono text-xs">
+                  <td className="py-2 px-3 font-mono text-[10px]">
                     {s.disk_free_gb != null && s.disk_total_gb != null ? (
                       <span
                         className={
@@ -233,7 +233,7 @@ export function ResourcesPage() {
                         }
                         title={`${s.disk_used_gb} / ${s.disk_total_gb} GB used`}
                       >
-                        {s.disk_free_gb} GB free
+                        {s.disk_free_gb}<span className="text-muted">/{s.disk_total_gb}</span><span className="text-muted ml-0.5">GB</span>
                       </span>
                     ) : "—"}
                   </td>
