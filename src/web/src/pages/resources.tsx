@@ -5,7 +5,7 @@ import { trackOperationInToast, useActiveOperations } from "../hooks/useOperatio
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
-import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, FolderOpen } from "lucide-react";
+import { HardDrive, Server, Database, Trash2, RefreshCw, Plus } from "lucide-react";
 import type { ResourcesData } from "../types.ts";
 
 export function ResourcesPage() {
@@ -275,16 +275,11 @@ export function ResourcesPage() {
                 <td className="py-2 px-3 text-accent-blue font-bold">{v.app_name || "—"}</td>
                 <td className="py-2 px-3 text-fg font-bold">{fmtPrice(v.monthly_eur)}</td>
                 <td className="py-2 px-3">
-                  <div className="flex items-center gap-1">
-                    <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/resources/volumes/${encodeURIComponent(v.id)}`; }} title="Inspect contents">
-                      <FolderOpen size={11} /> Inspect
+                  <PermissionGate permission="resources.delete">
+                    <Btn size="xs" variant="danger" disabled={!!v.app_name} title={v.app_name ? `In use by ${v.app_name}` : undefined} loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>
+                      <Trash2 size={11} />
                     </Btn>
-                    <PermissionGate permission="resources.delete">
-                      <Btn size="xs" variant="danger" disabled={!!v.app_name} title={v.app_name ? `In use by ${v.app_name}` : undefined} loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>
-                        <Trash2 size={11} />
-                      </Btn>
-                    </PermissionGate>
-                  </div>
+                  </PermissionGate>
                 </td>
               </tr>
             ))}
