@@ -6,6 +6,8 @@ import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
 import { syncAppCaddy } from "./scale/caddy-manager.ts";
 import { replicaBindHost } from "./scale/types.ts";
+import dbConn from "../shared/db/connection.ts";
+import type { OperationRow } from "../shared/db/operations.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -277,6 +279,88 @@ async function processServer(work: ServerWorkItem): Promise<void> {
   await Promise.all(healthChecks);
 }
 
+// ---------------------------------------------------------------------------
+// Stuck-state sweep
+// ---------------------------------------------------------------------------
+
+const STUCK_COMPENSATING_MIN = 5;
+const STUCK_PENDING_RUNNING_MIN = 10;
+
+function sweepStuckStates(): void {
+  try {
+    const apps = db.getApps().filter((a) => a.status === "cleanup_failed");
+    for (const a of apps) {
+      log("sweep", `app#${a.id} (${a.name}) is cleanup_failed — manual recovery may be needed`);
+    }
+  } catch (err) {
+    log("sweep", `apps query failed: ${err}`);
+  }
+  try {
+    const services = db.getServices().filter((s) => s.status === "cleanup_failed");
+    for (const s of services) {
+      log("sweep", `service#${s.id} (${s.name}) is cleanup_failed — manual recovery may be needed`);
+    }
+  } catch (err) {
+    log("sweep", `services query failed: ${err}`);
+  }
+  try {
+    const servers = db.getServers().filter((s) => s.status === "cleanup_failed");
+    for (const s of servers) {
+      log("sweep", `server#${s.id} (${s.name}) is cleanup_failed — manual recovery may be needed`);
+    }
+  } catch (err) {
+    log("sweep", `servers query failed: ${err}`);
+  }
+  try {
+    const stuckComp = dbConn
+      .query(
+        `SELECT id, kind, started_at, last_step FROM operations
+          WHERE status = 'compensating'
+            AND started_at IS NOT NULL
+            AND started_at < datetime('now', ?)`,
+      )
+      .all(`-${STUCK_COMPENSATING_MIN} minutes`) as Array<Pick<OperationRow, "id" | "kind" | "started_at" | "last_step">>;
+    for (const op of stuckComp) {
+      log("sweep", `op#${op.id} (${op.kind}) stuck in 'compensating' since ${op.started_at} (last_step=${op.last_step})`);
+    }
+  } catch (err) {
+    log("sweep", `stuck compensating query failed: ${err}`);
+  }
+  try {
+    const stuck = dbConn
+      .query(
+        `SELECT id, kind, status, started_at, enqueued_at, last_step FROM operations
+          WHERE status IN ('pending','running')
+            AND COALESCE(started_at, enqueued_at) < datetime('now', ?)`,
+      )
+      .all(`-${STUCK_PENDING_RUNNING_MIN} minutes`) as Array<{
+        id: number; kind: string; status: string; started_at: string | null; enqueued_at: string; last_step: string | null;
+      }>;
+    for (const op of stuck) {
+      log("sweep", `op#${op.id} (${op.kind}) stuck in '${op.status}' since ${op.started_at ?? op.enqueued_at} (last_step=${op.last_step})`);
+    }
+  } catch (err) {
+    log("sweep", `stuck pending/running query failed: ${err}`);
+  }
+  // Detect crash between stop_containers and mark_sleeping: all replicas
+  // stopped but the app status didn't get flipped. Correct it.
+  try {
+    const apps = db.getApps();
+    for (const app of apps) {
+      if (app.status === "sleeping" || app.status === "deploying" || app.status === "stopped") continue;
+      const replicas = db.getReplicas(app.id);
+      if (replicas.length === 0) continue;
+      const allStopped = replicas.every((r) => r.status === "stopped" || r.status === "sleeping");
+      if (allStopped) {
+        log("sweep", `app#${app.id} (${app.name}): all replicas stopped but status='${app.status}' — flipping to sleeping`);
+        try { db.updateAppStatus(app.id, "sleeping"); } catch (err) { log("sweep", `flip failed: ${err}`); }
+      }
+    }
+  } catch (err) {
+    log("sweep", `sleep-state correction failed: ${err}`);
+  }
+}
+
 async function tick(): Promise<void> {
   if (running) {
     log("tick", "skip (previous tick still running)");
@@ -388,6 +472,9 @@ async function tick(): Promise<void> {
 
     // --- Caddy route sync ---
     await reconcileCaddyRoutes(byApp);
+
+    // --- Stuck-state sweep (surfaces cleanup_failed + stuck ops to op-logger) ---
+    sweepStuckStates();
 
     // --- Cleanup ---
     db.pruneOldMetrics(METRICS_RETENTION_SEC);

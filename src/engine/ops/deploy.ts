@@ -478,6 +478,20 @@ const cloneRepoStep: Step<DeployInput, CloneOut> = {
     }, req.git_branch);
     return { ok: true };
   },
+  async compensate(ctx, _out, prior) {
+    const req = ctx.input;
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    if (!server) return;
+    try {
+      await sshExec(
+        server.serverIp,
+        `su - deploy -c "rm -rf /home/deploy/apps/${req.app_name}"`,
+        server.serverHostKey || undefined,
+      );
+    } catch (err) {
+      ctx.log(`Failed to remove cloned repo dir: ${err}`);
+    }
+  },
 };
 
 const buildAndRunContainer: Step<DeployInput, BuildOut> = {
@@ -711,9 +725,17 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
     });
     return { deploymentId: row.id, gitCommit };
   },
+  async compensate(ctx, out) {
+    if (!out) return;
+    try {
+      dbInstance.run("DELETE FROM deployment_history WHERE id = ?", [out.deploymentId]);
+    } catch (err) {
+      ctx.log(`Failed to delete deployment history row ${out.deploymentId}: ${err}`);
+    }
+  },
 };
 
-const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string }> = {
+const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webhookId?: string }> = {
   name: "setup_github_webhook",
   label: "Configure webhook",
   async run(ctx, prior) {
@@ -747,12 +769,24 @@ const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string }> = {
         !!req.webhook_wait_for_ci,
       );
       db.appendDeployLog(appOut.appId, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}`);
-      return { ok: true };
+      return { ok: true, webhookId: String(created.id) };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       db.appendDeployLog(appOut.appId, `[webhook] Warning: failed to set up webhook: ${msg}`);
       ctx.log(`Webhook setup failed (non-fatal): ${msg}`);
       return { ok: false, error: msg };
+    }
+  },
+  async compensate(ctx, out) {
+    const webhookId = (out as { webhookId?: string } | null)?.webhookId;
+    if (!webhookId) return;
+    const req = ctx.input;
+    const { githubPat } = await buildMasker(req, ctx.triggeredBy);
+    if (!githubPat) return;
+    try {
+      await github.deleteWebhook({ gitRepo: req.git_repo, webhookId, token: githubPat });
+    } catch (err) {
+      ctx.log(`Failed to delete webhook ${webhookId}: ${err}`);
     }
   },
 };

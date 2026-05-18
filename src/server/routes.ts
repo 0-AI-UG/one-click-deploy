@@ -32,7 +32,7 @@ import {
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
-import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile } from "./routes/resources.ts";
+import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus, handleMigrateReplica } from "./routes/scaling.ts";
 import {
@@ -287,6 +287,12 @@ export const apiRoutes = {
   "/api/resources": { GET: (req: Request) => handleGetResources(req) },
   "/api/resources/servers": { POST: (req: Request) => handleCreateServer(req) },
   "/api/resources/metrics/history": { GET: (req: Request) => handleGetServerMetricsHistory(req) },
+  "/api/resources/servers/:id": {
+    GET: (req: Request) => {
+      const id = parseInt(new URL(req.url).pathname.split("/")[4], 10);
+      return handleGetServerDetail(req, id);
+    },
+  },
   "/api/resources/volumes/:id": {
     GET: (req: Request) => {
       const id = new URL(req.url).pathname.split("/")[4];

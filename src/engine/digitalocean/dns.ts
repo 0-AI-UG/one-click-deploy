@@ -46,8 +46,19 @@ export async function createDoDnsRecord(opts: {
   const zone = opts.zone_id;
   const host = fqdnToHost(zone, opts.name);
 
-  // OCD-owned (name,type) — wipe existing values to avoid round-robin to stale IPs.
+  // Idempotency: if an existing record already matches (name,type,value),
+  // skip the destructive replace and return it as-is.
   const existing = await findRecords(zone, opts.name, opts.type);
+  const exact = existing.find((r) => r.data === opts.value);
+  if (exact) {
+    return {
+      id: String(exact.id),
+      name: opts.name,
+      type: opts.type,
+      value: opts.value,
+    };
+  }
+  // OCD-owned (name,type) — wipe existing values to avoid round-robin to stale IPs.
   for (const r of existing) {
     await doApi(`/domains/${encodeURIComponent(zone)}/records/${r.id}`, { method: "DELETE" })
       .catch(() => { /* ignore */ });

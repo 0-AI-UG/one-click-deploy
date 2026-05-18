@@ -15,6 +15,7 @@ import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail/index.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
 import { VolumeDetailPage } from "./pages/volume-detail.tsx";
+import { ServerDetailPage } from "./pages/server-detail.tsx";
 import { AccountPage } from "./pages/account.tsx";
 import { UsersPage } from "./pages/admin/users.tsx";
 import { UserDetailPage } from "./pages/admin/user-detail.tsx";
@@ -165,6 +166,9 @@ export function App() {
   } else if (hash.startsWith("#/resources/volumes/")) {
     const volumeId = decodeURIComponent(hash.split("/")[3] || "");
     content = volumeId ? <VolumeDetailPage volumeId={volumeId} /> : <ResourcesPage />;
+  } else if (hash.startsWith("#/resources/servers/")) {
+    const id = parseInt(hash.split("/")[3] || "", 10);
+    content = id ? <ServerDetailPage serverId={id} /> : <ResourcesPage />;
   } else if (hash === "#/resources") {
     content = <ResourcesPage />;
   } else if (hash === "#/account") {

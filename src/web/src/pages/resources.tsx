@@ -4,14 +4,12 @@ import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../co
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Sparkline } from "./app-detail/shared.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
-import { HardDrive, Server, Database, Trash2, RefreshCw, Terminal, Plus, FolderOpen } from "lucide-react";
-import type { ResourcesData, ServerMetricSample } from "../types.ts";
+import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, FolderOpen } from "lucide-react";
+import type { ResourcesData } from "../types.ts";
 
 export function ResourcesPage() {
   const [data, setData] = useState<ResourcesData | null>(null);
-  const [metricsHistory, setMetricsHistory] = useState<ServerMetricSample[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -79,12 +77,8 @@ export function ResourcesPage() {
 
   const load = async () => {
     try {
-      const [resources, history] = await Promise.all([
-        get("/api/resources"),
-        get("/api/resources/metrics/history?since=3600"),
-      ]);
+      const resources = await get("/api/resources");
       setData(resources);
-      setMetricsHistory(history);
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
@@ -206,66 +200,53 @@ export function ResourcesPage() {
           </div>
         </div>
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
-          <Table headers={["Name", "IP", "Type", "CPU", "RAM", "Disk", "CPU (1h)", "RAM (1h)", "Location", "Replicas", "€/mo", ""]}>
-            {data.servers.map((s) => {
-              const cpuSeries = metricsHistory
-                .filter((m) => m.server_id === s.id)
-                .map((m) => m.cpu_percent);
-              const memSeries = metricsHistory
-                .filter((m) => m.server_id === s.id)
-                .map((m) => m.memory_percent);
-              return (
-                <tr key={s.id} className="hover:bg-alt/50">
-                  <td className="py-2 px-3 text-fg font-bold">{s.name}</td>
-                  <td className="py-2 px-3 text-fg-dim">{s.ipv4}</td>
-                  <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.type}</span></td>
-                  <td className="py-2 px-3 font-mono text-xs">{s.cpu_percent != null ? `${s.cpu_percent}%` : "—"}</td>
-                  <td className="py-2 px-3 font-mono text-xs">{s.memory_percent != null ? `${s.memory_percent}%` : "—"}</td>
-                  <td className="py-2 px-3 font-mono text-[10px]">
-                    {s.disk_free_gb != null && s.disk_total_gb != null ? (
-                      <span
-                        className={
-                          s.disk_free_gb < 2
-                            ? "text-accent-red font-bold"
-                            : s.disk_free_gb < 5
-                              ? "text-accent-amber font-bold"
-                              : "text-fg-dim"
-                        }
-                        title={`${s.disk_used_gb} / ${s.disk_total_gb} GB used`}
-                      >
-                        {s.disk_free_gb}<span className="text-muted">/{s.disk_total_gb}</span><span className="text-muted ml-0.5">GB</span>
-                      </span>
-                    ) : "—"}
-                  </td>
-                  <td className="py-2 px-3"><Sparkline values={cpuSeries} /></td>
-                  <td className="py-2 px-3"><Sparkline values={memSeries} color="#f59e0b" /></td>
-                  <td className="py-2 px-3 text-fg-dim">{s.location}</td>
-                  <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
-                  <td className="py-2 px-3 text-fg font-bold">{fmtPrice(s.monthly_eur)}</td>
-                  <td className="py-2 px-3">
-                    <div className="flex items-center gap-1">
-                      <PermissionGate permission="terminal.access">
-                        <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/server/${s.id}`; }}>
-                          <Terminal size={11} /> Shell
-                        </Btn>
-                      </PermissionGate>
-                      <PermissionGate permission="resources.delete">
-                        <Btn
-                          size="xs"
-                          variant="danger"
-                          disabled={s.replica_count > 0}
-                          title={s.replica_count > 0 ? "In use by replicas" : undefined}
-                          loading={deleting === `server-${s.provider_id}` || !!ops.byResourceKey(`server:${s.id}`)}
-                          onClick={() => handleDelete("server", s.provider_id, s.name)}
-                        >
-                          <Trash2 size={11} />
-                        </Btn>
-                      </PermissionGate>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+          <Table headers={["Name", "Type", "Location", "Replicas", "Disk", "€/mo", ""]}>
+            {data.servers.map((s) => (
+              <tr key={s.id} className="hover:bg-alt/50">
+                <td className="py-2 px-3">
+                  <a
+                    href={`#/resources/servers/${s.id}`}
+                    className="text-fg font-bold hover:text-accent-blue hover:underline"
+                  >
+                    {s.name}
+                  </a>
+                </td>
+                <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.type}</span></td>
+                <td className="py-2 px-3 text-fg-dim">{s.location}</td>
+                <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
+                <td className="py-2 px-3 font-mono text-[10px]">
+                  {s.disk_free_gb != null && s.disk_total_gb != null ? (
+                    <span
+                      className={
+                        s.disk_free_gb < 2
+                          ? "text-accent-red font-bold"
+                          : s.disk_free_gb < 5
+                            ? "text-accent-amber font-bold"
+                            : "text-fg-dim"
+                      }
+                      title={`${s.disk_used_gb} / ${s.disk_total_gb} GB used`}
+                    >
+                      {s.disk_free_gb}<span className="text-muted">/{s.disk_total_gb}</span><span className="text-muted ml-0.5">GB</span>
+                    </span>
+                  ) : "—"}
+                </td>
+                <td className="py-2 px-3 text-fg font-bold">{fmtPrice(s.monthly_eur)}</td>
+                <td className="py-2 px-3">
+                  <PermissionGate permission="resources.delete">
+                    <Btn
+                      size="xs"
+                      variant="danger"
+                      disabled={s.replica_count > 0}
+                      title={s.replica_count > 0 ? "In use by replicas" : undefined}
+                      loading={deleting === `server-${s.provider_id}` || !!ops.byResourceKey(`server:${s.id}`)}
+                      onClick={() => handleDelete("server", s.provider_id, s.name)}
+                    >
+                      <Trash2 size={11} />
+                    </Btn>
+                  </PermissionGate>
+                </td>
+              </tr>
+            ))}
           </Table>
         )}
       </Card>

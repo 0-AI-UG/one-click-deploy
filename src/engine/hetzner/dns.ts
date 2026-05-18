@@ -22,6 +22,17 @@ export async function createDnsRecord(opts: {
   };
   if (opts.ttl != null) body.ttl = opts.ttl;
 
+  // Idempotency: if the rrset already contains an exact (value) match, no-op.
+  try {
+    const existing = await hetznerApi(rrsetPath(opts.zone_id, opts.name, opts.type)) as { rrset?: { records?: Array<{ value: string }> } };
+    const records = existing?.rrset?.records ?? [];
+    if (records.some((r) => r.value === opts.value)) {
+      return { id: `${opts.name}/${opts.type}/${opts.value}`, name: opts.name, type: opts.type, value: opts.value };
+    }
+  } catch {
+    // rrset doesn't exist yet — fall through to create.
+  }
+
   const postRrset = () =>
     hetznerApi(`/zones/${encodeURIComponent(opts.zone_id)}/rrsets`, {
       method: "POST",

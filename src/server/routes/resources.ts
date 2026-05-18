@@ -369,6 +369,230 @@ head -c ${FILE_VIEW_MAX_BYTES + 1} -- ${shellQuote(target)} | base64`;
   }
 }
 
+type HostProbe = {
+  uptime_seconds: number | null;
+  load1: number | null;
+  load5: number | null;
+  load15: number | null;
+  cpu_cores: number | null;
+  mem_total_mb: number | null;
+  mem_used_mb: number | null;
+  mem_free_mb: number | null;
+  mem_available_mb: number | null;
+  mem_buffers_cache_mb: number | null;
+  swap_total_mb: number | null;
+  swap_used_mb: number | null;
+  processes: number | null;
+  ports: { proto: string; address: string; port: number; process: string }[];
+  net: { iface: string; rx_bytes: number; tx_bytes: number } | null;
+  error: string | null;
+};
+
+const PROBE_SEP = "###OCD_SECTION###";
+
+async function probeServerHost(server: { ipv4: string; ssh_host_key: string }): Promise<HostProbe> {
+  const empty: HostProbe = {
+    uptime_seconds: null, load1: null, load5: null, load15: null, cpu_cores: null,
+    mem_total_mb: null, mem_used_mb: null, mem_free_mb: null, mem_available_mb: null,
+    mem_buffers_cache_mb: null, swap_total_mb: null, swap_used_mb: null,
+    processes: null, ports: [], net: null, error: null,
+  };
+  if (!server.ipv4) return { ...empty, error: "no ipv4" };
+
+  // One SSH round-trip — print labeled sections separated by PROBE_SEP.
+  const cmd = [
+    `cat /proc/uptime`,
+    `echo '${PROBE_SEP}'`,
+    `cat /proc/loadavg`,
+    `echo '${PROBE_SEP}'`,
+    `nproc`,
+    `echo '${PROBE_SEP}'`,
+    `cat /proc/meminfo`,
+    `echo '${PROBE_SEP}'`,
+    `ls /proc | grep -E '^[0-9]+$' | wc -l`,
+    `echo '${PROBE_SEP}'`,
+    // ss -H suppresses header; -tlnp gives TCP listeners with process info.
+    // Fallback to plain `ss -tln` if `-p` requires root and fails.
+    `(ss -Htlnp 2>/dev/null || ss -Htln) | head -200`,
+    `echo '${PROBE_SEP}'`,
+    // Pick first non-lo interface and print rx/tx bytes.
+    `awk -F'[: ]+' 'NR>2 && $2 != "lo" {print $2, $3, $11; exit}' /proc/net/dev`,
+  ].join("; ");
+
+  try {
+    const result = await sshExec(server.ipv4, cmd, server.ssh_host_key || undefined);
+    if (result.exitCode !== 0) {
+      return { ...empty, error: result.stderr.trim().slice(0, 200) || `exit ${result.exitCode}` };
+    }
+    const parts = result.stdout.split(PROBE_SEP).map((p) => p.trim());
+    const [uptimeStr, loadStr, nprocStr, meminfoStr, procsStr, ssStr, netStr] = parts;
+
+    const uptime_seconds = uptimeStr ? Math.round(parseFloat(uptimeStr.split(/\s+/)[0])) : null;
+
+    let load1: number | null = null, load5: number | null = null, load15: number | null = null;
+    if (loadStr) {
+      const lp = loadStr.split(/\s+/);
+      load1 = parseFloat(lp[0]); load5 = parseFloat(lp[1]); load15 = parseFloat(lp[2]);
+    }
+
+    const cpu_cores = nprocStr ? parseInt(nprocStr, 10) : null;
+
+    const meminfo: Record<string, number> = {};
+    for (const line of (meminfoStr || "").split("\n")) {
+      const m = line.match(/^(\w+):\s+(\d+)\s+kB/);
+      if (m) meminfo[m[1]] = parseInt(m[2], 10);
+    }
+    const kbToMb = (kb: number | undefined) => kb != null ? Math.round(kb / 1024) : null;
+    const mem_total_mb = kbToMb(meminfo.MemTotal);
+    const mem_free_mb = kbToMb(meminfo.MemFree);
+    const mem_available_mb = kbToMb(meminfo.MemAvailable);
+    const mem_buffers_cache_mb = kbToMb((meminfo.Buffers || 0) + (meminfo.Cached || 0) + (meminfo.SReclaimable || 0));
+    const mem_used_mb = mem_total_mb != null && mem_available_mb != null
+      ? Math.max(0, mem_total_mb - mem_available_mb) : null;
+    const swap_total_mb = kbToMb(meminfo.SwapTotal);
+    const swap_used_mb = meminfo.SwapTotal != null && meminfo.SwapFree != null
+      ? kbToMb(meminfo.SwapTotal - meminfo.SwapFree) : null;
+
+    const processes = procsStr ? parseInt(procsStr, 10) : null;
+
+    // ss -tlnp lines look like:
+    //   LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* users:(("caddy",pid=123,fd=7))
+    //   LISTEN 0 4096 *:22 *:*
+    const ports: HostProbe["ports"] = [];
+    const seen = new Set<string>();
+    for (const line of (ssStr || "").split("\n")) {
+      const tokens = line.trim().split(/\s+/);
+      if (tokens.length < 4) continue;
+      const local = tokens[3];
+      const idx = local.lastIndexOf(":");
+      if (idx < 0) continue;
+      const address = local.slice(0, idx) || "*";
+      const port = parseInt(local.slice(idx + 1), 10);
+      if (!port) continue;
+      let process = "";
+      const usersIdx = line.indexOf("users:(");
+      if (usersIdx >= 0) {
+        const m = line.slice(usersIdx).match(/"([^"]+)"/);
+        if (m) process = m[1];
+      }
+      const key = `tcp:${address}:${port}:${process}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ports.push({ proto: "tcp", address, port, process });
+    }
+    ports.sort((a, b) => a.port - b.port);
+
+    let net: HostProbe["net"] = null;
+    if (netStr) {
+      const np = netStr.split(/\s+/);
+      if (np.length >= 3) {
+        net = { iface: np[0], rx_bytes: parseInt(np[1], 10) || 0, tx_bytes: parseInt(np[2], 10) || 0 };
+      }
+    }
+
+    return {
+      uptime_seconds, load1, load5, load15, cpu_cores,
+      mem_total_mb, mem_used_mb, mem_free_mb, mem_available_mb, mem_buffers_cache_mb,
+      swap_total_mb, swap_used_mb, processes, ports, net, error: null,
+    };
+  } catch (err) {
+    return { ...empty, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function handleGetServerDetail(request: Request, serverId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "resources.view");
+    const server = db.getServer(serverId);
+    if (!server) {
+      return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
+    }
+
+    const compute = getComputeProvider();
+    let monthly_eur: number | null = null;
+    let currency = "EUR";
+    try {
+      const pricing = await compute.getPricing?.();
+      if (pricing) {
+        currency = pricing.currency;
+        monthly_eur = pricing.servers[`${server.type}|${server.location}`] ?? null;
+      }
+    } catch { /* ignore */ }
+
+    const recentMetrics = db.getRecentServerMetrics(120);
+    const latest = [...recentMetrics].reverse().find((m) => m.server_id === serverId);
+
+    // Live probe of the host — runs in parallel with the rest.
+    const probePromise = probeServerHost(server);
+
+    const replicaRows = db.getReplicasByServer(serverId);
+    const allApps = db.getApps();
+    const appById = new Map(allApps.map((a) => [a.id, a]));
+    const replicas = replicaRows.map((r) => {
+      const app = appById.get(r.app_id);
+      return {
+        id: r.id,
+        app_id: r.app_id,
+        app_name: app?.name || `app-${r.app_id}`,
+        container_name: r.container_name,
+        host_port: r.host_port,
+        status: r.status,
+        cpu_percent: r.cpu_percent,
+        memory_percent: r.memory_percent,
+        created_at: r.created_at,
+      };
+    });
+
+    const services = db.getServicesOnServer(serverId).map((s) => {
+      const instances = db.getServiceInstancesByServer(serverId).filter((i) => i.service_id === s.id);
+      return {
+        id: s.id,
+        name: s.name,
+        service_type: s.service_type,
+        version: s.version,
+        status: s.status,
+        instances: instances.map((i) => ({
+          id: i.id,
+          role: i.role,
+          container_name: i.container_name,
+          host_port: i.host_port,
+          status: i.status,
+          cpu_percent: i.cpu_percent,
+          memory_percent: i.memory_percent,
+        })),
+      };
+    });
+
+    return Response.json({
+      id: server.id,
+      name: server.name,
+      provider_id: server.provider_id,
+      provider: server.provider,
+      ipv4: server.ipv4,
+      ipv6: server.ipv6,
+      private_ipv4: server.private_ipv4,
+      type: server.type,
+      location: server.location,
+      status: server.status,
+      created_at: server.created_at,
+      monthly_eur,
+      currency,
+      cpu_percent: latest?.cpu_percent ?? null,
+      memory_percent: latest?.memory_percent ?? null,
+      disk_used_gb: latest?.disk_used_gb && latest.disk_used_gb > 0 ? latest.disk_used_gb : null,
+      disk_total_gb: latest?.disk_total_gb && latest.disk_total_gb > 0 ? latest.disk_total_gb : null,
+      disk_free_gb: latest?.disk_total_gb && latest.disk_total_gb > 0
+        ? Math.round((latest.disk_total_gb - latest.disk_used_gb) * 10) / 10
+        : null,
+      replicas,
+      services,
+      host: await probePromise,
+    }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleCreateServer(request: Request): Promise<Response> {
   try {
     const payload = await requirePermission(request, "resources.create");

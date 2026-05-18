@@ -158,6 +158,22 @@ const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
     if (!rolling.ok) db.appendDeployLog(ctx.input.appId, `[redeploy] Rolling update warning: ${rolling.error}`);
     return { ok: true };
   },
+  async compensate(ctx) {
+    // Rolling redeploy replaces replicas in-place; we can't undo the image
+    // swap, but we can clear any leftover 'draining' markers and re-sync the
+    // ingress so traffic stops routing to half-state replicas.
+    try {
+      const replicas = db.getReplicas(ctx.input.appId);
+      for (const r of replicas) {
+        if (r.status === "draining") {
+          try { db.updateReplicaStatus(r.id, "running"); } catch { /* ignore */ }
+        }
+      }
+      await syncAppCaddy(ctx.input.appId);
+    } catch (err) {
+      ctx.log(`Failed to re-sync after roll_extra_replicas compensate: ${err}`);
+    }
+  },
 };
 
 const manageAuthProxy: Step<RedeployInput, { ok: true }> = {

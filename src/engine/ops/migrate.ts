@@ -1,7 +1,8 @@
 import * as db from "../../shared/db.ts";
 import { migrateReplica, type MigrateResult, rollbackMigrateWithVolume, type VolumeMigrationContext } from "../scale/migrate.ts";
 import { syncAppCaddy } from "../scale/caddy-manager.ts";
-import { sshExec } from "../../shared/remote/index.ts";
+import { sshExec, healthCheck, composeHealthCheck } from "../../shared/remote/index.ts";
+import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -120,6 +121,31 @@ const performMigration: Step<MigrateInput, TransferOut> = {
   },
 };
 
+const verifyReplicaHealthy: Step<MigrateInput, { ok: true; healthy: boolean }> = {
+  name: "verify_replica_healthy",
+  label: "Verify replica healthy",
+  async run(ctx) {
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App not found");
+    const replica = db.getReplicas(ctx.input.appId).find((r) => r.id === ctx.input.replicaId);
+    if (!replica) throw new Error("Replica not found after migration");
+    const server = db.getServer(replica.server_id);
+    if (!server) throw new Error("Target server not found after migration");
+    const bindAddr = replicaBindHost(server);
+    const hostKey = server.ssh_host_key || undefined;
+    const health = app.deploy_mode === "compose"
+      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, replica.host_port, 5, hostKey)
+      : await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
+    if (!health.healthy) {
+      // Surface to the reconciler sweep — stays in cleanup_failed bucket so
+      // operators see it without auto-retry.
+      try { db.updateAppStatus(ctx.input.appId, "cleanup_failed"); } catch { /* ignore */ }
+      throw new Error(`Replica unhealthy after migration: ${health.error || "health check failed"}`);
+    }
+    return { ok: true, healthy: true };
+  },
+};
+
 const syncCaddyStep: Step<MigrateInput, { ok: true }> = {
   name: "sync_caddy",
   label: "Configure Caddy",
@@ -171,7 +197,7 @@ const migrateOp: OpKindDefinition<MigrateInput> = {
   kind: "migrate",
   label: "Migrate replica",
   resourceKeys: (input) => [`app:${input.appId}`],
-  steps: [loadAndValidate, preflightImage, markDraining, performMigration, syncCaddyStep, recordEvent, gcEmptyServers],
+  steps: [loadAndValidate, preflightImage, markDraining, performMigration, verifyReplicaHealthy, syncCaddyStep, recordEvent, gcEmptyServers],
 };
 
 registerOp(migrateOp as OpKindDefinition<any>);

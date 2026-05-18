@@ -97,9 +97,21 @@ async function resumeInterruptedOperations(): Promise<void> {
   const interrupted = listRunningOperations();
   if (interrupted.length === 0) return;
   log(`resuming ${interrupted.length} interrupted op(s) after restart`);
-  // Mark them back to pending so the tick loop picks them up normally.
+  const { default: db } = await import("../shared/db/connection.ts");
   for (const op of interrupted) {
-    const { default: db } = await import("../shared/db/connection.ts");
+    if (op.status === "compensating") {
+      // We can't safely re-enter compensation mid-stream without knowing which
+      // compensate steps already completed (compensate rows are recorded but
+      // step-runner does best-effort and continues on failure, so partial
+      // state may be unclear). Fail loudly so the reconciler sweep surfaces it.
+      const errMsg = "interrupted during compensation — manual recovery may be needed";
+      log(`op#${op.id} ${errMsg}`);
+      db.run(
+        "UPDATE operations SET status = 'failed', finished_at = datetime('now'), error_json = ? WHERE id = ?",
+        [JSON.stringify({ message: errMsg }), op.id],
+      );
+      continue;
+    }
     db.run("UPDATE operations SET status = 'pending' WHERE id = ?", [op.id]);
   }
 }

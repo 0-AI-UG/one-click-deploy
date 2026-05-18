@@ -28,7 +28,16 @@ type TargetOut = {
 
 type CheckoutOut = { envFilePath: string | null };
 type RebuildOut = { dockerfilePath: string | null };
-type SwapOut = { containerName: string };
+type PriorContainerSnapshot = {
+  image: string;
+  envFilePath: string | null;
+  hostPort: number;
+  containerPort: number;
+  bindAddr: string;
+  volumeMount: string | null;
+  extraVolumes: string[];
+} | null;
+type SwapOut = { containerName: string; priorSnapshot: PriorContainerSnapshot };
 
 function parseExtraVolumes(raw: string): string[] {
   try { const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }
@@ -145,6 +154,7 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
     const appDir = `/home/deploy/apps/${app.name}`;
     const envFileFlag = checkout.envFilePath ? `--env-file ${checkout.envFilePath}` : "";
 
+    let priorSnapshot: PriorContainerSnapshot = null;
     if (target.deployMode === "compose") {
       const composeCmd = `cd ${appDir} && docker compose -f ${app.compose_file} -f docker-compose.ocd.yml -p ${app.name} ${envFileFlag} up -d --build`;
       const result = await sshExec(server.ipv4, asUser(composeCmd), hostKey);
@@ -152,6 +162,30 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
         throw new Error(describeFailure("Failed to rollback compose project", result));
       }
     } else {
+      // Snapshot the running container before removing so compensate can
+      // restart the prior image if any later step in this op fails.
+      try {
+        const inspect = await sshExec(
+          server.ipv4,
+          `docker inspect ${app.name} --format '{{.Config.Image}}' 2>/dev/null || true`,
+          hostKey,
+        );
+        const priorImage = inspect.stdout.trim();
+        if (priorImage) {
+          priorSnapshot = {
+            image: priorImage,
+            envFilePath: checkout.envFilePath,
+            hostPort,
+            containerPort: app.container_port,
+            bindAddr,
+            volumeMount: app.volume_mount || null,
+            extraVolumes: parseExtraVolumes(app.extra_volumes),
+          };
+        }
+      } catch (err) {
+        ctx.log(`Failed to snapshot prior container (compensate may be no-op): ${err}`);
+      }
+
       await removeContainer(server.ipv4, app.name, hostKey);
       const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
       const extraVolFlags = parseExtraVolumes(app.extra_volumes).map((v) => `-v ${v}`).join(" ");
@@ -161,13 +195,31 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
         throw new Error(describeFailure("Failed to start container after rollback rebuild", runResult));
       }
     }
-    return { containerName: app.name };
+    return { containerName: app.name, priorSnapshot };
   },
-  async compensate(ctx, _out, prior) {
+  async compensate(ctx, out, prior) {
     const target = prior["load_target_deployment"] as TargetOut | undefined;
     if (!target) return;
     try { db.updateAppStatus(target.appId, target.previousStatus); } catch (err) {
       ctx.log(`Failed to restore previous status: ${err}`);
+    }
+    // Best-effort: restart the prior container image if we captured one.
+    const snap = out?.priorSnapshot;
+    if (!snap || target.deployMode === "compose") return;
+    try {
+      const app = db.getApp(target.appId);
+      const server = db.getServer(target.serverId);
+      if (!app || !server) return;
+      const hostKey = server.ssh_host_key || undefined;
+      await removeContainer(server.ipv4, app.name, hostKey);
+      const envFileFlag = snap.envFilePath ? `--env-file ${snap.envFilePath}` : "";
+      const volumeFlag = snap.volumeMount ? `-v ${snap.volumeMount}` : "";
+      const extraVolFlags = snap.extraVolumes.map((v) => `-v ${v}`).join(" ");
+      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${snap.bindAddr}:${snap.hostPort}:${snap.containerPort} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${snap.image}`;
+      await sshExec(server.ipv4, asUser(cmd), hostKey);
+      ctx.log(`Restored prior container image ${snap.image}`);
+    } catch (err) {
+      ctx.log(`Failed to restore prior container: ${err}`);
     }
   },
 };
