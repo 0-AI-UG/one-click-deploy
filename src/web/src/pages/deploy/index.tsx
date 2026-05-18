@@ -248,6 +248,7 @@ export function DeployPage() {
     envValues: Record<string, string>;
     extraEnv: Array<{ key: string; value: string }>;
     manifestEnvDefs?: ManifestEnvDef[];
+    selectedEnvironmentId?: number | null;
   } | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   // When true, the introspect effect is suppressed so a restored session
@@ -271,6 +272,9 @@ export function DeployPage() {
     if (pendingSession.envValues) setEnvValues(pendingSession.envValues);
     if (pendingSession.extraEnv) setExtraEnv(pendingSession.extraEnv);
     if (pendingSession.manifestEnvDefs) setManifestEnvDefs(pendingSession.manifestEnvDefs);
+    if (pendingSession.selectedEnvironmentId !== undefined) {
+      setSelectedEnvironmentId(pendingSession.selectedEnvironmentId);
+    }
     // Show the form sections immediately
     setRevealed(true);
     setPendingSession(null);
@@ -291,7 +295,7 @@ export function DeployPage() {
     if (!form.app_name && !form.git_repo) return;
     setSaveStatus("saving");
     const timer = setTimeout(() => {
-      post("/api/deploy-session", { form, envValues, extraEnv, manifestEnvDefs })
+      post("/api/deploy-session", { form, envValues, extraEnv, manifestEnvDefs, selectedEnvironmentId })
         .then(() => {
           setSaveStatus("saved");
           setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
@@ -299,7 +303,7 @@ export function DeployPage() {
         .catch(() => setSaveStatus("idle"));
     }, 1000);
     return () => clearTimeout(timer);
-  }, [form, envValues, extraEnv, manifestEnvDefs]);
+  }, [form, envValues, extraEnv, manifestEnvDefs, selectedEnvironmentId]);
 
   // --- Repo introspection ---
   const runIntrospect = useCallback(async (url: string, ref: string | undefined) => {
