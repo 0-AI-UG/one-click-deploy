@@ -526,6 +526,7 @@ export async function handleGetServerDetail(request: Request, serverId: number):
     const probePromise = probeServerHost(server);
 
     const replicaRows = db.getReplicasByServer(serverId);
+    const replicaMetrics = db.getRecentMetricsByReplicas(replicaRows.map((r) => r.id), 3600);
     const allApps = db.getApps();
     const appById = new Map(allApps.map((a) => [a.id, a]));
     const replicas = replicaRows.map((r) => {
@@ -585,6 +586,7 @@ export async function handleGetServerDetail(request: Request, serverId: number):
         ? Math.round((latest.disk_total_gb - latest.disk_used_gb) * 10) / 10
         : null,
       replicas,
+      replica_metrics: replicaMetrics,
       services,
       host: await probePromise,
     }, { headers: corsHeaders });

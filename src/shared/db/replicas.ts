@@ -136,6 +136,19 @@ export function getRecentAppMetrics(appId: number, sinceSeconds: number): Pick<M
     .all(appId, `-${sinceSeconds} seconds`) as Pick<MetricSampleRow, "replica_id" | "cpu_percent" | "memory_percent" | "sampled_at">[];
 }
 
+export function getRecentMetricsByReplicas(replicaIds: number[], sinceSeconds: number): Pick<MetricSampleRow, "replica_id" | "cpu_percent" | "memory_percent" | "sampled_at">[] {
+  if (replicaIds.length === 0) return [];
+  const placeholders = replicaIds.map(() => "?").join(",");
+  return db
+    .query(
+      `SELECT replica_id, cpu_percent, memory_percent, sampled_at
+       FROM metrics_samples
+       WHERE replica_id IN (${placeholders}) AND sampled_at >= datetime('now', ?)
+       ORDER BY sampled_at ASC`
+    )
+    .all(...replicaIds, `-${sinceSeconds} seconds`) as Pick<MetricSampleRow, "replica_id" | "cpu_percent" | "memory_percent" | "sampled_at">[];
+}
+
 export function pruneOldMetrics(olderThanSeconds: number): void {
   db.query(
     "DELETE FROM metrics_samples WHERE sampled_at < datetime('now', ?)"

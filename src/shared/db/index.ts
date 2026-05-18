@@ -68,6 +68,7 @@ export {
   resetUnhealthyTicks,
   insertMetricSample,
   getRecentAppMetrics,
+  getRecentMetricsByReplicas,
   pruneOldMetrics,
   insertScalingEvent,
   getScalingEvents,
