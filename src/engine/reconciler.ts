@@ -20,7 +20,7 @@ const UNHEALTHY_RESTART_THRESHOLD = 2;
 let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 let tickCount = 0;
-const PRUNE_EVERY_N_TICKS = 20; // ~10 minutes at 30s/tick
+const PRUNE_EVERY_N_TICKS = 10; // ~5 minutes at 30s/tick
 
 // ---------------------------------------------------------------------------
 // Per-server batched metrics collection

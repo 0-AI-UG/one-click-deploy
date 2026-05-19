@@ -77,24 +77,45 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
 }
 
 /**
- * Periodic disk cleanup scoped to OCD-managed images only. Removes unused
- * images carrying our label (so tagged-but-unreferenced images from deleted
- * apps are reclaimed) plus the global build cache (always reproducible).
- * Deliberately does NOT run `docker system prune` — that would remove images
- * belonging to other applications the user runs on the same host.
+ * Periodic disk cleanup. Two tiers based on disk pressure:
+ *
+ *   - Normal (root fs < 75% used): scoped prune. Removes unused OCD-labeled
+ *     images, dangling images, stopped containers, and ALL build cache
+ *     (build cache is fully reproducible from sources).
+ *
+ *   - Pressure (root fs >= 75%): escalates to a full system prune. On an
+ *     OCD-managed server there are essentially no non-OCD images worth
+ *     preserving, and a crash from a full disk is far worse than a cold
+ *     rebuild. Volumes are still preserved.
  */
 export async function pruneServer(ip: string, hostKey?: string) {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-  // -a removes even tagged images (not just dangling) as long as they carry
-  // our label and aren't referenced by a running container.
-  const cmd = [
-    `docker image prune -a -f --filter label=${OCD_IMAGE_LABEL} 2>&1 | tail -1`,
-    `docker builder prune -f 2>&1 | tail -1`,
-  ].join("; ");
-  const result = await sshExec(ip, asUser(cmd), hostKey);
-  if (result.stdout.trim()) {
-    log("prune", `Server ${ip}: ${result.stdout.trim().replace(/\n/g, " | ")}`);
-  }
+
+  // Probe disk usage on the root fs (where /var/lib/docker lives).
+  const usage = await sshExec(ip, `df -P / | awk 'NR==2 {gsub("%",""); print $5}'`, hostKey);
+  const usedPct = parseInt(usage.stdout.trim(), 10) || 0;
+  const underPressure = usedPct >= 75;
+
+  // Build the prune pipeline. Each step's output is trimmed to its summary
+  // line so the log entry stays one line per server.
+  const steps = underPressure
+    ? [
+        // Aggressive: anything not currently in use, plus all build cache.
+        `docker container prune -f 2>&1 | tail -1`,
+        `docker image prune -af 2>&1 | tail -1`,
+        `docker builder prune -af 2>&1 | tail -1`,
+      ]
+    : [
+        // Scoped: OCD-labeled images, dangling layers, stopped containers,
+        // and all build cache (always reproducible from sources).
+        `docker container prune -f 2>&1 | tail -1`,
+        `docker image prune -a -f --filter label=${OCD_IMAGE_LABEL} 2>&1 | tail -1`,
+        `docker image prune -f 2>&1 | tail -1`,
+        `docker builder prune -af 2>&1 | tail -1`,
+      ];
+  const result = await sshExec(ip, asUser(steps.join("; ")), hostKey);
+  const tag = underPressure ? "prune(pressure)" : "prune";
+  log(tag, `Server ${ip} (disk ${usedPct}%): ${result.stdout.trim().replace(/\n/g, " | ")}`);
 }
 
 // --- Image Transfer ---
