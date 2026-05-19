@@ -137,6 +137,57 @@ function ServicesGridSection({ onClose }: { onClose: () => void }) {
   );
 }
 
+function RocketLaunch() {
+  return (
+    <svg viewBox="0 0 64 80" width="48" height="60" className="overflow-visible" aria-hidden="true">
+      {/* Smoke puffs — fade in as rocket lifts, drift downward */}
+      <g className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+        <circle className="smoke-puff" cx="22" cy="64" r="3.5" fill="#1A1A1A" style={{ animationDelay: "0s" }} />
+        <circle className="smoke-puff" cx="42" cy="64" r="3"   fill="#1A1A1A" style={{ animationDelay: "0.15s" }} />
+        <circle className="smoke-puff" cx="32" cy="68" r="3.5" fill="#1A1A1A" style={{ animationDelay: "0.3s" }} />
+        <circle className="smoke-puff" cx="28" cy="72" r="2.5" fill="#1A1A1A" style={{ animationDelay: "0.45s" }} />
+        <circle className="smoke-puff" cx="38" cy="72" r="2.5" fill="#1A1A1A" style={{ animationDelay: "0.6s" }} />
+      </g>
+
+      {/* Rocket + flame — both lift together on hover */}
+      <g className="transition-transform duration-300 ease-out group-hover:-translate-y-4">
+        {/* Flame: outer (red) + inner (amber). Hidden until hover, then flickers. */}
+        <g className="origin-top scale-y-0 group-hover:scale-y-100 transition-transform duration-150">
+          <g className="flame-flicker" style={{ transformOrigin: "32px 46px" }}>
+            <path
+              d="M 24 46 L 26 60 L 30 52 L 32 62 L 34 52 L 38 60 L 40 46 Z"
+              fill="#FF4444"
+              stroke="#1A1A1A"
+              strokeWidth="2"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M 28 46 L 30 55 L 32 50 L 34 55 L 36 46 Z"
+              fill="#FFB800"
+            />
+          </g>
+        </g>
+
+        {/* Rocket body */}
+        <path
+          d="M 32 6 L 22 22 L 22 44 L 26 48 L 38 48 L 42 44 L 42 22 Z"
+          fill="#1A1A1A"
+          stroke="#1A1A1A"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+        {/* Fins */}
+        <path d="M 22 34 L 14 48 L 22 48 Z" fill="#1A1A1A" stroke="#1A1A1A" strokeWidth="2" strokeLinejoin="round" />
+        <path d="M 42 34 L 50 48 L 42 48 Z" fill="#1A1A1A" stroke="#1A1A1A" strokeWidth="2" strokeLinejoin="round" />
+        {/* Window — green matches button background */}
+        <circle cx="32" cy="26" r="4.5" fill="#BAFF39" stroke="#1A1A1A" strokeWidth="2" />
+        {/* Body stripe */}
+        <rect x="22" y="40" width="20" height="2" fill="#BAFF39" />
+      </g>
+    </svg>
+  );
+}
+
 const EMPTY_FORM: FormState = {
   app_name: "",
   git_repo: "",
@@ -660,10 +711,10 @@ export function DeployPage() {
             <button
               type="submit"
               disabled={introspecting}
-              className="group relative border-l-2 border-fg bg-accent hover:bg-accent-h active:bg-accent-h disabled:opacity-60 disabled:cursor-not-allowed transition-colors px-8 md:px-12 flex flex-col items-center justify-center gap-2 text-fg"
+              className="group relative border-l-2 border-fg bg-accent hover:bg-accent-h active:bg-accent-h disabled:opacity-60 disabled:cursor-not-allowed transition-colors px-8 md:px-12 flex flex-col items-center justify-center gap-2 text-fg overflow-hidden"
               aria-label="Deploy"
             >
-              <Rocket size={32} strokeWidth={2.5} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+              <RocketLaunch />
               <span className="font-mono text-[13px] font-bold uppercase tracking-[0.2em]">Deploy</span>
             </button>
           </div>
