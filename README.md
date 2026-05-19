@@ -10,7 +10,7 @@ No Kubernetes. No YAML. No vendor lock-in.
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/0-AI-UG/one-click-deploy/pkgs/container/one-click-deploy)
 [![Stars](https://img.shields.io/github/stars/0-AI-UG/one-click-deploy?style=social)](https://github.com/0-AI-UG/one-click-deploy)
 
-<!-- ![Dashboard](docs/screenshots/dashboard.png) -->
+![Deploy](docs/screenshots/deploy.png)
 
 </div>
 
