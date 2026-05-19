@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { get, post, del } from "../../api/client.ts";
-import { Btn, Card, showToast } from "../../components/ui.tsx";
+import { Btn, showToast } from "../../components/ui.tsx";
 import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown, Settings2, CheckCircle2 } from "lucide-react";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
@@ -40,7 +40,17 @@ function groupByCategory(entries: CatalogEntry[]): [string, CatalogEntry[]][] {
   });
 }
 
-function ServiceToggleButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+function HeaderToggleButton({
+  open,
+  onToggle,
+  icon,
+  label,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
   return (
     <button
       type="button"
@@ -49,8 +59,8 @@ function ServiceToggleButton({ open, onToggle }: { open: boolean; onToggle: () =
         open ? "text-fg" : "text-fg-dim hover:text-fg"
       }`}
     >
-      <Database size={12} />
-      Deploy a service
+      {icon}
+      {label}
       <ChevronDown size={12} className={`transition-transform ${open ? "rotate-180" : ""}`} />
     </button>
   );
@@ -536,7 +546,24 @@ export function DeployPage() {
           set={set}
           introspecting={introspecting}
           introspect={introspect}
-          extra={<ServiceToggleButton open={servicesOpen} onToggle={() => setServicesOpen((v) => !v)} />}
+          extra={
+            <>
+              {showReceipt && (
+                <HeaderToggleButton
+                  open={customizing}
+                  onToggle={() => setCustomizing((v) => !v)}
+                  icon={<Settings2 size={12} />}
+                  label="Customize"
+                />
+              )}
+              <HeaderToggleButton
+                open={servicesOpen}
+                onToggle={() => setServicesOpen((v) => !v)}
+                icon={<Database size={12} />}
+                label="Deploy a service"
+              />
+            </>
+          }
         />
 
         {servicesOpen && (
@@ -552,96 +579,94 @@ export function DeployPage() {
           />
         )}
 
-        {showReceipt && !customizing && (
-          <Card className="p-5 animate-fade-in">
-            <div className="flex items-center justify-between mb-3">
-              <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
-                <CheckCircle2 size={12} className="text-accent-green" />
-                Ready to deploy
-              </span>
-              {detected && (
-                <span className="font-mono text-[9px] uppercase tracking-wider text-fg-dim">
-                  {detected.owner}/{detected.repo}
-                </span>
-              )}
+        {showReceipt && customizing && (
+          <div className="border-2 border-fg bg-bg animate-fade-in">
+            <div className="px-4 py-2 border-b-2 border-fg bg-alt flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Settings2 size={12} className="text-fg" />
+                <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-fg">Customize</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCustomizing(false)}
+                className="text-fg-dim hover:text-fg transition-colors"
+                aria-label="Close"
+              >
+                <X size={14} />
+              </button>
             </div>
-            <div className="border-t-2 border-fg pt-3 grid grid-cols-2 gap-x-6 gap-y-2 font-mono text-[11px]">
-              <div className="text-fg-dim uppercase tracking-wider text-[9px]">App</div>
-              <div className="text-fg truncate">{form.app_name || "(set a name)"}</div>
-              {branchLabel && (
-                <>
-                  <div className="text-fg-dim uppercase tracking-wider text-[9px]">Branch</div>
-                  <div className="text-fg truncate">{branchLabel}</div>
-                </>
-              )}
-              <div className="text-fg-dim uppercase tracking-wider text-[9px]">Build</div>
-              <div className="text-fg truncate">{buildMode}{dockerfileLabel ? ` · ${dockerfileLabel}` : ""}</div>
-              {!form.compose_file && (
-                <>
-                  <div className="text-fg-dim uppercase tracking-wider text-[9px]">Port</div>
-                  <div className="text-fg">{form.container_port}</div>
-                </>
-              )}
-              <div className="text-fg-dim uppercase tracking-wider text-[9px]">Domain</div>
-              <div className="text-fg truncate">{form.domain || "auto (temporary)"}</div>
+            <div className="p-4 space-y-5">
+              <ReceiptSection
+                form={form}
+                set={set}
+                setForm={setForm}
+                detected={detected}
+                selectedManifest={selectedManifest}
+                onBranchChange={handleBranchChange}
+              />
+              <EnvSection
+                envValues={envValues}
+                setEnvValues={setEnvValues}
+                manifestEnvDefs={manifestEnvDefs}
+                selectedEnvironmentId={selectedEnvironmentId}
+                onEnvironmentChange={setSelectedEnvironmentId}
+              />
+              <AdvancedSection
+                form={form}
+                set={set}
+                setForm={setForm}
+                extraEnv={extraEnv}
+                setExtraEnv={setExtraEnv}
+              />
             </div>
-          </Card>
-        )}
-
-        {showReceipt && (
-          <div className="flex justify-center animate-fade-in">
-            <button
-              type="button"
-              onClick={() => setCustomizing((v) => !v)}
-              className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-fg-dim hover:text-fg transition-colors"
-            >
-              <Settings2 size={12} />
-              {customizing ? "Hide options" : "Customize"}
-              <ChevronDown size={12} className={`transition-transform ${customizing ? "rotate-180" : ""}`} />
-            </button>
           </div>
         )}
 
-        {showReceipt && customizing && (
-          <ReceiptSection
-            form={form}
-            set={set}
-            setForm={setForm}
-            detected={detected}
-            selectedManifest={selectedManifest}
-            onBranchChange={handleBranchChange}
-          />
-        )}
-
-        {showReceipt && customizing && (
-          <EnvSection
-            envValues={envValues}
-            setEnvValues={setEnvValues}
-            manifestEnvDefs={manifestEnvDefs}
-            selectedEnvironmentId={selectedEnvironmentId}
-            onEnvironmentChange={setSelectedEnvironmentId}
-          />
-        )}
-
-        {showReceipt && customizing && (
-          <AdvancedSection
-            form={form}
-            set={set}
-            setForm={setForm}
-            extraEnv={extraEnv}
-            setExtraEnv={setExtraEnv}
-          />
-        )}
-
         {showReceipt && (
-          <Btn
-            type="submit"
-            variant="primary"
-            disabled={introspecting}
-            className="w-full !py-4 !text-[13px] animate-fade-in"
-          >
-            <Rocket size={14} /> Deploy
-          </Btn>
+          <div className="border-2 border-fg bg-bg-raised shadow-neo grid grid-cols-[1fr_auto] animate-fade-in">
+            <div className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
+                  <CheckCircle2 size={12} className="text-accent-green" />
+                  Ready to deploy
+                </span>
+                {detected && (
+                  <span className="font-mono text-[9px] uppercase tracking-wider text-fg-dim">
+                    {detected.owner}/{detected.repo}
+                  </span>
+                )}
+              </div>
+              <div className="border-t-2 border-fg pt-3 grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 font-mono text-[11px]">
+                <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">App</div>
+                <div className="text-fg truncate">{form.app_name || "(set a name)"}</div>
+                {branchLabel && (
+                  <>
+                    <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">Branch</div>
+                    <div className="text-fg truncate">{branchLabel}</div>
+                  </>
+                )}
+                <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">Build</div>
+                <div className="text-fg truncate">{buildMode}{dockerfileLabel ? ` · ${dockerfileLabel}` : ""}</div>
+                {!form.compose_file && (
+                  <>
+                    <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">Port</div>
+                    <div className="text-fg">{form.container_port}</div>
+                  </>
+                )}
+                <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">Domain</div>
+                <div className="text-fg truncate">{form.domain || "auto (temporary)"}</div>
+              </div>
+            </div>
+            <button
+              type="submit"
+              disabled={introspecting}
+              className="group relative border-l-2 border-fg bg-accent hover:bg-accent-h active:bg-accent-h disabled:opacity-60 disabled:cursor-not-allowed transition-colors px-8 md:px-12 flex flex-col items-center justify-center gap-2 text-fg"
+              aria-label="Deploy"
+            >
+              <Rocket size={32} strokeWidth={2.5} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+              <span className="font-mono text-[13px] font-bold uppercase tracking-[0.2em]">Deploy</span>
+            </button>
+          </div>
         )}
       </form>
     </div>
