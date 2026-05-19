@@ -16,7 +16,7 @@ No Kubernetes. No YAML. No vendor lock-in.
 
 ---
 
-A lightweight, self-hostable alternative to Heroku, Railway, and Render. Point it at a Git repo and a Hetzner account — it provisions the server, builds your container, configures DNS, issues TLS, and serves traffic.
+A lightweight, self-hostable alternative to Heroku, Railway, and Render. Point it at a Git repo and a Hetzner account, and it provisions the server, builds your container, configures DNS, issues TLS, and serves traffic.
 
 ## Quick Start
 
@@ -36,11 +36,11 @@ Prefer bash? Copy `example.panel.json` to `panel.json` and run `./scripts/bootst
 - Auto-provisioned servers on Hetzner Cloud
 - Auto TLS (Caddy + Let's Encrypt) and auto DNS
 - Horizontal scaling, auto-scaling, pause/resume
-- Managed services — Postgres, Redis, MySQL, more
+- Managed services: Postgres, Redis, MySQL, and more
 - Web terminal, log streaming, rollbacks, webhooks
 - Passkeys, TOTP, GitHub OAuth, multi-user RBAC
 - `ocd` CLI for Linux, macOS, Windows
-- Self-managing — the panel deploys itself
+- Self-managing: the panel deploys itself
 
 ## CLI
 

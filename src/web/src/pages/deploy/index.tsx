@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { get, post, del } from "../../api/client.ts";
-import { Btn, showToast } from "../../components/ui.tsx";
-import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown } from "lucide-react";
+import { Btn, Card, showToast } from "../../components/ui.tsx";
+import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown, Settings2, CheckCircle2 } from "lucide-react";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
 import { ReceiptSection } from "./receipt-section.tsx";
@@ -474,6 +474,21 @@ export function DeployPage() {
   const detected = introspect?.ok === true ? introspect : null;
   const showReceipt = revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1);
 
+  const [customizing, setCustomizing] = useState(false);
+
+  const requiredEnvMissing = useMemo(
+    () => manifestEnvDefs.some((d) => d.required && !envValues[d.key]?.trim()),
+    [manifestEnvDefs, envValues],
+  );
+
+  useEffect(() => {
+    if (requiredEnvMissing && !selectedEnvironmentId) setCustomizing(true);
+  }, [requiredEnvMissing, selectedEnvironmentId]);
+
+  const buildMode = form.compose_file ? "Docker Compose" : "Dockerfile";
+  const dockerfileLabel = form.compose_file || form.dockerfile_path || (detected ? "auto-detect" : "");
+  const branchLabel = form.git_branch || detected?.default_branch || "";
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-10">
       <div className="mb-8">
@@ -537,7 +552,57 @@ export function DeployPage() {
           />
         )}
 
+        {showReceipt && !customizing && (
+          <Card className="p-5 animate-fade-in">
+            <div className="flex items-center justify-between mb-3">
+              <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
+                <CheckCircle2 size={12} className="text-accent-green" />
+                Ready to deploy
+              </span>
+              {detected && (
+                <span className="font-mono text-[9px] uppercase tracking-wider text-fg-dim">
+                  {detected.owner}/{detected.repo}
+                </span>
+              )}
+            </div>
+            <div className="border-t-2 border-fg pt-3 grid grid-cols-2 gap-x-6 gap-y-2 font-mono text-[11px]">
+              <div className="text-fg-dim uppercase tracking-wider text-[9px]">App</div>
+              <div className="text-fg truncate">{form.app_name || "(set a name)"}</div>
+              {branchLabel && (
+                <>
+                  <div className="text-fg-dim uppercase tracking-wider text-[9px]">Branch</div>
+                  <div className="text-fg truncate">{branchLabel}</div>
+                </>
+              )}
+              <div className="text-fg-dim uppercase tracking-wider text-[9px]">Build</div>
+              <div className="text-fg truncate">{buildMode}{dockerfileLabel ? ` · ${dockerfileLabel}` : ""}</div>
+              {!form.compose_file && (
+                <>
+                  <div className="text-fg-dim uppercase tracking-wider text-[9px]">Port</div>
+                  <div className="text-fg">{form.container_port}</div>
+                </>
+              )}
+              <div className="text-fg-dim uppercase tracking-wider text-[9px]">Domain</div>
+              <div className="text-fg truncate">{form.domain || "auto (temporary)"}</div>
+            </div>
+          </Card>
+        )}
+
         {showReceipt && (
+          <div className="flex justify-center animate-fade-in">
+            <button
+              type="button"
+              onClick={() => setCustomizing((v) => !v)}
+              className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-fg-dim hover:text-fg transition-colors"
+            >
+              <Settings2 size={12} />
+              {customizing ? "Hide options" : "Customize"}
+              <ChevronDown size={12} className={`transition-transform ${customizing ? "rotate-180" : ""}`} />
+            </button>
+          </div>
+        )}
+
+        {showReceipt && customizing && (
           <ReceiptSection
             form={form}
             set={set}
@@ -548,7 +613,7 @@ export function DeployPage() {
           />
         )}
 
-        {showReceipt && (
+        {showReceipt && customizing && (
           <EnvSection
             envValues={envValues}
             setEnvValues={setEnvValues}
@@ -558,7 +623,7 @@ export function DeployPage() {
           />
         )}
 
-        {showReceipt && (
+        {showReceipt && customizing && (
           <AdvancedSection
             form={form}
             set={set}
