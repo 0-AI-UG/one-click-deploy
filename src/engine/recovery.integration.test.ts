@@ -229,7 +229,7 @@ d("deploy: probe adopts orphaned side effect on resume", () => {
         container_port: 3000,
         env_vars: "{}",
         auth_password: "",
-        public: 1,
+        public: true,
       },
       server.id,
     );
@@ -354,7 +354,7 @@ d("pause_app: precondition guard avoids duplicate work", () => {
         container_port: 3000,
         env_vars: "{}",
         auth_password: "",
-        public: 1,
+        public: true,
       },
       server.id,
     );
