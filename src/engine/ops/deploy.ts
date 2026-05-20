@@ -14,6 +14,8 @@ import {
   composeHealthCheck,
   deployAuthProxy,
   removeAuthProxy,
+  containerExists,
+  composeProjectExists,
 } from "../../shared/remote/index.ts";
 import { syncAppCaddy, removeAppCaddy } from "../scale/caddy-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -94,6 +96,19 @@ async function resolveDomainIps(domain: string, timeoutMs = 3000): Promise<strin
     ]);
   } catch {
     return [];
+  }
+}
+
+async function findVolumeByName(name: string) {
+  const compute = getComputeProvider();
+  if (!compute.volumes) return null;
+  if (compute.volumes.findByName) return compute.volumes.findByName(name);
+  // Fallback: filter the full list.
+  try {
+    const all = await compute.volumes.list();
+    return all.find((v) => v.name === name) ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -189,6 +204,9 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
   },
 };
 
+// Note: no probe()/probeCompensated() here — both DNS providers' createRecord
+// and deleteRecord are naturally idempotent (match by name+type+value), so
+// safe to re-run after a crash without any explicit adopt-skip.
 const createDnsRecord: Step<DeployInput, DnsOut> = {
   name: "create_dns_record",
   label: "Create DNS record",
@@ -244,6 +262,32 @@ const createDnsRecord: Step<DeployInput, DnsOut> = {
 const createVolume: Step<DeployInput, VolumeOut> = {
   name: "create_volume",
   label: "Create volume",
+  async probe(ctx) {
+    const req = ctx.input;
+    if (!req.volume_size || req.volume_size <= 0) return null;
+    const volName = `ocd-${req.app_name}-data`;
+    const existing = await findVolumeByName(volName);
+    if (!existing) return null;
+    const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
+    const containerPath = req.volume_path || "/data";
+    ctx.log(`adopting existing volume ${existing.providerId} (${volName})`);
+    return {
+      volumeId: existing.providerId,
+      volumeMount: `${hostMountPath}:${containerPath}`,
+      containerPath,
+    };
+  },
+  async probeCompensated(_ctx, out) {
+    if (!out) return true;
+    try {
+      const compute = getComputeProvider();
+      if (!compute.volumes) return true;
+      await compute.volumes.get(out.volumeId);
+      return false;
+    } catch {
+      return true;
+    }
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     if (!req.volume_size || req.volume_size <= 0) return null;
@@ -302,6 +346,45 @@ const createVolume: Step<DeployInput, VolumeOut> = {
 const insertAppRow: Step<DeployInput, InsertAppOut> = {
   name: "insert_app_row",
   label: "Register app",
+  async probe(ctx, prior) {
+    const req = ctx.input;
+    const existing = db.getAppByName(req.app_name);
+    if (!existing) return null;
+    const replicas = db.getReplicas(existing.id);
+    if (replicas.length === 0) return null;
+    const replica = replicas[0];
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    if (!server || replica.server_id !== server.serverId) return null;
+    const useDomain = existing.domain || `${req.app_name}.${server.ingressIp}.nip.io`;
+    const useInternalTls = !req.domain;
+    const dockerfilePath = existing.dockerfile_path || req.dockerfile_path || "Dockerfile";
+
+    // Resolve flat env vars from the existing app's environment (idempotent).
+    const flatEnvVars: Record<string, string> = {};
+    if (existing.environment_id) {
+      const envRow = db.getEnvironment(existing.environment_id);
+      if (envRow) {
+        const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
+        Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
+      }
+    }
+    ctx.log(`adopting existing app row id=${existing.id} (already inserted in prior attempt)`);
+    return {
+      appId: existing.id,
+      replicaId: replica.id,
+      containerName: req.app_name,
+      hostPort: replica.host_port,
+      domain: useDomain,
+      useInternalTls,
+      environmentId: existing.environment_id,
+      flatEnvVars,
+      dockerfilePath,
+    };
+  },
+  async probeCompensated(_ctx, out) {
+    if (!out) return true;
+    return db.getApp(out.appId) === null;
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
@@ -467,6 +550,21 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
 const cloneRepoStep: Step<DeployInput, CloneOut> = {
   name: "clone_repo",
   label: "Clone repository",
+  async probe(ctx, prior) {
+    const req = ctx.input;
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    if (!server) return null;
+    const check = await sshExec(
+      server.serverIp,
+      `[ -d /home/deploy/apps/${req.app_name}/.git ] && echo yes || echo no`,
+      server.serverHostKey || undefined,
+    );
+    if (check.stdout.trim() === "yes") {
+      ctx.log(`repo already cloned at /home/deploy/apps/${req.app_name} — adopting`);
+      return { ok: true };
+    }
+    return null;
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
@@ -497,6 +595,49 @@ const cloneRepoStep: Step<DeployInput, CloneOut> = {
 const buildAndRunContainer: Step<DeployInput, BuildOut> = {
   name: "build_and_run_container",
   label: "Build and run container",
+  async probe(ctx, prior) {
+    const req = ctx.input;
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    if (!server) return null;
+    const hostKey = server.serverHostKey || undefined;
+    // Probe both deploy modes; whichever the prior run used will hit.
+    if (await composeProjectExists(server.serverIp, req.app_name, hostKey)) {
+      const composeFile = req.compose_file
+        || await detectComposeFile(server.serverIp, req.app_name, hostKey)
+        || "docker-compose.yml";
+      const composeWebService = req.compose_web_service
+        || await detectWebService(server.serverIp, req.app_name, composeFile, hostKey)
+        || "web";
+      const stillRunning = await containerExists(server.serverIp, req.app_name, hostKey);
+      if (stillRunning) {
+        ctx.log(`adopting existing compose project ${req.app_name}`);
+        return {
+          deployMode: "compose",
+          imageTag: `${req.app_name}:latest`,
+          composeFile,
+          composeWebService,
+        };
+      }
+    }
+    if (await containerExists(server.serverIp, req.app_name, hostKey)) {
+      ctx.log(`adopting existing container ${req.app_name}`);
+      return {
+        deployMode: "dockerfile",
+        imageTag: `${req.app_name}:latest`,
+        composeFile: "",
+        composeWebService: "",
+      };
+    }
+    return null;
+  },
+  async probeCompensated(_ctx, out, prior) {
+    if (!out) return true;
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
+    if (!server || !appOut) return true;
+    const exists = await containerExists(server.serverIp, appOut.containerName, server.serverHostKey || undefined);
+    return !exists;
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
@@ -601,6 +742,26 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
 const deployAuthProxyStep: Step<DeployInput, AuthProxyOut> = {
   name: "deploy_auth_proxy",
   label: "Deploy auth proxy",
+  async probe(ctx, prior) {
+    const req = ctx.input;
+    if (!req.auth_password) return null;
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    if (!server) return null;
+    const { authProxyPort } = await import("../../shared/remote/index.ts");
+    const proxyName = `${req.app_name}-auth`;
+    const exists = await containerExists(server.serverIp, proxyName, server.serverHostKey || undefined);
+    if (!exists) return null;
+    const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
+    const caddyPort = authProxyPort(appOut?.hostPort ?? 0);
+    ctx.log(`adopting existing auth proxy container ${proxyName}`);
+    return { caddyPort };
+  },
+  async probeCompensated(ctx, _out, prior) {
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    if (!server) return true;
+    const exists = await containerExists(server.serverIp, `${ctx.input.app_name}-auth`, server.serverHostKey || undefined);
+    return !exists;
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     if (!req.auth_password) return null;
@@ -706,6 +867,26 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
 const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitCommit: string }> = {
   name: "record_deployment_history",
   label: "Record deployment",
+  async probe(ctx, prior) {
+    const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
+    const build = prior["build_and_run_container"] as BuildOut | undefined;
+    if (!appOut || !build) return null;
+    // The newest row for this app + image_tag is treated as "ours" if we
+    // re-enter — avoids inserting a duplicate history row.
+    const row = dbInstance
+      .query("SELECT id, git_commit FROM deployment_history WHERE app_id = ? AND image_tag = ? ORDER BY id DESC LIMIT 1")
+      .get(appOut.appId, build.imageTag) as { id: number; git_commit: string } | null;
+    if (!row) return null;
+    ctx.log(`adopting existing deployment_history row id=${row.id}`);
+    return { deploymentId: row.id, gitCommit: row.git_commit };
+  },
+  async probeCompensated(_ctx, out) {
+    if (!out) return true;
+    const row = dbInstance
+      .query("SELECT id FROM deployment_history WHERE id = ?")
+      .get(out.deploymentId) as { id: number } | null;
+    return row === null;
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
@@ -738,6 +919,16 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
 const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webhookId?: string }> = {
   name: "setup_github_webhook",
   label: "Configure webhook",
+  async probe(ctx, prior) {
+    const req = ctx.input;
+    if (!req.webhook_enabled) return null;
+    const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
+    if (!appOut) return null;
+    const app = db.getApp(appOut.appId);
+    if (!app || !app.github_webhook_id) return null;
+    ctx.log(`adopting existing github webhook id=${app.github_webhook_id}`);
+    return { ok: true, webhookId: app.github_webhook_id };
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     if (!req.webhook_enabled) return { ok: true };

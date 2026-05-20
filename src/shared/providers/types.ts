@@ -51,6 +51,9 @@ export interface VolumeOps {
   }): Promise<ProviderVolume>;
   get(volumeId: string): Promise<VolumeInfo>;
   list(): Promise<VolumeInfo[]>;
+  /** Probe helper: return the volume info if one with this exact name exists,
+   *  null otherwise. Default implementation filters `list()`. */
+  findByName?(name: string): Promise<VolumeInfo | null>;
   attach(volumeId: string, serverId: string): Promise<void>;
   detach(volumeId: string): Promise<void>;
   resize(volumeId: string, sizeGb: number): Promise<void>;

@@ -117,15 +117,17 @@ const deleteDbRows: Step<DestroyServerInput, { ok: true }> = {
   name: "delete_db_rows",
   label: "Delete DB rows",
   async run(ctx, prior) {
-    const apps = prior["destroy_apps_on_server"] as { failed: boolean } | undefined;
-    const svcs = prior["destroy_services_on_server"] as { failed: boolean } | undefined;
-    const cloud = prior["delete_cloud_server"] as { ok: boolean } | undefined;
-    const anyFailed = apps?.failed || svcs?.failed || (cloud && !cloud.ok);
-    if (anyFailed) {
+    const failedSteps: string[] = [];
+    for (const [name, out] of Object.entries(prior)) {
+      if (!out || typeof out !== "object") continue;
+      const o = out as { ok?: boolean; failed?: boolean };
+      if (o.failed === true || o.ok === false) failedSteps.push(name);
+    }
+    if (failedSteps.length > 0) {
       try {
         db.updateServerStatus(ctx.input.serverId, "cleanup_failed");
       } catch { /* ignore */ }
-      ctx.log("Some child resources could not be cleaned up — server marked cleanup_failed");
+      ctx.log(`Some child resources could not be cleaned up (failed: ${failedSteps.join(", ")}) — server marked cleanup_failed`);
       return { ok: true };
     }
     await softStep(ctx, "delete_server_row", async () => {

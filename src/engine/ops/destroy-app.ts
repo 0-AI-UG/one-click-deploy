@@ -78,22 +78,24 @@ const stopAndRemoveContainers: Step<DestroyInput, { affectedServerIds: number[];
   },
 };
 
-const removeAuthProxyStep: Step<DestroyInput, { ok: boolean }> = {
+const removeAuthProxyStep: Step<DestroyInput, { ok: boolean; failed: boolean }> = {
   name: "remove_auth_proxy",
   label: "Remove auth proxy",
   async run(ctx) {
     const app = db.getApp(ctx.input.appId);
-    if (!app) return { ok: true };
-    if (!app.auth_password) return { ok: true };
+    if (!app) return { ok: true, failed: false };
+    if (!app.auth_password) return { ok: true, failed: false };
     const replicas = db.getReplicas(ctx.input.appId);
+    let failed = false;
     for (const replica of replicas) {
       const server = db.getServer(replica.server_id);
       if (!server) continue;
-      await softStep(ctx, `remove_auth_proxy ${replica.container_name}`, async () => {
+      const r = await softStep(ctx, `remove_auth_proxy ${replica.container_name}`, async () => {
         await removeAuthProxy(server.ipv4, replica.container_name, server.ssh_host_key || undefined);
       });
+      if (!r.ok) failed = true;
     }
-    return { ok: true };
+    return { ok: !failed, failed };
   },
 };
 
@@ -153,14 +155,17 @@ const deleteDbRows: Step<DestroyInput, { ok: true }> = {
   name: "delete_db_rows",
   label: "Delete DB rows",
   async run(ctx, prior) {
-    const containers = prior["stop_and_remove_containers"] as { failed: boolean } | undefined;
-    const dnsOut = prior["delete_dns_records"] as { failed: boolean } | undefined;
-    const volOut = prior["delete_volume"] as { ok: boolean } | undefined;
-    const anyFailed = (containers?.failed) || (dnsOut?.failed) || (volOut && !volOut.ok);
-    if (anyFailed) {
-      // Resources couldn't be cleaned up. Mark app but don't delete DB rows yet.
+    // Gate: if ANY upstream destroy step partially failed, do not delete DB
+    // rows. Mark the app `cleanup_failed` and surface to the reconciler.
+    const failedSteps: string[] = [];
+    for (const [name, out] of Object.entries(prior)) {
+      if (!out || typeof out !== "object") continue;
+      const o = out as { ok?: boolean; failed?: boolean; error?: string };
+      if (o.failed === true || o.ok === false) failedSteps.push(name);
+    }
+    if (failedSteps.length > 0) {
       try { db.updateAppStatus(ctx.input.appId, "cleanup_failed"); } catch { /* ignore */ }
-      ctx.log("Some resources could not be cleaned up — app marked cleanup_failed");
+      ctx.log(`Some resources could not be cleaned up (failed: ${failedSteps.join(", ")}) — app marked cleanup_failed`);
       return { ok: true };
     }
     const replicas = db.getReplicas(ctx.input.appId);

@@ -94,12 +94,15 @@ const deleteDbRows: Step<DestroyServiceInput, { ok: true }> = {
   name: "delete_db_rows",
   label: "Delete DB rows",
   async run(ctx, prior) {
-    const containers = prior["stop_and_remove_instance_container"] as { failed: boolean } | undefined;
-    const vol = prior["delete_volume"] as { failed: boolean } | undefined;
-    const anyFailed = containers?.failed || vol?.failed;
-    if (anyFailed) {
+    const failedSteps: string[] = [];
+    for (const [name, out] of Object.entries(prior)) {
+      if (!out || typeof out !== "object") continue;
+      const o = out as { ok?: boolean; failed?: boolean };
+      if (o.failed === true || o.ok === false) failedSteps.push(name);
+    }
+    if (failedSteps.length > 0) {
       try { db.updateServiceStatus(ctx.input.serviceId, "cleanup_failed"); } catch { /* ignore */ }
-      ctx.log("Some resources could not be cleaned up — service marked cleanup_failed");
+      ctx.log(`Some resources could not be cleaned up (failed: ${failedSteps.join(", ")}) — service marked cleanup_failed`);
       return { ok: true };
     }
     const instances = db.getServiceInstances(ctx.input.serviceId);

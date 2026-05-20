@@ -172,6 +172,115 @@ describe("step-runner: compensation on failure", () => {
     const s1Comp = steps.find((s) => s.phase === "compensate" && s.step === "s1");
     expect(s1Comp?.status).toBe("ok");
 
+    // New behavior: when any compensate fails, the op stays in 'compensating'
+    // so the reconciler can retry it. Only fully successful rollback yields
+    // 'compensated'.
+    expect(getOperation(op.id)!.status).toBe("compensating");
+  });
+});
+
+// ---- probe-based idempotency adoption ---------------------------------------
+
+describe("step-runner: probe adopts existing side effect", () => {
+  test("probe returning non-null skips run and records ok", async () => {
+    const runFn = mock(async () => "should-not-run");
+    const def = makeDef([
+      {
+        name: "tagged-step",
+        run: runFn,
+        probe: async () => "adopted-output",
+      },
+    ]);
+    const op = makeOp("test-op");
+    await runOperation(op, def);
+
+    expect(runFn).not.toHaveBeenCalled();
+    const steps = getSteps(op.id);
+    const row = steps.find((s) => s.step === "tagged-step");
+    expect(row?.status).toBe("ok");
+    expect(row?.output_json).toBe(JSON.stringify("adopted-output"));
+    expect(row?.detail).toContain("adopted");
+    expect(getOperation(op.id)!.status).toBe("done");
+  });
+
+  test("probe returning null falls through to run", async () => {
+    const runFn = mock(async () => "ran-it");
+    const def = makeDef([
+      {
+        name: "tagged-step",
+        run: runFn,
+        probe: async () => null,
+      },
+    ]);
+    const op = makeOp("test-op");
+    await runOperation(op, def);
+    expect(runFn).toHaveBeenCalled();
+    expect(getOperation(op.id)!.status).toBe("done");
+  });
+
+  test("step is marked 'executing' before run() is invoked", async () => {
+    const seen: string[] = [];
+    const def = makeDef([
+      {
+        name: "watched",
+        run: async (ctx) => {
+          // Read the live row state mid-flight.
+          const { default: conn } = await import("../shared/db/connection.ts");
+          const row = conn.query("SELECT status FROM operation_steps WHERE op_id = ? AND step = ?").get(ctx.opId, "watched") as { status: string } | null;
+          if (row) seen.push(row.status);
+          return null;
+        },
+      },
+    ]);
+    const op = makeOp("test-op");
+    await runOperation(op, def);
+    expect(seen).toEqual(["executing"]);
+  });
+});
+
+// ---- resumable compensation -------------------------------------------------
+
+describe("step-runner: resumable compensation", () => {
+  test("re-running a 'compensating' op resumes from where it left off", async () => {
+    const compensated: string[] = [];
+    const def = makeDef([
+      {
+        name: "a",
+        run: async () => "out-a",
+        compensate: async () => { compensated.push("a"); },
+      },
+      {
+        name: "b",
+        run: async () => "out-b",
+        compensate: async () => { compensated.push("b"); },
+      },
+      {
+        name: "c",
+        run: async () => { throw new Error("forward fail"); },
+      },
+    ]);
+    const op = makeOp("test-op");
+
+    // First run: forward fails at c, compensation runs b then a, op finishes
+    // as 'compensated'. Reset compensated[] and manually re-mark the op as
+    // 'compensating' and clear the b compensate row to simulate a crash that
+    // happened BEFORE b's compensate completed (but a's had already run).
+    await runOperation(op, def);
+    expect(compensated).toEqual(["b", "a"]);
+    compensated.length = 0;
+
+    const { default: conn } = await import("../shared/db/connection.ts");
+    // Wipe b's compensate row and put op back into 'compensating'.
+    conn.run("DELETE FROM operation_steps WHERE op_id = ? AND step = 'b' AND phase = 'compensate'", [op.id]);
+    conn.run("UPDATE operations SET status = 'compensating', finished_at = NULL WHERE id = ?", [op.id]);
+
+    // Resume.
+    const reloaded = (await import("../shared/db/operations.ts")).getOperation(op.id)!;
+    await runOperation(reloaded, def);
+
+    // Only b's compensate should re-run; a's compensate was already recorded ok
+    // from the first pass so it's skipped (durable resume).
+    expect(compensated).toEqual(["b"]);
     expect(getOperation(op.id)!.status).toBe("compensated");
   });
 });

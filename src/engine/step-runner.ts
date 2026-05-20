@@ -1,13 +1,16 @@
 import {
   getCompletedForwardSteps,
+  getCompletedCompensateSteps,
   insertStep,
   finishStep,
   nextStepSeq,
   updateLastStep,
+  markStepExecuting,
   isCancelRequested,
   markOperationCompensating,
   markOperationFinished,
   markOperationRunning,
+  bumpAttempt,
 } from "../shared/db/operations.ts";
 import type { AnyOpKind, OpContext, Step } from "./types.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
@@ -24,19 +27,9 @@ class CancelledError extends Error {
   }
 }
 
-/**
- * Execute an op end-to-end: mark running, replay prior successful steps (skip),
- * run remaining steps, on failure run compensations in reverse for steps that
- * actually completed in this or prior attempts.
- */
-export async function runOperation(op: OperationRow, def: AnyOpKind): Promise<void> {
-  return withOpContext(op.id, () => runOperationInner(op, def));
-}
-
-async function runOperationInner(op: OperationRow, def: AnyOpKind): Promise<void> {
-  markOperationRunning(op.id);
-  const input = JSON.parse(op.input_json || "{}");
-  const ctx: OpContext = {
+function buildContext(op: OperationRow, input: unknown, phase: "forward" | "compensate"): OpContext {
+  const label = phase === "compensate" ? "(compensate)" : "";
+  return {
     opId: op.id,
     kind: op.kind,
     input,
@@ -44,20 +37,48 @@ async function runOperationInner(op: OperationRow, def: AnyOpKind): Promise<void
     triggeredBy: op.triggered_by,
     parentId: op.parent_id,
     attempt: op.attempt + 1,
-    isCancelRequested: () => isCancelRequested(op.id),
-    log: (line) => log(`op#${op.id}`, line),
+    // Compensations must not short-circuit on cancel.
+    isCancelRequested: () => (phase === "forward" ? isCancelRequested(op.id) : false),
+    log: (line) => log(`op#${op.id}${label ? ` ${label}` : ""}`, line),
     park: () => parkOp(op.id),
     unpark: () => unparkOp(op.id),
   };
+}
 
-  // Prior completed forward steps (from earlier attempt) are replayed as skips.
-  const completed = getCompletedForwardSteps(op.id);
+/**
+ * Execute an op end-to-end:
+ *   - mark running, replay prior 'ok'/'skipped' forward steps as skips
+ *   - for each new step: probe (adopt if already done) → mark executing → run
+ *   - on failure: run compensations in reverse, skipping any already done
+ * Resume-safe: if the engine crashed mid-step or mid-compensation, calling
+ * runOperation again converges to a healthy state (forward done OR fully
+ * compensated). The only escape hatch is `compensation_failed`, set when a
+ * compensate step throws — the reconciler will retry with backoff.
+ */
+export async function runOperation(op: OperationRow, def: AnyOpKind): Promise<void> {
+  return withOpContext(op.id, () => runOperationInner(op, def));
+}
+
+async function runOperationInner(op: OperationRow, def: AnyOpKind): Promise<void> {
+  const input = JSON.parse(op.input_json || "{}");
+
+  // Resume directly into compensation if the op was interrupted there.
+  if (op.status === "compensating") {
+    bumpAttempt(op.id);
+    log(`op#${op.id} resuming compensation (attempt ${op.attempt + 1})`);
+    await runCompensation(op, def, input, /*cancelled=*/ false);
+    return;
+  }
+
+  markOperationRunning(op.id);
+
+  const ctx = buildContext(op, input, "forward");
+
+  // Prior completed forward steps (from earlier attempts).
   const priorByName = new Map<string, unknown>();
-  for (const row of completed) {
+  for (const row of getCompletedForwardSteps(op.id)) {
     priorByName.set(row.step, row.output_json ? JSON.parse(row.output_json) : null);
   }
-  // Track steps completed in this run (for in-attempt compensation).
-  const completedThisRun: Array<{ step: Step; output: unknown }> = [];
   const priorOutputs: Record<string, unknown> = Object.fromEntries(priorByName);
 
   try {
@@ -65,7 +86,6 @@ async function runOperationInner(op: OperationRow, def: AnyOpKind): Promise<void
       if (ctx.isCancelRequested()) throw new CancelledError();
 
       if (priorByName.has(step.name)) {
-        // Resume: step already succeeded in a prior attempt. Record a skip row.
         const seq = nextStepSeq(op.id);
         insertStep({
           opId: op.id,
@@ -79,68 +99,113 @@ async function runOperationInner(op: OperationRow, def: AnyOpKind): Promise<void
         continue;
       }
 
-      const seq = nextStepSeq(op.id);
-      updateLastStep(op.id, step.name);
-      insertStep({
-        opId: op.id,
-        seq,
-        step: step.name,
-        phase: "forward",
-        status: "started",
-      });
-
-      try {
-        const out = await step.run(ctx, priorOutputs);
-        finishStep({
-          opId: op.id,
-          seq,
-          status: "ok",
-          outputJson: JSON.stringify(out ?? null),
-        });
-        priorOutputs[step.name] = out;
-        completedThisRun.push({ step, output: out });
-      } catch (err) {
-        finishStep({
-          opId: op.id,
-          seq,
-          status: "failed",
-          detail: errMsg(err),
-        });
-        throw err;
-      }
+      await runOneForwardStep(op, ctx, step, priorOutputs);
     }
 
     markOperationFinished(op.id, "done");
   } catch (err) {
     const cancelled = err instanceof CancelledError || ctx.isCancelRequested();
-    log(`op#${op.id} failed`, errMsg(err), cancelled ? "(cancelled)" : "");
+    log(`op#${op.id} forward failed`, errMsg(err), cancelled ? "(cancelled)" : "");
     markOperationCompensating(op.id, { message: errMsg(err), cancelled });
-
-    // Compensate in reverse: all completed forward steps (prior + this run)
-    // that have a compensate fn. Walk def.steps in reverse so order is correct.
-    await runCompensations(op, def, priorOutputs);
-
-    markOperationFinished(
-      op.id,
-      cancelled ? "cancelled" : "compensated",
-      { message: errMsg(err), cancelled },
-    );
+    await runCompensation(op, def, input, cancelled, { message: errMsg(err), cancelled });
   }
 }
 
-async function runCompensations(
+async function runOneForwardStep(
   op: OperationRow,
-  def: AnyOpKind,
+  ctx: OpContext,
+  step: Step,
   priorOutputs: Record<string, unknown>,
 ): Promise<void> {
-  const completed = new Set(
-    getCompletedForwardSteps(op.id).map((r) => r.step),
-  );
+  const seq = nextStepSeq(op.id);
+  updateLastStep(op.id, step.name);
+  insertStep({
+    opId: op.id,
+    seq,
+    step: step.name,
+    phase: "forward",
+    status: "started",
+  });
+
+  try {
+    // Probe first — if the side effect already exists (e.g. from a prior crashed
+    // attempt of this same step), adopt its output and skip `run`.
+    if (step.probe) {
+      try {
+        const adopted = await step.probe(ctx, priorOutputs);
+        if (adopted != null) {
+          finishStep({
+            opId: op.id,
+            seq,
+            status: "ok",
+            detail: "adopted existing side effect (probe)",
+            outputJson: JSON.stringify(adopted ?? null),
+          });
+          priorOutputs[step.name] = adopted;
+          return;
+        }
+      } catch (err) {
+        // Probe failure is informational, not fatal — fall through to run.
+        log(`op#${op.id} probe ${step.name} failed (continuing):`, errMsg(err));
+      }
+    }
+
+    markStepExecuting(op.id, seq);
+    const out = await step.run(ctx, priorOutputs);
+    finishStep({
+      opId: op.id,
+      seq,
+      status: "ok",
+      outputJson: JSON.stringify(out ?? null),
+    });
+    priorOutputs[step.name] = out;
+  } catch (err) {
+    finishStep({
+      opId: op.id,
+      seq,
+      status: "failed",
+      detail: errMsg(err),
+    });
+    throw err;
+  }
+}
+
+/**
+ * Walk forward steps in reverse, running compensate for any that completed
+ * (in this or a prior attempt). Skips compensate steps already recorded as
+ * ok/skipped (durable resume). On compensate failure, marks the op
+ * `compensation_failed` so the reconciler can retry.
+ */
+async function runCompensation(
+  op: OperationRow,
+  def: AnyOpKind,
+  input: unknown,
+  cancelled: boolean,
+  error?: unknown,
+): Promise<void> {
+  const ctx = buildContext(op, input, "compensate");
+
+  // Outputs from completed forward steps (needed by compensate fns).
+  const priorOutputs: Record<string, unknown> = {};
+  const forwardDone = new Set<string>();
+  for (const row of getCompletedForwardSteps(op.id)) {
+    forwardDone.add(row.step);
+    priorOutputs[row.step] = row.output_json ? JSON.parse(row.output_json) : null;
+  }
+
+  // Compensate phase rows that already finished (across crashes/restarts).
+  const compensateDone = new Set<string>();
+  for (const row of getCompletedCompensateSteps(op.id)) {
+    compensateDone.add(row.step);
+  }
+
+  let anyFailed = false;
   for (let i = def.steps.length - 1; i >= 0; i--) {
     const step = def.steps[i];
     if (!step.compensate) continue;
-    if (!completed.has(step.name)) continue;
-    const out = priorOutputs[step.name];
+    if (!forwardDone.has(step.name)) continue;
+    if (compensateDone.has(step.name)) continue;
+
     const seq = nextStepSeq(op.id);
     insertStep({
       opId: op.id,
@@ -149,20 +214,31 @@ async function runCompensations(
       phase: "compensate",
       status: "started",
     });
+
+    const out = priorOutputs[step.name];
+
+    // probeCompensated lets a step short-circuit if the resource is already gone
+    // (e.g. compensate ran successfully but engine crashed before finishStep).
+    if (step.probeCompensated) {
+      try {
+        const gone = await step.probeCompensated(ctx, out, priorOutputs);
+        if (gone) {
+          finishStep({
+            opId: op.id,
+            seq,
+            status: "skipped",
+            detail: "side effect already gone (probeCompensated)",
+          });
+          continue;
+        }
+      } catch (err) {
+        log(`op#${op.id} probeCompensated ${step.name} failed (continuing):`, errMsg(err));
+      }
+    }
+
+    markStepExecuting(op.id, seq);
     try {
-      await step.compensate({
-        opId: op.id,
-        kind: op.kind,
-        input: JSON.parse(op.input_json || "{}"),
-        trigger: op.trigger,
-        triggeredBy: op.triggered_by,
-        parentId: op.parent_id,
-        attempt: op.attempt,
-        isCancelRequested: () => false, // don't short-circuit compensations
-        log: (line) => log(`op#${op.id} (compensate)`, line),
-        park: () => parkOp(op.id),
-        unpark: () => unparkOp(op.id),
-      }, out, priorOutputs);
+      await step.compensate!(ctx, out, priorOutputs);
       finishStep({ opId: op.id, seq, status: "ok" });
     } catch (err) {
       finishStep({
@@ -171,10 +247,28 @@ async function runCompensations(
         status: "failed",
         detail: errMsg(err),
       });
-      log(`op#${op.id} compensate step ${step.name} failed:`, errMsg(err));
-      // continue compensating the rest — best effort
+      log(`op#${op.id} compensate ${step.name} failed:`, errMsg(err));
+      anyFailed = true;
+      // Continue compensating earlier steps — best-effort rollback.
     }
   }
+
+  if (anyFailed) {
+    // Leave status as 'compensating' but flag the op finished for the
+    // reconciler. Actually: mark as compensation_failed terminal — reconciler
+    // will only retry while still in 'compensating'. We stay in compensating
+    // so the reconciler keeps retrying; if attempts exceed budget the
+    // reconciler escalates to compensation_failed.
+    log(`op#${op.id} compensation incomplete — left in 'compensating' for retry`);
+    // No finishStep on the operation; leave status='compensating'.
+    return;
+  }
+
+  markOperationFinished(
+    op.id,
+    cancelled ? "cancelled" : "compensated",
+    error,
+  );
 }
 
 function errMsg(err: unknown): string {

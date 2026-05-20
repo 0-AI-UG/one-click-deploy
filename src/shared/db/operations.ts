@@ -7,10 +7,11 @@ export type OperationStatus =
   | "failed"
   | "compensating"
   | "compensated"
+  | "compensation_failed"
   | "cancelled";
 
 export type StepPhase = "forward" | "compensate";
-export type StepStatus = "started" | "ok" | "skipped" | "failed";
+export type StepStatus = "started" | "executing" | "ok" | "skipped" | "failed";
 
 export type OperationRow = {
   id: number;
@@ -127,7 +128,7 @@ export function markOperationRunning(id: number): void {
 
 export function markOperationFinished(
   id: number,
-  status: Extract<OperationStatus, "done" | "failed" | "cancelled" | "compensated">,
+  status: Extract<OperationStatus, "done" | "failed" | "cancelled" | "compensated" | "compensation_failed">,
   error?: unknown,
 ): void {
   db.run(
@@ -141,6 +142,11 @@ export function markOperationCompensating(id: number, error?: unknown): void {
     "UPDATE operations SET status = 'compensating', error_json = ? WHERE id = ?",
     [error ? JSON.stringify(error) : null, id],
   );
+}
+
+/** Bump attempt counter; used when re-entering compensation after a crash. */
+export function bumpAttempt(id: number): void {
+  db.run("UPDATE operations SET attempt = attempt + 1 WHERE id = ?", [id]);
 }
 
 export function requestCancel(id: number): void {
@@ -238,11 +244,59 @@ export function getSteps(opId: number, sinceSeq = 0): OperationStepRow[] {
 }
 
 export function getCompletedForwardSteps(opId: number): OperationStepRow[] {
+  // Includes 'skipped' so a resume that already replayed prior-attempt steps
+  // still sees them on the next resume (e.g. crash during compensation).
   return db
     .query(
       `SELECT * FROM operation_steps
-        WHERE op_id = ? AND phase = 'forward' AND status = 'ok'
+        WHERE op_id = ? AND phase = 'forward' AND status IN ('ok','skipped')
         ORDER BY seq ASC`,
     )
     .all(opId) as OperationStepRow[];
+}
+
+/**
+ * Names of steps whose compensate phase already completed (ok or skipped).
+ * Used by the runner to skip already-done compensations on resume.
+ */
+export function getCompletedCompensateSteps(opId: number): OperationStepRow[] {
+  return db
+    .query(
+      `SELECT * FROM operation_steps
+        WHERE op_id = ? AND phase = 'compensate' AND status IN ('ok','skipped')
+        ORDER BY seq ASC`,
+    )
+    .all(opId) as OperationStepRow[];
+}
+
+/**
+ * Latest step row for an op (any phase). Used by resume to detect a step that
+ * was mid-execution (status='executing' or 'started') when the engine died.
+ */
+export function getLatestStep(opId: number): OperationStepRow | null {
+  return db
+    .query("SELECT * FROM operation_steps WHERE op_id = ? ORDER BY seq DESC LIMIT 1")
+    .get(opId) as OperationStepRow | null;
+}
+
+/** Flip a step row to status='executing' immediately before its side effect. */
+export function markStepExecuting(opId: number, seq: number): void {
+  db.run(
+    "UPDATE operation_steps SET status = 'executing' WHERE op_id = ? AND seq = ?",
+    [opId, seq],
+  );
+}
+
+/**
+ * Reset transient 'executing'/'started' step rows on a step the runner is
+ * about to retry. Called during resume so prior crash-rows don't poison
+ * `getLatestStep` checks; the step is re-attempted (probe → run).
+ */
+export function abandonInFlightSteps(opId: number): void {
+  db.run(
+    `UPDATE operation_steps
+        SET status = 'failed', detail = 'abandoned: engine restarted mid-step', finished_at = datetime('now')
+        WHERE op_id = ? AND status IN ('started','executing')`,
+    [opId],
+  );
 }

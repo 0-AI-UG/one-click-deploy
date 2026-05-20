@@ -22,6 +22,19 @@ export type Step<Input = unknown, Out = unknown> = {
   label?: string;
   run: (ctx: OpContext<Input>, prior: Record<string, unknown>) => Promise<Out>;
   compensate?: (ctx: OpContext<Input>, out: Out, prior: Record<string, unknown>) => Promise<void>;
+  /**
+   * Idempotency check. If the side effect from `run` already exists in the
+   * world (detected via tags/labels/listing), return its output; the runner
+   * will adopt it and skip `run`. Critical for safe resume after a crash that
+   * happened between starting and finishing `run`.
+   * Returning null means "no existing side effect found, please run".
+   */
+  probe?: (ctx: OpContext<Input>, prior: Record<string, unknown>) => Promise<Out | null>;
+  /**
+   * Mirror of `probe` for compensation: return true if the side effect is
+   * already gone (so the compensate body can be skipped during resume).
+   */
+  probeCompensated?: (ctx: OpContext<Input>, out: Out, prior: Record<string, unknown>) => Promise<boolean>;
 };
 
 export type OpKindDefinition<Input = unknown> = {

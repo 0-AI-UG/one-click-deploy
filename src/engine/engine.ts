@@ -2,6 +2,8 @@ import {
   listPendingOperations,
   listRunningOperations,
   markOperationFinished,
+  abandonInFlightSteps,
+  getOperation,
 } from "../shared/db/operations.ts";
 import { tryAcquire, release } from "./scheduler.ts";
 import { getOp } from "./ops/registry.ts";
@@ -66,6 +68,28 @@ async function tick(): Promise<void> {
     if (inFlight.has(op.id)) continue;
     tryStart(op);
   }
+  // Pick up ops parked in 'compensating' (e.g. resumed after restart or
+  // re-enqueued by the reconciler).
+  const compensating = listRunningOperations().filter((o) => o.status === "compensating");
+  for (const op of compensating) {
+    if (activeCount() >= MAX_CONCURRENT) break;
+    if (inFlight.has(op.id)) continue;
+    tryStart(op);
+  }
+}
+
+/**
+ * Requeue an op stuck in 'compensating' for another compensation pass. Used by
+ * the reconciler's stuck-state sweep. Idempotent: a no-op if the op is already
+ * in-flight or no longer compensating.
+ */
+export function requeueForCompensation(opId: number): void {
+  if (inFlight.has(opId)) return;
+  const op = getOperation(opId);
+  if (!op || op.status !== "compensating") return;
+  // Step-runner will re-enter runCompensation based on op.status.
+  abandonInFlightSteps(opId);
+  tryStart(op);
 }
 
 function tryStart(op: OperationRow): void {
@@ -99,19 +123,19 @@ async function resumeInterruptedOperations(): Promise<void> {
   log(`resuming ${interrupted.length} interrupted op(s) after restart`);
   const { default: db } = await import("../shared/db/connection.ts");
   for (const op of interrupted) {
+    // Mark any step row caught mid-flight ('started' or 'executing') as
+    // failed-and-abandoned. The step-runner will re-attempt the step on resume;
+    // its `probe` (if any) will adopt the existing side effect so the world
+    // remains consistent.
+    abandonInFlightSteps(op.id);
+
     if (op.status === "compensating") {
-      // We can't safely re-enter compensation mid-stream without knowing which
-      // compensate steps already completed (compensate rows are recorded but
-      // step-runner does best-effort and continues on failure, so partial
-      // state may be unclear). Fail loudly so the reconciler sweep surfaces it.
-      const errMsg = "interrupted during compensation — manual recovery may be needed";
-      log(`op#${op.id} ${errMsg}`);
-      db.run(
-        "UPDATE operations SET status = 'failed', finished_at = datetime('now'), error_json = ? WHERE id = ?",
-        [JSON.stringify({ message: errMsg }), op.id],
-      );
+      // Leave it as 'compensating' — runOperation detects this and re-enters
+      // runCompensation, which skips compensate steps already marked ok/skipped.
+      log(`op#${op.id} will resume compensation`);
       continue;
     }
+    // Running ops go back to pending so the main loop picks them up.
     db.run("UPDATE operations SET status = 'pending' WHERE id = ?", [op.id]);
   }
 }

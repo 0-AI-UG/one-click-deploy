@@ -5,11 +5,28 @@ import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
 type RestartServiceInput = { serviceId: number };
+type Precond = { runnable: boolean; reason?: string };
 
-const restartAllInstances: Step<RestartServiceInput, { allHealthy: boolean }> = {
+const checkPrecondition: Step<RestartServiceInput, Precond> = {
+  name: "check_precondition",
+  label: "Check current state",
+  async run(ctx) {
+    const service = db.getService(ctx.input.serviceId);
+    if (!service) throw new Error("Service not found");
+    if (service.status === "paused" || service.status === "deploying") {
+      ctx.log(`service ${service.name} status='${service.status}' — restart skipped`);
+      return { runnable: false, reason: `status=${service.status}` };
+    }
+    return { runnable: true };
+  },
+};
+
+const restartAllInstances: Step<RestartServiceInput, { allHealthy: boolean; skipped?: boolean }> = {
   name: "restart_container",
   label: "Restart containers",
-  async run(ctx) {
+  async run(ctx, prior) {
+    const pre = prior["check_precondition"] as Precond | undefined;
+    if (pre && !pre.runnable) return { allHealthy: true, skipped: true };
     const service = db.getService(ctx.input.serviceId);
     if (!service) throw new Error("Service not found");
     const catalog = getCatalogEntry(service.service_type);
@@ -39,7 +56,7 @@ const restartServiceOp: OpKindDefinition<RestartServiceInput> = {
   kind: "restart_service",
   label: "Restart service",
   resourceKeys: (input) => [`service:${input.serviceId}`],
-  steps: [restartAllInstances],
+  steps: [checkPrecondition, restartAllInstances],
 };
 
 registerOp(restartServiceOp as OpKindDefinition<any>);

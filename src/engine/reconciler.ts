@@ -8,6 +8,8 @@ import { syncAppCaddy } from "./scale/caddy-manager.ts";
 import { replicaBindHost } from "./scale/types.ts";
 import dbConn from "../shared/db/connection.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
+import { markOperationFinished } from "../shared/db/operations.ts";
+import { requeueForCompensation } from "./engine.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -285,6 +287,7 @@ async function processServer(work: ServerWorkItem): Promise<void> {
 
 const STUCK_COMPENSATING_MIN = 5;
 const STUCK_PENDING_RUNNING_MIN = 10;
+const MAX_COMPENSATION_ATTEMPTS = 5;
 
 function sweepStuckStates(): void {
   try {
@@ -314,14 +317,26 @@ function sweepStuckStates(): void {
   try {
     const stuckComp = dbConn
       .query(
-        `SELECT id, kind, started_at, last_step FROM operations
+        `SELECT id, kind, started_at, last_step, attempt FROM operations
           WHERE status = 'compensating'
             AND started_at IS NOT NULL
             AND started_at < datetime('now', ?)`,
       )
-      .all(`-${STUCK_COMPENSATING_MIN} minutes`) as Array<Pick<OperationRow, "id" | "kind" | "started_at" | "last_step">>;
+      .all(`-${STUCK_COMPENSATING_MIN} minutes`) as Array<Pick<OperationRow, "id" | "kind" | "started_at" | "last_step" | "attempt">>;
     for (const op of stuckComp) {
-      log("sweep", `op#${op.id} (${op.kind}) stuck in 'compensating' since ${op.started_at} (last_step=${op.last_step})`);
+      if (op.attempt >= MAX_COMPENSATION_ATTEMPTS) {
+        log("sweep", `op#${op.id} (${op.kind}) exhausted compensation retries (attempt=${op.attempt}) — marking compensation_failed`);
+        markOperationFinished(op.id, "compensation_failed", {
+          message: "compensation retries exhausted; affected resources may be stranded",
+        });
+        continue;
+      }
+      log("sweep", `op#${op.id} (${op.kind}) stuck in 'compensating' since ${op.started_at} (last_step=${op.last_step}, attempt=${op.attempt}) — re-enqueueing`);
+      try {
+        requeueForCompensation(op.id);
+      } catch (err) {
+        log("sweep", `requeue failed for op#${op.id}: ${err}`);
+      }
     }
   } catch (err) {
     log("sweep", `stuck compensating query failed: ${err}`);
@@ -338,6 +353,17 @@ function sweepStuckStates(): void {
       }>;
     for (const op of stuck) {
       log("sweep", `op#${op.id} (${op.kind}) stuck in '${op.status}' since ${op.started_at ?? op.enqueued_at} (last_step=${op.last_step})`);
+      // A 'running' op with no in-process holder is a zombie from a prior
+      // crash. Revert it to 'pending' so the main loop picks it up. The
+      // step-runner's probe/skip logic guarantees no double-execution of
+      // already-completed steps.
+      if (op.status === "running") {
+        try {
+          dbConn.run("UPDATE operations SET status = 'pending' WHERE id = ? AND status = 'running'", [op.id]);
+        } catch (err) {
+          log("sweep", `revive failed for op#${op.id}: ${err}`);
+        }
+      }
     }
   } catch (err) {
     log("sweep", `stuck pending/running query failed: ${err}`);
