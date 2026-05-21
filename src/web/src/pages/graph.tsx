@@ -527,22 +527,28 @@ export function GraphPage() {
     }
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
+  // Native non-passive wheel listener — React's onWheel is passive in React 17+
+  // so preventDefault() is a no-op there and the page would scroll behind us.
+  useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) / rect.width;
-    const my = (e.clientY - rect.top) / rect.height;
-    const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
-    setViewBox((vb) => {
-      const newW = Math.min(8000, Math.max(200, vb.w * factor));
-      const newH = Math.min(8000, Math.max(150, vb.h * factor));
-      const dx = (newW - vb.w) * mx;
-      const dy = (newH - vb.h) * my;
-      return { x: vb.x - dx, y: vb.y - dy, w: newW, h: newH };
-    });
-  };
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) / rect.width;
+      const my = (e.clientY - rect.top) / rect.height;
+      const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+      setViewBox((vb) => {
+        const newW = Math.min(8000, Math.max(200, vb.w * factor));
+        const newH = Math.min(8000, Math.max(150, vb.h * factor));
+        const dx = (newW - vb.w) * mx;
+        const dy = (newH - vb.h) * my;
+        return { x: vb.x - dx, y: vb.y - dy, w: newW, h: newH };
+      });
+    };
+    svg.addEventListener("wheel", handler, { passive: false });
+    return () => svg.removeEventListener("wheel", handler);
+  }, []);
 
   const onNodeMouseEnter = (key: NodeKey) => {
     setHovered(key);
@@ -829,7 +835,6 @@ export function GraphPage() {
             onMouseUp={onSvgMouseUp}
             onMouseLeave={onSvgMouseUp}
             onContextMenu={onSvgContextMenu}
-            onWheel={onWheel}
           >
             <defs>
               <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -1022,34 +1027,7 @@ export function GraphPage() {
             />
           )}
 
-          {/* Right-click context menu */}
-          {ctxMenu && (
-            <ContextMenu
-              node={ctxMenu.node}
-              data={data}
-              svgRef={svgRef}
-              clientX={ctxMenu.x}
-              clientY={ctxMenu.y}
-              onClose={() => setCtxMenu(null)}
-              onRename={(key, label) => setRenameState({ key, value: label })}
-              onAppAction={appAction}
-              onSvcAction={svcAction}
-              onDeleteEnv={deleteEnv}
-              onDetachVolume={detachVolumeFromApp}
-            />
-          )}
-
-          {/* New: empty-canvas create menu / + button picker */}
-          {createMenu && (
-            <CreateMenu
-              clientX={createMenu.x}
-              clientY={createMenu.y}
-              svgRef={svgRef}
-              catalog={catalog}
-              onClose={() => setCreateMenu(null)}
-              onCreateEnv={createEnvironment}
-            />
-          )}
+          {/* Minimap rendered inside the canvas (positioned absolute below) */}
 
           {/* Minimap */}
           <Minimap
@@ -1067,6 +1045,36 @@ export function GraphPage() {
             <div className="text-[7px] text-muted normal-case pt-1 border-t border-fg/10">drag handle → target · right-click for actions · double-click to rename</div>
           </div>
         </div>
+      )}
+
+      {/* Right-click context menu — rendered at top level with position:fixed
+          so it escapes the canvas's overflow:hidden and uses raw viewport
+          coords (no container offset math to get wrong). */}
+      {ctxMenu && (
+        <ContextMenu
+          node={ctxMenu.node}
+          data={data}
+          clientX={ctxMenu.x}
+          clientY={ctxMenu.y}
+          onClose={() => setCtxMenu(null)}
+          onRename={(key, label) => setRenameState({ key, value: label })}
+          onAppAction={appAction}
+          onSvcAction={svcAction}
+          onDeleteEnv={deleteEnv}
+          onDetachVolume={detachVolumeFromApp}
+        />
+      )}
+
+      {/* Create picker — same treatment so it works from the New button (above
+          the canvas) and from canvas right-click alike. */}
+      {createMenu && (
+        <CreateMenu
+          clientX={createMenu.x}
+          clientY={createMenu.y}
+          catalog={catalog}
+          onClose={() => setCreateMenu(null)}
+          onCreateEnv={createEnvironment}
+        />
       )}
     </div>
   );
@@ -1160,11 +1168,10 @@ function Minimap({
 // ---------- context menu ----------
 
 function ContextMenu({
-  node, data, svgRef, clientX, clientY, onClose, onRename, onAppAction, onSvcAction, onDeleteEnv, onDetachVolume,
+  node, data, clientX, clientY, onClose, onRename, onAppAction, onSvcAction, onDeleteEnv, onDetachVolume,
 }: {
   node: LaidOutNode;
   data: GraphData;
-  svgRef: React.RefObject<SVGSVGElement | null>;
   clientX: number;
   clientY: number;
   onClose: () => void;
@@ -1174,15 +1181,17 @@ function ContextMenu({
   onDeleteEnv: (id: number, name: string) => void;
   onDetachVolume: (appId: number) => void;
 }) {
-  const svg = svgRef.current;
-  if (!svg) return null;
-  const rect = svg.getBoundingClientRect();
-  // Clamp within the canvas container.
+  // Fixed positioning anchored at the actual viewport click point, clamped to
+  // the viewport so the menu doesn't spill off-screen.
   const W = 180, H = 220;
-  let left = clientX - rect.left;
-  let top = clientY - rect.top;
-  if (left + W > rect.width) left = rect.width - W - 4;
-  if (top + H > rect.height) top = rect.height - H - 4;
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 768;
+  let left = clientX;
+  let top = clientY;
+  if (left + W > vw) left = vw - W - 4;
+  if (top + H > vh) top = vh - H - 4;
+  if (left < 4) left = 4;
+  if (top < 4) top = 4;
 
   const Item = ({ icon: Icon, label, onClick, danger = false }: { icon: any; label: string; onClick: () => void; danger?: boolean }) => (
     <button
@@ -1256,9 +1265,9 @@ function ContextMenu({
 
   return (
     <>
-      <div className="fixed inset-0 z-20" onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
+      <div className="fixed inset-0 z-40" onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
       <div
-        className="absolute bg-white border-2 border-fg shadow-neo z-30 py-1"
+        className="fixed bg-white border-2 border-fg shadow-neo z-50 py-1"
         style={{ left, top, width: W }}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -1272,24 +1281,24 @@ function ContextMenu({
 // ---------- create menu ----------
 
 function CreateMenu({
-  clientX, clientY, svgRef, catalog, onClose, onCreateEnv,
+  clientX, clientY, catalog, onClose, onCreateEnv,
 }: {
   clientX: number; clientY: number;
-  svgRef: React.RefObject<SVGSVGElement | null>;
   catalog: ServiceCatalogEntry[];
   onClose: () => void;
   onCreateEnv: () => void;
 }) {
   const [showCatalog, setShowCatalog] = useState(false);
-  const svg = svgRef.current;
-  if (!svg) return null;
-  const rect = svg.getBoundingClientRect();
   const W = showCatalog ? 280 : 200;
   const H = showCatalog ? 320 : 160;
-  let left = clientX - rect.left;
-  let top = clientY - rect.top;
-  if (left + W > rect.width) left = rect.width - W - 4;
-  if (top + H > rect.height) top = rect.height - H - 4;
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 768;
+  let left = clientX;
+  let top = clientY;
+  if (left + W > vw) left = vw - W - 4;
+  if (top + H > vh) top = vh - H - 4;
+  if (left < 4) left = 4;
+  if (top < 4) top = 4;
 
   const Row = ({ icon: Icon, label, sub, onClick, chevron = false }: { icon: any; label: string; sub?: string; onClick: () => void; chevron?: boolean }) => (
     <button
@@ -1308,9 +1317,9 @@ function CreateMenu({
 
   return (
     <>
-      <div className="fixed inset-0 z-20" onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
+      <div className="fixed inset-0 z-40" onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
       <div
-        className="absolute bg-white border-2 border-fg shadow-neo z-30"
+        className="fixed bg-white border-2 border-fg shadow-neo z-50"
         style={{ left, top, width: W, maxHeight: H, overflow: "auto" }}
         onMouseDown={(e) => e.stopPropagation()}
       >
