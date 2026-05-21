@@ -70,12 +70,13 @@ const SVC_OP_LABELS: Record<string, string> = {
 const NODE_W = 180;
 const NODE_H = 56;
 const V_GAP = 24;
+const COL_GAP = 280;
 const COL_X: Record<NodeKind, number> = {
   volume: 60,
-  server: 320,
-  app: 620,
-  service: 620,
-  env: 920,
+  server: 60 + COL_GAP,
+  app: 60 + COL_GAP * 2,
+  service: 60 + COL_GAP * 2,
+  env: 60 + COL_GAP * 3,
 };
 
 const POS_KEY = "graph-positions-v1";
@@ -103,56 +104,116 @@ function statusColor(status: string | undefined): string {
   }
 }
 
+/**
+ * Layered LTR layout with barycentric Y ordering.
+ * Columns: volumes | servers | apps+services | environments.
+ * Inside each column, nodes are ordered by the mean Y of their neighbors in
+ * the already-placed adjacent column, which collapses crossings into a roughly
+ * radial arrangement around each server hub. Saved positions (from user drag)
+ * override the computed slot for that node.
+ */
 function layoutNodes(data: GraphData, saved: PosMap): LaidOutNode[] {
-  const cols: Record<NodeKind, LaidOutNode[]> = { volume: [], server: [], app: [], service: [], env: [] };
+  const nodes: Record<NodeKind, LaidOutNode[]> = { volume: [], server: [], app: [], service: [], env: [] };
 
   for (const v of data.volumes) {
-    cols.volume.push({ key: nk("volume", v.id), kind: "volume", id: v.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: v.name, sub: `${v.size_gb}GB · ${v.location}` });
+    nodes.volume.push({ key: nk("volume", v.id), kind: "volume", id: v.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: v.name, sub: `${v.size_gb}GB · ${v.location}` });
   }
   for (const s of data.servers) {
-    cols.server.push({ key: nk("server", s.id), kind: "server", id: s.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: s.name, sub: `${s.type} · ${s.location}`, status: s.status });
+    nodes.server.push({ key: nk("server", s.id), kind: "server", id: s.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: s.name, sub: `${s.type} · ${s.location}`, status: s.status });
   }
   for (const a of data.apps) {
-    cols.app.push({ key: nk("app", a.id), kind: "app", id: a.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: a.name, sub: a.domain || `${a.desired_replicas}× replica${a.desired_replicas === 1 ? "" : "s"}`, status: a.status });
+    nodes.app.push({ key: nk("app", a.id), kind: "app", id: a.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: a.name, sub: a.domain || `${a.desired_replicas}× replica${a.desired_replicas === 1 ? "" : "s"}`, status: a.status });
   }
   for (const s of data.services) {
-    cols.service.push({ key: nk("service", s.id), kind: "service", id: s.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: s.name, sub: `${s.service_type} ${s.version}`, status: s.status });
+    nodes.service.push({ key: nk("service", s.id), kind: "service", id: s.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: s.name, sub: `${s.service_type} ${s.version}`, status: s.status });
   }
   for (const e of data.environments) {
-    cols.env.push({ key: nk("env", e.id), kind: "env", id: e.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: e.name, sub: `${e.var_count} var${e.var_count === 1 ? "" : "s"}` });
+    nodes.env.push({ key: nk("env", e.id), kind: "env", id: e.id, x: 0, y: 0, w: NODE_W, h: NODE_H, label: e.name, sub: `${e.var_count} var${e.var_count === 1 ? "" : "s"}` });
   }
 
-  const out: LaidOutNode[] = [];
-  const placeColumn = (nodes: LaidOutNode[], xOverride?: number, yStart = 60) => {
-    let y = yStart;
-    for (const n of nodes) {
-      const x = xOverride ?? COL_X[n.kind];
-      const sv = saved[n.key];
-      if (sv) {
-        n.x = sv.x; n.y = sv.y;
-      } else {
-        n.x = x; n.y = y;
-        y += NODE_H + V_GAP;
-      }
-      out.push(n);
-    }
+  // Adjacency: for each node, which keys does it connect to in adjacent columns?
+  const adj = new Map<NodeKey, NodeKey[]>();
+  const addAdj = (a: NodeKey, b: NodeKey) => {
+    if (!adj.has(a)) adj.set(a, []);
+    if (!adj.has(b)) adj.set(b, []);
+    adj.get(a)!.push(b);
+    adj.get(b)!.push(a);
   };
-  placeColumn(cols.volume);
-  placeColumn(cols.server);
-  // Apps and services share col 2 but stagger vertically.
-  let yAS = 60;
-  for (const n of cols.app) {
-    const sv = saved[n.key];
-    if (sv) { n.x = sv.x; n.y = sv.y; } else { n.x = COL_X.app; n.y = yAS; yAS += NODE_H + V_GAP; }
-    out.push(n);
+  const seen = new Set<string>();
+  for (const r of data.replicas) {
+    const k = `r:${r.server_id}:${r.app_id}`;
+    if (seen.has(k)) continue; seen.add(k);
+    addAdj(nk("server", r.server_id), nk("app", r.app_id));
   }
-  yAS += V_GAP;
-  for (const n of cols.service) {
-    const sv = saved[n.key];
-    if (sv) { n.x = sv.x; n.y = sv.y; } else { n.x = COL_X.service; n.y = yAS; yAS += NODE_H + V_GAP; }
-    out.push(n);
+  for (const i of data.service_instances) {
+    const k = `i:${i.server_id}:${i.service_id}`;
+    if (seen.has(k)) continue; seen.add(k);
+    addAdj(nk("server", i.server_id), nk("service", i.service_id));
   }
-  placeColumn(cols.env);
+  for (const a of data.apps) {
+    if (a.environment_id != null) addAdj(nk("app", a.id), nk("env", a.environment_id));
+    if (a.volume_id) addAdj(nk("app", a.id), nk("volume", a.volume_id));
+  }
+  for (const l of data.service_links) {
+    addAdj(nk("service", l.service_id), nk("env", l.environment_id));
+  }
+
+  // Anchor column: servers. Order by name alphabetically and place evenly.
+  const ySlot = (i: number, yStart = 60) => yStart + i * (NODE_H + V_GAP);
+  nodes.server.sort((a, b) => a.label.localeCompare(b.label));
+  nodes.server.forEach((n, i) => { n.x = COL_X.server; n.y = ySlot(i); });
+
+  // Helper: place a column at column-x, sorted by mean Y of neighbors in `refKeys`.
+  const placedY = new Map<NodeKey, number>();
+  for (const n of nodes.server) placedY.set(n.key, n.y);
+
+  const meanNeighborY = (key: NodeKey): number => {
+    const ns = adj.get(key) || [];
+    const ys: number[] = [];
+    for (const nk of ns) {
+      const y = placedY.get(nk);
+      if (y != null) ys.push(y);
+    }
+    if (ys.length === 0) return Number.POSITIVE_INFINITY; // unconnected sinks to bottom
+    return ys.reduce((s, v) => s + v, 0) / ys.length;
+  };
+
+  const placeCol = (col: LaidOutNode[], x: number, yStart = 60) => {
+    col.sort((a, b) => {
+      const ma = meanNeighborY(a.key);
+      const mb = meanNeighborY(b.key);
+      if (ma === mb) return a.label.localeCompare(b.label);
+      return ma - mb;
+    });
+    col.forEach((n, i) => { n.x = x; n.y = ySlot(i, yStart); placedY.set(n.key, n.y); });
+  };
+
+  // Apps & services both anchor off servers; place them interleaved in one
+  // sorted list so the order reflects neighbor-Y rather than type.
+  const middle = [...nodes.app, ...nodes.service];
+  placeCol(middle, COL_X.app);
+  // Volumes hang off apps; place after apps so we can read app Y positions.
+  placeCol(nodes.volume, COL_X.volume);
+  // Environments hang off apps + services.
+  placeCol(nodes.env, COL_X.env);
+
+  // Second pass on the middle column: re-sort using both left (servers) and
+  // right (envs/volumes) neighbors — barycentric refinement to reduce crossings.
+  placeCol(middle, COL_X.app);
+
+  const out: LaidOutNode[] = [
+    ...nodes.volume,
+    ...nodes.server,
+    ...nodes.app,
+    ...nodes.service,
+    ...nodes.env,
+  ];
+
+  // Apply saved (user-dragged) positions on top.
+  for (const n of out) {
+    const sv = saved[n.key];
+    if (sv) { n.x = sv.x; n.y = sv.y; }
+  }
   return out;
 }
 
@@ -731,17 +792,22 @@ function NodePopover({
   onAppAction: (action: string, appId: number) => void;
   onSvcAction: (action: string, svcId: number) => void;
 }) {
-  // Compute screen coordinate of node's bottom-right corner
+  // Convert node's bottom-right SVG coord to screen coord via the SVG's CTM,
+  // which already accounts for preserveAspectRatio letterboxing (the cause of
+  // the offset growing with distance from center).
   const svg = svgRef.current;
   if (!svg) return null;
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return null;
+  const pt = svg.createSVGPoint();
+  pt.x = node.x + node.w;
+  pt.y = node.y + node.h;
+  const screen = pt.matrixTransform(ctm);
   const rect = svg.getBoundingClientRect();
-  const scaleX = rect.width / viewBox.w;
-  const scaleY = rect.height / viewBox.h;
-  const screenX = (node.x + node.w - viewBox.x) * scaleX + rect.left;
-  const screenY = (node.y + node.h - viewBox.y) * scaleY + rect.top;
-  // Container-relative (since popover lives inside the same container as the svg)
-  const left = screenX - rect.left + 8;
-  const top = screenY - rect.top + 8;
+  // viewBox tracks `useEffect` with ResizeObserver, but referenced for hook deps
+  void viewBox;
+  const left = screen.x - rect.left + 8;
+  const top = screen.y - rect.top + 8;
 
   const Icon = ICONS[node.kind];
   const Loading = (action: string, kind: "app" | "svc") => {
