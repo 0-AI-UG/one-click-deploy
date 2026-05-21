@@ -20,7 +20,7 @@ import {
 import { syncAppCaddy, removeAppCaddy } from "../scale/caddy-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
-import { validateDeployRequest } from "../../shared/validate.ts";
+import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
 import { createMasker } from "../../shared/mask.ts";
 import { processIncomingEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
 import { getProviderToken } from "../../shared/secret-store.ts";
@@ -143,6 +143,12 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
     }
     const validation = validateDeployRequest(req);
     if (!validation.valid) throw new Error(validation.error);
+
+    // Reject unsafe volume host paths early so the user sees a clear error
+    // rather than a deploy that fails deep inside docker run.
+    for (const v of req.extra_volumes || []) {
+      assertSafeHostPath(v.host_path, req.app_name);
+    }
 
     const settings = db.getSettings();
     const panel = db.getPanel();

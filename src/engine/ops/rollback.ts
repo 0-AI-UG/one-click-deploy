@@ -5,6 +5,7 @@ import {
   healthCheck,
   composeHealthCheck,
   describeFailure,
+  buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -187,9 +188,16 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
       }
 
       await removeContainer(server.ipv4, app.name, hostKey);
-      const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-      const extraVolFlags = parseExtraVolumes(app.extra_volumes).map((v) => `-v ${v}`).join(" ");
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${app.name}:latest`;
+      const cmd = buildDockerRunArgs({
+        name: app.name,
+        image: `${app.name}:latest`,
+        appName: app.name,
+        network: null,
+        publish: { bindAddr, hostPort, containerPort: app.container_port },
+        envFilePath: checkout.envFilePath || undefined,
+        volumeMount: app.volume_mount || undefined,
+        extraVolumes: parseExtraVolumes(app.extra_volumes),
+      });
       const runResult = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (runResult.exitCode !== 0) {
         throw new Error(describeFailure("Failed to start container after rollback rebuild", runResult));
@@ -212,10 +220,16 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
       if (!app || !server) return;
       const hostKey = server.ssh_host_key || undefined;
       await removeContainer(server.ipv4, app.name, hostKey);
-      const envFileFlag = snap.envFilePath ? `--env-file ${snap.envFilePath}` : "";
-      const volumeFlag = snap.volumeMount ? `-v ${snap.volumeMount}` : "";
-      const extraVolFlags = snap.extraVolumes.map((v) => `-v ${v}`).join(" ");
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${snap.bindAddr}:${snap.hostPort}:${snap.containerPort} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${snap.image}`;
+      const cmd = buildDockerRunArgs({
+        name: app.name,
+        image: snap.image,
+        appName: app.name,
+        network: null,
+        publish: { bindAddr: snap.bindAddr, hostPort: snap.hostPort, containerPort: snap.containerPort },
+        envFilePath: snap.envFilePath || undefined,
+        volumeMount: snap.volumeMount || undefined,
+        extraVolumes: snap.extraVolumes,
+      });
       await sshExec(server.ipv4, asUser(cmd), hostKey);
       ctx.log(`Restored prior container image ${snap.image}`);
     } catch (err) {

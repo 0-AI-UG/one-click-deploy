@@ -10,7 +10,38 @@ import {
   validateGitHubPat,
   validateComposeWebService,
   validateDeployManifest,
+  assertSafeHostPath,
 } from "./validate.ts";
+
+describe("assertSafeHostPath", () => {
+  test("accepts per-app volume root", () => {
+    expect(() => assertSafeHostPath("/home/deploy/apps/myapp/volumes/data", "myapp")).not.toThrow();
+  });
+  test("accepts block-storage prefix", () => {
+    expect(() => assertSafeHostPath("/mnt/ocd-myapp-data", "myapp")).not.toThrow();
+  });
+  test("accepts per-service volume root", () => {
+    expect(() => assertSafeHostPath("/home/deploy/services/postgres/data", "postgres")).not.toThrow();
+  });
+  test("rejects /etc", () => {
+    expect(() => assertSafeHostPath("/etc/passwd", "myapp")).toThrow(/allowlist/);
+  });
+  test("rejects another app's dir", () => {
+    expect(() => assertSafeHostPath("/home/deploy/apps/other/volumes/data", "myapp")).toThrow(/allowlist/);
+  });
+  test("rejects ..", () => {
+    expect(() => assertSafeHostPath("/home/deploy/apps/myapp/volumes/../../../etc", "myapp")).toThrow(/'\.\.'/);
+  });
+  test("rejects relative paths", () => {
+    expect(() => assertSafeHostPath("relative/path", "myapp")).toThrow(/absolute/);
+  });
+  test("rejects whitespace / injection chars", () => {
+    expect(() => assertSafeHostPath("/home/deploy/apps/myapp/volumes/x y", "myapp")).toThrow(/invalid/);
+  });
+  test("rejects unsafe app name", () => {
+    expect(() => assertSafeHostPath("/home/deploy/apps/x/volumes/data", "../etc")).toThrow(/Invalid app name/);
+  });
+});
 
 describe("validateAppName", () => {
   test("accepts valid names", () => {

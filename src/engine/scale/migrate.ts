@@ -1,5 +1,5 @@
 import * as db from "../../shared/db.ts";
-import { sshExec, removeAuthProxy, ensureOcdNetwork } from "../../shared/remote/index.ts";
+import { sshExec, removeAuthProxy, ensureOcdNetwork, buildDockerRunArgs } from "../../shared/remote/index.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
 import { scaleUp } from "./scale-up.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
@@ -502,8 +502,6 @@ async function restartSourceReplica(
   const containerName = replica.container_name;
   const hostPort = replica.host_port;
 
-  const volumeFlag = rb.originalVolumeMount ? `-v ${rb.originalVolumeMount}` : "";
-
   let extraVols: string[] = [];
   if (app.extra_volumes) {
     try {
@@ -511,16 +509,23 @@ async function restartSourceReplica(
       if (Array.isArray(parsed)) extraVols = parsed.filter((v) => typeof v === "string");
     } catch { /* ignore malformed */ }
   }
-  const extraVolFlags = extraVols.map((v) => `-v ${v}`).join(" ");
 
-  const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
-  const probe = await sshExec(sourceServer.ipv4, asUser(`test -f ${envFilePath}`), sourceHostKey);
-  const envFileFlag = probe.exitCode === 0 ? `--env-file ${envFilePath}` : "";
+  const envFilePathOnHost = `/home/deploy/apps/${app.name}/.env.deploy`;
+  const probe = await sshExec(sourceServer.ipv4, asUser(`test -f ${envFilePathOnHost}`), sourceHostKey);
+  const envFilePath = probe.exitCode === 0 ? envFilePathOnHost : undefined;
 
   // Best-effort: remove any stale container of the same name first.
   await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${containerName} 2>/dev/null || true`), sourceHostKey);
 
-  const cmd = `docker run -d --name ${containerName} --restart unless-stopped --network ocd-net -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${app.name}:latest`;
+  const cmd = buildDockerRunArgs({
+    name: containerName,
+    image: `${app.name}:latest`,
+    appName: app.name,
+    publish: { bindAddr, hostPort, containerPort: app.container_port },
+    envFilePath,
+    volumeMount: rb.originalVolumeMount || undefined,
+    extraVolumes: extraVols,
+  });
   const result = await sshExec(sourceServer.ipv4, asUser(cmd), sourceHostKey);
   if (result.exitCode !== 0) {
     throw new Error(`docker run exit ${result.exitCode}: ${result.stderr || result.stdout}`);

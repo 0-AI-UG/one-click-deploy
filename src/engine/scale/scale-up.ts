@@ -4,7 +4,7 @@ import {
   sshExec, cloneAndComposeBuild, cloneAndBuild, cloneAndRailpackBuild,
   transferImage, healthCheck, composeHealthCheck,
   deployAuthProxy, removeAuthProxy,
-  describeFailure,
+  describeFailure, buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
@@ -145,18 +145,24 @@ export async function scaleUp(
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
       const envVars = await resolveAppEnvVars(app);
       const envEntries = Object.entries(envVars);
-      let envFileFlag = "";
+      let envFilePath: string | undefined;
       if (envEntries.length > 0) {
-        const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
+        envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
         const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
         const escapedContent = envFileContent.replace(/'/g, "'\\''");
         await sshExec(targetServer.ipv4, `mkdir -p /home/deploy/apps/${app.name} && chown deploy:deploy /home/deploy/apps /home/deploy/apps/${app.name}`, targetHostKey);
         await sshExec(targetServer.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, targetHostKey);
-        envFileFlag = `--env-file ${envFilePath}`;
       }
-      const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-      const extraVolFlags = scaleExtraVols.map((v) => `-v ${v}`).join(" ");
-      const cmd = `docker run -d --name ${containerName} --restart unless-stopped -p ${replicaBindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${imageName}`;
+      const cmd = buildDockerRunArgs({
+        name: containerName,
+        image: imageName,
+        appName: app.name,
+        network: null, // scale-up replicas historically don't join ocd-net
+        publish: { bindAddr: replicaBindAddr, hostPort, containerPort: app.container_port },
+        envFilePath,
+        volumeMount: app.volume_mount || undefined,
+        extraVolumes: scaleExtraVols,
+      });
       const result = await sshExec(targetServer.ipv4, asUser(cmd), targetHostKey);
       if (result.exitCode !== 0) {
         throw new Error(describeFailure("Failed to start replica on target server", result));

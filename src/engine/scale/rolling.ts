@@ -2,6 +2,7 @@ import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
   sshExec, cloneAndComposeBuild, transferImage, healthCheck, composeHealthCheck,
+  buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
@@ -92,15 +93,19 @@ export async function rollingRedeploy(
       } else {
         await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
         const envVars = await resolveAppEnvVars(app);
-        const envEntries = Object.entries(envVars);
-        let envFileFlag = "";
-        if (envEntries.length > 0) {
-          const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
-          envFileFlag = `--env-file ${envFilePath}`;
-        }
-        const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-        const extraVolFlags = rollingExtraVols.map((v) => `-v ${v}`).join(" ");
-        const cmd = `docker run -d --name ${replica.container_name} --restart unless-stopped -p ${replicaBindAddr}:${replica.host_port}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${imageName}`;
+        const envFilePath = Object.keys(envVars).length > 0
+          ? `/home/deploy/apps/${app.name}/.env.deploy`
+          : undefined;
+        const cmd = buildDockerRunArgs({
+          name: replica.container_name,
+          image: imageName,
+          appName: app.name,
+          network: null,
+          publish: { bindAddr: replicaBindAddr, hostPort: replica.host_port, containerPort: app.container_port },
+          envFilePath,
+          volumeMount: app.volume_mount || undefined,
+          extraVolumes: rollingExtraVols,
+        });
         await sshExec(server.ipv4, asUser(cmd), hostKey);
       }
 

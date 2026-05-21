@@ -3,6 +3,7 @@ import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
   sshExec, composeHealthCheck, healthCheck, deployAuthProxy,
   startContainer, startCompose, containerExists, composeProjectExists,
+  buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
 import { log, replicaBindHost } from "./types.ts";
@@ -71,15 +72,21 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
         ), hostKey);
       } else {
         const envVars = await resolveAppEnvVars(app);
-        let envFileFlag = "";
-        if (Object.keys(envVars).length > 0) {
-          envFileFlag = `--env-file /home/deploy/apps/${app.name}/.env.deploy`;
-        }
-        const volumeFlag = app.volume_mount ? `-v ${app.volume_mount}` : "";
-        let wakeExtraVolFlags = "";
-        try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) wakeExtraVolFlags = ev.map((v: string) => `-v ${v}`).join(" "); } catch {}
-        const cmd = `docker run -d --name ${containerName} --restart unless-stopped ` +
-          `-p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${wakeExtraVolFlags} ${app.name}:latest`;
+        const envFilePath = Object.keys(envVars).length > 0
+          ? `/home/deploy/apps/${app.name}/.env.deploy`
+          : undefined;
+        let wakeExtraVols: string[] = [];
+        try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) wakeExtraVols = ev.filter((v: unknown): v is string => typeof v === "string"); } catch {}
+        const cmd = buildDockerRunArgs({
+          name: containerName,
+          image: `${app.name}:latest`,
+          appName: app.name,
+          network: null,
+          publish: { bindAddr, hostPort, containerPort: app.container_port },
+          envFilePath,
+          volumeMount: app.volume_mount || undefined,
+          extraVolumes: wakeExtraVols,
+        });
         await sshExec(server.ipv4, asUser(cmd), hostKey);
       }
     }

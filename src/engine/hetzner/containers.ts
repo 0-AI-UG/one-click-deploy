@@ -1,6 +1,7 @@
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { sshExec, getSshKeyPath, describeFailure } from "./ssh.ts";
+import { assertSafeHostPath } from "../../shared/validate.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
@@ -11,6 +12,109 @@ function log(context: string, ...args: unknown[]) {
 // other applications on the same host.
 export const OCD_IMAGE_LABEL_KEY = "ocd.managed";
 export const OCD_IMAGE_LABEL = `${OCD_IMAGE_LABEL_KEY}=true`;
+
+// Default per-container resource ceilings. Applied to every app/replica unless
+// the caller overrides. Sized for small web apps; infra services pass their
+// own higher ceilings via opts.
+export const DEFAULT_MEM_MB = 512;
+export const DEFAULT_CPUS = 1;
+export const DEFAULT_PIDS = 512;
+
+export type DockerRunVolume = { host: string; container: string };
+
+export type DockerRunOpts = {
+  /** Container name (--name). */
+  name: string;
+  /** Image reference (e.g. "myapp:latest" or "postgres:17-alpine"). */
+  image: string;
+  /** App name used to scope the volume host-path allowlist. */
+  appName: string;
+  /** Override the docker network. Default "ocd-net". Pass null to skip --network. */
+  network?: string | null;
+  /** Port publish spec. Omit for containers that don't expose ports. */
+  publish?: { bindAddr: string; hostPort: number; containerPort: number };
+  /** Absolute path to env-file on the host (--env-file). */
+  envFilePath?: string;
+  /** Primary "host:container" volume mount string (validated). */
+  volumeMount?: string;
+  /** Additional "host:container" volume mount strings (validated). */
+  extraVolumes?: string[];
+  /** Per-container memory ceiling in MB. Default DEFAULT_MEM_MB. */
+  memoryMb?: number;
+  /** Per-container CPU ceiling. Default DEFAULT_CPUS. */
+  cpus?: number;
+  /** Per-container pids cap. Default DEFAULT_PIDS. */
+  pidsLimit?: number;
+  /** Extra Linux capabilities to add back after --cap-drop=ALL. */
+  extraCaps?: string[];
+  /** --restart policy. Default "unless-stopped". */
+  restart?: string;
+  /** Optional trailing command/args (already shell-escaped by caller). */
+  cmd?: string;
+};
+
+function parseVolumeSpec(spec: string): { host: string; container: string } | null {
+  // Volume strings are "host:container" or "host:container:ro" etc.
+  const idx = spec.indexOf(":");
+  if (idx <= 0 || idx === spec.length - 1) return null;
+  const host = spec.slice(0, idx);
+  const rest = spec.slice(idx + 1);
+  // Container path may itself contain ":ro" suffix; strip after the next colon.
+  const containerEnd = rest.indexOf(":");
+  const container = containerEnd === -1 ? rest : rest.slice(0, containerEnd);
+  return { host, container };
+}
+
+/**
+ * Build a hardened `docker run` shell command. Centralizes capability drops,
+ * no-new-privileges, pid limits, and default mem/cpu ceilings so no callsite
+ * can forget them. Validates every host-path volume against the allowlist.
+ */
+export function buildDockerRunArgs(opts: DockerRunOpts): string {
+  const mem = opts.memoryMb ?? DEFAULT_MEM_MB;
+  const cpus = opts.cpus ?? DEFAULT_CPUS;
+  const pids = opts.pidsLimit ?? DEFAULT_PIDS;
+  const restart = opts.restart ?? "unless-stopped";
+  const network = opts.network === null ? null : (opts.network ?? "ocd-net");
+
+  const parts: string[] = [
+    "docker run -d",
+    `--name ${opts.name}`,
+    `--restart ${restart}`,
+  ];
+  if (network) parts.push(`--network ${network}`);
+  parts.push(
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    `--memory ${mem}m`,
+    `--memory-swap ${mem}m`,
+    `--cpus ${cpus}`,
+    `--pids-limit ${pids}`,
+  );
+  for (const cap of opts.extraCaps ?? []) {
+    parts.push(`--cap-add=${cap}`);
+  }
+
+  if (opts.publish) {
+    const { bindAddr, hostPort, containerPort } = opts.publish;
+    parts.push(`-p ${bindAddr}:${hostPort}:${containerPort}`);
+  }
+  if (opts.envFilePath) parts.push(`--env-file ${opts.envFilePath}`);
+
+  const allVolumes: string[] = [];
+  if (opts.volumeMount) allVolumes.push(opts.volumeMount);
+  if (opts.extraVolumes) allVolumes.push(...opts.extraVolumes);
+  for (const spec of allVolumes) {
+    const parsed = parseVolumeSpec(spec);
+    if (!parsed) throw new Error(`Invalid volume spec: ${spec}`);
+    assertSafeHostPath(parsed.host, opts.appName);
+    parts.push(`-v ${spec}`);
+  }
+
+  parts.push(opts.image);
+  if (opts.cmd) parts.push(opts.cmd);
+  return parts.join(" ");
+}
 
 type CaddyHandler = {
   handler: string;
@@ -497,25 +601,63 @@ export async function removeCaddyWakePage(
 
 // --- Registry Auth ---
 
+export type GhcrAuth = {
+  /** Absolute path on the remote host to a DOCKER_CONFIG dir holding the ephemeral creds. */
+  dockerConfig: string;
+  /** Shell prefix to prepend to docker invocations so they pick up the ephemeral creds. */
+  envPrefix: string;
+  /** Best-effort cleanup of the credential dir. Always call in a `finally`. */
+  cleanup: () => Promise<void>;
+};
+
+/**
+ * Authenticate against ghcr.io into a *per-deploy* DOCKER_CONFIG dir instead
+ * of the user's persistent `~/.docker/config.json`. The returned `envPrefix`
+ * must be prepended to subsequent `docker pull` / `docker build` / `docker
+ * compose` invocations that need the credentials; `cleanup()` removes the
+ * config dir so the token never outlives the deploy.
+ */
 async function dockerLoginGhcr(
   ip: string,
   token: string,
   hostKey?: string,
-): Promise<void> {
+): Promise<GhcrAuth> {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  // Random per-deploy dir, owned by `deploy` user (the uid that runs docker).
+  const rand = Math.random().toString(36).slice(2, 12);
+  const dockerConfig = `/home/deploy/.docker-ocd-${rand}`;
   const escaped = token.replace(/'/g, "'\\''");
   const result = await sshExec(
     ip,
-    asUser(`echo '${escaped}' | docker login ghcr.io -u x-access-token --password-stdin`),
+    asUser(
+      `mkdir -p ${dockerConfig} && chmod 700 ${dockerConfig} && ` +
+      `DOCKER_CONFIG=${dockerConfig} sh -c "echo '${escaped}' | docker login ghcr.io -u x-access-token --password-stdin"`,
+    ),
     hostKey,
   );
   if (result.exitCode !== 0) {
     log("registry", `ghcr.io login failed: ${result.stderr}`);
+    // Best-effort: nuke the dir even on failure so a half-written config
+    // doesn't linger.
+    await sshExec(ip, asUser(`rm -rf ${dockerConfig}`), hostKey).catch(() => {});
     throw new Error(
       "Failed to authenticate with GitHub Container Registry (ghcr.io). Check your GitHub token has the read:packages scope.",
     );
   }
-  log("registry", "ghcr.io login succeeded");
+  log("registry", "ghcr.io login succeeded (ephemeral DOCKER_CONFIG)");
+  return {
+    dockerConfig,
+    envPrefix: `DOCKER_CONFIG=${dockerConfig} `,
+    cleanup: async () => {
+      const r = await sshExec(ip, asUser(`rm -rf ${dockerConfig}`), hostKey).catch((err) => {
+        log("registry", `ghcr cleanup failed (non-fatal): ${err}`);
+        return null;
+      });
+      if (r && r.exitCode !== 0) {
+        log("registry", `ghcr cleanup non-zero exit: ${r.stderr}`);
+      }
+    },
+  };
 }
 
 // --- Clone & Build ---
@@ -638,18 +780,22 @@ export async function cloneAndBuild(
   }
 
   // Authenticate with ghcr.io if a GitHub token is available (needed for
-  // private base images in FROM directives)
+  // private base images in FROM directives). Credentials live in a per-deploy
+  // DOCKER_CONFIG dir and are wiped immediately after the build.
+  let ghcrAuth: GhcrAuth | null = null;
   if (opts.gitToken) {
-    await dockerLoginGhcr(ip, opts.gitToken);
+    ghcrAuth = await dockerLoginGhcr(ip, opts.gitToken);
   }
 
   // Build image first (before stopping old container — build-before-destroy)
   emit("Building Docker image...");
   const dockerContext = opts.dockerContext || ".";
-  const buildCmd = `cd ${appDir} && docker build --label ${OCD_IMAGE_LABEL} -t ${opts.name}:latest -f ${dockerfilePath} ${dockerContext}`;
+  const ghcrPrefix = ghcrAuth?.envPrefix ?? "";
+  const buildCmd = `cd ${appDir} && ${ghcrPrefix}docker build --label ${OCD_IMAGE_LABEL} -t ${opts.name}:latest -f ${dockerfilePath} ${dockerContext}`;
   log("build", `Docker build command: ${buildCmd}`);
   const dockerBuildStart = Date.now();
   const buildResult = await sshExec(ip, asUser(buildCmd));
+  if (ghcrAuth) await ghcrAuth.cleanup();
   if (buildResult.exitCode !== 0) {
     log("build", `Docker build stderr: ${buildResult.stderr.slice(0, 500)}`);
     throw new Error(describeFailure("Docker build failed", buildResult));
@@ -664,25 +810,30 @@ export async function cloneAndBuild(
 
   // Write env file to server (avoids shell injection via env var values)
   const envFileEntries = Object.entries(opts.envVars);
-  let envFileFlag = "";
+  let envFilePath: string | undefined;
   if (envFileEntries.length > 0) {
-    const envFilePath = `/home/deploy/apps/${opts.name}/.env.deploy`;
+    envFilePath = `/home/deploy/apps/${opts.name}/.env.deploy`;
     const envFileContent = envFileEntries
       .map(([k, v]) => `${k}=${v}`)
       .join("\n");
     const escapedContent = envFileContent.replace(/'/g, "'\\''");
     await sshExec(ip, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`);
-    envFileFlag = `--env-file ${envFilePath}`;
   }
 
   // Run container
   emit("Starting container...");
   // Ensure ocd-net exists so apps can reach infrastructure services by container name
   await ensureOcdNetwork(ip);
-  const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
-  const extraVolFlags = (opts.extraVolumes || []).map((v) => `-v ${v}`).join(" ");
   const bindAddr = opts.bindAddr || "127.0.0.1";
-  const cmd = `docker run -d --name ${containerName} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${opts.name}:latest`;
+  const cmd = buildDockerRunArgs({
+    name: containerName,
+    image: `${opts.name}:latest`,
+    appName: opts.name,
+    publish: { bindAddr, hostPort: opts.hostPort, containerPort: opts.port },
+    envFilePath,
+    volumeMount: opts.volumeMount,
+    extraVolumes: opts.extraVolumes,
+  });
   log("build", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
@@ -776,22 +927,27 @@ export async function cloneAndRailpackBuild(
 
   // Write env file
   const envFileEntries = Object.entries(opts.envVars);
-  let envFileFlag = "";
+  let envFilePath: string | undefined;
   if (envFileEntries.length > 0) {
-    const envFilePath = `/home/deploy/apps/${opts.name}/.env.deploy`;
+    envFilePath = `/home/deploy/apps/${opts.name}/.env.deploy`;
     const envFileContent = envFileEntries.map(([k, v]) => `${k}=${v}`).join("\n");
     const escapedContent = envFileContent.replace(/'/g, "'\\''");
     await sshExec(ip, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`);
-    envFileFlag = `--env-file ${envFilePath}`;
   }
 
   // Run container
   emit("Starting container...");
   await ensureOcdNetwork(ip);
-  const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
-  const extraVolFlags = (opts.extraVolumes || []).map((v) => `-v ${v}`).join(" ");
   const bindAddr = opts.bindAddr || "127.0.0.1";
-  const cmd = `docker run -d --name ${containerName} --restart unless-stopped --network ocd-net -p ${bindAddr}:${opts.hostPort}:${opts.port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${opts.name}:latest`;
+  const cmd = buildDockerRunArgs({
+    name: containerName,
+    image: `${opts.name}:latest`,
+    appName: opts.name,
+    publish: { bindAddr, hostPort: opts.hostPort, containerPort: opts.port },
+    envFilePath,
+    volumeMount: opts.volumeMount,
+    extraVolumes: opts.extraVolumes,
+  });
   log("railpack", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
   if (result.exitCode !== 0) {
@@ -962,17 +1118,21 @@ export async function cloneAndComposeBuild(
   }
 
   // Authenticate with ghcr.io if a GitHub token is available (needed for
-  // private GitHub Container Registry images referenced in compose files)
+  // private GitHub Container Registry images referenced in compose files).
+  // Ephemeral DOCKER_CONFIG so the token doesn't persist on the host.
+  let ghcrAuth: GhcrAuth | null = null;
   if (opts.gitToken) {
     emit("Authenticating with GitHub Container Registry...");
-    await dockerLoginGhcr(ip, opts.gitToken);
+    ghcrAuth = await dockerLoginGhcr(ip, opts.gitToken);
   }
 
   // Build and start compose project
   emit("Building and starting compose project...");
-  const composeCmd = `cd ${appDir} && docker compose -f ${opts.composeFile} -f docker-compose.ocd.yml -p ${opts.name} ${envFileFlag} up -d --build`;
+  const ghcrPrefix = ghcrAuth?.envPrefix ?? "";
+  const composeCmd = `cd ${appDir} && ${ghcrPrefix}docker compose -f ${opts.composeFile} -f docker-compose.ocd.yml -p ${opts.name} ${envFileFlag} up -d --build`;
   log("compose", `Compose command: ${composeCmd}`);
   const buildResult = await sshExec(ip, asUser(composeCmd));
+  if (ghcrAuth) await ghcrAuth.cleanup();
   if (buildResult.exitCode !== 0) {
     log("compose", `Compose build stderr: ${buildResult.stderr.slice(0, 500)}`);
     throw new Error(describeFailure("Docker Compose build failed", buildResult));
@@ -1374,19 +1534,29 @@ export async function pullAndRunService(
     bindAddress?: string;    // "127.0.0.1" (default) or "0.0.0.0"
     extraVolumes?: string[]; // additional -v mounts (e.g. config files)
     gitToken?: string;       // GitHub token for ghcr.io private images
+    /** Override memory ceiling (MB). Infra services may need more than the app default. */
+    memoryMb?: number;
+    /** Override CPU ceiling. */
+    cpus?: number;
+    /** Capabilities to add back after --cap-drop=ALL (e.g. ["CHOWN","SETUID","SETGID"] for postgres). */
+    extraCaps?: string[];
   },
   hostKey?: string
 ): Promise<{ containerId: string }> {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
   const bindAddr = opts.bindAddress || "127.0.0.1";
 
-  // Authenticate with ghcr.io for private GitHub Container Registry images
+  // Authenticate with ghcr.io for private GitHub Container Registry images.
+  // Credentials live in a per-pull DOCKER_CONFIG dir and are wiped after.
+  let ghcrAuth: GhcrAuth | null = null;
   if (opts.gitToken && opts.image.startsWith("ghcr.io/")) {
-    await dockerLoginGhcr(ip, opts.gitToken, hostKey);
+    ghcrAuth = await dockerLoginGhcr(ip, opts.gitToken, hostKey);
   }
 
   log("service", `Pulling image ${opts.image}...`);
-  const pullResult = await sshExec(ip, asUser(`docker pull ${opts.image}`), hostKey);
+  const ghcrPrefix = ghcrAuth?.envPrefix ?? "";
+  const pullResult = await sshExec(ip, asUser(`${ghcrPrefix}docker pull ${opts.image}`), hostKey);
+  if (ghcrAuth) await ghcrAuth.cleanup();
   if (pullResult.exitCode !== 0) {
     throw new Error(`Failed to pull image ${opts.image}: ${pullResult.stderr}`);
   }
@@ -1396,11 +1566,11 @@ export async function pullAndRunService(
 
   // Write env file
   const envEntries = Object.entries(opts.envVars);
-  let envFileFlag = "";
+  let envFilePath: string | undefined;
   if (envEntries.length > 0) {
     const svcDir = `/home/deploy/services/${opts.name}`;
     await sshExec(ip, `mkdir -p ${svcDir} && chown deploy:deploy ${svcDir}`, hostKey);
-    const envFilePath = `${svcDir}/.env.deploy`;
+    envFilePath = `${svcDir}/.env.deploy`;
     const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
     const escapedContent = envFileContent.replace(/'/g, "'\\''");
     await sshExec(
@@ -1408,29 +1578,27 @@ export async function pullAndRunService(
       `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`,
       hostKey
     );
-    envFileFlag = `--env-file ${envFilePath}`;
   }
 
   // Remove existing container if any
   await sshExec(ip, asUser(`docker rm -f ${opts.name} 2>/dev/null || true`), hostKey);
 
   // Build run command
-  const volumeFlag = opts.volumeMount ? `-v ${opts.volumeMount}` : "";
-  const extraVolFlags = (opts.extraVolumes || []).map((v) => `-v ${v}`).join(" ");
-  const cmdStr = opts.cmd ? opts.cmd.map((c) => `'${c.replace(/'/g, "'\\''")}'`).join(" ") : "";
+  const cmdStr = opts.cmd ? opts.cmd.map((c) => `'${c.replace(/'/g, "'\\''")}'`).join(" ") : undefined;
 
-  const runCmd = [
-    `docker run -d`,
-    `--name ${opts.name}`,
-    `--restart unless-stopped`,
-    `--network ocd-net`,
-    `-p ${bindAddr}:${opts.hostPort}:${opts.port}`,
-    envFileFlag,
-    volumeFlag,
-    extraVolFlags,
-    opts.image,
-    cmdStr,
-  ].filter(Boolean).join(" ");
+  const runCmd = buildDockerRunArgs({
+    name: opts.name,
+    image: opts.image,
+    appName: opts.name,
+    publish: { bindAddr, hostPort: opts.hostPort, containerPort: opts.port },
+    envFilePath,
+    volumeMount: opts.volumeMount,
+    extraVolumes: opts.extraVolumes,
+    memoryMb: opts.memoryMb,
+    cpus: opts.cpus,
+    extraCaps: opts.extraCaps,
+    cmd: cmdStr,
+  });
 
   log("service", `Docker run: ${runCmd}`);
   const result = await sshExec(ip, asUser(runCmd), hostKey);

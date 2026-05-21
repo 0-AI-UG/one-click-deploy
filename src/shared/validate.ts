@@ -182,6 +182,41 @@ export function validateGitHubPat(token: string): ValidationResult<string> {
   return { valid: true, value: trimmed };
 }
 
+/**
+ * Reject host paths that aren't in the per-app/service or block-storage
+ * allowlist. Stops a control-plane user from mounting `/etc`, `/root`, or
+ * another app's data dir into their container. Called both at the RPC
+ * boundary (early reject) and inside buildDockerRunArgs (defense in depth).
+ */
+export function assertSafeHostPath(hostPath: string, appName: string): void {
+  if (typeof hostPath !== "string" || hostPath.length === 0)
+    throw new Error("Volume host path is required");
+  if (!hostPath.startsWith("/"))
+    throw new Error(`Volume host path must be absolute: ${hostPath}`);
+  if (hostPath.includes(".."))
+    throw new Error(`Volume host path must not contain '..': ${hostPath}`);
+  if (hostPath.includes("\0") || /\s/.test(hostPath))
+    throw new Error(`Volume host path contains invalid characters: ${hostPath}`);
+  // Collapse duplicate slashes for the prefix check, but reject anything that
+  // would resolve outside the allowed roots.
+  const normalized = hostPath.replace(/\/+/g, "/");
+
+  // App name must be safe — we interpolate it into the allowed prefix.
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(appName))
+    throw new Error(`Invalid app name for volume scoping: ${appName}`);
+
+  const allowedPrefixes = [
+    `/home/deploy/apps/${appName}/`,
+    `/home/deploy/services/${appName}/`,
+    `/mnt/ocd-`, // block-storage mounts created by the volume provisioner
+  ];
+  if (!allowedPrefixes.some((p) => normalized.startsWith(p)))
+    throw new Error(
+      `Volume host path "${hostPath}" is not in the allowlist. ` +
+      `Allowed prefixes: ${allowedPrefixes.join(", ")}`,
+    );
+}
+
 export function validateComposeWebService(name: string): ValidationResult<string> {
   const trimmed = name.trim();
   if (!trimmed) return { valid: false, error: "Web service name is required" };

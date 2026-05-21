@@ -45,6 +45,7 @@ export {
   containerExists,
   transferImage,
   ensureOcdNetwork,
+  buildDockerRunArgs,
   pullAndRunService,
   serviceHealthCheck,
   deployConfigFile,
