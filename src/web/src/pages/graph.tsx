@@ -445,7 +445,10 @@ export function GraphPage() {
   // --- pan (mousedown on empty svg) ---
   const onSvgMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
-    setCtxMenu(null); setCreateMenu(null);
+    // Empty-canvas click dismisses every floating UI — node popover, context
+    // menu, create picker. Node mousedowns stopPropagation, so this only runs
+    // when the click really did land on the canvas background.
+    setCtxMenu(null); setCreateMenu(null); setSelected(null);
     dragState.current = { mode: "pan", startCX: e.clientX, startCY: e.clientY, vbX: viewBox.x, vbY: viewBox.y };
   };
 
