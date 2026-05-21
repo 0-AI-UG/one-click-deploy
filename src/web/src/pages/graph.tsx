@@ -1387,8 +1387,13 @@ function NodePopover({
   const screen = pt.matrixTransform(ctm);
   const rect = svg.getBoundingClientRect();
   void viewBox;
-  const left = screen.x - rect.left + 8;
-  const top = screen.y - rect.top + 8;
+  // Same html-zoom compensation as ContextMenu/CreateMenu — getScreenCTM and
+  // getBoundingClientRect both return visual-px, but `style.left` on an
+  // absolutely-positioned child of the zoomed root gets multiplied by the
+  // html zoom, so divide once to land at the node's actual on-screen edge.
+  const zoom = getHtmlZoom();
+  const left = (screen.x - rect.left) / zoom + 8;
+  const top = (screen.y - rect.top) / zoom + 8;
 
   const Icon = ICONS[node.kind];
   const Loading = (action: string, kind: "app" | "svc") => {
