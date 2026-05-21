@@ -529,6 +529,8 @@ export function GraphPage() {
 
   // Native non-passive wheel listener — React's onWheel is passive in React 17+
   // so preventDefault() is a no-op there and the page would scroll behind us.
+  // Re-run when data flips from null to populated so we attach to the SVG that
+  // wasn't in the DOM during the initial loading render.
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -548,7 +550,7 @@ export function GraphPage() {
     };
     svg.addEventListener("wheel", handler, { passive: false });
     return () => svg.removeEventListener("wheel", handler);
-  }, []);
+  }, [data]);
 
   const onNodeMouseEnter = (key: NodeKey) => {
     setHovered(key);
@@ -1184,10 +1186,11 @@ function ContextMenu({
   // Fixed positioning anchored at the actual viewport click point, clamped to
   // the viewport so the menu doesn't spill off-screen.
   const W = 180, H = 220;
-  const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
-  const vh = typeof window !== "undefined" ? window.innerHeight : 768;
-  let left = clientX;
-  let top = clientY;
+  const zoom = getHtmlZoom();
+  const vw = typeof window !== "undefined" ? window.innerWidth / zoom : 1024;
+  const vh = typeof window !== "undefined" ? window.innerHeight / zoom : 768;
+  let left = clientX / zoom;
+  let top = clientY / zoom;
   if (left + W > vw) left = vw - W - 4;
   if (top + H > vh) top = vh - H - 4;
   if (left < 4) left = 4;
@@ -1291,10 +1294,11 @@ function CreateMenu({
   const [showCatalog, setShowCatalog] = useState(false);
   const W = showCatalog ? 280 : 200;
   const H = showCatalog ? 320 : 160;
-  const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
-  const vh = typeof window !== "undefined" ? window.innerHeight : 768;
-  let left = clientX;
-  let top = clientY;
+  const zoom = getHtmlZoom();
+  const vw = typeof window !== "undefined" ? window.innerWidth / zoom : 1024;
+  const vh = typeof window !== "undefined" ? window.innerHeight / zoom : 768;
+  let left = clientX / zoom;
+  let top = clientY / zoom;
   if (left + W > vw) left = vw - W - 4;
   if (top + H > vh) top = vh - H - 4;
   if (left < 4) left = 4;
@@ -1561,4 +1565,16 @@ function NodePopover({
 
 function truncate(s: string, n: number) {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+// The site applies `html { zoom: 1.2 }`. With CSS zoom, event.clientX and
+// getBoundingClientRect return *visual* (post-zoom) pixels, but `style.left`
+// on a position:fixed element is CSS-px that the html-level zoom multiplies
+// back up — so menus anchored at raw clientX appear at clientX * zoom. We
+// divide once at the positioning boundary to cancel that out.
+function getHtmlZoom(): number {
+  if (typeof document === "undefined") return 1;
+  const raw = getComputedStyle(document.documentElement).zoom;
+  const n = parseFloat(raw || "1");
+  return Number.isFinite(n) && n > 0 ? n : 1;
 }
