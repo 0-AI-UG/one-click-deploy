@@ -33,7 +33,6 @@ import {
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail } from "./routes/resources.ts";
-import { handleGetGraph } from "./routes/graph.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus, handleMigrateReplica } from "./routes/scaling.ts";
 import {
@@ -204,9 +203,6 @@ export const apiRoutes = {
 
   // --- Dashboard ---
   "/api/dashboard": { GET: (req: Request) => handleGetDashboard(req) },
-
-  // --- Graph (single aggregate for the topology view) ---
-  "/api/graph": { GET: (req: Request) => handleGetGraph(req) },
 
   // --- Servers ---
   "/api/servers": { GET: (req: Request) => handleGetServers(req) },

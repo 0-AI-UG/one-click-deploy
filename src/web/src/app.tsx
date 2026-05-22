@@ -28,7 +28,6 @@ import { DeviceAuthPage } from "./pages/device-auth.tsx";
 import { EnginePage } from "./pages/engine.tsx";
 import { EngineOpDetailPage } from "./pages/engine-op-detail.tsx";
 import { EngineOpLogsPage } from "./pages/engine-op-logs.tsx";
-import { GraphPage } from "./pages/graph.tsx";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -164,8 +163,6 @@ export function App() {
     }
   } else if (hash === "#/environments") {
     content = <EnvironmentsPage />;
-  } else if (hash === "#/graph") {
-    content = <GraphPage />;
   } else if (hash.startsWith("#/resources/volumes/")) {
     const volumeId = decodeURIComponent(hash.split("/")[3] || "");
     content = volumeId ? <VolumeDetailPage volumeId={volumeId} /> : <ResourcesPage />;
