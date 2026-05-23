@@ -54,7 +54,9 @@ export function TwoFactorVerifyPage() {
           <div className="bg-bg-raised border-2 border-fg shadow-neo p-6">
             <Fingerprint size={48} className="text-fg mx-auto mb-4" />
             {loading ? (
-              <Spinner />
+              <div className="flex justify-center py-2">
+                <Spinner />
+              </div>
             ) : (
               <>
                 {error && <p className="text-[10px] text-red-500 font-mono mb-4">{error}</p>}
