@@ -27,10 +27,10 @@ type RedeployInput = {
 };
 
 type WakeOut = { woke: boolean };
+type SetDeployingOut = { previousStatus: string };
 type BuildOut = {
   imageTag: string;
   deployMode: "dockerfile" | "compose" | "railpack";
-  previousStatus: string;
   previousAuthPassword: string;
   previousContainerPort: number;
 };
@@ -72,6 +72,26 @@ const cloneRepoStep: Step<RedeployInput, { ok: true }> = {
   },
 };
 
+const setDeploying: Step<RedeployInput, SetDeployingOut> = {
+  name: "set_deploying",
+  label: "Mark deploying",
+  async run(ctx) {
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App not found");
+    const previousStatus = app.status;
+    if (ctx.input.userId) db.updateAppDeployedBy(ctx.input.appId, ctx.input.userId);
+    db.updateAppStatus(ctx.input.appId, "deploying");
+    return { previousStatus };
+  },
+  async compensate(ctx, _out, prior) {
+    const info = prior["set_deploying"] as SetDeployingOut | undefined;
+    if (!info) return;
+    try { db.updateAppStatus(ctx.input.appId, info.previousStatus); } catch (err) {
+      ctx.log(`Failed to restore previous status: ${err}`);
+    }
+  },
+};
+
 const pullAndBuild: Step<RedeployInput, BuildOut> = {
   name: "pull_and_build",
   label: "Build container",
@@ -85,7 +105,6 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     const server = db.getServer(first.server_id);
     if (!server) throw new Error("Server not found");
 
-    const previousStatus = app.status;
     const previousAuthPassword = app.auth_password;
     const previousContainerPort = app.container_port;
 
@@ -94,9 +113,6 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     const githubPat = (await resolveGitHubToken(ctx.input.userId)) || undefined;
     const bindAddr = replicaBindHost(server);
     const extraVolumes = parseExtraVolumes(app.extra_volumes);
-
-    if (ctx.input.userId) db.updateAppDeployedBy(appId, ctx.input.userId);
-    db.updateAppStatus(appId, "deploying");
 
     let imageTag = `${app.name}:latest`;
     const deployMode = app.deploy_mode as BuildOut["deployMode"];
@@ -137,14 +153,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       if (r.imageTag) imageTag = r.imageTag;
     }
 
-    return { imageTag, deployMode, previousStatus, previousAuthPassword, previousContainerPort };
-  },
-  async compensate(ctx, _out, prior) {
-    const build = prior["pull_and_build"] as BuildOut | undefined;
-    if (!build) return;
-    try { db.updateAppStatus(ctx.input.appId, build.previousStatus); } catch (err) {
-      ctx.log(`Failed to restore previous status: ${err}`);
-    }
+    return { imageTag, deployMode, previousAuthPassword, previousContainerPort };
   },
 };
 
@@ -290,6 +299,7 @@ const redeployOp: OpKindDefinition<RedeployInput> = {
   steps: [
     wakeIfSleeping,
     cloneRepoStep,
+    setDeploying,
     pullAndBuild,
     rollExtraReplicas,
     manageAuthProxy,
