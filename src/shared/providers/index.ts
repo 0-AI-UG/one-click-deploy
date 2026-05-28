@@ -3,13 +3,12 @@ import {
   registerDnsProvider,
 } from "./registry.ts";
 import { hetznerCompute, hetznerDns } from "./hetzner.ts";
-import { digitaloceanCompute, digitaloceanDns } from "./digitalocean.ts";
 
-// Register built-in providers
+// Hetzner Cloud is the only supported provider. The registry abstraction is
+// kept as a stable compute/DNS seam (and so tests can swap in fakes), but there
+// is intentionally a single registered implementation.
 registerComputeProvider(hetznerCompute);
 registerDnsProvider(hetznerDns);
-registerComputeProvider(digitaloceanCompute);
-registerDnsProvider(digitaloceanDns);
 
 // Re-export the public API
 export {

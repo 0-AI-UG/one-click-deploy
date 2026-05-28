@@ -12,9 +12,6 @@
 // Block-name convention used by callers:
 //   - user apps:  `app-${app.id}`
 //   - services:   `svc-${service.id}`
-//
-// These helpers are Hetzner-specific. Other providers (e.g. DigitalOcean)
-// handle their own host mounts via systemd units and should not call into here.
 
 import { sshExec } from "./ssh.ts";
 

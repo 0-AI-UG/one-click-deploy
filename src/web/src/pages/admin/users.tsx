@@ -63,7 +63,6 @@ export function UsersPage() {
     github_oauth_client_id: "", github_oauth_client_secret: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
-  const [providerName, setProviderName] = useState("Provider");
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const { serverTypes } = useServerTypes();
@@ -99,7 +98,6 @@ export function UsersPage() {
     get("/api/admin/settings")
       .then((s) => {
         setRequire2fa(s.require_2fa !== false);
-        if (s.provider?.name) setProviderName(s.provider.name);
         setSettingsForm({
           provider_token: s.provider_token ?? "",
           github_oauth_client_id: s.github_oauth_client_id ?? "",
@@ -213,7 +211,7 @@ export function UsersPage() {
       <Card className="p-5 space-y-4">
         <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">API Tokens</h3>
         <div>
-          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">{providerName} API Token</label>
+          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner Cloud API Token</label>
           <input type="password" value={settingsForm.provider_token} onChange={setS("provider_token")} placeholder="Enter token" />
         </div>
         <GitHubOAuthSettings form={settingsForm} setS={setS} />

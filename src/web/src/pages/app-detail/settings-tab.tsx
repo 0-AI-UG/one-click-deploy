@@ -137,7 +137,7 @@ export function SettingsTab({
               <div className="flex justify-between"><span className="text-muted">Mount</span><span className="text-fg">{app.volume_mount}</span></div>
             </div>
             <p className="text-[10px] text-muted font-mono mb-3">
-              Detaching keeps the volume in your cloud provider but unmounts it from this app. The container will be recreated.
+              Detaching keeps the volume in Hetzner but unmounts it from this app. The container will be recreated.
             </p>
             <PermissionGate permission="volumes.manage">
               <div className="flex justify-end">

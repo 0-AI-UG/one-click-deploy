@@ -2,9 +2,9 @@
 
 # One-Click Deploy
 
-**Self-hosted PaaS. Git repo in, live HTTPS app out.**
+**Self-hosted PaaS for Hetzner Cloud. Git repo in, live HTTPS app out.**
 
-No Kubernetes. No YAML. No vendor lock-in.
+No Kubernetes. No YAML. Just your Hetzner account.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/0-AI-UG/one-click-deploy/pkgs/container/one-click-deploy)
@@ -16,9 +16,11 @@ No Kubernetes. No YAML. No vendor lock-in.
 
 ---
 
-A lightweight, self-hostable alternative to Heroku, Railway, and Render. Point it at a Git repo and a Hetzner account, and it provisions the server, builds your container, configures DNS, issues TLS, and serves traffic.
+A lightweight, self-hostable alternative to Heroku, Railway, and Render — built exclusively for [Hetzner Cloud](https://www.hetzner.com/cloud). Point it at a Git repo and your Hetzner account, and it provisions the server, builds your container, configures DNS, issues TLS, and serves traffic. One provider, deeply integrated: Hetzner servers, volumes, private networks, firewalls, and DNS.
 
 ## Quick Start
+
+You'll need a [Hetzner Cloud API token](https://docs.hetzner.cloud/#getting-started) (Read & Write) from your project's **Security → API Tokens**.
 
 ```bash
 docker run --rm \
@@ -33,8 +35,8 @@ Prefer bash? Copy `example.panel.json` to `panel.json` and run `./scripts/bootst
 ## Features
 
 - Deploy from any Git repo (Dockerfile or auto-detected via [Railpack](https://railpack.io))
-- Auto-provisioned servers on Hetzner Cloud
-- Auto TLS (Caddy + Let's Encrypt) and auto DNS
+- Auto-provisioned Hetzner Cloud servers, volumes, private networks, and firewalls
+- Auto TLS (Caddy + Let's Encrypt) and auto DNS via Hetzner DNS
 - Horizontal scaling, auto-scaling, pause/resume
 - Managed services: Postgres, Redis, MySQL, and more
 - Web terminal, log streaming, rollbacks, webhooks

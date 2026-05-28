@@ -15,26 +15,19 @@ export function SetupPage() {
   // token is already present — skip the API-keys step and only ask for the
   // admin account.
   const [hasProviderToken, setHasProviderToken] = useState(false);
-  const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     get("/api/setup/status").then((res) => {
       setHasProviderToken(!!res.hasProviderToken);
-      if (Array.isArray(res.providers)) setProviders(res.providers);
-      if (res.provider?.id) {
-        setForm((f) => f.provider_id ? f : { ...f, provider_id: res.provider.id });
-      }
     }).catch(() => {});
   }, []);
   const [form, setForm] = useState({
     username: "", password: "", confirmPassword: "",
-    provider_id: "",
     provider_token: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
   });
-  const providerName = providers.find((p) => p.id === form.provider_id)?.name ?? "Provider";
 
-  // Debounced fetch of server types as the provider token is typed.
+  // Debounced fetch of server types as the Hetzner token is typed.
   useEffect(() => {
     const token = form.provider_token.trim();
     if (!token) {
@@ -44,7 +37,7 @@ export function SetupPage() {
     setTypesLoading(true);
     const handle = setTimeout(async () => {
       try {
-        const res = await post("/api/setup/server-types", { provider_token: token, provider_id: form.provider_id });
+        const res = await post("/api/setup/server-types", { provider_token: token });
         setServerTypes(res.server_types ?? []);
       } catch {
         setServerTypes([]);
@@ -53,13 +46,7 @@ export function SetupPage() {
       }
     }, 500);
     return () => { clearTimeout(handle); setTypesLoading(false); };
-  }, [form.provider_token, form.provider_id]);
-
-  // Reset server-type selection when the provider changes — slugs aren't cross-provider.
-  useEffect(() => {
-    setForm((f) => ({ ...f, default_server_type: "", default_location: "" }));
-    setServerTypes([]);
-  }, [form.provider_id]);
+  }, [form.provider_token]);
 
   useEffect(() => {
     if (serverTypes.length > 0 && !form.default_server_type) {
@@ -84,7 +71,7 @@ export function SetupPage() {
   };
 
   const handleSubmit = async () => {
-    if (!hasProviderToken && !form.provider_token) return showToast(`${providerName} API token is required`, "error");
+    if (!hasProviderToken && !form.provider_token) return showToast("Hetzner API token is required", "error");
     setLoading(true);
     try {
       const res = await post("/api/setup/complete", form);
@@ -165,26 +152,17 @@ export function SetupPage() {
                 <Server size={16} className="text-fg" />
                 <h3 className="font-mono font-bold text-sm text-fg uppercase">API Keys & Defaults</h3>
               </div>
-              {providers.length > 1 && (
-                <div>
-                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Cloud Provider</label>
-                  <NeoSelect
-                    value={form.provider_id}
-                    onChange={(v) => setForm((f) => ({ ...f, provider_id: v, provider_token: "" }))}
-                    options={providers.map((p) => ({ value: p.id, label: p.name }))}
-                  />
-                </div>
-              )}
               <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">{providerName} API Token *</label>
+                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner Cloud API Token *</label>
                 <input type="password" value={form.provider_token} onChange={set("provider_token")} placeholder="Required" />
+                <p className="text-[9px] text-muted font-mono mt-1">Create one at console.hetzner.cloud → Security → API Tokens (Read &amp; Write).</p>
               </div>
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>
                 <input type="text" value={form.dns_zone_id} onChange={set("dns_zone_id")} placeholder="Optional" />
               </div>
               <div className="text-[9px] font-mono uppercase tracking-wider text-muted -mt-1">
-                {typesLoading ? "Loading server types…" : serverTypes.length === 0 ? `Enter a valid ${providerName} token to load server types` : `${serverTypes.length} server types available`}
+                {typesLoading ? "Loading server types…" : serverTypes.length === 0 ? "Enter a valid Hetzner token to load server types" : `${serverTypes.length} server types available`}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

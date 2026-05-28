@@ -1,4 +1,4 @@
-export type ProviderId = "hetzner" | "digitalocean" | "vultr" | "lightsail";
+export type ProviderId = "hetzner";
 
 // --- Normalized resource types (provider-agnostic) ---
 

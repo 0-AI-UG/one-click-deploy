@@ -153,7 +153,7 @@ export function ResourcesPage() {
             </div>
           </div>
           <p className="font-mono text-[9px] text-muted mt-3">
-            Estimates based on your cloud provider's list prices. Excludes traffic overage and snapshots.
+            Estimates based on Hetzner's list prices. Excludes traffic overage and snapshots.
           </p>
         </Card>
       )}
