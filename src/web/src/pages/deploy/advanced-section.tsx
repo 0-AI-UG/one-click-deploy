@@ -58,6 +58,17 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
         </div>
       </div>
       <div>
+        <Label>Memory Limit (MB)</Label>
+        <input
+          type="number"
+          value={form.memory_mb}
+          onChange={set("memory_mb")}
+          placeholder="512 (platform default)"
+          min="0"
+        />
+        <p className="text-[9px] text-muted mt-1">Container memory ceiling. Blank or 0 uses the platform default (512). Dockerfile/railpack apps only.</p>
+      </div>
+      <div>
         <Checkbox
           checked={form.public}
           onChange={(v) => setForm((f) => ({ ...f, public: v }))}

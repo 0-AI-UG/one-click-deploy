@@ -41,6 +41,7 @@ export interface App {
   environment_id: number | null;
   public: number;
   extra_volumes: string;
+  memory_mb: number;
 }
 
 export interface Replica {

@@ -140,6 +140,7 @@ ${BOLD}Options:${RESET}
 
   if (manifest.replicas) body.replicas = manifest.replicas;
   if (manifest.public !== undefined) body.public = manifest.public;
+  if (manifest.memory_mb) body.memory_mb = manifest.memory_mb;
 
   if (manifest.volume?.size) {
     body.volume_size = manifest.volume.size;

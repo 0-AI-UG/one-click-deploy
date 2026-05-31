@@ -201,6 +201,7 @@ const EMPTY_FORM: FormState = {
   public: true,
   extra_volumes: [],
   server_id: "",
+  memory_mb: "",
 };
 
 export function DeployPage() {
@@ -247,6 +248,7 @@ export function DeployPage() {
       replicas: m.replicas ? String(m.replicas) : f.replicas,
       public: m.public ?? f.public,
       extra_volumes: m.extra_volumes ?? f.extra_volumes,
+      memory_mb: m.memory_mb ? String(m.memory_mb) : f.memory_mb,
     }));
 
     if (m.env && m.env.length > 0) {
@@ -285,6 +287,7 @@ export function DeployPage() {
       webhook_path: "",
       webhook_wait_for_ci: false,
       replicas: "1",
+      memory_mb: "",
     }));
     if (result.env_vars.length > 0) {
       const next: Record<string, string> = {};
@@ -511,6 +514,7 @@ export function DeployPage() {
         ? form.extra_volumes.filter((v) => v.host_path && v.container_path)
         : undefined,
       server_id: form.server_id ? parseInt(form.server_id, 10) : undefined,
+      memory_mb: form.memory_mb ? parseInt(form.memory_mb, 10) : undefined,
     };
 
     (async () => {

@@ -1195,6 +1195,15 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE server_metrics_samples ADD COLUMN disk_total_gb REAL NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 55,
+    description: "Add per-app memory_mb ceiling to apps (0 = platform default)",
+    up: (db) => {
+      // 0 means "use the platform default" (DEFAULT_MEM_MB in hetzner/containers).
+      // A positive value overrides the container's --memory/--memory-swap ceiling.
+      db.run("ALTER TABLE apps ADD COLUMN memory_mb INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

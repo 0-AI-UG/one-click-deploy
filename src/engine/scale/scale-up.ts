@@ -114,6 +114,7 @@ export async function scaleUp(
         gitBranch: app.git_branch || undefined,
         bindAddr: replicaBindAddr,
         containerName: containerNameForBuild,
+        memoryMb: app.memory_mb || undefined,
       };
       const logLine = (line: string) => emit("scale", line);
       if (app.deploy_mode === "railpack") {
@@ -162,6 +163,7 @@ export async function scaleUp(
         envFilePath,
         volumeMount: app.volume_mount || undefined,
         extraVolumes: scaleExtraVols,
+        memoryMb: app.memory_mb || undefined,
       });
       const result = await sshExec(targetServer.ipv4, asUser(cmd), targetHostKey);
       if (result.exitCode !== 0) {

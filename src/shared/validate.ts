@@ -303,7 +303,22 @@ export function validateDeployManifest(
   if ("replicas" in obj && (typeof obj.replicas !== "number" || obj.replicas < 1))
     return { ok: false, error: '"replicas" must be a positive number' };
 
+  if ("memory_mb" in obj && !isValidMemoryMb(obj.memory_mb))
+    return { ok: false, error: `"memory_mb" must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB}` };
+
   return { ok: true, manifest: raw as import("./rpc.ts").DeployManifest };
+}
+
+/** Per-app container memory ceiling bounds (MB). 0 means "platform default". */
+export const MIN_MEMORY_MB = 128;
+export const MAX_MEMORY_MB = 32768;
+
+export function isValidMemoryMb(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    (value === 0 || (value >= MIN_MEMORY_MB && value <= MAX_MEMORY_MB))
+  );
 }
 
 export function validateDeployRequest(req: {
@@ -313,6 +328,7 @@ export function validateDeployRequest(req: {
   git_branch?: string;
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
+  memory_mb?: number;
 }): ValidationResult<void> {
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };
@@ -336,6 +352,10 @@ export function validateDeployRequest(req: {
   if (req.env_vars) {
     const envResult = validateEnvVars(req.env_vars);
     if (!envResult.valid) return { valid: false, error: envResult.error };
+  }
+
+  if (req.memory_mb !== undefined && !isValidMemoryMb(req.memory_mb)) {
+    return { valid: false, error: `Memory: must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB} MB` };
   }
 
   return { valid: true, value: undefined };

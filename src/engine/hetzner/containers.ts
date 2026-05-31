@@ -744,6 +744,8 @@ export async function cloneAndBuild(
     /** When true, assume the repo is already cloned (the engine `clone_repo`
      *  step ran first). Skips the in-helper clone. */
     skipClone?: boolean;
+    /** Per-container memory ceiling in MB. Omit / 0 → platform default. */
+    memoryMb?: number;
   },
   onLog?: (line: string) => void
 ) {
@@ -833,6 +835,7 @@ export async function cloneAndBuild(
     envFilePath,
     volumeMount: opts.volumeMount,
     extraVolumes: opts.extraVolumes,
+    memoryMb: opts.memoryMb || undefined,
   });
   log("build", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
@@ -878,6 +881,8 @@ export async function cloneAndRailpackBuild(
     containerName?: string;
     /** See `cloneAndBuild`. */
     skipClone?: boolean;
+    /** Per-container memory ceiling in MB. Omit / 0 → platform default. */
+    memoryMb?: number;
   },
   onLog?: (line: string) => void
 ) {
@@ -947,6 +952,7 @@ export async function cloneAndRailpackBuild(
     envFilePath,
     volumeMount: opts.volumeMount,
     extraVolumes: opts.extraVolumes,
+    memoryMb: opts.memoryMb || undefined,
   });
   log("railpack", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));

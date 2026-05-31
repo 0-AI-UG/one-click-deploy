@@ -42,6 +42,7 @@ export type AppData = {
   sleeping_server_id?: number | null;
   sleeping_host_port?: number | null;
   public?: boolean | number;
+  memory_mb?: number;
 };
 
 export type ReplicaData = {
@@ -217,4 +218,5 @@ export type DeployBody = {
   public?: boolean;
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   server_id?: number;
+  memory_mb?: number;
 };

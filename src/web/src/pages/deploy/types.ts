@@ -26,6 +26,7 @@ export type DeployManifest = {
   replicas?: number;
   public?: boolean;
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
+  memory_mb?: number;
 };
 
 export type ParsedManifest = {
@@ -74,4 +75,5 @@ export type FormState = {
   public: boolean;
   extra_volumes: Array<{ host_path: string; container_path: string }>;
   server_id: string; // "" = auto
+  memory_mb: string; // "" / "0" = platform default
 };

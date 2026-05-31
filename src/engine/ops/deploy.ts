@@ -471,6 +471,9 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       if (extraVolumes.length > 0) {
         db.updateAppExtraVolumes(result.app.id, extraVolumes);
       }
+      if (typeof req.memory_mb === "number" && req.memory_mb > 0) {
+        db.updateAppMemory(result.app.id, req.memory_mb);
+      }
       return result;
     })();
 
@@ -717,6 +720,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
           gitBranch: req.git_branch,
           bindAddr: containerBindAddr,
           skipClone: true,
+          memoryMb: req.memory_mb || undefined,
         },
         (line) => {
           maskedLog(`[build] ${line}`);

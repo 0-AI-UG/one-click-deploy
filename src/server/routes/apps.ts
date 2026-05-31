@@ -5,7 +5,7 @@ import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getComposeLogs, getContainerLogs } from "../../shared/remote/index.ts";
-import { validateAppName } from "../../shared/validate.ts";
+import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB } from "../../shared/validate.ts";
 import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 
@@ -182,6 +182,7 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       container_port?: number;
       environment_id?: number | null;
       public?: boolean;
+      memory_mb?: number;
     };
 
     if (body.container_port !== undefined) {
@@ -190,6 +191,13 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
         return Response.json({ ok: false, error: "Port must be an integer between 1 and 65535" }, { headers: corsHeaders });
       }
       body.container_port = p;
+    }
+
+    if (body.memory_mb !== undefined) {
+      if (!isValidMemoryMb(body.memory_mb)) {
+        return Response.json({ ok: false, error: `Memory must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB} MB` }, { headers: corsHeaders });
+      }
+      db.updateAppMemory(appId, body.memory_mb);
     }
 
     if (body.environment_id !== undefined) {

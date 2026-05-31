@@ -41,6 +41,7 @@ export {
   updateAppDomain,
   updateAppVolume,
   updateAppExtraVolumes,
+  updateAppMemory,
   updateAppAuthPassword,
   updateAppPublic,
   updateAppDeployMode,

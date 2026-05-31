@@ -2,7 +2,7 @@ import { post, put } from "../../api/client.ts";
 import { Card, Btn, Checkbox, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
-import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe } from "lucide-react";
+import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe, Cpu } from "lucide-react";
 import type { AppData } from "../../types.ts";
 
 interface SettingsTabProps {
@@ -16,6 +16,8 @@ interface SettingsTabProps {
   setIsPublic: (v: boolean) => void;
   portEdit: number;
   setPortEdit: (v: number) => void;
+  memEdit: number;
+  setMemEdit: (v: number) => void;
   volumeForm: { size: number; mount_path: string };
   setVolumeForm: (f: { size: number; mount_path: string }) => void;
   actionLoading: string | null;
@@ -29,6 +31,7 @@ export function SettingsTab({
   authPassword, setAuthPassword,
   isPublic, setIsPublic,
   portEdit, setPortEdit,
+  memEdit, setMemEdit,
   volumeForm, setVolumeForm,
   actionLoading, action, ops,
 }: SettingsTabProps) {
@@ -101,6 +104,21 @@ export function SettingsTab({
             placeholder="3000"
           />
         </div>
+
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Cpu size={14} className="text-fg" />
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Memory Limit (MB)</h3>
+          </div>
+          <input
+            type="number"
+            min={0}
+            value={memEdit || ""}
+            onChange={(e) => setMemEdit(parseInt(e.target.value) || 0)}
+            placeholder="512 (platform default)"
+          />
+          <p className="text-[9px] text-muted mt-1">Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save &amp; redeploy. Dockerfile/railpack apps only.</p>
+        </div>
       </Card>
 
       <PermissionGate permission="apps.redeploy">
@@ -115,6 +133,7 @@ export function SettingsTab({
                 auth_password: authPassword || null,
                 container_port: portEdit,
                 public: isPublic,
+                memory_mb: memEdit,
               })) as { op_id?: number };
               if (res?.op_id) {
                 trackOperationInToast(res.op_id, "Saving & redeploying");

@@ -197,6 +197,7 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
         envFilePath: checkout.envFilePath || undefined,
         volumeMount: app.volume_mount || undefined,
         extraVolumes: parseExtraVolumes(app.extra_volumes),
+        memoryMb: app.memory_mb || undefined,
       });
       const runResult = await sshExec(server.ipv4, asUser(cmd), hostKey);
       if (runResult.exitCode !== 0) {
@@ -229,6 +230,7 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
         envFilePath: snap.envFilePath || undefined,
         volumeMount: snap.volumeMount || undefined,
         extraVolumes: snap.extraVolumes,
+        memoryMb: app.memory_mb || undefined,
       });
       await sshExec(server.ipv4, asUser(cmd), hostKey);
       ctx.log(`Restored prior container image ${snap.image}`);

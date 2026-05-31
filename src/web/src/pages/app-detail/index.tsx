@@ -23,6 +23,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [authPassword, setAuthPassword] = useState("");
   const [isPublic, setIsPublic] = useState(true);
   const [portEdit, setPortEdit] = useState<number>(0);
+  const [memEdit, setMemEdit] = useState<number>(0);
   const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
@@ -120,6 +121,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
       setAuthPassword(app.auth_password || "");
       setIsPublic(!!app.public);
       setPortEdit(app.container_port || 0);
+      setMemEdit(app.memory_mb || 0);
       if (app.volume_mount) {
         const parts = String(app.volume_mount).split(":");
         setVolumeForm((f) => ({ ...f, mount_path: parts[1] || "/data" }));
@@ -328,6 +330,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
           setIsPublic={setIsPublic}
           portEdit={portEdit}
           setPortEdit={setPortEdit}
+          memEdit={memEdit}
+          setMemEdit={setMemEdit}
           volumeForm={volumeForm}
           setVolumeForm={setVolumeForm}
           actionLoading={actionLoading}

@@ -251,6 +251,26 @@ describe("validateDeployRequest", () => {
   test("rejects invalid domain", () => {
     expect(validateDeployRequest({ ...validRequest, domain: "not valid" }).valid).toBe(false);
   });
+
+  test("accepts memory_mb of 0 (platform default)", () => {
+    expect(validateDeployRequest({ ...validRequest, memory_mb: 0 }).valid).toBe(true);
+  });
+
+  test("accepts memory_mb within bounds", () => {
+    expect(validateDeployRequest({ ...validRequest, memory_mb: 1024 }).valid).toBe(true);
+  });
+
+  test("rejects memory_mb below minimum", () => {
+    expect(validateDeployRequest({ ...validRequest, memory_mb: 64 }).valid).toBe(false);
+  });
+
+  test("rejects non-integer memory_mb", () => {
+    expect(validateDeployRequest({ ...validRequest, memory_mb: 512.5 }).valid).toBe(false);
+  });
+
+  test("rejects memory_mb above maximum", () => {
+    expect(validateDeployRequest({ ...validRequest, memory_mb: 99999 }).valid).toBe(false);
+  });
 });
 
 describe("validateGitHubPat", () => {
@@ -356,6 +376,17 @@ describe("validateDeployManifest", () => {
     const r = validateDeployManifest({ $schema: 2, name: "x" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/schema/i);
+  });
+
+  test("accepts a valid memory_mb", () => {
+    expect(validateDeployManifest({ name: "x", memory_mb: 2048 }).ok).toBe(true);
+    expect(validateDeployManifest({ name: "x", memory_mb: 0 }).ok).toBe(true);
+  });
+
+  test("rejects an out-of-range memory_mb", () => {
+    const r = validateDeployManifest({ name: "x", memory_mb: 10 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/memory_mb/);
   });
 
   test("rejects non-integer container_port", () => {

@@ -43,6 +43,7 @@ export type AppRow = {
   environment_id: number | null;
   public: number;
   extra_volumes: string; // JSON array of "host:container" strings
+  memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
 };
 
 export type DnsRecordRow = {
@@ -322,6 +323,12 @@ export function updateAppVolume(id: number, volumeId: string, volumeMount: strin
 
 export function updateAppExtraVolumes(id: number, extraVolumes: string[]): void {
   db.query("UPDATE apps SET extra_volumes = ? WHERE id = ?").run(JSON.stringify(extraVolumes), id);
+}
+
+/** Set the per-app memory ceiling in MB. 0 = use the platform default. Applied
+ *  to the container on the next (re)deploy / scale operation. */
+export function updateAppMemory(id: number, memoryMb: number): void {
+  db.query("UPDATE apps SET memory_mb = ? WHERE id = ?").run(memoryMb, id);
 }
 
 export function updateAppAuthPassword(id: number, authPassword: string): void {

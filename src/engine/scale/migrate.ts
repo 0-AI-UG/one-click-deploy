@@ -525,6 +525,7 @@ async function restartSourceReplica(
     envFilePath,
     volumeMount: rb.originalVolumeMount || undefined,
     extraVolumes: extraVols,
+    memoryMb: app.memory_mb || undefined,
   });
   const result = await sshExec(sourceServer.ipv4, asUser(cmd), sourceHostKey);
   if (result.exitCode !== 0) {
