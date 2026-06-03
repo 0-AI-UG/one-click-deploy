@@ -1152,10 +1152,94 @@ export async function cloneAndComposeBuild(
   return { composeFile: opts.composeFile, webService: opts.webService };
 }
 
+/**
+ * Deploy a multi-container *catalog service* from a bundled compose template.
+ * Unlike `cloneAndComposeBuild`, there is no git repo — the template ships with
+ * OCD and is written straight to the host. Persistent data and the public port
+ * are supplied via the generated `docker-compose.ocd.yml` override (the base
+ * template declares neither), mirroring the app compose flow.
+ *
+ * Services live under `/home/deploy/services/<name>` (NOT the apps dir); pass
+ * `baseDir: "/home/deploy/services"` to the compose lifecycle/health helpers
+ * for these projects.
+ */
+export async function pullAndRunComposeService(
+  ip: string,
+  opts: {
+    name: string; // compose project name (== service name)
+    composeTemplate: string; // bundled docker-compose.yml text
+    webService: string; // service Caddy proxies (gets the published port)
+    webPort: number; // that service's internal port
+    hostPort: number; // host-side published port
+    bindAddr: string; // host bind address (server private IPv4)
+    envVars: Record<string, string>;
+    /** Per-service bind mounts ("host:container") injected into the override. */
+    overrideVolumes: Record<string, string[]>;
+    /** Host directories to pre-create (the volume subpaths) before `up`. */
+    hostDirs: string[];
+  },
+  hostKey?: string,
+): Promise<void> {
+  const svcDir = `/home/deploy/services/${opts.name}`;
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  const writeFile = async (path: string, content: string) => {
+    const escaped = content.replace(/'/g, "'\\''");
+    await sshExec(ip, `echo '${escaped}' > ${path} && chown deploy:deploy ${path}`, hostKey);
+  };
+
+  await sshExec(ip, `mkdir -p ${svcDir} && chown deploy:deploy ${svcDir}`, hostKey);
+
+  // Pre-create the volume subpath directories so the bind mounts resolve.
+  if (opts.hostDirs.length > 0) {
+    const mk = opts.hostDirs.map((d) => `mkdir -p ${d}`).join(" && ");
+    await sshExec(ip, `${mk} && chown -R deploy:deploy ${opts.hostDirs.map((d) => d).join(" ")}`, hostKey);
+  }
+
+  // Base template (data paths + public port deliberately omitted).
+  await writeFile(`${svcDir}/docker-compose.yml`, opts.composeTemplate);
+
+  // Override: publish the web service + inject per-component bind mounts.
+  const overrideServices: ComposeOverrideServices = {
+    [opts.webService]: {
+      ports: [`${opts.bindAddr}:${opts.hostPort}:${opts.webPort}`],
+    },
+  };
+  for (const [svc, vols] of Object.entries(opts.overrideVolumes)) {
+    if (vols.length === 0) continue;
+    overrideServices[svc] = overrideServices[svc] || {};
+    overrideServices[svc].volumes = vols;
+  }
+  await writeFile(`${svcDir}/docker-compose.ocd.yml`, JSON.stringify({ services: overrideServices }));
+
+  // Env file (secrets, passwords, image tag).
+  const envEntries = Object.entries(opts.envVars);
+  let envFileFlag = "";
+  if (envEntries.length > 0) {
+    const envFilePath = `${svcDir}/.env.deploy`;
+    const envContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
+    const escaped = envContent.replace(/'/g, "'\\''");
+    await sshExec(
+      ip,
+      `echo '${escaped}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`,
+      hostKey,
+    );
+    envFileFlag = `--env-file ${envFilePath}`;
+  }
+
+  const composeCmd = `cd ${svcDir} && docker compose -f docker-compose.yml -f docker-compose.ocd.yml -p ${opts.name} ${envFileFlag} up -d`;
+  log("service", `Compose service command: ${composeCmd}`);
+  const result = await sshExec(ip, asUser(composeCmd), hostKey);
+  if (result.exitCode !== 0) {
+    log("service", `Compose service up stderr: ${result.stderr.slice(0, 500)}`);
+    throw new Error(describeFailure("Docker Compose service start failed", result));
+  }
+  log("service", `Compose service ${opts.name} started`);
+}
+
 // --- Compose Lifecycle Operations ---
 
-export async function restartCompose(ip: string, projectName: string, hostKey?: string) {
-  const appDir = `/home/deploy/apps/${projectName}`;
+export async function restartCompose(ip: string, projectName: string, hostKey?: string, baseDir = "/home/deploy/apps") {
+  const appDir = `${baseDir}/${projectName}`;
   const result = await sshExec(
     ip,
     `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} restart"`,
@@ -1166,8 +1250,8 @@ export async function restartCompose(ip: string, projectName: string, hostKey?: 
   }
 }
 
-export async function pauseCompose(ip: string, projectName: string, hostKey?: string) {
-  const appDir = `/home/deploy/apps/${projectName}`;
+export async function pauseCompose(ip: string, projectName: string, hostKey?: string, baseDir = "/home/deploy/apps") {
+  const appDir = `${baseDir}/${projectName}`;
   const result = await sshExec(
     ip,
     `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} pause"`,
@@ -1178,8 +1262,8 @@ export async function pauseCompose(ip: string, projectName: string, hostKey?: st
   }
 }
 
-export async function unpauseCompose(ip: string, projectName: string, hostKey?: string) {
-  const appDir = `/home/deploy/apps/${projectName}`;
+export async function unpauseCompose(ip: string, projectName: string, hostKey?: string, baseDir = "/home/deploy/apps") {
+  const appDir = `${baseDir}/${projectName}`;
   const result = await sshExec(
     ip,
     `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} unpause"`,
@@ -1190,8 +1274,8 @@ export async function unpauseCompose(ip: string, projectName: string, hostKey?: 
   }
 }
 
-export async function removeCompose(ip: string, projectName: string, removeVolumes = false, hostKey?: string) {
-  const appDir = `/home/deploy/apps/${projectName}`;
+export async function removeCompose(ip: string, projectName: string, removeVolumes = false, hostKey?: string, baseDir = "/home/deploy/apps") {
+  const appDir = `${baseDir}/${projectName}`;
   const volFlag = removeVolumes ? " -v" : "";
   await sshExec(
     ip,
@@ -1204,9 +1288,10 @@ export async function getComposeLogs(
   ip: string,
   projectName: string,
   tail: number = 100,
-  hostKey?: string
+  hostKey?: string,
+  baseDir = "/home/deploy/apps"
 ): Promise<string> {
-  const appDir = `/home/deploy/apps/${projectName}`;
+  const appDir = `${baseDir}/${projectName}`;
   const result = await sshExec(
     ip,
     `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} logs --tail ${tail} 2>&1"`,
@@ -1223,13 +1308,14 @@ export async function composeHealthCheck(
   bindHost: string,
   port: number,
   maxAttempts = 5,
-  hostKey?: string
+  hostKey?: string,
+  baseDir = "/home/deploy/apps"
 ): Promise<{ healthy: boolean; statusCode?: number; error?: string }> {
   log("health", `Checking compose health of ${projectName} on ${ip} via ${bindHost}:${port}`);
 
   for (let i = 0; i < maxAttempts; i++) {
     // Check all services are running
-    const appDir = `/home/deploy/apps/${projectName}`;
+    const appDir = `${baseDir}/${projectName}`;
     const ps = await sshExec(
       ip,
       `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} ps --format json 2>/dev/null"`,
@@ -1479,8 +1565,8 @@ export async function containerExists(
  * this actually releases CPU/memory, making it the correct choice for
  * scale-to-zero.
  */
-export async function stopCompose(ip: string, projectName: string, hostKey?: string) {
-  const appDir = `/home/deploy/apps/${projectName}`;
+export async function stopCompose(ip: string, projectName: string, hostKey?: string, baseDir = "/home/deploy/apps") {
+  const appDir = `${baseDir}/${projectName}`;
   const result = await sshExec(
     ip,
     `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} stop"`,
@@ -1492,8 +1578,8 @@ export async function stopCompose(ip: string, projectName: string, hostKey?: str
 }
 
 /** `docker compose start` — restarts a previously-stopped compose project. */
-export async function startCompose(ip: string, projectName: string, hostKey?: string) {
-  const appDir = `/home/deploy/apps/${projectName}`;
+export async function startCompose(ip: string, projectName: string, hostKey?: string, baseDir = "/home/deploy/apps") {
+  const appDir = `${baseDir}/${projectName}`;
   const result = await sshExec(
     ip,
     `su - deploy -c "cd ${appDir} && docker compose -p ${projectName} start"`,
@@ -1505,8 +1591,8 @@ export async function startCompose(ip: string, projectName: string, hostKey?: st
 }
 
 /** Returns true iff the compose project directory exists on the host. */
-export async function composeProjectExists(ip: string, projectName: string, hostKey?: string): Promise<boolean> {
-  const appDir = `/home/deploy/apps/${projectName}`;
+export async function composeProjectExists(ip: string, projectName: string, hostKey?: string, baseDir = "/home/deploy/apps"): Promise<boolean> {
+  const appDir = `${baseDir}/${projectName}`;
   const result = await sshExec(
     ip,
     `[ -d "${appDir}" ] && echo yes || echo no`,

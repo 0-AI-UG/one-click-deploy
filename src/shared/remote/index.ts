@@ -47,6 +47,7 @@ export {
   ensureOcdNetwork,
   buildDockerRunArgs,
   pullAndRunService,
+  pullAndRunComposeService,
   serviceHealthCheck,
   deployConfigFile,
   pruneServer,

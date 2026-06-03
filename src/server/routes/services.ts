@@ -23,9 +23,12 @@ export async function handleGetCatalog(_request: Request): Promise<Response> {
       icon: e.icon,
       color: e.color,
       http: e.http,
-      stateless: !e.volumePath,
+      // Compose services back their volume via subpaths, so a missing
+      // volumePath alone doesn't make them stateless.
+      stateless: !e.volumePath && !(e.volumeSubpaths && e.volumeSubpaths.length),
       description: e.description,
       category: e.category,
+      recommendedMemoryMb: e.recommendedMemoryMb,
     }));
     return Response.json(entries, { headers: corsHeaders });
   } catch (error) {

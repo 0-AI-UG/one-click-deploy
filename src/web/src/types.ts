@@ -129,6 +129,10 @@ export type ServiceData = {
     database?: string;
     domain?: string;
     url?: string;
+    admin_username?: string;
+    admin_email?: string;
+    admin_password?: string;
+    admin_token?: string;
   };
 };
 

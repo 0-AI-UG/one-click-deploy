@@ -1,6 +1,13 @@
 import * as db from "../../shared/db.ts";
 import { getComputeProvider } from "../../shared/providers/index.ts";
-import { sshExec, pullAndRunService, serviceHealthCheck } from "../../shared/remote/index.ts";
+import {
+  sshExec,
+  pullAndRunService,
+  pullAndRunComposeService,
+  serviceHealthCheck,
+  composeHealthCheck,
+  removeCompose,
+} from "../../shared/remote/index.ts";
 import { provisionServer } from "../provision-server.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import {
@@ -22,6 +29,29 @@ import type { OpKindDefinition, Step } from "../types.ts";
 import type { Server } from "../../shared/rpc.ts";
 
 type DeployServiceInput = ServiceDeployRequest;
+
+/** Compose-kind services live here (apps use /home/deploy/apps). */
+const SERVICES_BASE_DIR = "/home/deploy/services";
+
+/** A service is "compose-kind" when its catalog entry bundles a compose template. */
+function isComposeService(catalog: ServiceDefinition): boolean {
+  return !!catalog.compose;
+}
+
+/** Build the per-component bind mounts + host dirs for a compose service's base volume. */
+function composeVolumePlan(
+  catalog: ServiceDefinition,
+  hostMountPath: string,
+): { overrideVolumes: Record<string, string[]>; hostDirs: string[] } {
+  const overrideVolumes: Record<string, string[]> = {};
+  const hostDirs: string[] = [];
+  for (const vs of catalog.volumeSubpaths || []) {
+    const hostPath = `${hostMountPath}/${vs.subpath}`;
+    (overrideVolumes[vs.service] ||= []).push(`${hostPath}:${vs.container}`);
+    if (!hostDirs.includes(hostPath)) hostDirs.push(hostPath);
+  }
+  return { overrideVolumes, hostDirs };
+}
 
 type ServerOut = {
   serverId: number;
@@ -110,6 +140,12 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
 
     const existingReady = db.getServers().find((s: Server) => s.status === "ready");
     if (existingReady) {
+      if (catalog.recommendedMemoryMb) {
+        ctx.log(
+          `Note: ${catalog.label} recommends ~${catalog.recommendedMemoryMb}MB RAM — ` +
+          `reusing existing server "${existingReady.name}". Ensure it has headroom.`,
+        );
+      }
       return {
         serverId: existingReady.id,
         serverIp: existingReady.ipv4,
@@ -119,7 +155,9 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
       };
     }
     const settings = db.getSettings();
-    const serverType = settings.default_server_type;
+    // Resource-heavy services (e.g. the 4-container Authentik stack) pin a
+    // larger server type than the panel default.
+    const serverType = catalog.minServerType || settings.default_server_type;
     if (!serverType) throw new Error("No default server type configured — set one in Settings");
     const location = settings.default_location;
     if (!location) throw new Error("No default server location configured — set one in Settings");
@@ -153,8 +191,10 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
     const catalog = resolveCatalog(req);
-    // Stateless services (no volumePath) skip volume provisioning.
-    if (!catalog.volumePath) {
+    // Compose services back several components off one base volume via subpaths.
+    const wantsComposeVolume = isComposeService(catalog) && (catalog.volumeSubpaths?.length ?? 0) > 0;
+    // Stateless services (no volumePath, no compose subpaths) skip provisioning.
+    if (!catalog.volumePath && !wantsComposeVolume) {
       ctx.log("Stateless service — skipping volume");
       return {
         volumeId: "",
@@ -192,7 +232,9 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
     ctx.log(`Volume ready (${volumeSize}GB)`);
     return {
       volumeId: vol.providerId,
-      volumeMount: `${hostMountPath}:${containerPath}`,
+      // Compose services bind per-component subpaths in the run step, so there
+      // is no single host:container mount here.
+      volumeMount: containerPath ? `${hostMountPath}:${containerPath}` : "",
       hostMountPath,
       containerPath,
       volumeSize,
@@ -224,6 +266,8 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
 
     const generated = generateEnvVars(catalog);
     const envVars = { ...generated, ...(req.env_overrides || {}) };
+    // Compose templates pin their image tag from an env var (e.g. AUTHENTIK_TAG).
+    if (catalog.versionEnvKey) envVars[catalog.versionEnvKey] = version;
 
     const hostPort = db.nextServiceHostPort(server.serverId);
     const containerName = req.name;
@@ -258,6 +302,11 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
       credentials.url = `https://${httpDomain}`;
       credentials.domain = httpDomain;
     }
+    // Surface catalog-declared env values as credential fields (e.g. the
+    // generated Authentik bootstrap admin email/password/token).
+    for (const [field, envKey] of Object.entries(catalog.surfaceCredentials || {})) {
+      if (envVars[envKey] != null) credentials[field] = envVars[envKey];
+    }
 
     const service = db.insertService({
       name: req.name,
@@ -266,6 +315,7 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
       port: catalog.defaultPort,
       env_vars: JSON.stringify(envVars),
       credentials: JSON.stringify(credentials),
+      deploy_kind: isComposeService(catalog) ? "compose" : "container",
     });
     const instance = db.insertServiceInstance({
       service_id: service.id,
@@ -369,6 +419,27 @@ const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
     const svc = prior["insert_service_and_instance"] as InsertOut;
     const catalog = resolveCatalog(req);
 
+    if (isComposeService(catalog)) {
+      const { overrideVolumes, hostDirs } = composeVolumePlan(catalog, volume.hostMountPath);
+      await pullAndRunComposeService(
+        server.serverIp,
+        {
+          name: svc.containerName,
+          composeTemplate: catalog.composeTemplate || "",
+          webService: catalog.composeWebService || "",
+          webPort: catalog.composeWebPort || catalog.defaultPort,
+          hostPort: svc.hostPort,
+          bindAddr: svc.bindAddress,
+          envVars: svc.envVars,
+          overrideVolumes,
+          hostDirs,
+        },
+        server.serverHostKey || undefined,
+      );
+      ctx.log("Compose project started");
+      return { ok: true };
+    }
+
     await pullAndRunService(
       server.serverIp,
       {
@@ -387,15 +458,21 @@ const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
     return { ok: true };
   },
   async compensate(ctx, _out, prior) {
+    const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
     if (!server || !svc) return;
+    const catalog = resolveCatalog(req);
     try {
-      await sshExec(
-        server.serverIp,
-        `su - deploy -c "docker rm -f ${svc.containerName} 2>/dev/null || true"`,
-        server.serverHostKey || undefined,
-      );
+      if (isComposeService(catalog)) {
+        await removeCompose(server.serverIp, svc.containerName, true, server.serverHostKey || undefined, SERVICES_BASE_DIR);
+      } else {
+        await sshExec(
+          server.serverIp,
+          `su - deploy -c "docker rm -f ${svc.containerName} 2>/dev/null || true"`,
+          server.serverHostKey || undefined,
+        );
+      }
     } catch (err) {
       ctx.log(`Failed to remove container ${svc.containerName}: ${err}`);
     }
@@ -491,13 +568,23 @@ const healthCheckStep: Step<DeployServiceInput, { healthy: boolean }> = {
     const svc = prior["insert_service_and_instance"] as InsertOut;
     const catalog = resolveCatalog(req);
 
-    const health = await serviceHealthCheck(
-      server.serverIp,
-      svc.containerName,
-      catalog.healthCmd,
-      10,
-      server.serverHostKey || undefined,
-    );
+    const health = isComposeService(catalog)
+      ? await composeHealthCheck(
+          server.serverIp,
+          svc.containerName,
+          svc.bindAddress,
+          svc.hostPort,
+          10,
+          server.serverHostKey || undefined,
+          SERVICES_BASE_DIR,
+        )
+      : await serviceHealthCheck(
+          server.serverIp,
+          svc.containerName,
+          catalog.healthCmd,
+          10,
+          server.serverHostKey || undefined,
+        );
     if (health.healthy) {
       db.updateServiceInstanceStatus(svc.instanceId, "running");
       db.updateServiceStatus(svc.serviceId, "running");

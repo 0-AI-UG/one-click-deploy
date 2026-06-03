@@ -10,6 +10,8 @@ export type ServiceRow = {
   env_vars: string;
   credentials: string;
   desired_instances: number;
+  /** "container" (single docker run) or "compose" (bundled docker-compose project). */
+  deploy_kind: string;
   created_at: string;
 };
 
@@ -48,12 +50,13 @@ export function insertService(data: {
   env_vars: string;
   credentials: string;
   desired_instances?: number;
+  deploy_kind?: string;
 }): ServiceRow {
   return db
     .query(
-      "INSERT INTO services (name, service_type, version, port, env_vars, credentials, desired_instances) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO services (name, service_type, version, port, env_vars, credentials, desired_instances, deploy_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
-    .get(data.name, data.service_type, data.version, data.port, data.env_vars, data.credentials, data.desired_instances ?? 1) as ServiceRow;
+    .get(data.name, data.service_type, data.version, data.port, data.env_vars, data.credentials, data.desired_instances ?? 1, data.deploy_kind ?? "container") as ServiceRow;
 }
 
 export function getService(id: number): ServiceRow | null {

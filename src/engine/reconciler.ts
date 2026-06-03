@@ -18,6 +18,8 @@ function log(context: string, ...args: unknown[]) {
 const TICK_MS = 30_000;
 const METRICS_RETENTION_SEC = 24 * 60 * 60;
 const UNHEALTHY_RESTART_THRESHOLD = 2;
+/** Compose-kind services live here (apps use /home/deploy/apps). */
+const SERVICE_COMPOSE_DIR = "/home/deploy/services";
 
 let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -170,11 +172,16 @@ async function checkServiceInstanceHealth(
   const hostKey = server.ssh_host_key || undefined;
   const catalog = getCatalogEntry(service.service_type);
   if (!catalog) return;
+  const isCompose = service.deploy_kind === "compose";
 
   try {
-    const check = await serviceHealthCheck(
-      server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey,
-    );
+    const check = isCompose
+      ? await composeHealthCheck(
+          server.ipv4, instance.container_name, replicaBindHost(server), instance.host_port, 1, hostKey, SERVICE_COMPOSE_DIR,
+        )
+      : await serviceHealthCheck(
+          server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey,
+        );
 
     if (check.healthy) {
       db.updateServiceInstanceStatus(instance.id, "running");
@@ -187,7 +194,11 @@ async function checkServiceInstanceHealth(
       if (ticks >= UNHEALTHY_RESTART_THRESHOLD) {
         log("health", `auto-restarting service ${instance.container_name}`);
         try {
-          await restartContainer(server.ipv4, instance.container_name, hostKey);
+          if (isCompose) {
+            await restartCompose(server.ipv4, instance.container_name, hostKey, SERVICE_COMPOSE_DIR);
+          } else {
+            await restartContainer(server.ipv4, instance.container_name, hostKey);
+          }
           db.resetServiceInstanceUnhealthyTicks(instance.id);
         } catch (err) {
           log("health", `restart failed: ${err}`);

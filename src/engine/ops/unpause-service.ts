@@ -1,6 +1,9 @@
 import * as db from "../../shared/db.ts";
-import { unpauseContainer, serviceHealthCheck } from "../../shared/remote/index.ts";
+import { unpauseContainer, serviceHealthCheck, unpauseCompose, composeHealthCheck } from "../../shared/remote/index.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
+import { replicaBindHost } from "../scale/types.ts";
+
+const SERVICES_BASE_DIR = "/home/deploy/services";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -31,16 +34,25 @@ const unpauseAllInstances: Step<UnpauseServiceInput, { allHealthy: boolean; skip
     if (!service) throw new Error("Service not found");
     const catalog = getCatalogEntry(service.service_type);
     if (!catalog) throw new Error("Unknown service type");
+    const isCompose = service.deploy_kind === "compose";
     const instances = db.getServiceInstances(ctx.input.serviceId);
     let allHealthy = true;
     for (const inst of instances) {
       const server = db.getServer(inst.server_id);
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
-      await unpauseContainer(server.ipv4, inst.container_name, hostKey);
-      const health = await serviceHealthCheck(
-        server.ipv4, inst.container_name, catalog.healthCmd, 5, hostKey,
-      );
+      let health;
+      if (isCompose) {
+        await unpauseCompose(server.ipv4, inst.container_name, hostKey, SERVICES_BASE_DIR);
+        health = await composeHealthCheck(
+          server.ipv4, inst.container_name, replicaBindHost(server), inst.host_port, 5, hostKey, SERVICES_BASE_DIR,
+        );
+      } else {
+        await unpauseContainer(server.ipv4, inst.container_name, hostKey);
+        health = await serviceHealthCheck(
+          server.ipv4, inst.container_name, catalog.healthCmd, 5, hostKey,
+        );
+      }
       db.updateServiceInstanceStatus(inst.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }

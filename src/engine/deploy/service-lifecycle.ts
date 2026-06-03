@@ -1,9 +1,12 @@
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
-import { sshExec, restartContainer, serviceHealthCheck, pauseContainer, unpauseContainer, getContainerLogs } from "../../shared/remote/index.ts";
+import { sshExec, restartContainer, serviceHealthCheck, pauseContainer, unpauseContainer, getContainerLogs, removeCompose, getComposeLogs } from "../../shared/remote/index.ts";
 import { getComputeProvider } from "../../shared/providers/index.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
 import { removeServiceCaddy } from "../scale/caddy-manager.ts";
+
+/** Compose-kind services live here (apps use /home/deploy/apps). */
+const SERVICES_BASE_DIR = "/home/deploy/services";
 
 type ServiceInstance = {
   id: number;
@@ -54,11 +57,15 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
       if (server) {
         const hostKey = server.ssh_host_key || undefined;
         try {
-          await sshExec(
-            server.ipv4,
-            `su - deploy -c "docker rm -f ${instance.container_name} 2>/dev/null || true"`,
-            hostKey
-          );
+          if (service.deploy_kind === "compose") {
+            await removeCompose(server.ipv4, instance.container_name, true, hostKey, SERVICES_BASE_DIR);
+          } else {
+            await sshExec(
+              server.ipv4,
+              `su - deploy -c "docker rm -f ${instance.container_name} 2>/dev/null || true"`,
+              hostKey
+            );
+          }
         } catch (err) {
           log("destroy", `Failed to remove container ${instance.container_name}: ${err}`);
           cleanupFailed = true;
@@ -240,5 +247,9 @@ export async function getServiceLogs(
   const server = db.getServer(instance.server_id);
   if (!server) throw new Error("Server not found");
 
-  return getContainerLogs(server.ipv4, instance.container_name, tail, server.ssh_host_key || undefined);
+  const hostKey = server.ssh_host_key || undefined;
+  if (service.deploy_kind === "compose") {
+    return getComposeLogs(server.ipv4, instance.container_name, tail, hostKey, SERVICES_BASE_DIR);
+  }
+  return getContainerLogs(server.ipv4, instance.container_name, tail, hostKey);
 }

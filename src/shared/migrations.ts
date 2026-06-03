@@ -1204,6 +1204,16 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN memory_mb INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 56,
+    description: "Add deploy_kind to services (container | compose) for multi-container services",
+    up: (db) => {
+      // "container" = single `docker run` (the existing path). "compose" =
+      // multi-container catalog service deployed via a bundled docker-compose
+      // template (e.g. Authentik = server + worker + postgresql + redis).
+      db.run("ALTER TABLE services ADD COLUMN deploy_kind TEXT NOT NULL DEFAULT 'container'");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

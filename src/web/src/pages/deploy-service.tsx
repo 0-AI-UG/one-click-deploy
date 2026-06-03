@@ -17,6 +17,7 @@ type CatalogEntry = {
   stateless?: boolean;
   description?: string;
   category?: string;
+  recommendedMemoryMb?: number;
 };
 
 type Environment = {
@@ -141,6 +142,14 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
               </div>
             </div>
             <div className="p-4 space-y-4">
+              {selected.recommendedMemoryMb ? (
+                <div className="bg-alt border-2 border-fg/30 px-3 py-2">
+                  <p className="font-mono text-[9px] text-muted">
+                    This is a multi-container service and needs ~{(selected.recommendedMemoryMb / 1024).toFixed(0)}GB RAM.
+                    A larger server is provisioned automatically; reusing a small existing server may be tight on memory.
+                  </p>
+                </div>
+              ) : null}
               {/* Name */}
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Service Name</label>

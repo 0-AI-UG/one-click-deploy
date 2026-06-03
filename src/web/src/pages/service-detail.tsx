@@ -272,6 +272,33 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                   </div>
                 </div>
               )}
+              {credentials.admin_username && (
+                <div className="px-4 py-2 flex items-center justify-between gap-2">
+                  <span className="font-mono text-[9px] text-muted uppercase shrink-0">Admin Login</span>
+                  <div className="flex items-center gap-1">
+                    <code className="font-mono text-[10px] text-fg">{credentials.admin_username}</code>
+                    <CopyButton text={credentials.admin_username} />
+                  </div>
+                </div>
+              )}
+              {credentials.admin_password && (
+                <div className="px-4 py-2 flex items-center justify-between gap-2">
+                  <span className="font-mono text-[9px] text-muted uppercase shrink-0">Admin Password</span>
+                  <div className="flex items-center gap-1">
+                    <code className="font-mono text-[10px] text-fg">{"*".repeat(12)}</code>
+                    <CopyButton text={credentials.admin_password} />
+                  </div>
+                </div>
+              )}
+              {credentials.admin_token && (
+                <div className="px-4 py-2 flex items-center justify-between gap-2">
+                  <span className="font-mono text-[9px] text-muted uppercase shrink-0">Admin API Token</span>
+                  <div className="flex items-center gap-1">
+                    <code className="font-mono text-[10px] text-fg">{"*".repeat(12)}</code>
+                    <CopyButton text={credentials.admin_token} />
+                  </div>
+                </div>
+              )}
             </div>
           </Card>
 
