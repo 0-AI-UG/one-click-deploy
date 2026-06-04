@@ -30,7 +30,7 @@ export function RepoSection({ form, set, introspecting, introspect }: Props) {
           {introspecting && (
             <>
               <Loader2 size={12} className="animate-spin text-fg" />
-              <span className="text-fg-dim">Peeking at the repo…</span>
+              <span className="text-fg-dim">Peeking at the repo</span>
             </>
           )}
           {!introspecting && detected && (

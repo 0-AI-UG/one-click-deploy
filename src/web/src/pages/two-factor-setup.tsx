@@ -58,7 +58,7 @@ export function TwoFactorSetupPage() {
             {loading ? (
               <>
                 <p className="text-[10px] text-muted font-mono uppercase tracking-wider mb-4">
-                  Follow your browser's prompt to register a passkey...
+                  Follow your browser's prompt to register a passkey
                 </p>
                 <Spinner />
               </>

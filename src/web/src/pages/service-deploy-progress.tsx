@@ -80,7 +80,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
       ? errorMessage || `Deploy ${status}`
       : lastForward
         ? `${humanizeStep(lastForward.step)}${lastForward.detail ? ` — ${lastForward.detail}` : ""}`
-        : status === "pending" ? "Added to queue…" : "Starting…";
+        : status === "pending" ? "Added to queue" : "Starting";
 
   const pill = succeeded
     ? { text: "Live", dot: "bg-accent-green", headerBg: "bg-accent" }
@@ -101,7 +101,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
           <div className="flex items-center gap-3 px-4 py-4">
             <Loader2 size={16} className="animate-spin text-fg" />
             <span className="font-mono text-[11px] uppercase tracking-wider font-bold text-fg">
-              {status === "pending" ? "Added to queue…" : "Starting…"}
+              {status === "pending" ? "Added to queue" : "Starting"}
             </span>
           </div>
         ) : (
@@ -143,7 +143,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
             {steps.length === 0 && !terminal && (
               <div className="flex items-center gap-2 text-accent-amber">
                 <Loader2 size={12} className="animate-spin" />
-                <span>$ awaiting first event…</span>
+                <span>awaiting first event</span>
               </div>
             )}
             {steps.map((ev) => {

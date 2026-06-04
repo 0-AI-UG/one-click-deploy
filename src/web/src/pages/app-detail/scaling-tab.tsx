@@ -76,13 +76,13 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
     <div className="space-y-4">
       {(!app.domain || app.domain.endsWith(".nip.io")) && (
         <Card className="p-4">
-          <p className="font-mono text-[10px] text-accent-amber font-bold">Scaling requires a custom domain. Add a domain in Settings first — nip.io URLs are derived from a single server IP and can't be used once replicas are spread across multiple hosts.</p>
+          <p className="font-mono text-[10px] text-accent-amber font-bold flex items-center gap-1">Scaling needs a custom domain — add one in Settings. <InfoTip text="nip.io URLs are derived from a single server IP and can't be used once replicas are spread across multiple hosts." /></p>
         </Card>
       )}
 
       {hasVolume && (
         <Card className="p-4">
-          <p className="font-mono text-[10px] text-accent-amber font-bold">{volumeLockedReason}</p>
+          <p className="font-mono text-[10px] text-accent-amber font-bold flex items-center gap-1">Volumes lock this app to 1 replica. <InfoTip text="A cloud volume can only be attached to a single server at a time." /></p>
         </Card>
       )}
 

@@ -3,6 +3,7 @@ import { Card, Btn, Checkbox, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe, Cpu } from "lucide-react";
+import { InfoTip } from "./shared.tsx";
 import type { AppData } from "../../types.ts";
 
 interface SettingsTabProps {
@@ -108,7 +109,7 @@ export function SettingsTab({
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Cpu size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Memory Limit (MB)</h3>
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Memory Limit (MB) <InfoTip text="Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save & redeploy. Dockerfile/railpack apps only." /></h3>
           </div>
           <input
             type="number"
@@ -117,7 +118,6 @@ export function SettingsTab({
             onChange={(e) => setMemEdit(parseInt(e.target.value) || 0)}
             placeholder="512 (platform default)"
           />
-          <p className="text-[9px] text-muted mt-1">Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save &amp; redeploy. Dockerfile/railpack apps only.</p>
         </div>
       </Card>
 
@@ -155,9 +155,10 @@ export function SettingsTab({
               <div className="flex justify-between"><span className="text-muted">Volume ID</span><span className="text-fg">{app.volume_id}</span></div>
               <div className="flex justify-between"><span className="text-muted">Mount</span><span className="text-fg">{app.volume_mount}</span></div>
             </div>
-            <p className="text-[10px] text-muted font-mono mb-3">
-              Detaching keeps the volume in Hetzner but unmounts it from this app. The container will be recreated.
-            </p>
+            <div className="flex items-center gap-1 mb-3">
+              <span className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg">Detach Volume</span>
+              <InfoTip text="Detaching keeps the volume in Hetzner but unmounts it from this app. The container will be recreated." />
+            </div>
             <PermissionGate permission="volumes.manage">
               <div className="flex justify-end">
                 <Btn
@@ -175,9 +176,10 @@ export function SettingsTab({
           </>
         ) : (
           <>
-            <p className="text-[10px] text-muted font-mono mb-3">
-              Attach a new persistent volume. The container will be recreated with the volume mounted.
-            </p>
+            <div className="flex items-center gap-1 mb-3">
+              <span className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg">Attach Volume</span>
+              <InfoTip text="Attach a new persistent volume. The container will be recreated with the volume mounted." />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Size (GB)</label>

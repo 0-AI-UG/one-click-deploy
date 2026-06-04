@@ -4,7 +4,7 @@ import { get, post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft } from "lucide-react";
-import { Sparkline } from "./shared.tsx";
+import { Sparkline, InfoTip } from "./shared.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, MetricSample, ServerData } from "../../types.ts";
 
@@ -69,8 +69,8 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
             ) : (
               <div className="flex justify-between items-center"><span className="text-muted">Public Access</span><span className="text-fg-dim font-bold">Disabled</span></div>
             )}
-            <div className="flex justify-between items-center" title="Reachable from other apps on the private network. Set this in env vars when one app needs to call another.">
-              <span className="text-muted">Internal URL</span>
+            <div className="flex justify-between items-center">
+              <span className="text-muted flex items-center gap-1">Internal URL <InfoTip text="Reachable from other apps on the private network. Set this in env vars when one app needs to call another." /></span>
               <span className="flex items-center gap-1">
                 <span className="text-fg font-bold">{internalUrl}</span>
                 <CopyButton text={internalUrl} />

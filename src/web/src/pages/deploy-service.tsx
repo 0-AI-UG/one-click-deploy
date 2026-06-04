@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
 import { Card, Btn, showToast, Spinner, CopyButton } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
+import { InfoTip } from "./app-detail/shared.tsx";
 import { Database, Loader2, Eye, EyeOff, ArrowLeft, RefreshCw } from "lucide-react";
 
 type CatalogEntry = {
@@ -161,8 +162,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
               {selected.recommendedMemoryMb ? (
                 <div className="bg-alt border-2 border-fg/30 px-3 py-2">
                   <p className="font-mono text-[9px] text-muted">
-                    This is a multi-container service and needs ~{(selected.recommendedMemoryMb / 1024).toFixed(0)}GB RAM.
-                    A larger server is provisioned automatically; reusing a small existing server may be tight on memory.
+                    Needs ~{(selected.recommendedMemoryMb / 1024).toFixed(0)}GB RAM — a larger server is provisioned automatically. <InfoTip text="Reusing a small existing server may be tight on memory." />
                   </p>
                 </div>
               ) : null}
@@ -205,18 +205,15 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
               {selected.http && (
                 <div>
                   <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">
-                    Custom Domain <span className="font-normal text-muted ml-1">(optional)</span>
+                    Custom Domain <span className="font-normal text-muted ml-1">(optional)</span> <InfoTip text="Point the domain's A record at the server first." />
                   </label>
                   <input
                     type="text"
                     value={customDomain}
-                    placeholder={`${name || "service"}.<server-ip>.nip.io (auto)`}
+                    placeholder={`${name || "service"}.<server-ip>.nip.io (auto-generated if left blank)`}
                     onChange={(e) => setCustomDomain(e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ""))}
                     className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
                   />
-                  <p className="font-mono text-[9px] text-muted mt-1">
-                    Leave blank to use an auto-generated nip.io subdomain. For a real domain, point its A record at the server first.
-                  </p>
                 </div>
               )}
 
@@ -270,7 +267,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">
                   Add to Environment
-                  <span className="font-normal text-muted ml-1">(optional)</span>
+                  <span className="font-normal text-muted ml-1">(optional)</span> <InfoTip text="Inject connection credentials into this environment on deploy" />
                 </label>
                 <NeoSelect
                   value={environmentId ? String(environmentId) : ""}
@@ -280,9 +277,6 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
                     ...environments.map((e) => ({ value: String(e.id), label: e.name })),
                   ]}
                 />
-                <p className="font-mono text-[9px] text-muted mt-1">
-                  Inject connection credentials into this environment on deploy
-                </p>
               </div>
 
               {/* Env Prefix */}
@@ -295,9 +289,11 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
                     onChange={(e) => setEnvPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
                     className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
                   />
-                  <p className="font-mono text-[9px] text-muted mt-1">
-                    Variables will be named {envPrefix}_URL, {envPrefix}_HOST, {envPrefix}_PASSWORD, etc.
-                  </p>
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {["URL", "HOST", "PASSWORD"].map((s) => (
+                      <span key={s} className="font-mono text-[9px] text-muted border border-fg/40 px-1.5 py-0.5">{(envPrefix || "PREFIX")}_{s}</span>
+                    ))}
+                  </div>
                 </div>
               )}
 

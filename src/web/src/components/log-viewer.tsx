@@ -1,4 +1,5 @@
 import { useEffect, useRef, useMemo } from "react";
+import { Spinner } from "./ui.tsx";
 
 // ANSI color code to CSS color mapping
 const ANSI_COLORS: Record<number, string> = {
@@ -136,7 +137,7 @@ export function LogViewer({ logs, className }: LogViewerProps) {
       className={`bg-[#111] border-2 border-fg rounded p-3 max-h-[500px] overflow-auto font-mono text-[11px] leading-[1.6] text-[#ccc] ${className || ""}`}
       style={{ tabSize: 4 }}
     >
-      {rendered || <span className="text-muted">Loading...</span>}
+      {rendered || <span className="text-muted inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Loading</span>}
       <style>{`
         .log-line:hover { background: rgba(255,255,255,0.04); }
         .log-line { padding: 0 4px; white-space: pre-wrap; word-break: break-all; }

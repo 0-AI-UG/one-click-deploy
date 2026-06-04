@@ -155,14 +155,14 @@ export function SetupPage() {
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner Cloud API Token *</label>
                 <input type="password" value={form.provider_token} onChange={set("provider_token")} placeholder="Required" />
-                <p className="text-[9px] text-muted font-mono mt-1">Create one at console.hetzner.cloud → Security → API Tokens (Read &amp; Write).</p>
+                <p className="text-[9px] text-muted font-mono mt-1">Create one at <a href="https://console.hetzner.cloud" target="_blank" rel="noreferrer" className="underline hover:text-fg">console.hetzner.cloud</a> → Security → API Tokens (Read &amp; Write).</p>
               </div>
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>
                 <input type="text" value={form.dns_zone_id} onChange={set("dns_zone_id")} placeholder="Optional" />
               </div>
               <div className="text-[9px] font-mono uppercase tracking-wider text-muted -mt-1">
-                {typesLoading ? "Loading server types…" : serverTypes.length === 0 ? "Enter a valid Hetzner token to load server types" : `${serverTypes.length} server types available`}
+                {typesLoading ? <span className="inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Loading server types</span> : serverTypes.length === 0 ? "Enter a valid Hetzner token to load server types" : `${serverTypes.length} server types available`}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

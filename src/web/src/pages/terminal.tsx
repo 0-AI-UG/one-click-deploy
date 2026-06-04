@@ -3,7 +3,7 @@ import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import "xterm/css/xterm.css";
 import { useAuth } from "../stores/auth.ts";
-import { Btn } from "../components/ui.tsx";
+import { Btn, Spinner } from "../components/ui.tsx";
 import { ArrowLeft } from "lucide-react";
 
 type Props = {
@@ -238,9 +238,9 @@ export function TerminalPage({ kind, id }: Props) {
         {(status === "disconnected" || status === "connecting" || status === "ended") && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60">
             <div className="font-mono text-xs text-accent-amber uppercase tracking-wider text-center">
-              {status === "connecting" ? "Connecting…"
+              {status === "connecting" ? <span className="inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Connecting</span>
                 : status === "ended" ? <>Session ended<br /><button className="mt-2 underline text-[10px] cursor-pointer" onClick={connect}>reconnect</button></>
-                : <>Disconnected — reconnecting…<br /><button className="mt-2 underline text-[10px] cursor-pointer" onClick={() => { backoffRef.current = 500; connect(); }}>reconnect now</button></>
+                : <><span className="inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Disconnected — reconnecting</span><br /><button className="mt-2 underline text-[10px] cursor-pointer" onClick={() => { backoffRef.current = 500; connect(); }}>reconnect now</button></>
               }
             </div>
           </div>

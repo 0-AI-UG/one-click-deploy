@@ -50,7 +50,8 @@ export function EnvSection({ envValues, setEnvValues, manifestEnvDefs, selectedE
       {selectedEnv && (
         <div className="space-y-1">
           <p className="font-mono text-[9px] text-muted uppercase tracking-wider">
-            Using environment "{selectedEnv.name}" — edit variables on the Environments page
+            Using environment "{selectedEnv.name}" — edit variables on the{" "}
+            <a href="#/environments" className="font-bold text-accent-blue hover:underline">Environments page</a>
           </p>
           {selectedEnv.env_vars.length > 0 && (
             <div className="mt-2 space-y-1">

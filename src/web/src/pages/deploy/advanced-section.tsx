@@ -1,6 +1,7 @@
 import { Plus, Minus, AlertTriangle } from "lucide-react";
 import { Btn, Checkbox } from "../../components/ui.tsx";
 import { Label } from "./shared.tsx";
+import { InfoTip } from "../app-detail/shared.tsx";
 import type { FormState } from "./types.ts";
 
 type Props = {
@@ -58,7 +59,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
         </div>
       </div>
       <div>
-        <Label>Memory Limit (MB)</Label>
+        <Label>Memory Limit (MB) <InfoTip text="Container memory ceiling. Blank or 0 uses the platform default (512). Dockerfile/railpack apps only." /></Label>
         <input
           type="number"
           value={form.memory_mb}
@@ -66,7 +67,6 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           placeholder="512 (platform default)"
           min="0"
         />
-        <p className="text-[9px] text-muted mt-1">Container memory ceiling. Blank or 0 uses the platform default (512). Dockerfile/railpack apps only.</p>
       </div>
       <div>
         <Checkbox

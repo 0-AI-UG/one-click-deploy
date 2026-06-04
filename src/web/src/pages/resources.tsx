@@ -6,6 +6,7 @@ import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 import { HardDrive, Server, Database, Trash2, RefreshCw, Plus } from "lucide-react";
+import { InfoTip } from "./app-detail/shared.tsx";
 import type { ResourcesData } from "../types.ts";
 
 export function ResourcesPage() {
@@ -133,7 +134,7 @@ export function ResourcesPage() {
       {data?.totals && (
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Estimated Monthly Cost</h3>
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Estimated Monthly Cost <InfoTip text="Estimates based on Hetzner's list prices. Excludes traffic overage and snapshots." /></h3>
             <span className="font-mono text-[9px] text-muted uppercase tracking-wider">
               gross · {data.totals.currency || "EUR"}
             </span>
@@ -152,9 +153,6 @@ export function ResourcesPage() {
               <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.total)}</div>
             </div>
           </div>
-          <p className="font-mono text-[9px] text-muted mt-3">
-            Estimates based on Hetzner's list prices. Excludes traffic overage and snapshots.
-          </p>
         </Card>
       )}
 
