@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
-import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown, Settings2 } from "lucide-react";
+import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown, Settings2, CheckCircle2 } from "lucide-react";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
 import { ReceiptSection } from "./receipt-section.tsx";
@@ -107,6 +107,15 @@ function ServicesGridSection({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[9px] uppercase tracking-wider text-muted shrink-0">{label}</span>
+      <span className="text-fg truncate text-right">{value}</span>
     </div>
   );
 }
@@ -473,6 +482,13 @@ export function DeployPage() {
     if (requiredEnvMissing && !selectedEnvironmentId) setAdvancedOpen(true);
   }, [requiredEnvMissing, selectedEnvironmentId]);
 
+  const buildMode = form.compose_file ? "Docker Compose" : "Dockerfile";
+  const dockerfileLabel = form.compose_file || form.dockerfile_path || (detected ? "auto-detect" : "");
+  const branchLabel = form.git_branch || detected?.default_branch || "";
+  const envCount = selectedEnvironmentId
+    ? null
+    : Object.keys(envValues).length + extraEnv.filter((e) => e.key.trim()).length;
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
       <div className="flex items-center gap-2 mb-1">
@@ -514,6 +530,7 @@ export function DeployPage() {
       )}
 
       <form onSubmit={handleSubmit}>
+        <div className={showReceipt ? "grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-6 items-start" : ""}>
         <div className="border-2 border-fg bg-bg-raised shadow-neo divide-y-2 divide-fg">
           <RepoSection
             form={form}
@@ -583,18 +600,39 @@ export function DeployPage() {
         </div>
 
         {showReceipt && (
-          <button
-            type="submit"
-            disabled={introspecting}
-            className="group mt-4 w-full border-2 border-fg bg-accent hover:bg-accent-h active:bg-accent-h disabled:opacity-60 disabled:cursor-not-allowed shadow-neo py-4 flex items-center justify-center gap-2.5 font-mono text-sm font-bold uppercase tracking-[0.2em] text-fg transition-colors"
-          >
-            <Rocket
-              size={18}
-              className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
-            />
-            Deploy{form.app_name ? ` ${form.app_name}` : ""}
-          </button>
+          <div className="lg:sticky lg:top-6 border-2 border-fg bg-bg-raised shadow-neo">
+            <div className="px-4 py-2.5 border-b-2 border-fg bg-accent flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-fg">
+              <CheckCircle2 size={12} /> Ready to deploy
+            </div>
+            <div className="p-4 font-mono text-[11px] space-y-2.5">
+              <SummaryRow label="App" value={form.app_name || "(set a name)"} />
+              {branchLabel && <SummaryRow label="Branch" value={branchLabel} />}
+              <SummaryRow label="Build" value={buildMode} />
+              {dockerfileLabel && (
+                <SummaryRow label={form.compose_file ? "Compose" : "Dockerfile"} value={dockerfileLabel} />
+              )}
+              {!form.compose_file && <SummaryRow label="Port" value={form.container_port} />}
+              <SummaryRow label="Domain" value={form.domain || "auto (temporary)"} />
+              {envCount === null ? (
+                <SummaryRow label="Env" value="existing environment" />
+              ) : envCount > 0 ? (
+                <SummaryRow label="Env vars" value={String(envCount)} />
+              ) : null}
+            </div>
+            <button
+              type="submit"
+              disabled={introspecting}
+              className="group w-full border-t-2 border-fg bg-accent hover:bg-accent-h active:bg-accent-h disabled:opacity-60 disabled:cursor-not-allowed py-4 flex items-center justify-center gap-2.5 font-mono text-sm font-bold uppercase tracking-[0.2em] text-fg transition-colors"
+            >
+              <Rocket
+                size={18}
+                className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+              />
+              Deploy
+            </button>
+          </div>
         )}
+        </div>
       </form>
 
       <div className="mt-6 text-center">

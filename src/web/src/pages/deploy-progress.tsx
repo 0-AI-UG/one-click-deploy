@@ -86,53 +86,18 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
         : status === "pending" ? "Added to queue…" : "Starting…";
 
   const pill = succeeded
-    ? { text: "Live", dot: "bg-accent-green", cls: "text-fg" }
+    ? { text: "Live", dot: "bg-accent-green", headerBg: "bg-accent" }
     : failed
-      ? { text: "Failed", dot: "bg-accent-red", cls: "text-accent-red" }
+      ? { text: "Failed", dot: "bg-accent-red", headerBg: "bg-accent-red" }
       : status === "running" || status === "compensating"
-        ? { text: status === "compensating" ? "Rolling back" : "Running", dot: "bg-accent-amber animate-pulse", cls: "text-fg" }
+        ? { text: status === "compensating" ? "Rolling back" : "Running", dot: "bg-accent-amber animate-pulse", headerBg: "bg-accent-amber" }
         : status === "pending"
-          ? { text: "Queued", dot: "bg-muted", cls: "text-fg-dim" }
-          : { text: "Idle", dot: "bg-muted", cls: "text-fg-dim" };
+          ? { text: "Queued", dot: "bg-muted", headerBg: "bg-alt" }
+          : { text: "Idle", dot: "bg-muted", headerBg: "bg-alt" };
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
-      {/* Status card */}
-      <div className="border-2 border-fg bg-bg-raised shadow-neo p-5 mb-5">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 border-2 border-fg bg-accent flex items-center justify-center shrink-0">
-            <Rocket size={20} className="text-fg" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="font-mono text-[9px] uppercase tracking-wider text-muted">Deploying</div>
-            <div className="font-mono font-bold text-base text-fg truncate">
-              {appName || (op ? `op #${op.id}` : "—")}
-            </div>
-          </div>
-          <div className="text-right shrink-0">
-            <div className={`flex items-center justify-end gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider ${pill.cls}`}>
-              <span className={`w-2 h-2 rounded-full ${pill.dot}`} />
-              {pill.text}
-            </div>
-            {!terminal && totalSteps > 0 && (
-              <div className="font-mono text-[9px] uppercase tracking-wider text-muted mt-0.5">
-                {completedCount} of {totalSteps}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-4 h-3 border-2 border-fg bg-bg overflow-hidden">
-          <div
-            className={`h-full transition-all duration-500 ${failed ? "bg-accent-red" : "bg-accent"}`}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <div className={`mt-2 font-mono text-[11px] truncate ${failed ? "text-accent-red" : "text-fg-dim"}`}>
-          {currentLine}
-        </div>
-      </div>
-
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-6 items-start">
       {/* Timeline + collapsed log */}
       <div className="border-2 border-fg bg-bg-raised shadow-neo-sm">
         {steps.length === 0 ? (
@@ -221,12 +186,43 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
         </details>
       </div>
 
-      {terminal && (
-        <div className="flex gap-3 mt-6">
-          {succeeded ? (
+      {/* Sticky status */}
+      <div className="lg:sticky lg:top-6 space-y-4">
+        <div className="border-2 border-fg bg-bg-raised shadow-neo">
+          <div className={`px-4 py-2.5 border-b-2 border-fg ${pill.headerBg} flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-fg`}>
+            <span className={`w-2 h-2 rounded-full ${pill.dot}`} />
+            {pill.text}
+          </div>
+          <div className="p-5 text-center">
+            <div className="w-12 h-12 mx-auto border-2 border-fg bg-accent flex items-center justify-center">
+              <Rocket size={22} className="text-fg" />
+            </div>
+            <div className="mt-3 font-mono text-[9px] uppercase tracking-wider text-muted">Deploying</div>
+            <div className="font-mono font-bold text-base text-fg truncate">
+              {appName || (op ? `op #${op.id}` : "—")}
+            </div>
+            <div className="mt-4 h-3 border-2 border-fg bg-bg overflow-hidden">
+              <div
+                className={`h-full transition-all duration-500 ${failed ? "bg-accent-red" : "bg-accent"}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            {!terminal && totalSteps > 0 && (
+              <div className="mt-2 font-mono text-[9px] uppercase tracking-wider text-muted">
+                {completedCount} of {totalSteps}
+              </div>
+            )}
+            <div className={`mt-1.5 font-mono text-[11px] truncate ${failed ? "text-accent-red" : "text-fg-dim"}`}>
+              {currentLine}
+            </div>
+          </div>
+        </div>
+
+        {terminal && (
+          succeeded ? (
             <Btn
               variant="primary"
-              className="flex-1 !py-2.5"
+              className="w-full !py-2.5"
               onClick={() => {
                 window.location.hash = "#/";
               }}
@@ -236,15 +232,17 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
           ) : (
             <Btn
               variant="ghost"
+              className="w-full !py-2.5"
               onClick={() => {
                 window.location.hash = "#/deploy";
               }}
             >
               <ArrowLeft size={14} /> Back
             </Btn>
-          )}
-        </div>
-      )}
+          )
+        )}
+      </div>
+      </div>
     </div>
   );
 }
