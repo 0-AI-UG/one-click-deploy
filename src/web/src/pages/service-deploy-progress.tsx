@@ -93,7 +93,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
           : { text: "Idle", dot: "bg-muted", cls: "text-fg-dim" };
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-12 animate-fade-in">
+    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
       {/* Status card */}
       <div className="border-2 border-fg bg-bg-raised shadow-neo p-5 mb-5">
         <div className="flex items-center gap-3">
