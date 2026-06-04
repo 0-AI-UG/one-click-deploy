@@ -5,8 +5,8 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 
 const compute = makeFakeComputeProvider();
 mock.module("../../shared/providers/index.ts", () => ({
-  getComputeProvider: () => compute,
-  getDnsProvider: () => ({
+  hetzner: compute,
+  hetznerDns: ({
     id: "x",
     name: "x",
     listZones: async () => [],

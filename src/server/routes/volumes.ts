@@ -2,7 +2,7 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { recreateAppContainer } from "../../engine/deploy/index.ts";
 import {
@@ -29,7 +29,7 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
 
-    const compute = getComputeProvider();
+    const compute = hetzner;
     const suffix = Date.now().toString(36).slice(-4);
     const volName = `ocd-${app.name}-${suffix}`;
     const vol = await compute.volumes!.create({
@@ -83,7 +83,7 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
     const hostKey = server.ssh_host_key || undefined;
 
-    const compute = getComputeProvider();
+    const compute = hetzner;
     const volInfo = await compute.volumes!.get(volume_id);
     if (volInfo.location && volInfo.location !== server.location) {
       return Response.json({ ok: false, error: `Cannot attach: volume is in ${volInfo.location} but server is in ${server.location}` }, { headers: corsHeaders });
@@ -127,7 +127,7 @@ export async function handleDetachVolume(request: Request): Promise<Response> {
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
     if (!app.volume_id) return Response.json({ ok: false, error: "App has no volume attached" }, { headers: corsHeaders });
 
-    const compute = getComputeProvider();
+    const compute = hetzner;
     // Tear down the bind mount before Hetzner pulls the device so we don't
     // leave a dangling /mnt/ocd-*-data behind.
     if (compute.id === "hetzner") {
@@ -178,7 +178,7 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
       return Response.json({ ok: false, error: `Cannot reattach: volume in ${fromServer.location}, target in ${toServer.location}` }, { headers: corsHeaders });
     }
 
-    const compute = getComputeProvider();
+    const compute = hetzner;
     // Source-side cleanup before detach (Hetzner only).
     if (compute.id === "hetzner") {
       const fromHostMount = (fromApp.volume_mount?.split(":")[0]) || `/mnt/ocd-${fromApp.name}-data`;
@@ -225,7 +225,7 @@ export async function handleResizeVolume(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "volumes.manage");
     const { volume_id, size } = await request.json() as { volume_id: string; size: number };
-    const compute = getComputeProvider();
+    const compute = hetzner;
     await compute.volumes!.resize(volume_id, size);
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {

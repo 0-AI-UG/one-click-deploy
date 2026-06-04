@@ -19,7 +19,7 @@ const RUN = process.env.RUN_INTEGRATION === "1" && !!process.env.HCLOUD_TOKEN;
 async function loadProvider() {
   await secretStore.set("hetzner_api_token", process.env.HCLOUD_TOKEN!);
   const mod = await import("../shared/providers/hetzner.ts");
-  return mod.hetznerCompute;
+  return mod.hetzner;
 }
 
 // The suite's shared resources. Populated in beforeAll.

@@ -1,5 +1,5 @@
 import * as db from "../../shared/db.ts";
-import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
+import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import { destroyApp } from "../deploy/lifecycle.ts";
 import { destroyService } from "../deploy/service-lifecycle.ts";
 import { registerOp } from "./registry.ts";
@@ -77,7 +77,7 @@ const cleanupPanelRow: Step<DestroyServerInput, { ok: true }> = {
     if (!panel || panel.server_id !== ctx.input.serverId || !server) return { ok: true };
     if (panel.dns_zone_id && panel.dns_name && panel.dns_type && panel.dns_value) {
       await softStep(ctx, "delete_panel_dns", async () => {
-        const dns = getDnsProvider();
+        const dns = hetznerDns;
         await dns.deleteRecord({
           zoneId: panel.dns_zone_id,
           name: panel.dns_name,
@@ -88,7 +88,7 @@ const cleanupPanelRow: Step<DestroyServerInput, { ok: true }> = {
     }
     if (panel.volume_id) {
       await softStep(ctx, "delete_panel_volume", async () => {
-        const compute = getComputeProvider(server.provider);
+        const compute = hetzner;
         await compute.volumes?.delete(panel.volume_id);
       });
     }
@@ -106,7 +106,7 @@ const deleteCloudServer: Step<DestroyServerInput, { ok: boolean; error?: string 
     const server = db.getServer(ctx.input.serverId);
     if (!server || !server.provider_id) return { ok: true };
     const r = await softStep(ctx, "delete_cloud_server", async () => {
-      const compute = getComputeProvider(server.provider);
+      const compute = hetzner;
       await compute.deleteServer(server.provider_id);
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };

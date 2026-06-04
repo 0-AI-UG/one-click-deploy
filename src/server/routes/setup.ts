@@ -3,7 +3,7 @@ import { createTempToken } from "../lib/auth.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore } from "../../shared/secret-store.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 
 export function isSetupComplete(): boolean {
   return db.getUserCount() > 0;
@@ -13,7 +13,7 @@ export async function handleSetupStatus(_request: Request): Promise<Response> {
   // If the panel was handed off from an auto-deploy run, the provider token
   // is already present — the wizard should skip the token step and only
   // prompt for the admin account.
-  const provider = getComputeProvider();
+  const provider = hetzner;
   const existingToken = await secretStore.get(provider.tokenKey).catch(() => null);
   return Response.json(
     {
@@ -33,12 +33,12 @@ export async function handleSetupServerTypes(request: Request): Promise<Response
         { status: 400, headers: corsHeaders },
       );
     }
-    const body = await request.json() as { provider_token?: string; provider_id?: string };
+    const body = await request.json() as { provider_token?: string };
     const token = body.provider_token?.trim();
     if (!token) {
       return Response.json({ server_types: [] }, { headers: corsHeaders });
     }
-    const provider = getComputeProvider(body.provider_id);
+    const provider = hetzner;
     const validation = provider.validateToken(token);
     if (!validation.valid) {
       return Response.json(
@@ -75,7 +75,7 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     }
 
     const body = await request.json() as Record<string, string>;
-    const { username, password, provider_token, provider_id, dns_zone_id, default_server_type, default_location } = body;
+    const { username, password, provider_token, dns_zone_id, default_server_type, default_location } = body;
 
     if (!username || !password) {
       return Response.json(
@@ -84,7 +84,7 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
       );
     }
 
-    const provider = getComputeProvider(provider_id);
+    const provider = hetzner;
 
     // Allow skipping the provider token if one is already present (e.g.
     // after a self-deploy handoff from a bootstrap instance).
@@ -113,11 +113,6 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
 
     // Store secrets (only overwrite provider token if a new one was given)
     if (provider_token) await secretStore.set(provider.tokenKey, provider_token);
-
-    // Persist the provider selection so future getComputeProvider() /
-    // getDnsProvider() calls resolve correctly. Hetzner is the only provider.
-    db.saveSetting("compute_provider", provider.id);
-    db.saveSetting("dns_provider", "hetzner-dns");
 
     // Store non-secret settings
     if (dns_zone_id) db.saveSetting("dns_zone_id", dns_zone_id);

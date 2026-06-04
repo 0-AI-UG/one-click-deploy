@@ -1,9 +1,4 @@
-import type {
-  ComputeProvider,
-  DnsProvider,
-  ProviderServer,
-  ServerType,
-} from "./types.ts";
+import type { ProviderServer, ServerType, VolumeInfo } from "./types.ts";
 import { hetznerApi } from "../../engine/hetzner/api.ts";
 import {
   createServer,
@@ -33,16 +28,16 @@ import {
 import { cloudInitScript } from "./cloud-init.ts";
 import { validateHetznerToken } from "../validate.ts";
 
-export const hetznerCompute: ComputeProvider = {
+export const hetzner = {
   id: "hetzner",
   name: "Hetzner Cloud",
   tokenKey: "hetzner_api_token",
 
-  validateToken(token) {
+  validateToken(token: string) {
     return validateHetznerToken(token);
   },
 
-  async verifyToken(token) {
+  async verifyToken(token: string) {
     const res = await fetch("https://api.hetzner.cloud/v1/server_types?per_page=1", {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -51,7 +46,7 @@ export const hetznerCompute: ComputeProvider = {
     throw new Error(`Hetzner API error (${res.status})`);
   },
 
-  async ensureSshKey(name, publicKey) {
+  async ensureSshKey(name: string, publicKey: string) {
     const existing = (await hetznerApi(
       `/ssh_keys?name=${name}`,
     )) as unknown as {
@@ -105,7 +100,17 @@ export const hetznerCompute: ComputeProvider = {
     return types;
   },
 
-  async createServer(opts) {
+  async createServer(opts: {
+    name: string;
+    serverType: string;
+    location: string;
+    sshKeyName: string;
+    firewallId: string;
+    userData: string;
+    /** Private network to attach at create time — when set, the returned
+     *  ProviderServer.privateIpv4 reflects the assigned address. */
+    networkId?: string;
+  }): Promise<ProviderServer> {
     const userData = opts.userData || cloudInitScript({
       extraPackages: ["hc-utils"],
       extraCommands: ["systemctl enable hc-agent && systemctl start hc-agent"],
@@ -132,7 +137,7 @@ export const hetznerCompute: ComputeProvider = {
     };
   },
 
-  async getServer(providerId) {
+  async getServer(providerId: string): Promise<ProviderServer> {
     const s = await getHetznerServer(providerId);
     return {
       providerId: String(s.id),
@@ -142,11 +147,11 @@ export const hetznerCompute: ComputeProvider = {
     };
   },
 
-  async waitForRunning(providerId, onStatus) {
+  async waitForRunning(providerId: string, onStatus?: (msg: string) => void) {
     await waitForServerRunning(providerId, onStatus);
   },
 
-  async deleteServer(providerId) {
+  async deleteServer(providerId: string) {
     await deleteHetznerServer(providerId);
   },
 
@@ -164,7 +169,12 @@ export const hetznerCompute: ComputeProvider = {
   },
 
   volumes: {
-    async create(opts) {
+    async create(opts: {
+      name: string;
+      sizeGb: number;
+      serverId: string;
+      location: string;
+    }) {
       const v = await createVolume({
         name: opts.name,
         size: opts.sizeGb,
@@ -173,7 +183,7 @@ export const hetznerCompute: ComputeProvider = {
       });
       return { providerId: String(v.id), linuxDevice: v.linux_device };
     },
-    async get(volumeId) {
+    async get(volumeId: string): Promise<VolumeInfo> {
       const data = await hetznerApi(`/volumes/${volumeId}`) as any;
       const v = data.volume;
       return {
@@ -184,7 +194,7 @@ export const hetznerCompute: ComputeProvider = {
         serverId: v.server ? String(v.server) : null,
       };
     },
-    async list() {
+    async list(): Promise<VolumeInfo[]> {
       const data = await hetznerApi("/volumes?label_selector=managed_by%3Done-click-deploy&per_page=50") as any;
       return (data.volumes ?? []).map((v: any) => ({
         providerId: String(v.id),
@@ -194,16 +204,16 @@ export const hetznerCompute: ComputeProvider = {
         serverId: v.server ? String(v.server) : null,
       }));
     },
-    async attach(volumeId, serverId) {
+    async attach(volumeId: string, serverId: string) {
       await attachVolume(volumeId, parseInt(serverId, 10));
     },
-    async detach(volumeId) {
+    async detach(volumeId: string) {
       await detachVolume(volumeId);
     },
-    async resize(volumeId, sizeGb) {
+    async resize(volumeId: string, sizeGb: number) {
       await resizeVolume(volumeId, sizeGb);
     },
-    async delete(volumeId) {
+    async delete(volumeId: string) {
       await deleteVolume(volumeId);
     },
   },
@@ -213,10 +223,10 @@ export const hetznerCompute: ComputeProvider = {
       const net = await ensureNetwork();
       return { id: String(net.id) };
     },
-    async attachServer(serverId, networkId) {
+    async attachServer(serverId: string, networkId: string) {
       await attachServerToNetwork(serverId, parseInt(networkId, 10));
     },
-    async getPrivateIpv4(serverId, networkId) {
+    async getPrivateIpv4(serverId: string, networkId: string) {
       return getPrivateIpv4(serverId, parseInt(networkId, 10));
     },
   },
@@ -241,7 +251,7 @@ export const hetznerCompute: ComputeProvider = {
   },
 };
 
-export const hetznerDns: DnsProvider = {
+export const hetznerDns = {
   id: "hetzner-dns",
   name: "Hetzner DNS",
 
@@ -250,7 +260,13 @@ export const hetznerDns: DnsProvider = {
     return (zones ?? []).map((z: any) => ({ id: z.id, name: z.name }));
   },
 
-  async createRecord(opts) {
+  async createRecord(opts: {
+    zoneId: string;
+    name: string;
+    type: string;
+    value: string;
+    ttl?: number;
+  }) {
     return createDnsRecord({
       zone_id: opts.zoneId,
       name: opts.name,
@@ -260,7 +276,12 @@ export const hetznerDns: DnsProvider = {
     });
   },
 
-  async deleteRecord(opts) {
+  async deleteRecord(opts: {
+    zoneId: string;
+    name: string;
+    type: string;
+    value: string;
+  }) {
     await deleteDnsRecord({
       zone_id: opts.zoneId,
       name: opts.name,
@@ -269,3 +290,8 @@ export const hetznerDns: DnsProvider = {
     });
   },
 };
+
+/** The single concrete Hetzner compute/DNS modules — there is no provider
+ *  abstraction; these are imported directly. */
+export type Hetzner = typeof hetzner;
+export type HetznerDns = typeof hetznerDns;

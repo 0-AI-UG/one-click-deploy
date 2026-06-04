@@ -1,5 +1,5 @@
 import * as db from "../shared/db.ts";
-import { getComputeProvider } from "../shared/providers/index.ts";
+import { hetzner } from "../shared/providers/index.ts";
 
 /**
  * Ensure the shared private network exists at the provider level and that its
@@ -10,7 +10,7 @@ import { getComputeProvider } from "../shared/providers/index.ts";
  * existing server (reconciler pass).
  */
 export async function ensureNetwork(): Promise<string> {
-  const compute = getComputeProvider();
+  const compute = hetzner;
   if (!compute.networks) {
     // Provider doesn't support private networking — silently degrade. Callers
     // fall back to the public IPv4 path.

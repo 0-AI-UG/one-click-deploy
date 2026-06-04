@@ -31,10 +31,8 @@ const fakeProvider = {
   listServers: async () => [],
 };
 mock.module("../../shared/providers/index.ts", () => ({
-  getComputeProvider: () => fakeProvider,
-  getDnsProvider: () => ({ id: "", name: "", listZones: async () => [], createRecord: async () => ({}), deleteRecord: async () => {} }),
-  listComputeProviders: () => [fakeProvider],
-  listDnsProviders: () => [],
+  hetzner: fakeProvider,
+  hetznerDns: ({ id: "", name: "", listZones: async () => [], createRecord: async () => ({}), deleteRecord: async () => {} }),
 }));
 
 import * as db from "../../shared/db.ts";

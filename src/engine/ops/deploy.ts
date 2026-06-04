@@ -1,6 +1,6 @@
 import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import dbInstance, * as db from "../../shared/db.ts";
-import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
+import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import {
   sshExec,
   cloneRepo,
@@ -100,12 +100,8 @@ async function resolveDomainIps(domain: string, timeoutMs = 3000): Promise<strin
 }
 
 async function findVolumeByName(name: string) {
-  const compute = getComputeProvider();
-  if (!compute.volumes) return null;
-  if (compute.volumes.findByName) return compute.volumes.findByName(name);
-  // Fallback: filter the full list.
   try {
-    const all = await compute.volumes.list();
+    const all = await hetzner.volumes.list();
     return all.find((v) => v.name === name) ?? null;
   } catch {
     return null;
@@ -227,7 +223,7 @@ const createDnsRecord: Step<DeployInput, DnsOut> = {
     const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
 
     // Idempotency: check provider for existing record.
-    const dns = getDnsProvider();
+    const dns = hetznerDns;
     try {
       const record = await dns.createRecord({
         zoneId: dnsZoneId,
@@ -252,7 +248,7 @@ const createDnsRecord: Step<DeployInput, DnsOut> = {
   async compensate(ctx, out) {
     if (!out) return;
     try {
-      const dns = getDnsProvider();
+      const dns = hetznerDns;
       await dns.deleteRecord({
         zoneId: out.zoneId,
         name: out.name,
@@ -286,7 +282,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
   async probeCompensated(_ctx, out) {
     if (!out) return true;
     try {
-      const compute = getComputeProvider();
+      const compute = hetzner;
       if (!compute.volumes) return true;
       await compute.volumes.get(out.volumeId);
       return false;
@@ -300,7 +296,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
 
     const server = prior["pick_or_provision_server"] as ServerOut;
     const settings = db.getSettings();
-    const compute = getComputeProvider();
+    const compute = hetzner;
     if (!compute.volumes) {
       throw new Error(`Provider "${compute.name}" does not support managed volumes`);
     }
@@ -340,7 +336,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
   async compensate(ctx, out) {
     if (!out) return;
     try {
-      const compute = getComputeProvider();
+      const compute = hetzner;
       try { await compute.volumes?.detach(out.volumeId); } catch { /* already detached */ }
       await compute.volumes?.delete(out.volumeId);
     } catch (err) {
@@ -506,7 +502,7 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
   async run(ctx, prior) {
     const volume = prior["create_volume"] as VolumeOut;
     if (!volume) return { ok: true };
-    const compute = getComputeProvider();
+    const compute = hetzner;
     if (compute.id !== "hetzner") return { ok: true };
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
@@ -536,7 +532,7 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
   async compensate(ctx, _out, prior) {
     const volume = prior["create_volume"] as VolumeOut;
     if (!volume) return;
-    const compute = getComputeProvider();
+    const compute = hetzner;
     if (compute.id !== "hetzner") return;
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     const appOut = prior["insert_app_row"] as InsertAppOut | undefined;

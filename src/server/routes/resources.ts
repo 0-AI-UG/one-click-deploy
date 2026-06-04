@@ -2,14 +2,14 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
 
-    const compute = getComputeProvider();
+    const compute = hetzner;
 
     // Fetch pricing once and build lookup maps.
     // If pricing fetch fails (no token, network), monthly_eur falls back to null.
@@ -150,7 +150,7 @@ export async function handleGetServerMetricsHistory(request: Request): Promise<R
 export async function handleDeleteResource(request: Request, type: string, id: string): Promise<Response> {
   try {
     await requirePermission(request, "resources.delete");
-    const compute = getComputeProvider();
+    const compute = hetzner;
 
     if (type === "server") {
       const payload = await requirePermission(request, "resources.delete");
@@ -204,7 +204,7 @@ async function resolveVolumeMount(volumeId: string): Promise<
   | { ok: true; server: ReturnType<typeof db.getServer> & {}; hostPath: string; volume: { providerId: string; name: string; sizeGb: number; location: string; serverId: string | null } }
   | { ok: false; error: string; status?: number; volume?: { providerId: string; name: string; sizeGb: number; location: string; serverId: string | null } }
 > {
-  const compute = getComputeProvider();
+  const compute = hetzner;
   let volume;
   try {
     volume = await compute.volumes!.get(volumeId);
@@ -240,7 +240,7 @@ function shellQuote(s: string): string {
 export async function handleGetVolumeDetail(request: Request, volumeId: string): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
-    const compute = getComputeProvider();
+    const compute = hetzner;
     let volume;
     try {
       volume = await compute.volumes!.get(volumeId);
@@ -508,7 +508,7 @@ export async function handleGetServerDetail(request: Request, serverId: number):
       return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
     }
 
-    const compute = getComputeProvider();
+    const compute = hetzner;
     let monthly_eur: number | null = null;
     let currency = "EUR";
     try {
@@ -568,7 +568,6 @@ export async function handleGetServerDetail(request: Request, serverId: number):
       id: server.id,
       name: server.name,
       provider_id: server.provider_id,
-      provider: server.provider,
       ipv4: server.ipv4,
       ipv6: server.ipv6,
       private_ipv4: server.private_ipv4,

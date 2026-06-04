@@ -1,6 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
-import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
+import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import {
   sshExec,
   removeContainer,
@@ -96,7 +96,7 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     }
 
     const dnsRecords = db.getDnsRecords(appId);
-    const dns = getDnsProvider();
+    const dns = hetznerDns;
     for (const record of dnsRecords) {
       try {
         await dns.deleteRecord({
@@ -115,7 +115,7 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
     if (app.volume_id) {
       try {
         const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
-        const compute = getComputeProvider(firstServer?.provider);
+        const compute = hetzner;
         await compute.volumes?.delete(app.volume_id);
         log("destroyApp", `Deleted volume ${app.volume_id}`);
       } catch (err) {
@@ -171,7 +171,7 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
     if (panel && panel.server_id === serverId) {
       if (panel.dns_zone_id && panel.dns_name && panel.dns_type && panel.dns_value) {
         try {
-          const dns = getDnsProvider();
+          const dns = hetznerDns;
           await dns.deleteRecord({
             zoneId: panel.dns_zone_id,
             name: panel.dns_name,
@@ -185,7 +185,7 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
       }
       if (panel.volume_id) {
         try {
-          const compute = getComputeProvider(server.provider);
+          const compute = hetzner;
           await compute.volumes?.delete(panel.volume_id);
           log("destroyServer", `Deleted panel volume ${panel.volume_id}`);
         } catch (err) {
@@ -197,7 +197,7 @@ export async function destroyServer(serverId: number): Promise<{ ok: boolean; er
       db.deletePanel();
     }
 
-    const compute = getComputeProvider(server.provider);
+    const compute = hetzner;
     await compute.deleteServer(server.provider_id);
     db.deleteServer(serverId);
     log("destroyServer", `Server id=${serverId} destroyed successfully`);

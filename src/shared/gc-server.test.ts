@@ -17,8 +17,8 @@ const fakeProvider = {
 };
 const fakeDnsProvider = { id: "hetzner-dns", name: "Hetzner DNS", listZones: async () => [], createRecord: async () => ({ id: "1", name: "", type: "", value: "" }), deleteRecord: async () => {} };
 mock.module("./providers/index.ts", () => ({
-  getComputeProvider: () => fakeProvider,
-  getDnsProvider: () => fakeDnsProvider,
+  hetzner: fakeProvider,
+  hetznerDns: fakeDnsProvider,
 }));
 
 import * as db from "./db.ts";

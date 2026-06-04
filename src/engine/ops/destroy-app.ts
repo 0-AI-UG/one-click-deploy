@@ -7,7 +7,7 @@ import {
   removeAuthProxy,
 } from "../../shared/remote/index.ts";
 import { removeAppCaddy } from "../scale/caddy-manager.ts";
-import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
+import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -118,7 +118,7 @@ const deleteDnsRecords: Step<DestroyInput, { ok: boolean; failed: boolean }> = {
   async run(ctx) {
     const records = db.getDnsRecords(ctx.input.appId);
     if (records.length === 0) return { ok: true, failed: false };
-    const dns = getDnsProvider();
+    const dns = hetznerDns;
     let failed = false;
     for (const record of records) {
       const r = await softStep(ctx, `delete_dns ${record.name}/${record.type}`, async () => {
@@ -144,7 +144,7 @@ const deleteVolume: Step<DestroyInput, { ok: boolean; error?: string }> = {
     const replicas = db.getReplicas(ctx.input.appId);
     const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
     const r = await softStep(ctx, "delete_volume", async () => {
-      const compute = getComputeProvider(firstServer?.provider);
+      const compute = hetzner;
       await compute.volumes?.delete(app.volume_id);
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };

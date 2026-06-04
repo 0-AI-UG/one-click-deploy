@@ -22,8 +22,8 @@ const fakeDnsProvider = {
   deleteRecord: async () => {},
 };
 mock.module("./providers/index.ts", () => ({
-  getComputeProvider: () => fakeProvider,
-  getDnsProvider: () => fakeDnsProvider,
+  hetzner: fakeProvider,
+  hetznerDns: fakeDnsProvider,
 }));
 
 import * as db from "../shared/db.ts";

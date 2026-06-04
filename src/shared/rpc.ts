@@ -2,7 +2,6 @@ export type Server = {
   id: number;
   name: string;
   provider_id: string;
-  provider: string;
   ipv4: string;
   ipv6: string;
   private_ipv4: string;
@@ -196,6 +195,4 @@ export type Settings = {
   dns_zone_id: string;
   default_server_type: string;
   default_location: string;
-  compute_provider: string;
-  dns_provider: string;
 };

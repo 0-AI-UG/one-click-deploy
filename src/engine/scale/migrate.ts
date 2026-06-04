@@ -3,7 +3,7 @@ import { sshExec, removeAuthProxy, ensureOcdNetwork, buildDockerRunArgs } from "
 import { syncAppCaddy } from "./caddy-manager.ts";
 import { scaleUp } from "./scale-up.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 
 const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
@@ -64,7 +64,7 @@ export async function migrateReplica(
       const onTarget = allReplicas.filter((r) => r.server_id === targetServerId);
       if (onTarget.length > 0) {
         if (app.volume_id) {
-          const compute = getComputeProvider();
+          const compute = hetzner;
           if (compute.volumes) {
             try {
               const info = await compute.volumes.get(app.volume_id);
@@ -188,7 +188,7 @@ async function migrateWithVolume(
     );
   }
 
-  const compute = getComputeProvider();
+  const compute = hetzner;
   if (!compute.volumes) throw new Error("Compute provider does not support volumes");
   const volumeOps = compute.volumes;
 
@@ -423,7 +423,7 @@ export async function rollbackMigrateWithVolume(
   // 2. Move the volume back to source if it's on target.
   if (rb.volumeAttachedToTarget || rb.volumeDetachedFromSource) {
     try {
-      const compute = getComputeProvider();
+      const compute = hetzner;
       if (!compute.volumes) {
         logLine(`MANUAL RECOVERY NEEDED: provider has no volumes API — volume may be on ${targetServer.name}`);
       } else {

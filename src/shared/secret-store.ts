@@ -100,9 +100,8 @@ class DbSecretStore implements SecretStore {
   }
 
   async getProviderToken() {
-    const { getComputeProvider } = await import("./providers/index.ts");
-    const provider = getComputeProvider();
-    return (await this.get(provider.tokenKey)) ?? "";
+    const { hetzner } = await import("./providers/index.ts");
+    return (await this.get(hetzner.tokenKey)) ?? "";
   }
 }
 

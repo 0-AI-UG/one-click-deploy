@@ -4,7 +4,7 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { mock } from "bun:test";
-import type { ComputeProvider, DnsProvider } from "./providers/types.ts";
+import type { Hetzner, HetznerDns } from "./providers/hetzner.ts";
 import type { OperationRow } from "./db/operations.ts";
 
 /** Create a fresh temp data dir and set OCD_DATA_DIR to it. Must run before
@@ -22,8 +22,8 @@ export function randomSuffix(): string {
 /** Factory for a fully-stubbed ComputeProvider. Every method is a bun mock
  *  so callers can assert calls and override return values per-test. */
 export function makeFakeComputeProvider(
-  overrides: Partial<ComputeProvider> = {},
-): ComputeProvider & {
+  overrides: Partial<Hetzner> = {},
+): Hetzner & {
   // surface the mocks for assertion
   _mocks: {
     deleteServer: ReturnType<typeof mock>;
@@ -62,7 +62,7 @@ export function makeFakeComputeProvider(
     volumeAttach: mock(async () => {}),
     volumeDetach: mock(async () => {}),
   };
-  const provider: ComputeProvider = {
+  const provider: Hetzner = {
     id: "hetzner",
     name: "Hetzner",
     tokenKey: "hetzner_api_token",
@@ -91,6 +91,12 @@ export function makeFakeComputeProvider(
       resize: async () => {},
       delete: _mocks.volumeDelete,
     },
+    networks: {
+      ensure: async () => ({ id: "net-1" }),
+      attachServer: async () => {},
+      getPrivateIpv4: async () => "10.0.0.2",
+    },
+    getPricing: async () => null,
     ...overrides,
   };
   return Object.assign(provider, { _mocks }) as any;
@@ -162,8 +168,8 @@ export async function waitForReplicaHealthy(
 }
 
 export function makeFakeDnsProvider(
-  overrides: Partial<DnsProvider> = {},
-): DnsProvider & {
+  overrides: Partial<HetznerDns> = {},
+): HetznerDns & {
   _mocks: { createRecord: ReturnType<typeof mock>; deleteRecord: ReturnType<typeof mock> };
 } {
   const _mocks = {
@@ -177,7 +183,7 @@ export function makeFakeDnsProvider(
     ),
     deleteRecord: mock(async () => {}),
   };
-  const provider: DnsProvider = {
+  const provider: HetznerDns = {
     id: "hetzner-dns",
     name: "Hetzner DNS",
     listZones: async () => [{ id: "zone-1", name: "example.com" }],

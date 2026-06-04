@@ -23,7 +23,6 @@ function initSchema(instance: Database) {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     provider_id TEXT NOT NULL DEFAULT '',
-    provider TEXT NOT NULL DEFAULT 'hetzner',
     ipv4 TEXT NOT NULL DEFAULT '',
     ipv6 TEXT NOT NULL DEFAULT '',
     type TEXT NOT NULL DEFAULT 'cx23',

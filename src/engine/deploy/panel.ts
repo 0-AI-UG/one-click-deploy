@@ -15,7 +15,7 @@
 //     SSH blocking. All DB writes happen BEFORE dispatch so they land even
 //     if the panel container is destroyed seconds later.
 import * as db from "../../shared/db.ts";
-import { getComputeProvider, getDnsProvider } from "../../shared/providers/index.ts";
+import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
   cloneAndBuild, deployCaddySite, healthCheck, getContainerLogs,
@@ -74,8 +74,8 @@ export async function bootstrapPanel(
   let volumeId: string | undefined;
   let dnsRecordKey: { zoneId: string; name: string; type: string; value: string } | undefined;
 
-  const compute = getComputeProvider();
-  const dns = getDnsProvider();
+  const compute = hetzner;
+  const dns = hetznerDns;
 
   try {
     // 1. SSH key + firewall + private network
@@ -93,7 +93,6 @@ export async function bootstrapPanel(
     const dbServer = db.insertServer({
       name: serverName,
       provider_id: "",
-      provider: compute.id,
       ipv4: "",
       ipv6: "",
       type: opts.serverType,

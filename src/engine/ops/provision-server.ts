@@ -1,5 +1,5 @@
 import * as db from "../../shared/db.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import {
   getOrCreateLocalKeyPair,
   waitForServer,
@@ -35,7 +35,7 @@ const ensureInfra: Step<ProvisionInput, EnsureInfraOut> = {
   name: "ensure_infra",
   label: "Ensure SSH key, firewall, network",
   async run(ctx) {
-    const compute = getComputeProvider();
+    const compute = hetzner;
     const { publicKey } = await getOrCreateLocalKeyPair();
     const [sshKey, firewallId, networkId] = await Promise.all([
       compute.ensureSshKey("one-click-deploy", publicKey),
@@ -56,7 +56,7 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
   name: "insert_server_row",
   label: "Register server",
   async run(ctx) {
-    const compute = getComputeProvider();
+    const compute = hetzner;
     const serverName = ctx.input.name || `ocd-server-${Date.now()}`;
     const existing = db.getServers().find((s) => s.name === serverName && s.status === "creating");
     if (existing) {
@@ -66,7 +66,6 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
     const row = db.insertServer({
       name: serverName,
       provider_id: "",
-      provider: compute.id,
       ipv4: "",
       ipv6: "",
       type: ctx.input.serverType,
@@ -91,7 +90,7 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
   async run(ctx, prior) {
     const infra = prior["ensure_infra"] as EnsureInfraOut;
     const row = prior["insert_server_row"] as InsertRowOut;
-    const compute = getComputeProvider();
+    const compute = hetzner;
 
     // Idempotent replay: if the row already has a provider_id, read back.
     const current = db.getServer(row.serverId);
@@ -131,7 +130,7 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
   async compensate(ctx, out) {
     if (!out?.providerId) return;
     try {
-      const compute = getComputeProvider();
+      const compute = hetzner;
       await compute.deleteServer(out.providerId);
     } catch (err) {
       ctx.log(`compute.deleteServer(${out.providerId}) failed (tolerating): ${err}`);
@@ -144,7 +143,7 @@ const waitForBoot: Step<ProvisionInput, { ok: true }> = {
   label: "Wait for boot",
   async run(ctx, prior) {
     const cloud = prior["create_cloud_server"] as CreateCloudOut;
-    const compute = getComputeProvider();
+    const compute = hetzner;
     await compute.waitForRunning(cloud.providerId, (msg) => ctx.log(msg));
     return { ok: true };
   },

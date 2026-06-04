@@ -4,7 +4,6 @@ export type ServerRow = {
   id: number;
   name: string;
   provider_id: string;
-  provider: string;
   ipv4: string;
   ipv6: string;
   type: string;
@@ -37,7 +36,6 @@ export function getServerByProviderId(providerId: string): ServerRow | null {
 export function insertServer(server: {
   name: string;
   provider_id: string;
-  provider?: string;
   ipv4: string;
   ipv6: string;
   type: string;
@@ -47,12 +45,11 @@ export function insertServer(server: {
 }): ServerRow {
   return db
     .query(
-      "INSERT INTO servers (name, provider_id, provider, ipv4, ipv6, type, location, status, private_ipv4) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO servers (name, provider_id, ipv4, ipv6, type, location, status, private_ipv4) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       server.name,
       server.provider_id,
-      server.provider ?? "hetzner",
       server.ipv4,
       server.ipv6,
       server.type,

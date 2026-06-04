@@ -16,7 +16,6 @@ const provisionServer = mock(async (opts: { name: string; location?: string; ser
   id: 99_999,
   name: opts.name,
   provider_id: `h-${opts.name}`,
-  provider: "hetzner",
   ipv4: "9.9.9.9",
   ipv6: "",
   type: opts.serverType,

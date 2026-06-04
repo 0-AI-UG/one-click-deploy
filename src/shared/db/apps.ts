@@ -212,19 +212,13 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
   const { getServer, deleteServer } = await import("./servers.ts");
   const server = getServer(serverId);
   if (!server) return;
-  const { getComputeProvider } = await import("../providers/index.ts");
-  let compute;
-  try {
-    compute = getComputeProvider(server.provider);
-  } catch {
-    compute = undefined;
-  }
-  if (server.provider_id && compute) {
+  const { hetzner } = await import("../providers/index.ts");
+  if (server.provider_id) {
     try {
-      await compute.deleteServer(server.provider_id);
+      await hetzner.deleteServer(server.provider_id);
     } catch (err) {
       console.error(
-        `[db:gcServerIfEmpty] failed to delete server ${server.provider_id} (${server.provider}):`,
+        `[db:gcServerIfEmpty] failed to delete server ${server.provider_id}:`,
         err,
       );
     }

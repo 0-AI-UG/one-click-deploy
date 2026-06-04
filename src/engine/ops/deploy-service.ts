@@ -1,5 +1,5 @@
 import * as db from "../../shared/db.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import {
   sshExec,
   pullAndRunService,
@@ -207,7 +207,7 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
     }
     const volumeSize = req.volume_size || catalog.defaultVolumeSize;
 
-    const compute = getComputeProvider();
+    const compute = hetzner;
     if (!compute.volumes) {
       throw new Error(`Provider "${compute.name}" does not support managed volumes`);
     }
@@ -244,7 +244,7 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
   async compensate(ctx, out) {
     if (!out || out.skipped) return;
     try {
-      const compute = getComputeProvider();
+      const compute = hetzner;
       try { await compute.volumes?.detach(out.volumeId); } catch { /* already detached */ }
       await compute.volumes?.delete(out.volumeId);
     } catch (err) {
@@ -359,7 +359,7 @@ const setupVolumeBindMount: Step<DeployServiceInput, { ok: true }> = {
     if (!volume || volume.skipped) return { ok: true };
     const server = prior["pick_or_provision_server"] as ServerOut;
     const svc = prior["insert_service_and_instance"] as InsertOut;
-    const compute = getComputeProvider();
+    const compute = hetzner;
     if (compute.id !== "hetzner") {
       // Fallback for non-Hetzner: at least ensure the directory exists, so
       // Docker doesn't bind-mount over a non-existent path.
@@ -396,7 +396,7 @@ const setupVolumeBindMount: Step<DeployServiceInput, { ok: true }> = {
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
     if (!server || !svc) return;
-    const compute = getComputeProvider();
+    const compute = hetzner;
     if (compute.id !== "hetzner") return;
     try {
       const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");

@@ -27,8 +27,8 @@ const fakeProvider = {
   listServers: async () => [],
 };
 mock.module("../../shared/providers/index.ts", () => ({
-  getComputeProvider: () => fakeProvider,
-  getDnsProvider: () => ({ id: "", name: "", listZones: async () => [], createRecord: async () => ({}), deleteRecord: async () => {} }),
+  hetzner: fakeProvider,
+  hetznerDns: ({ id: "", name: "", listZones: async () => [], createRecord: async () => ({}), deleteRecord: async () => {} }),
 }));
 
 mock.module("../lib/auth.ts", () => ({

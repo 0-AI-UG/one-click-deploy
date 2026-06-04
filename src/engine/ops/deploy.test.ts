@@ -7,8 +7,8 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 const compute = makeFakeComputeProvider();
 const dns = makeFakeDnsProvider();
 mock.module("../../shared/providers/index.ts", () => ({
-  getComputeProvider: () => compute,
-  getDnsProvider: () => dns,
+  hetzner: compute,
+  hetznerDns: dns,
 }));
 
 // provisionServer is only called when no ready server exists. Stub it.

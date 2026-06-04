@@ -3,7 +3,7 @@ import { parseEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
 import { sshExec, removeCompose } from "../../shared/remote/index.ts";
 
 const SERVICES_BASE_DIR = "/home/deploy/services";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -87,7 +87,7 @@ const deleteVolumes: Step<DestroyServiceInput, { failed: boolean }> = {
       if (!inst.volume_id) continue;
       const server = inst.server_id ? db.getServer(inst.server_id) : null;
       const r = await softStep(ctx, `delete_volume ${inst.volume_id}`, async () => {
-        const compute = getComputeProvider(server?.provider);
+        const compute = hetzner;
         await compute.volumes?.delete(inst.volume_id);
       });
       if (!r.ok) failed = true;

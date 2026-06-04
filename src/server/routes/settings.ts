@@ -3,7 +3,7 @@ import { requireAdmin } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore, maskToken } from "../../shared/secret-store.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 
 export async function handleGetSettings(request: Request): Promise<Response> {
   try {
@@ -11,7 +11,7 @@ export async function handleGetSettings(request: Request): Promise<Response> {
     const s = db.getSettings();
     const providerToken = await secretStore.getProviderToken();
     const githubOauthClientSecret = await secretStore.get("github_oauth_client_secret");
-    const provider = getComputeProvider();
+    const provider = hetzner;
     return Response.json(
       {
         provider_token: maskToken(providerToken),
@@ -33,7 +33,7 @@ export async function handleGetSettings(request: Request): Promise<Response> {
 export async function handleGetServerTypes(request: Request): Promise<Response> {
   try {
     await requireAdmin(request);
-    const compute = getComputeProvider();
+    const compute = hetzner;
     const types = await compute.listServerTypes();
     return Response.json({ server_types: types }, { headers: corsHeaders });
   } catch (error) {
@@ -46,7 +46,7 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
     await requireAdmin(request);
     const settings = await request.json() as Record<string, unknown>;
 
-    const provider = getComputeProvider();
+    const provider = hetzner;
     for (const [key, rawValue] of Object.entries(settings)) {
       if (key === "require_2fa") {
         db.saveSetting(key, rawValue ? "1" : "0");

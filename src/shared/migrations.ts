@@ -1214,6 +1214,27 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE services ADD COLUMN deploy_kind TEXT NOT NULL DEFAULT 'container'");
     },
   },
+  {
+    version: 57,
+    description: "Drop servers.provider column and provider-selection settings (Hetzner-exclusive)",
+    up: (db) => {
+      // The provider abstraction was removed — Hetzner is the only provider, so
+      // the per-server `provider` column and the compute/dns provider-selection
+      // settings no longer vary. DROP COLUMN leaves the table in place, so the
+      // ON DELETE CASCADE children of `servers` are untouched (no rebuild needed).
+      const cols = db.query("PRAGMA table_info(servers)").all() as Array<{ name: string }>;
+      if (cols.some((c) => c.name === "provider")) {
+        db.run("ALTER TABLE servers DROP COLUMN provider");
+      }
+      // Settings table may not exist in test fixtures that only create servers + apps.
+      const hasSettings = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'").get();
+      if (hasSettings) {
+        db.run(
+          "DELETE FROM settings WHERE key IN ('compute_provider', 'dns_provider')",
+        );
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

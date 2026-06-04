@@ -63,7 +63,6 @@ export interface Server {
   id: number;
   name: string;
   provider_id: string;
-  provider: string;
   ipv4: string;
   ipv6: string;
   type: string;

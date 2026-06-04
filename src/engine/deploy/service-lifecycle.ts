@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
 import { sshExec, restartContainer, serviceHealthCheck, pauseContainer, unpauseContainer, getContainerLogs, removeCompose, getComposeLogs } from "../../shared/remote/index.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
 import { removeServiceCaddy } from "../scale/caddy-manager.ts";
 
@@ -85,7 +85,7 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
       // Delete Hetzner volume
       if (instance.volume_id) {
         try {
-          await getComputeProvider().volumes!.delete(instance.volume_id);
+          await hetzner.volumes!.delete(instance.volume_id);
           log("destroy", `Deleted volume ${instance.volume_id}`);
         } catch (err) {
           log("destroy", `Failed to delete volume ${instance.volume_id}: ${err}`);

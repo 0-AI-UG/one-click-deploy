@@ -1,5 +1,5 @@
 import * as db from "../shared/db.ts";
-import { getComputeProvider } from "../shared/providers/index.ts";
+import { hetzner } from "../shared/providers/index.ts";
 import { getOrCreateLocalKeyPair, waitForServer, captureHostKey } from "../shared/remote/index.ts";
 import { sshExec } from "../shared/remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "./network.ts";
@@ -22,7 +22,7 @@ export async function provisionServer(opts: {
   emit: ProgressFn;
 }): Promise<Server> {
   const { serverType, location, emit } = opts;
-  const compute = getComputeProvider();
+  const compute = hetzner;
   const serverName = opts.name || `ocd-server-${Date.now()}`;
 
   emit("server", `Creating new ${compute.name} server...`);
@@ -41,7 +41,6 @@ export async function provisionServer(opts: {
   const dbServer = db.insertServer({
     name: serverName,
     provider_id: "",
-    provider: compute.id,
     ipv4: "",
     ipv6: "",
     type: serverType,

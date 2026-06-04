@@ -5,13 +5,12 @@
 import { readFileSync } from "fs";
 import * as db from "../shared/db.ts";
 import { secretStore } from "../shared/secret-store.ts";
-import { getComputeProvider } from "../shared/providers/index.ts";
+import { hetzner } from "../shared/providers/index.ts";
 import { bootstrapPanel } from "./deploy/panel.ts";
 
 export type AutoDeployConfig = {
   provider_token: string;
   domain: string;
-  provider?: string;
   server_type?: string;
   server_location?: string;
   dns_zone_id?: string;
@@ -65,9 +64,7 @@ export async function runAutoDeploy(
     crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   process.env.JWT_SECRET = jwtSecret;
 
-  if (config.provider) db.saveSetting("compute_provider", config.provider);
-  const provider = getComputeProvider(config.provider);
-  await secretStore.set(provider.tokenKey, config.provider_token);
+  await secretStore.set(hetzner.tokenKey, config.provider_token);
   if (config.dns_zone_id) {
     db.saveSetting("dns_zone_id", config.dns_zone_id);
   }

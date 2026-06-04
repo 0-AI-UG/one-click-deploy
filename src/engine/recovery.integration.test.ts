@@ -22,8 +22,8 @@ if (RUN) useTempDataDir();
 const compute = makeFakeComputeProvider();
 const dns = makeFakeDnsProvider();
 if (RUN) mock.module("../shared/providers/index.ts", () => ({
-  getComputeProvider: () => compute,
-  getDnsProvider: () => dns,
+  hetzner: compute,
+  hetznerDns: dns,
 }));
 
 // provisionServer is only called when no ready server exists; stub it.

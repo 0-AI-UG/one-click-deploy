@@ -1,5 +1,5 @@
 import * as db from "../../shared/db.ts";
-import { getComputeProvider } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 
@@ -19,7 +19,7 @@ function log(context: string, ...args: unknown[]) {
  * already up to date.
  */
 export async function reconcileNetwork(): Promise<void> {
-  const compute = getComputeProvider();
+  const compute = hetzner;
   if (!compute.networks) return; // provider doesn't support private networking
 
   let networkId: string;
