@@ -1,0 +1,38 @@
+{
+  "type": "zitadel",
+  "label": "Zitadel",
+  "image": "ghcr.io/zitadel/zitadel",
+  "versions": ["v2.65.10", "v2.65.9"],
+  "defaultPort": 8080,
+  "requiredEnvVars": [
+    { "key": "ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME", "label": "Admin Username", "default": "zitadel-admin" }
+  ],
+  "secrets": [
+    { "key": "PG_PASS", "generate": "password" },
+    { "key": "ZITADEL_DB_PASS", "generate": "password" },
+    { "key": "ZITADEL_MASTERKEY", "generate": "masterkey" },
+    { "key": "ZITADEL_ADMIN_PASSWORD", "generate": "strong-password", "label": "Admin Password" }
+  ],
+  "volumePath": "",
+  "healthCmd": "",
+  "defaultVolumeSize": 10,
+  "connectionUrlTemplate": "https://{host}",
+  "icon": "Zi",
+  "color": "bg-emerald-600",
+  "http": true,
+  "description": "Fully open-source identity & SSO — social login, password, passkey, MFA (no paywall)",
+  "category": "auth",
+  "compose": "zitadel.yml",
+  "composeWebService": "zitadel",
+  "composeWebPort": 8080,
+  "versionEnvKey": "ZITADEL_TAG",
+  "domainEnvKey": "ZITADEL_EXTERNALDOMAIN",
+  "volumeSubpaths": [
+    { "service": "db", "subpath": "database", "container": "/var/lib/postgresql/data" }
+  ],
+  "surfaceCredentials": {
+    "admin_username": "ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME",
+    "admin_password": "ZITADEL_ADMIN_PASSWORD"
+  },
+  "recommendedMemoryMb": 1024
+}

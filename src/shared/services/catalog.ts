@@ -12,8 +12,13 @@ export type ServiceEnvVar = {
 /** A secret value generated at deploy time and written to the service's env. */
 export type ServiceSecretSpec = {
   key: string;
-  /** password = 24 alnum chars, secret-key = 50 url-safe chars, token = 64 hex chars. */
-  generate: "password" | "secret-key" | "token";
+  /** password = 24 alnum chars, strong-password = 24 chars w/ guaranteed
+   *  upper+lower+digit+symbol (for policies like Zitadel's), masterkey = exactly
+   *  32 alnum chars, secret-key = 50 url-safe chars, token = 64 hex chars. */
+  generate: "password" | "strong-password" | "masterkey" | "secret-key" | "token";
+  /** When set, the secret is user-editable in the deploy form under this label
+   *  (e.g. an admin password). Unlabeled secrets stay internal/auto-generated. */
+  label?: string;
 };
 
 /** Maps a base-volume subdirectory into a specific compose service's data path. */
@@ -68,6 +73,9 @@ export type ServiceDefinition = {
   /** For compose services, inject the selected `version` into the env file
    *  under this key so the template can pin its image tag (e.g. "AUTHENTIK_TAG"). */
   versionEnvKey?: string;
+  /** For HTTP services that must know their public hostname at startup (e.g.
+   *  Zitadel's ZITADEL_EXTERNALDOMAIN), inject the resolved domain under this key. */
+  domainEnvKey?: string;
   /** Server type to provision for this service (overrides the default when it
    *  needs more resources than a typical single container). */
   minServerType?: string;
@@ -84,10 +92,36 @@ function randomPassword(len = 24): string {
   return randomFromAlphabet("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", len);
 }
 
+/** Password guaranteed to contain lower+upper+digit+symbol, for strict policies
+ *  (e.g. Zitadel's first-admin). Symbol set excludes $ ' " ` \ to stay safe in
+ *  env files and docker-compose ${VAR} interpolation. */
+function strongPassword(len = 24): string {
+  const lower = "abcdefghijklmnopqrstuvwxyz";
+  const upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const digit = "0123456789";
+  // Symbols safe in env files / ${VAR} interpolation: no $ ' " ` \ # =.
+  const symbol = "!@%^*-_+.";
+  const all = lower + upper + digit + symbol;
+  const pick = (set: string) => set[crypto.getRandomValues(new Uint8Array(1))[0] % set.length];
+  const chars = [pick(lower), pick(upper), pick(digit), pick(symbol)];
+  while (chars.length < len) chars.push(pick(all));
+  // Fisher–Yates shuffle so the guaranteed chars aren't always at the front.
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = crypto.getRandomValues(new Uint8Array(1))[0] % (i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
+}
+
 function generateSecret(kind: ServiceSecretSpec["generate"]): string {
   switch (kind) {
     case "password":
       return randomPassword();
+    case "strong-password":
+      return strongPassword();
+    case "masterkey":
+      // Zitadel requires a masterkey of exactly 32 bytes.
+      return randomPassword(32);
     case "secret-key":
       // 50 url-safe chars — used for app signing keys (e.g. AUTHENTIK_SECRET_KEY).
       return randomFromAlphabet("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_", 50);

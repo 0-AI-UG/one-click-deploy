@@ -1,0 +1,5 @@
+# Cate project-local state. Only workspace.json is shared; everything else
+# (session state, backups, the pi-agent dir, and worktrees) stays local.
+*
+!.gitignore
+!workspace.json

@@ -301,6 +301,9 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
     if (httpDomain) {
       credentials.url = `https://${httpDomain}`;
       credentials.domain = httpDomain;
+      // Services that bake their public hostname at startup (e.g. Zitadel) need
+      // the resolved domain in their env, not just the request Host header.
+      if (catalog.domainEnvKey) envVars[catalog.domainEnvKey] = httpDomain;
     }
     // Surface catalog-declared env values as credential fields (e.g. the
     // generated Authentik bootstrap admin email/password/token).

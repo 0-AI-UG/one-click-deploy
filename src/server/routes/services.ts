@@ -19,6 +19,11 @@ export async function handleGetCatalog(_request: Request): Promise<Response> {
       versions: e.versions,
       defaultPort: e.defaultPort,
       requiredEnvVars: e.requiredEnvVars,
+      // Secrets carrying a label are user-editable (e.g. an admin password);
+      // unlabeled secrets stay internal and are not exposed to the client.
+      editableSecrets: (e.secrets || [])
+        .filter((s) => s.label)
+        .map((s) => ({ key: s.key, label: s.label, generate: s.generate })),
       defaultVolumeSize: e.defaultVolumeSize,
       icon: e.icon,
       color: e.color,

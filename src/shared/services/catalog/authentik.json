@@ -10,7 +10,7 @@
   "secrets": [
     { "key": "PG_PASS", "generate": "password" },
     { "key": "AUTHENTIK_SECRET_KEY", "generate": "secret-key" },
-    { "key": "AUTHENTIK_BOOTSTRAP_PASSWORD", "generate": "password" },
+    { "key": "AUTHENTIK_BOOTSTRAP_PASSWORD", "generate": "password", "label": "Admin Password" },
     { "key": "AUTHENTIK_BOOTSTRAP_TOKEN", "generate": "token" }
   ],
   "volumePath": "",

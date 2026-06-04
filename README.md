@@ -16,7 +16,7 @@ No Kubernetes. No YAML. Just your Hetzner account.
 
 ---
 
-A lightweight, self-hostable alternative to Heroku, Railway, and Render — built exclusively for [Hetzner Cloud](https://www.hetzner.com/cloud). Point it at a Git repo and your Hetzner account, and it provisions the server, builds your container, configures DNS, issues TLS, and serves traffic. One provider, deeply integrated: Hetzner servers, volumes, private networks, firewalls, and DNS.
+A lightweight, self-hostable alternative to Heroku, Railway, and Render, built exclusively for [Hetzner Cloud](https://www.hetzner.com/cloud). Point it at a Git repo and your Hetzner account, and it provisions the server, builds your container, configures DNS, issues TLS, and serves traffic. One provider, deeply integrated: Hetzner servers, volumes, private networks, firewalls, and DNS.
 
 ## Quick Start
 

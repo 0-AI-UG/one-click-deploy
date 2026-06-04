@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
 import { Card, Btn, showToast, Spinner, CopyButton } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Database, Loader2, Eye, EyeOff, ArrowLeft } from "lucide-react";
+import { Database, Loader2, Eye, EyeOff, ArrowLeft, RefreshCw } from "lucide-react";
 
 type CatalogEntry = {
   type: string;
@@ -10,6 +10,7 @@ type CatalogEntry = {
   versions: string[];
   defaultPort: number;
   requiredEnvVars: Array<{ key: string; label: string; generate?: string; default?: string }>;
+  editableSecrets?: Array<{ key: string; label: string; generate?: string }>;
   defaultVolumeSize: number;
   icon?: string;
   color?: string;
@@ -44,6 +45,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
   const [version, setVersion] = useState("");
   const [volumeSize, setVolumeSize] = useState(10);
   const [generatedEnv, setGeneratedEnv] = useState<Record<string, string>>({});
+  const [credentialFields, setCredentialFields] = useState<Array<{ key: string; label: string; isPassword: boolean }>>([]);
   const [deploying, setDeploying] = useState(false);
   const [environmentId, setEnvironmentId] = useState<number | null>(null);
   const [envPrefix, setEnvPrefix] = useState("DATABASE");
@@ -76,14 +78,27 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
     setVersion(entry.versions[0]);
     setVolumeSize(entry.defaultVolumeSize);
     setRevealedKeys(new Set());
-    // Generate credentials
+    // Seed editable credential fields with sensible defaults; the user can
+    // change any of them before deploying (blank = auto-generated server-side).
     const env: Record<string, string> = {};
+    const fields: Array<{ key: string; label: string; isPassword: boolean }> = [];
     for (const v of entry.requiredEnvVars) {
       if (v.generate === "password") env[v.key] = randomPassword();
       else if (v.generate === "username") env[v.key] = "ocd_user";
       else if (v.default) env[v.key] = v.default;
+      else env[v.key] = "";
+      fields.push({ key: v.key, label: v.label, isPassword: isPasswordKey(v.key) });
+    }
+    for (const s of entry.editableSecrets || []) {
+      env[s.key] = s.generate === "password" ? randomPassword() : "";
+      fields.push({ key: s.key, label: s.label, isPassword: isPasswordKey(s.key) || s.generate === "password" });
     }
     setGeneratedEnv(env);
+    setCredentialFields(fields);
+  };
+
+  const regenerate = (key: string) => {
+    setGeneratedEnv((prev) => ({ ...prev, [key]: randomPassword() }));
   };
 
   const toggleReveal = (key: string) => {
@@ -104,7 +119,8 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
         service_type: selected.type,
         version,
         volume_size: selected.stateless ? undefined : volumeSize,
-        env_overrides: generatedEnv,
+        // Drop blanks so cleared fields fall back to server-side generation.
+        env_overrides: Object.fromEntries(Object.entries(generatedEnv).filter(([, v]) => v !== "")),
         environment_id: environmentId || undefined,
         env_prefix: environmentId ? envPrefix : undefined,
         domain: selected.http && customDomain ? customDomain.trim() : undefined,
@@ -204,36 +220,49 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
                 </div>
               )}
 
-              {/* Generated Credentials */}
-              {Object.keys(generatedEnv).length > 0 && (
+              {/* Credentials (editable) */}
+              {credentialFields.length > 0 && (
               <div>
                 <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Credentials</label>
                 <div className="bg-alt border-2 border-fg/30 divide-y divide-fg/10">
-                  {Object.entries(generatedEnv).map(([key, value]) => {
-                    const isPassword = isPasswordKey(key);
-                    const revealed = revealedKeys.has(key);
+                  {credentialFields.map((f) => {
+                    const revealed = revealedKeys.has(f.key);
+                    const value = generatedEnv[f.key] ?? "";
                     return (
-                      <div key={key} className="px-3 py-2 flex items-center justify-between gap-2">
-                        <span className="font-mono text-[9px] text-muted uppercase shrink-0">{key}</span>
-                        <div className="flex items-center gap-1 min-w-0">
-                          <span className="font-mono text-[10px] text-fg truncate">
-                            {isPassword && !revealed ? "••••••••••••••••" : value}
-                          </span>
-                          {isPassword && (
+                      <div key={f.key} className="px-3 py-2 flex items-center gap-2">
+                        <label className="font-mono text-[9px] text-muted uppercase shrink-0 w-28 truncate" title={f.label}>{f.label}</label>
+                        <input
+                          type={f.isPassword && !revealed ? "password" : "text"}
+                          value={value}
+                          onChange={(e) => setGeneratedEnv((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                          className="flex-1 min-w-0 bg-bg border border-fg/30 px-2 py-1 font-mono text-[10px] text-fg focus:outline-none focus:ring-1 focus:ring-accent-blue"
+                        />
+                        {f.isPassword && (
+                          <>
                             <button
-                              onClick={() => toggleReveal(key)}
+                              onClick={() => toggleReveal(f.key)}
                               className="p-0.5 text-muted hover:text-fg transition-colors shrink-0"
                               title={revealed ? "Hide" : "Reveal"}
                             >
                               {revealed ? <EyeOff size={12} /> : <Eye size={12} />}
                             </button>
-                          )}
-                          <CopyButton text={value} />
-                        </div>
+                            <button
+                              onClick={() => regenerate(f.key)}
+                              className="p-0.5 text-muted hover:text-fg transition-colors shrink-0"
+                              title="Regenerate"
+                            >
+                              <RefreshCw size={12} />
+                            </button>
+                          </>
+                        )}
+                        <CopyButton text={value} />
                       </div>
                     );
                   })}
                 </div>
+                <p className="font-mono text-[9px] text-muted mt-1">
+                  Edit any field before deploying. Cleared fields are auto-generated.
+                </p>
               </div>
               )}
 
