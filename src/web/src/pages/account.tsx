@@ -53,7 +53,7 @@ function SecuritySection() {
     }
   };
 
-  if (loading) return <Card className="p-5"><div className="flex justify-center"><Spinner /></div></Card>;
+  if (loading) return <Card className="p-5 mt-6"><div className="flex justify-center"><Spinner /></div></Card>;
 
   return (
     <Card className="p-5 space-y-4">
@@ -184,7 +184,7 @@ function GitHubSection() {
     }
   };
 
-  if (loading) return <Card className="p-5"><div className="flex justify-center"><Spinner /></div></Card>;
+  if (loading) return <Card className="p-5 mt-6"><div className="flex justify-center"><Spinner /></div></Card>;
 
   const linked = status?.linked || user?.githubLinked;
   const username = status?.githubUsername || user?.githubUsername || "";
@@ -224,16 +224,14 @@ function GitHubSection() {
 
 export function AccountPage() {
   return (
-    <div className="max-w-5xl mx-auto px-4 py-6 animate-fade-in">
+    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
       <div className="flex items-center gap-2 mb-6">
         <User size={18} className="text-fg" />
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Account</h1>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        <GitHubSection />
-        <SecuritySection />
-      </div>
+      <GitHubSection />
+      <SecuritySection />
     </div>
   );
 }

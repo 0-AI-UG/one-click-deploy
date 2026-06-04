@@ -4,7 +4,7 @@ import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx"
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Layers, Plus, Trash2, Key, X } from "lucide-react";
+import { Layers, Plus, Trash2, ChevronDown, ChevronRight, Key, X } from "lucide-react";
 import type { EnvironmentData, AppData } from "../types.ts";
 
 type AttachedApp = { id: number; name: string; status: string; domain: string };
@@ -124,7 +124,7 @@ export function EnvironmentsPage() {
   const renderEditor = (id: number | "new") => {
     const envBusy = typeof id === "number" && !!ops.byResourceKey(`env:${id}`);
     return (
-      <Card className="p-4 space-y-3">
+      <div className="px-4 pb-3 pt-1 ml-7 space-y-3">
         <input
           type="text"
           value={editName}
@@ -140,54 +140,12 @@ export function EnvironmentsPage() {
             {id === "new" ? "Create" : envBusy ? "Redeploying…" : "Save"}
           </Btn>
         </div>
-      </Card>
+      </div>
     );
   };
-
-  const renderAttachedApps = (env: EnvironmentData) => {
-    const apps = attachedApps[env.id] || [];
-    const available = unattachedApps(env.id);
-    return (
-      <Card className="p-4 space-y-2">
-        <div className="flex items-center justify-between">
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Attached Apps</h3>
-          {available.length > 0 && (
-            <div className="w-40">
-              <NeoSelect
-                compact
-                value=""
-                placeholder="+ attach app"
-                options={available.map((a) => ({ value: String(a.id), label: a.name }))}
-                onChange={(v) => { if (v) attachApp(env.id, parseInt(v)); }}
-              />
-            </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {apps.map((a) => (
-            <span key={a.id} className="inline-flex items-center gap-1 font-mono text-[9px] px-2 py-1 bg-alt text-fg border-2 border-fg">
-              <a href={`#/apps/${a.id}`} className="hover:underline">{a.name}</a>
-              <button
-                onClick={() => detachApp(env.id, a.id)}
-                className="text-muted hover:text-accent-red transition-colors"
-                title="Detach"
-              >
-                <X size={9} />
-              </button>
-            </span>
-          ))}
-          {apps.length === 0 && (
-            <span className="font-mono text-[9px] text-muted">no apps attached</span>
-          )}
-        </div>
-      </Card>
-    );
-  };
-
-  const selectedEnv = typeof expanded === "number" ? environments.find((e) => e.id === expanded) : undefined;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Environments</h1>
         <Btn size="sm" variant="primary" onClick={startNew}>
@@ -196,41 +154,48 @@ export function EnvironmentsPage() {
       </div>
 
       {environments.length > 0 || expanded === "new" ? (
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
-          {/* Master list */}
-          <Card className="overflow-hidden">
-            <div className="px-4 py-3 border-b-2 border-fg bg-alt">
-              <span className="font-mono text-[10px] font-bold text-fg uppercase">Environments ({environments.length})</span>
-            </div>
-            <div className="divide-y divide-fg/10">
-              {expanded === "new" && (
-                <div className="px-4 py-3 flex items-center gap-2 bg-fg text-accent">
-                  <Layers size={11} />
-                  <span className="font-mono text-[10px] font-bold uppercase">New Environment</span>
+        <Card className="overflow-hidden">
+          <div className="divide-y divide-fg/10">
+            {expanded === "new" && (
+              <div>
+                <div className="px-4 py-3 flex items-center gap-3 bg-alt/30">
+                  <ChevronDown size={12} className="text-muted flex-shrink-0" />
+                  <span className="font-mono text-[10px] font-bold text-fg uppercase">New Environment</span>
                 </div>
-              )}
-              {environments.map((env) => {
-                const selected = expanded === env.id;
-                const apps = attachedApps[env.id] || [];
-                return (
+                {renderEditor("new")}
+              </div>
+            )}
+            {environments.map((env) => {
+              const isOpen = expanded === env.id;
+              const apps = attachedApps[env.id] || [];
+              const available = unattachedApps(env.id);
+              return (
+                <div key={env.id}>
                   <div
-                    key={env.id}
+                    className="px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors cursor-pointer"
                     onClick={() => toggle(env)}
-                    className={`px-4 py-3 flex items-center justify-between cursor-pointer transition-colors ${selected ? "bg-fg text-accent" : "hover:bg-alt/50"}`}
                   >
-                    <span className="font-mono text-[10px] font-bold uppercase truncate min-w-0">{env.name}</span>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className={`font-mono text-[9px] flex items-center gap-1 ${selected ? "text-accent/70" : "text-muted"}`}>
+                    <div className="flex items-center gap-3 min-w-0">
+                      {isOpen
+                        ? <ChevronDown size={12} className="text-muted flex-shrink-0" />
+                        : <ChevronRight size={12} className="text-muted flex-shrink-0" />
+                      }
+                      <span className="font-mono text-[10px] font-bold text-fg uppercase">{env.name}</span>
+                      <span className="font-mono text-[9px] text-muted flex items-center gap-1">
                         <Key size={9} /> {env.env_vars.length}
                       </span>
                       {apps.length > 0 && (
-                        <span className={`font-mono text-[9px] ${selected ? "text-accent/70" : "text-muted"}`}>
+                        <span className="font-mono text-[9px] text-muted">
                           {apps.length} app{apps.length !== 1 ? "s" : ""}
                         </span>
                       )}
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
+                    </div>
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <Btn
+                        size="xs"
+                        variant="ghost"
+                        title="Delete"
+                        onClick={async () => {
                           if (apps.length > 0) {
                             showToast(`Cannot delete: used by ${apps.map((a) => a.name).join(", ")}`, "error");
                             return;
@@ -238,41 +203,57 @@ export function EnvironmentsPage() {
                           if (await confirm("Delete Environment", `Delete "${env.name}"?`, true)) {
                             try {
                               await del(`/api/environments/${env.id}`);
-                              if (expanded === env.id) setExpanded(null);
                               load();
                             } catch (err: any) {
                               showToast(err.message || "Failed to delete", "error");
                             }
                           }
                         }}
-                        className={`transition-colors ${selected ? "text-accent hover:text-white" : "text-muted hover:text-accent-red"}`}
-                        title="Delete"
                       >
-                        <Trash2 size={12} />
-                      </button>
+                        <Trash2 size={12} className="text-accent-red" />
+                      </Btn>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </Card>
-
-          {/* Detail pane */}
-          <div className="xl:col-span-2 space-y-6">
-            {expanded === "new" ? (
-              renderEditor("new")
-            ) : selectedEnv ? (
-              <>
-                {renderAttachedApps(selectedEnv)}
-                {renderEditor(selectedEnv.id)}
-              </>
-            ) : (
-              <Card className="p-10">
-                <p className="font-mono text-[10px] text-muted text-center uppercase tracking-wider">Select an environment to edit</p>
-              </Card>
-            )}
+                  {isOpen && (
+                    <>
+                      {/* Attached apps with detach */}
+                      <div className="px-4 py-2 ml-7 flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-[9px] text-muted uppercase">Apps:</span>
+                        {apps.map((a) => (
+                          <span key={a.id} className="inline-flex items-center gap-1 font-mono text-[9px] px-1.5 py-0.5 bg-alt text-fg">
+                            <a href={`#/apps/${a.id}`} className="hover:underline">{a.name}</a>
+                            <button
+                              onClick={() => detachApp(env.id, a.id)}
+                              className="text-muted hover:text-accent-red transition-colors"
+                              title="Detach"
+                            >
+                              <X size={9} />
+                            </button>
+                          </span>
+                        ))}
+                        {available.length > 0 && (
+                          <div className="w-32">
+                            <NeoSelect
+                              compact
+                              value=""
+                              placeholder="+ attach app"
+                              options={available.map((a) => ({ value: String(a.id), label: a.name }))}
+                              onChange={(v) => { if (v) attachApp(env.id, parseInt(v)); }}
+                            />
+                          </div>
+                        )}
+                        {apps.length === 0 && available.length === 0 && (
+                          <span className="font-mono text-[9px] text-muted">no apps</span>
+                        )}
+                      </div>
+                      {renderEditor(env.id)}
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        </div>
+        </Card>
       ) : (
         <EmptyState message="No environments yet" icon={Layers} />
       )}
