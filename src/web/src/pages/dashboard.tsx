@@ -146,9 +146,11 @@ export function DashboardPage() {
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
 
   const { apps, services } = data;
+  const appsRunning = apps.filter((a) => a.status === "running").length;
+  const activeOps = ops.active.length;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
+    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Dashboard</h1>
@@ -170,6 +172,27 @@ export function DashboardPage() {
         <EmptyState message="Nothing deployed yet. Deploy your first app or service to get started." icon={Box} />
       ) : (
         <>
+          {/* Fleet summary */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-bg-raised border-2 border-fg shadow-neo p-4">
+              <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Apps</div>
+              <div className="font-mono text-2xl font-bold text-fg">{apps.length}</div>
+            </div>
+            <div className="bg-bg-raised border-2 border-fg shadow-neo p-4">
+              <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Running</div>
+              <div className="font-mono text-2xl font-bold text-fg">{appsRunning}<span className="text-sm text-muted">/{apps.length}</span></div>
+            </div>
+            <div className="bg-bg-raised border-2 border-fg shadow-neo p-4">
+              <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Services</div>
+              <div className="font-mono text-2xl font-bold text-fg">{services.length}</div>
+            </div>
+            <div className={`border-2 border-fg shadow-neo p-4 ${activeOps > 0 ? "bg-accent-blue text-white" : "bg-bg-raised"}`}>
+              <div className={`font-mono text-[9px] uppercase tracking-wider mb-1 ${activeOps > 0 ? "text-white/80" : "text-muted"}`}>Active ops</div>
+              <div className="font-mono text-2xl font-bold">{activeOps}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
           {/* Apps */}
           {apps.length > 0 && (
             <Card className="overflow-hidden">
@@ -346,6 +369,7 @@ export function DashboardPage() {
               </div>
             </Card>
           )}
+          </div>
         </>
       )}
     </div>

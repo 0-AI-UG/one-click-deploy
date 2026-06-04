@@ -121,7 +121,7 @@ export function ResourcesPage() {
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
+    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <HardDrive size={18} className="text-fg" />
@@ -130,32 +130,35 @@ export function ResourcesPage() {
         <Btn variant="ghost" onClick={() => { setLoading(true); load(); }}><RefreshCw size={13} /> Refresh</Btn>
       </div>
 
-      {/* Cost estimate */}
-      {data?.totals && (
-        <Card className="p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Estimated Monthly Cost <InfoTip text="Estimates based on Hetzner's list prices. Excludes traffic overage and snapshots." /></h3>
-            <span className="font-mono text-[9px] text-muted uppercase tracking-wider">
-              gross · {data.totals.currency || "EUR"}
-            </span>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <div className="border-2 border-fg p-3 bg-alt">
-              <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Servers</div>
-              <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.servers)}</div>
-            </div>
-            <div className="border-2 border-fg p-3 bg-alt">
-              <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-1">Volumes</div>
-              <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.volumes)}</div>
-            </div>
-            <div className="border-2 border-fg p-3 bg-accent">
-              <div className="font-mono text-[9px] text-fg uppercase tracking-wider mb-1 font-bold">Total / month</div>
-              <div className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.total)}</div>
-            </div>
-          </div>
-        </Card>
-      )}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+        {/* Left rail: cost */}
+        <div className="space-y-6">
+          {data?.totals && (
+            <Card className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Monthly Cost <InfoTip text="Estimates based on Hetzner's list prices. Excludes traffic overage and snapshots." /></h3>
+                <span className="font-mono text-[9px] text-muted uppercase tracking-wider">{data.totals.currency || "EUR"}</span>
+              </div>
+              <div className="space-y-2">
+                <div className="border-2 border-fg p-3 bg-alt flex items-center justify-between">
+                  <span className="font-mono text-[9px] text-muted uppercase tracking-wider">Servers</span>
+                  <span className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.servers)}</span>
+                </div>
+                <div className="border-2 border-fg p-3 bg-alt flex items-center justify-between">
+                  <span className="font-mono text-[9px] text-muted uppercase tracking-wider">Volumes</span>
+                  <span className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.volumes)}</span>
+                </div>
+                <div className="border-2 border-fg p-3 bg-accent flex items-center justify-between">
+                  <span className="font-mono text-[9px] text-fg uppercase tracking-wider font-bold">Total / mo</span>
+                  <span className="font-mono text-sm font-bold text-fg">{fmtPrice(data.totals.total)}</span>
+                </div>
+              </div>
+            </Card>
+          )}
+        </div>
 
+        {/* Content: servers + volumes */}
+        <div className="xl:col-span-2 space-y-6">
       {/* Servers */}
       <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">
@@ -284,6 +287,8 @@ export function ResourcesPage() {
           </Table>
         )}
       </Card>
+        </div>
+      </div>
     </div>
   );
 }

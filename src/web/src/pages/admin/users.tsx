@@ -28,7 +28,7 @@ function GitHubOAuthSettings({ form, setS }: { form: Record<string, string>; set
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3">
         <div>
           <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Client ID</label>
           <input type="text" value={form.github_oauth_client_id} onChange={setS("github_oauth_client_id")} placeholder="Ov23li..." />
@@ -201,12 +201,15 @@ export function UsersPage() {
   if (loading || settingsLoading) return <div className="flex justify-center py-20"><Spinner /></div>;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in space-y-6">
+    <div className="max-w-7xl mx-auto px-4 py-6 animate-fade-in space-y-6">
       <div className="flex items-center gap-2">
         <Settings size={18} className="text-fg" />
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Admin</h1>
       </div>
 
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+        {/* Left rail: instance settings + panel */}
+        <div className="space-y-6">
       {/* Instance Settings */}
       <Card className="p-5 space-y-4">
         <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">API Tokens</h3>
@@ -222,7 +225,7 @@ export function UsersPage() {
             <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>
             <input type="text" value={settingsForm.dns_zone_id} onChange={setS("dns_zone_id")} placeholder="DNS Zone ID" />
           </div>
-          <div className="grid grid-cols-2 gap-3 mt-3">
+          <div className="grid grid-cols-1 gap-3 mt-3">
             <div>
               <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Default Server Type</label>
               <NeoSelect
@@ -340,8 +343,10 @@ export function UsersPage() {
           )}
         </Card>
       )}
+        </div>
 
-      {/* Users */}
+        {/* Users */}
+        <div className="xl:col-span-2">
       <Card className="p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -423,6 +428,8 @@ export function UsersPage() {
           ))}
         </Table>
       </Card>
+        </div>
+      </div>
     </div>
   );
 }

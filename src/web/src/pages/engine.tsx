@@ -65,7 +65,7 @@ export function EnginePage() {
   const hb = heartbeatLabel(snap.engine.heartbeat);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
+    <div className="max-w-7xl mx-auto px-4 py-6 animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="font-mono text-xl font-bold uppercase tracking-wider">Engine</h1>
@@ -85,36 +85,38 @@ export function EnginePage() {
         </div>
       </div>
 
-      <Section title="Running" count={snap.running.length}>
-        {snap.running.length === 0 ? (
-          <EmptyState label="No operations running" />
-        ) : (
-          <OpList ops={snap.running} showProgress />
-        )}
-      </Section>
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        <Section title="Running" count={snap.running.length}>
+          {snap.running.length === 0 ? (
+            <EmptyState label="No operations running" />
+          ) : (
+            <OpList ops={snap.running} showProgress />
+          )}
+        </Section>
 
-      <Section title="Pending" count={snap.pending.length}>
-        {snap.pending.length === 0 ? (
-          <EmptyState label="Queue is empty" />
-        ) : (
-          <OpList ops={snap.pending} />
-        )}
-      </Section>
+        <Section title="Pending" count={snap.pending.length}>
+          {snap.pending.length === 0 ? (
+            <EmptyState label="Queue is empty" />
+          ) : (
+            <OpList ops={snap.pending} />
+          )}
+        </Section>
 
-      <Section title="Recent" count={snap.recent.length}>
-        {snap.recent.length === 0 ? (
-          <EmptyState label="No operations yet" />
-        ) : (
-          <OpList ops={snap.recent} />
-        )}
-      </Section>
+        <Section title="Recent" count={snap.recent.length}>
+          {snap.recent.length === 0 ? (
+            <EmptyState label="No operations yet" />
+          ) : (
+            <OpList ops={snap.recent} />
+          )}
+        </Section>
+      </div>
     </div>
   );
 }
 
 function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
   return (
-    <section className="mb-8">
+    <section>
       <div className="flex items-baseline gap-2 mb-3">
         <h2 className="font-mono text-sm font-bold uppercase tracking-wider">{title}</h2>
         <span className="text-[10px] font-mono text-fg-dim">({count})</span>
@@ -156,7 +158,7 @@ function OpRow({ op, showProgress }: { op: OperationView; showProgress?: boolean
       href={`#/engine/op/${op.id}`}
       className="block border-2 border-fg bg-bg-raised shadow-neo-sm hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-neo-none transition-all px-3 py-2"
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 flex-wrap">
         <span
           className={`font-mono text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 border-2 border-fg ${statusColor(op.status)}`}
         >
@@ -164,11 +166,13 @@ function OpRow({ op, showProgress }: { op: OperationView; showProgress?: boolean
         </span>
         <span className="font-mono text-xs font-bold">{op.kind}</span>
         <span className="font-mono text-[10px] text-fg-dim">#{op.id}</span>
-        <span className="font-mono text-[10px] text-fg-dim">{resource}</span>
-        <span className="font-mono text-[10px] text-fg-dim ml-auto">
-          {op.trigger}
-          {age ? ` · ${age}` : ""}
-        </span>
+      </div>
+      {resource && (
+        <div className="mt-1 font-mono text-[10px] text-fg-dim truncate">{resource}</div>
+      )}
+      <div className="mt-0.5 font-mono text-[9px] text-muted">
+        {op.trigger}
+        {age ? ` · ${age}` : ""}
       </div>
       {progress && (
         <div className="mt-1 font-mono text-[10px] text-fg-dim">
