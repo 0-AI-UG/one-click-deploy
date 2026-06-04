@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { get } from "../../api/client.ts";
-import { Card } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import type { ManifestEnvDef } from "./types.ts";
 import type { EnvironmentData } from "../../types.ts";
@@ -25,7 +24,7 @@ export function EnvSection({ envValues, setEnvValues, manifestEnvDefs, selectedE
   const selectedEnv = environments.find((e) => e.id === selectedEnvironmentId);
 
   return (
-    <Card className="p-5 animate-fade-in">
+    <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-3">
         <span className="font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
           Environment
@@ -111,6 +110,6 @@ export function EnvSection({ envValues, setEnvValues, manifestEnvDefs, selectedE
           No environment variables detected. An empty environment will be created.
         </p>
       )}
-    </Card>
+    </div>
   );
 }

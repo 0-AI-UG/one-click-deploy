@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
-import { Card } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { ReceiptRow } from "./shared.tsx";
 import { get } from "../../api/client.ts";
@@ -35,10 +34,10 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest,
   const hasMultipleServices = !!detected && detected.compose_services.length > 1;
 
   return (
-    <Card className="p-5 animate-fade-in">
-      <div className="flex items-center justify-between mb-2">
+    <div className="p-5 animate-fade-in">
+      <div className="flex items-center justify-between mb-3">
         <span className="font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
-          Deployment Receipt
+          Configuration
         </span>
         {detected && (
           <span className="font-mono text-[9px] uppercase tracking-wider text-fg-dim">
@@ -47,7 +46,7 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest,
         )}
       </div>
 
-      <div className="border-t-2 border-fg pt-1">
+      <div>
         <ReceiptRow label="App Name" detected={!!detected}>
           <input type="text" value={form.app_name} onChange={set("app_name")} required />
         </ReceiptRow>
@@ -200,6 +199,6 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest,
           ))}
         </div>
       )}
-    </Card>
+    </div>
   );
 }

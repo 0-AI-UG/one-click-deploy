@@ -1,10 +1,39 @@
 import { useEffect, useRef } from "react";
 import { Btn } from "../components/ui.tsx";
 import {
-  Database, CheckCircle2, XCircle, Loader2, Circle, Terminal, ArrowLeft,
+  Database, Check, X, Loader2, ChevronRight, Terminal, ArrowLeft, CheckCircle2, XCircle,
 } from "lucide-react";
 import { useOperation, humanizeStep, collapseForwardSteps, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
 import type { OperationStep } from "../hooks/useOperation.ts";
+
+function StepBadge({ status }: { status: OperationStep["status"] }) {
+  const isOk = status === "ok" || status === "skipped";
+  const isActive = status === "started";
+  const isFailed = status === "failed";
+  if (isOk)
+    return (
+      <span className="w-6 h-6 shrink-0 border-2 border-fg bg-accent-green flex items-center justify-center">
+        <Check size={13} strokeWidth={3} className="text-fg" />
+      </span>
+    );
+  if (isActive)
+    return (
+      <span className="w-6 h-6 shrink-0 border-2 border-fg bg-accent-amber flex items-center justify-center">
+        <Loader2 size={13} className="animate-spin text-fg" />
+      </span>
+    );
+  if (isFailed)
+    return (
+      <span className="w-6 h-6 shrink-0 border-2 border-fg bg-accent-red flex items-center justify-center">
+        <X size={13} strokeWidth={3} className="text-fg" />
+      </span>
+    );
+  return (
+    <span className="w-6 h-6 shrink-0 border-2 border-fg/30 flex items-center justify-center">
+      <span className="w-1.5 h-1.5 rounded-full bg-muted" />
+    </span>
+  );
+}
 
 export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
   const op = useOperation(opId);
@@ -39,101 +68,112 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
     return () => clearTimeout(t);
   }, [succeeded, steps.length]);
 
-  const statusLabel = succeeded
-    ? "● LIVE"
+  const collapsed = collapseForwardSteps(steps);
+  const completedCount = collapsed.filter((s) => s.status === "ok" || s.status === "skipped").length;
+  const totalSteps = Math.max(op?.total_steps ?? 0, collapsed.length, completedCount);
+  const pct = succeeded ? 100 : totalSteps > 0 ? Math.round((completedCount / totalSteps) * 100) : 8;
+
+  const lastForward = [...steps].reverse().find((s) => s.phase === "forward");
+  const currentLine = succeeded
+    ? "Service deployed"
     : failed
-      ? "● FAILED"
+      ? errorMessage || `Deploy ${status}`
+      : lastForward
+        ? `${humanizeStep(lastForward.step)}${lastForward.detail ? ` — ${lastForward.detail}` : ""}`
+        : status === "pending" ? "Added to queue…" : "Starting…";
+
+  const pill = succeeded
+    ? { text: "Live", dot: "bg-accent-green", cls: "text-fg" }
+    : failed
+      ? { text: "Failed", dot: "bg-accent-red", cls: "text-accent-red" }
       : status === "running" || status === "compensating"
-        ? "● RUNNING"
+        ? { text: status === "compensating" ? "Rolling back" : "Running", dot: "bg-accent-amber animate-pulse", cls: "text-fg" }
         : status === "pending"
-          ? "● QUEUED"
-          : "● IDLE";
+          ? { text: "Queued", dot: "bg-muted", cls: "text-fg-dim" }
+          : { text: "Idle", dot: "bg-muted", cls: "text-fg-dim" };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8 animate-fade-in">
-      <div className="bg-accent border-2 border-fg shadow-neo-lg p-4 mb-6 flex items-center justify-between">
+    <div className="max-w-2xl mx-auto px-4 py-12 animate-fade-in">
+      {/* Status card */}
+      <div className="border-2 border-fg bg-bg-raised shadow-neo p-5 mb-5">
         <div className="flex items-center gap-3">
-          <div className="bg-bg-raised border-2 border-fg w-10 h-10 flex items-center justify-center">
-            <Database size={18} className="text-fg" />
+          <div className="w-11 h-11 border-2 border-fg bg-accent flex items-center justify-center shrink-0">
+            <Database size={20} className="text-fg" />
           </div>
-          <div>
-            <div className="font-mono text-[9px] uppercase tracking-wider text-fg/70">Deploying Service</div>
-            <div className="font-mono font-bold text-sm text-fg">{serviceName || (op ? `op #${op.id}` : "—")}</div>
+          <div className="flex-1 min-w-0">
+            <div className="font-mono text-[9px] uppercase tracking-wider text-muted">Deploying service</div>
+            <div className="font-mono font-bold text-base text-fg truncate">
+              {serviceName || (op ? `op #${op.id}` : "—")}
+            </div>
+          </div>
+          <div className="text-right shrink-0">
+            <div className={`flex items-center justify-end gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider ${pill.cls}`}>
+              <span className={`w-2 h-2 rounded-full ${pill.dot}`} />
+              {pill.text}
+            </div>
+            {!terminal && totalSteps > 0 && (
+              <div className="font-mono text-[9px] uppercase tracking-wider text-muted mt-0.5">
+                {completedCount} of {totalSteps}
+              </div>
+            )}
           </div>
         </div>
-        <div className="font-mono text-[9px] uppercase tracking-wider text-fg font-bold">{statusLabel}</div>
+
+        <div className="mt-4 h-3 border-2 border-fg bg-bg overflow-hidden">
+          <div
+            className={`h-full transition-all duration-500 ${failed ? "bg-accent-red" : "bg-accent"}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className={`mt-2 font-mono text-[11px] truncate ${failed ? "text-accent-red" : "text-fg-dim"}`}>
+          {currentLine}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-6">
-        <div className="space-y-2">
-          {steps.length === 0 && (
-            <div className="bg-bg-raised border-2 border-fg shadow-neo-sm p-3 flex items-center gap-3">
-              <Loader2 size={16} className="animate-spin text-fg" />
-              <span className="font-mono text-[11px] uppercase tracking-wider font-bold text-fg">
-                {status === "pending" ? "Added to queue…" : "Starting…"}
-              </span>
-            </div>
-          )}
-          {collapseForwardSteps(steps).map((s, i) => {
+      {/* Timeline + collapsed log */}
+      <div className="border-2 border-fg bg-bg-raised shadow-neo-sm">
+        {steps.length === 0 ? (
+          <div className="flex items-center gap-3 px-4 py-4">
+            <Loader2 size={16} className="animate-spin text-fg" />
+            <span className="font-mono text-[11px] uppercase tracking-wider font-bold text-fg">
+              {status === "pending" ? "Added to queue…" : "Starting…"}
+            </span>
+          </div>
+        ) : (
+          <ol>
+            {collapsed.map((s, i) => {
               const isActive = s.status === "started";
-              const isOk = s.status === "ok" || s.status === "skipped";
-              const isFailed = s.status === "failed";
-              const bg = isOk
-                ? "bg-accent-green"
-                : isActive
-                  ? "bg-accent-amber"
-                  : isFailed
-                    ? "bg-accent-red"
-                    : "bg-bg-raised";
-              const shadow = isActive ? "shadow-neo" : "shadow-neo-sm";
-              const icon = isOk ? (
-                <CheckCircle2 size={16} className="text-fg" />
-              ) : isActive ? (
-                <Loader2 size={16} className="animate-spin text-fg" />
-              ) : isFailed ? (
-                <XCircle size={16} className="text-fg" />
-              ) : (
-                <Circle size={16} className="text-muted" />
-              );
+              const isPending = !isActive && s.status !== "ok" && s.status !== "skipped" && s.status !== "failed";
               return (
-                <div
+                <li
                   key={s.seq}
-                  className={`${bg} border-2 border-fg ${shadow} flex items-center gap-3 p-3 transition-all`}
+                  className={`flex items-center gap-3 px-4 py-3 ${
+                    i < collapsed.length - 1 ? "border-b border-fg/10" : ""
+                  } ${isActive ? "bg-accent-amber/15" : ""} ${isPending ? "opacity-55" : ""}`}
                 >
-                  <div className="bg-bg-raised border-2 border-fg w-7 h-7 flex items-center justify-center font-mono text-[10px] font-bold">
-                    {String(i + 1).padStart(2, "0")}
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    {icon}
-                    <span className="font-mono text-[11px] uppercase tracking-wider font-bold text-fg">
-                      {humanizeStep(s.step)}
-                    </span>
-                  </div>
+                  <StepBadge status={s.status} />
+                  <span className={`font-mono text-[12px] flex-1 truncate ${isActive ? "font-bold text-fg" : "text-fg"}`}>
+                    {humanizeStep(s.step)}
+                  </span>
                   {s.detail && (
-                    <span className="font-mono text-[10px] text-fg/70 truncate ml-auto">
+                    <span className="font-mono text-[9px] text-muted truncate max-w-[45%]">
                       {s.detail}
                     </span>
                   )}
-                </div>
+                </li>
               );
             })}
-        </div>
+          </ol>
+        )}
 
-        <div className="border-2 border-fg shadow-neo bg-fg self-start">
-          <div className="flex items-center justify-between bg-fg text-bg px-3 py-1.5 border-b-2 border-bg">
-            <div className="flex items-center gap-2">
-              <Terminal size={12} />
-              <span className="font-mono text-[10px] uppercase tracking-wider font-bold">deploy.log</span>
-            </div>
-            <div className="flex gap-1">
-              <span className="w-2 h-2 bg-accent-red border border-bg" />
-              <span className="w-2 h-2 bg-accent-amber border border-bg" />
-              <span className="w-2 h-2 bg-accent-green border border-bg" />
-            </div>
-          </div>
+        <details className="border-t-2 border-fg group">
+          <summary className="px-4 py-2.5 cursor-pointer list-none hover:bg-alt flex items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-muted">
+            <ChevronRight size={12} className="transition-transform group-open:rotate-90" />
+            <Terminal size={11} /> Show live log
+          </summary>
           <div
             ref={logRef}
-            className="bg-fg text-bg p-3 h-72 overflow-y-auto font-mono text-[10px] leading-relaxed"
+            className="bg-fg text-bg p-3 h-56 overflow-y-auto font-mono text-[10px] leading-relaxed"
           >
             {steps.length === 0 && !terminal && (
               <div className="flex items-center gap-2 text-accent-amber">
@@ -175,7 +215,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
               </div>
             )}
           </div>
-        </div>
+        </details>
       </div>
 
       {terminal && (

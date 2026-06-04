@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
-import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown, Settings2, CheckCircle2 } from "lucide-react";
+import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown, Settings2 } from "lucide-react";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
 import { ReceiptSection } from "./receipt-section.tsx";
@@ -38,32 +38,6 @@ function groupByCategory(entries: CatalogEntry[]): [string, CatalogEntry[]][] {
     if (b === "other") return -1;
     return a.localeCompare(b);
   });
-}
-
-function HeaderToggleButton({
-  open,
-  onToggle,
-  icon,
-  label,
-}: {
-  open: boolean;
-  onToggle: () => void;
-  icon: React.ReactNode;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={`flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
-        open ? "text-fg" : "text-fg-dim hover:text-fg"
-      }`}
-    >
-      {icon}
-      {label}
-      <ChevronDown size={12} className={`transition-transform ${open ? "rotate-180" : ""}`} />
-    </button>
-  );
 }
 
 function ServicesGridSection({ onClose }: { onClose: () => void }) {
@@ -134,49 +108,6 @@ function ServicesGridSection({ onClose }: { onClose: () => void }) {
         )}
       </div>
     </div>
-  );
-}
-
-function RocketLaunch() {
-  return (
-    <svg
-      viewBox="-4 -2 32 32"
-      width="48"
-      height="48"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="overflow-visible"
-      aria-hidden="true"
-    >
-      {/* Smoke trail at launch origin — stays put while rocket lifts away */}
-      <g className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-        <circle className="smoke-puff" cx="1"  cy="22" r="1.2" fill="currentColor" stroke="none" style={{ animationDelay: "0s" }} />
-        <circle className="smoke-puff" cx="4"  cy="25" r="1"   fill="currentColor" stroke="none" style={{ animationDelay: "0.15s" }} />
-        <circle className="smoke-puff" cx="-1" cy="25" r="1.4" fill="currentColor" stroke="none" style={{ animationDelay: "0.3s" }} />
-        <circle className="smoke-puff" cx="2"  cy="28" r="1"   fill="currentColor" stroke="none" style={{ animationDelay: "0.45s" }} />
-        <circle className="smoke-puff" cx="6"  cy="27" r="1.1" fill="currentColor" stroke="none" style={{ animationDelay: "0.6s" }} />
-      </g>
-
-      {/* Rocket lifts diagonally up-right on hover */}
-      <g className="transition-transform duration-300 ease-out group-hover:-translate-y-2 group-hover:translate-x-1.5">
-        {/* Flame trail at tail — flickers on hover */}
-        <g className="scale-0 group-hover:scale-100 transition-transform duration-150" style={{ transformOrigin: "5px 19px" }}>
-          <g className="flame-flicker" style={{ transformOrigin: "5px 19px" }}>
-            <path d="M 4.2 18 C 1.5 21, 0 25, 2 27 C 3 25, 5.5 23.5, 6.5 21.5" stroke="#FF4444" strokeWidth="1.8" />
-            <path d="M 5  19 C 3.5 21, 2.5 23, 4 24.5"                          stroke="#FFB800" strokeWidth="1.5" />
-          </g>
-        </g>
-
-        {/* Lucide rocket — exact paths from the icon set */}
-        <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
-        <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
-        <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
-        <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
-      </g>
-    </svg>
   );
 }
 
@@ -531,7 +462,7 @@ export function DeployPage() {
   const detected = introspect?.ok === true ? introspect : null;
   const showReceipt = revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1);
 
-  const [customizing, setCustomizing] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const requiredEnvMissing = useMemo(
     () => manifestEnvDefs.some((d) => d.required && !envValues[d.key]?.trim()),
@@ -539,29 +470,24 @@ export function DeployPage() {
   );
 
   useEffect(() => {
-    if (requiredEnvMissing && !selectedEnvironmentId) setCustomizing(true);
+    if (requiredEnvMissing && !selectedEnvironmentId) setAdvancedOpen(true);
   }, [requiredEnvMissing, selectedEnvironmentId]);
 
-  const buildMode = form.compose_file ? "Docker Compose" : "Dockerfile";
-  const dockerfileLabel = form.compose_file || form.dockerfile_path || (detected ? "auto-detect" : "");
-  const branchLabel = form.git_branch || detected?.default_branch || "";
-
   return (
-    <div className="max-w-6xl mx-auto px-4 py-10">
-      <div className="mb-8">
-        <div className="flex items-center gap-2 mb-2">
-          <Rocket size={18} className="text-fg" />
-          <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy New App</h1>
-          {saveStatus === "saving" && (
-            <Loader2 size={12} className="ml-auto animate-spin text-fg-dim" />
-          )}
-          {saveStatus === "saved" && (
-            <span className="ml-auto flex items-center gap-1.5 font-mono text-[9px] text-fg-dim uppercase tracking-wider">
-              <Save size={10} /> Saved
-            </span>
-          )}
-        </div>
+    <div className="max-w-2xl mx-auto px-4 py-12">
+      <div className="flex items-center gap-2 mb-1">
+        <Rocket size={18} className="text-fg" />
+        <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy</h1>
+        {saveStatus === "saving" && (
+          <Loader2 size={12} className="ml-auto animate-spin text-fg-dim" />
+        )}
+        {saveStatus === "saved" && (
+          <span className="ml-auto flex items-center gap-1.5 font-mono text-[9px] text-fg-dim uppercase tracking-wider">
+            <Save size={10} /> Saved
+          </span>
+        )}
       </div>
+      <p className="text-fg-dim text-sm mb-7">Paste a repo. We detect the rest.</p>
 
       {pendingSession && (
         <div className="mb-5 border-2 border-fg bg-bg-card px-4 py-3 flex items-center justify-between gap-3 animate-fade-in">
@@ -587,135 +513,106 @@ export function DeployPage() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-5">
-        <RepoSection
-          form={form}
-          set={set}
-          introspecting={introspecting}
-          introspect={introspect}
-          extra={
-            <>
-              {showReceipt && (
-                <HeaderToggleButton
-                  open={customizing}
-                  onToggle={() => setCustomizing((v) => !v)}
-                  icon={<Settings2 size={12} />}
-                  label="Customize"
-                />
-              )}
-              <HeaderToggleButton
-                open={servicesOpen}
-                onToggle={() => setServicesOpen((v) => !v)}
-                icon={<Database size={12} />}
-                label="Deploy a service"
-              />
-            </>
-          }
-        />
-
-        {servicesOpen && (
-          <ServicesGridSection onClose={() => setServicesOpen(false)} />
-        )}
-
-        {revealed && detected && detected.manifests.length > 0 && (
-          <ManifestSection
-            detected={detected}
-            selectedManifest={selectedManifest}
-            onSelect={(idx) => applyManifest(idx, detected)}
-            onClear={() => clearManifest(detected)}
+      <form onSubmit={handleSubmit}>
+        <div className="border-2 border-fg bg-bg-raised shadow-neo divide-y-2 divide-fg">
+          <RepoSection
+            form={form}
+            set={set}
+            introspecting={introspecting}
+            introspect={introspect}
           />
-        )}
 
-        {showReceipt && customizing && (
-          <div className="border-2 border-fg bg-bg animate-fade-in">
-            <div className="px-4 py-2 border-b-2 border-fg bg-alt flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Settings2 size={12} className="text-fg" />
-                <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-fg">Customize</span>
-              </div>
+          {revealed && detected && detected.manifests.length > 0 && (
+            <ManifestSection
+              detected={detected}
+              selectedManifest={selectedManifest}
+              onSelect={(idx) => applyManifest(idx, detected)}
+              onClear={() => clearManifest(detected)}
+            />
+          )}
+
+          {showReceipt && (
+            <ReceiptSection
+              form={form}
+              set={set}
+              setForm={setForm}
+              detected={detected}
+              selectedManifest={selectedManifest}
+              onBranchChange={handleBranchChange}
+            />
+          )}
+
+          {showReceipt && (
+            <div>
               <button
                 type="button"
-                onClick={() => setCustomizing(false)}
-                className="text-fg-dim hover:text-fg transition-colors"
-                aria-label="Close"
+                onClick={() => setAdvancedOpen((o) => !o)}
+                className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-alt transition-colors"
               >
-                <X size={14} />
+                <span className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider text-fg">
+                  <Settings2 size={12} /> Advanced
+                </span>
+                <span className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-muted">
+                  env · memory · volumes · webhooks
+                  <ChevronDown
+                    size={12}
+                    className={`transition-transform ${advancedOpen ? "rotate-180" : ""}`}
+                  />
+                </span>
               </button>
+              {advancedOpen && (
+                <div className="border-t-2 border-fg/15 px-5 pb-5 pt-4 space-y-6">
+                  <EnvSection
+                    envValues={envValues}
+                    setEnvValues={setEnvValues}
+                    manifestEnvDefs={manifestEnvDefs}
+                    selectedEnvironmentId={selectedEnvironmentId}
+                    onEnvironmentChange={setSelectedEnvironmentId}
+                  />
+                  <AdvancedSection
+                    form={form}
+                    set={set}
+                    setForm={setForm}
+                    extraEnv={extraEnv}
+                    setExtraEnv={setExtraEnv}
+                  />
+                </div>
+              )}
             </div>
-            <div className="p-4 space-y-5">
-              <ReceiptSection
-                form={form}
-                set={set}
-                setForm={setForm}
-                detected={detected}
-                selectedManifest={selectedManifest}
-                onBranchChange={handleBranchChange}
-              />
-              <EnvSection
-                envValues={envValues}
-                setEnvValues={setEnvValues}
-                manifestEnvDefs={manifestEnvDefs}
-                selectedEnvironmentId={selectedEnvironmentId}
-                onEnvironmentChange={setSelectedEnvironmentId}
-              />
-              <AdvancedSection
-                form={form}
-                set={set}
-                setForm={setForm}
-                extraEnv={extraEnv}
-                setExtraEnv={setExtraEnv}
-              />
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {showReceipt && (
-          <div className="border-2 border-fg bg-bg-raised shadow-neo grid grid-cols-[1fr_auto] animate-fade-in">
-            <div className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
-                  <CheckCircle2 size={12} className="text-accent-green" />
-                  Ready to deploy
-                </span>
-                {detected && (
-                  <span className="font-mono text-[9px] uppercase tracking-wider text-fg-dim">
-                    {detected.owner}/{detected.repo}
-                  </span>
-                )}
-              </div>
-              <div className="border-t-2 border-fg pt-3 grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 font-mono text-[11px]">
-                <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">App</div>
-                <div className="text-fg truncate">{form.app_name || "(set a name)"}</div>
-                {branchLabel && (
-                  <>
-                    <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">Branch</div>
-                    <div className="text-fg truncate">{branchLabel}</div>
-                  </>
-                )}
-                <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">Build</div>
-                <div className="text-fg truncate">{buildMode}{dockerfileLabel ? ` · ${dockerfileLabel}` : ""}</div>
-                {!form.compose_file && (
-                  <>
-                    <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">Port</div>
-                    <div className="text-fg">{form.container_port}</div>
-                  </>
-                )}
-                <div className="text-fg-dim uppercase tracking-wider text-[9px] self-center">Domain</div>
-                <div className="text-fg truncate">{form.domain || "auto (temporary)"}</div>
-              </div>
-            </div>
-            <button
-              type="submit"
-              disabled={introspecting}
-              className="group relative border-l-2 border-fg bg-accent hover:bg-accent-h active:bg-accent-h disabled:opacity-60 disabled:cursor-not-allowed transition-colors px-8 md:px-12 flex flex-col items-center justify-center gap-2 text-fg overflow-hidden"
-              aria-label="Deploy"
-            >
-              <RocketLaunch />
-              <span className="font-mono text-[13px] font-bold uppercase tracking-[0.2em]">Deploy</span>
-            </button>
-          </div>
+          <button
+            type="submit"
+            disabled={introspecting}
+            className="group mt-4 w-full border-2 border-fg bg-accent hover:bg-accent-h active:bg-accent-h disabled:opacity-60 disabled:cursor-not-allowed shadow-neo py-4 flex items-center justify-center gap-2.5 font-mono text-sm font-bold uppercase tracking-[0.2em] text-fg transition-colors"
+          >
+            <Rocket
+              size={18}
+              className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+            />
+            Deploy{form.app_name ? ` ${form.app_name}` : ""}
+          </button>
         )}
       </form>
+
+      <div className="mt-6 text-center">
+        <button
+          type="button"
+          onClick={() => setServicesOpen((v) => !v)}
+          className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-fg-dim hover:text-fg underline transition-colors"
+        >
+          <Database size={11} />
+          {servicesOpen ? "Hide services" : "Deploy a database or service instead"}
+        </button>
+      </div>
+
+      {servicesOpen && (
+        <div className="mt-4">
+          <ServicesGridSection onClose={() => setServicesOpen(false)} />
+        </div>
+      )}
     </div>
   );
 }

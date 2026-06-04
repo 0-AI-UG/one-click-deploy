@@ -1,5 +1,4 @@
 import { Check, Package, Settings2 } from "lucide-react";
-import { Card } from "../../components/ui.tsx";
 import type { IntrospectResult } from "./types.ts";
 
 type Props = {
@@ -14,7 +13,7 @@ export function ManifestSection({ detected, selectedManifest, onSelect, onClear 
 
   if (detected.manifests.length > 1) {
     return (
-      <Card className="p-5 animate-fade-in">
+      <div className="p-5 animate-fade-in">
         <div className="mb-3">
           <span className="font-mono text-[10px] uppercase tracking-wider font-bold text-fg">
             Pick a service to deploy
@@ -68,14 +67,14 @@ export function ManifestSection({ detected, selectedManifest, onSelect, onClear 
             <span className="font-mono text-[11px] text-fg-dim">Configure manually</span>
           </button>
         </div>
-      </Card>
+      </div>
     );
   }
 
   // Single manifest banner
   if (selectedManifest === 0) {
     return (
-      <div className="flex items-center justify-between bg-accent/10 border-2 border-fg px-4 py-2.5 animate-fade-in">
+      <div className="flex items-center justify-between bg-accent/10 px-5 py-3 animate-fade-in">
         <div className="flex items-center gap-2">
           <Package size={14} className="text-fg" />
           <span className="font-mono text-[10px] font-bold text-fg">

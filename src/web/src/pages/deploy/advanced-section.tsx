@@ -1,6 +1,6 @@
 import { Plus, Minus, AlertTriangle } from "lucide-react";
 import { Btn, Checkbox } from "../../components/ui.tsx";
-import { Label, Section } from "./shared.tsx";
+import { Label } from "./shared.tsx";
 import type { FormState } from "./types.ts";
 
 type Props = {
@@ -13,7 +13,7 @@ type Props = {
 
 export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: Props) {
   return (
-    <Section title="Advanced">
+    <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>Replicas</Label>
@@ -220,6 +220,6 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           </div>
         ))}
       </div>
-    </Section>
+    </div>
   );
 }

@@ -7,14 +7,13 @@ type Props = {
   set: (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void;
   introspecting: boolean;
   introspect: IntrospectResult | null;
-  extra?: React.ReactNode;
 };
 
-export function RepoSection({ form, set, introspecting, introspect, extra }: Props) {
+export function RepoSection({ form, set, introspecting, introspect }: Props) {
   const detected = introspect?.ok === true ? introspect : null;
 
   return (
-    <div className="bg-bg-raised border-2 border-fg shadow-neo p-5">
+    <div className="p-5">
       <Label>Git Repository</Label>
       <input
         type="text"
@@ -59,12 +58,9 @@ export function RepoSection({ form, set, introspecting, introspect, extra }: Pro
             </>
           )}
         </div>
-        <div className="flex items-center gap-3">
-          <a href="/llm.txt" target="_blank" rel="noopener noreferrer" className="text-[9px] text-fg-dim hover:text-fg transition-colors uppercase tracking-wider">
-            Manifest docs
-          </a>
-          {extra}
-        </div>
+        <a href="/llm.txt" target="_blank" rel="noopener noreferrer" className="text-[9px] text-fg-dim hover:text-fg transition-colors uppercase tracking-wider">
+          Manifest docs
+        </a>
       </div>
     </div>
   );
