@@ -43,11 +43,12 @@ describe("buildDockerRunArgs", () => {
     expect(off).not.toContain("seccomp=unconfined");
 
     const on = buildDockerRunArgs({ name: "x", image: "x:latest", appName: "x", userns: true });
-    // both LSM profiles relaxed so bubblewrap can unshare userns + write uid_map
+    // both LSM profiles relaxed + SETUID/SETGID so root-bwrap can write uid/gid maps
     expect(on).toContain("--security-opt=seccomp=unconfined");
     expect(on).toContain("--security-opt=apparmor=unconfined");
-    // no capabilities granted; hardening baseline still applies
-    expect(on).not.toContain("--cap-add=");
+    expect(on).toContain("--cap-add=SETUID");
+    expect(on).toContain("--cap-add=SETGID");
+    // hardening baseline still applies
     expect(on).toContain("--cap-drop=ALL");
     expect(on).toContain("--security-opt=no-new-privileges");
   });
