@@ -103,10 +103,17 @@ export function buildDockerRunArgs(opts: DockerRunOpts): string {
     parts.push(`--cap-add=${cap}`);
   }
   if (opts.userns) {
-    // Lets bubblewrap (and other nested sandboxes) unshare a user+mount
-    // namespace, which the default seccomp profile otherwise blocks with
-    // EPERM. Opt-in per app via the `userns` manifest flag.
-    parts.push("--security-opt=seccomp=unconfined");
+    // Lets bubblewrap (and other nested sandboxes) set up an unprivileged
+    // user+mount namespace. Two things are needed on top of the hardened
+    // baseline, both opt-in via the `userns` manifest flag:
+    //   1. seccomp=unconfined — the default profile blocks the
+    //      unshare(CLONE_NEWUSER|CLONE_NEWNS) syscall with EPERM.
+    //   2. SETUID + SETGID added back to the (otherwise empty) capability set
+    //      so the process can write /proc/self/{uid,gid}_map. With cap-drop=ALL
+    //      even a single self-map write fails ("setting up uid map: Operation
+    //      not permitted"). Mounts happen *inside* the new userns where the
+    //      process is already privileged, so CAP_SYS_ADMIN is not required.
+    parts.push("--security-opt=seccomp=unconfined", "--cap-add=SETUID", "--cap-add=SETGID");
   }
 
   if (opts.publish) {

@@ -44,6 +44,9 @@ describe("buildDockerRunArgs", () => {
 
     const on = buildDockerRunArgs({ name: "x", image: "x:latest", appName: "x", userns: true });
     expect(on).toContain("--security-opt=seccomp=unconfined");
+    // SETUID/SETGID added back so bubblewrap can write uid/gid maps
+    expect(on).toContain("--cap-add=SETUID");
+    expect(on).toContain("--cap-add=SETGID");
     // hardening is still applied alongside it
     expect(on).toContain("--cap-drop=ALL");
     expect(on).toContain("--security-opt=no-new-privileges");
