@@ -104,16 +104,16 @@ export function buildDockerRunArgs(opts: DockerRunOpts): string {
   }
   if (opts.userns) {
     // Lets bubblewrap (and other nested sandboxes) set up an unprivileged
-    // user+mount namespace. Two host LSM profiles block this and must be
-    // relaxed for the container (opt-in via the `userns` manifest flag):
+    // user+mount namespace. Two things are needed on top of the hardened
+    // baseline, both opt-in via the `userns` manifest flag:
     //   1. seccomp=unconfined — the default profile blocks the
     //      unshare(CLONE_NEWUSER|CLONE_NEWNS) syscall with EPERM.
-    //   2. apparmor=unconfined — the docker-default AppArmor profile denies
-    //      writing /proc/<pid>/uid_map (bwrap then fails with "setting up uid
-    //      map: Operation not permitted", even with CAP_SETUID).
-    // No capabilities are added: bubblewrap uses the *unprivileged* userns
-    // path, and cap-drop=ALL + no-new-privileges stay in force.
-    parts.push("--security-opt=seccomp=unconfined", "--security-opt=apparmor=unconfined");
+    //   2. SETUID + SETGID added back to the (otherwise empty) capability set
+    //      so the process can write /proc/self/{uid,gid}_map. With cap-drop=ALL
+    //      even a single self-map write fails ("setting up uid map: Operation
+    //      not permitted"). Mounts happen *inside* the new userns where the
+    //      process is already privileged, so CAP_SYS_ADMIN is not required.
+    parts.push("--security-opt=seccomp=unconfined", "--cap-add=SETUID", "--cap-add=SETGID");
   }
 
   if (opts.publish) {
