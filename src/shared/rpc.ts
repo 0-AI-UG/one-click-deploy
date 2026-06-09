@@ -127,6 +127,7 @@ export type DeployRequest = {
   extra_volumes?: Array<{ host_path: string; container_path: string }>; // Additional volume mounts
   server_id?: number; // If set, deploy to this specific server instead of auto-selecting
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
+  userns?: boolean; // Allow unprivileged user namespaces (bubblewrap etc.). Relaxes seccomp to unconfined.
 };
 
 export type PanelInfo = {
@@ -182,6 +183,7 @@ export type DeployManifest = {
   public?: boolean;
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
+  userns?: boolean; // Allow unprivileged user namespaces (bubblewrap etc.). Relaxes seccomp to unconfined.
 };
 
 export type ParsedManifest = {

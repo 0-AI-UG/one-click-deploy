@@ -47,6 +47,14 @@ export type DockerRunOpts = {
   pidsLimit?: number;
   /** Extra Linux capabilities to add back after --cap-drop=ALL. */
   extraCaps?: string[];
+  /**
+   * Allow the container to create unprivileged user/mount namespaces (needed
+   * for nested sandboxes like bubblewrap). Relaxes the seccomp profile to
+   * `unconfined` for this container — the default profile blocks the
+   * `unshare(CLONE_NEWUSER|CLONE_NEWNS)` bubblewrap relies on. cap-drop=ALL and
+   * no-new-privileges still apply; the namespace is created unprivileged.
+   */
+  userns?: boolean;
   /** --restart policy. Default "unless-stopped". */
   restart?: string;
   /** Optional trailing command/args (already shell-escaped by caller). */
@@ -93,6 +101,12 @@ export function buildDockerRunArgs(opts: DockerRunOpts): string {
   );
   for (const cap of opts.extraCaps ?? []) {
     parts.push(`--cap-add=${cap}`);
+  }
+  if (opts.userns) {
+    // Lets bubblewrap (and other nested sandboxes) unshare a user+mount
+    // namespace, which the default seccomp profile otherwise blocks with
+    // EPERM. Opt-in per app via the `userns` manifest flag.
+    parts.push("--security-opt=seccomp=unconfined");
   }
 
   if (opts.publish) {
@@ -746,6 +760,8 @@ export async function cloneAndBuild(
     skipClone?: boolean;
     /** Per-container memory ceiling in MB. Omit / 0 → platform default. */
     memoryMb?: number;
+    /** Allow nested unprivileged user namespaces (bubblewrap). See DockerRunOpts.userns. */
+    userns?: boolean;
   },
   onLog?: (line: string) => void
 ) {
@@ -836,6 +852,7 @@ export async function cloneAndBuild(
     volumeMount: opts.volumeMount,
     extraVolumes: opts.extraVolumes,
     memoryMb: opts.memoryMb || undefined,
+    userns: opts.userns,
   });
   log("build", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));
@@ -883,6 +900,8 @@ export async function cloneAndRailpackBuild(
     skipClone?: boolean;
     /** Per-container memory ceiling in MB. Omit / 0 → platform default. */
     memoryMb?: number;
+    /** Allow nested unprivileged user namespaces (bubblewrap). See DockerRunOpts.userns. */
+    userns?: boolean;
   },
   onLog?: (line: string) => void
 ) {
@@ -953,6 +972,7 @@ export async function cloneAndRailpackBuild(
     volumeMount: opts.volumeMount,
     extraVolumes: opts.extraVolumes,
     memoryMb: opts.memoryMb || undefined,
+    userns: opts.userns,
   });
   log("railpack", `Docker run: ${cmd}`);
   const result = await sshExec(ip, asUser(cmd));

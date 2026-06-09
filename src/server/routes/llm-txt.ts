@@ -52,6 +52,7 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
   "replicas": "number — desired replica count (default: 1)",
   "public": "boolean — whether the app is publicly accessible (default: true)",
   "memory_mb": "number — per-container memory ceiling in MB (--memory/--memory-swap). Omit or 0 to use the platform default (512). Allowed: 0 or 128–32768. Dockerfile/railpack apps only (compose apps set limits in their compose file).",
+  "userns": "boolean — allow the container to create unprivileged user/mount namespaces, needed for nested sandboxes like bubblewrap (runs --security-opt=seccomp=unconfined). Default false. Only enable if your app sandboxes untrusted code itself; it relaxes the host seccomp profile for this container.",
   "extra_volumes": [
     {
       "host_path": "string — absolute path on the host machine",

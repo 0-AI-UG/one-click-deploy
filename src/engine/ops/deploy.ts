@@ -470,6 +470,9 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       if (typeof req.memory_mb === "number" && req.memory_mb > 0) {
         db.updateAppMemory(result.app.id, req.memory_mb);
       }
+      if (req.userns) {
+        db.updateAppUserns(result.app.id, true);
+      }
       return result;
     })();
 
@@ -717,6 +720,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
           bindAddr: containerBindAddr,
           skipClone: true,
           memoryMb: req.memory_mb || undefined,
+          userns: req.userns || undefined,
         },
         (line) => {
           maskedLog(`[build] ${line}`);

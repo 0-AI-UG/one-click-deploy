@@ -115,6 +115,7 @@ export async function scaleUp(
         bindAddr: replicaBindAddr,
         containerName: containerNameForBuild,
         memoryMb: app.memory_mb || undefined,
+        userns: app.userns ? true : undefined,
       };
       const logLine = (line: string) => emit("scale", line);
       if (app.deploy_mode === "railpack") {
@@ -164,6 +165,7 @@ export async function scaleUp(
         volumeMount: app.volume_mount || undefined,
         extraVolumes: scaleExtraVols,
         memoryMb: app.memory_mb || undefined,
+        userns: app.userns ? true : undefined,
       });
       const result = await sshExec(targetServer.ipv4, asUser(cmd), targetHostKey);
       if (result.exitCode !== 0) {

@@ -87,6 +87,7 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
           volumeMount: app.volume_mount || undefined,
           extraVolumes: wakeExtraVols,
           memoryMb: app.memory_mb || undefined,
+          userns: app.userns ? true : undefined,
         });
         await sshExec(server.ipv4, asUser(cmd), hostKey);
       }

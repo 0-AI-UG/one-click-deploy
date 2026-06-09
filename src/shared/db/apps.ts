@@ -44,6 +44,7 @@ export type AppRow = {
   public: number;
   extra_volumes: string; // JSON array of "host:container" strings
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
+  userns: number; // 1 = allow unprivileged user namespaces (seccomp=unconfined); 0 = hardened default
 };
 
 export type DnsRecordRow = {
@@ -323,6 +324,12 @@ export function updateAppExtraVolumes(id: number, extraVolumes: string[]): void 
  *  to the container on the next (re)deploy / scale operation. */
 export function updateAppMemory(id: number, memoryMb: number): void {
   db.query("UPDATE apps SET memory_mb = ? WHERE id = ?").run(memoryMb, id);
+}
+
+/** Toggle unprivileged user namespaces for the app's container (bubblewrap et al).
+ *  Applied on the next (re)deploy / scale operation via buildDockerRunArgs. */
+export function updateAppUserns(id: number, userns: boolean): void {
+  db.query("UPDATE apps SET userns = ? WHERE id = ?").run(userns ? 1 : 0, id);
 }
 
 export function updateAppAuthPassword(id: number, authPassword: string): void {

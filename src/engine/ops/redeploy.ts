@@ -130,6 +130,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       containerName: first.container_name,
       skipClone: true,
       memoryMb: app.memory_mb || undefined,
+      userns: app.userns ? true : undefined,
     };
     const logLine = (line: string) => {
       db.appendDeployLog(appId, `[redeploy] ${line}`);
