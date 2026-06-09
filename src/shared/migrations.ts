@@ -1235,16 +1235,6 @@ export const migrations: Migration[] = [
       }
     },
   },
-  {
-    version: 58,
-    description: "Add per-app userns flag to apps (0 = default seccomp, 1 = seccomp=unconfined)",
-    up: (db) => {
-      // 1 lets the container create unprivileged user/mount namespaces (e.g. for
-      // bubblewrap-based nested sandboxes); buildDockerRunArgs then adds
-      // --security-opt=seccomp=unconfined. Default 0 keeps the hardened profile.
-      db.run("ALTER TABLE apps ADD COLUMN userns INTEGER NOT NULL DEFAULT 0");
-    },
-  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

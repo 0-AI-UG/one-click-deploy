@@ -106,7 +106,6 @@ export async function rollingRedeploy(
           volumeMount: app.volume_mount || undefined,
           extraVolumes: rollingExtraVols,
           memoryMb: app.memory_mb || undefined,
-          userns: app.userns ? true : undefined,
         });
         await sshExec(server.ipv4, asUser(cmd), hostKey);
       }

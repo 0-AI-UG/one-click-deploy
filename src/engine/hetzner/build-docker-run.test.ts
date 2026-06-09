@@ -38,21 +38,6 @@ describe("buildDockerRunArgs", () => {
     expect(cmd).toContain("--cap-add=SETUID");
   });
 
-  test("userns adds seccomp=unconfined (opt-in), default keeps it hardened", () => {
-    const off = buildDockerRunArgs({ name: "x", image: "x:latest", appName: "x" });
-    expect(off).not.toContain("seccomp=unconfined");
-
-    const on = buildDockerRunArgs({ name: "x", image: "x:latest", appName: "x", userns: true });
-    // both LSM profiles relaxed + SETUID/SETGID so root-bwrap can write uid/gid maps
-    expect(on).toContain("--security-opt=seccomp=unconfined");
-    expect(on).toContain("--security-opt=apparmor=unconfined");
-    expect(on).toContain("--cap-add=SETUID");
-    expect(on).toContain("--cap-add=SETGID");
-    // hardening baseline still applies
-    expect(on).toContain("--cap-drop=ALL");
-    expect(on).toContain("--security-opt=no-new-privileges");
-  });
-
   test("network: null omits --network", () => {
     const cmd = buildDockerRunArgs({ name: "x", image: "x:latest", appName: "x", network: null });
     expect(cmd).not.toContain("--network");
