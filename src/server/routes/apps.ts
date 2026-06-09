@@ -183,7 +183,6 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       environment_id?: number | null;
       public?: boolean;
       memory_mb?: number;
-      userns?: boolean;
     };
 
     if (body.container_port !== undefined) {
@@ -199,13 +198,6 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
         return Response.json({ ok: false, error: `Memory must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB} MB` }, { headers: corsHeaders });
       }
       db.updateAppMemory(appId, body.memory_mb);
-    }
-
-    if (body.userns !== undefined) {
-      if (typeof body.userns !== "boolean") {
-        return Response.json({ ok: false, error: "userns must be a boolean" }, { headers: corsHeaders });
-      }
-      db.updateAppUserns(appId, body.userns);
     }
 
     if (body.environment_id !== undefined) {

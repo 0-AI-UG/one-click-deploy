@@ -38,17 +38,6 @@ describe("buildDockerRunArgs", () => {
     expect(cmd).toContain("--cap-add=SETUID");
   });
 
-  test("userns adds seccomp=unconfined (opt-in), default keeps it hardened", () => {
-    const off = buildDockerRunArgs({ name: "x", image: "x:latest", appName: "x" });
-    expect(off).not.toContain("seccomp=unconfined");
-
-    const on = buildDockerRunArgs({ name: "x", image: "x:latest", appName: "x", userns: true });
-    expect(on).toContain("--security-opt=seccomp=unconfined");
-    // hardening is still applied alongside it
-    expect(on).toContain("--cap-drop=ALL");
-    expect(on).toContain("--security-opt=no-new-privileges");
-  });
-
   test("network: null omits --network", () => {
     const cmd = buildDockerRunArgs({ name: "x", image: "x:latest", appName: "x", network: null });
     expect(cmd).not.toContain("--network");
