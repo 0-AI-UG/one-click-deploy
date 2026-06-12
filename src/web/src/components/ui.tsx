@@ -155,6 +155,23 @@ export function ConfirmDialog() {
   );
 }
 
+// --- Portal anchor rect ---
+// getBoundingClientRect returns real viewport pixels, but position:fixed portals
+// live inside the `html { zoom }` coordinate space (index.html), so the zoom
+// must be divided back out or the portal lands offset by the zoom factor.
+export function portalAnchorRect(el: Element) {
+  const zoom = Number(getComputedStyle(document.documentElement).zoom) || 1;
+  const r = el.getBoundingClientRect();
+  return {
+    top: r.top / zoom,
+    bottom: r.bottom / zoom,
+    left: r.left / zoom,
+    right: r.right / zoom,
+    width: r.width / zoom,
+    height: r.height / zoom,
+  };
+}
+
 // --- Spinner ---
 export function Spinner({ className = "" }: { className?: string }) {
   return <Loader2 size={16} className={`animate-spin text-fg ${className}`} />;

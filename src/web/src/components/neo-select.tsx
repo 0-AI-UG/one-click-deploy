@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
+import { portalAnchorRect } from "./ui.tsx";
 
 export type SelectOption = { value: string; label: string };
 
@@ -19,8 +20,9 @@ export function NeoSelect({ value, options, onChange, placeholder, compact }: {
   useLayoutEffect(() => {
     if (!open) return;
     const update = () => {
-      const r = triggerRef.current?.getBoundingClientRect();
-      if (r) setPos({ top: r.bottom, left: r.left, width: r.width });
+      if (!triggerRef.current) return;
+      const r = portalAnchorRect(triggerRef.current);
+      setPos({ top: r.bottom, left: r.left, width: r.width });
     };
     update();
     window.addEventListener("resize", update);

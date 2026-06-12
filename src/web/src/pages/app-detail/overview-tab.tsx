@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { get, post } from "../../api/client.ts";
-import { Card, Btn, StatusBadge, showToast, Table, CopyButton } from "../../components/ui.tsx";
+import { Card, Btn, StatusBadge, showToast, Table, CopyButton, portalAnchorRect } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft } from "lucide-react";
 import { Sparkline, InfoTip } from "./shared.tsx";
@@ -165,8 +165,9 @@ function MoveMenu({ targets, loading, disabled, onPick }: {
   useLayoutEffect(() => {
     if (!open) return;
     const update = () => {
-      const r = triggerRef.current?.getBoundingClientRect();
-      if (r) setPos({ top: r.bottom + 4, left: r.right });
+      if (!triggerRef.current) return;
+      const r = portalAnchorRect(triggerRef.current);
+      setPos({ top: r.bottom + 4, left: r.right });
     };
     update();
     window.addEventListener("resize", update);
