@@ -219,7 +219,7 @@ export function TerminalPage({ kind, id }: Props) {
     : "text-accent-red";
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6">
+    <div className="max-w-4xl mx-auto px-4 py-6">
       <div className="flex items-center gap-3 mb-4">
         <Btn variant="ghost" onClick={() => window.history.back()}><ArrowLeft size={14} /></Btn>
         <h1 className="font-mono font-bold text-sm text-fg uppercase">

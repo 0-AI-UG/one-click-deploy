@@ -224,7 +224,7 @@ function GitHubSection() {
 
 export function AccountPage() {
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
       <div className="flex items-center gap-2 mb-6">
         <User size={18} className="text-fg" />
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Account</h1>

@@ -224,7 +224,7 @@ export function Nav() {
 
   return (
     <nav className="sticky top-0 z-50 bg-accent border-b-2 border-fg">
-      <div className="max-w-7xl mx-auto px-4 relative">
+      <div className="max-w-5xl mx-auto px-4 relative">
         <Row innerRef={containerRef}>
           {collapsed ? <CompactNav hash={hash} /> : <DesktopNav user={user} hash={hash} />}
         </Row>

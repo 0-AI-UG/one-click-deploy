@@ -138,7 +138,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
       <div>
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy Service</h1>
         <p className="text-[10px] text-muted font-mono mt-0.5">Deploy a managed database or cache</p>

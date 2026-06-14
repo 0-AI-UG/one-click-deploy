@@ -91,7 +91,7 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
           : { text: "Idle", dot: "bg-muted", headerBg: "bg-alt" };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-6 items-start">
       {/* Timeline + collapsed log */}
       <div className="border-2 border-fg bg-bg-raised shadow-neo-sm">

@@ -65,7 +65,7 @@ export function EnginePage() {
   const hb = heartbeatLabel(snap.engine.heartbeat);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="font-mono text-xl font-bold uppercase tracking-wider">Engine</h1>

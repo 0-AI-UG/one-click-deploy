@@ -156,7 +156,7 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
 
   if (detailErr) {
     return (
-      <div className="max-w-6xl mx-auto px-4 py-6">
+      <div className="max-w-4xl mx-auto px-4 py-6">
         <Btn variant="ghost" onClick={() => { window.location.hash = "#/resources"; }}>
           <ArrowLeft size={11} /> Back to Resources
         </Btn>
@@ -172,7 +172,7 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
   const memSeries = history.filter((m) => m.server_id === serverId).map((m) => m.memory_percent);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
       <div className="flex items-center gap-2">
         <Btn variant="ghost" size="xs" onClick={() => { window.location.hash = "#/resources"; }}>
           <ArrowLeft size={11} /> Resources

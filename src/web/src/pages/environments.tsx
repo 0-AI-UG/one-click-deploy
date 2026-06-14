@@ -145,7 +145,7 @@ export function EnvironmentsPage() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Environments</h1>
         <Btn size="sm" variant="primary" onClick={startNew}>

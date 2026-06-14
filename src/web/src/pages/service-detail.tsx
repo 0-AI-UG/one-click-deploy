@@ -121,7 +121,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   ];
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <Btn variant="ghost" onClick={() => { window.location.hash = "#/"; }}><ArrowLeft size={14} /></Btn>

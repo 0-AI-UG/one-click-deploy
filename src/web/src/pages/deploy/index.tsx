@@ -490,7 +490,7 @@ export function DeployPage() {
     : Object.keys(envValues).length + extraEnv.filter((e) => e.key.trim()).length;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6">
+    <div className="max-w-4xl mx-auto px-4 py-6">
       <div className="flex items-center gap-2 mb-1">
         <Rocket size={18} className="text-fg" />
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy</h1>

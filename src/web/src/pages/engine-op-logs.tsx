@@ -71,7 +71,7 @@ export function EngineOpLogsPage({ opId }: { opId: number }) {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 animate-fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
       <div className="mb-6">
         <Btn variant="ghost" onClick={() => { window.location.hash = `#/engine/op/${opId}`; }}>
           <ArrowLeft size={14} />
