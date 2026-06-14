@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Btn } from "../components/ui.tsx";
 import {
-  Rocket, Check, X, Loader2, ChevronRight, Terminal, ArrowLeft, CheckCircle2, XCircle,
+  Rocket, Check, X, Loader2, ArrowLeft,
 } from "lucide-react";
 import { useOperation, humanizeStep, collapseForwardSteps, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
 import type { OperationStep } from "../hooks/useOperation.ts";
@@ -37,17 +37,12 @@ function StepBadge({ status }: { status: OperationStep["status"] }) {
 
 export function DeployProgressPage({ opId }: { opId: number | null }) {
   const op = useOperation(opId);
-  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!opId) window.location.hash = "#/deploy";
   }, [opId]);
 
   const steps: OperationStep[] = op?.steps || [];
-
-  useEffect(() => {
-    logRef.current?.scrollTo(0, logRef.current.scrollHeight);
-  }, [steps.length]);
 
   const status = op?.status ?? "pending";
   const terminal = TERMINAL_STATUSES.has(status);
@@ -133,57 +128,6 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
             })}
           </ol>
         )}
-
-        <details className="border-t-2 border-fg group">
-          <summary className="px-4 py-2.5 cursor-pointer list-none hover:bg-alt flex items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-muted">
-            <ChevronRight size={12} className="transition-transform group-open:rotate-90" />
-            <Terminal size={11} /> Show live log
-          </summary>
-          <div
-            ref={logRef}
-            className="bg-fg text-bg p-3 h-56 overflow-y-auto font-mono text-[10px] leading-relaxed"
-          >
-            {steps.length === 0 && !terminal && (
-              <div className="flex items-center gap-2 text-accent-amber">
-                <Loader2 size={12} className="animate-spin" />
-                <span>awaiting first event</span>
-              </div>
-            )}
-            {steps.map((ev) => {
-              const isCompensate = ev.phase === "compensate";
-              const isFailed = ev.status === "failed";
-              return (
-                <div
-                  key={ev.seq}
-                  className={`flex gap-2 ${isFailed ? "text-accent-red" : isCompensate ? "text-accent-amber" : "text-bg"}`}
-                >
-                  <span className="text-accent-amber shrink-0">›</span>
-                  <span className="text-muted shrink-0 w-56 uppercase truncate">
-                    [{isCompensate ? "undo:" : ""}{ev.step}]
-                  </span>
-                  <span className="whitespace-pre-wrap break-all">
-                    {ev.status}
-                    {ev.detail ? ` — ${ev.detail}` : ""}
-                  </span>
-                </div>
-              );
-            })}
-            {terminal && (
-              <div
-                className={`flex items-center gap-2 mt-3 pt-2 border-t-2 border-bg ${
-                  succeeded ? "text-accent-green" : "text-accent-red"
-                }`}
-              >
-                {succeeded ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                <span className="font-bold">
-                  {succeeded
-                    ? `Deploy completed${domain ? ` — https://${domain}` : ""}`
-                    : `Deploy ${status}${errorMessage ? `: ${errorMessage}` : ""}`}
-                </span>
-              </div>
-            )}
-          </div>
-        </details>
       </div>
 
       {/* Sticky status */}
