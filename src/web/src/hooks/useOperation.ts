@@ -74,7 +74,9 @@ export function collapseForwardSteps(steps: OperationStep[]): OperationStep[] {
     if (s.phase !== "forward") continue;
     if (!firstSeq.has(s.step)) firstSeq.set(s.step, s.seq);
     const prev = latest.get(s.step);
-    if (!prev || s.seq > prev.seq) latest.set(s.step, s);
+    // `>=` so a re-delivered same-seq row (started → ok, mutated in place)
+    // replaces the earlier state rather than being dropped.
+    if (!prev || s.seq >= prev.seq) latest.set(s.step, s);
   }
   return Array.from(latest.values()).sort(
     (a, b) => (firstSeq.get(a.step)! - firstSeq.get(b.step)!),

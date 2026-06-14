@@ -45,14 +45,6 @@
     }
   },
   "panels": {
-    "be5e5853-7f7f-4c31-b961-1639b839e592": {
-      "type": "terminal",
-      "title": "Claude Code"
-    },
-    "15c6fccc-cc72-47e3-8787-c6cae69b3f51": {
-      "type": "terminal",
-      "title": "Codex"
-    },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
       "title": "Canvas"
@@ -61,58 +53,11 @@
   "canvases": {
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "id": "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea",
-      "canvasNodes": {
-        "17e7b2c6-3c79-4267-8eaa-8f9454d532f3": {
-          "id": "17e7b2c6-3c79-4267-8eaa-8f9454d532f3",
-          "panelId": "be5e5853-7f7f-4c31-b961-1639b839e592",
-          "origin": {
-            "x": 1820.7961936681513,
-            "y": -361.03437237879166
-          },
-          "size": {
-            "width": 640,
-            "height": 400
-          },
-          "zOrder": 162,
-          "creationIndex": 32,
-          "animationState": "idle",
-          "dockLayout": {
-            "type": "tabs",
-            "id": "508f1e80-e338-4b70-9a41-c78fdb876fba",
-            "panelIds": [
-              "be5e5853-7f7f-4c31-b961-1639b839e592"
-            ],
-            "activeIndex": 0
-          }
-        },
-        "14f2d18b-2fde-4ce1-846c-023c4b0aad15": {
-          "id": "14f2d18b-2fde-4ce1-846c-023c4b0aad15",
-          "panelId": "15c6fccc-cc72-47e3-8787-c6cae69b3f51",
-          "origin": {
-            "x": 1820,
-            "y": 80
-          },
-          "size": {
-            "width": 640,
-            "height": 400
-          },
-          "zOrder": 160,
-          "creationIndex": 33,
-          "animationState": "idle",
-          "dockLayout": {
-            "type": "tabs",
-            "id": "098832d4-5237-4ee7-93bb-c625cce85174",
-            "panelIds": [
-              "15c6fccc-cc72-47e3-8787-c6cae69b3f51"
-            ],
-            "activeIndex": 0
-          }
-        }
-      },
-      "zoomLevel": 0.6893142342541673,
+      "canvasNodes": {},
+      "zoomLevel": 1,
       "viewportOffset": {
-        "x": -1177.8822086627385,
-        "y": 431.41740774950955
+        "x": 0,
+        "y": 0
       }
     }
   }

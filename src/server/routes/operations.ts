@@ -157,8 +157,12 @@ export async function handleOperationEvents(request: Request, id: number): Promi
     while (Date.now() < deadline) {
       const op = getOperation(id);
       if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
-      const steps = getSteps(id, since);
       const terminal = ["done", "failed", "cancelled", "compensated"].includes(op.status);
+      // Step rows mutate in place at the same seq (started → ok), so an
+      // exclusive `since` cursor misses the final transition of the last
+      // step(s). On terminal, re-send the full list so the client lands on
+      // every step's final state instead of a frozen "started".
+      const steps = terminal ? getSteps(id, 0) : getSteps(id, since);
       if (steps.length > 0 || terminal) {
         return Response.json(
           {
