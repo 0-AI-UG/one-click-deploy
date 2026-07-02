@@ -26,7 +26,7 @@ function freshState(): RemoteState {
 // Mock sshExec to pattern-match the small set of commands ensureVolumeBindMount /
 // removeVolumeBindMount / bindMountStatus emit, and update the simulated state
 // accordingly.
-const sshExec = mock(async (_ip: string, command: string, _hostKey?: string) => {
+async function defaultSshExec(_ip: string, command: string, _hostKey?: string) {
   state.commands.push(command);
 
   // findmnt: `findmnt -no SOURCE <path>` (optionally `2>/dev/null || true`)
@@ -105,7 +105,9 @@ const sshExec = mock(async (_ip: string, command: string, _hostKey?: string) => 
 
   // Default: ok
   return { stdout: "", stderr: "", exitCode: 0 };
-});
+}
+
+const sshExec = mock(defaultSshExec);
 
 mock.module("./ssh.ts", () => ({ sshExec }));
 
@@ -120,6 +122,7 @@ import {
 beforeEach(() => {
   state = freshState();
   sshExec.mockClear();
+  sshExec.mockImplementation(defaultSshExec);
 });
 
 describe("buildFstabBlock", () => {
@@ -140,14 +143,41 @@ describe("buildFstabBlock", () => {
 describe("ensureVolumeBindMount", () => {
   test("throws when the Hetzner volume isn't mounted", async () => {
     // No entry for /mnt/HC_Volume_999 → simulated findmnt returns empty.
+    // mountWaitMs: 0 → probe once, then give up immediately (no polling wait).
     await expect(
       ensureVolumeBindMount({
         serverIp: "1.2.3.4",
         hetznerVolumeId: 999,
         hostMountPath: "/mnt/ocd-x-data",
         blockName: "app-1",
+        mountWaitMs: 0,
       }),
     ).rejects.toThrow(/Hetzner volume not mounted/);
+  });
+
+  test("retries and succeeds once the volume mounts mid-poll", async () => {
+    // Volume not mounted on the first probe, then appears — the poll loop
+    // should recover instead of failing on the race like it used to.
+    let probes = 0;
+    sshExec.mockImplementation(async (ip: string, command: string, key?: string) => {
+      const m = command.match(/^findmnt -no SOURCE (\/mnt\/HC_Volume_\S+)/);
+      if (m) {
+        probes++;
+        // Only mount it on the 2nd+ probe of the HC volume path.
+        if (probes >= 2) state.findmnt.set(m[1], "/dev/sdb");
+      }
+      return defaultSshExec(ip, command, key);
+    });
+    await ensureVolumeBindMount({
+      serverIp: "1.2.3.4",
+      hetznerVolumeId: 42,
+      hostMountPath: "/mnt/ocd-x-data",
+      blockName: "app-1",
+      mountWaitMs: 5_000,
+      mountPollMs: 10,
+    });
+    expect(state.findmnt.get("/mnt/ocd-x-data")).toBe("/mnt/HC_Volume_42");
+    expect(probes).toBeGreaterThanOrEqual(2);
   });
 
   test("mounts and writes a tagged fstab block", async () => {

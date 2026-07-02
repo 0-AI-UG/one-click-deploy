@@ -28,7 +28,21 @@ docker run --rm \
   ghcr.io/0-ai-ug/one-click-deploy:latest
 ```
 
-Open `https://<domain>` and create your admin account. That's it.
+Bootstrap provisions the server and prints its IP. Open `https://<domain>` and create your admin account. That's it.
+
+### DNS
+
+The panel needs `<domain>` to resolve to the new server so Let's Encrypt can issue a TLS certificate. You have two options:
+
+- **Automatic** — add `"dns_zone_id":"<zone_id>"` to the config and the A record is created for you. Find the zone ID in the [Hetzner DNS Console](https://dns.hetzner.com) → your zone → the ID in the URL (`dns.hetzner.com/zone/<zone_id>`).
+- **Manual** — leave `dns_zone_id` out and create an `A` record for `<domain>` → the server IP printed at the end of bootstrap. TLS is issued automatically once DNS propagates.
+
+> **No domain?** Omit `domain` entirely. Bootstrap derives a `<server-ip>.nip.io` domain once the server exists and serves it with a self-signed certificate — no DNS setup and no real domain needed (your browser will warn on first visit). Just:
+> ```bash
+> docker run --rm \
+>   -e OCD_AUTO_DEPLOY='{"provider_token":"<hetzner_token>"}' \
+>   ghcr.io/0-ai-ug/one-click-deploy:latest
+> ```
 
 Prefer bash? Copy `example.panel.json` to `panel.json` and run `./scripts/bootstrap.sh`.
 

@@ -14,6 +14,7 @@
 //     host via systemd-run so the panel can kill and replace itself without
 //     SSH blocking. All DB writes happen BEFORE dispatch so they land even
 //     if the panel container is destroyed seconds later.
+import { resolve4 } from "node:dns/promises";
 import * as db from "../../shared/db.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import {
@@ -29,9 +30,42 @@ function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [panel:${context}]`, ...args);
 }
 
+/** Best-effort check that `domain` has an A record pointing at `ip`. */
+async function checkDnsResolves(domain: string, ip: string): Promise<boolean> {
+  try {
+    const addrs = await resolve4(domain);
+    return addrs.includes(ip);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Poll https://domain until it responds (any non-5xx status counts as "up").
+ * Best-effort: returns false after `attempts` failures rather than throwing,
+ * since a not-yet-issued cert or unpropagated DNS is expected, not fatal.
+ */
+async function waitForHttps(domain: string, attempts: number): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(`https://${domain}/`, {
+        method: "HEAD",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.status < 500) return true;
+    } catch {
+      // DNS/cert not ready yet — retry.
+    }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 5000));
+  }
+  return false;
+}
+
 export type BootstrapPanelOpts = {
   appName: string;
-  domain: string;
+  /** Public domain. When omitted, a `<server-ip>.nip.io` domain is derived
+   *  after the server is created and served with a self-signed cert. */
+  domain?: string;
   gitRepo: string;
   containerPort: number;
   envVars: Record<string, string>;
@@ -54,9 +88,20 @@ export type BootstrapPanelOpts = {
 export async function bootstrapPanel(
   opts: BootstrapPanelOpts,
   onProgress: ProgressFn,
-): Promise<{ ok: boolean; error?: string; domain?: string }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  domain?: string;
+  serverIp?: string;
+  dnsAutoCreated?: boolean;
+  dnsResolved?: boolean;
+  internalTls?: boolean;
+}> {
   const t0 = Date.now();
-  log("start", `Bootstrapping panel ${opts.appName} → ${opts.domain}`);
+  // Resolved below: either the caller-supplied domain, or a `<ip>.nip.io`
+  // derived once the server (and its IP) exists.
+  let domain = opts.domain;
+  log("start", `Bootstrapping panel ${opts.appName} → ${domain ?? "<ip>.nip.io (auto)"}`);
 
   if (!opts.envVars.JWT_SECRET) {
     return { ok: false, error: "bootstrapPanel requires env_vars.JWT_SECRET" };
@@ -78,6 +123,25 @@ export async function bootstrapPanel(
   const dns = hetznerDns;
 
   try {
+    // 0. Guard against duplicate provisioning. The bootstrap DB is ephemeral
+    //    (the container runs with --rm), so the db.getPanel() check above can't
+    //    catch a panel that a previous run already created. Ask the provider
+    //    directly: if a server for this app already exists, refuse rather than
+    //    silently spinning up a second paid server.
+    onProgress("server", "Checking for an existing panel server...");
+    const existing = (await compute.listServers()).find((s) =>
+      s.name.startsWith(`ocd-${opts.appName}-`),
+    );
+    if (existing) {
+      return {
+        ok: false,
+        error:
+          `A panel server already exists (${existing.name} @ ${existing.ipv4}). ` +
+          (domain ? `The panel may already be live at https://${domain}. ` : "") +
+          `Destroy that server in the Hetzner console before re-running bootstrap.`,
+      };
+    }
+
     // 1. SSH key + firewall + private network
     onProgress("server", "Ensuring SSH key + firewall + network...");
     const { publicKey } = await getOrCreateLocalKeyPair();
@@ -121,6 +185,14 @@ export async function bootstrapPanel(
     });
     onProgress("server", `Server created: ${serverIp}`);
 
+    // No domain supplied → derive a self-resolving <ip>.nip.io domain now that
+    // we know the IP, and serve it with Caddy's internal (self-signed) cert.
+    // This is the "no domain, no DNS" path; the browser warns on first visit.
+    if (!domain) {
+      domain = `${serverIp.replace(/\./g, "-")}.nip.io`;
+      onProgress("server", `No domain supplied — using ${domain} (self-signed TLS)`);
+    }
+
     // 3. Wait for boot + cloud-init
     onProgress("provision", "Waiting for server to boot...");
     await compute.waitForRunning(providerServerId, (msg) => onProgress("provision", msg));
@@ -137,10 +209,11 @@ export async function bootstrapPanel(
     if (hostKey) db.updateServerHostKey(dbServer.id, hostKey);
     db.updateServerStatus(dbServer.id, "ready");
 
-    // 5. DNS (best-effort)
-    if (opts.dnsZoneId) {
+    // 5. DNS (best-effort). Skipped for an auto-derived nip.io domain — it
+    //    resolves via public wildcard DNS and isn't in the user's zone.
+    if (opts.dnsZoneId && opts.domain) {
       try {
-        const parts = opts.domain.split(".");
+        const parts = domain.split(".");
         const sub = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
         await dns.createRecord({
           zoneId: opts.dnsZoneId,
@@ -149,7 +222,7 @@ export async function bootstrapPanel(
           value: serverIp,
         });
         dnsRecordKey = { zoneId: opts.dnsZoneId, name: sub, type: "A", value: serverIp };
-        onProgress("dns", `DNS A record created: ${opts.domain} → ${serverIp}`);
+        onProgress("dns", `DNS A record created: ${domain} → ${serverIp}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         onProgress("dns", `DNS creation failed (continuing): ${msg}`);
@@ -197,7 +270,7 @@ export async function bootstrapPanel(
     db.insertPanel({
       server_id: dbServer.id,
       name: opts.appName,
-      domain: opts.domain,
+      domain: domain,
       git_repo: opts.gitRepo,
       git_branch: opts.webhookBranch || "main",
       container_port: opts.containerPort,
@@ -213,7 +286,7 @@ export async function bootstrapPanel(
       status: "deployed",
       source: "bootstrap",
     });
-    db.appendPanelDeployLog(`[bootstrap] Panel deployed to ${opts.domain}`);
+    db.appendPanelDeployLog(`[bootstrap] Panel deployed to ${domain}`);
 
     // Persist the DNS record on the panel row so destroyServer can clean it
     // up later (the panel lives outside the apps table, so dns_records keyed
@@ -253,11 +326,11 @@ export async function bootstrapPanel(
     );
 
     // 10. Caddy + TLS
-    onProgress("caddy", `Configuring reverse proxy for ${opts.domain}...`);
-    const useInternalTls = opts.domain.endsWith(".nip.io");
+    onProgress("caddy", `Configuring reverse proxy for ${domain}...`);
+    const useInternalTls = domain.endsWith(".nip.io");
     await deployCaddySite(
       serverIp,
-      opts.domain,
+      domain,
       hostPort,
       useInternalTls,
       hostKey || undefined,
@@ -279,12 +352,47 @@ export async function bootstrapPanel(
       throw new Error(`Panel health check failed: ${health.error || "unknown"}`);
     }
 
+    // 12. Public reachability. The health check above only proves the container
+    //     is up on the server's loopback — it says nothing about whether the
+    //     operator can actually reach https://domain. For a real domain, Caddy
+    //     cannot issue a Let's Encrypt cert until DNS points at the server, so
+    //     verify that here and report it honestly instead of claiming success
+    //     the operator can't act on. (.nip.io uses an internal cert and needs
+    //     no public DNS, so it's considered reachable by construction.)
+    let dnsResolved = useInternalTls;
+    if (!useInternalTls) {
+      onProgress("verify", "Verifying DNS points at the server...");
+      dnsResolved = await checkDnsResolves(domain, serverIp);
+      if (dnsResolved) {
+        onProgress("verify", "DNS resolves; waiting for TLS certificate...");
+        const httpsOk = await waitForHttps(domain, 6);
+        if (!httpsOk) {
+          onProgress(
+            "verify",
+            "TLS not ready yet — it will be issued automatically once the domain is reachable.",
+          );
+        }
+      } else {
+        onProgress(
+          "verify",
+          `${domain} does not resolve to ${serverIp} yet — create a DNS A record to finish.`,
+        );
+      }
+    }
+
     log(
       "done",
-      `Panel bootstrapped in ${((Date.now() - t0) / 1000).toFixed(1)}s → https://${opts.domain}`,
+      `Panel bootstrapped in ${((Date.now() - t0) / 1000).toFixed(1)}s → https://${domain}`,
     );
-    onProgress("done", `Panel deployed: https://${opts.domain}`);
-    return { ok: true, domain: opts.domain };
+    onProgress("done", `Panel deployed: https://${domain}`);
+    return {
+      ok: true,
+      domain: domain,
+      serverIp,
+      dnsAutoCreated: !!dnsRecordKey,
+      dnsResolved,
+      internalTls: useInternalTls,
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log("error", `Bootstrap failed: ${msg}`);

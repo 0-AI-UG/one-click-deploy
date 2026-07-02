@@ -56,6 +56,10 @@ export type EnsureOpts = {
   hetznerVolumeId: string | number;
   hostMountPath: string;
   blockName: string;
+  /** How long to wait for the Hetzner automount to settle (default 60s). */
+  mountWaitMs?: number;
+  /** Poll interval while waiting for the mount (default 2s). */
+  mountPollMs?: number;
 };
 
 /**
@@ -69,14 +73,29 @@ export type EnsureOpts = {
 export async function ensureVolumeBindMount(opts: EnsureOpts): Promise<void> {
   const { serverIp, hostKey, hetznerVolumeId, hostMountPath, blockName } = opts;
   const hc = hetznerMountPath(hetznerVolumeId);
+  const MOUNT_WAIT_MS = opts.mountWaitMs ?? 60_000;
+  const POLL_MS = opts.mountPollMs ?? 2_000;
 
-  // 1. Verify the Hetzner volume is mounted (findmnt prints the source device).
-  const probe = await exec(serverIp, hostKey, `findmnt -no SOURCE ${hc} || true`);
-  const probeOut = probe.stdout.trim();
-  if (!probeOut) {
-    throw new Error(
-      `Hetzner volume not mounted at ${hc} on ${serverIp} — attach + automount may not have settled. Re-check the volume's attachment in the Hetzner console and retry once cloud-init / systemd has settled.`,
-    );
+  // 1. Wait for the Hetzner volume to be mounted (findmnt prints the source
+  //    device). The volume-attach API returns before systemd's automount unit
+  //    has necessarily settled — especially on a freshly-booted server — so
+  //    poll with a bounded backoff rather than probing once and failing on a
+  //    race the caller can't otherwise recover from.
+  const deadline = Date.now() + MOUNT_WAIT_MS;
+  let attempts = 0;
+  for (;;) {
+    const probe = await exec(serverIp, hostKey, `findmnt -no SOURCE ${hc} || true`);
+    if (probe.stdout.trim()) break;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Hetzner volume not mounted at ${hc} on ${serverIp} after ${MOUNT_WAIT_MS / 1000}s ` +
+          `(${attempts} probes) — attach + automount may not have settled. Re-check the ` +
+          `volume's attachment in the Hetzner console and retry once cloud-init / systemd has settled.`,
+      );
+    }
+    if (attempts === 0) log(`waiting for ${hc} to mount on ${serverIp}...`);
+    attempts++;
+    await new Promise((r) => setTimeout(r, POLL_MS));
   }
 
   // 2. Make the bind target directory and own it to deploy.

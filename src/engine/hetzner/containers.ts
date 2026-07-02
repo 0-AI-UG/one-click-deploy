@@ -346,7 +346,6 @@ export async function deployCaddySite(
       // by stale TCP teardowns between Caddy and the backend.
       keep_alive: {
         enabled: true,
-        idle_conns_per_host: 16,
         max_idle_conns_per_host: 32,
       },
     },
@@ -377,38 +376,36 @@ export async function deployCaddySite(
     ? { automation: { policies: [{ subjects: [domain], issuers: [{ module: "internal" }] }] } }
     : {};
 
-  // Try to delete existing route first (ignore errors if not found)
-  await sshExec(
-    ip,
-    `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`,
-    hostKey
-  );
-
-  // Add the route via the admin API
   const routeJson = JSON.stringify(route);
   const escaped = routeJson.replace(/'/g, "'\\''");
-  const addResult = await sshExec(
-    ip,
-    `curl -sf -X POST -H 'Content-Type: application/json' -d '${escaped}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
-    hostKey
-  );
 
-  if (addResult.exitCode !== 0) {
-    log("caddy", `Admin API route add failed: ${addResult.stderr}. Restarting Caddy and retrying...`);
-    // Restart Caddy (loads persisted caddy.json from disk) and retry
-    await sshExec(ip, "systemctl restart caddy", hostKey);
-    await Bun.sleep(1000);
-    // Re-delete in case the route survived the restart
+  // Add the route via the admin API, waiting for Caddy to be ready. Right after
+  // boot/restart the admin API can be briefly unavailable or reject the config,
+  // so poll with a bounded backoff instead of trying once. `curl -f` swallows
+  // the HTTP error body, so capture the status code + body explicitly here —
+  // otherwise a failure surfaces only as a useless "exit 22" with no cause.
+  const postCmd =
+    `curl -s -o /tmp/ocd-caddy-resp -w '%{http_code}' -X POST ` +
+    `-H 'Content-Type: application/json' -d '${escaped}' ` +
+    `http://localhost:2019/config/apps/http/servers/srv0/routes; ` +
+    `echo; cat /tmp/ocd-caddy-resp 2>/dev/null`;
+  const ADMIN_WAIT_MS = 30_000;
+  const deadline = Date.now() + ADMIN_WAIT_MS;
+  for (let attempt = 1; ; attempt++) {
+    // Delete any existing route with this id first (ignore errors if absent).
     await sshExec(ip, `curl -sf -X DELETE http://localhost:2019/id/${routeId} 2>/dev/null || true`, hostKey);
-    const retry = await sshExec(
-      ip,
-      `curl -sf -X POST -H 'Content-Type: application/json' -d '${escaped}' http://localhost:2019/config/apps/http/servers/srv0/routes`,
-      hostKey
-    );
-    if (retry.exitCode !== 0) {
-      log("caddy", `Admin API retry also failed: ${retry.stderr}`);
-      throw new Error(describeFailure(`Failed to configure Caddy reverse proxy for ${domain}`, retry));
+    const res = await sshExec(ip, postCmd, hostKey);
+    const [codeLine, ...bodyLines] = res.stdout.split("\n");
+    const httpCode = parseInt(codeLine.trim(), 10);
+    const body = bodyLines.join("\n").trim();
+    if (res.exitCode === 0 && httpCode >= 200 && httpCode < 300) break;
+    const desc = `HTTP ${Number.isNaN(httpCode) ? "?" : httpCode}${body ? ` ${body}` : ` (curl exit ${res.exitCode})`}`;
+    if (Date.now() >= deadline) {
+      throw new Error(`Failed to configure Caddy reverse proxy for ${domain}: ${desc}`);
     }
+    log("caddy", `Route add attempt ${attempt} failed (${desc}); restarting Caddy and retrying...`);
+    await sshExec(ip, "systemctl restart caddy", hostKey);
+    await Bun.sleep(2000);
   }
 
   // If using internal TLS, set the TLS automation policy

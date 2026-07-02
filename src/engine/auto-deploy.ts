@@ -10,7 +10,12 @@ import { bootstrapPanel } from "./deploy/panel.ts";
 
 export type AutoDeployConfig = {
   provider_token: string;
-  domain: string;
+  /**
+   * Public domain for the panel. Optional: when omitted, bootstrap derives a
+   * `<server-ip>.nip.io` domain after the server is created and serves it with
+   * a self-signed (Caddy internal) cert — no DNS setup or real domain needed.
+   */
+  domain?: string;
   server_type?: string;
   server_location?: string;
   dns_zone_id?: string;
@@ -44,8 +49,10 @@ export function loadAutoDeployConfig(raw: string): AutoDeployConfig {
   if (!cfg.provider_token || typeof cfg.provider_token !== "string") {
     throw new Error("auto-deploy config missing required field: provider_token");
   }
-  if (!cfg.domain || typeof cfg.domain !== "string") {
-    throw new Error("auto-deploy config missing required field: domain");
+  // `domain` is optional (omit it for a self-signed <ip>.nip.io panel), but if
+  // present it must be a string.
+  if (cfg.domain !== undefined && typeof cfg.domain !== "string") {
+    throw new Error("auto-deploy config field 'domain' must be a string");
   }
   return cfg as unknown as AutoDeployConfig;
 }
@@ -53,7 +60,28 @@ export function loadAutoDeployConfig(raw: string): AutoDeployConfig {
 export async function runAutoDeploy(
   config: AutoDeployConfig,
 ): Promise<{ ok: boolean; error?: string }> {
-  log(`Starting headless panel bootstrap for ${config.domain}`);
+  log(
+    `Starting headless panel bootstrap for ${config.domain ?? "an auto-assigned <ip>.nip.io domain"}`,
+  );
+
+  // Fail fast on a bad token: validate the format, then confirm it actually
+  // authenticates against the Hetzner API BEFORE we start provisioning
+  // anything. Otherwise a typo surfaces as a cryptic mid-pipeline error after
+  // a server has already been created.
+  const validation = hetzner.validateToken(config.provider_token);
+  if (!validation.valid) {
+    const error = `Invalid ${hetzner.name} API token: ${validation.error}`;
+    log(`✗ ${error}`);
+    return { ok: false, error };
+  }
+  try {
+    log("Verifying provider token...");
+    await hetzner.verifyToken(config.provider_token);
+  } catch (err) {
+    const error = (err as Error).message;
+    log(`✗ Provider token verification failed: ${error}`);
+    return { ok: false, error };
+  }
 
   // Generate the JWT secret FIRST, then export it into the environment
   // BEFORE touching secretStore. secret-store derives its AES-GCM key from
@@ -93,9 +121,22 @@ export async function runAutoDeploy(
 
   if (result.ok) {
     log(`✓ Panel deployed to https://${result.domain}`);
-    log("  Open the domain and finish setup to create your admin account.");
+    log(`  Server IP: ${result.serverIp}`);
+    if (result.internalTls) {
+      log("  This domain uses a self-signed certificate (.nip.io) — your");
+      log("  browser will warn on first visit; that's expected.");
+      log(`  Open https://${result.domain} and finish setup to create your admin account.`);
+    } else if (result.dnsResolved) {
+      log(`  Open https://${result.domain} and finish setup to create your admin account.`);
+    } else {
+      log("  ⚠ DNS is not pointing at the server yet, so the site won't load");
+      log("    and no TLS certificate can be issued until you fix that.");
+      log(`      Create a DNS A record:  ${result.domain}  →  ${result.serverIp}`);
+      log("    TLS is then issued automatically once DNS propagates (usually");
+      log(`    a few minutes). Then open https://${result.domain} to create your admin account.`);
+    }
   } else {
     log(`✗ Bootstrap failed: ${result.error}`);
   }
-  return result;
+  return { ok: result.ok, error: result.error };
 }
