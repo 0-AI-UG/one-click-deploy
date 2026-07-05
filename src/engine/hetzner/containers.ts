@@ -184,13 +184,21 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
  * Periodic disk cleanup. Two tiers based on disk pressure:
  *
  *   - Normal (root fs < 75% used): scoped prune. Removes unused OCD-labeled
- *     images, dangling images, stopped containers, and ALL build cache
- *     (build cache is fully reproducible from sources).
+ *     images, dangling images, foreign stopped containers, and ALL build
+ *     cache (build cache is fully reproducible from sources).
  *
  *   - Pressure (root fs >= 75%): escalates to a full system prune. On an
  *     OCD-managed server there are essentially no non-OCD images worth
  *     preserving, and a crash from a full disk is far worse than a cold
  *     rebuild. Volumes are still preserved.
+ *
+ * NOTE: the container prune always excludes OCD-managed containers
+ * (label!=ocd.managed=true). A sleeping app keeps its last container as a
+ * *stopped* anchor so it can wake with a fast `docker start`; an unfiltered
+ * `docker container prune` would delete that anchor, and once the container
+ * is gone its image becomes unreferenced and gets swept by the image prune —
+ * leaving the app unable to wake. OCD removes its own containers explicitly
+ * (see scaleDown), so the blanket prune only needs to clear foreign junk.
  */
 export async function pruneServer(ip: string, hostKey?: string) {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
@@ -205,14 +213,17 @@ export async function pruneServer(ip: string, hostKey?: string) {
   const steps = underPressure
     ? [
         // Aggressive: anything not currently in use, plus all build cache.
-        `docker container prune -f 2>&1 | tail -1`,
+        // Still preserve OCD-managed containers (sleeping anchors) so wake
+        // stays fast and their images survive the image prune below.
+        `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
         `docker image prune -af 2>&1 | tail -1`,
         `docker builder prune -af 2>&1 | tail -1`,
       ]
     : [
-        // Scoped: OCD-labeled images, dangling layers, stopped containers,
-        // and all build cache (always reproducible from sources).
-        `docker container prune -f 2>&1 | tail -1`,
+        // Scoped: OCD-labeled images, dangling layers, foreign stopped
+        // containers, and all build cache (always reproducible from sources).
+        // Excludes OCD-managed containers so sleeping anchors are never swept.
+        `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
         `docker image prune -a -f --filter label=${OCD_IMAGE_LABEL} 2>&1 | tail -1`,
         `docker image prune -f 2>&1 | tail -1`,
         `docker builder prune -af 2>&1 | tail -1`,
