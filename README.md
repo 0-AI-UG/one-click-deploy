@@ -48,7 +48,7 @@ Prefer bash? Copy `example.panel.json` to `panel.json` and run `./scripts/bootst
 
 ## Features
 
-- Deploy from any Git repo (Dockerfile or auto-detected via [Railpack](https://railpack.io))
+- Deploy from any Git repo with a Dockerfile
 - Auto-provisioned Hetzner Cloud servers, volumes, private networks, and firewalls
 - Auto TLS (Caddy + Let's Encrypt) and auto DNS via Hetzner DNS
 - Horizontal scaling, auto-scaling, pause/resume
