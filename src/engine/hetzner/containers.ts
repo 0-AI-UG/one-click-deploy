@@ -164,9 +164,11 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
   // Remove old commit-tagged images for this app (keep only :latest which the
   // running container uses), prune dangling images, and compact the git repo.
   const cmd = [
-    // Remove all tags for this app except :latest — old commit tags are no
-    // longer needed since rollback rebuilds from git.
-    `docker images ${appName} --format '{{.Repository}}:{{.Tag}}' | grep -v ':latest$' | xargs -r docker rmi 2>/dev/null || true`,
+    // Remove all tags for this app except :latest and :rollback — old commit
+    // tags are no longer needed since rollback rebuilds from git. The
+    // `:rollback` tag pins the previous image so a failed redeploy can restore
+    // it (redeploy op drops the tag on success/compensation).
+    `docker images ${appName} --format '{{.Repository}}:{{.Tag}}' | grep -vE ':(latest|rollback)$' | xargs -r docker rmi 2>/dev/null || true`,
     // Prune dangling images (untagged layers from previous builds). Scoped to
     // OCD-labeled layers so we never drop intermediate layers that belong to
     // other applications on this host.

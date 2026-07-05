@@ -268,9 +268,15 @@ const healthCheckStep: Step<RollbackInput, { healthy: boolean }> = {
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
     const health = target.deployMode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, first.host_port, 5, hostKey)
-      : await healthCheck(server.ipv4, app.name, bindAddr, first.host_port, 5, hostKey);
+      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey)
+      : await healthCheck(server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey);
     db.updateAppStatus(target.appId, health.healthy ? "running" : "unhealthy");
+    if (!health.healthy) {
+      // Fail the op so swap_container's compensate restores the prior image
+      // instead of leaving the app on a broken rolled-back version.
+      db.appendDeployLog(target.appId, `[health] Rollback target unhealthy: ${health.error || `HTTP ${health.statusCode ?? "no response"}`}`);
+      throw new Error(`App did not become healthy after rollback: ${health.error || "health check failed"}`);
+    }
     return { healthy: health.healthy };
   },
 };

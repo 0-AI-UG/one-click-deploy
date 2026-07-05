@@ -1,6 +1,7 @@
 import * as db from "../shared/db.ts";
 import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } from "../shared/db.ts";
-import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck, pruneServer } from "../shared/remote/index.ts";
+import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck, pruneServer, buildDockerRunArgs } from "../shared/remote/index.ts";
+import { resolveAppEnvVars } from "../shared/env-crypto.ts";
 import { evaluateAutoScale } from "./scale-api.ts";
 import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
@@ -117,6 +118,54 @@ async function collectServerMetrics(
 // Health checks (run in parallel per server)
 // ---------------------------------------------------------------------------
 
+/**
+ * Last-resort recovery when `docker restart` can't bring a replica back — the
+ * container was removed out-of-band, or it's wedged in a state containerd
+ * can't kill ("tried to kill container, but did not receive an exit event").
+ * Force-remove it and re-run from the existing `:latest` image. Requires the
+ * image to still be present; a genuinely missing image needs a full redeploy
+ * from source, so we surface that as an error rather than silently failing.
+ */
+async function recreateReplica(
+  server: ServerRow,
+  app: AppRow,
+  replica: ReplicaRow,
+  hostKey: string | undefined,
+): Promise<void> {
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  if (app.deploy_mode === "compose") {
+    await sshExec(server.ipv4, asUser(`cd /home/deploy/apps/${app.name} && docker compose -p ${app.name} up -d`), hostKey);
+    log("health", `recreated compose project ${app.name}`);
+    return;
+  }
+  const image = `${app.name}:latest`;
+  const present = await sshExec(server.ipv4, asUser(`docker image inspect ${image} >/dev/null 2>&1 && echo yes || echo no`), hostKey);
+  if (present.stdout.trim() !== "yes") {
+    throw new Error(`image ${image} not present — redeploy required`);
+  }
+  const envVars = await resolveAppEnvVars(app);
+  const envFilePath = Object.keys(envVars).length > 0 ? `/home/deploy/apps/${app.name}/.env.deploy` : undefined;
+  let extraVolumes: string[] = [];
+  try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) extraVolumes = ev.filter((v: unknown): v is string => typeof v === "string"); } catch { /* ignore */ }
+  const cmd = buildDockerRunArgs({
+    name: replica.container_name,
+    image,
+    appName: app.name,
+    network: null,
+    publish: { bindAddr: replicaBindHost(server), hostPort: replica.host_port, containerPort: app.container_port },
+    envFilePath,
+    volumeMount: app.volume_mount || undefined,
+    extraVolumes,
+    memoryMb: app.memory_mb || undefined,
+  });
+  // rm -f clears both the missing-container and wedged-container cases; then
+  // re-run. If the wedged container also resists removal, the run will fail on
+  // the name/port conflict and we surface it (dockerd-level intervention).
+  await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
+  await sshExec(server.ipv4, asUser(cmd), hostKey);
+  log("health", `recreated ${replica.container_name} from ${image}`);
+}
+
 async function checkReplicaHealth(
   replica: ReplicaRow,
   app: AppRow,
@@ -155,7 +204,22 @@ async function checkReplicaHealth(
             reason: `replica ${replica.container_name} unhealthy for ${ticks} ticks`,
           });
         } catch (err) {
-          log("health", `restart failed: ${err}`);
+          // `docker restart` can't recover a container that no longer exists or
+          // is wedged (containerd lost its exit event). Fall back to recreate.
+          log("health", `restart failed: ${err} — attempting recreate`);
+          try {
+            await recreateReplica(server, app, replica, hostKey);
+            db.resetUnhealthyTicks(replica.id);
+            db.insertScalingEvent({
+              app_id: replica.app_id,
+              event_type: "auto_recreate",
+              from_count: 0,
+              to_count: 0,
+              reason: `restart failed for ${replica.container_name}; recreated from image`,
+            });
+          } catch (recreateErr) {
+            log("health", `recreate failed for ${replica.container_name}: ${recreateErr}`);
+          }
         }
       }
     }

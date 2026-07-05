@@ -851,20 +851,24 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
     if (!tenantServerRow) throw new Error(`Server ${server.serverId} not found`);
     const containerBindAddr = replicaBindHost(tenantServerRow);
 
+    // Generous window (10 attempts) so a slow first boot isn't failed early.
     const health = build.deployMode === "compose"
-      ? await composeHealthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 5, server.serverHostKey || undefined)
-      : await healthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 5, server.serverHostKey || undefined);
+      ? await composeHealthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined)
+      : await healthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined);
 
     if (health.healthy) {
       db.appendDeployLog(appOut.appId, `[health] Health check passed (HTTP ${health.statusCode})`);
       db.updateAppStatus(appOut.appId, "running");
       db.updateReplicaStatus(appOut.replicaId, "running");
     } else {
-      // Soft failure: record but don't throw.
-      db.appendDeployLog(appOut.appId, `[health] ${health.error || "Health check failed"}`);
+      // Hard failure: a deploy that never becomes healthy must fail the op so
+      // its compensations tear down the half-deployed app rather than leaving
+      // it stuck 'unhealthy'.
+      const detail = health.error || `HTTP ${health.statusCode ?? "no response"}`;
+      db.appendDeployLog(appOut.appId, `[health] ${detail}`);
       db.updateAppStatus(appOut.appId, "unhealthy");
       db.updateReplicaStatus(appOut.replicaId, "unhealthy");
-      ctx.log(`Warning: ${health.error || "Health check failed"} — app may still be starting`);
+      throw new Error(`App did not become healthy after deploy: ${detail}`);
     }
     return { healthy: health.healthy, statusCode: health.statusCode };
   },
