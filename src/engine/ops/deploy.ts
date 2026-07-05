@@ -5,17 +5,11 @@ import {
   sshExec,
   cloneRepo,
   cloneAndBuild,
-  cloneAndComposeBuild,
-  detectComposeFile,
-  detectWebService,
   removeContainer,
-  removeCompose,
   healthCheck,
-  composeHealthCheck,
   deployAuthProxy,
   removeAuthProxy,
   containerExists,
-  composeProjectExists,
 } from "../../shared/remote/index.ts";
 import { syncAppCaddy, removeAppCaddy } from "../scale/caddy-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -76,10 +70,7 @@ type InsertAppOut = {
 type CloneOut = { ok: true };
 
 type BuildOut = {
-  deployMode: "dockerfile" | "compose";
   imageTag: string;
-  composeFile: string;
-  composeWebService: string;
 };
 
 type AuthProxyOut = { caddyPort: number } | null;
@@ -605,32 +596,10 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     if (!server) return null;
     const hostKey = server.serverHostKey || undefined;
-    // Probe both deploy modes; whichever the prior run used will hit.
-    if (await composeProjectExists(server.serverIp, req.app_name, hostKey)) {
-      const composeFile = req.compose_file
-        || await detectComposeFile(server.serverIp, req.app_name, hostKey)
-        || "docker-compose.yml";
-      const composeWebService = req.compose_web_service
-        || await detectWebService(server.serverIp, req.app_name, composeFile, hostKey)
-        || "web";
-      const stillRunning = await containerExists(server.serverIp, req.app_name, hostKey);
-      if (stillRunning) {
-        ctx.log(`adopting existing compose project ${req.app_name}`);
-        return {
-          deployMode: "compose",
-          imageTag: `${req.app_name}:latest`,
-          composeFile,
-          composeWebService,
-        };
-      }
-    }
     if (await containerExists(server.serverIp, req.app_name, hostKey)) {
       ctx.log(`adopting existing container ${req.app_name}`);
       return {
-        deployMode: "dockerfile",
         imageTag: `${req.app_name}:latest`,
-        composeFile: "",
-        composeWebService: "",
       };
     }
     return null;
@@ -652,81 +621,37 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     const { mask, githubPat } = await buildMasker(req, ctx.triggeredBy);
     const maskedLog = (line: string) => db.appendDeployLog(appOut.appId, mask(line));
 
-    let deployMode: "dockerfile" | "compose" = "dockerfile";
-    let composeFile = "";
-    let composeWebService = "";
-
-    if (!req.dockerfile_path) {
-      const detected = req.compose_file
-        || await detectComposeFile(server.serverIp, req.app_name, server.serverHostKey || undefined);
-      if (detected) {
-        deployMode = "compose";
-        composeFile = detected;
-        composeWebService = req.compose_web_service ||
-          await detectWebService(server.serverIp, req.app_name, detected, server.serverHostKey || undefined) ||
-          "web";
-      }
-    }
-
     const tenantServerRow = db.getServer(server.serverId);
     if (!tenantServerRow) throw new Error(`Server ${server.serverId} not found`);
     const containerBindAddr = replicaBindHost(tenantServerRow);
 
     let imageTag = `${req.app_name}:latest`;
-    if (deployMode === "compose") {
-      const result = await cloneAndComposeBuild(
-        server.serverIp,
-        {
-          name: req.app_name,
-          gitRepo: req.git_repo,
-          port: req.container_port,
-          hostPort: appOut.hostPort,
-          envVars: appOut.flatEnvVars,
-          volumeMount: volume?.volumeMount,
-          extraVolumes: (req.extra_volumes || []).map((v) => `${v.host_path}:${v.container_path}`),
-          composeFile,
-          webService: composeWebService,
-          gitToken: githubPat,
-          gitBranch: req.git_branch,
-          bindAddr: containerBindAddr,
-          skipClone: true,
-        },
-        (line) => {
-          maskedLog(`[build] ${line}`);
-          ctx.log(`[build] ${mask(line)}`);
-        },
-      );
-      db.updateAppDeployMode(appOut.appId, "compose", result.composeFile, result.webService);
-      composeFile = result.composeFile;
-      composeWebService = result.webService;
-    } else {
-      const result = await cloneAndBuild(
-        server.serverIp,
-        {
-          name: req.app_name,
-          gitRepo: req.git_repo,
-          port: req.container_port,
-          hostPort: appOut.hostPort,
-          envVars: appOut.flatEnvVars,
-          volumeMount: volume?.volumeMount,
-          extraVolumes: (req.extra_volumes || []).map((v) => `${v.host_path}:${v.container_path}`),
-          dockerfilePath: req.dockerfile_path,
-          dockerContext: req.docker_context,
-          gitToken: githubPat,
-          gitBranch: req.git_branch,
-          bindAddr: containerBindAddr,
-          skipClone: true,
-          memoryMb: req.memory_mb || undefined,
-        },
-        (line) => {
-          maskedLog(`[build] ${line}`);
-          ctx.log(`[build] ${mask(line)}`);
-        },
-      );
-      if (result.imageTag) imageTag = result.imageTag;
-    }
+    const result = await cloneAndBuild(
+      server.serverIp,
+      {
+        name: req.app_name,
+        gitRepo: req.git_repo,
+        port: req.container_port,
+        hostPort: appOut.hostPort,
+        envVars: appOut.flatEnvVars,
+        volumeMount: volume?.volumeMount,
+        extraVolumes: (req.extra_volumes || []).map((v) => `${v.host_path}:${v.container_path}`),
+        dockerfilePath: req.dockerfile_path,
+        dockerContext: req.docker_context,
+        gitToken: githubPat,
+        gitBranch: req.git_branch,
+        bindAddr: containerBindAddr,
+        skipClone: true,
+        memoryMb: req.memory_mb || undefined,
+      },
+      (line) => {
+        maskedLog(`[build] ${line}`);
+        ctx.log(`[build] ${mask(line)}`);
+      },
+    );
+    if (result.imageTag) imageTag = result.imageTag;
 
-    return { deployMode, imageTag, composeFile, composeWebService };
+    return { imageTag };
   },
   async compensate(ctx, out, prior) {
     if (!out) return;
@@ -734,11 +659,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     const appOut = prior["insert_app_row"] as InsertAppOut;
     if (!server || !appOut) return;
     try {
-      if (out.deployMode === "compose") {
-        await removeCompose(server.serverIp, appOut.containerName, false, server.serverHostKey || undefined);
-      } else {
-        await removeContainer(server.serverIp, appOut.containerName, server.serverHostKey || undefined);
-      }
+      await removeContainer(server.serverIp, appOut.containerName, server.serverHostKey || undefined);
     } catch (err) {
       ctx.log(`Failed to remove container: ${err}`);
     }
@@ -846,15 +767,12 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
-    const build = prior["build_and_run_container"] as BuildOut;
     const tenantServerRow = db.getServer(server.serverId);
     if (!tenantServerRow) throw new Error(`Server ${server.serverId} not found`);
     const containerBindAddr = replicaBindHost(tenantServerRow);
 
     // Generous window (10 attempts) so a slow first boot isn't failed early.
-    const health = build.deployMode === "compose"
-      ? await composeHealthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined)
-      : await healthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined);
+    const health = await healthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined);
 
     if (health.healthy) {
       db.appendDeployLog(appOut.appId, `[health] Health check passed (HTTP ${health.statusCode})`);

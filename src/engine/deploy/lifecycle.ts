@@ -4,15 +4,10 @@ import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import {
   sshExec,
   removeContainer,
-  removeCompose,
   removeAuthProxy,
   restartContainer,
   pauseContainer,
   unpauseContainer,
-  restartCompose,
-  pauseCompose,
-  unpauseCompose,
-  composeHealthCheck,
   healthCheck,
   describeFailure,
 } from "../../shared/remote/index.ts";
@@ -60,11 +55,7 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       if (replicaServer) {
         const hostKey = replicaServer.ssh_host_key || undefined;
         try {
-          if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-            await removeCompose(replicaServer.ipv4, app.name, true, hostKey);
-          } else {
-            await removeContainer(replicaServer.ipv4, replica.container_name, hostKey);
-          }
+          await removeContainer(replicaServer.ipv4, replica.container_name, hostKey);
         } catch (err) {
           log("destroyApp", `Failed to remove replica ${replica.container_name}: ${err}`);
           cleanupFailed = true;
@@ -224,16 +215,10 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
-      if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-        await restartCompose(server.ipv4, app.name, hostKey);
-      } else {
-        await restartContainer(server.ipv4, replica.container_name, hostKey);
-      }
+      await restartContainer(server.ipv4, replica.container_name, hostKey);
 
       const bindAddr = replicaBindHost(server);
-      const health = app.deploy_mode === "compose" && replica.container_name === app.name
-        ? await composeHealthCheck(server.ipv4, app.name, bindAddr, replica.host_port, 5, hostKey)
-        : await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
+      const health = await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }
@@ -267,55 +252,27 @@ export async function recreateAppContainer(
     const hostPort = firstReplica.host_port;
     const bindAddr = replicaBindHost(server);
 
-    if (app.deploy_mode === "compose") {
-      // Rewrite the compose override to update volume mount
-      const appDir = `/home/deploy/apps/${app.name}`;
-      const overrideServices: Record<string, { ports: string[]; volumes?: string[] }> = {
-        [app.compose_web_service]: {
-          ports: [`${bindAddr}:${hostPort}:${app.container_port}`],
-        },
-      };
-      const allVols = [
-        ...(volumeMount ? [volumeMount] : []),
-        ...(extraVolumes || []),
-      ];
-      if (allVols.length > 0) {
-        overrideServices[app.compose_web_service].volumes = allVols;
-      }
-      const override = JSON.stringify({ services: overrideServices });
-      const escapedOverride = override.replace(/'/g, "'\\''");
-      await sshExec(server.ipv4, `echo '${escapedOverride}' > ${appDir}/docker-compose.ocd.yml && chown deploy:deploy ${appDir}/docker-compose.ocd.yml`, hostKey);
+    // Dockerfile mode: rm + run with updated flags
+    await removeContainer(server.ipv4, app.name, hostKey);
 
-      // Restart compose (no rebuild)
-      const envFilePath = `${appDir}/.env.deploy`;
-      const envFileFlag = app.env_vars && app.env_vars !== "{}" ? `--env-file ${envFilePath}` : "";
-      const composeCmd = `cd ${appDir} && docker compose -f ${app.compose_file} -f docker-compose.ocd.yml -p ${app.name} ${envFileFlag} up -d`;
-      await sshExec(server.ipv4, asUser(composeCmd), hostKey);
-    } else {
-      // Dockerfile mode: rm + run with updated flags
-      await removeContainer(server.ipv4, app.name, hostKey);
+    const envVars = await resolveAppEnvVars(app);
+    const envFileEntries = Object.entries(envVars);
+    let envFileFlag = "";
+    if (envFileEntries.length > 0) {
+      const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
+      envFileFlag = `--env-file ${envFilePath}`;
+    }
 
-      const envVars = await resolveAppEnvVars(app);
-      const envFileEntries = Object.entries(envVars);
-      let envFileFlag = "";
-      if (envFileEntries.length > 0) {
-        const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
-        envFileFlag = `--env-file ${envFilePath}`;
-      }
-
-      const volumeFlag = volumeMount ? `-v ${volumeMount}` : "";
-      const extraVolFlags = (extraVolumes || []).map((v) => `-v ${v}`).join(" ");
-      const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${app.name}:latest`;
-      const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
-      if (result.exitCode !== 0) {
-        throw new Error(describeFailure("Failed to start container", result));
-      }
+    const volumeFlag = volumeMount ? `-v ${volumeMount}` : "";
+    const extraVolFlags = (extraVolumes || []).map((v) => `-v ${v}`).join(" ");
+    const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${app.name}:latest`;
+    const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
+    if (result.exitCode !== 0) {
+      throw new Error(describeFailure("Failed to start container", result));
     }
 
     // Health check
-    const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey)
-      : await healthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey);
+    const health = await healthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
     db.updateReplicaStatus(firstReplica.id, health.healthy ? "running" : "unhealthy");
 
@@ -342,11 +299,7 @@ export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: st
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
 
-      if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-        await pauseCompose(server.ipv4, app.name, hostKey);
-      } else {
-        await pauseContainer(server.ipv4, replica.container_name, hostKey);
-      }
+      await pauseContainer(server.ipv4, replica.container_name, hostKey);
       db.updateReplicaStatus(replica.id, "paused");
     }
 
@@ -384,16 +337,10 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
       if (!server) { allHealthy = false; continue; }
       const hostKey = server.ssh_host_key || undefined;
 
-      if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-        await unpauseCompose(server.ipv4, app.name, hostKey);
-      } else {
-        await unpauseContainer(server.ipv4, replica.container_name, hostKey);
-      }
+      await unpauseContainer(server.ipv4, replica.container_name, hostKey);
 
       const bindAddr = replicaBindHost(server);
-      const health = app.deploy_mode === "compose" && replica.container_name === app.name
-        ? await composeHealthCheck(server.ipv4, app.name, bindAddr, replica.host_port, 5, hostKey)
-        : await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
+      const health = await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }

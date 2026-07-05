@@ -397,7 +397,6 @@ describe("validateDeployManifest", () => {
 
   test("rejects build paths containing .. (path traversal)", () => {
     expect(validateDeployManifest({ name: "x", build: { dockerfile: "../evil/Dockerfile" } }).ok).toBe(false);
-    expect(validateDeployManifest({ name: "x", build: { compose_file: "sub/../etc/compose.yml" } }).ok).toBe(false);
   });
 
   test("rejects env entries with invalid keys", () => {

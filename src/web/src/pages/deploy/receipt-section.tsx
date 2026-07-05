@@ -12,11 +12,10 @@ type Props = {
   set: (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void;
   setForm: React.Dispatch<React.SetStateAction<FormState>>;
   detected: (IntrospectResult & { ok: true }) | null;
-  selectedManifest: number | null;
   onBranchChange: (branch: string) => void;
 };
 
-export function ReceiptSection({ form, set, setForm, detected, selectedManifest, onBranchChange }: Props) {
+export function ReceiptSection({ form, set, setForm, detected, onBranchChange }: Props) {
   const [servers, setServers] = useState<ServerOption[]>([]);
   useEffect(() => {
     get("/api/resources")
@@ -27,11 +26,7 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest,
       .catch(() => {});
   }, []);
 
-  const hasBothModes = !!detected && detected.dockerfiles.length > 0 && !!detected.compose_files[0];
-  const isCompose = !!(form.compose_file || (!form.dockerfile_path && detected?.compose_files[0]));
-  const hasMultipleDockerfiles = !isCompose && !!detected && detected.dockerfiles.length > 1;
-  const hasMultipleComposeFiles = isCompose && !!detected && detected.compose_files.length > 1;
-  const hasMultipleServices = !!detected && detected.compose_services.length > 1;
+  const hasMultipleDockerfiles = !!detected && detected.dockerfiles.length > 1;
 
   return (
     <div className="p-5 animate-fade-in">
@@ -51,53 +46,11 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest,
           <input type="text" value={form.app_name} onChange={set("app_name")} required />
         </ReceiptRow>
 
-        {hasBothModes && selectedManifest == null && (
-          <ReceiptRow label="Build Mode" detected>
-            <NeoSelect
-              value={isCompose ? "compose" : "dockerfile"}
-              onChange={(v) => {
-                if (v === "compose") {
-                  setForm((f) => ({
-                    ...f,
-                    compose_file: detected?.compose_files[0] || "docker-compose.yml",
-                    compose_web_service: detected?.suggested_web_service || "",
-                    dockerfile_path: "",
-                  }));
-                } else {
-                  setForm((f) => ({
-                    ...f,
-                    compose_file: "",
-                    compose_web_service: "",
-                    dockerfile_path: detected?.dockerfiles[0] || "",
-                  }));
-                }
-              }}
-              options={[
-                { value: "compose", label: "Docker Compose" },
-                { value: "dockerfile", label: "Dockerfile" },
-              ]}
-            />
-          </ReceiptRow>
-        )}
-
         <ReceiptRow
-          label={isCompose ? "Compose" : "Dockerfile"}
-          detected={!!detected && (detected.dockerfiles.length > 0 || isCompose)}
+          label="Dockerfile"
+          detected={!!detected && detected.dockerfiles.length > 0}
         >
-          {isCompose && hasMultipleComposeFiles ? (
-            <NeoSelect
-              value={form.compose_file}
-              onChange={(v) => setForm((f) => ({ ...f, compose_file: v }))}
-              options={detected!.compose_files.map((c) => ({ value: c, label: c }))}
-            />
-          ) : isCompose ? (
-            <input
-              type="text"
-              value={form.compose_file}
-              onChange={set("compose_file")}
-              placeholder={detected?.compose_files[0] || "docker-compose.yml"}
-            />
-          ) : hasMultipleDockerfiles ? (
+          {hasMultipleDockerfiles ? (
             <NeoSelect
               value={form.dockerfile_path}
               onChange={(v) => setForm((f) => ({ ...f, dockerfile_path: v }))}
@@ -113,38 +66,14 @@ export function ReceiptSection({ form, set, setForm, detected, selectedManifest,
           )}
         </ReceiptRow>
 
-        {!isCompose && (
-          <ReceiptRow label="Build Context" detected={!!form.docker_context}>
-            <input
-              type="text"
-              value={form.docker_context}
-              onChange={set("docker_context")}
-              placeholder=". (repo root)"
-            />
-          </ReceiptRow>
-        )}
-
-        {isCompose && (
-          <ReceiptRow label="Web Service" detected={!!form.compose_web_service}>
-            {hasMultipleServices ? (
-              <NeoSelect
-                value={form.compose_web_service}
-                onChange={(v) => setForm((f) => ({ ...f, compose_web_service: v }))}
-                options={detected!.compose_services.map((s) => ({
-                  value: s.name,
-                  label: s.has_ports ? `${s.name}  ·  exposes port` : s.name,
-                }))}
-              />
-            ) : (
-              <input
-                type="text"
-                value={form.compose_web_service}
-                onChange={set("compose_web_service")}
-                placeholder="Service name to route traffic to"
-              />
-            )}
-          </ReceiptRow>
-        )}
+        <ReceiptRow label="Build Context" detected={!!form.docker_context}>
+          <input
+            type="text"
+            value={form.docker_context}
+            onChange={set("docker_context")}
+            placeholder=". (repo root)"
+          />
+        </ReceiptRow>
 
         {detected && detected.branches.length > 0 && (
           <ReceiptRow label="Branch" detected>

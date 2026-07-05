@@ -136,8 +136,6 @@ const EMPTY_FORM: FormState = {
   webhook_wait_for_ci: false,
   auth_password: "",
   replicas: "1",
-  compose_file: "",
-  compose_web_service: "",
   public: true,
   extra_volumes: [],
   server_id: "",
@@ -177,8 +175,6 @@ export function DeployPage() {
           : f.container_port,
       dockerfile_path: m.build?.dockerfile || f.dockerfile_path,
       docker_context: m.build?.context || f.docker_context,
-      compose_file: m.build?.compose_file || f.compose_file,
-      compose_web_service: m.build?.compose_web_service || f.compose_web_service,
       volume_size: m.volume?.size ? String(m.volume.size) : f.volume_size,
       volume_path: m.volume?.path || f.volume_path,
       webhook_enabled: m.webhook?.enabled ?? f.webhook_enabled,
@@ -218,8 +214,6 @@ export function DeployPage() {
       app_name: f.app_name || result.suggested_app_name,
       container_port: result.detected_port ? String(result.detected_port) : "3000",
       dockerfile_path: result.dockerfiles[0] ?? "",
-      compose_file: result.compose_files[0] ?? "",
-      compose_web_service: result.suggested_web_service ?? "",
       webhook_branch: result.default_branch,
       volume_size: "",
       volume_path: "/data",
@@ -334,8 +328,6 @@ export function DeployPage() {
                 ? String(result.detected_port)
                 : f.container_port,
             dockerfile_path: result.dockerfiles[0] ?? f.dockerfile_path,
-            compose_file: result.compose_files[0] ?? f.compose_file,
-            compose_web_service: result.suggested_web_service ?? f.compose_web_service,
             webhook_branch:
               f.webhook_branch === "main" ? result.default_branch : f.webhook_branch,
           }));
@@ -447,8 +439,6 @@ export function DeployPage() {
       webhook_wait_for_ci: form.webhook_enabled ? form.webhook_wait_for_ci : undefined,
       auth_password: form.auth_password || undefined,
       replicas: parseInt(form.replicas, 10) || 1,
-      compose_file: form.compose_file || undefined,
-      compose_web_service: form.compose_web_service || undefined,
       public: form.public,
       extra_volumes: form.extra_volumes.length > 0
         ? form.extra_volumes.filter((v) => v.host_path && v.container_path)
@@ -482,8 +472,8 @@ export function DeployPage() {
     if (requiredEnvMissing && !selectedEnvironmentId) setAdvancedOpen(true);
   }, [requiredEnvMissing, selectedEnvironmentId]);
 
-  const buildMode = form.compose_file ? "Docker Compose" : "Dockerfile";
-  const dockerfileLabel = form.compose_file || form.dockerfile_path || (detected ? "auto-detect" : "");
+  const buildMode = "Dockerfile";
+  const dockerfileLabel = form.dockerfile_path || (detected ? "auto-detect" : "");
   const branchLabel = form.git_branch || detected?.default_branch || "";
   const envCount = selectedEnvironmentId
     ? null
@@ -554,7 +544,6 @@ export function DeployPage() {
               set={set}
               setForm={setForm}
               detected={detected}
-              selectedManifest={selectedManifest}
               onBranchChange={handleBranchChange}
             />
           )}
@@ -609,9 +598,9 @@ export function DeployPage() {
               {branchLabel && <SummaryRow label="Branch" value={branchLabel} />}
               <SummaryRow label="Build" value={buildMode} />
               {dockerfileLabel && (
-                <SummaryRow label={form.compose_file ? "Compose" : "Dockerfile"} value={dockerfileLabel} />
+                <SummaryRow label="Dockerfile" value={dockerfileLabel} />
               )}
-              {!form.compose_file && <SummaryRow label="Port" value={form.container_port} />}
+              <SummaryRow label="Port" value={form.container_port} />
               <SummaryRow label="Domain" value={form.domain || "auto (temporary)"} />
               {envCount === null ? (
                 <SummaryRow label="Env" value="existing environment" />

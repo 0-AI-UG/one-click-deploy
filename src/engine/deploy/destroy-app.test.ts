@@ -48,7 +48,6 @@ mock.module("../../shared/github.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import rawDb from "../../shared/db.ts";
 import { destroyApp, destroyServer } from "./lifecycle.ts";
 
 function freshServer() {
@@ -156,16 +155,6 @@ describe("destroyApp: happy path", () => {
     attachReplica(app.id, server.id, app.name + "-r2");
     await destroyApp(app.id);
     expect(removeAuthProxy).toHaveBeenCalledTimes(2);
-  });
-
-  test("uses removeCompose path when deploy_mode is 'compose' and replica is primary", async () => {
-    const server = freshServer();
-    const app = freshApp();
-    rawDb.query("UPDATE apps SET deploy_mode=?, compose_file=? WHERE id=?").run("compose", "docker-compose.yml", app.id);
-    attachReplica(app.id, server.id, app.name); // container_name === app.name → primary
-    await destroyApp(app.id);
-    expect(removeCompose).toHaveBeenCalledTimes(1);
-    expect(removeContainer).not.toHaveBeenCalled();
   });
 
   test("invokes GitHub webhook deletion when webhook was enabled", async () => {

@@ -3,7 +3,6 @@ import {
   sshExec,
   removeContainer,
   healthCheck,
-  composeHealthCheck,
   describeFailure,
   buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
@@ -24,7 +23,6 @@ type TargetOut = {
   gitCommit: string;
   imageTag: string;
   previousStatus: string;
-  deployMode: string;
 };
 
 type CheckoutOut = { envFilePath: string | null };
@@ -63,7 +61,6 @@ const loadTargetDeployment: Step<RollbackInput, TargetOut> = {
       gitCommit: deployment.git_commit,
       imageTag: deployment.image_tag,
       previousStatus: app.status,
-      deployMode: app.deploy_mode,
     };
   },
 };
@@ -106,10 +103,6 @@ const rebuildImage: Step<RollbackInput, RebuildOut> = {
   label: "Rebuild image",
   async run(ctx, prior) {
     const target = prior["load_target_deployment"] as TargetOut;
-    if (target.deployMode === "compose") {
-      // Compose build happens together with `up -d --build` in swap_container.
-      return { dockerfilePath: null };
-    }
     const app = db.getApp(target.appId);
     if (!app) throw new Error("App not found");
     const server = db.getServer(target.serverId);
@@ -152,57 +145,47 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
     const hostPort = first.host_port;
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
-    const appDir = `/home/deploy/apps/${app.name}`;
-    const envFileFlag = checkout.envFilePath ? `--env-file ${checkout.envFilePath}` : "";
 
     let priorSnapshot: PriorContainerSnapshot = null;
-    if (target.deployMode === "compose") {
-      const composeCmd = `cd ${appDir} && docker compose -f ${app.compose_file} -f docker-compose.ocd.yml -p ${app.name} ${envFileFlag} up -d --build`;
-      const result = await sshExec(server.ipv4, asUser(composeCmd), hostKey);
-      if (result.exitCode !== 0) {
-        throw new Error(describeFailure("Failed to rollback compose project", result));
+    // Snapshot the running container before removing so compensate can
+    // restart the prior image if any later step in this op fails.
+    try {
+      const inspect = await sshExec(
+        server.ipv4,
+        `docker inspect ${app.name} --format '{{.Config.Image}}' 2>/dev/null || true`,
+        hostKey,
+      );
+      const priorImage = inspect.stdout.trim();
+      if (priorImage) {
+        priorSnapshot = {
+          image: priorImage,
+          envFilePath: checkout.envFilePath,
+          hostPort,
+          containerPort: app.container_port,
+          bindAddr,
+          volumeMount: app.volume_mount || null,
+          extraVolumes: parseExtraVolumes(app.extra_volumes),
+        };
       }
-    } else {
-      // Snapshot the running container before removing so compensate can
-      // restart the prior image if any later step in this op fails.
-      try {
-        const inspect = await sshExec(
-          server.ipv4,
-          `docker inspect ${app.name} --format '{{.Config.Image}}' 2>/dev/null || true`,
-          hostKey,
-        );
-        const priorImage = inspect.stdout.trim();
-        if (priorImage) {
-          priorSnapshot = {
-            image: priorImage,
-            envFilePath: checkout.envFilePath,
-            hostPort,
-            containerPort: app.container_port,
-            bindAddr,
-            volumeMount: app.volume_mount || null,
-            extraVolumes: parseExtraVolumes(app.extra_volumes),
-          };
-        }
-      } catch (err) {
-        ctx.log(`Failed to snapshot prior container (compensate may be no-op): ${err}`);
-      }
+    } catch (err) {
+      ctx.log(`Failed to snapshot prior container (compensate may be no-op): ${err}`);
+    }
 
-      await removeContainer(server.ipv4, app.name, hostKey);
-      const cmd = buildDockerRunArgs({
-        name: app.name,
-        image: `${app.name}:latest`,
-        appName: app.name,
-        network: null,
-        publish: { bindAddr, hostPort, containerPort: app.container_port },
-        envFilePath: checkout.envFilePath || undefined,
-        volumeMount: app.volume_mount || undefined,
-        extraVolumes: parseExtraVolumes(app.extra_volumes),
-        memoryMb: app.memory_mb || undefined,
-      });
-      const runResult = await sshExec(server.ipv4, asUser(cmd), hostKey);
-      if (runResult.exitCode !== 0) {
-        throw new Error(describeFailure("Failed to start container after rollback rebuild", runResult));
-      }
+    await removeContainer(server.ipv4, app.name, hostKey);
+    const cmd = buildDockerRunArgs({
+      name: app.name,
+      image: `${app.name}:latest`,
+      appName: app.name,
+      network: null,
+      publish: { bindAddr, hostPort, containerPort: app.container_port },
+      envFilePath: checkout.envFilePath || undefined,
+      volumeMount: app.volume_mount || undefined,
+      extraVolumes: parseExtraVolumes(app.extra_volumes),
+      memoryMb: app.memory_mb || undefined,
+    });
+    const runResult = await sshExec(server.ipv4, asUser(cmd), hostKey);
+    if (runResult.exitCode !== 0) {
+      throw new Error(describeFailure("Failed to start container after rollback rebuild", runResult));
     }
     return { containerName: app.name, priorSnapshot };
   },
@@ -214,7 +197,7 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
     }
     // Best-effort: restart the prior container image if we captured one.
     const snap = out?.priorSnapshot;
-    if (!snap || target.deployMode === "compose") return;
+    if (!snap) return;
     try {
       const app = db.getApp(target.appId);
       const server = db.getServer(target.serverId);
@@ -267,9 +250,7 @@ const healthCheckStep: Step<RollbackInput, { healthy: boolean }> = {
     const first = replicas[0];
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
-    const health = target.deployMode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey)
-      : await healthCheck(server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey);
+    const health = await healthCheck(server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey);
     db.updateAppStatus(target.appId, health.healthy ? "running" : "unhealthy");
     if (!health.healthy) {
       // Fail the op so swap_container's compensate restores the prior image

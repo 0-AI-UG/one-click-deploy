@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import {
   sshExec, deployCaddyWakePage,
-  removeAuthProxy, stopContainer, stopCompose,
+  removeAuthProxy, stopContainer,
 } from "../../shared/remote/index.ts";
 import { syncAppCaddy, removeAppCaddy } from "./caddy-manager.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
@@ -58,20 +58,11 @@ export async function scaleDown(
       if (preserveAsAnchor) {
         // Stop-but-preserve path (light sleep). Keep the container, env file,
         // and volume mount on disk so wake is `docker start`.
-        if (app.deploy_mode === "compose") {
-          try {
-            await stopCompose(server.ipv4, app.name, hostKey);
-          } catch (err) {
-            log("scale", `Failed to stop compose project ${app.name}: ${err}`);
-            throw err;
-          }
-        } else {
-          try {
-            await stopContainer(server.ipv4, replica.container_name, hostKey);
-          } catch (err) {
-            log("scale", `Failed to stop container ${replica.container_name}: ${err}`);
-            throw err;
-          }
+        try {
+          await stopContainer(server.ipv4, replica.container_name, hostKey);
+        } catch (err) {
+          log("scale", `Failed to stop container ${replica.container_name}: ${err}`);
+          throw err;
         }
         // Leave auth proxy in place (if any) — it will proxy to the stopped
         // container during sleep, but nothing routes traffic there: Caddy is
@@ -81,11 +72,7 @@ export async function scaleDown(
         emit("scale", `Replica ${replica.container_name} stopped (anchor for sleep)`);
       } else {
         // Stop-and-remove path (actual scale-down, not sleep).
-        if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-          // This is the primary compose instance — handled separately during 2→1
-        } else {
-          await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
-        }
+        await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
 
         if (app.auth_password) {
           try {

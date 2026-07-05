@@ -22,9 +22,6 @@ export interface App {
   webhook_wait_for_ci: number;
   github_webhook_id: string;
   auth_password: string;
-  deploy_mode: string;
-  compose_file: string;
-  compose_web_service: string;
   desired_replicas: number;
   min_replicas: number;
   max_replicas: number;

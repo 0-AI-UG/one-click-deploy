@@ -42,7 +42,7 @@ export function RepoSection({ form, set, introspecting, introspect }: Props) {
                     ? `Deploy manifest found`
                     : `${detected.manifests.length} deploy manifests found`
                   : <>
-                      Found {detected.dockerfiles.length > 0 ? "Dockerfile" : detected.compose_files[0] ? "compose" : "repo"}
+                      Found {detected.dockerfiles.length > 0 ? "Dockerfile" : "repo"}
                       {detected.detected_port ? ` · port ${detected.detected_port}` : ""}
                       {detected.env_vars.length > 0
                         ? ` · ${detected.env_vars.length} env var${detected.env_vars.length === 1 ? "" : "s"}`

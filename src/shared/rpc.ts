@@ -33,9 +33,6 @@ export type App = {
   webhook_wait_for_ci: number;
   github_webhook_id: string;
   auth_password: string;
-  deploy_mode: string; // "dockerfile" | "compose"
-  compose_file: string;
-  compose_web_service: string;
   desired_replicas: number;
   min_replicas: number;
   max_replicas: number;
@@ -120,8 +117,6 @@ export type DeployRequest = {
   webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
   webhook_wait_for_ci?: boolean; // Wait for CI checks to pass before deploying
   auth_password?: string; // If set, deploys a login gate in front of the app
-  compose_file?: string; // Path to compose file, auto-detected if omitted
-  compose_web_service?: string; // Which compose service Caddy proxies to (default: auto-detect)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
   public?: boolean; // Whether the app is publicly accessible (default true)
   extra_volumes?: Array<{ host_path: string; container_path: string }>; // Additional volume mounts
@@ -165,8 +160,6 @@ export type DeployManifest = {
     dockerfile?: string;
     context?: string;
     container_port?: number;
-    compose_file?: string;
-    compose_web_service?: string;
   };
   env?: Array<{
     key: string;

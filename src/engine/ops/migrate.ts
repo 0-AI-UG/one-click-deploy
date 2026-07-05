@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { migrateReplica, type MigrateResult, rollbackMigrateWithVolume, type VolumeMigrationContext } from "../scale/migrate.ts";
 import { syncAppCaddy } from "../scale/caddy-manager.ts";
-import { sshExec, healthCheck, composeHealthCheck } from "../../shared/remote/index.ts";
+import { sshExec, healthCheck } from "../../shared/remote/index.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -133,9 +133,7 @@ const verifyReplicaHealthy: Step<MigrateInput, { ok: true; healthy: boolean }> =
     if (!server) throw new Error("Target server not found after migration");
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
-    const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, replica.host_port, 5, hostKey)
-      : await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
+    const health = await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
     if (!health.healthy) {
       // Surface to the reconciler sweep — stays in cleanup_failed bucket so
       // operators see it without auto-retry.

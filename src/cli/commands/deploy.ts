@@ -128,8 +128,6 @@ ${BOLD}Options:${RESET}
   if (domain) body.domain = domain;
   if (manifest.build?.dockerfile) body.dockerfile_path = manifest.build.dockerfile;
   if (manifest.build?.context) body.docker_context = manifest.build.context;
-  if (manifest.build?.compose_file) body.compose_file = manifest.build.compose_file;
-  if (manifest.build?.compose_web_service) body.compose_web_service = manifest.build.compose_web_service;
 
   if (manifest.webhook?.enabled) {
     body.webhook_enabled = true;

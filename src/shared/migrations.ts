@@ -1235,6 +1235,23 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 58,
+    description: "Drop apps deploy_mode/compose_file/compose_web_service columns (Dockerfile-only)",
+    up: (db) => {
+      // Docker Compose and Railpack app deploy modes were removed — every app
+      // now builds from a Dockerfile, so these columns no longer vary. DROP
+      // COLUMN leaves the table in place, so the ON DELETE CASCADE children of
+      // `apps` are untouched (no rebuild needed). Guarded so re-runs and older
+      // fixtures without the columns don't error.
+      const cols = db.query("PRAGMA table_info(apps)").all() as Array<{ name: string }>;
+      for (const col of ["deploy_mode", "compose_file", "compose_web_service"]) {
+        if (cols.some((c) => c.name === col)) {
+          db.run(`ALTER TABLE apps DROP COLUMN ${col}`);
+        }
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

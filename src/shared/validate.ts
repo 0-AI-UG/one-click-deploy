@@ -246,10 +246,6 @@ export function validateDeployManifest(
     const b = obj.build as Record<string, unknown>;
     if ("dockerfile" in b && typeof b.dockerfile !== "string")
       return { ok: false, error: '"build.dockerfile" must be a string' };
-    if ("compose_file" in b && typeof b.compose_file !== "string")
-      return { ok: false, error: '"build.compose_file" must be a string' };
-    if ("compose_web_service" in b && typeof b.compose_web_service !== "string")
-      return { ok: false, error: '"build.compose_web_service" must be a string' };
     if ("context" in b && typeof b.context !== "string")
       return { ok: false, error: '"build.context" must be a string' };
     if ("container_port" in b) {
@@ -257,7 +253,7 @@ export function validateDeployManifest(
         return { ok: false, error: '"build.container_port" must be an integer 1–65535' };
     }
     // Reject .. in paths
-    for (const key of ["dockerfile", "compose_file"] as const) {
+    for (const key of ["dockerfile"] as const) {
       if (typeof b[key] === "string" && (b[key] as string).includes(".."))
         return { ok: false, error: `"build.${key}" must not contain ".."` };
     }

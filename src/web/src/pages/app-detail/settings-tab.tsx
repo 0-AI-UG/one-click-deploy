@@ -109,7 +109,7 @@ export function SettingsTab({
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Cpu size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Memory Limit (MB) <InfoTip text="Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save & redeploy. Dockerfile/railpack apps only." /></h3>
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Memory Limit (MB) <InfoTip text="Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save & redeploy." /></h3>
           </div>
           <input
             type="number"

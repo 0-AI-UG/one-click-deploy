@@ -1,7 +1,7 @@
 /**
  * Generate a cloud-init user-data script for provisioning servers.
- * The base script installs Docker, Caddy, Bun, Railpack/BuildKit, and
- * hardens SSH. Provider-specific packages/commands can be injected.
+ * The base script installs Docker, Caddy, Bun, and hardens SSH.
+ * Provider-specific packages/commands can be injected.
  */
 export function cloudInitScript(opts?: {
   extraPackages?: string[];
@@ -114,10 +114,6 @@ systemctl restart caddy
 # Install Bun runtime (for webhook receiver)
 curl -fsSL https://bun.sh/install | bash
 ln -sf /root/.bun/bin/bun /usr/local/bin/bun
-
-# Install Railpack + BuildKit for zero-config builds
-curl -sSL https://railpack.com/install.sh | sh
-docker run --rm --privileged -d --name buildkit moby/buildkit
 
 # Signal ready
 touch /root/.provisioned

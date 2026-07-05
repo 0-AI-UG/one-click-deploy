@@ -136,14 +136,10 @@ async function migrateStateless(
   emit("migrate", `Waiting 10s drain for ${replica.container_name}...`);
   await Bun.sleep(10_000);
 
-  if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-    // Primary compose instance — leave the on-disk project; just stop the container.
-  } else {
-    // Graceful stop first so SQLite WAL and other buffered writers flush.
-    // `docker stop -t 20` sends SIGTERM, waits up to 20s, then SIGKILL.
-    await sshExec(sourceServer.ipv4, asUser(`docker stop -t 20 ${replica.container_name} 2>/dev/null || true`), hostKey);
-    await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
-  }
+  // Graceful stop first so SQLite WAL and other buffered writers flush.
+  // `docker stop -t 20` sends SIGTERM, waits up to 20s, then SIGKILL.
+  await sshExec(sourceServer.ipv4, asUser(`docker stop -t 20 ${replica.container_name} 2>/dev/null || true`), hostKey);
+  await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
 
   if (app.auth_password) {
     try {
@@ -236,14 +232,9 @@ async function migrateWithVolume(
 
   if (containerPresent) {
     // Graceful stop so SQLite WAL and other buffered writers flush before the
-    // volume is detached. compose down sends SIGTERM then SIGKILL (10s default);
-    // docker stop -t 20 gives single containers a 20s grace window.
-    if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-      await sshExec(sourceServer.ipv4, asUser(`cd /home/deploy/apps/${app.name} && docker compose down -t 20 2>/dev/null || true`), sourceHostKey);
-    } else {
-      await sshExec(sourceServer.ipv4, asUser(`docker stop -t 20 ${replica.container_name} 2>/dev/null || true`), sourceHostKey);
-      await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), sourceHostKey);
-    }
+    // volume is detached. docker stop -t 20 gives the container a 20s grace window.
+    await sshExec(sourceServer.ipv4, asUser(`docker stop -t 20 ${replica.container_name} 2>/dev/null || true`), sourceHostKey);
+    await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), sourceHostKey);
   } else {
     log("migrate", `Source container ${replica.container_name} already gone — skipping stop/rm`);
   }
@@ -456,23 +447,10 @@ export async function rollbackMigrateWithVolume(
       if (res.exitCode !== 0) {
         logLine(`MANUAL RECOVERY NEEDED: source container destroyed and image '${app.name}:latest' missing — redeploy required`);
       } else {
-        if (app.deploy_mode === "compose" && rb.replica && rb.replica.container_name === app.name) {
-          try {
-            await sshExec(
-              sourceServer.ipv4,
-              asUser(`cd /home/deploy/apps/${app.name} && docker compose up -d 2>&1 || true`),
-              sourceHostKey,
-            );
-            logLine(`Attempted to restart compose project on source ${sourceServer.name}`);
-          } catch (err) {
-            logLine(`MANUAL RECOVERY NEEDED: failed to restart compose on source: ${err}`);
-          }
-        } else {
-          try {
-            await restartSourceReplica(rb, logLine);
-          } catch (err) {
-            logLine(`MANUAL RECOVERY NEEDED: failed to restart source container: ${err}`);
-          }
+        try {
+          await restartSourceReplica(rb, logLine);
+        } catch (err) {
+          logLine(`MANUAL RECOVERY NEEDED: failed to restart source container: ${err}`);
         }
       }
     } catch (err) {

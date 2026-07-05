@@ -133,11 +133,6 @@ async function recreateReplica(
   hostKey: string | undefined,
 ): Promise<void> {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-  if (app.deploy_mode === "compose") {
-    await sshExec(server.ipv4, asUser(`cd /home/deploy/apps/${app.name} && docker compose -p ${app.name} up -d`), hostKey);
-    log("health", `recreated compose project ${app.name}`);
-    return;
-  }
   const image = `${app.name}:latest`;
   const present = await sshExec(server.ipv4, asUser(`docker image inspect ${image} >/dev/null 2>&1 && echo yes || echo no`), hostKey);
   if (present.stdout.trim() !== "yes") {
@@ -175,9 +170,7 @@ async function checkReplicaHealth(
   const hostKey = server.ssh_host_key || undefined;
   const bindHost = replicaBindHost(server);
   try {
-    const check = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, bindHost, replica.host_port, 1, hostKey)
-      : await healthCheck(server.ipv4, replica.container_name, bindHost, replica.host_port, 1, hostKey);
+    const check = await healthCheck(server.ipv4, replica.container_name, bindHost, replica.host_port, 1, hostKey);
 
     if (check.healthy) {
       db.updateReplicaStatus(replica.id, "running");
@@ -190,11 +183,7 @@ async function checkReplicaHealth(
       if (ticks >= UNHEALTHY_RESTART_THRESHOLD) {
         log("health", `auto-restarting ${replica.container_name}`);
         try {
-          if (app.deploy_mode === "compose") {
-            await restartCompose(server.ipv4, app.name, hostKey);
-          } else {
-            await restartContainer(server.ipv4, replica.container_name, hostKey);
-          }
+          await restartContainer(server.ipv4, replica.container_name, hostKey);
           db.resetUnhealthyTicks(replica.id);
           db.insertScalingEvent({
             app_id: replica.app_id,

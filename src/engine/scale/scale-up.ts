@@ -1,8 +1,8 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  sshExec, cloneAndComposeBuild, cloneAndBuild, cloneAndRailpackBuild,
-  transferImage, healthCheck, composeHealthCheck,
+  sshExec, cloneAndBuild,
+  transferImage, healthCheck,
   deployAuthProxy, removeAuthProxy,
   describeFailure, buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
@@ -57,47 +57,25 @@ export async function scaleUp(
     // target — the build helper runs the replica container itself, so the
     // manual env-file/docker-run block below is skipped.
     let rebuildFallback = false;
-    if (app.deploy_mode === "compose") {
-      // For compose, clone repo and build on target
-      await cloneAndComposeBuild(
+    try {
+      await transferImage(
+        primaryServer.ipv4,
         targetServer.ipv4,
-        {
-          name: app.name,
-          gitRepo: app.git_repo,
-          port: app.container_port,
-          hostPort,
-          envVars: await resolveAppEnvVars(app),
-          volumeMount: app.volume_mount || undefined,
-          extraVolumes: scaleExtraVols,
-          composeFile: app.compose_file,
-          webService: app.compose_web_service,
-          gitToken: githubPat,
-          gitBranch: app.git_branch || undefined,
-          bindAddr: replicaBindAddr,
-        },
-        (line) => emit("scale", line)
+        imageName,
+        primaryServer.ssh_host_key || undefined,
+        targetHostKey
       );
-    } else {
-      try {
-        await transferImage(
-          primaryServer.ipv4,
-          targetServer.ipv4,
-          imageName,
-          primaryServer.ssh_host_key || undefined,
-          targetHostKey
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        emit("scale", `Image transfer from primary failed: ${msg}`);
-        if (!app.git_repo) {
-          throw new Error(`Image '${imageName}' missing on source server and app has no git_repo configured for rebuild fallback.`);
-        }
-        // Rebuild on the target from git. Match the dispatch in
-        // ops/redeploy.ts so the rebuilt image is identical to what an
-        // initial deploy would produce.
-        emit("scale", `Falling back to rebuild from git on ${targetServer.name}...`);
-        rebuildFallback = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      emit("scale", `Image transfer from primary failed: ${msg}`);
+      if (!app.git_repo) {
+        throw new Error(`Image '${imageName}' missing on source server and app has no git_repo configured for rebuild fallback.`);
       }
+      // Rebuild on the target from git. Match the dispatch in
+      // ops/redeploy.ts so the rebuilt image is identical to what an
+      // initial deploy would produce.
+      emit("scale", `Falling back to rebuild from git on ${targetServer.name}...`);
+      rebuildFallback = true;
     }
 
     if (rebuildFallback) {
@@ -117,15 +95,11 @@ export async function scaleUp(
         memoryMb: app.memory_mb || undefined,
       };
       const logLine = (line: string) => emit("scale", line);
-      if (app.deploy_mode === "railpack") {
-        await cloneAndRailpackBuild(targetServer.ipv4, buildOpts, logLine);
-      } else {
-        await cloneAndBuild(targetServer.ipv4, {
-          ...buildOpts,
-          dockerfilePath: app.dockerfile_path || undefined,
-          dockerContext: app.docker_context || undefined,
-        }, logLine);
-      }
+      await cloneAndBuild(targetServer.ipv4, {
+        ...buildOpts,
+        dockerfilePath: app.dockerfile_path || undefined,
+        dockerContext: app.docker_context || undefined,
+      }, logLine);
     }
 
     const containerName = `${app.name}-r${replicaNum}`;
@@ -135,14 +109,14 @@ export async function scaleUp(
     // private-IP host port and make `docker run` fail with
     // "port is already allocated". Removing it here makes retries idempotent.
     // (Auth proxy is a systemd unit handled by deployAuthProxy itself.)
-    // Skipped on rebuildFallback: cloneAndBuild/cloneAndRailpackBuild already
-    // started the replica container above; removing it here would undo that.
+    // Skipped on rebuildFallback: cloneAndBuild already started the replica
+    // container above; removing it here would undo that.
     if (!rebuildFallback) {
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
       await sshExec(targetServer.ipv4, asUser(`docker rm -f ${containerName} 2>/dev/null || true`), targetHostKey);
     }
 
-    if (app.deploy_mode !== "compose" && !rebuildFallback) {
+    if (!rebuildFallback) {
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
       const envVars = await resolveAppEnvVars(app);
       const envEntries = Object.entries(envVars);
@@ -185,9 +159,7 @@ export async function scaleUp(
 
     // Health check
     emit("scale", `Health checking replica ${replicaNum}...`);
-    const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(targetServer.ipv4, app.name, replicaBindAddr, hostPort, 5, targetHostKey)
-      : await healthCheck(targetServer.ipv4, containerName, replicaBindAddr, hostPort, 5, targetHostKey);
+    const health = await healthCheck(targetServer.ipv4, containerName, replicaBindAddr, hostPort, 5, targetHostKey);
 
     // Insert replica record BEFORE syncing Caddy so the upstream list
     // built from the DB actually includes the new replica.

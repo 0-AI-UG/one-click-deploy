@@ -9,7 +9,6 @@ type RenameOut = {
   oldName: string;
   newName: string;
   serversRenamed: number[];
-  deployMode: string;
   dbRenamed: boolean;
 };
 
@@ -24,7 +23,6 @@ const renameOnServers: Step<RenameAppInput, RenameOut> = {
       oldName: app.name,
       newName,
       serversRenamed: [],
-      deployMode: app.deploy_mode,
       dbRenamed: false,
     };
     if (newName === app.name) return out;
@@ -42,24 +40,16 @@ const renameOnServers: Step<RenameAppInput, RenameOut> = {
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
 
-      if (app.deploy_mode === "compose") {
-        await sshExec(
-          server.ipv4,
-          `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
-          hostKey,
-        );
-      } else {
-        await sshExec(
-          server.ipv4,
-          `su - deploy -c "docker rename ${app.name} ${newName} 2>/dev/null || true"`,
-          hostKey,
-        );
-        await sshExec(
-          server.ipv4,
-          `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
-          hostKey,
-        );
-      }
+      await sshExec(
+        server.ipv4,
+        `su - deploy -c "docker rename ${app.name} ${newName} 2>/dev/null || true"`,
+        hostKey,
+      );
+      await sshExec(
+        server.ipv4,
+        `su - deploy -c "mv /home/deploy/apps/${app.name} /home/deploy/apps/${newName} 2>/dev/null || true"`,
+        hostKey,
+      );
       out.serversRenamed.push(server.id);
     }
 
@@ -79,24 +69,16 @@ const renameOnServers: Step<RenameAppInput, RenameOut> = {
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
       try {
-        if (out.deployMode === "compose") {
-          await sshExec(
-            server.ipv4,
-            `su - deploy -c "mv /home/deploy/apps/${out.newName} /home/deploy/apps/${out.oldName} 2>/dev/null || true"`,
-            hostKey,
-          );
-        } else {
-          await sshExec(
-            server.ipv4,
-            `su - deploy -c "docker rename ${out.newName} ${out.oldName} 2>/dev/null || true"`,
-            hostKey,
-          );
-          await sshExec(
-            server.ipv4,
-            `su - deploy -c "mv /home/deploy/apps/${out.newName} /home/deploy/apps/${out.oldName} 2>/dev/null || true"`,
-            hostKey,
-          );
-        }
+        await sshExec(
+          server.ipv4,
+          `su - deploy -c "docker rename ${out.newName} ${out.oldName} 2>/dev/null || true"`,
+          hostKey,
+        );
+        await sshExec(
+          server.ipv4,
+          `su - deploy -c "mv /home/deploy/apps/${out.newName} /home/deploy/apps/${out.oldName} 2>/dev/null || true"`,
+          hostKey,
+        );
       } catch (err) {
         ctx.log(`Failed to revert rename on server ${serverId}: ${err}`);
       }

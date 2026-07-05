@@ -44,7 +44,6 @@ export {
   updateAppMemory,
   updateAppAuthPassword,
   updateAppPublic,
-  updateAppDeployMode,
   updateAppWebhook,
   updateAppWebhookWaitForCi,
   updateAppScaling,

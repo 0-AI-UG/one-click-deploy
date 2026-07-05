@@ -18,7 +18,6 @@ export type AppData = {
   domain: string;
   git_repo: string;
   status: string;
-  deploy_mode: string;
   container_port: number;
   webhook_enabled: number | boolean;
   webhook_branch?: string;
@@ -217,8 +216,6 @@ export type DeployBody = {
   webhook_wait_for_ci?: boolean;
   auth_password?: string;
   replicas?: number;
-  compose_file?: string;
-  compose_web_service?: string;
   public?: boolean;
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   server_id?: number;

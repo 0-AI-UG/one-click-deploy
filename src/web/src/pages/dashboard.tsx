@@ -7,7 +7,7 @@ import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLi
 
 type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
-  deploy_mode: string; container_port: number; webhook_enabled: number;
+  container_port: number; webhook_enabled: number;
   desired_replicas: number; volume_id: string;
 };
 type ServiceData = {

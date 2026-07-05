@@ -23,9 +23,6 @@ export type AppRow = {
   webhook_path: string;
   github_webhook_id: string;
   auth_password: string;
-  deploy_mode: string;
-  compose_file: string;
-  compose_web_service: string;
   desired_replicas: number;
   min_replicas: number;
   max_replicas: number;
@@ -331,17 +328,6 @@ export function updateAppAuthPassword(id: number, authPassword: string): void {
 
 export function updateAppPublic(id: number, isPublic: boolean): void {
   db.query("UPDATE apps SET public = ? WHERE id = ?").run(isPublic ? 1 : 0, id);
-}
-
-export function updateAppDeployMode(
-  id: number,
-  deployMode: string,
-  composeFile: string,
-  composeWebService: string
-): void {
-  db.query(
-    "UPDATE apps SET deploy_mode = ?, compose_file = ?, compose_web_service = ? WHERE id = ?"
-  ).run(deployMode, composeFile, composeWebService, id);
 }
 
 export function updateAppWebhook(

@@ -1,7 +1,7 @@
 // Lightweight GitHub repo introspection — peeks at a public (or token-scoped)
 // repo via the GitHub Contents API and pulls out the few things our deploy
-// flow needs to autofill: Dockerfile path(s), docker-compose file + likely
-// web service, an EXPOSE'd port, and env var keys from a .env.example.
+// flow needs to autofill: Dockerfile path(s), an EXPOSE'd port, and env var
+// keys from a .env.example.
 //
 // Everything here is best-effort. If anything fails (rate limit, private
 // repo, missing files, parse error) we degrade gracefully — the frontend
@@ -19,9 +19,6 @@ export type IntrospectResult = {
   branches: string[];
   suggested_app_name: string;
   dockerfiles: string[];
-  compose_files: string[];
-  compose_services: Array<{ name: string; port: number | null; has_ports: boolean }>;
-  suggested_web_service: string | null;
   detected_port: number | null;
   env_vars: Array<{ key: string; value: string }>;
   manifests: ParsedManifest[];
@@ -32,7 +29,6 @@ export type IntrospectResult = {
   suggested_app_name?: string;
 };
 
-const WEB_SERVICE_HINTS = ["web", "app", "frontend", "server", "api", "www", "site"];
 
 function sanitizeAppName(repo: string): string {
   return repo
@@ -74,66 +70,6 @@ async function fetchRawFile(
     }
   }
   return null;
-}
-
-// Tiny purpose-built compose parser. We don't need full YAML — we just need
-// the names of services under `services:` and whether each one has a `ports:`
-// block (and if so, the host port from the first mapping).
-function parseCompose(yaml: string): Array<{ name: string; port: number | null; has_ports: boolean }> {
-  const lines = yaml.split(/\r?\n/);
-  const services: Array<{ name: string; port: number | null; has_ports: boolean }> = [];
-
-  // Find the `services:` block (top-level, indent 0)
-  let i = 0;
-  while (i < lines.length && !/^services:\s*$/.test(lines[i])) i++;
-  if (i >= lines.length) return services;
-  i++;
-
-  // Service entries are indented; assume 2-space indent (the overwhelming convention).
-  // A service starts with `  <name>:` and runs until the next 2-space line or EOF.
-  let current: { name: string; port: number | null; has_ports: boolean } | null = null;
-  let inPorts = false;
-
-  for (; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.trim() || line.trim().startsWith("#")) continue;
-    // End of services block — top-level key with no leading spaces
-    if (/^[A-Za-z]/.test(line)) break;
-
-    const serviceMatch = line.match(/^ {2}([A-Za-z0-9_.-]+):\s*$/);
-    if (serviceMatch) {
-      if (current) services.push(current);
-      current = { name: serviceMatch[1], port: null, has_ports: false };
-      inPorts = false;
-      continue;
-    }
-
-    if (!current) continue;
-
-    // `    ports:` or `    ports: [...]`
-    if (/^ {4}ports:\s*(\[.*\])?\s*$/.test(line)) {
-      current.has_ports = true;
-      inPorts = true;
-      // Inline list form: ports: ["80:80"]
-      const inline = line.match(/\[(.*)\]/);
-      if (inline && current.port == null) {
-        const m = inline[1].match(/['"]?(\d+)(?::\d+)?['"]?/);
-        if (m) current.port = parseInt(m[1], 10);
-      }
-      continue;
-    }
-
-    // Leaving ports if we hit another sibling key at the same indent
-    if (inPorts && /^ {4}[A-Za-z]/.test(line)) inPorts = false;
-
-    if (inPorts && current.port == null) {
-      // - "3000:3000" or - 3000:3000 or - "3000"
-      const m = line.match(/^\s*-\s*['"]?(\d+)(?::\d+)?['"]?/);
-      if (m) current.port = parseInt(m[1], 10);
-    }
-  }
-  if (current) services.push(current);
-  return services;
 }
 
 function parseDockerfileExpose(dockerfile: string): number | null {
@@ -202,26 +138,6 @@ function pickEnvExample(paths: string[], dockerfilePath: string | null): string 
   }
 
   return envPaths.sort((a, b) => a.split("/").length - b.split("/").length)[0] ?? null;
-}
-
-function pickWebService(
-  services: Array<{ name: string; port: number | null; has_ports: boolean }>,
-): string | null {
-  if (services.length === 0) return null;
-  // Prefer a service with a hint name AND ports
-  for (const hint of WEB_SERVICE_HINTS) {
-    const match = services.find((s) => s.name.toLowerCase() === hint && s.has_ports);
-    if (match) return match.name;
-  }
-  // Else any service with ports
-  const withPorts = services.find((s) => s.has_ports);
-  if (withPorts) return withPorts.name;
-  // Else first hint match without ports
-  for (const hint of WEB_SERVICE_HINTS) {
-    const match = services.find((s) => s.name.toLowerCase() === hint);
-    if (match) return match.name;
-  }
-  return services[0].name;
 }
 
 export async function introspectRepo(url: string, userId?: string, ref?: string): Promise<IntrospectResult> {
@@ -299,9 +215,6 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
       branches,
       suggested_app_name,
       dockerfiles: [],
-      compose_files: [],
-      compose_services: [],
-      suggested_web_service: null,
       detected_port: null,
       env_vars: [],
       manifests: [],
@@ -347,7 +260,6 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
       const m = result.manifest;
       if (m.build && dir) {
         if (m.build.dockerfile) m.build.dockerfile = `${dir}/${m.build.dockerfile}`;
-        if (m.build.compose_file) m.build.compose_file = `${dir}/${m.build.compose_file}`;
       }
       manifests.push({ path: mPath, dir, manifest: m });
     } catch {
@@ -360,42 +272,23 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
     .filter((p) => /(^|\/)Dockerfile(\.[A-Za-z0-9_-]+)?$/.test(p))
     .sort((a, b) => a.split("/").length - b.split("/").length); // shallowest first
 
-  const composeFiles = paths
-    .filter((p) => /(^|\/)(?:docker-compose|compose)\.ya?ml$/.test(p))
-    .sort((a, b) => a.split("/").length - b.split("/").length); // shallowest first
-
   const envExampleCandidate = pickEnvExample(paths, dockerfiles[0] ?? null);
 
   // 4. Read the chosen files in parallel
-  const [composeContent, dockerfileContent, envContent] = await Promise.all([
-    composeFiles[0] ? fetchRawFile(owner, repo, fetchRef, composeFiles[0], token) : Promise.resolve(null),
+  const [dockerfileContent, envContent] = await Promise.all([
     dockerfiles[0] ? fetchRawFile(owner, repo, fetchRef, dockerfiles[0], token) : Promise.resolve(null),
     envExampleCandidate ? fetchRawFile(owner, repo, fetchRef, envExampleCandidate, token) : Promise.resolve(null),
   ]);
 
-  let compose_services: Array<{ name: string; port: number | null; has_ports: boolean }> = [];
-  let suggested_web_service: string | null = null;
   let detected_port: number | null = null;
-
-  if (composeContent) {
-    try {
-      compose_services = parseCompose(composeContent);
-      suggested_web_service = pickWebService(compose_services);
-      const webSvc = compose_services.find((s) => s.name === suggested_web_service);
-      if (webSvc?.port) detected_port = webSvc.port;
-    } catch {
-      notes.push("Found a compose file but couldn't read it — we'll detect it again at deploy time.");
-    }
-  }
-
-  if (detected_port == null && dockerfileContent) {
+  if (dockerfileContent) {
     detected_port = parseDockerfileExpose(dockerfileContent);
   }
 
   const env_vars = envContent ? parseEnvExample(envContent) : [];
 
-  if (dockerfiles.length === 0 && composeFiles.length === 0) {
-    notes.push("No Dockerfile or compose file found — Railpack will auto-detect your stack and build the image.");
+  if (dockerfiles.length === 0) {
+    notes.push("No Dockerfile found — add a Dockerfile to the repo root to deploy.");
   }
 
   return {
@@ -406,9 +299,6 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
     branches,
     suggested_app_name,
     dockerfiles,
-    compose_files: composeFiles,
-    compose_services,
-    suggested_web_service,
     detected_port,
     env_vars,
     manifests,

@@ -44,7 +44,6 @@ export interface App {
   status: string;
   domain: string;
   git_repo: string;
-  deploy_mode: string;
   desired_replicas: number;
   servers: number[];
   created_at: string;

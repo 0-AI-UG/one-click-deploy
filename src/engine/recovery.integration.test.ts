@@ -55,9 +55,6 @@ const remoteMocks = {
     world.containers.add(opts.name);
     return { imageTag: `${opts.name}:latest` };
   }),
-  cloneAndComposeBuild: mock(async () => ({ composeFile: "docker-compose.yml", webService: "web" })),
-  detectComposeFile: mock(async () => ""),
-  detectWebService: mock(async () => "web"),
   removeContainer: mock(async (_ip: string, name: string) => { world.containers.delete(name); }),
   removeCompose: mock(async (_ip: string, name: string) => { world.composeDirs.delete(name); world.containers.delete(name); }),
   healthCheck: mock(async () => ({ healthy: true, statusCode: 200 })),
@@ -65,7 +62,6 @@ const remoteMocks = {
   deployAuthProxy: mock(async (_ip: string, name: string) => { world.containers.add(`${name}-auth`); return 9999; }),
   removeAuthProxy: mock(async (_ip: string, name: string) => { world.containers.delete(`${name}-auth`); }),
   containerExists: mock(async (_ip: string, name: string) => world.containers.has(name)),
-  composeProjectExists: mock(async (_ip: string, name: string) => world.composeDirs.has(name)),
   pauseContainer: mock(async () => {}),
   unpauseContainer: mock(async () => {}),
   restartContainer: mock(async () => {}),

@@ -14,24 +14,17 @@ export {
 // SSH PTY (interactive terminal)
 export { spawnSshPty, type PtySession } from "../../engine/hetzner/ssh-pty.ts";
 
-// Containers (Caddy, Docker, Compose, Railpack, health checks)
+// Containers (Caddy, Docker, Compose, health checks)
 export {
   deployCaddySite,
   deployCaddyWakePage,
   removeCaddyWakePage,
   cloneRepo,
   cloneAndBuild,
-  cloneAndRailpackBuild,
   removeContainer,
-  detectComposeFile,
-  detectWebService,
-  cloneAndComposeBuild,
   restartCompose,
   pauseCompose,
   unpauseCompose,
-  stopCompose,
-  startCompose,
-  composeProjectExists,
   removeCompose,
   getComposeLogs,
   composeHealthCheck,

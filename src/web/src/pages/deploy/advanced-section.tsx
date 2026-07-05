@@ -59,7 +59,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
         </div>
       </div>
       <div>
-        <Label>Memory Limit (MB) <InfoTip text="Container memory ceiling. Blank or 0 uses the platform default (512). Dockerfile/railpack apps only." /></Label>
+        <Label>Memory Limit (MB) <InfoTip text="Container memory ceiling. Blank or 0 uses the platform default (512)." /></Label>
         <input
           type="number"
           value={form.memory_mb}

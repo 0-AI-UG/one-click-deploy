@@ -16,8 +16,6 @@ export type DeployManifest = {
     dockerfile?: string;
     context?: string;
     container_port?: number;
-    compose_file?: string;
-    compose_web_service?: string;
   };
   env?: ManifestEnvDef[];
   volume?: { size?: number; path?: string };
@@ -44,9 +42,6 @@ export type IntrospectResult =
       branches: string[];
       suggested_app_name: string;
       dockerfiles: string[];
-      compose_files: string[];
-      compose_services: Array<{ name: string; port: number | null; has_ports: boolean }>;
-      suggested_web_service: string | null;
       detected_port: number | null;
       env_vars: Array<{ key: string; value: string }>;
       manifests: ParsedManifest[];
@@ -70,8 +65,6 @@ export type FormState = {
   webhook_wait_for_ci: boolean;
   auth_password: string;
   replicas: string;
-  compose_file: string;
-  compose_web_service: string;
   public: boolean;
   extra_volumes: Array<{ host_path: string; container_path: string }>;
   server_id: string; // "" = auto

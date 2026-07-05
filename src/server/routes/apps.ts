@@ -4,7 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
-import { getComposeLogs, getContainerLogs } from "../../shared/remote/index.ts";
+import { getContainerLogs } from "../../shared/remote/index.ts";
 import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB } from "../../shared/validate.ts";
 import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
@@ -284,9 +284,7 @@ export async function handleGetContainerLogs(request: Request, appId: number): P
     const server = db.getServer(replica.server_id);
     if (!server) return Response.json({ logs: "", error: "Server not found" }, { headers: corsHeaders });
 
-    const logs = app.deploy_mode === "compose"
-      ? await getComposeLogs(server.ipv4, app.name, tail, server.ssh_host_key || undefined)
-      : await getContainerLogs(server.ipv4, replica.container_name, tail, server.ssh_host_key || undefined);
+    const logs = await getContainerLogs(server.ipv4, replica.container_name, tail, server.ssh_host_key || undefined);
 
     return Response.json({ logs }, { headers: corsHeaders });
   } catch (error) {

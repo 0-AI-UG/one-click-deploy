@@ -3,12 +3,9 @@ import {
   sshExec,
   cloneRepo,
   cloneAndBuild,
-  cloneAndComposeBuild,
-  cloneAndRailpackBuild,
   deployAuthProxy,
   removeAuthProxy,
   healthCheck,
-  composeHealthCheck,
   removeContainer,
   buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
@@ -46,7 +43,6 @@ type RollbackSnapshot = {
 };
 type BuildOut = {
   imageTag: string;
-  deployMode: "dockerfile" | "compose" | "railpack";
   previousAuthPassword: string;
   previousContainerPort: number;
   rollback: RollbackSnapshot | null;
@@ -138,42 +134,38 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     const extraVolumes = parseExtraVolumes(app.extra_volumes);
 
     let imageTag = `${app.name}:latest`;
-    const deployMode = app.deploy_mode as BuildOut["deployMode"];
 
     // Snapshot the currently-running image + run config so a failed redeploy
     // can roll back to the last-known-good container instead of leaving the
     // app unhealthy. Retag it to `${name}:rollback` BEFORE building so the
     // upcoming `docker build -t :latest` doesn't orphan it (pruneAfterBuild
-    // preserves the `:rollback` tag). Non-compose only — compose rollback is
-    // handled by the dedicated rollback op.
+    // preserves the `:rollback` tag).
     let rollback: RollbackSnapshot | null = null;
-    if (deployMode !== "compose") {
-      try {
-        const insp = await sshExec(
-          server.ipv4,
-          asUser(`docker inspect --format='{{.Image}}' ${first.container_name} 2>/dev/null || true`),
-          server.ssh_host_key || undefined,
-        );
-        const prevImageId = insp.stdout.trim();
-        if (prevImageId) {
-          const rollbackTag = `${app.name}:rollback`;
-          await sshExec(server.ipv4, asUser(`docker tag ${prevImageId} ${rollbackTag}`), server.ssh_host_key || undefined);
-          rollback = {
-            image: rollbackTag,
-            containerName: first.container_name,
-            hostPort: first.host_port,
-            // Roll back to the port the *previous* container actually used.
-            containerPort: app.container_port,
-            bindAddr,
-            envFilePath: Object.keys(envVars).length > 0 ? `/home/deploy/apps/${app.name}/.env.deploy` : null,
-            volumeMount: app.volume_mount || null,
-            extraVolumes,
-            memoryMb: app.memory_mb ?? null,
-          };
-        }
-      } catch (err) {
-        ctx.log(`Could not snapshot previous image for rollback: ${err}`);
+    try {
+      const insp = await sshExec(
+        server.ipv4,
+        asUser(`docker inspect --format='{{.Image}}' ${first.container_name} 2>/dev/null || true`),
+        server.ssh_host_key || undefined,
+      );
+      const prevImageId = insp.stdout.trim();
+      if (prevImageId) {
+        const rollbackTag = `${app.name}:rollback`;
+        await sshExec(server.ipv4, asUser(`docker tag ${prevImageId} ${rollbackTag}`), server.ssh_host_key || undefined);
+        rollback = {
+          image: rollbackTag,
+          containerName: first.container_name,
+          hostPort: first.host_port,
+          // Roll back to the port the *previous* container actually used.
+          containerPort: app.container_port,
+          bindAddr,
+          envFilePath: Object.keys(envVars).length > 0 ? `/home/deploy/apps/${app.name}/.env.deploy` : null,
+          volumeMount: app.volume_mount || null,
+          extraVolumes,
+          memoryMb: app.memory_mb ?? null,
+        };
       }
+    } catch (err) {
+      ctx.log(`Could not snapshot previous image for rollback: ${err}`);
     }
 
     const buildOpts = {
@@ -196,25 +188,14 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       ctx.log(`[build] ${line}`);
     };
 
-    if (deployMode === "compose") {
-      await cloneAndComposeBuild(server.ipv4, {
-        ...buildOpts,
-        composeFile: app.compose_file,
-        webService: app.compose_web_service,
-      }, logLine);
-    } else if (deployMode === "railpack") {
-      const r = await cloneAndRailpackBuild(server.ipv4, buildOpts, logLine);
-      if (r.imageTag) imageTag = r.imageTag;
-    } else {
-      const r = await cloneAndBuild(server.ipv4, {
-        ...buildOpts,
-        dockerfilePath: app.dockerfile_path || undefined,
-        dockerContext: app.docker_context || undefined,
-      }, logLine);
-      if (r.imageTag) imageTag = r.imageTag;
-    }
+    const r = await cloneAndBuild(server.ipv4, {
+      ...buildOpts,
+      dockerfilePath: app.dockerfile_path || undefined,
+      dockerContext: app.docker_context || undefined,
+    }, logLine);
+    if (r.imageTag) imageTag = r.imageTag;
 
-    return { imageTag, deployMode, previousAuthPassword, previousContainerPort, rollback };
+    return { imageTag, previousAuthPassword, previousContainerPort, rollback };
   },
   // If a later step fails (e.g. the new build never becomes healthy), restore
   // the previous container so the app keeps serving instead of going unhealthy.
@@ -344,13 +325,10 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
     if (!server) throw new Error("Server not found");
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
-    const build = prior["pull_and_build"] as BuildOut;
     // Generous window (10 attempts) so a slow-booting app isn't failed
     // prematurely — but if it never comes up, throw so the op fails and
     // pull_and_build's compensate rolls back to the previous image.
-    const health = build.deployMode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey)
-      : await healthCheck(server.ipv4, first.container_name, bindAddr, first.host_port, 10, hostKey);
+    const health = await healthCheck(server.ipv4, first.container_name, bindAddr, first.host_port, 10, hostKey);
     db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
     if (!health.healthy) {
       const detail = health.error || `HTTP ${health.statusCode ?? "no response"}`;

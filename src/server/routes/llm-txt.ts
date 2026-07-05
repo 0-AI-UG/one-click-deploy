@@ -21,9 +21,7 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
   "build": {
     "dockerfile": "string — path to Dockerfile, relative to this file's directory (default: Dockerfile)",
     "context": "string — Docker build context path, relative to the repo root (default: \".\" i.e. the repo root)",
-    "container_port": "number — port the app listens on inside the container (1–65535)",
-    "compose_file": "string — path to docker-compose/compose.yml, relative to this file's directory",
-    "compose_web_service": "string — which compose service to route traffic to"
+    "container_port": "number — port the app listens on inside the container (1–65535)"
   },
 
   "env": [
@@ -51,7 +49,7 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
   "suggested_app_name": "string — suggested app name (DNS-safe: lowercase, digits, hyphens)",
   "replicas": "number — desired replica count (default: 1)",
   "public": "boolean — whether the app is publicly accessible (default: true)",
-  "memory_mb": "number — per-container memory ceiling in MB (--memory/--memory-swap). Omit or 0 to use the platform default (512). Allowed: 0 or 128–32768. Dockerfile/railpack apps only (compose apps set limits in their compose file).",
+  "memory_mb": "number — per-container memory ceiling in MB (--memory/--memory-swap). Omit or 0 to use the platform default (512). Allowed: 0 or 128–32768.",
   "extra_volumes": [
     {
       "host_path": "string — absolute path on the host machine",
@@ -90,28 +88,6 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
   ],
   "webhook": { "enabled": true, "branch": "main" },
   "suggested_app_name": "my-app"
-}
-\`\`\`
-
-## Example: Compose-based app
-
-\`\`\`json
-{
-  "$schema": 1,
-  "$llm": "{{PANEL_LLM_URL}}",
-  "name": "My Compose App",
-  "description": "Multi-container app using Docker Compose",
-  "build": {
-    "compose_file": "docker-compose.yml",
-    "compose_web_service": "server"
-  },
-  "env": [
-    { "key": "API_KEY", "description": "External API key", "required": true, "secret": true },
-    { "key": "LOG_LEVEL", "default": "info" }
-  ],
-  "volume": { "size": 10, "path": "/app/data" },
-  "webhook": { "enabled": true, "branch": "main" },
-  "suggested_app_name": "my-compose-app"
 }
 \`\`\`
 

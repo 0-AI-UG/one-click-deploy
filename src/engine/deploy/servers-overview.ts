@@ -9,7 +9,6 @@ type DbApp = {
   container_port: number;
   env_vars: string;
   status: string;
-  deploy_mode: string;
   sleeping_server_id: number | null;
   sleeping_host_port: number | null;
   deployed_by: string | null;

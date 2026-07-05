@@ -3,7 +3,6 @@ import * as github from "../../shared/github.ts";
 import {
   sshExec,
   removeContainer,
-  removeCompose,
   removeAuthProxy,
 } from "../../shared/remote/index.ts";
 import { removeAppCaddy } from "../scale/caddy-manager.ts";
@@ -63,11 +62,7 @@ const stopAndRemoveContainers: Step<DestroyInput, { affectedServerIds: number[];
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
       const r = await softStep(ctx, `rm ${replica.container_name}`, async () => {
-        if (app.deploy_mode === "compose" && replica.container_name === app.name) {
-          await removeCompose(server.ipv4, app.name, true, hostKey);
-        } else {
-          await removeContainer(server.ipv4, replica.container_name, hostKey);
-        }
+        await removeContainer(server.ipv4, replica.container_name, hostKey);
       });
       if (!r.ok) failed = true;
       await softStep(ctx, `rmdir ${app.name}`, async () => {

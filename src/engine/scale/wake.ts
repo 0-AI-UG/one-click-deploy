@@ -1,8 +1,8 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  sshExec, composeHealthCheck, healthCheck, deployAuthProxy,
-  startContainer, startCompose, containerExists, composeProjectExists,
+  sshExec, healthCheck, deployAuthProxy,
+  startContainer, containerExists,
   buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
@@ -30,72 +30,50 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     const containerName = app.name;
 
     // Prefer the fast path: if the replica was preserved on disk by
-    // scale-down (Phase 0), the container/compose project still exists and
-    // we can bring it back up with `docker start` in ~1s instead of a fresh
-    // `docker run` that has to (re)create everything.
+    // scale-down (Phase 0), the container still exists and we can bring it
+    // back up with `docker start` in ~1s instead of a fresh `docker run`
+    // that has to (re)create everything.
     let startedFastPath = false;
-    if (app.deploy_mode === "compose") {
-      if (await composeProjectExists(server.ipv4, app.name, hostKey)) {
-        try {
-          await startCompose(server.ipv4, app.name, hostKey);
+    if (await containerExists(server.ipv4, containerName, hostKey)) {
+      try {
+        const ok = await startContainer(server.ipv4, containerName, hostKey);
+        if (ok) {
           startedFastPath = true;
-          log("wake", `App ${appId}: light wake via 'docker compose start'`);
-        } catch (err) {
-          // Fall through to the slow path (full `compose up -d`). The
-          // compose stack may have been removed out-of-band.
-          log("wake", `compose start failed, falling back to 'compose up -d': ${err}`);
+          log("wake", `App ${appId}: light wake via 'docker start'`);
         }
-      }
-    } else {
-      if (await containerExists(server.ipv4, containerName, hostKey)) {
-        try {
-          const ok = await startContainer(server.ipv4, containerName, hostKey);
-          if (ok) {
-            startedFastPath = true;
-            log("wake", `App ${appId}: light wake via 'docker start'`);
-          }
-        } catch (err) {
-          log("wake", `docker start failed, falling back to 'docker run': ${err}`);
-        }
+      } catch (err) {
+        log("wake", `docker start failed, falling back to 'docker run': ${err}`);
       }
     }
 
     const bindAddr = replicaBindHost(server);
 
-    // Slow path: full re-run. Only taken when the container/compose project
-    // is not on disk — e.g. a pre-Phase-0 sleep where scale-down did
-    // `docker rm -f`, or manual cleanup on the tenant host.
+    // Slow path: full re-run. Only taken when the container is not on disk —
+    // e.g. a pre-Phase-0 sleep where scale-down did `docker rm -f`, or manual
+    // cleanup on the tenant host.
     if (!startedFastPath) {
-      if (app.deploy_mode === "compose") {
-        await sshExec(server.ipv4, asUser(
-          `cd /home/deploy/apps/${app.name} && docker compose -p ${app.name} up -d`
-        ), hostKey);
-      } else {
-        const envVars = await resolveAppEnvVars(app);
-        const envFilePath = Object.keys(envVars).length > 0
-          ? `/home/deploy/apps/${app.name}/.env.deploy`
-          : undefined;
-        let wakeExtraVols: string[] = [];
-        try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) wakeExtraVols = ev.filter((v: unknown): v is string => typeof v === "string"); } catch {}
-        const cmd = buildDockerRunArgs({
-          name: containerName,
-          image: `${app.name}:latest`,
-          appName: app.name,
-          network: null,
-          publish: { bindAddr, hostPort, containerPort: app.container_port },
-          envFilePath,
-          volumeMount: app.volume_mount || undefined,
-          extraVolumes: wakeExtraVols,
-          memoryMb: app.memory_mb || undefined,
-        });
-        await sshExec(server.ipv4, asUser(cmd), hostKey);
-      }
+      const envVars = await resolveAppEnvVars(app);
+      const envFilePath = Object.keys(envVars).length > 0
+        ? `/home/deploy/apps/${app.name}/.env.deploy`
+        : undefined;
+      let wakeExtraVols: string[] = [];
+      try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) wakeExtraVols = ev.filter((v: unknown): v is string => typeof v === "string"); } catch {}
+      const cmd = buildDockerRunArgs({
+        name: containerName,
+        image: `${app.name}:latest`,
+        appName: app.name,
+        network: null,
+        publish: { bindAddr, hostPort, containerPort: app.container_port },
+        envFilePath,
+        volumeMount: app.volume_mount || undefined,
+        extraVolumes: wakeExtraVols,
+        memoryMb: app.memory_mb || undefined,
+      });
+      await sshExec(server.ipv4, asUser(cmd), hostKey);
     }
 
     // Health check
-    const health = app.deploy_mode === "compose"
-      ? await composeHealthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey)
-      : await healthCheck(server.ipv4, containerName, bindAddr, hostPort, 5, hostKey);
+    const health = await healthCheck(server.ipv4, containerName, bindAddr, hostPort, 5, hostKey);
 
     // Re-deploy auth proxy only on the slow path. The fast path preserved
     // the auth proxy systemd unit when the container was stopped.
