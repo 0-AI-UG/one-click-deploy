@@ -45,6 +45,14 @@
     }
   },
   "panels": {
+    "66557708-db74-4961-9c72-97d24c826c9e": {
+      "type": "terminal",
+      "title": "Claude Code"
+    },
+    "b8847212-bc2b-4f69-b890-3ea25c6504e8": {
+      "type": "terminal",
+      "title": "Claude Code 2"
+    },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
       "title": "Canvas"
@@ -53,11 +61,58 @@
   "canvases": {
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "id": "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea",
-      "canvasNodes": {},
-      "zoomLevel": 1,
+      "canvasNodes": {
+        "5f8cca04-8eb4-450f-82f7-f7d91c2e11ca": {
+          "id": "5f8cca04-8eb4-450f-82f7-f7d91c2e11ca",
+          "panelId": "66557708-db74-4961-9c72-97d24c826c9e",
+          "origin": {
+            "x": -39,
+            "y": 169.5
+          },
+          "size": {
+            "width": 640,
+            "height": 470.5
+          },
+          "zOrder": 35,
+          "creationIndex": 0,
+          "animationState": "idle",
+          "dockLayout": {
+            "type": "tabs",
+            "id": "90fe9af7-af14-45c4-a267-604287e98b63",
+            "panelIds": [
+              "66557708-db74-4961-9c72-97d24c826c9e"
+            ],
+            "activeIndex": 0
+          }
+        },
+        "c7526e7e-c431-416b-9da1-ab886fb34d38": {
+          "id": "c7526e7e-c431-416b-9da1-ab886fb34d38",
+          "panelId": "b8847212-bc2b-4f69-b890-3ea25c6504e8",
+          "origin": {
+            "x": 660,
+            "y": 160
+          },
+          "size": {
+            "width": 640,
+            "height": 400
+          },
+          "zOrder": 36,
+          "creationIndex": 1,
+          "animationState": "idle",
+          "dockLayout": {
+            "type": "tabs",
+            "id": "1d48a092-3fa4-4ae2-b865-243fdf470d96",
+            "panelIds": [
+              "b8847212-bc2b-4f69-b890-3ea25c6504e8"
+            ],
+            "activeIndex": 0
+          }
+        }
+      },
+      "zoomLevel": 0.7760433647207028,
       "viewportOffset": {
-        "x": 0,
-        "y": 0
+        "x": -400.02249742628874,
+        "y": 30.124388700547
       }
     }
   }
