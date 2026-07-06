@@ -331,12 +331,12 @@ export function Checkbox({ checked, onChange, label }: { checked: boolean; onCha
 }
 
 // --- Field ---
-// A settings-style row: label (left) + control (right) on one line, separated
-// from adjacent rows by a hairline divider (the last row suppresses its own).
-// The control column is right-bound and width-capped so inputs align down the
-// right edge. Drop any control inside — inputs, NeoSelect, and textareas are all
-// width:100% so they fill the column. Use `align="start"` for multi-line
-// controls (textareas) and `wide` for controls that need a roomier column.
+// A settings-style row: label (left) + control (right) on one line. The control
+// column is right-bound and width-capped so inputs align down the right edge.
+// Drop any control inside — inputs, NeoSelect, and textareas are all width:100%
+// so they fill the column. Use `align="start"` for multi-line controls
+// (textareas) and `wide` for controls that need a roomier column. Pass
+// `divider` to draw a hairline rule between rows (off by default).
 export function Field({
   label,
   hint,
@@ -344,7 +344,7 @@ export function Field({
   className = "",
   align = "center",
   wide = false,
-  divider = true,
+  divider = false,
   htmlFor,
 }: {
   label?: ReactNode;
