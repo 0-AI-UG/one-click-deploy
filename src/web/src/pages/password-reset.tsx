@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { post } from "../api/client.ts";
-import { showToast, Spinner, Btn } from "../components/ui.tsx";
+import { showToast, Spinner, Btn, Field } from "../components/ui.tsx";
 import { KeyRound, Fingerprint, ArrowLeft } from "lucide-react";
 import { startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { PasskeyUnsupported } from "../components/passkey-unsupported.tsx";
@@ -51,18 +51,15 @@ export function PasswordResetPage() {
               Enter your username and new password, then verify with your passkey.
             </p>
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Username</label>
+              <Field label="Username">
                 <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" required autoFocus />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">New password</label>
+              </Field>
+              <Field label="New password">
                 <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="••••••••" required minLength={8} />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Confirm new password</label>
+              </Field>
+              <Field label="Confirm new password">
                 <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="••••••••" required minLength={8} />
-              </div>
+              </Field>
               <button
                 type="submit"
                 disabled={loading}

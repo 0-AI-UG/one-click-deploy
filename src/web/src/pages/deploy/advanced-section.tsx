@@ -1,5 +1,5 @@
 import { Plus, Minus, AlertTriangle } from "lucide-react";
-import { Btn, Checkbox } from "../../components/ui.tsx";
+import { Btn, Checkbox, Field } from "../../components/ui.tsx";
 import { Label } from "./shared.tsx";
 import { InfoTip } from "../app-detail/shared.tsx";
 import type { FormState } from "./types.ts";
@@ -15,51 +15,42 @@ type Props = {
 export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: Props) {
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label>Replicas</Label>
-          <input
-            type="number"
-            value={form.domain ? form.replicas : "1"}
-            onChange={set("replicas")}
-            min="1"
-            disabled={!form.domain}
-            title={!form.domain ? "Add a custom domain to enable scaling" : undefined}
-          />
-          {!form.domain && <p className="text-[9px] text-muted mt-1">Requires a custom domain</p>}
-        </div>
-        <div>
-          <Label>Auth Password</Label>
-          <input
-            type="password"
-            value={form.auth_password}
-            onChange={set("auth_password")}
-            placeholder="Optional login gate"
-          />
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label>Volume Size (GB)</Label>
-          <input
-            type="number"
-            value={form.volume_size}
-            onChange={set("volume_size")}
-            placeholder="0"
-            min="0"
-          />
-        </div>
-        <div>
-          <Label>Volume Path</Label>
-          <input
-            type="text"
-            value={form.volume_path}
-            onChange={set("volume_path")}
-          />
-        </div>
-      </div>
-      <div>
-        <Label>Memory Limit (MB) <InfoTip text="Container memory ceiling. Blank or 0 uses the platform default (512)." /></Label>
+      <Field label="Replicas">
+        <input
+          type="number"
+          value={form.domain ? form.replicas : "1"}
+          onChange={set("replicas")}
+          min="1"
+          disabled={!form.domain}
+          title={!form.domain ? "Add a custom domain to enable scaling" : undefined}
+        />
+        {!form.domain && <p className="text-[9px] text-muted mt-1">Requires a custom domain</p>}
+      </Field>
+      <Field label="Auth Password">
+        <input
+          type="password"
+          value={form.auth_password}
+          onChange={set("auth_password")}
+          placeholder="Optional login gate"
+        />
+      </Field>
+      <Field label="Volume Size (GB)">
+        <input
+          type="number"
+          value={form.volume_size}
+          onChange={set("volume_size")}
+          placeholder="0"
+          min="0"
+        />
+      </Field>
+      <Field label="Volume Path">
+        <input
+          type="text"
+          value={form.volume_path}
+          onChange={set("volume_path")}
+        />
+      </Field>
+      <Field label={<>Memory Limit (MB) <InfoTip text="Container memory ceiling. Blank or 0 uses the platform default (512)." /></>}>
         <input
           type="number"
           value={form.memory_mb}
@@ -67,7 +58,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           placeholder="512 (platform default)"
           min="0"
         />
-      </div>
+      </Field>
       <div>
         <Checkbox
           checked={form.public}
@@ -84,23 +75,21 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
         />
         {form.webhook_enabled && (
           <>
-            <div className="mt-2">
-              <Label>Branch</Label>
+            <Field label="Branch">
               <input
                 type="text"
                 value={form.webhook_branch}
                 onChange={set("webhook_branch")}
               />
-            </div>
-            <div className="mt-2">
-              <Label>Path filter (optional)</Label>
+            </Field>
+            <Field label="Path filter (optional)">
               <input
                 type="text"
                 value={form.webhook_path}
                 onChange={set("webhook_path")}
                 placeholder="e.g. services/api — only redeploy when files under this path change"
               />
-            </div>
+            </Field>
             <div className="mt-2">
               <Checkbox
                 checked={!!form.webhook_wait_for_ci}

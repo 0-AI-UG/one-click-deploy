@@ -330,6 +330,54 @@ export function Checkbox({ checked, onChange, label }: { checked: boolean; onCha
   );
 }
 
+// --- Field ---
+// A settings-style row: label (left) + control (right) on one line, separated
+// from adjacent rows by a hairline divider (the last row suppresses its own).
+// The control column is right-bound and width-capped so inputs align down the
+// right edge. Drop any control inside — inputs, NeoSelect, and textareas are all
+// width:100% so they fill the column. Use `align="start"` for multi-line
+// controls (textareas) and `wide` for controls that need a roomier column.
+export function Field({
+  label,
+  hint,
+  children,
+  className = "",
+  align = "center",
+  wide = false,
+  divider = true,
+  htmlFor,
+}: {
+  label?: ReactNode;
+  hint?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  align?: "center" | "start";
+  wide?: boolean;
+  divider?: boolean;
+  htmlFor?: string;
+}) {
+  const col = wide ? "w-[min(75%,34rem)]" : "w-[min(62%,20rem)]";
+  return (
+    <div
+      className={`flex ${align === "start" ? "items-start" : "items-center"} justify-between gap-4 py-3 ${
+        divider ? "border-b-2 border-fg/10 last:border-b-0" : ""
+      } ${className}`}
+    >
+      {(label || hint) && (
+        <div className={`min-w-0 ${align === "start" ? "pt-1.5" : ""}`}>
+          {label && (
+            <label htmlFor={htmlFor} className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg leading-tight block">
+              {label}
+            </label>
+          )}
+          {hint && <div className="font-mono text-[9px] text-muted normal-case tracking-normal mt-1 leading-snug">{hint}</div>}
+        </div>
+      )}
+      <div className={`shrink-0 ${col}`}>{children}</div>
+    </div>
+  );
+}
+
 // --- Empty State ---
 export function EmptyState({ message, icon: Icon }: { message: string; icon?: React.ComponentType<{ size?: number; className?: string }> }) {
   return (

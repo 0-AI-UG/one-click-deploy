@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
-import { Card, Btn, showToast, Spinner, CopyButton } from "../components/ui.tsx";
+import { Card, Btn, showToast, Spinner, CopyButton, Field } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { InfoTip } from "./app-detail/shared.tsx";
 import { Database, Loader2, Eye, EyeOff, ArrowLeft, RefreshCw } from "lucide-react";
@@ -166,136 +166,117 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
                   </p>
                 </div>
               ) : null}
-              {/* Name */}
+              {/* Settings */}
               <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Service Name</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                  className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent-blue"
-                />
-              </div>
-
-              {/* Version */}
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Version</label>
-                <NeoSelect
-                  value={version}
-                  onChange={setVersion}
-                  options={selected.versions.map((v) => ({ value: v, label: `${selected.label} ${v}` }))}
-                />
-              </div>
-
-              {/* Volume */}
-              {!selected.stateless && (
-                <div>
-                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Volume Size (GB)</label>
-                  <input
-                    type="number"
-                    value={volumeSize}
-                    onChange={(e) => setVolumeSize(parseInt(e.target.value, 10) || 10)}
-                    min={10}
-                    className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
-                  />
-                </div>
-              )}
-
-              {/* Custom domain (HTTP services only) */}
-              {selected.http && (
-                <div>
-                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">
-                    Custom Domain <span className="font-normal text-muted ml-1">(optional)</span> <InfoTip text="Point the domain's A record at the server first." />
-                  </label>
+                <Field label="Service Name">
                   <input
                     type="text"
-                    value={customDomain}
-                    placeholder={`${name || "service"}.<server-ip>.nip.io (auto-generated if left blank)`}
-                    onChange={(e) => setCustomDomain(e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ""))}
-                    className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
+                    value={name}
+                    onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+                    className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent-blue"
                   />
-                </div>
-              )}
+                </Field>
 
-              {/* Credentials (editable) */}
-              {credentialFields.length > 0 && (
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Credentials</label>
-                <div className="bg-alt border-2 border-fg/30 divide-y divide-fg/10">
-                  {credentialFields.map((f) => {
-                    const revealed = revealedKeys.has(f.key);
-                    const value = generatedEnv[f.key] ?? "";
-                    return (
-                      <div key={f.key} className="px-3 py-2 flex items-center gap-2">
-                        <label className="font-mono text-[9px] text-muted uppercase shrink-0 w-28 truncate" title={f.label}>{f.label}</label>
-                        <input
-                          type={f.isPassword && !revealed ? "password" : "text"}
-                          value={value}
-                          onChange={(e) => setGeneratedEnv((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                          className="flex-1 min-w-0 bg-bg border border-fg/30 px-2 py-1 font-mono text-[10px] text-fg focus:outline-none focus:ring-1 focus:ring-accent-blue"
-                        />
-                        {f.isPassword && (
-                          <>
-                            <button
-                              onClick={() => toggleReveal(f.key)}
-                              className="p-0.5 text-muted hover:text-fg transition-colors shrink-0"
-                              title={revealed ? "Hide" : "Reveal"}
-                            >
-                              {revealed ? <EyeOff size={12} /> : <Eye size={12} />}
-                            </button>
-                            <button
-                              onClick={() => regenerate(f.key)}
-                              className="p-0.5 text-muted hover:text-fg transition-colors shrink-0"
-                              title="Regenerate"
-                            >
-                              <RefreshCw size={12} />
-                            </button>
-                          </>
-                        )}
-                        <CopyButton text={value} />
-                      </div>
-                    );
-                  })}
-                </div>
-                <p className="font-mono text-[9px] text-muted mt-1">
-                  Edit any field before deploying. Cleared fields are auto-generated.
-                </p>
-              </div>
-              )}
-
-              {/* Environment */}
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">
-                  Add to Environment
-                  <span className="font-normal text-muted ml-1">(optional)</span> <InfoTip text="Inject connection credentials into this environment on deploy" />
-                </label>
-                <NeoSelect
-                  value={environmentId ? String(environmentId) : ""}
-                  onChange={(v) => setEnvironmentId(v ? Number(v) : null)}
-                  options={[
-                    { value: "", label: "None — add manually later" },
-                    ...environments.map((e) => ({ value: String(e.id), label: e.name })),
-                  ]}
-                />
-              </div>
-
-              {/* Env Prefix */}
-              {environmentId && (
-                <div>
-                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Env Prefix</label>
-                  <input
-                    type="text"
-                    value={envPrefix}
-                    onChange={(e) => setEnvPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
-                    className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
+                <Field label="Version">
+                  <NeoSelect
+                    value={version}
+                    onChange={setVersion}
+                    options={selected.versions.map((v) => ({ value: v, label: `${selected.label} ${v}` }))}
                   />
-                  <div className="flex flex-wrap gap-1 mt-1.5">
-                    {["URL", "HOST", "PASSWORD"].map((s) => (
-                      <span key={s} className="font-mono text-[9px] text-muted border border-fg/40 px-1.5 py-0.5">{(envPrefix || "PREFIX")}_{s}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
+                </Field>
+
+                {!selected.stateless && (
+                  <Field label="Volume Size (GB)">
+                    <input
+                      type="number"
+                      value={volumeSize}
+                      onChange={(e) => setVolumeSize(parseInt(e.target.value, 10) || 10)}
+                      min={10}
+                      className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
+                    />
+                  </Field>
+                )}
+
+                {selected.http && (
+                  <Field label={<>Custom Domain <span className="font-normal text-muted ml-1">(optional)</span> <InfoTip text="Point the domain's A record at the server first." /></>}>
+                    <input
+                      type="text"
+                      value={customDomain}
+                      placeholder={`${name || "service"}.<server-ip>.nip.io (auto-generated if left blank)`}
+                      onChange={(e) => setCustomDomain(e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ""))}
+                      className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
+                    />
+                  </Field>
+                )}
+
+                {credentialFields.length > 0 && (
+                  <Field label="Credentials" align="start" wide hint="Edit any field before deploying. Cleared fields are auto-generated.">
+                    <div className="bg-alt border-2 border-fg/30 divide-y divide-fg/10">
+                      {credentialFields.map((f) => {
+                        const revealed = revealedKeys.has(f.key);
+                        const value = generatedEnv[f.key] ?? "";
+                        return (
+                          <div key={f.key} className="px-3 py-2 flex items-center gap-2">
+                            <label className="font-mono text-[9px] text-muted uppercase shrink-0 w-28 truncate" title={f.label}>{f.label}</label>
+                            <input
+                              type={f.isPassword && !revealed ? "password" : "text"}
+                              value={value}
+                              onChange={(e) => setGeneratedEnv((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                              className="flex-1 min-w-0 bg-bg border border-fg/30 px-2 py-1 font-mono text-[10px] text-fg focus:outline-none focus:ring-1 focus:ring-accent-blue"
+                            />
+                            {f.isPassword && (
+                              <>
+                                <button
+                                  onClick={() => toggleReveal(f.key)}
+                                  className="p-0.5 text-muted hover:text-fg transition-colors shrink-0"
+                                  title={revealed ? "Hide" : "Reveal"}
+                                >
+                                  {revealed ? <EyeOff size={12} /> : <Eye size={12} />}
+                                </button>
+                                <button
+                                  onClick={() => regenerate(f.key)}
+                                  className="p-0.5 text-muted hover:text-fg transition-colors shrink-0"
+                                  title="Regenerate"
+                                >
+                                  <RefreshCw size={12} />
+                                </button>
+                              </>
+                            )}
+                            <CopyButton text={value} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Field>
+                )}
+
+                <Field label={<>Add to Environment <span className="font-normal text-muted ml-1">(optional)</span> <InfoTip text="Inject connection credentials into this environment on deploy" /></>}>
+                  <NeoSelect
+                    value={environmentId ? String(environmentId) : ""}
+                    onChange={(v) => setEnvironmentId(v ? Number(v) : null)}
+                    options={[
+                      { value: "", label: "None — add manually later" },
+                      ...environments.map((e) => ({ value: String(e.id), label: e.name })),
+                    ]}
+                  />
+                </Field>
+
+                {environmentId && (
+                  <Field label="Env Prefix">
+                    <input
+                      type="text"
+                      value={envPrefix}
+                      onChange={(e) => setEnvPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
+                      className="w-full bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none"
+                    />
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {["URL", "HOST", "PASSWORD"].map((s) => (
+                        <span key={s} className="font-mono text-[9px] text-muted border border-fg/40 px-1.5 py-0.5">{(envPrefix || "PREFIX")}_{s}</span>
+                      ))}
+                    </div>
+                  </Field>
+                )}
+              </div>
 
               <Btn
                 onClick={handleDeploy}

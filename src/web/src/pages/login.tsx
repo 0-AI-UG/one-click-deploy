@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { post } from "../api/client.ts";
 import { login, setTempToken } from "../stores/auth.ts";
-import { showToast, Spinner } from "../components/ui.tsx";
+import { showToast, Spinner, Field } from "../components/ui.tsx";
 import { Terminal, ArrowRight } from "lucide-react";
 
 export function LoginPage() {
@@ -41,14 +41,12 @@ export function LoginPage() {
         <div className="bg-bg-raised border-2 border-fg shadow-neo p-6">
           <h2 className="font-mono text-sm font-bold text-fg uppercase mb-4">Sign In</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Username</label>
+            <Field label="Username">
               <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" required autoFocus />
-            </div>
-            <div>
-              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Password</label>
+            </Field>
+            <Field label="Password">
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required />
-            </div>
+            </Field>
             <button
               type="submit"
               disabled={loading}

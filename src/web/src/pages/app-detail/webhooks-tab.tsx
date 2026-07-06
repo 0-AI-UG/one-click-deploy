@@ -1,5 +1,5 @@
 import { post } from "../../api/client.ts";
-import { Card, Btn } from "../../components/ui.tsx";
+import { Card, Btn, Field } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { GitBranch } from "lucide-react";
 import type { AppData } from "../../types.ts";
@@ -48,24 +48,22 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
           </div>
         ) : (
           <div className="space-y-2">
-            <div>
-              <label className="block text-[9px] uppercase tracking-wider text-muted mb-1">Branch</label>
+            <Field label="Branch">
               <input
                 type="text"
                 value={webhookForm.branch}
                 onChange={(e) => setWebhookForm({ ...webhookForm, branch: e.target.value })}
                 placeholder="main"
               />
-            </div>
-            <div>
-              <label className="block text-[9px] uppercase tracking-wider text-muted mb-1">Path filter (optional)</label>
+            </Field>
+            <Field label="Path filter (optional)">
               <input
                 type="text"
                 value={webhookForm.path}
                 onChange={(e) => setWebhookForm({ ...webhookForm, path: e.target.value })}
                 placeholder="e.g. services/api"
               />
-            </div>
+            </Field>
             <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">
               <input
                 type="checkbox"

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
 import { setTempToken } from "../stores/auth.ts";
-import { showToast, Spinner, Card } from "../components/ui.tsx";
+import { showToast, Spinner, Card, Field } from "../components/ui.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Terminal, ArrowRight, ArrowLeft, Key, Server } from "lucide-react";
 import { type ServerType, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
@@ -124,18 +124,9 @@ export function SetupPage() {
                 <Key size={16} className="text-fg" />
                 <h3 className="font-mono font-bold text-sm text-fg uppercase">Admin Account</h3>
               </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Username</label>
-                <input type="text" value={form.username} onChange={set("username")} placeholder="admin" autoFocus />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Password</label>
-                <input type="password" value={form.password} onChange={set("password")} placeholder="Min 8 characters" />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Confirm Password</label>
-                <input type="password" value={form.confirmPassword} onChange={set("confirmPassword")} placeholder="Confirm password" />
-              </div>
+              <Field label="Username"><input type="text" value={form.username} onChange={set("username")} placeholder="admin" autoFocus /></Field>
+              <Field label="Password"><input type="password" value={form.password} onChange={set("password")} placeholder="Min 8 characters" /></Field>
+              <Field label="Confirm Password"><input type="password" value={form.confirmPassword} onChange={set("confirmPassword")} placeholder="Confirm password" /></Field>
               <button onClick={handleStep1Submit} disabled={loading} className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35">
                 {loading ? <Spinner /> : (
                   hasProviderToken
@@ -152,43 +143,43 @@ export function SetupPage() {
                 <Server size={16} className="text-fg" />
                 <h3 className="font-mono font-bold text-sm text-fg uppercase">API Keys & Defaults</h3>
               </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner Cloud API Token *</label>
+              <Field
+                label="Hetzner Cloud API Token *"
+                align="start"
+                hint={<>Create one at <a href="https://console.hetzner.cloud" target="_blank" rel="noreferrer" className="underline hover:text-fg">console.hetzner.cloud</a> → Security → API Tokens (Read &amp; Write).</>}
+              >
                 <input type="password" value={form.provider_token} onChange={set("provider_token")} placeholder="Required" />
-                <p className="text-[9px] text-muted font-mono mt-1">Create one at <a href="https://console.hetzner.cloud" target="_blank" rel="noreferrer" className="underline hover:text-fg">console.hetzner.cloud</a> → Security → API Tokens (Read &amp; Write).</p>
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>
+              </Field>
+              <Field
+                label="DNS Zone ID"
+                align="start"
+                hint={<>Find it at <a href="https://dns.hetzner.com" target="_blank" rel="noreferrer" className="underline hover:text-fg">dns.hetzner.com</a> → your zone (the ID in the URL). Leave blank to manage DNS yourself.</>}
+              >
                 <input type="text" value={form.dns_zone_id} onChange={set("dns_zone_id")} placeholder="Optional — auto-creates DNS records" />
-                <p className="text-[9px] text-muted font-mono mt-1">Find it at <a href="https://dns.hetzner.com" target="_blank" rel="noreferrer" className="underline hover:text-fg">dns.hetzner.com</a> → your zone (the ID in the URL). Leave blank to manage DNS yourself.</p>
-              </div>
+              </Field>
               <div className="text-[9px] font-mono uppercase tracking-wider text-muted -mt-1">
                 {typesLoading ? <span className="inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Loading server types</span> : serverTypes.length === 0 ? "Enter a valid Hetzner token to load server types" : `${serverTypes.length} server types available`}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Default Server Type</label>
-                  <NeoSelect
-                    value={form.default_server_type}
-                    onChange={(v) => {
-                      setForm((f) => {
-                        const locs = locationOptions(serverTypes, v);
-                        const locValid = locs.some((l) => l.value === f.default_location);
-                        return { ...f, default_server_type: v, ...(!locValid && locs.length ? { default_location: locs[0].value } : {}) };
-                      });
-                    }}
-                    options={typeOptions(serverTypes)}
-                  />
-                </div>
-                <div>
-                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Default Location</label>
-                  <NeoSelect
-                    value={form.default_location}
-                    onChange={(v) => setForm((f) => ({ ...f, default_location: v }))}
-                    options={locationOptions(serverTypes, form.default_server_type)}
-                  />
-                </div>
-              </div>
+              <Field label="Default Server Type">
+                <NeoSelect
+                  value={form.default_server_type}
+                  onChange={(v) => {
+                    setForm((f) => {
+                      const locs = locationOptions(serverTypes, v);
+                      const locValid = locs.some((l) => l.value === f.default_location);
+                      return { ...f, default_server_type: v, ...(!locValid && locs.length ? { default_location: locs[0].value } : {}) };
+                    });
+                  }}
+                  options={typeOptions(serverTypes)}
+                />
+              </Field>
+              <Field label="Default Location">
+                <NeoSelect
+                  value={form.default_location}
+                  onChange={(v) => setForm((f) => ({ ...f, default_location: v }))}
+                  options={locationOptions(serverTypes, form.default_server_type)}
+                />
+              </Field>
               <div className="flex gap-2">
                 <button onClick={() => setStep(1)} className="flex-1 flex items-center justify-center gap-2 bg-bg-raised text-fg-dim border-2 border-fg shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all">
                   <ArrowLeft size={14} />

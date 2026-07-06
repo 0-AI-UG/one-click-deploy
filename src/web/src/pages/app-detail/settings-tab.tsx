@@ -1,5 +1,5 @@
 import { post, put } from "../../api/client.ts";
-import { Card, Btn, Checkbox, confirm } from "../../components/ui.tsx";
+import { Card, Btn, Checkbox, Field, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe, Cpu } from "lucide-react";
@@ -38,12 +38,8 @@ export function SettingsTab({
 }: SettingsTabProps) {
   return (
     <div className="space-y-4">
-      <Card className="p-4 space-y-4">
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Pencil size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">App Name</h3>
-          </div>
+      <Card className="p-4">
+        <Field label={<span className="flex items-center gap-2"><Pencil size={14} className="text-fg" /> App Name</span>}>
           <div className="flex gap-2 items-center">
             <input
               type="text"
@@ -63,39 +59,27 @@ export function SettingsTab({
               >Rename</Btn>
             </PermissionGate>
           </div>
-        </div>
+        </Field>
 
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Lock size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Password Protection</h3>
-          </div>
+        <Field label={<span className="flex items-center gap-2"><Lock size={14} className="text-fg" /> Password Protection</span>}>
           <input
             type="password"
             value={authPassword}
             onChange={(e) => setAuthPassword(e.target.value)}
             placeholder="(none)"
           />
-        </div>
+        </Field>
 
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Globe size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Public Access</h3>
+        <Field
+          label={<span className="flex items-center gap-2"><Globe size={14} className="text-fg" /> Public Access</span>}
+          hint={!isPublic ? "App will only be reachable over the internal network" : undefined}
+        >
+          <div className="flex justify-end">
+            <Checkbox checked={isPublic} onChange={setIsPublic} label="Expose via public domain" />
           </div>
-          <Checkbox
-            checked={isPublic}
-            onChange={setIsPublic}
-            label="Expose via public domain"
-          />
-          {!isPublic && <p className="text-[9px] text-muted mt-1">App will only be reachable over the internal network</p>}
-        </div>
+        </Field>
 
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <SettingsIcon size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Container Port</h3>
-          </div>
+        <Field label={<span className="flex items-center gap-2"><SettingsIcon size={14} className="text-fg" /> Container Port</span>}>
           <input
             type="number"
             min={1}
@@ -104,13 +88,9 @@ export function SettingsTab({
             onChange={(e) => setPortEdit(parseInt(e.target.value) || 0)}
             placeholder="3000"
           />
-        </div>
+        </Field>
 
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Cpu size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Memory Limit (MB) <InfoTip text="Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save & redeploy." /></h3>
-          </div>
+        <Field label={<span className="flex items-center gap-2"><Cpu size={14} className="text-fg" /> Memory Limit (MB) <InfoTip text="Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save & redeploy." /></span>}>
           <input
             type="number"
             min={0}
@@ -118,7 +98,7 @@ export function SettingsTab({
             onChange={(e) => setMemEdit(parseInt(e.target.value) || 0)}
             placeholder="512 (platform default)"
           />
-        </div>
+        </Field>
       </Card>
 
       <PermissionGate permission="apps.redeploy">
@@ -180,25 +160,23 @@ export function SettingsTab({
               <span className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg">Attach Volume</span>
               <InfoTip text="Attach a new persistent volume. The container will be recreated with the volume mounted." />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Size (GB)</label>
+            <div>
+              <Field label="Size (GB)">
                 <input
                   type="number"
                   min={10}
                   value={volumeForm.size}
                   onChange={(e) => setVolumeForm({ ...volumeForm, size: parseInt(e.target.value) || 10 })}
                 />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Mount Path</label>
+              </Field>
+              <Field label="Mount Path">
                 <input
                   type="text"
                   value={volumeForm.mount_path}
                   onChange={(e) => setVolumeForm({ ...volumeForm, mount_path: e.target.value })}
                   placeholder="/data"
                 />
-              </div>
+              </Field>
             </div>
             <PermissionGate permission="volumes.create">
               <div className="flex justify-end mt-3">

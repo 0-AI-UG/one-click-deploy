@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { get, post, del, put } from "../../api/client.ts";
-import { Card, Btn, Table, Spinner, showToast, confirm } from "../../components/ui.tsx";
+import { Card, Btn, Table, Spinner, Field, showToast, confirm } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-server-types.ts";
 import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check } from "lucide-react";
@@ -17,27 +17,22 @@ function GitHubOAuthSettings({ form, setS }: { form: Record<string, string>; set
   };
 
   return (
-    <div className="pt-2 space-y-3">
+    <div className="pt-2">
       <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">GitHub OAuth</h3>
-      <div>
-        <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Callback URL</label>
+      <Field label="Callback URL" align="start">
         <div className="flex items-center gap-2 bg-alt border-2 border-fg px-3 py-2">
           <code className="font-mono text-[10px] text-fg flex-1 select-all truncate">{callbackUrl}</code>
           <button onClick={copyUrl} className="text-muted hover:text-fg transition-colors shrink-0">
             {copied ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
           </button>
         </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Client ID</label>
-          <input type="text" value={form.github_oauth_client_id} onChange={setS("github_oauth_client_id")} placeholder="Ov23li..." />
-        </div>
-        <div>
-          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Client Secret</label>
-          <input type="password" value={form.github_oauth_client_secret} onChange={setS("github_oauth_client_secret")} placeholder="Client secret" />
-        </div>
-      </div>
+      </Field>
+      <Field label="Client ID">
+        <input type="text" value={form.github_oauth_client_id} onChange={setS("github_oauth_client_id")} placeholder="Ov23li..." />
+      </Field>
+      <Field label="Client Secret">
+        <input type="password" value={form.github_oauth_client_secret} onChange={setS("github_oauth_client_secret")} placeholder="Client secret" />
+      </Field>
     </div>
   );
 }
@@ -210,42 +205,36 @@ export function UsersPage() {
       {/* Instance Settings */}
       <Card className="p-5 space-y-4">
         <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">API Tokens</h3>
-        <div>
-          <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Hetzner Cloud API Token</label>
+        <Field label="Hetzner Cloud API Token">
           <input type="password" value={settingsForm.provider_token} onChange={setS("provider_token")} placeholder="Enter token" />
-        </div>
+        </Field>
         <GitHubOAuthSettings form={settingsForm} setS={setS} />
 
         <div className="pt-2">
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-3">Defaults</h3>
-          <div>
-            <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">DNS Zone ID</label>
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Defaults</h3>
+          <Field label="DNS Zone ID">
             <input type="text" value={settingsForm.dns_zone_id} onChange={setS("dns_zone_id")} placeholder="DNS Zone ID" />
-          </div>
-          <div className="grid grid-cols-2 gap-3 mt-3">
-            <div>
-              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Default Server Type</label>
-              <NeoSelect
-                value={settingsForm.default_server_type}
-                onChange={(v) => {
-                  setSettingsForm((f) => {
-                    const locs = locationOptions(serverTypes, v);
-                    const locValid = locs.some((l) => l.value === f.default_location);
-                    return { ...f, default_server_type: v, ...(!locValid && locs.length ? { default_location: locs[0].value } : {}) };
-                  });
-                }}
-                options={typeOptions(serverTypes)}
-              />
-            </div>
-            <div>
-              <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1">Default Location</label>
-              <NeoSelect
-                value={settingsForm.default_location}
-                onChange={(v) => setSettingsForm((f) => ({ ...f, default_location: v }))}
-                options={locationOptions(serverTypes, settingsForm.default_server_type)}
-              />
-            </div>
-          </div>
+          </Field>
+          <Field label="Default Server Type">
+            <NeoSelect
+              value={settingsForm.default_server_type}
+              onChange={(v) => {
+                setSettingsForm((f) => {
+                  const locs = locationOptions(serverTypes, v);
+                  const locValid = locs.some((l) => l.value === f.default_location);
+                  return { ...f, default_server_type: v, ...(!locValid && locs.length ? { default_location: locs[0].value } : {}) };
+                });
+              }}
+              options={typeOptions(serverTypes)}
+            />
+          </Field>
+          <Field label="Default Location">
+            <NeoSelect
+              value={settingsForm.default_location}
+              onChange={(v) => setSettingsForm((f) => ({ ...f, default_location: v }))}
+              options={locationOptions(serverTypes, settingsForm.default_server_type)}
+            />
+          </Field>
         </div>
 
         <div className="pt-2">

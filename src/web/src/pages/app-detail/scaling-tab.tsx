@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { get, post, put } from "../../api/client.ts";
-import { Card, Btn, Checkbox, Spinner, Table, confirm } from "../../components/ui.tsx";
+import { Card, Btn, Checkbox, Spinner, Table, Field, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { Zap, Gauge, History } from "lucide-react";
@@ -201,9 +201,8 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
               <InfoTip text="Reconciler checks CPU/memory every 30s and scales between min and max replicas." />
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Min <InfoTip text="Lowest replica count the autoscaler is allowed to scale down to. Set to 0 to enable scale-to-zero (app sleeps when idle, wakes on HTTP request)." /></label>
+            <div>
+              <Field label={<span className="flex items-center gap-1">Min <InfoTip text="Lowest replica count the autoscaler is allowed to scale down to. Set to 0 to enable scale-to-zero (app sleeps when idle, wakes on HTTP request)." /></span>}>
                 <input
                   type="number"
                   min={0}
@@ -211,9 +210,8 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                   disabled={!policy.autoscale_enabled}
                   onChange={(e) => setPolicy({ ...policy, min_replicas: parseInt(e.target.value) || 0 })}
                 />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Max <InfoTip text={hasVolume ? volumeLockedReason : "Highest replica count the autoscaler will scale up to."} /></label>
+              </Field>
+              <Field label={<span className="flex items-center gap-1">Max <InfoTip text={hasVolume ? volumeLockedReason : "Highest replica count the autoscaler will scale up to."} /></span>}>
                 <input
                   type="number"
                   min={1}
@@ -223,9 +221,8 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                   title={hasVolume ? volumeLockedReason : undefined}
                   onChange={(e) => setPolicy({ ...policy, max_replicas: parseInt(e.target.value) || 1 })}
                 />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">CPU % <InfoTip text="Average CPU above this triggers scale-up. Scale-down kicks in below half this value." /></label>
+              </Field>
+              <Field label={<span className="flex items-center gap-1">CPU % <InfoTip text="Average CPU above this triggers scale-up. Scale-down kicks in below half this value." /></span>}>
                 <input
                   type="number"
                   min={1}
@@ -234,9 +231,8 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                   disabled={!policy.autoscale_enabled}
                   onChange={(e) => setPolicy({ ...policy, cpu_threshold: parseInt(e.target.value) || 0 })}
                 />
-              </div>
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Mem % <InfoTip text="Average memory above this triggers scale-up. Scale-down kicks in below half this value." /></label>
+              </Field>
+              <Field label={<span className="flex items-center gap-1">Mem % <InfoTip text="Average memory above this triggers scale-up. Scale-down kicks in below half this value." /></span>}>
                 <input
                   type="number"
                   min={1}
@@ -245,12 +241,8 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                   disabled={!policy.autoscale_enabled}
                   onChange={(e) => setPolicy({ ...policy, mem_threshold: parseInt(e.target.value) || 0 })}
                 />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div>
-                <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Cooldown s <InfoTip text="Minimum seconds between scaling actions to prevent flapping." /></label>
+              </Field>
+              <Field label={<span className="flex items-center gap-1">Cooldown s <InfoTip text="Minimum seconds between scaling actions to prevent flapping." /></span>}>
                 <input
                   type="number"
                   min={30}
@@ -258,10 +250,9 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                   disabled={!policy.autoscale_enabled}
                   onChange={(e) => setPolicy({ ...policy, cooldown: parseInt(e.target.value) || 30 })}
                 />
-              </div>
+              </Field>
               {policy.min_replicas === 0 && (
-                <div>
-                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg block mb-1 flex items-center gap-1">Idle timeout s <InfoTip text="Seconds of sustained low CPU/memory before the app sleeps. The app wakes automatically on the next HTTP request." /></label>
+                <Field label={<span className="flex items-center gap-1">Idle timeout s <InfoTip text="Seconds of sustained low CPU/memory before the app sleeps. The app wakes automatically on the next HTTP request." /></span>}>
                   <input
                     type="number"
                     min={60}
@@ -269,7 +260,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                     disabled={!policy.autoscale_enabled}
                     onChange={(e) => setPolicy({ ...policy, scale_to_zero_after: parseInt(e.target.value) || 300 })}
                   />
-                </div>
+                </Field>
               )}
             </div>
 

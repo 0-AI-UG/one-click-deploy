@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Check } from "lucide-react";
 import { NeoSelect } from "../../components/neo-select.tsx";
-import { ReceiptRow } from "./shared.tsx";
+import { Field } from "../../components/ui.tsx";
 import { get } from "../../api/client.ts";
 import type { IntrospectResult, FormState } from "./types.ts";
 
@@ -28,6 +28,15 @@ export function ReceiptSection({ form, set, setForm, detected, onBranchChange }:
 
   const hasMultipleDockerfiles = !!detected && detected.dockerfiles.length > 1;
 
+  // Green check adornment shown next to a Field label when the value was
+  // auto-detected from the repo (was the ReceiptRow `detected` prop).
+  const mark = (show: boolean) =>
+    show ? (
+      <span title="Auto-detected" className="text-accent-green">
+        <Check size={11} strokeWidth={3} />
+      </span>
+    ) : null;
+
   return (
     <div className="p-5 animate-fade-in">
       <div className="flex items-center justify-between mb-3">
@@ -42,14 +51,11 @@ export function ReceiptSection({ form, set, setForm, detected, onBranchChange }:
       </div>
 
       <div>
-        <ReceiptRow label="App Name" detected={!!detected}>
+        <Field label={<span className="inline-flex items-center gap-1.5">App Name{mark(!!detected)}</span>}>
           <input type="text" value={form.app_name} onChange={set("app_name")} required />
-        </ReceiptRow>
+        </Field>
 
-        <ReceiptRow
-          label="Dockerfile"
-          detected={!!detected && detected.dockerfiles.length > 0}
-        >
+        <Field label={<span className="inline-flex items-center gap-1.5">Dockerfile{mark(!!detected && detected.dockerfiles.length > 0)}</span>}>
           {hasMultipleDockerfiles ? (
             <NeoSelect
               value={form.dockerfile_path}
@@ -64,19 +70,19 @@ export function ReceiptSection({ form, set, setForm, detected, onBranchChange }:
               placeholder="Auto-detect at deploy time"
             />
           )}
-        </ReceiptRow>
+        </Field>
 
-        <ReceiptRow label="Build Context" detected={!!form.docker_context}>
+        <Field label={<span className="inline-flex items-center gap-1.5">Build Context{mark(!!form.docker_context)}</span>}>
           <input
             type="text"
             value={form.docker_context}
             onChange={set("docker_context")}
             placeholder=". (repo root)"
           />
-        </ReceiptRow>
+        </Field>
 
         {detected && detected.branches.length > 0 && (
-          <ReceiptRow label="Branch" detected>
+          <Field label={<span className="inline-flex items-center gap-1.5">Branch{mark(true)}</span>}>
             <NeoSelect
               value={form.git_branch || detected.default_branch}
               onChange={onBranchChange}
@@ -85,24 +91,24 @@ export function ReceiptSection({ form, set, setForm, detected, onBranchChange }:
                 label: b === detected.default_branch ? `${b}  ·  default` : b,
               }))}
             />
-          </ReceiptRow>
+          </Field>
         )}
 
-        <ReceiptRow label="Listens On" detected={!!detected?.detected_port}>
+        <Field label={<span className="inline-flex items-center gap-1.5">Listens On{mark(!!detected?.detected_port)}</span>}>
           <input type="number" value={form.container_port} onChange={set("container_port")} />
-        </ReceiptRow>
+        </Field>
 
-        <ReceiptRow label="Domain">
+        <Field label="Domain">
           <input
             type="text"
             value={form.domain}
             onChange={set("domain")}
             placeholder="app.example.com (we'll give you a temporary one if blank)"
           />
-        </ReceiptRow>
+        </Field>
 
         {servers.length > 0 && (
-          <ReceiptRow label="Target Server">
+          <Field label="Target Server">
             <NeoSelect
               value={form.server_id}
               onChange={(v) => setForm((f) => ({ ...f, server_id: v }))}
@@ -114,7 +120,7 @@ export function ReceiptSection({ form, set, setForm, detected, onBranchChange }:
                 })),
               ]}
             />
-          </ReceiptRow>
+          </Field>
         )}
       </div>
 
