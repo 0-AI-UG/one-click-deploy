@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { get, post, del, put } from "../../api/client.ts";
-import { Card, Btn, Table, Spinner, Field, showToast, confirm } from "../../components/ui.tsx";
+import { Card, Btn, Table, Spinner, Field, Divider, showToast, confirm } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-server-types.ts";
 import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check } from "lucide-react";
@@ -208,7 +208,9 @@ export function UsersPage() {
         <Field label="Hetzner Cloud API Token">
           <input type="password" value={settingsForm.provider_token} onChange={setS("provider_token")} placeholder="Enter token" />
         </Field>
+        <Divider />
         <GitHubOAuthSettings form={settingsForm} setS={setS} />
+        <Divider />
 
         <div className="pt-2">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Defaults</h3>

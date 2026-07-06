@@ -1,5 +1,5 @@
 import { Plus, Minus, AlertTriangle } from "lucide-react";
-import { Btn, Checkbox, Field } from "../../components/ui.tsx";
+import { Btn, Checkbox, Field, Divider } from "../../components/ui.tsx";
 import { Label } from "./shared.tsx";
 import { InfoTip } from "../app-detail/shared.tsx";
 import type { FormState } from "./types.ts";
@@ -100,6 +100,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           </>
         )}
       </div>
+      <Divider />
       <div>
         <div className="flex items-center justify-between mb-1">
           <Label>Extra Volume Mounts</Label>
@@ -165,6 +166,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           </div>
         ))}
       </div>
+      <Divider />
       <div>
         <div className="flex items-center justify-between mb-1">
           <Label>Extra Environment Variables</Label>

@@ -378,6 +378,12 @@ export function Field({
   );
 }
 
+// --- Divider ---
+// A hairline rule for separating logical sections of a form/card.
+export function Divider({ className = "" }: { className?: string }) {
+  return <div className={`border-t-2 border-fg/10 ${className}`} />;
+}
+
 // --- Empty State ---
 export function EmptyState({ message, icon: Icon }: { message: string; icon?: React.ComponentType<{ size?: number; className?: string }> }) {
   return (
