@@ -3,6 +3,7 @@ import {
   sshExec,
   removeContainer,
   healthCheck,
+  containerRunningCheck,
   describeFailure,
   buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
@@ -250,7 +251,12 @@ const healthCheckStep: Step<RollbackInput, { healthy: boolean }> = {
     const first = replicas[0];
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
-    const health = await healthCheck(server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey);
+    const health = app.health_check
+      ? await healthCheck(server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey)
+      : await containerRunningCheck(server.ipv4, app.name, 10, hostKey);
+    if (!app.health_check && health.healthy) {
+      db.appendDeployLog(target.appId, `[health] HTTP probe disabled; container is running`);
+    }
     db.updateAppStatus(target.appId, health.healthy ? "running" : "unhealthy");
     if (!health.healthy) {
       // Fail the op so swap_container's compensate restores the prior image

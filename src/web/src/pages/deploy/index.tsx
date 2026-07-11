@@ -140,6 +140,7 @@ const EMPTY_FORM: FormState = {
   extra_volumes: [],
   server_id: "",
   memory_mb: "",
+  health_check: true,
 };
 
 export function DeployPage() {
@@ -185,6 +186,7 @@ export function DeployPage() {
       public: m.public ?? f.public,
       extra_volumes: m.extra_volumes ?? f.extra_volumes,
       memory_mb: m.memory_mb ? String(m.memory_mb) : f.memory_mb,
+      health_check: m.health_check ?? f.health_check,
     }));
 
     if (m.env && m.env.length > 0) {
@@ -222,6 +224,7 @@ export function DeployPage() {
       webhook_wait_for_ci: false,
       replicas: "1",
       memory_mb: "",
+      health_check: true,
     }));
     if (result.env_vars.length > 0) {
       const next: Record<string, string> = {};
@@ -445,6 +448,7 @@ export function DeployPage() {
         : undefined,
       server_id: form.server_id ? parseInt(form.server_id, 10) : undefined,
       memory_mb: form.memory_mb ? parseInt(form.memory_mb, 10) : undefined,
+      health_check: form.health_check === false ? false : undefined,
     };
 
     (async () => {

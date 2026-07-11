@@ -25,6 +25,7 @@ export type DeployManifest = {
   public?: boolean;
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   memory_mb?: number;
+  health_check?: boolean;
 };
 
 export type ParsedManifest = {
@@ -69,4 +70,5 @@ export type FormState = {
   extra_volumes: Array<{ host_path: string; container_path: string }>;
   server_id: string; // "" = auto
   memory_mb: string; // "" / "0" = platform default
+  health_check: boolean; // false = skip the HTTP probe (manifest passthrough, no UI control)
 };

@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  sshExec, transferImage, healthCheck,
+  sshExec, transferImage, healthCheck, containerRunningCheck,
   buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
 import { syncAppCaddy } from "./caddy-manager.ts";
@@ -87,8 +87,10 @@ export async function rollingRedeploy(
       });
       await sshExec(server.ipv4, asUser(cmd), hostKey);
 
-      // Health check
-      const health = await healthCheck(server.ipv4, replica.container_name, replicaBindAddr, replica.host_port, 5, hostKey);
+      // Health check (running-only when the app opted out of the HTTP probe)
+      const health = app.health_check
+        ? await healthCheck(server.ipv4, replica.container_name, replicaBindAddr, replica.host_port, 5, hostKey)
+        : await containerRunningCheck(server.ipv4, replica.container_name, 5, hostKey);
 
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 

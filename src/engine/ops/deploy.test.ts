@@ -22,12 +22,15 @@ mock.module("../provision-server.ts", () => ({ provisionServer }));
 
 // Stub all remote + caddy + github + other deep deps so deploy.ts at least
 // imports cleanly even though we're only exercising selected steps.
+const healthCheckMock = mock(async () => ({ healthy: true, statusCode: 200 }));
+const containerRunningCheckMock = mock(async () => ({ healthy: true }));
 mock.module("../../shared/remote/index.ts", () => ({
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
   cloneAndBuild: mock(async () => {}),
   removeContainer: mock(async () => {}),
   removeCompose: mock(async () => {}),
-  healthCheck: mock(async () => ({ healthy: true })),
+  healthCheck: healthCheckMock,
+  containerRunningCheck: containerRunningCheckMock,
   composeHealthCheck: mock(async () => ({ healthy: true })),
   deployAuthProxy: mock(async () => ({ caddyPort: 9999 })),
   removeAuthProxy: mock(async () => {}),
@@ -36,7 +39,10 @@ mock.module("../scale/caddy-manager.ts", () => ({
   syncAppCaddy: mock(async () => {}),
   removeAppCaddy: mock(async () => {}),
 }));
-mock.module("../scale-api.ts", () => ({ scaleApp: mock(async () => ({ ok: true })) }));
+mock.module("../scale-api.ts", () => ({
+  scaleApp: mock(async () => ({ ok: true })),
+  rollingRedeploy: mock(async () => ({ ok: true })),
+}));
 mock.module("../../shared/github.ts", () => ({
   getGitHubPat: async () => null,
   deleteWebhook: async () => {},
@@ -45,6 +51,7 @@ mock.module("../../shared/github.ts", () => ({
 
 import * as db from "../../shared/db.ts";
 import deployOp from "./deploy.ts";
+import redeployOp from "./redeploy.ts";
 
 // Synthetic op context. Steps that don't call park/unpark can use this shape.
 function makeCtx(input: any) {
@@ -79,6 +86,8 @@ beforeEach(() => {
   dns._mocks.deleteRecord.mockClear();
   compute._mocks.volumeCreate.mockClear();
   compute._mocks.volumeDelete.mockClear();
+  healthCheckMock.mockClear();
+  containerRunningCheckMock.mockClear();
 });
 
 const baseReq = (name: string) => ({
@@ -364,6 +373,123 @@ describe("deploy step: create_volume", () => {
     const { ctx } = makeCtx({});
     await step.compensate!(ctx, { volumeId: "v-xyz", volumeMount: "", containerPath: "/d" }, {});
     expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
+  });
+});
+
+// --- health_check opt-out --------------------------------------------------
+
+function setupDeployedApp(healthCheckFlag: boolean) {
+  const server = db.insertServer({
+    name: `srv-${randomSuffix()}`,
+    provider_id: `h-${randomSuffix()}`,
+    ipv4: "2.2.2.2",
+    ipv6: "",
+    type: "cx22",
+    location: "fsn1",
+    status: "ready",
+    private_ipv4: "10.0.0.2",
+  });
+  const name = `hc-${randomSuffix()}`;
+  const { app, replica } = db.insertAppWithFirstReplica(
+    {
+      name,
+      domain: `${name}.example.com`,
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 5432,
+      env_vars: "{}",
+      health_check: healthCheckFlag,
+    },
+    server.id,
+  );
+  const prior = {
+    pick_or_provision_server: {
+      serverId: server.id,
+      serverIp: server.ipv4,
+      serverHostKey: "",
+      provisioned: false,
+      ingressIp: server.ipv4,
+    },
+    insert_app_row: {
+      appId: app.id,
+      replicaId: replica.id,
+      containerName: name,
+      hostPort: replica.host_port,
+      domain: `${name}.example.com`,
+      useInternalTls: false,
+      environmentId: null,
+      flatEnvVars: {},
+      dockerfilePath: "Dockerfile",
+    },
+  };
+  return { server, app, replica, prior, name };
+}
+
+describe("deploy step: health_check", () => {
+  const step = stepByName("health_check");
+
+  test("stores the health_check flag on the app row", () => {
+    const { app } = setupDeployedApp(false);
+    expect(db.getApp(app.id)!.health_check).toBe(0);
+    const { app: app2 } = setupDeployedApp(true);
+    expect(db.getApp(app2.id)!.health_check).toBe(1);
+  });
+
+  test("health_check:false skips the HTTP probe and marks the app running", async () => {
+    const { app, replica, prior, name } = setupDeployedApp(false);
+    const { ctx } = makeCtx({ ...baseReq(name), container_port: 5432, health_check: false });
+    const out = (await step.run(ctx, prior)) as { healthy: boolean };
+    expect(out.healthy).toBe(true);
+    expect(containerRunningCheckMock).toHaveBeenCalledTimes(1);
+    expect(healthCheckMock).not.toHaveBeenCalled();
+    expect(db.getApp(app.id)!.status).toBe("running");
+    expect(db.getReplica(replica.id)!.status).toBe("running");
+    expect(db.getDeployLog(app.id)).toContain("HTTP probe disabled; container is running");
+  });
+
+  test("health_check:false still fails the op when the container is not running", async () => {
+    const { app, replica, prior, name } = setupDeployedApp(false);
+    containerRunningCheckMock.mockImplementationOnce(async () => ({
+      healthy: false,
+      error: "Container is not running",
+    }));
+    const { ctx } = makeCtx({ ...baseReq(name), health_check: false });
+    expect(step.run(ctx, prior)).rejects.toThrow(/did not become healthy/i);
+    expect(healthCheckMock).not.toHaveBeenCalled();
+    expect(db.getApp(app.id)!.status).toBe("unhealthy");
+    expect(db.getReplica(replica.id)!.status).toBe("unhealthy");
+  });
+
+  test("default (health_check omitted) still runs the HTTP probe", async () => {
+    const { prior, name } = setupDeployedApp(true);
+    const { ctx } = makeCtx(baseReq(name));
+    await step.run(ctx, prior);
+    expect(healthCheckMock).toHaveBeenCalledTimes(1);
+    expect(containerRunningCheckMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("redeploy step: health_check", () => {
+  const step = redeployOp.steps.find((s) => s.name === "health_check")!;
+
+  test("honors the stored health_check=0 flag (skips HTTP probe)", async () => {
+    const { app } = setupDeployedApp(false);
+    const { ctx } = makeCtx({ appId: app.id });
+    const out = (await step.run(ctx, {})) as { healthy: boolean };
+    expect(out.healthy).toBe(true);
+    expect(containerRunningCheckMock).toHaveBeenCalledTimes(1);
+    expect(healthCheckMock).not.toHaveBeenCalled();
+    expect(db.getApp(app.id)!.status).toBe("running");
+    expect(db.getDeployLog(app.id)).toContain("HTTP probe disabled; container is running");
+  });
+
+  test("keeps the HTTP probe for apps with health_check=1", async () => {
+    const { app } = setupDeployedApp(true);
+    const { ctx } = makeCtx({ appId: app.id });
+    await step.run(ctx, {});
+    expect(healthCheckMock).toHaveBeenCalledTimes(1);
+    expect(containerRunningCheckMock).not.toHaveBeenCalled();
+    expect(db.getApp(app.id)!.status).toBe("running");
   });
 });
 

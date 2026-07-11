@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  sshExec, healthCheck, deployAuthProxy,
+  sshExec, healthCheck, containerRunningCheck, deployAuthProxy,
   startContainer, containerExists,
   buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
@@ -72,8 +72,10 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
       await sshExec(server.ipv4, asUser(cmd), hostKey);
     }
 
-    // Health check
-    const health = await healthCheck(server.ipv4, containerName, bindAddr, hostPort, 5, hostKey);
+    // Health check (running-only when the app opted out of the HTTP probe)
+    const health = app.health_check
+      ? await healthCheck(server.ipv4, containerName, bindAddr, hostPort, 5, hostKey)
+      : await containerRunningCheck(server.ipv4, containerName, 5, hostKey);
 
     // Re-deploy auth proxy only on the slow path. The fast path preserved
     // the auth proxy systemd unit when the container was stopped.

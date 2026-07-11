@@ -1157,6 +1157,39 @@ export async function healthCheck(
   return { healthy: false, error: "Health check timed out" };
 }
 
+/**
+ * Running-only health check for apps with the HTTP probe disabled
+ * (apps.health_check = 0): databases, queue workers and other containers
+ * that don't speak HTTP on their exposed port. Same docker-inspect retry
+ * loop and result shape as healthCheck, minus the curl.
+ */
+export async function containerRunningCheck(
+  ip: string,
+  containerName: string,
+  maxAttempts = 5,
+  hostKey?: string
+): Promise<{ healthy: boolean; statusCode?: number; error?: string }> {
+  log("health", `HTTP probe disabled for ${containerName} on ${ip}; verifying container is running`);
+
+  for (let i = 0; i < maxAttempts; i++) {
+    const inspect = await sshExec(
+      ip,
+      `su - deploy -c "docker inspect --format='{{.State.Running}}' ${containerName} 2>/dev/null"`,
+      hostKey
+    );
+    if (inspect.stdout.trim() === "true") {
+      log("health", `HTTP probe disabled; container is running`);
+      return { healthy: true };
+    }
+    if (i < maxAttempts - 1) {
+      log("health", `Container not running yet (attempt ${i + 1}/${maxAttempts})`);
+      await Bun.sleep(3000);
+    }
+  }
+
+  return { healthy: false, error: "Container is not running" };
+}
+
 // --- Container Logs ---
 
 export async function getContainerLogs(

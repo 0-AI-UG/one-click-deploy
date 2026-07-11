@@ -7,6 +7,7 @@ import {
   cloneAndBuild,
   removeContainer,
   healthCheck,
+  containerRunningCheck,
   deployAuthProxy,
   removeAuthProxy,
   containerExists,
@@ -438,6 +439,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           auth_password: req.auth_password,
           environment_id: environmentId ?? undefined,
           public: req.public,
+          health_check: req.health_check,
         },
         server.serverId,
       );
@@ -772,10 +774,17 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
     const containerBindAddr = replicaBindHost(tenantServerRow);
 
     // Generous window (10 attempts) so a slow first boot isn't failed early.
-    const health = await healthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined);
+    // Apps with the HTTP probe opted out (databases, queue workers) only get
+    // the container-is-running verification.
+    const httpProbe = req.health_check !== false;
+    const health = httpProbe
+      ? await healthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined)
+      : await containerRunningCheck(server.serverIp, req.app_name, 10, server.serverHostKey || undefined);
 
     if (health.healthy) {
-      db.appendDeployLog(appOut.appId, `[health] Health check passed (HTTP ${health.statusCode})`);
+      db.appendDeployLog(appOut.appId, httpProbe
+        ? `[health] Health check passed (HTTP ${health.statusCode})`
+        : `[health] HTTP probe disabled; container is running`);
       db.updateAppStatus(appOut.appId, "running");
       db.updateReplicaStatus(appOut.replicaId, "running");
     } else {

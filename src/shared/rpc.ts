@@ -44,6 +44,7 @@ export type App = {
   volume_id: string;
   volume_mount: string;
   extra_volumes: string; // JSON array of "host:container" strings
+  health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
   created_at: string;
 };
 
@@ -122,6 +123,7 @@ export type DeployRequest = {
   extra_volumes?: Array<{ host_path: string; container_path: string }>; // Additional volume mounts
   server_id?: number; // If set, deploy to this specific server instead of auto-selecting
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
+  health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
 };
 
 export type PanelInfo = {
@@ -175,6 +177,7 @@ export type DeployManifest = {
   public?: boolean;
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
+  health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
 };
 
 export type ParsedManifest = {

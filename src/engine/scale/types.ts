@@ -39,6 +39,7 @@ export interface App {
   public: number;
   extra_volumes: string;
   memory_mb: number;
+  health_check: number;
 }
 
 export interface Replica {

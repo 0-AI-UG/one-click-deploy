@@ -2,7 +2,7 @@ import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
   sshExec, cloneAndBuild,
-  transferImage, healthCheck,
+  transferImage, healthCheck, containerRunningCheck,
   deployAuthProxy, removeAuthProxy,
   describeFailure, buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
@@ -159,7 +159,9 @@ export async function scaleUp(
 
     // Health check
     emit("scale", `Health checking replica ${replicaNum}...`);
-    const health = await healthCheck(targetServer.ipv4, containerName, replicaBindAddr, hostPort, 5, targetHostKey);
+    const health = app.health_check
+      ? await healthCheck(targetServer.ipv4, containerName, replicaBindAddr, hostPort, 5, targetHostKey)
+      : await containerRunningCheck(targetServer.ipv4, containerName, 5, targetHostKey);
 
     // Insert replica record BEFORE syncing Caddy so the upstream list
     // built from the DB actually includes the new replica.

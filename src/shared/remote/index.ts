@@ -29,6 +29,7 @@ export {
   getComposeLogs,
   composeHealthCheck,
   healthCheck,
+  containerRunningCheck,
   getContainerLogs,
   restartContainer,
   pauseContainer,

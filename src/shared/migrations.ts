@@ -1252,6 +1252,17 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 59,
+    description: "Add per-app health_check flag to apps (0 = skip HTTP probe, only verify container runs)",
+    up: (db) => {
+      // 1 = probe http://<bind>:<port>/ after (re)deploys, scale-ups and wakes
+      //     (the default, matches historical behavior).
+      // 0 = the app doesn't speak HTTP on its exposed port (database, queue
+      //     worker) — only verify the container is running.
+      db.run("ALTER TABLE apps ADD COLUMN health_check INTEGER NOT NULL DEFAULT 1");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

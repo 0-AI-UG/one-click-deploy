@@ -71,6 +71,7 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
   "replicas": "number — desired replica count (default: 1)",
   "public": "boolean — whether the app is publicly accessible (default: true)",
   "memory_mb": "number — per-container memory ceiling in MB (--memory/--memory-swap). Omit or 0 to use the platform default (512). Allowed: 0 or 128–32768.",
+  "health_check": "boolean — set false for apps that don't speak HTTP on the exposed port (databases, queue workers); the platform then only verifies the container stays running (default: true)",
   "extra_volumes": [
     {
       "host_path": "string — absolute path on the host machine",
@@ -90,6 +91,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 - Paths must not contain \`..\`.
 - \`env[].key\` must match \`/^[A-Za-z_][A-Za-z0-9_]*$/\`. Reserved prefixes (\`DOCKER_\`, \`PATH\`, \`HOME\`, \`LD_\`, \`DYLD_\`) are blocked.
 - A repo can have up to 10 manifest files. Extra manifests beyond 10 are ignored.
+- Deployed apps are health-checked with an HTTP request to \`/\` on the exposed port; a deploy that never answers is rolled back. For non-HTTP apps (databases, queue workers) set \`"health_check": false\` so the platform only verifies the container stays running.
 
 ## Example: Single service
 

@@ -220,4 +220,5 @@ export type DeployBody = {
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   server_id?: number;
   memory_mb?: number;
+  health_check?: boolean;
 };

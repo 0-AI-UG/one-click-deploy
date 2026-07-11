@@ -9,6 +9,7 @@ import {
   pauseContainer,
   unpauseContainer,
   healthCheck,
+  containerRunningCheck,
   describeFailure,
 } from "../../shared/remote/index.ts";
 import { removeAppCaddy, syncAppCaddy } from "../scale/caddy-manager.ts";
@@ -218,7 +219,9 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
       await restartContainer(server.ipv4, replica.container_name, hostKey);
 
       const bindAddr = replicaBindHost(server);
-      const health = await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
+      const health = app.health_check
+        ? await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey)
+        : await containerRunningCheck(server.ipv4, replica.container_name, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }
@@ -271,8 +274,10 @@ export async function recreateAppContainer(
       throw new Error(describeFailure("Failed to start container", result));
     }
 
-    // Health check
-    const health = await healthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey);
+    // Health check (running-only when the app opted out of the HTTP probe)
+    const health = app.health_check
+      ? await healthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey)
+      : await containerRunningCheck(server.ipv4, app.name, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
     db.updateReplicaStatus(firstReplica.id, health.healthy ? "running" : "unhealthy");
 
@@ -340,7 +345,9 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
       await unpauseContainer(server.ipv4, replica.container_name, hostKey);
 
       const bindAddr = replicaBindHost(server);
-      const health = await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
+      const health = app.health_check
+        ? await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey)
+        : await containerRunningCheck(server.ipv4, replica.container_name, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }

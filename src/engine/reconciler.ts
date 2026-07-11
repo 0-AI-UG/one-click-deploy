@@ -1,6 +1,6 @@
 import * as db from "../shared/db.ts";
 import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } from "../shared/db.ts";
-import { sshExec, healthCheck, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck, pruneServer, buildDockerRunArgs } from "../shared/remote/index.ts";
+import { sshExec, healthCheck, containerRunningCheck, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck, pruneServer, buildDockerRunArgs } from "../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../shared/env-crypto.ts";
 import { evaluateAutoScale } from "./scale-api.ts";
 import { getCatalogEntry } from "../shared/services/catalog.ts";
@@ -180,7 +180,9 @@ export async function checkReplicaHealth(
   const hostKey = server.ssh_host_key || undefined;
   const bindHost = replicaBindHost(server);
   try {
-    const check = await healthCheck(server.ipv4, replica.container_name, bindHost, replica.host_port, 1, hostKey);
+    const check = app.health_check
+      ? await healthCheck(server.ipv4, replica.container_name, bindHost, replica.host_port, 1, hostKey)
+      : await containerRunningCheck(server.ipv4, replica.container_name, 1, hostKey);
 
     const current = db.getReplica(replica.id);
     if (!current || HEALTH_EXEMPT_STATUSES.has(current.status)) return;

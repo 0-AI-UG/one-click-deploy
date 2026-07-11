@@ -41,6 +41,7 @@ export type AppRow = {
   public: number;
   extra_volumes: string; // JSON array of "host:container" strings
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
+  health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
 };
 
 export type DnsRecordRow = {
@@ -97,10 +98,11 @@ export function insertApp(app: {
   auth_password?: string;
   environment_id?: number;
   public?: boolean;
+  health_check?: boolean;
 }): AppRow {
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, health_check) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       app.name,
@@ -114,6 +116,7 @@ export function insertApp(app: {
       app.auth_password || "",
       app.environment_id ?? null,
       (app.public ?? true) ? 1 : 0,
+      (app.health_check ?? true) ? 1 : 0,
     ) as AppRow;
 }
 
@@ -130,13 +133,14 @@ export function insertAppWithFirstReplica(
     auth_password?: string;
     environment_id?: number;
     public?: boolean;
+    health_check?: boolean;
   },
   serverId: number,
 ): { app: AppRow; replica: ReplicaRow } {
   const tx = db.transaction(() => {
     const appRow = db
       .query(
-        "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+        "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, health_check) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
       )
       .get(
         app.name,
@@ -150,6 +154,7 @@ export function insertAppWithFirstReplica(
         app.auth_password || "",
         app.environment_id ?? null,
         (app.public ?? true) ? 1 : 0,
+        (app.health_check ?? true) ? 1 : 0,
       ) as AppRow;
     const hostPort = nextReplicaHostPort(serverId);
     const replicaRow = db

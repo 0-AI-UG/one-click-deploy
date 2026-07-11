@@ -6,6 +6,7 @@ import {
   deployAuthProxy,
   removeAuthProxy,
   healthCheck,
+  containerRunningCheck,
   removeContainer,
   buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
@@ -222,7 +223,9 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
         memoryMb: snap.memoryMb ?? undefined,
       });
       await sshExec(server.ipv4, asUser(cmd), hostKey);
-      const health = await healthCheck(server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey);
+      const health = app.health_check
+        ? await healthCheck(server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey)
+        : await containerRunningCheck(server.ipv4, snap.containerName, 5, hostKey);
       if (first) db.updateReplicaStatus(first.id, health.healthy ? "running" : "unhealthy");
       db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
       db.appendDeployLog(ctx.input.appId, `[rollback] Restored previous image after failed redeploy (healthy=${health.healthy})`);
@@ -328,7 +331,12 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
     // Generous window (10 attempts) so a slow-booting app isn't failed
     // prematurely — but if it never comes up, throw so the op fails and
     // pull_and_build's compensate rolls back to the previous image.
-    const health = await healthCheck(server.ipv4, first.container_name, bindAddr, first.host_port, 10, hostKey);
+    const health = app.health_check
+      ? await healthCheck(server.ipv4, first.container_name, bindAddr, first.host_port, 10, hostKey)
+      : await containerRunningCheck(server.ipv4, first.container_name, 10, hostKey);
+    if (!app.health_check && health.healthy) {
+      db.appendDeployLog(ctx.input.appId, `[health] HTTP probe disabled; container is running`);
+    }
     db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
     if (!health.healthy) {
       const detail = health.error || `HTTP ${health.statusCode ?? "no response"}`;

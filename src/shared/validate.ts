@@ -302,6 +302,9 @@ export function validateDeployManifest(
   if ("memory_mb" in obj && !isValidMemoryMb(obj.memory_mb))
     return { ok: false, error: `"memory_mb" must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB}` };
 
+  if ("health_check" in obj && typeof obj.health_check !== "boolean")
+    return { ok: false, error: '"health_check" must be a boolean' };
+
   return { ok: true, manifest: raw as import("./rpc.ts").DeployManifest };
 }
 
