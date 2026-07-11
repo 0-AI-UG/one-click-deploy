@@ -259,31 +259,31 @@ export function Btn({
     ghost: "bg-bg-raised text-fg-dim shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none",
   };
 
-  const { node: renderedChildren, found: iconSpinning } = loading
-    ? spinFirstIcon(children)
+  const { node: renderedChildren, found: iconReplaced } = loading
+    ? replaceFirstIconWithSpinner(children)
     : { node: children, found: false };
 
   return (
     <button type={type} onClick={onClick} disabled={disabled || loading} title={title} className={`${base} ${sizes} ${variants[variant]} ${className}`}>
-      {loading && !iconSpinning && <Spinner />}
+      {loading && !iconReplaced && <Loader2 size={size === "xs" ? 12 : 13} className="animate-spin flex-shrink-0" />}
       {renderedChildren}
     </button>
   );
 }
 
-// Walk children and add `animate-spin` to the first Lucide-style icon element
-// (detected by a numeric `size` prop). Returns the transformed tree and whether
-// an icon was found, so Btn can skip rendering a second Spinner.
-function spinFirstIcon(node: ReactNode): { node: ReactNode; found: boolean } {
+// Walk children and swap the first Lucide-style icon element (detected by a
+// numeric `size` prop) for a same-size spinner, so a loading button shows a
+// spinner where its icon was instead of spinning the icon itself. Returns the
+// transformed tree and whether an icon was found, so Btn can prepend a spinner
+// for icon-less buttons.
+function replaceFirstIconWithSpinner(node: ReactNode): { node: ReactNode; found: boolean } {
   let found = false;
   const visit = (child: ReactNode): ReactNode => {
     if (found || !React.isValidElement(child)) return child;
     const props = child.props as { size?: unknown; className?: string; children?: ReactNode };
     if (typeof props.size === "number") {
       found = true;
-      return React.cloneElement(child as React.ReactElement<{ className?: string }>, {
-        className: `${props.className ?? ""} animate-spin`.trim(),
-      });
+      return <Loader2 key={child.key ?? undefined} size={props.size} className="animate-spin flex-shrink-0" />;
     }
     if (props.children !== undefined) {
       const newChildren = React.Children.map(props.children, visit);
