@@ -202,10 +202,12 @@ App and server arguments accept a name or numeric ID.
 ### ocd deploy
 
 \`\`\`
-ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>]
+ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>] [--set=KEY=VALUE ...]
 \`\`\`
 
-Run from inside a git repo with an \`origin\` remote. Reads the manifest (default: \`./.ocd-deploy.json\`) for the app name, build settings, port, webhook, volume, and scaling configuration, then streams deploy progress step by step until it completes or fails. \`--domain\` sets a custom domain; \`--env\` links the app to an existing environment.
+Run from inside a git repo with an \`origin\` remote. Reads the manifest (default: \`./.ocd-deploy.json\`) for the app name, build settings, port, env vars, webhook, volume, and scaling configuration, then streams deploy progress step by step until it completes or fails. \`--domain\` sets a custom domain.
+
+Env vars from the manifest's \`env[]\` section are included automatically: entries with a \`default\` are sent as-is, \`--set=KEY=VALUE\` (repeatable) overrides or adds values, and \`required\` vars still missing a value are prompted for interactively (hidden input when \`secret\`). In non-interactive shells, missing required vars fail the deploy with a message listing them — provide them via \`--set\`. Alternatively, \`--env\` links the app to an existing environment, which then supplies all variables (manifest env vars and \`--set\` are ignored).
 
 ### ocd envs
 

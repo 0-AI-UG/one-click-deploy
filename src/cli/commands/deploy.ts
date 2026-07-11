@@ -3,6 +3,7 @@ import { execSync } from "node:child_process";
 import { resolve } from "node:path";
 import { get, post } from "../api.ts";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET } from "../format.ts";
+import { promptLine, promptHidden } from "../prompt.ts";
 import type { DeployManifest, DeployRequest } from "../../shared/rpc.ts";
 
 interface OperationEventPoll {
@@ -69,10 +70,17 @@ async function resolveEnvironment(nameOrId: string): Promise<Environment> {
   process.exit(1);
 }
 
-function parseFlags(args: string[]): { manifestPath: string; domain?: string; envName?: string; help: boolean } {
+function parseFlags(args: string[]): {
+  manifestPath: string;
+  domain?: string;
+  envName?: string;
+  sets: Record<string, string>;
+  help: boolean;
+} {
   let manifestPath = "";
   let domain: string | undefined;
   let envName: string | undefined;
+  const sets: Record<string, string> = {};
   let help = false;
 
   for (const arg of args) {
@@ -80,6 +88,14 @@ function parseFlags(args: string[]): { manifestPath: string; domain?: string; en
       domain = arg.slice(9);
     } else if (arg.startsWith("--env=")) {
       envName = arg.slice(6);
+    } else if (arg.startsWith("--set=")) {
+      const pair = arg.slice(6);
+      const eq = pair.indexOf("=");
+      if (eq < 1) {
+        console.error(`${RED}Invalid --set value (expected --set=KEY=VALUE): ${arg}${RESET}`);
+        process.exit(1);
+      }
+      sets[pair.slice(0, eq)] = pair.slice(eq + 1);
     } else if (arg === "--help" || arg === "-h") {
       help = true;
     } else if (!arg.startsWith("--") && !manifestPath) {
@@ -89,11 +105,60 @@ function parseFlags(args: string[]): { manifestPath: string; domain?: string; en
 
   if (!manifestPath) manifestPath = ".ocd-deploy.json";
 
-  return { manifestPath, domain, envName, help };
+  return { manifestPath, domain, envName, sets, help };
+}
+
+// Resolve the manifest's env[] section into concrete values: --set overrides,
+// then manifest defaults, then interactive prompts for required vars.
+async function collectEnvVars(
+  manifest: DeployManifest,
+  sets: Record<string, string>,
+): Promise<Array<{ key: string; value: string; secret?: boolean }>> {
+  const out: Array<{ key: string; value: string; secret?: boolean }> = [];
+  const remaining = { ...sets };
+
+  const toPrompt: NonNullable<DeployManifest["env"]> = [];
+  for (const entry of manifest.env || []) {
+    if (entry.key in remaining) {
+      out.push({ key: entry.key, value: remaining[entry.key], secret: entry.secret });
+      delete remaining[entry.key];
+    } else if (entry.default !== undefined) {
+      out.push({ key: entry.key, value: entry.default, secret: entry.secret });
+    } else if (entry.required) {
+      toPrompt.push(entry);
+    }
+  }
+
+  // Extra --set keys not declared in the manifest
+  for (const [key, value] of Object.entries(remaining)) {
+    out.push({ key, value });
+  }
+
+  if (toPrompt.length > 0) {
+    if (!process.stdin.isTTY) {
+      console.error(
+        `${RED}Missing required env vars: ${toPrompt.map((e) => e.key).join(", ")}${RESET}`,
+      );
+      console.error(`Provide them with --set=KEY=VALUE or link an environment with --env=<name|id>.`);
+      process.exit(1);
+    }
+    console.log(`\n${BOLD}Required environment variables${RESET}`);
+    for (const entry of toPrompt) {
+      const hint = entry.description ? ` ${DIM}(${entry.description})${RESET}` : "";
+      const question = `  ${entry.key}${hint}: `;
+      let value = "";
+      while (!value) {
+        value = entry.secret ? await promptHidden(question) : await promptLine(question);
+      }
+      out.push({ key: entry.key, value, secret: entry.secret });
+    }
+  }
+
+  return out;
 }
 
 export async function deploy(args: string[]): Promise<void> {
-  const { manifestPath, domain, envName, help } = parseFlags(args);
+  const { manifestPath, domain, envName, sets, help } = parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
@@ -101,12 +166,18 @@ export async function deploy(args: string[]): Promise<void> {
 Deploys the current git repo using a local .ocd-deploy.json manifest.
 Run from inside a git repo with an "origin" remote.
 
+Env vars from the manifest's env[] section are included automatically:
+defaults are sent as-is, --set overrides or adds values, and required
+vars without a value are prompted for (hidden input when secret).
+With --env, the linked environment supplies all variables instead.
+
 ${BOLD}Arguments:${RESET}
   [manifest]                 Path to manifest (default: .ocd-deploy.json)
 
 ${BOLD}Options:${RESET}
   --domain=<domain>          Custom domain
-  --env=<name|id>            Link to an existing environment`);
+  --env=<name|id>            Link to an existing environment
+  --set=KEY=VALUE            Set an env var (repeatable)`);
     process.exit(0);
   }
 
@@ -148,9 +219,14 @@ ${BOLD}Options:${RESET}
   if (manifest.extra_volumes?.length) body.extra_volumes = manifest.extra_volumes;
 
   if (envName) {
+    // The server ignores env_vars when environment_id is set — the linked
+    // environment supplies all variables, so skip manifest env collection.
     const env = await resolveEnvironment(envName);
     body.environment_id = env.id;
     console.log(`${DIM}Env:${RESET}      ${env.name}`);
+  } else {
+    const envVars = await collectEnvVars(manifest, sets);
+    if (envVars.length > 0) body.env_vars = envVars;
   }
 
   console.log(`\nDeploying ${BOLD}${name}${RESET}...`);
