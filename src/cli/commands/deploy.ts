@@ -2,24 +2,10 @@ import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
 import { get, post } from "../api.ts";
-import { BOLD, CYAN, DIM, GREEN, RED, RESET } from "../format.ts";
+import { followOp } from "../ops.ts";
+import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
 import { promptLine, promptHidden } from "../prompt.ts";
 import type { DeployManifest, DeployRequest } from "../../shared/rpc.ts";
-
-interface OperationEventPoll {
-  status: "pending" | "running" | "done" | "failed" | "compensating" | "compensated" | "cancelled";
-  last_step: string | null;
-  error: { message?: string; cancelled?: boolean } | null;
-  steps: Array<{
-    seq: number;
-    step: string;
-    phase: "forward" | "compensate";
-    status: "started" | "ok" | "skipped" | "failed";
-    detail: string;
-  }>;
-}
-
-const TERMINAL = new Set(["done", "failed", "cancelled", "compensated"]);
 
 interface Environment {
   id: number;
@@ -233,39 +219,11 @@ ${BOLD}Options:${RESET}
 
   const { op_id } = await post<{ op_id: number }>("/api/apps/deploy", body);
 
-  let lastSeq = 0;
-  while (true) {
-    const poll = await get<OperationEventPoll>(
-      `/api/operations/${op_id}/events?since=${lastSeq}&wait=15000`,
-    );
-
-    for (const event of poll.steps) {
-      // Only surface forward-phase starts once per step (mirrors prior UX).
-      if (event.phase === "compensate") {
-        const step = `rollback ${event.step}`.padEnd(22);
-        console.log(`  ${RED}${step}${RESET} ${event.detail || event.status}`);
-      } else {
-        const step = event.step.padEnd(22);
-        if (event.status === "failed") {
-          console.log(`  ${RED}${step}${RESET} ${event.detail}`);
-        } else if (event.status === "ok" || event.status === "skipped") {
-          console.log(`  ${GREEN}${step}${RESET} ${event.status === "skipped" ? "(skipped) " : ""}${event.detail}`);
-        } else {
-          console.log(`  ${CYAN}${step}${RESET} ${event.detail || "…"}`);
-        }
-      }
-      lastSeq = event.seq;
-    }
-
-    if (TERMINAL.has(poll.status)) {
-      if (poll.status === "done") {
-        console.log(`\n${GREEN}Deploy complete!${RESET}`);
-      } else {
-        const msg = poll.error?.message || poll.status;
-        console.error(`\n${RED}Deploy ${poll.status}: ${msg}${RESET}`);
-        process.exit(1);
-      }
-      break;
-    }
+  const result = await followOp(op_id);
+  if (result.ok) {
+    console.log(`\n${GREEN}Deploy complete!${RESET}`);
+  } else {
+    console.error(`\n${RED}Deploy failed: ${result.error || "unknown error"}${RESET}`);
+    process.exit(1);
   }
 }

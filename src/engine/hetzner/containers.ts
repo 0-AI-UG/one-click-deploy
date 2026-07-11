@@ -972,6 +972,8 @@ export async function pauseCompose(ip: string, projectName: string, hostKey?: st
     hostKey
   );
   if (result.exitCode !== 0) {
+    // Idempotent, same as pauseContainer: tolerate already-paused containers.
+    if (`${result.stdout}\n${result.stderr}`.toLowerCase().includes("already paused")) return;
     throw new Error(describeFailure("Failed to pause compose project", result));
   }
 }
@@ -984,6 +986,8 @@ export async function unpauseCompose(ip: string, projectName: string, hostKey?: 
     hostKey
   );
   if (result.exitCode !== 0) {
+    // Idempotent, same as unpauseContainer: tolerate not-paused containers.
+    if (`${result.stdout}\n${result.stderr}`.toLowerCase().includes("is not paused")) return;
     throw new Error(describeFailure("Failed to unpause compose project", result));
   }
 }
@@ -1197,6 +1201,9 @@ export async function pauseContainer(
     hostKey
   );
   if (result.exitCode !== 0) {
+    // Idempotent: the DB status can lag the actual container state (e.g. a
+    // crashed op or manual intervention), so pausing twice must not fail.
+    if (`${result.stdout}\n${result.stderr}`.toLowerCase().includes("already paused")) return;
     throw new Error(describeFailure("Failed to pause container", result));
   }
 }
@@ -1212,6 +1219,9 @@ export async function unpauseContainer(
     hostKey
   );
   if (result.exitCode !== 0) {
+    // Idempotent: unpausing a container that is running but not frozen
+    // (DB said paused, container was not) must not fail the op.
+    if (`${result.stdout}\n${result.stderr}`.toLowerCase().includes("is not paused")) return;
     throw new Error(describeFailure("Failed to unpause container", result));
   }
 }

@@ -291,8 +291,9 @@ export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: st
     const app = db.getApp(appId);
     if (!app) throw new Error("App not found");
 
+    // Zero replicas (never deployed or torn down) is not an error — there is
+    // nothing to freeze, but the desired state should still be recorded.
     const replicas = db.getReplicas(appId);
-    if (replicas.length === 0) throw new Error("App has no replicas");
 
     for (const replica of replicas) {
       const server = db.getServer(replica.server_id);
@@ -329,7 +330,6 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
     if (!app) throw new Error("App not found");
 
     const replicas = db.getReplicas(appId);
-    if (replicas.length === 0) throw new Error("App has no replicas");
 
     let allHealthy = true;
     for (const replica of replicas) {
@@ -344,7 +344,8 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }
-    db.updateAppStatus(appId, allHealthy ? "running" : "unhealthy");
+    // With no replicas there is nothing running — "stopped", not "running".
+    db.updateAppStatus(appId, replicas.length === 0 ? "stopped" : allHealthy ? "running" : "unhealthy");
     // Re-add the replicas to the Caddy upstream pool now that they're
     // live again. The reconciler would pick this up within 30s anyway,
     // but waiting means the first requests after unpause hit stale 503s.

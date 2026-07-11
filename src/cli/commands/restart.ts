@@ -1,5 +1,6 @@
 import { post, resolveApp } from "../api.ts";
-import { GREEN, RESET } from "../format.ts";
+import { followOp } from "../ops.ts";
+import { GREEN, RED, RESET } from "../format.ts";
 
 export async function restart(args: string[]): Promise<void> {
   const appName = args[0];
@@ -9,12 +10,13 @@ export async function restart(args: string[]): Promise<void> {
   }
 
   const app = await resolveApp(appName);
-  const result = await post<{ ok: boolean; error?: string }>(`/api/apps/${app.id}/restart`);
+  const { op_id } = await post<{ op_id: number }>(`/api/apps/${app.id}/restart`);
+  const result = await followOp(op_id);
 
   if (result.ok) {
     console.log(`${GREEN}Restarted ${app.name}${RESET}`);
   } else {
-    console.error(`Failed: ${result.error || "unknown error"}`);
+    console.error(`${RED}Restart failed: ${result.error || "unknown error"}${RESET}`);
     process.exit(1);
   }
 }

@@ -1,5 +1,6 @@
 import { post, resolveApp } from "../api.ts";
-import { GREEN, RESET } from "../format.ts";
+import { followOp } from "../ops.ts";
+import { GREEN, RED, RESET } from "../format.ts";
 
 export async function pause(args: string[]): Promise<void> {
   const appName = args[0];
@@ -9,12 +10,13 @@ export async function pause(args: string[]): Promise<void> {
   }
 
   const app = await resolveApp(appName);
-  const result = await post<{ ok: boolean; error?: string }>(`/api/apps/${app.id}/pause`);
+  const { op_id } = await post<{ op_id: number }>(`/api/apps/${app.id}/pause`);
+  const result = await followOp(op_id);
 
   if (result.ok) {
     console.log(`${GREEN}Paused ${app.name}${RESET}`);
   } else {
-    console.error(`Failed: ${result.error || "unknown error"}`);
+    console.error(`${RED}Pause failed: ${result.error || "unknown error"}${RESET}`);
     process.exit(1);
   }
 }
@@ -27,12 +29,13 @@ export async function unpause(args: string[]): Promise<void> {
   }
 
   const app = await resolveApp(appName);
-  const result = await post<{ ok: boolean; error?: string }>(`/api/apps/${app.id}/unpause`);
+  const { op_id } = await post<{ op_id: number }>(`/api/apps/${app.id}/unpause`);
+  const result = await followOp(op_id);
 
   if (result.ok) {
     console.log(`${GREEN}Unpaused ${app.name}${RESET}`);
   } else {
-    console.error(`Failed: ${result.error || "unknown error"}`);
+    console.error(`${RED}Unpause failed: ${result.error || "unknown error"}${RESET}`);
     process.exit(1);
   }
 }

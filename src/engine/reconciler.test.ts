@@ -13,12 +13,15 @@ process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-reconciler-test-
 import { describe, test, expect, mock } from "bun:test";
 
 // Stub remote SSH calls so reconciler internals don't try to connect.
+// Named refs so individual tests can override behavior per call.
+const healthCheckMock = mock(async (): Promise<{ healthy: boolean; error?: string }> => ({ healthy: true }));
+const restartContainerMock = mock(async () => {});
 mock.module("../shared/remote/index.ts", () => ({
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
-  healthCheck: mock(async () => ({ healthy: true })),
+  healthCheck: healthCheckMock,
   composeHealthCheck: mock(async () => ({ healthy: true })),
   restartCompose: mock(async () => {}),
-  restartContainer: mock(async () => {}),
+  restartContainer: restartContainerMock,
   serviceHealthCheck: mock(async () => ({ healthy: true })),
   pruneServer: mock(async () => {}),
 }));
@@ -54,6 +57,7 @@ import {
 import { insertApp } from "../shared/db/apps.ts";
 import { insertServer } from "../shared/db/servers.ts";
 import { evaluateAutoScale } from "./scale-api.ts";
+import { checkReplicaHealth } from "./reconciler.ts";
 
 function makeServer() {
   return insertServer({
@@ -180,6 +184,83 @@ describe("reconciler: unhealthy tick tracking", () => {
     updateReplicaStatus(replica.id, "unhealthy");
     const updated = getReplica(replica.id)!;
     expect(updated.status).toBe("unhealthy");
+  });
+});
+
+// ---- paused-state guards -------------------------------------------------
+// Regression tests for the reconciler restarting deliberately paused
+// containers: a pause op can land while a health check is in flight, and the
+// stale result must not clobber the paused status or trigger auto-restart.
+
+describe("reconciler: health checks respect paused state", () => {
+  function makeHealthFixture(appStatus = "running") {
+    const server = makeServer();
+    const { default: conn } = require("../shared/db/connection.ts");
+    conn.run("UPDATE servers SET private_ipv4 = '10.0.0.9' WHERE id = ?", [server.id]);
+    const app = makeApp();
+    conn.run("UPDATE apps SET status = ? WHERE id = ?", [appStatus, app.id]);
+    const replica = insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 7000 + Math.floor(Math.random() * 1000),
+      container_name: `c-pauseguard-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      status: "running",
+    });
+    return {
+      server: db.getServer(server.id)!,
+      app: db.getApp(app.id)!,
+      replica: getReplica(replica.id)!,
+    };
+  }
+
+  test("failed check does not clobber a replica paused mid-check", async () => {
+    const { server, app, replica } = makeHealthFixture();
+    restartContainerMock.mockClear();
+    healthCheckMock.mockImplementationOnce(async () => {
+      // Pause op lands while the check is in flight.
+      updateReplicaStatus(replica.id, "paused");
+      return { healthy: false, error: "HTTP no response" };
+    });
+
+    await checkReplicaHealth(replica, app, server);
+
+    expect(getReplica(replica.id)!.status).toBe("paused");
+    expect(restartContainerMock).not.toHaveBeenCalled();
+  });
+
+  test("healthy check does not flip a replica paused mid-check back to running", async () => {
+    const { server, app, replica } = makeHealthFixture();
+    healthCheckMock.mockImplementationOnce(async () => {
+      updateReplicaStatus(replica.id, "paused");
+      return { healthy: true };
+    });
+
+    await checkReplicaHealth(replica, app, server);
+
+    expect(getReplica(replica.id)!.status).toBe("paused");
+  });
+
+  test("no auto-restart at threshold when the app is paused", async () => {
+    const { server, app, replica } = makeHealthFixture("paused");
+    restartContainerMock.mockClear();
+    // Already one strike; this failed check reaches UNHEALTHY_RESTART_THRESHOLD.
+    incrementUnhealthyTicks(replica.id);
+    healthCheckMock.mockImplementationOnce(async () => ({ healthy: false, error: "HTTP no response" }));
+
+    await checkReplicaHealth(replica, app, server);
+
+    expect(restartContainerMock).not.toHaveBeenCalled();
+  });
+
+  test("unhealthy running replica still auto-restarts at threshold", async () => {
+    const { server, app, replica } = makeHealthFixture();
+    restartContainerMock.mockClear();
+    incrementUnhealthyTicks(replica.id);
+    healthCheckMock.mockImplementationOnce(async () => ({ healthy: false, error: "HTTP no response" }));
+
+    await checkReplicaHealth(replica, app, server);
+
+    expect(restartContainerMock).toHaveBeenCalledTimes(1);
   });
 });
 

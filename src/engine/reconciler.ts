@@ -161,7 +161,17 @@ async function recreateReplica(
   log("health", `recreated ${replica.container_name} from ${image}`);
 }
 
-async function checkReplicaHealth(
+/**
+ * Statuses that mean a container is intentionally not serving traffic. A
+ * pause/stop/sleep op can land while a health check is already in flight
+ * (ticks snapshot replicas before ops mutate them), so check results must be
+ * re-validated against the live row before any status write or restart —
+ * otherwise the reconciler clobbers the paused status and auto-restarts a
+ * deliberately paused container.
+ */
+const HEALTH_EXEMPT_STATUSES = new Set(["paused", "stopped", "sleeping", "waking"]);
+
+export async function checkReplicaHealth(
   replica: ReplicaRow,
   app: AppRow,
   server: ServerRow,
@@ -172,6 +182,9 @@ async function checkReplicaHealth(
   try {
     const check = await healthCheck(server.ipv4, replica.container_name, bindHost, replica.host_port, 1, hostKey);
 
+    const current = db.getReplica(replica.id);
+    if (!current || HEALTH_EXEMPT_STATUSES.has(current.status)) return;
+
     if (check.healthy) {
       db.updateReplicaStatus(replica.id, "running");
       db.touchReplicaHealth(replica.id);
@@ -181,6 +194,11 @@ async function checkReplicaHealth(
       const ticks = db.incrementUnhealthyTicks(replica.id);
       log("health", `replica ${replica.container_name} unhealthy (${ticks} ticks): ${check.error ?? ""}`);
       if (ticks >= UNHEALTHY_RESTART_THRESHOLD) {
+        const currentApp = db.getApp(app.id);
+        if (!currentApp || (currentApp.status !== "running" && currentApp.status !== "unhealthy")) {
+          log("health", `skipping auto-restart of ${replica.container_name}: app status is ${currentApp?.status ?? "gone"}`);
+          return;
+        }
         log("health", `auto-restarting ${replica.container_name}`);
         try {
           await restartContainer(server.ipv4, replica.container_name, hostKey);
@@ -236,6 +254,9 @@ async function checkServiceInstanceHealth(
           server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey,
         );
 
+    const current = db.getServiceInstance(instance.id);
+    if (!current || HEALTH_EXEMPT_STATUSES.has(current.status)) return;
+
     if (check.healthy) {
       db.updateServiceInstanceStatus(instance.id, "running");
       db.touchServiceInstanceHealth(instance.id);
@@ -245,6 +266,11 @@ async function checkServiceInstanceHealth(
       const ticks = db.incrementServiceInstanceUnhealthyTicks(instance.id);
       log("health", `service instance ${instance.container_name} unhealthy (${ticks} ticks): ${check.error ?? ""}`);
       if (ticks >= UNHEALTHY_RESTART_THRESHOLD) {
+        const currentService = db.getService(service.id);
+        if (!currentService || currentService.status === "paused") {
+          log("health", `skipping auto-restart of ${instance.container_name}: service status is ${currentService?.status ?? "gone"}`);
+          return;
+        }
         log("health", `auto-restarting service ${instance.container_name}`);
         try {
           if (isCompose) {
@@ -521,7 +547,7 @@ async function tick(): Promise<void> {
       if (app.status === "running" || app.status === "unhealthy") {
         const freshReplicas = list
           .map((r) => db.getReplica(r.id))
-          .filter((r): r is NonNullable<typeof r> => r !== null && r.status !== "stopped");
+          .filter((r): r is NonNullable<typeof r> => r !== null && !HEALTH_EXEMPT_STATUSES.has(r.status));
         const allHealthy = freshReplicas.length > 0 && freshReplicas.every((r) => r.status === "running");
         const newStatus = allHealthy ? "running" : "unhealthy";
         if (newStatus !== app.status) {
@@ -543,7 +569,9 @@ async function tick(): Promise<void> {
       if (service.status === "paused" || service.status === "deploying") continue;
       if (service.status === "running" || service.status === "unhealthy") {
         const instances = db.getServiceInstances(service.id);
-        const freshInstances = instances.map((i) => db.getServiceInstance(i.id)).filter((i): i is NonNullable<typeof i> => i !== null);
+        const freshInstances = instances
+          .map((i) => db.getServiceInstance(i.id))
+          .filter((i): i is NonNullable<typeof i> => i !== null && !HEALTH_EXEMPT_STATUSES.has(i.status));
         const allHealthy = freshInstances.length > 0 && freshInstances.every((i) => i.status === "running");
         const newStatus = allHealthy ? "running" : "unhealthy";
         if (newStatus !== service.status) {
