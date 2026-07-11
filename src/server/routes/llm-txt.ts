@@ -1,6 +1,27 @@
-const LLM_TXT = `# One-Click Deploy — .ocd-deploy.json Manifest
+const LLM_TXT = `# One-Click Deploy (OCD)
 
-One-Click Deploy is a self-hosted platform that deploys Docker apps from GitHub repos to Hetzner Cloud servers. Repos can include \`.ocd-deploy.json\` manifest files to pre-configure the deploy flow so users just click "Deploy" without filling in any settings.
+One-Click Deploy ("OCD") is a self-hosted, open-source PaaS for Hetzner Cloud — a lightweight alternative to Heroku, Railway, and Render. Point it at a Git repo containing a Dockerfile and it provisions a Hetzner Cloud server, builds the container image, configures DNS, issues TLS (Caddy + Let's Encrypt), and serves traffic over HTTPS. It is deeply integrated with a single provider: Hetzner servers, volumes, private networks, firewalls, and Hetzner DNS.
+
+This document covers the three things an AI agent most often needs: what the platform does, the \`.ocd-deploy.json\` manifest format, and the \`ocd\` CLI.
+
+## Platform overview
+
+- **Deploys**: any Git repo with a Dockerfile. The panel builds the image on a Hetzner server and runs it as one or more containers behind Caddy with automatic HTTPS.
+- **Infrastructure**: servers, persistent volumes, private networks, and firewalls are provisioned automatically on Hetzner Cloud. DNS records can be managed via Hetzner DNS.
+- **Scaling & lifecycle**: replicas (horizontal scaling), auto-scaling, restart, pause/unpause, rollback to a previous deployment, per-app memory limits.
+- **Managed services**: one-click Postgres, Redis, MySQL, and more; their connection credentials are injected into linked environments.
+- **Environments**: named groups of env vars (plain or secret) that can be shared across apps; changing an environment redeploys its linked apps.
+- **Webhooks**: auto-deploy on git push, optionally scoped to a branch and path prefix, optionally waiting for CI checks to pass first.
+- **Observability & access**: log streaming, a web terminal, and \`ocd ssh\` for running commands in app containers or on servers.
+- **Auth**: passkeys, TOTP, GitHub OAuth, multi-user RBAC.
+
+There are three ways to deploy an app:
+
+1. **Web panel** — paste a GitHub repo URL. The panel introspects the repo (Dockerfiles, \`EXPOSE\` port, \`.env.example\` variables, and any \`.ocd-deploy.json\` manifests) and pre-fills the deploy form.
+2. **\`.ocd-deploy.json\` manifest** — committed to the repo to pre-configure the deploy flow so users just click "Deploy" without filling in any settings. Documented below.
+3. **\`ocd\` CLI** — deploy the current git checkout from the terminal. Documented at the end of this file.
+
+# The .ocd-deploy.json manifest
 
 ## File name
 
@@ -133,13 +154,79 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 - Use \`secret: true\` for credentials, API keys, and connection strings — the UI will mask these inputs.
 - Provide a \`default\` for non-sensitive configuration that works out of the box (e.g. \`NODE_ENV=production\`).
 - Add a \`description\` to help the deployer understand what each variable is for.
+
+# The ocd CLI
+
+\`ocd\` is a single-binary CLI (Linux, macOS, Windows) for driving a One-Click Deploy panel from the terminal.
+
+## Install
+
+\`\`\`bash
+curl -fsSL {{PANEL_URL}}/cli/install.sh | sh
+\`\`\`
+
+The script detects OS/architecture, installs \`ocd\` to \`~/.local/bin\` (or \`/usr/local/bin\` as root), and pre-fills the panel URL. Binaries are also served directly from the panel at \`/cli/<binary>\` (\`ocd-linux-x64\`, \`ocd-linux-arm64\`, \`ocd-darwin-x64\`, \`ocd-darwin-arm64\`, \`ocd-windows-x64.exe\`).
+
+## Authentication
+
+\`\`\`bash
+ocd login <panel-url>   # e.g. ocd login https://panel.example.com
+\`\`\`
+
+Login uses a browser device flow: the CLI prints a short code and opens the panel's authorization page; approve it there and the CLI stores a token in \`~/.config/ocd/config.json\` (or \`$XDG_CONFIG_HOME/ocd/config.json\`). Running \`ocd login\` with no argument reuses the saved panel URL.
+
+## Commands
+
+\`\`\`
+ocd login <panel-url>        Log in to a panel (browser device flow)
+ocd status                   Dashboard overview: apps and services with statuses
+ocd apps                     List all apps (name, status, domain, repo)
+ocd deploy [manifest]        Deploy the current git repo using .ocd-deploy.json
+ocd redeploy <app>           Rebuild and redeploy an existing app
+ocd logs <app> [--tail=N]    Show app logs (default: last 100 lines)
+ocd restart <app>            Restart an app's containers
+ocd rollback <app>           Roll back to the previous successful deployment
+ocd pause <app>              Stop an app without deleting it
+ocd unpause <app>            Start a paused app again
+ocd envs <subcommand>        Manage environments and their variables
+ocd services                 List managed services (Postgres, Redis, ...)
+ocd servers                  List Hetzner servers and the apps on them
+ocd ssh <app> <cmd>          Run a command inside an app container
+ocd ssh <app> -i             Interactive shell inside an app container
+ocd ssh <server> --server    Interactive shell on a server (disambiguates name collisions)
+ocd version                  Print CLI version
+\`\`\`
+
+App and server arguments accept a name or numeric ID.
+
+### ocd deploy
+
+\`\`\`
+ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>]
+\`\`\`
+
+Run from inside a git repo with an \`origin\` remote. Reads the manifest (default: \`./.ocd-deploy.json\`) for the app name, build settings, port, webhook, volume, and scaling configuration, then streams deploy progress step by step until it completes or fails. \`--domain\` sets a custom domain; \`--env\` links the app to an existing environment.
+
+### ocd envs
+
+\`\`\`
+ocd envs list                                                List all environments
+ocd envs show <name|id>                                      Show details and variables
+ocd envs create <name> [KEY=VALUE ...] [--secret KEY=VALUE]  Create an environment
+ocd envs set <name|id> KEY=VALUE ... [--replace]             Merge (or replace) variables
+ocd envs unset <name|id> KEY [KEY...]                        Remove variables
+\`\`\`
+
+\`--secret KEY=VALUE\` marks a variable as secret (encrypted at rest, not retrievable later). \`set\` and \`unset\` automatically redeploy the apps linked to the environment.
 `;
 
 export function handleLlmTxt(request: Request): Response {
   const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "localhost:3001";
   const proto = request.headers.get("x-forwarded-proto") || "http";
-  const panelLlmUrl = `${proto}://${host}/llm.txt`;
-  const body = LLM_TXT.replaceAll("{{PANEL_LLM_URL}}", panelLlmUrl);
+  const panelUrl = `${proto}://${host}`;
+  const body = LLM_TXT
+    .replaceAll("{{PANEL_LLM_URL}}", `${panelUrl}/llm.txt`)
+    .replaceAll("{{PANEL_URL}}", panelUrl);
   return new Response(body, {
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
