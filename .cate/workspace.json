@@ -73,7 +73,7 @@
             "width": 640,
             "height": 470.5
           },
-          "zOrder": 91,
+          "zOrder": 104,
           "creationIndex": 0,
           "animationState": "idle",
           "dockLayout": {
@@ -96,7 +96,7 @@
             "width": 640,
             "height": 400
           },
-          "zOrder": 90,
+          "zOrder": 105,
           "creationIndex": 1,
           "animationState": "idle",
           "dockLayout": {
@@ -111,8 +111,8 @@
       },
       "zoomLevel": 0.87236974736666,
       "viewportOffset": {
-        "x": -506.6358990100314,
-        "y": 61.40834475334441
+        "x": -417.63589901003144,
+        "y": 78.40834475334441
       }
     }
   }

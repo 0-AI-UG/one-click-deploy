@@ -259,9 +259,13 @@ export function Btn({
     ghost: "bg-bg-raised text-fg-dim shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none",
   };
 
-  const { node: renderedChildren, found: iconReplaced } = loading
-    ? replaceFirstIconWithSpinner(children)
-    : { node: children, found: false };
+  let renderedChildren: ReactNode = children;
+  let iconReplaced = false;
+  if (loading) {
+    const swap = replaceFirstIconWithSpinner(children);
+    renderedChildren = swap.found ? swap.node : stripLeadingGlyph(children);
+    iconReplaced = swap.found;
+  }
 
   return (
     <button type={type} onClick={onClick} disabled={disabled || loading} title={title} className={`${base} ${sizes} ${variants[variant]} ${className}`}>
@@ -269,6 +273,19 @@ export function Btn({
       {renderedChildren}
     </button>
   );
+}
+
+// Text-only buttons often lead with a one-character glyph acting as the icon
+// ("+ Add Passkey", "×"). While loading, that glyph is dropped so the prepended
+// spinner takes its place instead of sitting next to it.
+function stripLeadingGlyph(node: ReactNode): ReactNode {
+  const arr = React.Children.toArray(node);
+  const first = arr[0];
+  if (typeof first === "string") {
+    const m = first.match(/^\s*\S(\s+|$)/);
+    if (m) return [first.slice(m[0].length), ...arr.slice(1)];
+  }
+  return node;
 }
 
 // Walk children and swap the first Lucide-style icon element (detected by a
