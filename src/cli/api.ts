@@ -49,12 +49,22 @@ export interface App {
   created_at: string;
   public?: boolean | number;
   internal_port?: number;
+  health_check?: boolean | number;
 }
 
 /** Where the app answers: its public domain, or the internal address for
  *  private apps (which have no public ingress at all). */
-export function appAddress(app: { name: string; domain: string; public?: boolean | number }): string {
-  if (app.public === false || app.public === 0) return `${app.name}.ocd.internal:8080 (private)`;
+export function appAddress(app: {
+  name: string;
+  domain: string;
+  public?: boolean | number;
+  internal_port?: number;
+  health_check?: boolean | number;
+}): string {
+  if (app.public === false || app.public === 0) {
+    const scheme = app.health_check === false || app.health_check === 0 ? "tcp" : "http";
+    return `${scheme}://${app.name}.ocd.internal:${app.internal_port} (private)`;
+  }
   return app.domain || "-";
 }
 

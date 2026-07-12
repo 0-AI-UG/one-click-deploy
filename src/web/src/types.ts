@@ -43,6 +43,7 @@ export type AppData = {
   public?: boolean | number;
   memory_mb?: number;
   internal_port?: number;
+  health_check?: boolean | number;
 };
 
 export type ReplicaData = {

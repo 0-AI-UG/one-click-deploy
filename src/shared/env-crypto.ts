@@ -174,9 +174,31 @@ export async function processIncomingEnvVars(
   return { version: 2, entries };
 }
 
-/** Convenience: resolve all env vars for an app from its linked environment. */
+/** Platform-injected env vars every app container receives: its own stable
+ *  internal address behind the local Traefik. HTTP apps (health_check=1) get
+ *  an `http://` URL; non-HTTP apps (health_check=0) get `tcp://`. User-defined
+ *  vars with the same key always win over these (users may have hand-set them). */
+export function platformEnvVars(
+  app: Pick<AppRow, "name" | "internal_port" | "health_check">,
+): Record<string, string> {
+  const host = `${app.name}.ocd.internal`;
+  const scheme = app.health_check ? "http" : "tcp";
+  return {
+    OCD_INTERNAL_URL: `${scheme}://${host}:${app.internal_port}`,
+    OCD_INTERNAL_HOST: host,
+    OCD_INTERNAL_PORT: String(app.internal_port),
+  };
+}
+
+/** Convenience: resolve all env vars for an app from its linked environment,
+ *  merged over the platform-injected OCD_INTERNAL_* vars (user vars win).
+ *  Single choke point for redeploy/wake/rolling/scale-up/lifecycle/rollback/
+ *  reconciler; the first-deploy path (ops/deploy.ts buildAndRunContainer)
+ *  merges platformEnvVars manually because it resolves env vars before the
+ *  app row exists. */
 export async function resolveAppEnvVars(app: AppRow): Promise<Record<string, string>> {
   const db = await import("./db.ts");
   const envRow = app.environment_id ? db.getEnvironment(app.environment_id) : null;
-  return resolveEnvVarsForDeploy(envRow?.env_vars);
+  const userVars = await resolveEnvVarsForDeploy(envRow?.env_vars);
+  return { ...platformEnvVars(app), ...userVars };
 }

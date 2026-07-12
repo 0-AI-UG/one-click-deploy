@@ -17,7 +17,7 @@ import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
 import { createMasker } from "../../shared/mask.ts";
-import { processIncomingEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
+import { processIncomingEnvVars, serializeEnvVars, platformEnvVars } from "../../shared/env-crypto.ts";
 import { getProviderToken } from "../../shared/secret-store.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
@@ -694,6 +694,14 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     if (!tenantServerRow) throw new Error(`Server ${server.serverId} not found`);
     const containerBindAddr = replicaBindHost(tenantServerRow);
 
+    // First-deploy path bypasses resolveAppEnvVars (env vars were resolved
+    // before the app row existed), so merge the platform OCD_INTERNAL_* vars
+    // here. User-defined vars with the same key win.
+    const appRow = db.getApp(appOut.appId);
+    const envVars = appRow
+      ? { ...platformEnvVars(appRow), ...appOut.flatEnvVars }
+      : appOut.flatEnvVars;
+
     let imageTag = `${req.app_name}:latest`;
     const result = await cloneAndBuild(
       server.serverIp,
@@ -702,7 +710,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         gitRepo: req.git_repo,
         port: req.container_port,
         hostPort: appOut.hostPort,
-        envVars: appOut.flatEnvVars,
+        envVars,
         volumeMount: volume?.volumeMount,
         extraVolumes: (req.extra_volumes || []).map((v) => `${v.host_path}:${v.container_path}`),
         dockerfilePath: req.dockerfile_path,

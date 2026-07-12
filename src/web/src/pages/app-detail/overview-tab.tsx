@@ -19,7 +19,7 @@ interface OverviewTabProps {
 }
 
 export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas, ops }: OverviewTabProps) {
-  const internalUrl = `http://${app.name}.ocd.internal:8080`;
+  const internalUrl = `${app.health_check ? "http" : "tcp"}://${app.name}.ocd.internal:${app.internal_port}`;
   const [migratingId, setMigratingId] = useState<number | null>(null);
 
   const handleMigrate = async (replicaId: number, targetId: string) => {
