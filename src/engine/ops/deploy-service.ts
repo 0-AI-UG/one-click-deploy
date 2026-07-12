@@ -278,6 +278,10 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
     // them directly across the fleet, HTTP services are proxied by the
     // panel's Caddy via the same address.
     const bindAddress = replicaBindHost(serverRow);
+    // Credentials advertise the stable /etc/hosts alias, not the raw private
+    // IP — the alias survives service migrations across servers, while
+    // bindAddress remains what docker run/health checks actually bind to.
+    const stableHost = `${req.name}.svc.ocd.internal`;
 
     let connectionUrl: string;
     let httpDomain: string | undefined;
@@ -288,10 +292,10 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
       httpDomain = req.domain || `${req.name}.${server.ingressIp}.nip.io`;
       connectionUrl = `https://${httpDomain}`;
     } else {
-      connectionUrl = buildConnectionUrl(catalog, envVars, bindAddress, hostPort);
+      connectionUrl = buildConnectionUrl(catalog, envVars, stableHost, hostPort);
     }
     const credentials: Record<string, string | number> = {
-      host: bindAddress,
+      host: stableHost,
       port: hostPort,
       internal_host: containerName,
       internal_port: catalog.defaultPort,
