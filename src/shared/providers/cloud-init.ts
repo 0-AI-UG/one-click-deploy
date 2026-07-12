@@ -2,7 +2,7 @@ import { traefikInstallScript } from "../../engine/scale/traefik-config.ts";
 
 /**
  * Generate a cloud-init user-data script for provisioning servers.
- * The base script installs Docker, Traefik, Bun, and hardens SSH.
+ * The base script installs Docker and Traefik, and hardens SSH.
  * Provider-specific packages/commands can be injected.
  */
 export function cloudInitScript(opts?: {
@@ -82,10 +82,6 @@ ${traefikInstallScript()}
 TRAEFIK_INSTALL
 bash /tmp/ocd-traefik-install.sh
 rm -f /tmp/ocd-traefik-install.sh
-
-# Install Bun runtime (for webhook receiver)
-curl -fsSL https://bun.sh/install | bash
-ln -sf /root/.bun/bin/bun /usr/local/bin/bun
 
 # Signal ready
 touch /root/.provisioned

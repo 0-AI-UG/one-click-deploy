@@ -33,6 +33,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           onChange={set("auth_password")}
           placeholder="Optional login gate"
         />
+        {form.auth_password && <p className="text-[9px] text-muted mt-1">HTTP basic auth — visitors sign in with username "admin" and this password</p>}
       </Field>
       <Field label="Volume Size (GB)">
         <input
@@ -67,6 +68,62 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
         />
         {!form.public && <p className="text-[9px] text-muted mt-1">App will only be reachable over the internal network</p>}
       </div>
+      <Field label={<>Rate Limit <InfoTip text="Requests per second allowed on the public domain. 0 or blank = unlimited. Internal traffic is never limited." /></>}>
+        <input
+          type="number"
+          value={form.rate_limit_rps}
+          onChange={set("rate_limit_rps")}
+          placeholder="requests/sec, 0 = unlimited"
+          min="0"
+        />
+      </Field>
+      <Field label={<>IP Allowlist <InfoTip text="Only these IPs/CIDRs can reach the public domain. Blank = open to all." /></>}>
+        <input
+          type="text"
+          value={form.ip_allowlist}
+          onChange={set("ip_allowlist")}
+          placeholder="comma-separated IPs or CIDRs"
+        />
+      </Field>
+      <Field label={<>Health Check Path <InfoTip text="Active HTTP health check — replicas failing this path leave the load balancer rotation." /></>}>
+        <input
+          type="text"
+          value={form.health_check_path}
+          onChange={set("health_check_path")}
+          placeholder="/healthz"
+        />
+      </Field>
+      <div>
+        <Checkbox
+          checked={form.sticky}
+          onChange={(v) => setForm((f) => ({ ...f, sticky: v }))}
+          label="Sticky sessions (pin visitors to one replica)"
+        />
+      </div>
+      <div>
+        <Checkbox
+          checked={form.compress}
+          onChange={(v) => setForm((f) => ({ ...f, compress: v }))}
+          label="Compress responses on the public domain"
+        />
+      </div>
+      <Field label={<>Public TCP/UDP Port <InfoTip text="Forwards a dedicated public port on the panel IP raw to the app — for game servers, databases, MQTT. Independent of the public domain. Blank port = auto-assign (TCP 30000-30049, UDP 30050-30099)." /></>}>
+        <div className="flex gap-2">
+          <select value={form.public_protocol} onChange={set("public_protocol")}>
+            <option value="off">Off</option>
+            <option value="tcp">TCP</option>
+            <option value="udp">UDP</option>
+          </select>
+          {form.public_protocol !== "off" && (
+            <input
+              type="number"
+              value={form.public_port}
+              onChange={set("public_port")}
+              placeholder="auto"
+            />
+          )}
+        </div>
+      </Field>
       <div>
         <Checkbox
           checked={!!form.webhook_enabled}

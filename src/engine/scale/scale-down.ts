@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import {
   sshExec,
-  removeAuthProxy, stopContainer,
+  stopContainer,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
@@ -64,24 +64,11 @@ export async function scaleDown(
           log("scale", `Failed to stop container ${replica.container_name}: ${err}`);
           throw err;
         }
-        // Leave auth proxy in place (if any) — it will proxy to the stopped
-        // container during sleep, but nothing routes traffic there: the
-        // ingress points the domain at the panel's wake page. On wake,
-        // `docker start` restores the backend without needing to re-deploy
-        // the auth proxy.
         db.markReplicaStopped(replica.id);
         emit("scale", `Replica ${replica.container_name} stopped (anchor for sleep)`);
       } else {
         // Stop-and-remove path (actual scale-down, not sleep).
         await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
-
-        if (app.auth_password) {
-          try {
-            await removeAuthProxy(server.ipv4, replica.container_name, hostKey);
-          } catch (err) {
-            log("scale", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
-          }
-        }
 
         db.deleteReplica(replica.id);
         emit("scale", `Replica ${replica.container_name} removed`);

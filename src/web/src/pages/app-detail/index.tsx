@@ -9,7 +9,7 @@ import { LogsTab } from "./logs-tab.tsx";
 import { DeploymentsTab } from "./deployments-tab.tsx";
 import { ScalingTab } from "./scaling-tab.tsx";
 import { WebhooksTab } from "./webhooks-tab.tsx";
-import { SettingsTab } from "./settings-tab.tsx";
+import { SettingsTab, type IngressForm } from "./settings-tab.tsx";
 import type { AppData, ServerData, ReplicaData, MetricSample, ScalingEvent, DeploymentRecord } from "../../types.ts";
 
 const errMessage = (err: unknown): string =>
@@ -20,11 +20,11 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [server, setServer] = useState<ServerData | null>(null);
   const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
   const [nameEdit, setNameEdit] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
   const [isPublic, setIsPublic] = useState(true);
   const [portEdit, setPortEdit] = useState<number>(0);
   const [memEdit, setMemEdit] = useState<number>(0);
   const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
+  const [ingressForm, setIngressForm] = useState<IngressForm>({ sticky: false, rate_limit_rps: 0, ip_allowlist: "", health_check_path: "", compress: false, public_protocol: "off", public_port: "", auth_enabled: false, auth_password: "" });
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
   const [replicas, setReplicas] = useState<ReplicaData[]>([]);
@@ -118,10 +118,22 @@ export function AppDetailPage({ appId }: { appId: number }) {
     if (tab === "overview" || tab === "scaling") loadReplicas();
     if (tab === "settings" && app) {
       setNameEdit(app.name || "");
-      setAuthPassword(app.auth_password || "");
       setIsPublic(!!app.public);
       setPortEdit(app.container_port || 0);
       setMemEdit(app.memory_mb || 0);
+      setIngressForm({
+        sticky: !!app.sticky,
+        rate_limit_rps: app.rate_limit_rps || 0,
+        ip_allowlist: app.ip_allowlist || "",
+        health_check_path: app.health_check_path || "",
+        compress: !!app.compress,
+        public_protocol: app.public_port != null ? (app.public_protocol === "udp" ? "udp" : "tcp") : "off",
+        public_port: app.public_port != null ? String(app.public_port) : "",
+        // Password is write-only: we only know whether auth is on, never the
+        // value. Blank field + enabled = keep current password.
+        auth_enabled: !!app.auth_enabled,
+        auth_password: "",
+      });
       if (app.volume_mount) {
         const parts = String(app.volume_mount).split(":");
         setVolumeForm((f) => ({ ...f, mount_path: parts[1] || "/data" }));
@@ -324,8 +336,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
           appId={appId}
           nameEdit={nameEdit}
           setNameEdit={setNameEdit}
-          authPassword={authPassword}
-          setAuthPassword={setAuthPassword}
           isPublic={isPublic}
           setIsPublic={setIsPublic}
           portEdit={portEdit}
@@ -334,6 +344,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
           setMemEdit={setMemEdit}
           volumeForm={volumeForm}
           setVolumeForm={setVolumeForm}
+          ingressForm={ingressForm}
+          setIngressForm={setIngressForm}
           actionLoading={actionLoading}
           action={action}
           ops={ops}

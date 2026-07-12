@@ -11,8 +11,7 @@ import {
 import { provisionServer } from "../provision-server.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import {
-  syncServiceIngress,
-  removeServiceIngress,
+  syncAllTraefik,
   getPanelIngressIpv4,
 } from "../scale/traefik-manager.ts";
 import {
@@ -501,12 +500,20 @@ const configureHttpIngress: Step<DeployServiceInput, { ok: true; domain?: string
     const serverRow = db.getServer(server.serverId);
     const privateIp = serverRow?.private_ipv4 || "";
 
-    await syncServiceIngress({
-      serviceName: svc.containerName,
-      domain,
-      serverPrivateIpv4: privateIp,
-      hostPort: svc.hostPort,
-    });
+    // Preconditions for routing an HTTP service's public vhost through the
+    // panel: a registered panel to own the ingress IP, and a private IP on the
+    // service's host so the panel can reach it over the shared network.
+    if (!db.getPanel()) {
+      throw new Error(
+        "No panel server is registered; HTTP services need a panel to route ingress through. Deploy the panel first.",
+      );
+    }
+    if (!privateIp) {
+      throw new Error(
+        "Service server has no private IP — HTTP services require the shared private network. Wait for the network reconciler to attach the server and retry.",
+      );
+    }
+    await syncAllTraefik();
     ctx.log(`Ingress configured: https://${domain}`);
     return { ok: true, domain };
   },
@@ -514,7 +521,7 @@ const configureHttpIngress: Step<DeployServiceInput, { ok: true; domain?: string
     const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
     if (!svc) return;
     try {
-      await removeServiceIngress(svc.containerName);
+      await syncAllTraefik();
     } catch (err) {
       ctx.log(`Failed to remove ingress route: ${err}`);
     }

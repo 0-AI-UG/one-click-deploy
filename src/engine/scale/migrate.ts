@@ -1,5 +1,5 @@
 import * as db from "../../shared/db.ts";
-import { sshExec, removeAuthProxy, ensureOcdNetwork, buildDockerRunArgs } from "../../shared/remote/index.ts";
+import { sshExec, ensureOcdNetwork, startAppReplica } from "../../shared/remote/index.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { scaleUp } from "./scale-up.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
@@ -141,14 +141,6 @@ async function migrateStateless(
   await sshExec(sourceServer.ipv4, asUser(`docker stop -t 20 ${replica.container_name} 2>/dev/null || true`), hostKey);
   await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
 
-  if (app.auth_password) {
-    try {
-      await removeAuthProxy(sourceServer.ipv4, replica.container_name, hostKey);
-    } catch (err) {
-      log("migrate", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
-    }
-  }
-
   db.deleteReplica(replica.id);
   emit("migrate", `Old replica ${replica.container_name} removed`);
 
@@ -239,14 +231,6 @@ async function migrateWithVolume(
     log("migrate", `Source container ${replica.container_name} already gone — skipping stop/rm`);
   }
   if (rollbackCtx) rollbackCtx.sourceContainerDestroyed = true;
-
-  if (app.auth_password) {
-    try {
-      await removeAuthProxy(sourceServer.ipv4, replica.container_name, sourceHostKey);
-    } catch (err) {
-      log("migrate", `Failed to remove auth proxy for ${replica.container_name}: ${err}`);
-    }
-  }
 
   // Phase B — Move volume from source to target. Branch on observed attachment.
   const onSource = volumeInfoAtStart.serverId === sourceServer.provider_id;
@@ -480,34 +464,25 @@ async function restartSourceReplica(
   const containerName = replica.container_name;
   const hostPort = replica.host_port;
 
-  let extraVols: string[] = [];
-  if (app.extra_volumes) {
-    try {
-      const parsed = JSON.parse(app.extra_volumes);
-      if (Array.isArray(parsed)) extraVols = parsed.filter((v) => typeof v === "string");
-    } catch { /* ignore malformed */ }
-  }
-
   const envFilePathOnHost = `/home/deploy/apps/${app.name}/.env.deploy`;
   const probe = await sshExec(sourceServer.ipv4, asUser(`test -f ${envFilePathOnHost}`), sourceHostKey);
   const envFilePath = probe.exitCode === 0 ? envFilePathOnHost : undefined;
 
-  // Best-effort: remove any stale container of the same name first.
-  await sshExec(sourceServer.ipv4, asUser(`docker rm -f ${containerName} 2>/dev/null || true`), sourceHostKey);
-
-  const cmd = buildDockerRunArgs({
-    name: containerName,
+  // startAppReplica removes any stale same-named container first (best-effort),
+  // then runs on ocd-net (default — the source was already on the shared
+  // network). We use the original volume mount because by the time this runs
+  // the volume has been re-attached to source.
+  await startAppReplica(sourceServer.ipv4, {
+    containerName,
     image: `${app.name}:latest`,
     appName: app.name,
-    publish: { bindAddr, hostPort, containerPort: app.container_port },
+    bindAddr,
+    hostPort,
+    containerPort: app.container_port,
     envFilePath,
     volumeMount: rb.originalVolumeMount || undefined,
-    extraVolumes: extraVols,
+    extraVolumes: db.parseExtraVolumes(app.extra_volumes),
     memoryMb: app.memory_mb || undefined,
-  });
-  const result = await sshExec(sourceServer.ipv4, asUser(cmd), sourceHostKey);
-  if (result.exitCode !== 0) {
-    throw new Error(`docker run exit ${result.exitCode}: ${result.stderr || result.stdout}`);
-  }
+  }, sourceHostKey);
   logLine(`Restarted source container ${containerName} on ${sourceServer.name}`);
 }

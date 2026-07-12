@@ -21,7 +21,7 @@ export interface App {
   webhook_path: string;
   webhook_wait_for_ci: number;
   github_webhook_id: string;
-  auth_password: string;
+  auth_password_hash: string;
   desired_replicas: number;
   min_replicas: number;
   max_replicas: number;
@@ -41,6 +41,15 @@ export interface App {
   memory_mb: number;
   health_check: number;
   internal_port: number;
+  last_request_at: string | null;
+  requests_per_min: number;
+  sticky: number;
+  rate_limit_rps: number;
+  ip_allowlist: string;
+  health_check_path: string;
+  compress: number;
+  public_port: number | null;
+  public_protocol: string;
 }
 
 export interface Replica {

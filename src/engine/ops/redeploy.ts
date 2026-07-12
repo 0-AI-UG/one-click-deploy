@@ -3,12 +3,8 @@ import {
   sshExec,
   cloneRepo,
   cloneAndBuild,
-  deployAuthProxy,
-  removeAuthProxy,
-  healthCheck,
-  containerRunningCheck,
-  removeContainer,
-  buildDockerRunArgs,
+  probeAppHealth,
+  startAppReplica,
 } from "../../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
@@ -21,7 +17,6 @@ import type { OpKindDefinition, Step } from "../types.ts";
 
 type RedeployInput = {
   appId: number;
-  auth_password?: string | null;
   container_port?: number;
   userId?: string;
 };
@@ -44,17 +39,11 @@ type RollbackSnapshot = {
 };
 type BuildOut = {
   imageTag: string;
-  previousAuthPassword: string;
-  previousContainerPort: number;
   rollback: RollbackSnapshot | null;
 };
 type HealthOut = { healthy: boolean; statusCode?: number };
 
 const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-
-function parseExtraVolumes(raw: string): string[] {
-  try { const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }
-}
 
 const wakeIfSleeping: Step<RedeployInput, WakeOut> = {
   name: "wake_if_sleeping",
@@ -83,7 +72,7 @@ const cloneRepoStep: Step<RedeployInput, { ok: true }> = {
     await cloneRepo(server.ipv4, app.name, app.git_repo, githubPat, (line) => {
       db.appendDeployLog(ctx.input.appId, `[clone] ${line}`);
       ctx.log(`[clone] ${line}`);
-    }, app.git_branch || undefined);
+    }, app.git_branch || undefined, server.ssh_host_key || undefined);
     return { ok: true };
   },
 };
@@ -125,14 +114,11 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     const server = db.getServer(first.server_id);
     if (!server) throw new Error("Server not found");
 
-    const previousAuthPassword = app.auth_password;
-    const previousContainerPort = app.container_port;
-
     const containerPort = ctx.input.container_port ?? app.container_port;
     const envVars = await resolveAppEnvVars(app);
     const githubPat = (await resolveGitHubToken(ctx.input.userId)) || undefined;
     const bindAddr = replicaBindHost(server);
-    const extraVolumes = parseExtraVolumes(app.extra_volumes);
+    const extraVolumes = db.parseExtraVolumes(app.extra_volumes);
 
     let imageTag = `${app.name}:latest`;
 
@@ -183,6 +169,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       containerName: first.container_name,
       skipClone: true,
       memoryMb: app.memory_mb || undefined,
+      hostKey: server.ssh_host_key || undefined,
     };
     const logLine = (line: string) => {
       db.appendDeployLog(appId, `[redeploy] ${line}`);
@@ -196,7 +183,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     }, logLine);
     if (r.imageTag) imageTag = r.imageTag;
 
-    return { imageTag, previousAuthPassword, previousContainerPort, rollback };
+    return { imageTag, rollback };
   },
   // If a later step fails (e.g. the new build never becomes healthy), restore
   // the previous container so the app keeps serving instead of going unhealthy.
@@ -210,22 +197,20 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       const server = first ? db.getServer(first.server_id) : null;
       if (!app || !server) return;
       const hostKey = server.ssh_host_key || undefined;
-      await removeContainer(server.ipv4, snap.containerName, hostKey);
-      const cmd = buildDockerRunArgs({
-        name: snap.containerName,
+      await startAppReplica(server.ipv4, {
+        containerName: snap.containerName,
         image: snap.image,
         appName: app.name,
         network: null,
-        publish: { bindAddr: snap.bindAddr, hostPort: snap.hostPort, containerPort: snap.containerPort },
+        bindAddr: snap.bindAddr,
+        hostPort: snap.hostPort,
+        containerPort: snap.containerPort,
         envFilePath: snap.envFilePath || undefined,
         volumeMount: snap.volumeMount || undefined,
         extraVolumes: snap.extraVolumes,
         memoryMb: snap.memoryMb ?? undefined,
-      });
-      await sshExec(server.ipv4, asUser(cmd), hostKey);
-      const health = app.health_check
-        ? await healthCheck(server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey)
-        : await containerRunningCheck(server.ipv4, snap.containerName, 5, hostKey);
+      }, hostKey);
+      const health = await probeAppHealth(app, server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey);
       if (first) db.updateReplicaStatus(first.id, health.healthy ? "running" : "unhealthy");
       db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
       db.appendDeployLog(ctx.input.appId, `[rollback] Restored previous image after failed redeploy (healthy=${health.healthy})`);
@@ -267,33 +252,15 @@ const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
   },
 };
 
-const manageAuthProxy: Step<RedeployInput, { ok: true }> = {
-  name: "manage_auth_proxy",
-  label: "Manage auth proxy",
+const persistSettings: Step<RedeployInput, { ok: true }> = {
+  name: "persist_settings",
+  label: "Persist settings",
   async run(ctx) {
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
-    const replicas = db.getReplicas(ctx.input.appId);
-    if (replicas.length === 0) return { ok: true };
-    const first = replicas[0];
-    const server = db.getServer(first.server_id);
-    if (!server) throw new Error("Server not found");
-    const hostKey = server.ssh_host_key || undefined;
-    const bindAddr = replicaBindHost(server);
-
-    const desired = ctx.input.auth_password !== undefined
-      ? (ctx.input.auth_password || "")
-      : app.auth_password;
-    if (desired) {
-      await deployAuthProxy(server.ipv4, first.container_name, desired, first.host_port, bindAddr, hostKey);
-    } else if (app.auth_password && !desired) {
-      await removeAuthProxy(server.ipv4, first.container_name, hostKey);
-    }
-
-    // Persist port/auth changes after the proxy state is in place.
-    if (ctx.input.auth_password !== undefined) {
-      db.updateAppAuthPassword(ctx.input.appId, ctx.input.auth_password || "");
-    }
+    // Only the container port needs a rebuild path (the container binds it), so
+    // it persists here before the fresh container starts. Password protection is
+    // pure ingress config now and lives on PUT /api/apps/:id/ingress instead.
     if (ctx.input.container_port !== undefined && ctx.input.container_port !== app.container_port) {
       db.updateAppContainerPort(ctx.input.appId, ctx.input.container_port);
     }
@@ -331,9 +298,7 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
     // Generous window (10 attempts) so a slow-booting app isn't failed
     // prematurely — but if it never comes up, throw so the op fails and
     // pull_and_build's compensate rolls back to the previous image.
-    const health = app.health_check
-      ? await healthCheck(server.ipv4, first.container_name, bindAddr, first.host_port, 10, hostKey)
-      : await containerRunningCheck(server.ipv4, first.container_name, 10, hostKey);
+    const health = await probeAppHealth(app, server.ipv4, first.container_name, bindAddr, first.host_port, 10, hostKey);
     if (!app.health_check && health.healthy) {
       db.appendDeployLog(ctx.input.appId, `[health] HTTP probe disabled; container is running`);
     }
@@ -396,7 +361,7 @@ const redeployOp: OpKindDefinition<RedeployInput> = {
     setDeploying,
     pullAndBuild,
     rollExtraReplicas,
-    manageAuthProxy,
+    persistSettings,
     syncIngressStep,
     healthCheckStep,
     recordDeploymentHistory,

@@ -50,7 +50,7 @@ Prefer bash? Copy `example.panel.json` to `panel.json` and run `./scripts/bootst
 
 - Deploy from any Git repo with a Dockerfile
 - Auto-provisioned Hetzner Cloud servers, volumes, private networks, and firewalls
-- Auto TLS (Caddy + Let's Encrypt) and auto DNS via Hetzner DNS
+- Auto TLS (Traefik + Let's Encrypt) and auto DNS via Hetzner DNS
 - Horizontal scaling, auto-scaling, pause/resume
 - Managed services: Postgres, Redis, MySQL, and more
 - Web terminal, log streaming, rollbacks, webhooks
@@ -76,7 +76,7 @@ bun run test
 bun run build:cli
 ```
 
-Built with [Bun](https://bun.sh), TypeScript, React, SQLite, and [Caddy](https://caddyserver.com).
+Built with [Bun](https://bun.sh), TypeScript, React, SQLite, and [Traefik](https://traefik.io).
 
 ## Links
 

@@ -141,6 +141,13 @@ const EMPTY_FORM: FormState = {
   server_id: "",
   memory_mb: "",
   health_check: true,
+  sticky: false,
+  rate_limit_rps: "",
+  ip_allowlist: "",
+  health_check_path: "",
+  compress: false,
+  public_protocol: "off",
+  public_port: "",
 };
 
 export function DeployPage() {
@@ -449,6 +456,15 @@ export function DeployPage() {
       server_id: form.server_id ? parseInt(form.server_id, 10) : undefined,
       memory_mb: form.memory_mb ? parseInt(form.memory_mb, 10) : undefined,
       health_check: form.health_check === false ? false : undefined,
+      sticky: form.sticky || undefined,
+      rate_limit_rps: form.rate_limit_rps ? parseInt(form.rate_limit_rps, 10) : undefined,
+      ip_allowlist: form.ip_allowlist.trim() || undefined,
+      health_check_path: form.health_check_path.trim() || undefined,
+      compress: form.compress || undefined,
+      public_port: form.public_protocol === "off"
+        ? undefined
+        : (parseInt(form.public_port, 10) || "auto"),
+      public_protocol: form.public_protocol === "off" ? undefined : form.public_protocol,
     };
 
     (async () => {

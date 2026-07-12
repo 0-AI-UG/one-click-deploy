@@ -1,0 +1,4 @@
+[test]
+# Isolate every `bun test` run in a temp OCD_DATA_DIR before any module
+# (notably src/shared/db/connection.ts) is imported. See src/shared/test-preload.ts.
+preload = ["./src/shared/test-preload.ts"]

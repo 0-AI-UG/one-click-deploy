@@ -68,8 +68,8 @@ export async function reconcileNetwork(): Promise<void> {
  *   - `<app>.ocd.internal`      → this server's own private_ipv4 (local Traefik)
  *   - `<svc>.svc.ocd.internal`  → service host's private_ipv4 (direct)
  *
- * Each server runs its own Traefik with the :8080 compat entrypoint and the
- * per-app internal entrypoints, so callers reach the local Traefik and it
+ * Each server runs its own Traefik with the per-app internal entrypoints,
+ * so callers reach the local Traefik and it
  * reverse-proxies to the replica pool over the private network. App entries
  * point at the *server's own* private IP rather than 127.0.0.1 because
  * Docker containers inherit DNS from the host — a 127.0.0.1 entry would

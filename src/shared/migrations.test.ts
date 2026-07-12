@@ -177,4 +177,27 @@ describe("runMigrations", () => {
     expect(pub.domain).toBe("pub.example.com");
     expect(priv.domain).toBe("");
   });
+
+  test("migration 62 backfills bcrypt hashes for password-protected apps only", () => {
+    // Minimal pre-62 apps table (the migration only touches auth_password*).
+    const db = new Database(":memory:");
+    db.run("CREATE TABLE apps (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, auth_password TEXT NOT NULL DEFAULT '')");
+    db.run("INSERT INTO apps (name, auth_password) VALUES ('gated', 'hunter2')");
+    db.run("INSERT INTO apps (name) VALUES ('open')");
+    migrations.find((m) => m.version === 62)!.up(db);
+    const gated = db.query("SELECT auth_password_hash FROM apps WHERE name = 'gated'").get() as any;
+    const open = db.query("SELECT auth_password_hash FROM apps WHERE name = 'open'").get() as any;
+    expect(gated.auth_password_hash.startsWith("$2")).toBe(true);
+    expect(Bun.password.verifySync("hunter2", gated.auth_password_hash)).toBe(true);
+    expect(open.auth_password_hash).toBe("");
+  });
+
+  test("migration 66 drops apps.auth_password but keeps auth_password_hash", () => {
+    const db = freshDb();
+    runMigrations(db);
+    const cols = (db.query("PRAGMA table_info(apps)").all() as any[]).map((c) => c.name);
+    // The plaintext column is gone; the bcrypt hash is the sole source of truth.
+    expect(cols).not.toContain("auth_password");
+    expect(cols).toContain("auth_password_hash");
+  });
 });

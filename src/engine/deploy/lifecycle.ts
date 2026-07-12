@@ -4,15 +4,13 @@ import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import {
   sshExec,
   removeContainer,
-  removeAuthProxy,
   restartContainer,
   pauseContainer,
   unpauseContainer,
-  healthCheck,
-  containerRunningCheck,
-  describeFailure,
+  probeAppHealth,
+  startAppReplica,
 } from "../../shared/remote/index.ts";
-import { removeAppIngress, syncAppIngress } from "../scale/traefik-manager.ts";
+import { syncAllTraefik, syncAppIngress } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 
@@ -61,14 +59,6 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
           log("destroyApp", `Failed to remove replica ${replica.container_name}: ${err}`);
           cleanupFailed = true;
         }
-        // Remove auth proxy for this replica if present
-        if (app.auth_password) {
-          try {
-            await removeAuthProxy(replicaServer.ipv4, replica.container_name, hostKey);
-          } catch (e) {
-            log("destroyApp", `Failed to remove auth proxy for ${replica.container_name}: ${e}`);
-          }
-        }
         // App directories live on the tenant server. Ingress routes are
         // removed from the panel server once, after this loop.
         try {
@@ -80,9 +70,10 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       db.deleteReplica(replica.id);
     }
 
-    // Remove the app from the fleet ingress config.
+    // Re-render the fleet ingress config: with the replica rows gone above the
+    // app's routers simply disappear from the desired-state render.
     try {
-      await removeAppIngress(app.name, app.domain);
+      await syncAllTraefik();
     } catch (err) {
       log("destroyApp", `Failed to remove panel ingress route: ${err}`);
     }
@@ -219,9 +210,7 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
       await restartContainer(server.ipv4, replica.container_name, hostKey);
 
       const bindAddr = replicaBindHost(server);
-      const health = app.health_check
-        ? await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey)
-        : await containerRunningCheck(server.ipv4, replica.container_name, 5, hostKey);
+      const health = await probeAppHealth(app, server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }
@@ -251,33 +240,35 @@ export async function recreateAppContainer(
     const server = db.getServer(firstReplica.server_id);
     if (!server) throw new Error("Server not found");
     const hostKey = server.ssh_host_key || undefined;
-    const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
     const hostPort = firstReplica.host_port;
     const bindAddr = replicaBindHost(server);
 
-    // Dockerfile mode: rm + run with updated flags
-    await removeContainer(server.ipv4, app.name, hostKey);
-
     const envVars = await resolveAppEnvVars(app);
-    const envFileEntries = Object.entries(envVars);
-    let envFileFlag = "";
-    if (envFileEntries.length > 0) {
-      const envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
-      envFileFlag = `--env-file ${envFilePath}`;
-    }
+    const envFilePath = Object.keys(envVars).length > 0
+      ? `/home/deploy/apps/${app.name}/.env.deploy`
+      : undefined;
 
-    const volumeFlag = volumeMount ? `-v ${volumeMount}` : "";
-    const extraVolFlags = (extraVolumes || []).map((v) => `-v ${v}`).join(" ");
-    const cmd = `docker run -d --name ${app.name} --restart unless-stopped -p ${bindAddr}:${hostPort}:${app.container_port} ${envFileFlag} ${volumeFlag} ${extraVolFlags} ${app.name}:latest`;
-    const result = await sshExec(server.ipv4, asUser(cmd), hostKey);
-    if (result.exitCode !== 0) {
-      throw new Error(describeFailure("Failed to start container", result));
-    }
+    // Recreate through the shared hardened path. The previous hand-built
+    // `docker run` here skipped cap-drop / no-new-privileges / mem-cpu-pids
+    // ceilings and did no allowlist validation of the interpolated -v flags;
+    // buildDockerRunArgs (via startAppReplica) applies all of them. network:null
+    // preserves the historical default-bridge attachment for this container.
+    await startAppReplica(server.ipv4, {
+      containerName: app.name,
+      image: `${app.name}:latest`,
+      appName: app.name,
+      network: null,
+      bindAddr,
+      hostPort,
+      containerPort: app.container_port,
+      envFilePath,
+      volumeMount: volumeMount || undefined,
+      extraVolumes: extraVolumes || [],
+      memoryMb: app.memory_mb || undefined,
+    }, hostKey);
 
     // Health check (running-only when the app opted out of the HTTP probe)
-    const health = app.health_check
-      ? await healthCheck(server.ipv4, app.name, bindAddr, hostPort, 5, hostKey)
-      : await containerRunningCheck(server.ipv4, app.name, 5, hostKey);
+    const health = await probeAppHealth(app, server.ipv4, app.name, bindAddr, hostPort, 5, hostKey);
     db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
     db.updateReplicaStatus(firstReplica.id, health.healthy ? "running" : "unhealthy");
 
@@ -345,9 +336,7 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
       await unpauseContainer(server.ipv4, replica.container_name, hostKey);
 
       const bindAddr = replicaBindHost(server);
-      const health = app.health_check
-        ? await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey)
-        : await containerRunningCheck(server.ipv4, replica.container_name, 5, hostKey);
+      const health = await probeAppHealth(app, server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey);
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     }

@@ -6,7 +6,10 @@ function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
-async function apiToken(): Promise<string> {
+/** The Hetzner API token (secret store, settings fallback). Also reused by
+ *  the Traefik manager as HETZNER_API_KEY for wildcard DNS-01 issuance —
+ *  DNS lives in the unified Cloud API, so one token serves both. */
+export async function hetznerApiToken(): Promise<string> {
   const token = await secretStore.get("hetzner_api_token");
   if (token) return token;
   return getSettings().hetzner_api_token ?? "";
@@ -42,7 +45,7 @@ export async function hetznerApi(
   options: RequestInit = {}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<Record<string, any>> {
-  const token = await apiToken();
+  const token = await hetznerApiToken();
   if (!token) throw new Error("Hetzner API token not configured");
   return withRetry(async () => {
     const method = options.method || "GET";

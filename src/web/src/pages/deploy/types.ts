@@ -71,4 +71,11 @@ export type FormState = {
   server_id: string; // "" = auto
   memory_mb: string; // "" / "0" = platform default
   health_check: boolean; // false = skip the HTTP probe (manifest passthrough, no UI control)
+  sticky: boolean; // sticky sessions on the ingress service
+  rate_limit_rps: string; // "" / "0" = unlimited
+  ip_allowlist: string; // comma-separated IPs/CIDRs, "" = open
+  health_check_path: string; // "" = no active HTTP health check
+  compress: boolean; // response compression on the public router
+  public_protocol: "off" | "tcp" | "udp"; // "off" = no raw TCP/UDP exposure
+  public_port: string; // requested public pool port; "" = auto-assign
 };

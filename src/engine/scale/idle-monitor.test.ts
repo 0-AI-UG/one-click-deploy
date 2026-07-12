@@ -1,7 +1,6 @@
-// Unit tests for idle-monitor: collectMetrics() (docker-stats parsing, SSH
-// failure resilience, stopped-replica skip) and evaluateAutoScale() edges
-// not covered by reconciler.test.ts (sustained-idle → sleep, 0 replicas,
-// waking/sleeping skip).
+// Unit tests for idle-monitor: evaluateAutoScale() edges not covered by
+// reconciler.test.ts (sustained-idle → sleep, 0 replicas, waking/sleeping
+// skip, request-based scale-to-zero).
 //
 // Single-tenant: no orgs in this branch.
 import { tmpdir } from "os";
@@ -32,14 +31,14 @@ mock.module("../../server/ipc/enqueue.ts", () => ({
 }));
 
 import { insertServer } from "../../shared/db/servers.ts";
-import { insertApp } from "../../shared/db/apps.ts";
+import { insertApp, getApp } from "../../shared/db/apps.ts";
 import {
   insertReplica,
   updateReplicaMetrics,
   markReplicaStopped,
-  getReplica,
 } from "../../shared/db/replicas.ts";
-import { collectMetrics, evaluateAutoScale, idleSince } from "./idle-monitor.ts";
+import { evaluateAutoScale, idleSince } from "./idle-monitor.ts";
+import { ingestServerRequestMetrics, resetRequestMetricsState } from "./request-metrics.ts";
 
 function makeServer() {
   return insertServer({
@@ -53,7 +52,7 @@ function makeServer() {
   });
 }
 
-function makeApp() {
+function makeApp(opts: { healthCheck?: boolean; authPassword?: string } = {}) {
   return insertApp({
     name: `idle-app-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
     domain: "",
@@ -61,7 +60,19 @@ function makeApp() {
     dockerfile_path: "Dockerfile",
     container_port: 3000,
     env_vars: "{}",
+    health_check: opts.healthCheck ?? true,
+    auth_password: opts.authPassword,
   });
+}
+
+/** Mark a server's request metrics as freshly scraped this tick. */
+function markMetricsFresh(serverId: number) {
+  ingestServerRequestMetrics(serverId, "# scrape ok\n");
+}
+
+function setLastRequestAt(appId: number, at: Date | null) {
+  const { default: conn } = require("../../shared/db/connection.ts");
+  conn.run("UPDATE apps SET last_request_at = ? WHERE id = ?", [at ? at.toISOString() : null, appId]);
 }
 
 beforeEach(() => {
@@ -69,124 +80,7 @@ beforeEach(() => {
   sshExec.mockClear();
   enqueueMock.mockClear();
   idleSince.clear();
-});
-
-describe("collectMetrics", () => {
-  test("parses 'NN.NN%' strings into floats and writes to DB", async () => {
-    const server = makeServer();
-    const app = makeApp();
-    const replica = insertReplica({
-      app_id: app.id,
-      server_id: server.id,
-      host_port: 20001,
-      container_name: `c-stat-${Date.now()}`,
-      status: "running",
-    });
-
-    sshQueue.push({
-      exitCode: 0,
-      stdout: JSON.stringify({ CPUPerc: "12.34%", MemPerc: "56.78%" }),
-      stderr: "",
-    });
-
-    await collectMetrics(app.id);
-
-    const after = getReplica(replica.id)!;
-    expect(after.cpu_percent).toBeCloseTo(12.34, 2);
-    expect(after.memory_percent).toBeCloseTo(56.78, 2);
-  });
-
-  test("skips replicas with status='stopped' (light-sleep anchors)", async () => {
-    const server = makeServer();
-    const app = makeApp();
-    const replica = insertReplica({
-      app_id: app.id,
-      server_id: server.id,
-      host_port: 20002,
-      container_name: `c-stopped-${Date.now()}`,
-      status: "running",
-    });
-    markReplicaStopped(replica.id);
-
-    await collectMetrics(app.id);
-
-    expect(sshExec).not.toHaveBeenCalled();
-  });
-
-  test("malformed stats (non-zero exit) are skipped, DB left untouched", async () => {
-    const server = makeServer();
-    const app = makeApp();
-    const replica = insertReplica({
-      app_id: app.id,
-      server_id: server.id,
-      host_port: 20003,
-      container_name: `c-bad-${Date.now()}`,
-      status: "running",
-    });
-    updateReplicaMetrics(replica.id, 7, 8);
-
-    sshQueue.push({ exitCode: 1, stdout: "", stderr: "no such container" });
-
-    await collectMetrics(app.id);
-
-    const after = getReplica(replica.id)!;
-    expect(after.cpu_percent).toBe(7);
-    expect(after.memory_percent).toBe(8);
-  });
-
-  test("missing CPUPerc/MemPerc fields parse as 0 (|| '0' fallback)", async () => {
-    const server = makeServer();
-    const app = makeApp();
-    const replica = insertReplica({
-      app_id: app.id,
-      server_id: server.id,
-      host_port: 20004,
-      container_name: `c-empty-${Date.now()}`,
-      status: "running",
-    });
-    updateReplicaMetrics(replica.id, 99, 99);
-
-    sshQueue.push({ exitCode: 0, stdout: "{}", stderr: "" });
-
-    await collectMetrics(app.id);
-
-    const after = getReplica(replica.id)!;
-    expect(after.cpu_percent).toBe(0);
-    expect(after.memory_percent).toBe(0);
-  });
-
-  test("SSH failure on one replica does not stop the loop (caught per-replica)", async () => {
-    const server = makeServer();
-    const app = makeApp();
-    const r1 = insertReplica({
-      app_id: app.id,
-      server_id: server.id,
-      host_port: 20005,
-      container_name: `c-fail-${Date.now()}`,
-      status: "running",
-    });
-    const r2 = insertReplica({
-      app_id: app.id,
-      server_id: server.id,
-      host_port: 20006,
-      container_name: `c-ok-${Date.now()}`,
-      status: "running",
-    });
-
-    sshQueue.push(new Error("ssh boom"));
-    sshQueue.push({
-      exitCode: 0,
-      stdout: JSON.stringify({ CPUPerc: "33.3%", MemPerc: "44.4%" }),
-      stderr: "",
-    });
-
-    await collectMetrics(app.id);
-
-    const a1 = getReplica(r1.id)!;
-    const a2 = getReplica(r2.id)!;
-    expect(a1.cpu_percent).toBe(0);
-    expect(a2.cpu_percent).toBeCloseTo(33.3, 1);
-  });
+  resetRequestMetricsState();
 });
 
 function setAutoscale(appId: number, fields: {
@@ -288,9 +182,11 @@ describe("evaluateAutoScale", () => {
     expect(enqueueMock).not.toHaveBeenCalled();
   });
 
-  test("sustained-idle: first idle tick sets idleSince and does NOT enqueue sleep", async () => {
+  // TCP-routed apps (health_check=0, no auth) have no Traefik request
+  // counters, so they keep the legacy CPU sustained-idle sleep path.
+  test("legacy sustained-idle (TCP app): first idle tick sets idleSince and does NOT enqueue sleep", async () => {
     const server = makeServer();
-    const app = makeApp();
+    const app = makeApp({ healthCheck: false });
     setAutoscale(app.id, { min_replicas: 0, scale_to_zero_after: 300 });
     const r = insertReplica({
       app_id: app.id,
@@ -307,9 +203,9 @@ describe("evaluateAutoScale", () => {
     expect(idleSince.has(app.id)).toBe(true);
   });
 
-  test("sustained-idle: second tick after idleTimeout elapsed enqueues sleep and clears tracker", async () => {
+  test("legacy sustained-idle (TCP app): second tick after idleTimeout elapsed enqueues sleep and clears tracker", async () => {
     const server = makeServer();
-    const app = makeApp();
+    const app = makeApp({ healthCheck: false });
     setAutoscale(app.id, { min_replicas: 0, scale_to_zero_after: 1 });
     const r = insertReplica({
       app_id: app.id,
@@ -330,9 +226,9 @@ describe("evaluateAutoScale", () => {
     expect(idleSince.has(app.id)).toBe(false);
   });
 
-  test("non-idle metrics clear an existing idleSince entry", async () => {
+  test("legacy path: non-idle metrics clear an existing idleSince entry", async () => {
     const server = makeServer();
-    const app = makeApp();
+    const app = makeApp({ healthCheck: false });
     setAutoscale(app.id, { min_replicas: 0 });
     const r = insertReplica({
       app_id: app.id,
@@ -409,6 +305,80 @@ describe("evaluateAutoScale", () => {
     const call = enqueueMock.mock.calls[0][0] as { kind: string; input: { targetReplicas: number } };
     expect(call.kind).toBe("scale_up");
     expect(call.input.targetReplicas).toBe(3);
+  });
+
+  // --- request-based scale-to-zero (HTTP-routed apps) -----------------------
+
+  function setupHttpSleepApp(opts: { lastRequestAt?: Date | null; authPassword?: string; healthCheck?: boolean } = {}) {
+    const server = makeServer();
+    const app = makeApp({ healthCheck: opts.healthCheck, authPassword: opts.authPassword });
+    setAutoscale(app.id, { min_replicas: 0, scale_to_zero_after: 300 });
+    setLastRequestAt(app.id, opts.lastRequestAt === undefined ? null : opts.lastRequestAt);
+    const r = insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 21100 + Math.floor(Math.random() * 100),
+      container_name: `c-req-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      status: "running",
+    });
+    updateReplicaMetrics(r.id, 1, 1);
+    return { server, app };
+  }
+
+  test("request-based sleep: fresh metrics + no requests for the window enqueues sleep", async () => {
+    const { server, app } = setupHttpSleepApp({ lastRequestAt: new Date(Date.now() - 600_000) });
+    markMetricsFresh(server.id);
+
+    await evaluateAutoScale(app.id);
+
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+    expect((enqueueMock.mock.calls[0][0] as { kind: string }).kind).toBe("sleep");
+    // The request path never uses the CPU idle tracker.
+    expect(idleSince.has(app.id)).toBe(false);
+  });
+
+  test("request-based sleep: recent request keeps the app awake even at idle CPU", async () => {
+    const { server, app } = setupHttpSleepApp({ lastRequestAt: new Date(Date.now() - 10_000) });
+    markMetricsFresh(server.id);
+
+    await evaluateAutoScale(app.id);
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
+  test("request-based sleep fail-safe: stale/missing scrape skips the sleep decision", async () => {
+    const lastRequestAt = new Date(Date.now() - 600_000);
+    const { app } = setupHttpSleepApp({ lastRequestAt });
+    // No markMetricsFresh — the replica's server was never scraped.
+
+    await evaluateAutoScale(app.id);
+
+    expect(enqueueMock).not.toHaveBeenCalled();
+    // last_request_at is untouched: a stale server means "unknown", not "idle".
+    expect(getApp(app.id)!.last_request_at).toBe(lastRequestAt.toISOString());
+  });
+
+  test("request-based sleep: NULL last_request_at is seeded, not slept on", async () => {
+    const { server, app } = setupHttpSleepApp({ lastRequestAt: null });
+    markMetricsFresh(server.id);
+
+    await evaluateAutoScale(app.id);
+
+    expect(enqueueMock).not.toHaveBeenCalled();
+    expect(getApp(app.id)!.last_request_at).not.toBeNull();
+  });
+
+  test("auth-protected health_check=0 app is HTTP-routed and uses the request path", async () => {
+    const { server, app } = setupHttpSleepApp({
+      lastRequestAt: new Date(Date.now() - 600_000),
+      healthCheck: false,
+      authPassword: "hunter2",
+    });
+    markMetricsFresh(server.id);
+
+    await evaluateAutoScale(app.id);
+
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+    expect((enqueueMock.mock.calls[0][0] as { kind: string }).kind).toBe("sleep");
   });
 
   test("volume-capped: max_replicas is clamped to 1 regardless of stored value", async () => {

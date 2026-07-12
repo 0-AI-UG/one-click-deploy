@@ -8,11 +8,9 @@ import {
   removeContainer,
   healthCheck,
   containerRunningCheck,
-  deployAuthProxy,
-  removeAuthProxy,
   containerExists,
 } from "../../shared/remote/index.ts";
-import { syncAppIngress, removeAppIngress } from "../scale/traefik-manager.ts";
+import { syncAppIngress, syncAllTraefik } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
@@ -78,8 +76,6 @@ type CloneOut = { ok: true };
 type BuildOut = {
   imageTag: string;
 };
-
-type AuthProxyOut = { proxyPort: number } | null;
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [engine:deploy:${context}]`, ...args);
@@ -507,6 +503,13 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           environment_id: environmentId ?? undefined,
           public: req.public,
           health_check: req.health_check,
+          sticky: req.sticky,
+          rate_limit_rps: req.rate_limit_rps,
+          ip_allowlist: req.ip_allowlist,
+          health_check_path: req.health_check_path,
+          compress: req.compress,
+          public_port: req.public_port,
+          public_protocol: req.public_protocol,
         },
         server.serverId,
       );
@@ -638,7 +641,7 @@ const cloneRepoStep: Step<DeployInput, CloneOut> = {
     await cloneRepo(server.serverIp, req.app_name, req.git_repo, githubPat, (line) => {
       db.appendDeployLog(appOut.appId, mask(`[clone] ${line}`));
       ctx.log(`[clone] ${mask(line)}`);
-    }, req.git_branch);
+    }, req.git_branch, server.serverHostKey || undefined);
     return { ok: true };
   },
   async compensate(ctx, _out, prior) {
@@ -720,6 +723,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         bindAddr: containerBindAddr,
         skipClone: true,
         memoryMb: req.memory_mb || undefined,
+        hostKey: server.serverHostKey || undefined,
       },
       (line) => {
         maskedLog(`[build] ${line}`);
@@ -739,61 +743,6 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
       await removeContainer(server.serverIp, appOut.containerName, server.serverHostKey || undefined);
     } catch (err) {
       ctx.log(`Failed to remove container: ${err}`);
-    }
-  },
-};
-
-const deployAuthProxyStep: Step<DeployInput, AuthProxyOut> = {
-  name: "deploy_auth_proxy",
-  label: "Deploy auth proxy",
-  async probe(ctx, prior) {
-    const req = ctx.input;
-    if (!req.auth_password) return null;
-    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
-    if (!server) return null;
-    const { authProxyPort } = await import("../../shared/remote/index.ts");
-    const proxyName = `${req.app_name}-auth`;
-    const exists = await containerExists(server.serverIp, proxyName, server.serverHostKey || undefined);
-    if (!exists) return null;
-    const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
-    const proxyPort = authProxyPort(appOut?.hostPort ?? 0);
-    ctx.log(`adopting existing auth proxy container ${proxyName}`);
-    return { proxyPort };
-  },
-  async probeCompensated(ctx, _out, prior) {
-    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
-    if (!server) return true;
-    const exists = await containerExists(server.serverIp, `${ctx.input.app_name}-auth`, server.serverHostKey || undefined);
-    return !exists;
-  },
-  async run(ctx, prior) {
-    const req = ctx.input;
-    if (!req.auth_password) return null;
-    const server = prior["pick_or_provision_server"] as ServerOut;
-    const appOut = prior["insert_app_row"] as InsertAppOut;
-    const tenantServerRow = db.getServer(server.serverId);
-    if (!tenantServerRow) throw new Error(`Server ${server.serverId} not found`);
-    const containerBindAddr = replicaBindHost(tenantServerRow);
-    const proxyPort = await deployAuthProxy(
-      server.serverIp,
-      req.app_name,
-      req.auth_password,
-      appOut.hostPort,
-      containerBindAddr,
-      server.serverHostKey || undefined,
-    );
-    db.appendDeployLog(appOut.appId, `[auth] Auth proxy deployed on port ${proxyPort}`);
-    return { proxyPort };
-  },
-  async compensate(ctx, out, prior) {
-    if (!out) return;
-    const server = prior["pick_or_provision_server"] as ServerOut;
-    const req = ctx.input;
-    if (!server) return;
-    try {
-      await removeAuthProxy(server.serverIp, req.app_name, server.serverHostKey || undefined);
-    } catch (err) {
-      ctx.log(`Failed to remove auth proxy: ${err}`);
     }
   },
 };
@@ -836,7 +785,7 @@ const syncIngressStep: Step<DeployInput, { domain: string }> = {
     const appOut = prior["insert_app_row"] as InsertAppOut;
     if (!appOut) return;
     try {
-      await removeAppIngress(appOut.containerName, out.domain);
+      await syncAllTraefik();
     } catch (err) {
       ctx.log(`Failed to remove ingress route: ${err}`);
     }
@@ -1100,7 +1049,6 @@ const deployOp: OpKindDefinition<DeployInput> = {
     setupVolumeBindMount,
     cloneRepoStep,
     buildAndRunContainer,
-    deployAuthProxyStep,
     syncIngressStep,
     healthCheckStep,
     recordDeploymentHistory,

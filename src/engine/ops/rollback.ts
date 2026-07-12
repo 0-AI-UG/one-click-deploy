@@ -1,11 +1,11 @@
 import * as db from "../../shared/db.ts";
 import {
   sshExec,
-  removeContainer,
-  healthCheck,
-  containerRunningCheck,
-  describeFailure,
-  buildDockerRunArgs,
+  probeAppHealth,
+  startAppReplica,
+  writeEnvDeployFile,
+  buildAppImage,
+  findDockerfile,
 } from "../../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -38,10 +38,6 @@ type PriorContainerSnapshot = {
   extraVolumes: string[];
 } | null;
 type SwapOut = { containerName: string; priorSnapshot: PriorContainerSnapshot };
-
-function parseExtraVolumes(raw: string): string[] {
-  try { const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }
-}
 
 const loadTargetDeployment: Step<RollbackInput, TargetOut> = {
   name: "load_target_deployment",
@@ -83,18 +79,7 @@ const checkoutTarget: Step<RollbackInput, CheckoutOut> = {
     await sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${target.gitCommit}`), hostKey);
 
     const envVars = await resolveAppEnvVars(app);
-    const envEntries = Object.entries(envVars);
-    let envFilePath: string | null = null;
-    if (envEntries.length > 0) {
-      envFilePath = `${appDir}/.env.deploy`;
-      const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
-      const escapedContent = envFileContent.replace(/'/g, "'\\''");
-      await sshExec(
-        server.ipv4,
-        `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`,
-        hostKey,
-      );
-    }
+    const envFilePath = (await writeEnvDeployFile(server.ipv4, app.name, envVars, hostKey)) ?? null;
     return { envFilePath };
   },
 };
@@ -113,20 +98,17 @@ const rebuildImage: Step<RollbackInput, RebuildOut> = {
 
     let dockerfilePath = app.dockerfile_path?.replace(/^\/+/, "");
     if (!dockerfilePath) {
-      const findResult = await sshExec(
-        server.ipv4,
-        asUser(`cd ${appDir} && if [ -f Dockerfile ]; then echo Dockerfile; elif [ -f docker/Dockerfile ]; then echo docker/Dockerfile; else find . -maxdepth 3 -name Dockerfile -type f | head -1 | sed 's|^\\./||'; fi`),
-        hostKey,
-      );
-      dockerfilePath = findResult.stdout.trim();
+      dockerfilePath = await findDockerfile(server.ipv4, appDir, hostKey);
       if (!dockerfilePath) throw new Error("No Dockerfile found in repository for rollback");
     }
-    const dockerContext = (app as any).docker_context || ".";
-    const buildCmd = `cd ${appDir} && docker build -t ${app.name}:latest -f ${dockerfilePath} ${dockerContext}`;
-    const buildResult = await sshExec(server.ipv4, asUser(buildCmd), hostKey);
-    if (buildResult.exitCode !== 0) {
-      throw new Error(describeFailure("Failed to rollback (docker build)", buildResult));
-    }
+    // Shares cloneAndBuild's build invocation so the rebuilt image carries the
+    // OCD_IMAGE_LABEL — without it a rollback image escapes the scoped prune.
+    await buildAppImage(server.ipv4, {
+      appDir,
+      imageTag: `${app.name}:latest`,
+      dockerfilePath,
+      dockerContext: app.docker_context || undefined,
+    }, hostKey);
     return { dockerfilePath };
   },
 };
@@ -165,29 +147,26 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
           containerPort: app.container_port,
           bindAddr,
           volumeMount: app.volume_mount || null,
-          extraVolumes: parseExtraVolumes(app.extra_volumes),
+          extraVolumes: db.parseExtraVolumes(app.extra_volumes),
         };
       }
     } catch (err) {
       ctx.log(`Failed to snapshot prior container (compensate may be no-op): ${err}`);
     }
 
-    await removeContainer(server.ipv4, app.name, hostKey);
-    const cmd = buildDockerRunArgs({
-      name: app.name,
+    await startAppReplica(server.ipv4, {
+      containerName: app.name,
       image: `${app.name}:latest`,
       appName: app.name,
       network: null,
-      publish: { bindAddr, hostPort, containerPort: app.container_port },
+      bindAddr,
+      hostPort,
+      containerPort: app.container_port,
       envFilePath: checkout.envFilePath || undefined,
       volumeMount: app.volume_mount || undefined,
-      extraVolumes: parseExtraVolumes(app.extra_volumes),
+      extraVolumes: db.parseExtraVolumes(app.extra_volumes),
       memoryMb: app.memory_mb || undefined,
-    });
-    const runResult = await sshExec(server.ipv4, asUser(cmd), hostKey);
-    if (runResult.exitCode !== 0) {
-      throw new Error(describeFailure("Failed to start container after rollback rebuild", runResult));
-    }
+    }, hostKey);
     return { containerName: app.name, priorSnapshot };
   },
   async compensate(ctx, out, prior) {
@@ -204,19 +183,19 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
       const server = db.getServer(target.serverId);
       if (!app || !server) return;
       const hostKey = server.ssh_host_key || undefined;
-      await removeContainer(server.ipv4, app.name, hostKey);
-      const cmd = buildDockerRunArgs({
-        name: app.name,
+      await startAppReplica(server.ipv4, {
+        containerName: app.name,
         image: snap.image,
         appName: app.name,
         network: null,
-        publish: { bindAddr: snap.bindAddr, hostPort: snap.hostPort, containerPort: snap.containerPort },
+        bindAddr: snap.bindAddr,
+        hostPort: snap.hostPort,
+        containerPort: snap.containerPort,
         envFilePath: snap.envFilePath || undefined,
         volumeMount: snap.volumeMount || undefined,
         extraVolumes: snap.extraVolumes,
         memoryMb: app.memory_mb || undefined,
-      });
-      await sshExec(server.ipv4, asUser(cmd), hostKey);
+      }, hostKey);
       ctx.log(`Restored prior container image ${snap.image}`);
     } catch (err) {
       ctx.log(`Failed to restore prior container: ${err}`);
@@ -251,9 +230,7 @@ const healthCheckStep: Step<RollbackInput, { healthy: boolean }> = {
     const first = replicas[0];
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
-    const health = app.health_check
-      ? await healthCheck(server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey)
-      : await containerRunningCheck(server.ipv4, app.name, 10, hostKey);
+    const health = await probeAppHealth(app, server.ipv4, app.name, bindAddr, first.host_port, 10, hostKey);
     if (!app.health_check && health.healthy) {
       db.appendDeployLog(target.appId, `[health] HTTP probe disabled; container is running`);
     }

@@ -16,12 +16,10 @@ mock.module("../../shared/providers/index.ts", () => ({
 const sshExec = mock(async (..._args: unknown[]) => ({ exitCode: 0, stdout: "", stderr: "" }));
 const removeContainer = mock(async (..._args: unknown[]) => {});
 const removeCompose = mock(async (..._args: unknown[]) => {});
-const removeAuthProxy = mock(async (..._args: unknown[]) => {});
 mock.module("../../shared/remote/index.ts", () => ({
   sshExec,
   removeContainer,
   removeCompose,
-  removeAuthProxy,
   restartContainer: mock(async () => {}),
   pauseContainer: mock(async () => {}),
   unpauseContainer: mock(async () => {}),
@@ -33,15 +31,12 @@ mock.module("../../shared/remote/index.ts", () => ({
   describeFailure: (prefix: string) => prefix,
 }));
 
-const removeAppIngress = mock(async () => {});
+const syncAllTraefik = mock(async () => {});
 const syncAppIngress = mock(async () => {});
 mock.module("../scale/traefik-manager.ts", () => ({
-  removeAppIngress,
+  syncAllTraefik,
   syncAppIngress,
-  syncServiceIngress: mock(async () => {}),
-  removeServiceIngress: mock(async () => {}),
   getPanelIngressIpv4: mock(() => null),
-  syncAllTraefik: mock(async () => {}),
   reconcileTraefik: mock(async () => {}),
 }));
 
@@ -67,7 +62,7 @@ function freshServer() {
   });
 }
 
-function freshApp(overrides: Partial<{ auth_password: string }> = {}) {
+function freshApp() {
   return db.insertApp({
     name: `app-${randomSuffix()}`,
     domain: "x.example.com",
@@ -75,7 +70,6 @@ function freshApp(overrides: Partial<{ auth_password: string }> = {}) {
     dockerfile_path: "Dockerfile",
     container_port: 3000,
     env_vars: "{}",
-    auth_password: overrides.auth_password,
   });
 }
 
@@ -93,8 +87,7 @@ beforeEach(() => {
   sshExec.mockClear();
   removeContainer.mockClear();
   removeCompose.mockClear();
-  removeAuthProxy.mockClear();
-  removeAppIngress.mockClear();
+  syncAllTraefik.mockClear();
   deleteGithubWebhook.mockClear();
   getGitHubPat.mockClear();
   compute._mocks.volumeDelete.mockClear();
@@ -104,7 +97,7 @@ beforeEach(() => {
   // Restore default successful behaviour (tests override as needed).
   removeContainer.mockImplementation(async () => {});
   removeCompose.mockImplementation(async () => {});
-  removeAppIngress.mockImplementation(async () => {});
+  syncAllTraefik.mockImplementation(async () => {});
   dns._mocks.deleteRecord.mockImplementation(async () => {});
   compute._mocks.volumeDelete.mockImplementation(async () => {});
   sshExec.mockImplementation(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
@@ -130,7 +123,7 @@ describe("destroyApp: happy path", () => {
     expect(removeContainer).toHaveBeenCalledTimes(1);
     expect(removeContainer.mock.calls[0][0]).toBe("1.2.3.4");
     expect(removeContainer.mock.calls[0][1]).toBe(app.name);
-    expect(removeAppIngress).toHaveBeenCalledTimes(1);
+    expect(syncAllTraefik).toHaveBeenCalledTimes(1);
     expect(dns._mocks.deleteRecord).toHaveBeenCalledTimes(1);
 
     // DB rows gone.
@@ -143,23 +136,6 @@ describe("destroyApp: happy path", () => {
     const result = await destroyApp(999_999);
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/not found/i);
-  });
-
-  test("skips auth-proxy removal when auth_password is not set", async () => {
-    const server = freshServer();
-    const app = freshApp();
-    attachReplica(app.id, server.id, app.name);
-    await destroyApp(app.id);
-    expect(removeAuthProxy).not.toHaveBeenCalled();
-  });
-
-  test("removes auth proxy for each replica when auth_password is set", async () => {
-    const server = freshServer();
-    const app = freshApp({ auth_password: "$2b$fakehash" });
-    attachReplica(app.id, server.id, app.name);
-    attachReplica(app.id, server.id, app.name + "-r2");
-    await destroyApp(app.id);
-    expect(removeAuthProxy).toHaveBeenCalledTimes(2);
   });
 
   test("invokes GitHub webhook deletion when webhook was enabled", async () => {
@@ -257,7 +233,7 @@ describe("destroyApp: partial failure handling", () => {
     const server = freshServer();
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
-    removeAppIngress.mockImplementationOnce(async () => { throw new Error("ingress 503"); });
+    syncAllTraefik.mockImplementationOnce(async () => { throw new Error("ingress 503"); });
     const result = await destroyApp(app.id);
     expect(result.ok).toBe(true);
     expect(db.getApp(app.id)).toBeNull();

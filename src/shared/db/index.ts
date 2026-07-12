@@ -13,7 +13,7 @@ export {
   getRecentServerMetrics,
   pruneOldServerMetrics,
 } from "./servers.ts";
-export type { AppRow, DnsRecordRow } from "./apps.ts";
+export type { AppRow, AppIngressSettings, DnsRecordRow, PublicProtocol } from "./apps.ts";
 export {
   getApps,
   getApp,
@@ -29,6 +29,8 @@ export {
   updateAppStatus,
   updateAppSleepingState,
   clearAppSleepingState,
+  touchAppLastRequest,
+  updateAppRequestRate,
   updateAppDeployedBy,
   appendDeployLog,
   getDeployLog,
@@ -41,12 +43,14 @@ export {
   updateAppDomain,
   updateAppVolume,
   updateAppExtraVolumes,
+  parseExtraVolumes,
   updateAppMemory,
   updateAppAuthPassword,
   updateAppPublic,
   updateAppWebhook,
   updateAppWebhookWaitForCi,
   updateAppScaling,
+  updateAppIngressSettings,
   updateAppEnvironment,
   getAppsByEnvironmentId,
   nextReplicaHostPort,
@@ -54,6 +58,14 @@ export {
   allocateInternalPort,
   INTERNAL_PORT_BASE,
   INTERNAL_PORT_COUNT,
+  allocatePublicPort,
+  getAppByPublicPort,
+  updateAppPublicExposure,
+  publicPortRange,
+  PUBLIC_TCP_PORT_BASE,
+  PUBLIC_TCP_PORT_COUNT,
+  PUBLIC_UDP_PORT_BASE,
+  PUBLIC_UDP_PORT_COUNT,
 } from "./apps.ts";
 export type { ReplicaRow, MetricSampleRow, ScalingEventRow } from "./replicas.ts";
 export {

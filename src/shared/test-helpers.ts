@@ -1,5 +1,5 @@
-// Shared helpers for bun:test tests. Callers must set OCD_DATA_DIR before
-// importing db.ts; see existing *.test.ts files for the pattern.
+// Shared helpers for bun:test tests. The temp data dir is established by
+// src/shared/test-preload.ts (bunfig.toml preload) before any import runs.
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -7,12 +7,17 @@ import { mock } from "bun:test";
 import type { Hetzner, HetznerDns } from "./providers/hetzner.ts";
 import type { OperationRow } from "./db/operations.ts";
 
-/** Create a fresh temp data dir and set OCD_DATA_DIR to it. Must run before
- *  any db.ts import. Returns the path so tests can inspect/cleanup. */
+/** Return the test run's temp data dir. Setting OCD_DATA_DIR here would be
+ *  too late — import hoisting evaluates paths.ts/db before any test-file
+ *  statement — so the real work happens in test-preload.ts; this exists as
+ *  the conventional marker in test files and for dir inspection. */
 export function useTempDataDir(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "ocd-test-"));
-  process.env.OCD_DATA_DIR = dir;
-  return dir;
+  if (!process.env.OCD_DATA_DIR) {
+    // Only reachable when a test runs without the bunfig preload (e.g. a
+    // bare `bun run` of a test file) — best effort, may be too late for db.
+    process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-test-"));
+  }
+  return process.env.OCD_DATA_DIR;
 }
 
 export function randomSuffix(): string {

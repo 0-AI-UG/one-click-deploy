@@ -2,17 +2,34 @@ import { post, put } from "../../api/client.ts";
 import { Card, Btn, Checkbox, Field, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
-import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe, Cpu } from "lucide-react";
+import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe, Cpu, Network } from "lucide-react";
 import { InfoTip } from "./shared.tsx";
 import type { AppData } from "../../types.ts";
+
+export type IngressForm = {
+  sticky: boolean;
+  rate_limit_rps: number;
+  ip_allowlist: string;
+  health_check_path: string;
+  compress: boolean;
+  /** "off" = not raw-exposed; otherwise the pool protocol. */
+  public_protocol: "off" | "tcp" | "udp";
+  /** Requested public port; "" = auto-assign. */
+  public_port: string;
+  /** Whether HTTP basic auth is on. Backed by app.auth_enabled (the password
+   *  itself is write-only — the server never sends it back). */
+  auth_enabled: boolean;
+  /** Write-only new password. Blank while enabled = keep the current password. */
+  auth_password: string;
+};
+
+const PUBLIC_PORT_RANGES = { tcp: "30000–30049", udp: "30050–30099" } as const;
 
 interface SettingsTabProps {
   app: AppData;
   appId: number;
   nameEdit: string;
   setNameEdit: (v: string) => void;
-  authPassword: string;
-  setAuthPassword: (v: string) => void;
   isPublic: boolean;
   setIsPublic: (v: boolean) => void;
   portEdit: number;
@@ -21,6 +38,8 @@ interface SettingsTabProps {
   setMemEdit: (v: number) => void;
   volumeForm: { size: number; mount_path: string };
   setVolumeForm: (f: { size: number; mount_path: string }) => void;
+  ingressForm: IngressForm;
+  setIngressForm: (f: IngressForm) => void;
   actionLoading: string | null;
   action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
   ops: ResourceOpsResult;
@@ -29,11 +48,11 @@ interface SettingsTabProps {
 export function SettingsTab({
   app, appId,
   nameEdit, setNameEdit,
-  authPassword, setAuthPassword,
   isPublic, setIsPublic,
   portEdit, setPortEdit,
   memEdit, setMemEdit,
   volumeForm, setVolumeForm,
+  ingressForm, setIngressForm,
   actionLoading, action, ops,
 }: SettingsTabProps) {
   return (
@@ -59,15 +78,6 @@ export function SettingsTab({
               >Rename</Btn>
             </PermissionGate>
           </div>
-        </Field>
-
-        <Field label={<span className="flex items-center gap-2"><Lock size={14} className="text-fg" /> Password Protection</span>}>
-          <input
-            type="password"
-            value={authPassword}
-            onChange={(e) => setAuthPassword(e.target.value)}
-            placeholder="(none)"
-          />
         </Field>
 
         <Field
@@ -110,7 +120,6 @@ export function SettingsTab({
             disabled={!portEdit || ops.isBusy}
             onClick={() => action("save-settings", async () => {
               const res = (await post(`/api/apps/${appId}/redeploy`, {
-                auth_password: authPassword || null,
                 container_port: portEdit,
                 public: isPublic,
                 memory_mb: memEdit,
@@ -123,6 +132,155 @@ export function SettingsTab({
           >Save & Redeploy</Btn>
         </div>
       </PermissionGate>
+
+      <Card className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Network size={14} className="text-fg" />
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Ingress</h3>
+          <InfoTip text="Applied to the proxy config immediately on save — no rebuild or redeploy." />
+        </div>
+
+        <Field
+          label={<span className="flex items-center gap-2"><Lock size={14} className="text-fg" /> Password Protection</span>}
+          hint={ingressForm.auth_enabled
+            ? 'HTTP basic auth — visitors sign in with username "admin". Leave the field blank to keep the current password.'
+            : "Requires the HTTP health check."}
+        >
+          <div className="space-y-2">
+            <div className="flex justify-end">
+              <Checkbox
+                checked={ingressForm.auth_enabled}
+                onChange={(v) => setIngressForm({ ...ingressForm, auth_enabled: v, auth_password: v ? ingressForm.auth_password : "" })}
+                label="Require a password"
+              />
+            </div>
+            {ingressForm.auth_enabled && (
+              <input
+                type="password"
+                value={ingressForm.auth_password}
+                onChange={(e) => setIngressForm({ ...ingressForm, auth_password: e.target.value })}
+                placeholder={app.auth_enabled ? "(unchanged)" : "New password"}
+              />
+            )}
+          </div>
+        </Field>
+
+        <Field
+          label={<span className="flex items-center gap-2">Rate Limit</span>}
+          hint="requests/sec on the public domain, 0 = unlimited"
+        >
+          <input
+            type="number"
+            min={0}
+            value={ingressForm.rate_limit_rps || ""}
+            onChange={(e) => setIngressForm({ ...ingressForm, rate_limit_rps: parseInt(e.target.value) || 0 })}
+            placeholder="0 (unlimited)"
+          />
+        </Field>
+
+        <Field
+          label={<span className="flex items-center gap-2">IP Allowlist</span>}
+          hint={ingressForm.ip_allowlist ? "only these IPs/CIDRs can reach the public domain" : undefined}
+        >
+          <input
+            type="text"
+            value={ingressForm.ip_allowlist}
+            onChange={(e) => setIngressForm({ ...ingressForm, ip_allowlist: e.target.value })}
+            placeholder="comma-separated IPs or CIDRs"
+          />
+        </Field>
+
+        <Field
+          label={<span className="flex items-center gap-2">Health Check Path <InfoTip text="Active HTTP health check — replicas failing this path leave rotation within seconds. Requires the HTTP health check." /></span>}
+        >
+          <input
+            type="text"
+            value={ingressForm.health_check_path}
+            onChange={(e) => setIngressForm({ ...ingressForm, health_check_path: e.target.value })}
+            placeholder="/healthz"
+            disabled={app.health_check === 0 || app.health_check === false}
+          />
+        </Field>
+
+        <Field label={<span className="flex items-center gap-2">Sticky Sessions</span>}>
+          <div className="flex justify-end">
+            <Checkbox
+              checked={ingressForm.sticky}
+              onChange={(v) => setIngressForm({ ...ingressForm, sticky: v })}
+              label="Pin visitors to one replica"
+            />
+          </div>
+        </Field>
+
+        <Field label={<span className="flex items-center gap-2">Compression</span>}>
+          <div className="flex justify-end">
+            <Checkbox
+              checked={ingressForm.compress}
+              onChange={(v) => setIngressForm({ ...ingressForm, compress: v })}
+              label="Compress responses on the public domain"
+            />
+          </div>
+        </Field>
+
+        <Field
+          label={<span className="flex items-center gap-2">Public TCP/UDP Port <InfoTip text="Forwards a dedicated public port on the panel IP raw to the app's replicas — for game servers, databases, MQTT. Independent of the public domain. Blank port = auto-assign." /></span>}
+          hint={app.public_address
+            ? `reachable at ${app.public_address} (${(app.public_protocol || "tcp").toUpperCase()})`
+            : ingressForm.public_protocol !== "off"
+              ? `pool ${PUBLIC_PORT_RANGES[ingressForm.public_protocol]}`
+              : undefined}
+        >
+          <div className="flex gap-2">
+            <select
+              value={ingressForm.public_protocol}
+              onChange={(e) => setIngressForm({ ...ingressForm, public_protocol: e.target.value as IngressForm["public_protocol"] })}
+            >
+              <option value="off">Off</option>
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+            {ingressForm.public_protocol !== "off" && (
+              <input
+                type="number"
+                value={ingressForm.public_port}
+                onChange={(e) => setIngressForm({ ...ingressForm, public_port: e.target.value })}
+                placeholder="auto"
+              />
+            )}
+          </div>
+        </Field>
+
+        <PermissionGate permission="apps.redeploy">
+          <div className="flex justify-end mt-3">
+            <Btn
+              size="sm"
+              variant="primary"
+              loading={actionLoading === "save-ingress"}
+              onClick={() => action("save-ingress", async () => {
+                // Password is write-only. Disabled → clear ("").  Enabled with a
+                // typed value → set it. Enabled but blank → omit (keep current).
+                const authField = !ingressForm.auth_enabled
+                  ? { auth_password: "" }
+                  : ingressForm.auth_password
+                    ? { auth_password: ingressForm.auth_password }
+                    : {};
+                await put(`/api/apps/${appId}/ingress`, {
+                  ...authField,
+                  sticky: ingressForm.sticky,
+                  rate_limit_rps: ingressForm.rate_limit_rps,
+                  ip_allowlist: ingressForm.ip_allowlist,
+                  health_check_path: ingressForm.health_check_path,
+                  compress: ingressForm.compress,
+                  public_port: ingressForm.public_protocol === "off"
+                    ? null
+                    : (parseInt(ingressForm.public_port, 10) || "auto"),
+                  ...(ingressForm.public_protocol !== "off" ? { public_protocol: ingressForm.public_protocol } : {}),
+                });
+              })}
+            >Save Ingress</Btn>
+          </div>
+        </PermissionGate>
+      </Card>
 
       <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">

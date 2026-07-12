@@ -1,6 +1,7 @@
 import db from "./connection.ts";
 import type { ServerRow } from "./servers.ts";
 import type { ReplicaRow } from "./replicas.ts";
+import { validatePublicPort } from "../validate.ts";
 
 export type AppRow = {
   id: number;
@@ -22,7 +23,13 @@ export type AppRow = {
   webhook_branch: string;
   webhook_path: string;
   github_webhook_id: string;
-  auth_password: string;
+  /** htpasswd bcrypt hash of the app password for Traefik's basicAuth
+   *  middleware. This hash is the sole source of truth for "auth on" — non-empty
+   *  ⇔ basic auth enabled. The plaintext is never stored (write-only at the API).
+   *  Persisted at set-time (bcrypt salts differ per hash, so hashing at render
+   *  time would make every rendered ingress config unique and defeat the
+   *  content-hash sync cache). "" = auth disabled. */
+  auth_password_hash: string;
   desired_replicas: number;
   min_replicas: number;
   max_replicas: number;
@@ -43,6 +50,19 @@ export type AppRow = {
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
   health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
   internal_port: number; // fleet-unique internal ingress port (20000-20199), owned for the app's lifetime
+  /** ISO timestamp of the last request observed in Traefik's per-service
+   *  counters (public + internal traffic alike). NULL until the engine has
+   *  seen the app once — the idle monitor seeds it on first evaluation so
+   *  the sleep window never counts from the epoch. */
+  last_request_at: string | null;
+  requests_per_min: number; // rolling req/min from the engine's Traefik scrape; 0 when unobserved
+  sticky: number; // 1 = sticky sessions (cookie-based) on the app's Traefik service
+  rate_limit_rps: number; // public-router rate limit in req/s; 0 = unlimited
+  ip_allowlist: string; // comma-separated IPs/CIDRs gating the public router; "" = open
+  health_check_path: string; // active HTTP health-check path (e.g. /healthz); "" = off
+  compress: number; // 1 = gzip/brotli compression on the public router
+  public_port: number | null; // fleet-unique public raw TCP/UDP port on the panel IP; NULL = not exposed
+  public_protocol: string; // 'tcp' | 'udp' — which pool public_port came from
 };
 
 /** Internal ingress port block: every app owns one port in
@@ -50,6 +70,28 @@ export type AppRow = {
  *  The block size doubles as the hard fleet app cap. */
 export const INTERNAL_PORT_BASE = 20000;
 export const INTERNAL_PORT_COUNT = 200;
+
+/** Public raw TCP/UDP exposure pool: Traefik entrypoints are static-config-
+ *  only, so the two 50-port blocks are pre-reserved fleet-wide (see
+ *  traefikStaticConfig) and opened in the base Hetzner firewall rules. */
+export const PUBLIC_TCP_PORT_BASE = 30000;
+export const PUBLIC_TCP_PORT_COUNT = 50;
+export const PUBLIC_UDP_PORT_BASE = 30050;
+export const PUBLIC_UDP_PORT_COUNT = 50;
+
+export type PublicProtocol = "tcp" | "udp";
+
+export function publicPortRange(protocol: PublicProtocol): { base: number; count: number } {
+  return protocol === "udp"
+    ? { base: PUBLIC_UDP_PORT_BASE, count: PUBLIC_UDP_PORT_COUNT }
+    : { base: PUBLIC_TCP_PORT_BASE, count: PUBLIC_TCP_PORT_COUNT };
+}
+
+/** bcrypt htpasswd entry hash for Traefik basicAuth ($2b$ — accepted by
+ *  Traefik's htpasswd parser). "" in, "" out (auth disabled). */
+export function hashAuthPassword(password: string): string {
+  return password ? Bun.password.hashSync(password, { algorithm: "bcrypt" }) : "";
+}
 
 export function countApps(): number {
   const row = db.query("SELECT COUNT(*) as c FROM apps").get() as { c: number } | null;
@@ -71,6 +113,33 @@ export function allocateInternalPort(): number {
   throw new Error(
     `Fleet limit of ${INTERNAL_PORT_COUNT} apps reached (internal port block ${INTERNAL_PORT_BASE}-${INTERNAL_PORT_BASE + INTERNAL_PORT_COUNT - 1} is full). Destroy an app before deploying a new one.`,
   );
+}
+
+/** Lowest free port in the protocol's public block. Mirrors
+ *  allocateInternalPort: the partial unique index on apps.public_port is the
+ *  concurrency backstop; deleting an app frees its port automatically. */
+export function allocatePublicPort(protocol: PublicProtocol): number {
+  const { base, count } = publicPortRange(protocol);
+  const used = new Set(
+    (db.query("SELECT public_port FROM apps WHERE public_port IS NOT NULL").all() as Array<{ public_port: number }>)
+      .map((r) => r.public_port),
+  );
+  for (let port = base; port < base + count; port++) {
+    if (!used.has(port)) return port;
+  }
+  throw new Error(
+    `All ${count} public ${protocol.toUpperCase()} ports (${base}-${base + count - 1}) are taken. Unexpose an app before exposing a new one.`,
+  );
+}
+
+export function getAppByPublicPort(port: number): AppRow | null {
+  return db.query("SELECT * FROM apps WHERE public_port = ?").get(port) as AppRow | null;
+}
+
+/** Expose (port set) or unexpose (port null) an app on the public raw
+ *  TCP/UDP pool. Pure Traefik-config change — callers re-sync ingress. */
+export function updateAppPublicExposure(id: number, port: number | null, protocol: PublicProtocol): void {
+  db.query("UPDATE apps SET public_port = ?, public_protocol = ? WHERE id = ?").run(port, protocol, id);
 }
 
 export type DnsRecordRow = {
@@ -115,7 +184,15 @@ export function renameApp(id: number, newName: string): void {
   db.query("UPDATE replicas SET container_name = ? WHERE app_id = ?").run(newName, id);
 }
 
-export function insertApp(app: {
+export type AppIngressSettings = {
+  sticky?: boolean;
+  rate_limit_rps?: number;
+  ip_allowlist?: string;
+  health_check_path?: string;
+  compress?: boolean;
+};
+
+type InsertAppFields = {
   name: string;
   domain: string;
   git_repo: string;
@@ -124,72 +201,78 @@ export function insertApp(app: {
   docker_context?: string;
   container_port: number;
   env_vars: string;
+  /** Write-only plaintext: hashed into auth_password_hash on insert, never
+   *  stored. Empty/omitted = auth disabled. */
   auth_password?: string;
   environment_id?: number;
   public?: boolean;
   health_check?: boolean;
-}): AppRow {
-  const tx = db.transaction(() => {
-    return db
-      .query(
-        "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, health_check, internal_port) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
-      )
-      .get(
-        app.name,
-        app.domain,
-        app.git_repo,
-        app.git_branch || "",
-        app.dockerfile_path,
-        app.docker_context || ".",
-        app.container_port,
-        app.env_vars,
-        app.auth_password || "",
-        app.environment_id ?? null,
-        (app.public ?? true) ? 1 : 0,
-        (app.health_check ?? true) ? 1 : 0,
-        allocateInternalPort(),
-      ) as AppRow;
-  });
+  /** Public raw TCP/UDP exposure: "auto" = lowest free port, number =
+   *  specific port, omit/null = not exposed. */
+  public_port?: number | "auto" | null;
+  public_protocol?: PublicProtocol;
+} & AppIngressSettings;
+
+/** Resolve a deploy request's public exposure to a concrete port. Runs
+ *  inside the insert transaction; re-checks range/freeness because the
+ *  deploy op executes long after the API validated the request. */
+function resolvePublicPort(app: InsertAppFields): number | null {
+  if (app.public_port == null) return null;
+  const protocol = app.public_protocol ?? "tcp";
+  if (app.public_port === "auto") return allocatePublicPort(protocol);
+  const rangeResult = validatePublicPort(app.public_port, protocol);
+  if (!rangeResult.valid) throw new Error(rangeResult.error);
+  if (getAppByPublicPort(app.public_port)) {
+    throw new Error(`Public port ${app.public_port} is already taken by another app`);
+  }
+  return app.public_port;
+}
+
+// The single apps-table INSERT, shared by insertApp and
+// insertAppWithFirstReplica (which wrap it in their own transactions —
+// insertAppWithFirstReplica additionally inserts the first replica in the same
+// tx). resolvePublicPort/allocateInternalPort run here so both paths allocate
+// identically.
+function insertAppRow(app: InsertAppFields): AppRow {
+  return db
+    .query(
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, public, health_check, internal_port, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+    )
+    .get(
+      app.name,
+      app.domain,
+      app.git_repo,
+      app.git_branch || "",
+      app.dockerfile_path,
+      app.docker_context || ".",
+      app.container_port,
+      app.env_vars,
+      hashAuthPassword(app.auth_password || ""),
+      app.environment_id ?? null,
+      (app.public ?? true) ? 1 : 0,
+      (app.health_check ?? true) ? 1 : 0,
+      allocateInternalPort(),
+      app.sticky ? 1 : 0,
+      app.rate_limit_rps ?? 0,
+      app.ip_allowlist ?? "",
+      app.health_check_path ?? "",
+      app.compress ? 1 : 0,
+      resolvePublicPort(app),
+      app.public_protocol ?? "tcp",
+    ) as AppRow;
+}
+
+export function insertApp(app: InsertAppFields): AppRow {
+  const tx = db.transaction(() => insertAppRow(app));
   return tx();
 }
 
 export function insertAppWithFirstReplica(
-  app: {
-    name: string;
-    domain: string;
-    git_repo: string;
-    git_branch?: string;
-    dockerfile_path: string;
-    docker_context?: string;
-    container_port: number;
-    env_vars: string;
-    auth_password?: string;
-    environment_id?: number;
-    public?: boolean;
-    health_check?: boolean;
-  },
+  app: InsertAppFields,
   serverId: number,
 ): { app: AppRow; replica: ReplicaRow } {
   const tx = db.transaction(() => {
-    const appRow = db
-      .query(
-        "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, health_check, internal_port) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
-      )
-      .get(
-        app.name,
-        app.domain,
-        app.git_repo,
-        app.git_branch || "",
-        app.dockerfile_path,
-        app.docker_context || ".",
-        app.container_port,
-        app.env_vars,
-        app.auth_password || "",
-        app.environment_id ?? null,
-        (app.public ?? true) ? 1 : 0,
-        (app.health_check ?? true) ? 1 : 0,
-        allocateInternalPort(),
-      ) as AppRow;
+    const appRow = insertAppRow(app);
     const hostPort = nextReplicaHostPort(serverId);
     const replicaRow = db
       .query(
@@ -274,6 +357,14 @@ export function clearAppSleepingState(id: number): void {
   db.query("UPDATE apps SET sleeping_server_id = NULL, sleeping_host_port = NULL, wake_token = NULL WHERE id = ?").run(id);
 }
 
+export function touchAppLastRequest(id: number, atMs: number = Date.now()): void {
+  db.query("UPDATE apps SET last_request_at = ? WHERE id = ?").run(new Date(atMs).toISOString(), id);
+}
+
+export function updateAppRequestRate(id: number, requestsPerMin: number): void {
+  db.query("UPDATE apps SET requests_per_min = ? WHERE id = ?").run(requestsPerMin, id);
+}
+
 export function updateAppDeployedBy(id: number, userId: string): void {
   db.query("UPDATE apps SET deployed_by = ? WHERE id = ?").run(userId, id);
 }
@@ -355,14 +446,35 @@ export function updateAppExtraVolumes(id: number, extraVolumes: string[]): void 
   db.query("UPDATE apps SET extra_volumes = ? WHERE id = ?").run(JSON.stringify(extraVolumes), id);
 }
 
+/**
+ * Parse the `apps.extra_volumes` JSON column into a list of "host:container"
+ * mount specs. Tolerates malformed/legacy values (returns []) and filters out
+ * any non-string entries so a corrupt row can never inject a bad `-v` flag.
+ */
+export function parseExtraVolumes(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Set the per-app memory ceiling in MB. 0 = use the platform default. Applied
  *  to the container on the next (re)deploy / scale operation. */
 export function updateAppMemory(id: number, memoryMb: number): void {
   db.query("UPDATE apps SET memory_mb = ? WHERE id = ?").run(memoryMb, id);
 }
 
+/** Set (or clear) the app password. Takes write-only plaintext, stores only the
+ *  bcrypt hash — a non-empty `authPassword` enables basic auth, "" disables it.
+ *  Callers re-sync ingress after persisting (pure Traefik-config change). */
 export function updateAppAuthPassword(id: number, authPassword: string): void {
-  db.query("UPDATE apps SET auth_password = ? WHERE id = ?").run(authPassword, id);
+  db.query("UPDATE apps SET auth_password_hash = ? WHERE id = ?").run(
+    hashAuthPassword(authPassword),
+    id,
+  );
 }
 
 export function updateAppPublic(id: number, isPublic: boolean): void {
@@ -409,6 +521,22 @@ export function updateAppScaling(id: number, fields: {
   if (fields.autoscale_cooldown !== undefined) { sets.push("autoscale_cooldown = ?"); values.push(fields.autoscale_cooldown); }
   if (fields.scale_to_zero_after !== undefined) { sets.push("scale_to_zero_after = ?"); values.push(fields.scale_to_zero_after); }
   if (fields.last_scale_at !== undefined) { sets.push("last_scale_at = ?"); values.push(fields.last_scale_at); }
+  if (sets.length === 0) return;
+  values.push(id);
+  db.query(`UPDATE apps SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+/** Partial update of the per-app ingress settings (sticky sessions, rate
+ *  limit, IP allowlist, health-check path, compression). Values are rendered
+ *  into Traefik dynamic config — callers re-sync ingress after persisting. */
+export function updateAppIngressSettings(id: number, fields: AppIngressSettings): void {
+  const sets: string[] = [];
+  const values: (string | number)[] = [];
+  if (fields.sticky !== undefined) { sets.push("sticky = ?"); values.push(fields.sticky ? 1 : 0); }
+  if (fields.rate_limit_rps !== undefined) { sets.push("rate_limit_rps = ?"); values.push(fields.rate_limit_rps); }
+  if (fields.ip_allowlist !== undefined) { sets.push("ip_allowlist = ?"); values.push(fields.ip_allowlist); }
+  if (fields.health_check_path !== undefined) { sets.push("health_check_path = ?"); values.push(fields.health_check_path); }
+  if (fields.compress !== undefined) { sets.push("compress = ?"); values.push(fields.compress ? 1 : 0); }
   if (sets.length === 0) return;
   values.push(id);
   db.query(`UPDATE apps SET ${sets.join(", ")} WHERE id = ?`).run(...values);

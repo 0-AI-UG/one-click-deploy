@@ -5,18 +5,27 @@ import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
-import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB } from "../../shared/validate.ts";
+import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB, isPublicProtocol, validateIngressFields } from "../../shared/validate.ts";
+import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-manager.ts";
 import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 
-/** Enrich app row for API responses — adds environment name, drops raw env_vars. */
-function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
+/** Enrich app row for API responses — adds environment name, the resolved
+ *  public raw TCP/UDP address, a boolean `auth_enabled` flag, and strips every
+ *  secret/credential field so nothing sensitive leaks to `servers.view` users.
+ *  `auth_password_hash` is the source of truth for "auth on" but is itself a
+ *  credential (bcrypt hash), so only the derived boolean goes out. */
+export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
   const envRow = app.environment_id ? db.getEnvironment(app.environment_id as number) : null;
+  const panelIp = app.public_port != null ? getPanelIngressIpv4() : null;
+  const { auth_password_hash, wake_token, webhook_secret, ...safe } = app;
   return {
-    ...app,
+    ...safe,
     env_vars: [],
+    auth_enabled: !!auth_password_hash,
     environment_id: app.environment_id ?? null,
     environment_name: envRow?.name ?? null,
+    public_address: app.public_port != null && panelIp ? `${panelIp}:${app.public_port}` : null,
   };
 }
 
@@ -178,7 +187,6 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
   try {
     const payload = await requirePermission(request, "apps.redeploy");
     const body = (await request.json().catch(() => ({}))) as {
-      auth_password?: string | null;
       container_port?: number;
       environment_id?: number | null;
       public?: boolean;
@@ -213,7 +221,6 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       resourceKeys: [`app:${appId}`],
       input: {
         appId,
-        auth_password: body.auth_password,
         container_port: body.container_port,
         userId: payload.userId,
       },
@@ -221,6 +228,106 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       triggeredBy: payload.userId,
     });
     return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/**
+ * Update the per-app ingress settings (password protection, sticky sessions,
+ * rate limit, IP allowlist, health-check path, compression, raw TCP/UDP
+ * exposure). These only change rendered Traefik config — no container rebuild —
+ * so this persists and re-syncs the ingress directly instead of enqueueing a
+ * redeploy op. Password protection lives here too: under basicAuth a password
+ * change is a pure ingress-config change (hash swap), never a rebuild.
+ */
+export async function handleUpdateIngressSettings(request: Request, appId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "apps.redeploy");
+    const body = (await request.json().catch(() => ({}))) as {
+      /** Write-only plaintext. Omit = leave auth unchanged; "" = disable auth;
+       *  non-empty = enable/replace the password. Only the bcrypt hash is
+       *  stored (apps.auth_password_hash). */
+      auth_password?: string;
+      sticky?: boolean;
+      rate_limit_rps?: number;
+      ip_allowlist?: string;
+      health_check_path?: string;
+      compress?: boolean;
+      /** null = unexpose, "auto" = lowest free pool port, number = specific pool port. */
+      public_port?: number | "auto" | null;
+      public_protocol?: string;
+    };
+
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
+
+    // Effective raw-exposure protocol: an explicit body value wins, else keep
+    // the app's current pool. Fed to the shared validator so its range check
+    // matches what we persist below.
+    const effectivePublicProtocol = body.public_protocol !== undefined
+      ? body.public_protocol
+      : (app.public_protocol === "udp" ? "udp" : "tcp");
+
+    // One validator, shared with validateDeployRequest — auth/health-path/rate-
+    // limit/allowlist/public-port rules and their error strings live in one place.
+    const validation = validateIngressFields(
+      {
+        auth_password: body.auth_password,
+        rate_limit_rps: body.rate_limit_rps,
+        ip_allowlist: body.ip_allowlist,
+        health_check_path: body.health_check_path,
+        public_port: body.public_port,
+        public_protocol: (body.public_port !== undefined || body.public_protocol !== undefined) ? effectivePublicProtocol : undefined,
+      },
+      { httpHealthCheck: !!app.health_check },
+    );
+    if (!validation.valid) return Response.json({ ok: false, error: validation.error }, { status: 400, headers: corsHeaders });
+    const norm = validation.value;
+
+    const fields: Parameters<typeof db.updateAppIngressSettings>[1] = {};
+    if (body.sticky !== undefined) fields.sticky = !!body.sticky;
+    if (body.compress !== undefined) fields.compress = !!body.compress;
+    if (norm.rate_limit_rps !== undefined) fields.rate_limit_rps = norm.rate_limit_rps;
+    if (norm.ip_allowlist !== undefined) fields.ip_allowlist = norm.ip_allowlist;
+    if (norm.health_check_path !== undefined) fields.health_check_path = norm.health_check_path;
+
+    // Password protection: write-only plaintext in, bcrypt hash stored. Empty
+    // string clears the hash (disables auth); a non-empty value enables/replaces.
+    if (norm.auth_password !== undefined) {
+      db.updateAppAuthPassword(appId, norm.auth_password);
+    }
+
+    // Public raw TCP/UDP exposure. Deliberately independent of `public`
+    // (HTTP publicness) — an HTTP-private app can still be TCP-exposed
+    // (e.g. a database). Pure Traefik-config change like the rest of this
+    // endpoint: expose/unexpose post-deploy, no rebuild. Range/protocol already
+    // validated above; only DB allocation/freeness is checked here.
+    if (body.public_port !== undefined) {
+      const protocol: "tcp" | "udp" = isPublicProtocol(effectivePublicProtocol) ? effectivePublicProtocol : "tcp";
+      if (body.public_port === null) {
+        db.updateAppPublicExposure(appId, null, protocol);
+      } else if (body.public_port === "auto") {
+        // Idempotent: keep the current port unless the protocol changed.
+        if (app.public_port == null || app.public_protocol !== protocol) {
+          db.updateAppPublicExposure(appId, db.allocatePublicPort(protocol), protocol);
+        }
+      } else {
+        const holder = db.getAppByPublicPort(body.public_port);
+        if (holder && holder.id !== appId) {
+          return Response.json({ ok: false, error: `Port ${body.public_port} is already used by "${holder.name}"` }, { status: 409, headers: corsHeaders });
+        }
+        db.updateAppPublicExposure(appId, body.public_port, protocol);
+      }
+    }
+
+    db.updateAppIngressSettings(appId, fields);
+    await syncAppIngress(appId);
+    const updated = db.getApp(appId);
+    return Response.json(
+      { ok: true, public_port: updated?.public_port ?? null, public_protocol: updated?.public_protocol ?? "tcp" },
+      { headers: corsHeaders },
+    );
   } catch (error) {
     return handleError(error);
   }

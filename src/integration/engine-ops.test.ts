@@ -576,24 +576,23 @@ d(
       6 * 60_000,
     );
 
-    // ---- 16. auth-proxy ----------------------------------------------------
+    // ---- 16. basic auth ----------------------------------------------------
     appTest(
-      "16. auth-proxy: redeploy with auth_password sets proxy",
+      "16. basic auth: setting the app password persists the htpasswd hash",
       async () => {
         expect(ctx).not.toBeNull();
         const db = await import("../shared/db.ts");
+        const { syncAppIngress } = await import("../engine/scale/traefik-manager.ts");
 
-        const result = await enqueueAndWait(
-          "redeploy",
-          { appId: ctx!.appId, auth_password: "itest-secret" },
-          { timeoutMs: 10 * 60_000 },
-        );
-        expect(result.status).toBe("done");
+        // Password protection is pure ingress config now (no rebuild): store the
+        // hash and re-sync the ingress, mirroring PUT /api/apps/:id/ingress.
+        db.updateAppAuthPassword(ctx!.appId, "itest-secret");
+        await syncAppIngress(ctx!.appId);
 
         const app = db.getApp(ctx!.appId);
-        expect(app!.auth_password).toBe("itest-secret");
+        expect(Bun.password.verifySync("itest-secret", app!.auth_password_hash)).toBe(true);
         console.log(
-          `[itest:engine-ops] auth_password set; verify manually at ${app!.domain}`,
+          `[itest:engine-ops] basicAuth set; verify manually at ${app!.domain} (user "admin")`,
         );
       },
       10 * 60_000,

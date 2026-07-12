@@ -2,13 +2,20 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
+import { enrichAppForResponse } from "./apps.ts";
 import * as db from "../../shared/db.ts";
 import { enqueue } from "../ipc/enqueue.ts";
+
+/** Scrub each server's app rows through enrichAppForResponse so secrets never
+ *  leak from the server-overview endpoints (same guarantee as /api/apps). */
+function scrubServersWithApps(servers: any[]): any[] {
+  return servers.map((s) => ({ ...s, apps: (s.apps || []).map((a: any) => enrichAppForResponse(a)) }));
+}
 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");
-    const result = getServersWithApps();
+    const result = scrubServersWithApps(getServersWithApps());
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -41,7 +48,7 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
 export async function handleRefreshServers(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");
-    const result = getServersWithApps();
+    const result = scrubServersWithApps(getServersWithApps());
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

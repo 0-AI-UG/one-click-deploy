@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
-import { sshExec } from "../../shared/remote/index.ts";
 import { log } from "./types.ts";
 import { enqueue } from "../../server/ipc/enqueue.ts";
+import { requestMetricsFresh } from "./request-metrics.ts";
 
 function enqueueAutoscale(appId: number, decision: "up" | "down" | "sleep", targetReplicas: number) {
   const bucket = Math.floor(Date.now() / 60000);
@@ -19,35 +19,6 @@ function enqueueAutoscale(appId: number, decision: "up" | "down" | "sleep", targ
 // In-memory tracker: when each app first entered sustained idle state.
 // Cleared when metrics rise above idle thresholds or app scales.
 export const idleSince = new Map<number, number>();
-
-export async function collectMetrics(appId: number): Promise<void> {
-  const replicas = db.getReplicas(appId);
-
-  for (const replica of replicas) {
-    // Skip light-sleep anchors — they have no running container to stat.
-    if (replica.status === "stopped") continue;
-    const server = db.getServer(replica.server_id);
-    if (!server) continue;
-
-    try {
-      const hostKey = server.ssh_host_key || undefined;
-      const result = await sshExec(
-        server.ipv4,
-        `su - deploy -c "docker stats --no-stream --format '{{json .}}' ${replica.container_name} 2>/dev/null"`,
-        hostKey
-      );
-
-      if (result.exitCode === 0 && result.stdout.trim()) {
-        const stats = JSON.parse(result.stdout.trim());
-        const cpuPercent = parseFloat(stats.CPUPerc?.replace("%", "") || "0");
-        const memPercent = parseFloat(stats.MemPerc?.replace("%", "") || "0");
-        db.updateReplicaMetrics(replica.id, cpuPercent, memPercent);
-      }
-    } catch (err) {
-      log("metrics", `Failed to collect metrics for ${replica.container_name}: ${err}`);
-    }
-  }
-}
 
 export async function evaluateAutoScale(appId: number): Promise<void> {
   const app = db.getApp(appId);
@@ -96,6 +67,42 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
     return;
   }
 
+  const canScaleToZero = replicas.length === 1 && app.min_replicas === 0;
+  // HTTP-routed apps (same predicate as the ingress renderer) have Traefik
+  // request counters; raw-TCP apps (health_check=0, no auth) don't, so they
+  // keep the legacy CPU sustained-idle heuristic below.
+  const httpRouted = !!app.health_check || !!app.auth_password_hash;
+
+  // Scale-to-zero, request-driven: sleep once the app has had zero requests
+  // (public + internal — an app called by another app never sleeps) for its
+  // scale_to_zero_after window.
+  if (canScaleToZero && httpRouted) {
+    idleSince.delete(appId); // CPU idle tracker is only for the legacy path
+    const idleTimeout = app.scale_to_zero_after ?? 300;
+    const serverIds = [...new Set(replicas.map((r) => r.server_id))];
+    // Fail safe: a failed scrape is "unknown", not "zero traffic" — no sleep
+    // decision until this tick's metrics arrived from every replica's server.
+    if (!requestMetricsFresh(serverIds)) {
+      log("autoscale", `App ${appId}: request metrics stale/missing — skipping sleep decision`);
+      return;
+    }
+    if (!app.last_request_at) {
+      // Never observed a request (row predates tracking, or genuinely no
+      // traffic yet) — start the idle window now instead of sleeping blind.
+      db.touchAppLastRequest(appId);
+      log("autoscale", `App ${appId}: no request history, sleep after ${idleTimeout}s without requests`);
+      return;
+    }
+    const idleFor = (Date.now() - new Date(app.last_request_at).getTime()) / 1000;
+    if (idleFor < idleTimeout) {
+      log("autoscale", `App ${appId}: last request ${Math.round(idleFor)}s ago / ${idleTimeout}s before sleep`);
+      return;
+    }
+    log("autoscale", `Enqueue sleep app ${appId}: no requests for ${Math.round(idleFor)}s (threshold: ${idleTimeout}s)`);
+    enqueueAutoscale(appId, "sleep", 0);
+    return;
+  }
+
   // Scale down
   const isIdle = avgCpu < app.autoscale_cpu_threshold * 0.5 &&
     avgMem < app.autoscale_mem_threshold * 0.5;
@@ -107,8 +114,9 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
   }
 
   if (replicas.length > app.min_replicas) {
-    // Scale-to-zero requires sustained idle for scale_to_zero_after seconds
-    if (replicas.length === 1 && app.min_replicas === 0) {
+    // Legacy CPU-based scale-to-zero for TCP-routed apps: requires sustained
+    // idle for scale_to_zero_after seconds.
+    if (canScaleToZero) {
       const idleTimeout = app.scale_to_zero_after ?? 300;
       const now = Date.now();
       if (!idleSince.has(appId)) {

@@ -3,7 +3,7 @@ import { parseEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
 import { sshExec, restartContainer, serviceHealthCheck, pauseContainer, unpauseContainer, getContainerLogs, removeCompose, getComposeLogs } from "../../shared/remote/index.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
-import { removeServiceIngress } from "../scale/traefik-manager.ts";
+import { syncAllTraefik } from "../scale/traefik-manager.ts";
 
 /** Compose-kind services live here (apps use /home/deploy/apps). */
 const SERVICES_BASE_DIR = "/home/deploy/services";
@@ -101,7 +101,7 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
     try {
       const creds = JSON.parse(service.credentials || "{}");
       if (creds.domain) {
-        await removeServiceIngress(service.name);
+        await syncAllTraefik();
         log("destroy", `Removed ingress route for ${creds.domain}`);
       }
     } catch (err) {

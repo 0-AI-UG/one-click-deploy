@@ -27,12 +27,13 @@ export type App = {
   env_vars: string;
   status: string;
   webhook_enabled: number;
-  webhook_secret: string;
   webhook_branch: string;
   webhook_path: string;
   webhook_wait_for_ci: number;
   github_webhook_id: string;
-  auth_password: string;
+  /** Whether HTTP basic auth is on (derived from the password hash server-side).
+   *  The password and its hash are secrets and never leave the server. */
+  auth_enabled: boolean;
   desired_replicas: number;
   min_replicas: number;
   max_replicas: number;
@@ -45,6 +46,13 @@ export type App = {
   volume_mount: string;
   extra_volumes: string; // JSON array of "host:container" strings
   health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
+  sticky: number; // 1 = sticky sessions (cookie-based) on the app's ingress service
+  rate_limit_rps: number; // public-router rate limit in req/s; 0 = unlimited
+  ip_allowlist: string; // comma-separated IPs/CIDRs gating the public router; "" = open
+  health_check_path: string; // active HTTP health-check path; "" = off
+  compress: number; // 1 = response compression on the public router
+  public_port: number | null; // public raw TCP/UDP port on the panel IP; null = not exposed
+  public_protocol: string; // 'tcp' | 'udp'
   created_at: string;
 };
 
@@ -117,13 +125,20 @@ export type DeployRequest = {
   webhook_branch?: string; // Branch to watch, defaults to "main"
   webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
   webhook_wait_for_ci?: boolean; // Wait for CI checks to pass before deploying
-  auth_password?: string; // If set, deploys a login gate in front of the app
+  auth_password?: string; // If set, the ingress enforces HTTP basic auth (username "admin"). Requires health_check !== false
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
   public?: boolean; // Whether the app is publicly accessible (default true)
   extra_volumes?: Array<{ host_path: string; container_path: string }>; // Additional volume mounts
   server_id?: number; // If set, deploy to this specific server instead of auto-selecting
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
   health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
+  sticky?: boolean; // Sticky sessions (cookie-based) on the app's ingress service
+  rate_limit_rps?: number; // Public-router rate limit in req/s; omit / 0 = unlimited
+  ip_allowlist?: string; // Comma-separated IPs/CIDRs gating the public router; omit / "" = open
+  health_check_path?: string; // Active HTTP health-check path (e.g. /healthz); omit / "" = off. Requires health_check !== false
+  compress?: boolean; // Response compression on the public router
+  public_port?: number | "auto" | null; // Public raw TCP/UDP exposure: "auto" = lowest free pool port, number = specific pool port, omit = none
+  public_protocol?: "tcp" | "udp"; // Pool for public_port (default "tcp"): 30000-30049 tcp, 30050-30099 udp
 };
 
 export type PanelInfo = {

@@ -10,9 +10,7 @@ import {
   removeVolumeBindMount,
 } from "../../engine/hetzner/host-mounts.ts";
 
-function parseExtraVolumes(raw: string): string[] {
-  try { const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }
-}
+const { parseExtraVolumes } = db;
 
 export async function handleAttachVolume(request: Request): Promise<Response> {
   try {

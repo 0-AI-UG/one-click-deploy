@@ -2,9 +2,7 @@ import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
   sshExec, cloneAndBuild,
-  transferImage, healthCheck, containerRunningCheck,
-  deployAuthProxy, removeAuthProxy,
-  describeFailure, buildDockerRunArgs,
+  transferImage, probeAppHealth, startAppReplica,
 } from "../../shared/remote/index.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
@@ -51,8 +49,7 @@ export async function scaleUp(
     emit("scale", `Transferring image to ${targetServer.name}...`);
     const imageName = `${app.name}:latest`;
 
-    let scaleExtraVols: string[] = [];
-    try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) scaleExtraVols = ev; } catch {}
+    const scaleExtraVols = db.parseExtraVolumes(app.extra_volumes);
     // Set when transferImage fails and we successfully rebuild from git on the
     // target — the build helper runs the replica container itself, so the
     // manual env-file/docker-run block below is skipped.
@@ -93,6 +90,7 @@ export async function scaleUp(
         bindAddr: replicaBindAddr,
         containerName: containerNameForBuild,
         memoryMb: app.memory_mb || undefined,
+        hostKey: targetHostKey,
       };
       const logLine = (line: string) => emit("scale", line);
       await cloneAndBuild(targetServer.ipv4, {
@@ -104,64 +102,30 @@ export async function scaleUp(
 
     const containerName = `${app.name}-r${replicaNum}`;
 
-    // Defensive cleanup: a previous failed scale-up or migration may have left
-    // a same-named container on the target, which would squat on the
-    // private-IP host port and make `docker run` fail with
-    // "port is already allocated". Removing it here makes retries idempotent.
-    // (Auth proxy is a systemd unit handled by deployAuthProxy itself.)
-    // Skipped on rebuildFallback: cloneAndBuild already started the replica
-    // container above; removing it here would undo that.
+    // On the transfer (non-rebuild) path we start the replica ourselves.
+    // startAppReplica force-removes any same-named squatter first: a previous
+    // failed scale-up or migration may have left one holding the private-IP
+    // host port, which would make the run fail with "port already allocated".
+    // Skipped on rebuildFallback: cloneAndBuild already started the container.
     if (!rebuildFallback) {
-      const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-      await sshExec(targetServer.ipv4, asUser(`docker rm -f ${containerName} 2>/dev/null || true`), targetHostKey);
-    }
-
-    if (!rebuildFallback) {
-      const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-      const envVars = await resolveAppEnvVars(app);
-      const envEntries = Object.entries(envVars);
-      let envFilePath: string | undefined;
-      if (envEntries.length > 0) {
-        envFilePath = `/home/deploy/apps/${app.name}/.env.deploy`;
-        const envFileContent = envEntries.map(([k, v]) => `${k}=${v}`).join("\n");
-        const escapedContent = envFileContent.replace(/'/g, "'\\''");
-        await sshExec(targetServer.ipv4, `mkdir -p /home/deploy/apps/${app.name} && chown deploy:deploy /home/deploy/apps /home/deploy/apps/${app.name}`, targetHostKey);
-        await sshExec(targetServer.ipv4, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`, targetHostKey);
-      }
-      const cmd = buildDockerRunArgs({
-        name: containerName,
+      await startAppReplica(targetServer.ipv4, {
+        containerName,
         image: imageName,
         appName: app.name,
         network: null, // scale-up replicas historically don't join ocd-net
-        publish: { bindAddr: replicaBindAddr, hostPort, containerPort: app.container_port },
-        envFilePath,
+        bindAddr: replicaBindAddr,
+        hostPort,
+        containerPort: app.container_port,
+        envVars: await resolveAppEnvVars(app),
         volumeMount: app.volume_mount || undefined,
         extraVolumes: scaleExtraVols,
         memoryMb: app.memory_mb || undefined,
-      });
-      const result = await sshExec(targetServer.ipv4, asUser(cmd), targetHostKey);
-      if (result.exitCode !== 0) {
-        throw new Error(describeFailure("Failed to start replica on target server", result));
-      }
-    }
-
-    // Deploy auth proxy on new server if needed
-    if (app.auth_password) {
-      await deployAuthProxy(
-        targetServer.ipv4,
-        containerName,
-        app.auth_password,
-        hostPort,
-        replicaBindAddr,
-        targetHostKey
-      );
+      }, targetHostKey);
     }
 
     // Health check
     emit("scale", `Health checking replica ${replicaNum}...`);
-    const health = app.health_check
-      ? await healthCheck(targetServer.ipv4, containerName, replicaBindAddr, hostPort, 5, targetHostKey)
-      : await containerRunningCheck(targetServer.ipv4, containerName, 5, targetHostKey);
+    const health = await probeAppHealth(app, targetServer.ipv4, containerName, replicaBindAddr, hostPort, 5, targetHostKey);
 
     // Insert replica record BEFORE syncing ingress so the upstream pool
     // built from the DB actually includes the new replica.
@@ -203,9 +167,6 @@ export async function rollbackScaleUp(
         await sshExec(server.ipv4, `su - deploy -c "docker rm -f ${replica.container_name} 2>/dev/null || true"`, hostKey);
       } catch (err) {
         log("scale", `Rollback: failed to remove container ${replica.container_name}: ${err}`);
-      }
-      if (app.auth_password) {
-        try { await removeAuthProxy(server.ipv4, replica.container_name, hostKey); } catch { /* cleanup, container may already be gone */ }
       }
     }
     db.deleteReplica(replica.id);

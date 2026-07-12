@@ -55,7 +55,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
               <div className="flex justify-between"><span className="text-muted">Host Port</span><span className="text-fg">{replicas[0].host_port}</span></div>
             )}
             {app.volume_id && <div className="flex justify-between"><span className="text-muted">Volume</span><span className="text-fg">{app.volume_mount}</span></div>}
-            {app.auth_password && <div className="flex justify-between"><span className="text-muted">Auth</span><span className="text-accent-amber font-bold">Password protected</span></div>}
+            {app.auth_enabled && <div className="flex justify-between"><span className="text-muted">Auth</span><span className="text-accent-amber font-bold">Password protected</span></div>}
             {app.deployed_by_username && <div className="flex justify-between"><span className="text-muted">Last deployed by</span><span className="text-fg">{app.deployed_by_username}</span></div>}
             {app.environment_name && <div className="flex justify-between"><span className="text-muted">Environment</span><a href="#/environments" className="text-fg font-bold hover:underline">{app.environment_name}</a></div>}
           </div>

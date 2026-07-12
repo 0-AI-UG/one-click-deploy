@@ -11,6 +11,11 @@ import {
   validateComposeWebService,
   validateDeployManifest,
   assertSafeHostPath,
+  validateIpAllowlist,
+  validateHealthCheckPath,
+  validatePublicPort,
+  isPublicProtocol,
+  validateIngressFields,
 } from "./validate.ts";
 
 describe("assertSafeHostPath", () => {
@@ -272,6 +277,15 @@ describe("validateDeployRequest", () => {
     expect(validateDeployRequest({ ...validRequest, memory_mb: 99999 }).valid).toBe(false);
   });
 
+  test("rejects auth_password on a raw-TCP app (health_check: false)", () => {
+    expect(validateDeployRequest({ ...validRequest, auth_password: "pw", health_check: false }).valid).toBe(false);
+  });
+
+  test("accepts auth_password when the HTTP probe is on (default or explicit)", () => {
+    expect(validateDeployRequest({ ...validRequest, auth_password: "pw" }).valid).toBe(true);
+    expect(validateDeployRequest({ ...validRequest, auth_password: "pw", health_check: true }).valid).toBe(true);
+  });
+
   test("rejects a private app with a domain", () => {
     const r = validateDeployRequest({ ...validRequest, public: false, domain: "app.example.com" });
     expect(r.valid).toBe(false);
@@ -280,6 +294,133 @@ describe("validateDeployRequest", () => {
 
   test("accepts a private app without a domain", () => {
     expect(validateDeployRequest({ ...validRequest, public: false }).valid).toBe(true);
+  });
+
+  test("accepts the per-app ingress settings when valid", () => {
+    expect(validateDeployRequest({
+      ...validRequest,
+      sticky: true,
+      rate_limit_rps: 100,
+      ip_allowlist: "10.0.0.0/8, 203.0.113.7",
+      health_check_path: "/healthz",
+      compress: true,
+    }).valid).toBe(true);
+  });
+
+  test("rejects a bad rate limit (negative / non-integer)", () => {
+    expect(validateDeployRequest({ ...validRequest, rate_limit_rps: -1 }).valid).toBe(false);
+    expect(validateDeployRequest({ ...validRequest, rate_limit_rps: 1.5 }).valid).toBe(false);
+  });
+
+  test("rejects a garbage IP allowlist", () => {
+    const r = validateDeployRequest({ ...validRequest, ip_allowlist: "not-an-ip" });
+    expect(r.valid).toBe(false);
+    if (!r.valid) expect(r.error).toMatch(/ip allowlist/i);
+  });
+
+  test("rejects a health check path that doesn't start with /", () => {
+    const r = validateDeployRequest({ ...validRequest, health_check_path: "healthz" });
+    expect(r.valid).toBe(false);
+    if (!r.valid) expect(r.error).toMatch(/must start with/i);
+  });
+
+  test("rejects health_check_path on a raw-TCP app (health_check: false)", () => {
+    expect(validateDeployRequest({ ...validRequest, health_check_path: "/healthz", health_check: false }).valid).toBe(false);
+  });
+
+  test("accepts public raw exposure: auto or an in-range port, even for HTTP-private apps", () => {
+    expect(validateDeployRequest({ ...validRequest, public_port: "auto" as const }).valid).toBe(true);
+    expect(validateDeployRequest({ ...validRequest, public_port: 30001, public_protocol: "tcp" }).valid).toBe(true);
+    expect(validateDeployRequest({ ...validRequest, public_port: 30051, public_protocol: "udp" }).valid).toBe(true);
+    // Raw exposure is independent of HTTP publicness.
+    expect(validateDeployRequest({ ...validRequest, public: false, public_port: "auto" as const }).valid).toBe(true);
+  });
+
+  test("rejects a public port outside the protocol's pool or a bad protocol", () => {
+    expect(validateDeployRequest({ ...validRequest, public_port: 30051 }).valid).toBe(false); // udp block, tcp default
+    expect(validateDeployRequest({ ...validRequest, public_port: 30001, public_protocol: "udp" }).valid).toBe(false);
+    expect(validateDeployRequest({ ...validRequest, public_port: 8080 }).valid).toBe(false);
+    expect(validateDeployRequest({ ...validRequest, public_port: "auto" as const, public_protocol: "sctp" }).valid).toBe(false);
+  });
+});
+
+describe("validatePublicPort / isPublicProtocol", () => {
+  test("bounds per protocol", () => {
+    expect(validatePublicPort(30000, "tcp").valid).toBe(true);
+    expect(validatePublicPort(30049, "tcp").valid).toBe(true);
+    expect(validatePublicPort(30050, "tcp").valid).toBe(false);
+    expect(validatePublicPort(30050, "udp").valid).toBe(true);
+    expect(validatePublicPort(30099, "udp").valid).toBe(true);
+    expect(validatePublicPort(30100, "udp").valid).toBe(false);
+    expect(validatePublicPort(29999, "tcp").valid).toBe(false);
+  });
+
+  test("rejects non-integers", () => {
+    expect(validatePublicPort(30000.5, "tcp").valid).toBe(false);
+    expect(validatePublicPort("30000", "tcp").valid).toBe(false);
+    expect(validatePublicPort(null, "tcp").valid).toBe(false);
+  });
+
+  test("isPublicProtocol accepts only tcp/udp", () => {
+    expect(isPublicProtocol("tcp")).toBe(true);
+    expect(isPublicProtocol("udp")).toBe(true);
+    expect(isPublicProtocol("sctp")).toBe(false);
+    expect(isPublicProtocol(undefined)).toBe(false);
+  });
+});
+
+describe("validateIpAllowlist", () => {
+  test("accepts IPv4 addresses and CIDRs, normalizing whitespace", () => {
+    const r = validateIpAllowlist(" 203.0.113.7 , 10.0.0.0/8,192.168.1.0/24 ");
+    expect(r).toEqual({ valid: true, value: "203.0.113.7,10.0.0.0/8,192.168.1.0/24" });
+  });
+
+  test("accepts IPv6 addresses and CIDRs", () => {
+    expect(validateIpAllowlist("2001:db8::1").valid).toBe(true);
+    expect(validateIpAllowlist("2001:db8::/32").valid).toBe(true);
+    expect(validateIpAllowlist("::1").valid).toBe(true);
+    expect(validateIpAllowlist("fe80:0:0:0:0:0:0:1").valid).toBe(true);
+  });
+
+  test("empty string means allowlist off", () => {
+    expect(validateIpAllowlist("")).toEqual({ valid: true, value: "" });
+    expect(validateIpAllowlist(" , ")).toEqual({ valid: true, value: "" });
+  });
+
+  test("rejects garbage entries", () => {
+    expect(validateIpAllowlist("example.com").valid).toBe(false);
+    expect(validateIpAllowlist("10.0.0.0/8; rm -rf /").valid).toBe(false);
+    expect(validateIpAllowlist("1.2.3").valid).toBe(false);
+    expect(validateIpAllowlist("1.2.3.256").valid).toBe(false);
+    expect(validateIpAllowlist("10.0.0.1, banana").valid).toBe(false);
+    expect(validateIpAllowlist("2001:db8:::1").valid).toBe(false);
+    expect(validateIpAllowlist("1:2:3").valid).toBe(false);
+  });
+
+  test("rejects out-of-range prefixes", () => {
+    expect(validateIpAllowlist("10.0.0.0/33").valid).toBe(false);
+    expect(validateIpAllowlist("2001:db8::/129").valid).toBe(false);
+    expect(validateIpAllowlist("10.0.0.0/8/8").valid).toBe(false);
+  });
+});
+
+describe("validateHealthCheckPath", () => {
+  test("accepts an absolute path and trims it", () => {
+    expect(validateHealthCheckPath(" /healthz ")).toEqual({ valid: true, value: "/healthz" });
+    expect(validateHealthCheckPath("/api/v1/health?deep=1").valid).toBe(true);
+  });
+
+  test("empty means disabled", () => {
+    expect(validateHealthCheckPath("")).toEqual({ valid: true, value: "" });
+  });
+
+  test("rejects relative paths and embedded whitespace", () => {
+    expect(validateHealthCheckPath("healthz").valid).toBe(false);
+    expect(validateHealthCheckPath("/health z").valid).toBe(false);
+  });
+
+  test("rejects overlong paths", () => {
+    expect(validateHealthCheckPath("/" + "a".repeat(200)).valid).toBe(false);
   });
 });
 
@@ -423,5 +564,46 @@ describe("validateDeployManifest", () => {
 
   test("rejects replicas <1", () => {
     expect(validateDeployManifest({ name: "x", replicas: 0 }).ok).toBe(false);
+  });
+});
+
+describe("validateIngressFields (shared by deploy + ingress endpoint)", () => {
+  test("normalizes allowlist and health path, passes through rate limit", () => {
+    const r = validateIngressFields(
+      { ip_allowlist: " 10.0.0.0/8 , 203.0.113.7 ", health_check_path: " /healthz ", rate_limit_rps: 100 },
+      { httpHealthCheck: true },
+    );
+    expect(r.valid).toBe(true);
+    if (r.valid) {
+      expect(r.value.ip_allowlist).toBe("10.0.0.0/8,203.0.113.7");
+      expect(r.value.health_check_path).toBe("/healthz");
+      expect(r.value.rate_limit_rps).toBe(100);
+    }
+  });
+
+  test("password + health-path require HTTP routing (httpHealthCheck=false rejects)", () => {
+    expect(validateIngressFields({ auth_password: "pw" }, { httpHealthCheck: false }).valid).toBe(false);
+    expect(validateIngressFields({ health_check_path: "/healthz" }, { httpHealthCheck: false }).valid).toBe(false);
+    // Empty values don't trip the gate.
+    expect(validateIngressFields({ auth_password: "" }, { httpHealthCheck: false }).valid).toBe(true);
+    expect(validateIngressFields({ health_check_path: "" }, { httpHealthCheck: false }).valid).toBe(true);
+  });
+
+  test("deploy and ingress agree: same rule yields the same error string", () => {
+    const viaDeploy = validateDeployRequest({
+      app_name: "a", git_repo: "https://github.com/x/y.git", container_port: 3000,
+      auth_password: "pw", health_check: false,
+    });
+    const viaHelper = validateIngressFields({ auth_password: "pw" }, { httpHealthCheck: false });
+    expect(viaDeploy.valid).toBe(false);
+    expect(viaHelper.valid).toBe(false);
+    if (!viaDeploy.valid && !viaHelper.valid) expect(viaDeploy.error).toBe(viaHelper.error);
+  });
+
+  test("range-checks public port against the resolved protocol", () => {
+    expect(validateIngressFields({ public_port: 30001, public_protocol: "tcp" }, { httpHealthCheck: true }).valid).toBe(true);
+    expect(validateIngressFields({ public_port: 30001, public_protocol: "udp" }, { httpHealthCheck: true }).valid).toBe(false);
+    expect(validateIngressFields({ public_protocol: "sctp" }, { httpHealthCheck: true }).valid).toBe(false);
+    expect(validateIngressFields({ public_port: "auto" }, { httpHealthCheck: true }).valid).toBe(true);
   });
 });

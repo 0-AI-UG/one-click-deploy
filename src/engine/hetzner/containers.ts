@@ -116,6 +116,145 @@ export function buildDockerRunArgs(opts: DockerRunOpts): string {
   return parts.join(" ");
 }
 
+/**
+ * Conventional Dockerfile probe: prefer ./Dockerfile, then ./docker/Dockerfile,
+ * else the first Dockerfile within three levels. Shared by cloneAndBuild and the
+ * rollback rebuild so both discover the same path. Returns "" when none found.
+ */
+export async function findDockerfile(ip: string, appDir: string, hostKey?: string): Promise<string> {
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  const result = await sshExec(
+    ip,
+    asUser(`cd ${appDir} && if [ -f Dockerfile ]; then echo Dockerfile; elif [ -f docker/Dockerfile ]; then echo docker/Dockerfile; else find . -maxdepth 3 -name Dockerfile -type f | head -1 | sed 's|^\\./||'; fi`),
+    hostKey,
+  );
+  return result.stdout.trim();
+}
+
+/**
+ * Run `docker build` for an app image. Always applies the OCD_IMAGE_LABEL so the
+ * scoped prune (pruneAfterBuild/pruneServer) can reclaim it — the single choke
+ * point that guarantees no build path (deploy OR rollback) can orphan an image.
+ */
+export async function buildAppImage(
+  ip: string,
+  opts: {
+    appDir: string;
+    imageTag: string;
+    dockerfilePath: string;
+    dockerContext?: string;
+    /** Prefix for ephemeral ghcr.io DOCKER_CONFIG creds (trailing space included). */
+    envPrefix?: string;
+  },
+  hostKey?: string,
+): Promise<void> {
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  const dockerContext = opts.dockerContext || ".";
+  const buildCmd = `cd ${opts.appDir} && ${opts.envPrefix ?? ""}docker build --label ${OCD_IMAGE_LABEL} -t ${opts.imageTag} -f ${opts.dockerfilePath} ${dockerContext}`;
+  log("build", `Docker build command: ${buildCmd}`);
+  const result = await sshExec(ip, asUser(buildCmd), hostKey);
+  if (result.exitCode !== 0) {
+    log("build", `Docker build stderr: ${result.stderr.slice(0, 500)}`);
+    throw new Error(describeFailure("Docker build failed", result));
+  }
+}
+
+/**
+ * Write `<baseDir>/<appName>/.env.deploy` from resolved env vars — single-quote
+ * escaping the values (so container env can contain anything), creating the app
+ * dir first (fresh scale-up targets have none), and locking the file down
+ * (chown deploy, chmod 600). Returns the path, or undefined when there are no
+ * vars (caller then runs with no --env-file).
+ */
+export async function writeEnvDeployFile(
+  ip: string,
+  appName: string,
+  envVars: Record<string, string>,
+  hostKey?: string,
+  baseDir = "/home/deploy/apps",
+): Promise<string | undefined> {
+  const entries = Object.entries(envVars);
+  if (entries.length === 0) return undefined;
+  const appDir = `${baseDir}/${appName}`;
+  const envFilePath = `${appDir}/.env.deploy`;
+  const content = entries.map(([k, v]) => `${k}=${v}`).join("\n").replace(/'/g, "'\\''");
+  await sshExec(
+    ip,
+    `mkdir -p ${appDir} && chown deploy:deploy ${baseDir} ${appDir} && echo '${content}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`,
+    hostKey,
+  );
+  return envFilePath;
+}
+
+export type StartAppReplicaOpts = {
+  /** Container name (--name). */
+  containerName: string;
+  /** Image ref to run (e.g. "app:latest", "app:rollback", a prior image id). */
+  image: string;
+  appName: string;
+  bindAddr: string;
+  hostPort: number;
+  containerPort: number;
+  /** Docker network. Defaults to "ocd-net"; pass null for the default bridge
+   *  (replicas historically don't join ocd-net). */
+  network?: string | null;
+  volumeMount?: string;
+  extraVolumes?: string[];
+  memoryMb?: number;
+  /** When provided, (re)write .env.deploy from these vars and use it. Mutually
+   *  exclusive with envFilePath. Empty object → run with no env file. */
+  envVars?: Record<string, string>;
+  /** Use a pre-existing env file path verbatim (compensation/snapshot paths). */
+  envFilePath?: string;
+  /** App dir base for the env file (default /home/deploy/apps). */
+  baseDir?: string;
+  /** `docker rm -f` any same-named container first. Default true; wake's slow
+   *  path passes false (the container provably does not exist). */
+  removeExisting?: boolean;
+};
+
+/**
+ * The one place that starts a hardened app-replica container: optional
+ * `.env.deploy` (re)write → `docker rm -f` the stale container → hardened
+ * `docker run` (always via buildDockerRunArgs, so cap-drop / no-new-privileges /
+ * mem-cpu-pids ceilings / volume allowlisting can never be forgotten). Throws
+ * describeFailure() on a non-zero run. Returns the new container id.
+ */
+export async function startAppReplica(
+  ip: string,
+  opts: StartAppReplicaOpts,
+  hostKey?: string,
+): Promise<{ containerId: string }> {
+  const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+
+  let envFilePath = opts.envFilePath;
+  if (opts.envVars !== undefined) {
+    envFilePath = await writeEnvDeployFile(ip, opts.appName, opts.envVars, hostKey, opts.baseDir);
+  }
+
+  if (opts.removeExisting !== false) {
+    await sshExec(ip, asUser(`docker rm -f ${opts.containerName} 2>/dev/null || true`), hostKey);
+  }
+
+  const cmd = buildDockerRunArgs({
+    name: opts.containerName,
+    image: opts.image,
+    appName: opts.appName,
+    network: opts.network,
+    publish: { bindAddr: opts.bindAddr, hostPort: opts.hostPort, containerPort: opts.containerPort },
+    envFilePath,
+    volumeMount: opts.volumeMount,
+    extraVolumes: opts.extraVolumes,
+    memoryMb: opts.memoryMb,
+  });
+  const result = await sshExec(ip, asUser(cmd), hostKey);
+  if (result.exitCode !== 0) {
+    log("run", `Docker run stderr: ${result.stderr}`);
+    throw new Error(describeFailure("Failed to start container", result));
+  }
+  return { containerId: result.stdout.trim() };
+}
+
 type ComposeOverrideServices = {
   [service: string]: {
     ports?: string[];
@@ -367,6 +506,7 @@ export async function cloneRepo(
   gitToken?: string,
   emit?: (msg: string) => void,
   gitBranch?: string,
+  hostKey?: string,
 ) {
   const appDir = `/home/deploy/apps/${appName}`;
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
@@ -385,11 +525,12 @@ export async function cloneRepo(
   // Ensure the app dir (if it exists) is owned by deploy so the subsequent
   // rm -rf/git clone/pull works even if a prior root-run step (e.g. scaleUp
   // writing .env.deploy) left root-owned files behind.
-  await sshExec(ip, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps && mkdir -p ${appDir} && chown -R deploy:deploy ${appDir}`);
+  await sshExec(ip, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps && mkdir -p ${appDir} && chown -R deploy:deploy ${appDir}`, hostKey);
   const gitEnv = gitToken ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
   const cloneResult = await sshExec(
     ip,
-    asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git remote set-url origin ${cloneUrl} && git fetch origin && git checkout ${gitBranch || "HEAD"} && git pull; else rm -rf ${appDir} && git clone${branchFlag} ${cloneUrl} ${appDir}; fi`)
+    asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git remote set-url origin ${cloneUrl} && git fetch origin && git checkout ${gitBranch || "HEAD"} && git pull; else rm -rf ${appDir} && git clone${branchFlag} ${cloneUrl} ${appDir}; fi`),
+    hostKey,
   );
   if (cloneResult.exitCode !== 0) {
     const stderr = cloneResult.stderr;
@@ -410,7 +551,7 @@ export async function cloneRepo(
 
   // Strip token from git remote
   if (gitToken && cloneUrl !== gitRepo) {
-    await sshExec(ip, asUser(`cd ${appDir} && git remote set-url origin ${gitRepo}`));
+    await sshExec(ip, asUser(`cd ${appDir} && git remote set-url origin ${gitRepo}`), hostKey);
   }
   log("build", `Clone done, stdout: ${cloneResult.stdout.trim().slice(0, 200)}`);
 }
@@ -443,6 +584,8 @@ export async function cloneAndBuild(
     skipClone?: boolean;
     /** Per-container memory ceiling in MB. Omit / 0 → platform default. */
     memoryMb?: number;
+    /** Pinned SSH host key of the target server, threaded to every remote call. */
+    hostKey?: string;
   },
   onLog?: (line: string) => void
 ) {
@@ -450,27 +593,24 @@ export async function cloneAndBuild(
   const emit = (msg: string) => onLog?.(msg);
   const buildStart = Date.now();
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+  const hostKey = opts.hostKey;
 
   if (!opts.skipClone) {
-    await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch);
+    await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch, hostKey);
   }
 
   // Find Dockerfile
   let dockerfilePath = opts.dockerfilePath?.replace(/^\/+/, "");
   if (dockerfilePath) {
     emit(`Using specified Dockerfile: ${dockerfilePath}`);
-    const checkResult = await sshExec(ip, asUser(`test -f ${appDir}/${dockerfilePath} && echo ok`));
+    const checkResult = await sshExec(ip, asUser(`test -f ${appDir}/${dockerfilePath} && echo ok`), hostKey);
     if (checkResult.stdout.trim() !== "ok") {
       throw new Error(`Dockerfile not found at "${dockerfilePath}" in the repository. The path should be relative to the repo root, e.g. "Dockerfile" or "docker/Dockerfile".`);
     }
     log("build", `Using specified Dockerfile: ${dockerfilePath}`);
   } else {
     emit("Searching for Dockerfile...");
-    const findResult = await sshExec(
-      ip,
-      asUser(`cd ${appDir} && if [ -f Dockerfile ]; then echo Dockerfile; elif [ -f docker/Dockerfile ]; then echo docker/Dockerfile; else find . -maxdepth 3 -name Dockerfile -type f | head -1 | sed 's|^\\./||'; fi`)
-    );
-    dockerfilePath = findResult.stdout.trim();
+    dockerfilePath = await findDockerfile(ip, appDir, hostKey);
     if (!dockerfilePath) {
       throw new Error("No Dockerfile found in repository");
     }
@@ -483,69 +623,51 @@ export async function cloneAndBuild(
   // DOCKER_CONFIG dir and are wiped immediately after the build.
   let ghcrAuth: GhcrAuth | null = null;
   if (opts.gitToken) {
-    ghcrAuth = await dockerLoginGhcr(ip, opts.gitToken);
+    ghcrAuth = await dockerLoginGhcr(ip, opts.gitToken, hostKey);
   }
 
   // Build image first (before stopping old container — build-before-destroy)
   emit("Building Docker image...");
-  const dockerContext = opts.dockerContext || ".";
-  const ghcrPrefix = ghcrAuth?.envPrefix ?? "";
-  const buildCmd = `cd ${appDir} && ${ghcrPrefix}docker build --label ${OCD_IMAGE_LABEL} -t ${opts.name}:latest -f ${dockerfilePath} ${dockerContext}`;
-  log("build", `Docker build command: ${buildCmd}`);
   const dockerBuildStart = Date.now();
-  const buildResult = await sshExec(ip, asUser(buildCmd));
-  if (ghcrAuth) await ghcrAuth.cleanup();
-  if (buildResult.exitCode !== 0) {
-    log("build", `Docker build stderr: ${buildResult.stderr.slice(0, 500)}`);
-    throw new Error(describeFailure("Docker build failed", buildResult));
+  try {
+    await buildAppImage(ip, {
+      appDir,
+      imageTag: `${opts.name}:latest`,
+      dockerfilePath,
+      dockerContext: opts.dockerContext,
+      envPrefix: ghcrAuth?.envPrefix,
+    }, hostKey);
+  } finally {
+    // Wipe the ephemeral ghcr creds whether or not the build succeeded.
+    if (ghcrAuth) await ghcrAuth.cleanup();
   }
   log("build", `Docker build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
   emit("Image built successfully");
 
-  // Build succeeded — now safe to stop old container and swap
+  // Build succeeded — now safe to stop old container and swap.
   const containerName = opts.containerName || opts.name;
-  log("build", `Removing existing container ${containerName} (if any)`);
-  await sshExec(ip, asUser(`docker rm -f ${containerName} 2>/dev/null || true`));
-
-  // Write env file to server (avoids shell injection via env var values)
-  const envFileEntries = Object.entries(opts.envVars);
-  let envFilePath: string | undefined;
-  if (envFileEntries.length > 0) {
-    envFilePath = `/home/deploy/apps/${opts.name}/.env.deploy`;
-    const envFileContent = envFileEntries
-      .map(([k, v]) => `${k}=${v}`)
-      .join("\n");
-    const escapedContent = envFileContent.replace(/'/g, "'\\''");
-    await sshExec(ip, `echo '${escapedContent}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`);
-  }
-
-  // Run container
   emit("Starting container...");
   // Ensure ocd-net exists so apps can reach infrastructure services by container name
-  await ensureOcdNetwork(ip);
+  await ensureOcdNetwork(ip, hostKey);
   const bindAddr = opts.bindAddr || "127.0.0.1";
-  const cmd = buildDockerRunArgs({
-    name: containerName,
+  const { containerId } = await startAppReplica(ip, {
+    containerName,
     image: `${opts.name}:latest`,
     appName: opts.name,
-    publish: { bindAddr, hostPort: opts.hostPort, containerPort: opts.port },
-    envFilePath,
+    bindAddr,
+    hostPort: opts.hostPort,
+    containerPort: opts.port,
     volumeMount: opts.volumeMount,
     extraVolumes: opts.extraVolumes,
     memoryMb: opts.memoryMb || undefined,
-  });
-  log("build", `Docker run: ${cmd}`);
-  const result = await sshExec(ip, asUser(cmd));
-  if (result.exitCode !== 0) {
-    log("build", `Docker run stderr: ${result.stderr}`);
-    throw new Error(describeFailure("Failed to start container", result));
-  }
-  log("build", `Container started: ${result.stdout.trim().slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
+    envVars: opts.envVars,
+  }, hostKey);
+  log("build", `Container started: ${containerId.slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
 
   // Fire-and-forget cleanup of dangling images and git repo
-  pruneAfterBuild(ip, opts.name);
+  pruneAfterBuild(ip, opts.name, hostKey);
 
-  return { containerId: result.stdout.trim(), dockerfilePath, imageTag: `${opts.name}:latest` };
+  return { containerId, dockerfilePath, imageTag: `${opts.name}:latest` };
 }
 
 export async function removeContainer(ip: string, name: string, hostKey?: string) {
@@ -875,6 +997,26 @@ export async function containerRunningCheck(
   }
 
   return { healthy: false, error: "Container is not running" };
+}
+
+/**
+ * The app-health probe every deploy/scale/restart path shares: an HTTP probe
+ * (healthCheck) when `app.health_check` is on, else a running-only probe
+ * (containerRunningCheck) for databases/workers that don't speak HTTP. Same
+ * result shape either way.
+ */
+export async function probeAppHealth(
+  app: { health_check: number },
+  ip: string,
+  containerName: string,
+  bindHost: string,
+  port: number,
+  maxAttempts = 5,
+  hostKey?: string,
+): Promise<{ healthy: boolean; statusCode?: number; error?: string }> {
+  return app.health_check
+    ? healthCheck(ip, containerName, bindHost, port, maxAttempts, hostKey)
+    : containerRunningCheck(ip, containerName, maxAttempts, hostKey);
 }
 
 // --- Container Logs ---

@@ -26,7 +26,9 @@ export type AppData = {
   desired_replicas: number;
   volume_id?: string | number;
   volume_mount?: string;
-  auth_password?: string;
+  /** Whether HTTP basic auth is enabled (derived server-side from the password
+   *  hash). The password itself is write-only and never sent to the client. */
+  auth_enabled?: boolean;
   deployed_by_username?: string;
   env_vars?: EnvVarEntry[] | string | Record<string, string>;
   environment_id?: number | null;
@@ -44,6 +46,15 @@ export type AppData = {
   memory_mb?: number;
   internal_port?: number;
   health_check?: boolean | number;
+  sticky?: boolean | number;
+  rate_limit_rps?: number;
+  ip_allowlist?: string;
+  health_check_path?: string;
+  compress?: boolean | number;
+  public_port?: number | null;
+  public_protocol?: string;
+  /** `<panel-ip>:<public_port>` when raw TCP/UDP exposed (server-derived). */
+  public_address?: string | null;
 };
 
 export type ReplicaData = {
@@ -223,4 +234,11 @@ export type DeployBody = {
   server_id?: number;
   memory_mb?: number;
   health_check?: boolean;
+  sticky?: boolean;
+  rate_limit_rps?: number;
+  ip_allowlist?: string;
+  health_check_path?: string;
+  compress?: boolean;
+  public_port?: number | "auto";
+  public_protocol?: "tcp" | "udp";
 };

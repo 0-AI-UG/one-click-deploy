@@ -1,10 +1,16 @@
 import { hetznerApi } from "./api.ts";
+import {
+  PUBLIC_TCP_PORT_BASE,
+  PUBLIC_TCP_PORT_COUNT,
+  PUBLIC_UDP_PORT_BASE,
+  PUBLIC_UDP_PORT_COUNT,
+} from "../../shared/db/apps.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
-type FirewallRule = {
+export type FirewallRule = {
   direction: string;
   protocol: string;
   port?: string;
@@ -28,6 +34,64 @@ type WithServer = { server: HetznerServer };
 
 const FIREWALL_NAME = "one-click-deploy";
 
+const ANY_SOURCE = ["0.0.0.0/0", "::/0"];
+
+/**
+ * Base inbound rules every fleet server gets. The public raw TCP/UDP blocks
+ * (apps.public_port pool, see traefik-config.ts) are opened fleet-wide like
+ * 80/443: only the panel's Traefik ever routes them, on workers nothing
+ * listens there (replicas bind private IPs) — same stance as the
+ * 20000-20199 internal block staying unreachable.
+ */
+export const BASE_FIREWALL_RULES: FirewallRule[] = [
+  { direction: "in", protocol: "tcp", port: "22", source_ips: ANY_SOURCE, description: "SSH" },
+  { direction: "in", protocol: "tcp", port: "80", source_ips: ANY_SOURCE, description: "HTTP" },
+  { direction: "in", protocol: "tcp", port: "443", source_ips: ANY_SOURCE, description: "HTTPS" },
+  { direction: "in", protocol: "icmp", source_ips: ANY_SOURCE, description: "ICMP ping" },
+  {
+    direction: "in",
+    protocol: "tcp",
+    port: `${PUBLIC_TCP_PORT_BASE}-${PUBLIC_TCP_PORT_BASE + PUBLIC_TCP_PORT_COUNT - 1}`,
+    source_ips: ANY_SOURCE,
+    description: "Public TCP apps",
+  },
+  {
+    direction: "in",
+    protocol: "udp",
+    port: `${PUBLIC_UDP_PORT_BASE}-${PUBLIC_UDP_PORT_BASE + PUBLIC_UDP_PORT_COUNT - 1}`,
+    source_ips: ANY_SOURCE,
+    description: "Public UDP apps",
+  },
+];
+
+function sameRuleSlot(a: FirewallRule, b: FirewallRule): boolean {
+  return a.direction === b.direction && a.protocol === b.protocol && (a.port ?? "") === (b.port ?? "");
+}
+
+/**
+ * Reconcile an existing firewall's rules against BASE_FIREWALL_RULES: returns
+ * the full desired rule set (base rules re-asserted, operator-added extras
+ * preserved) when anything is missing, or null when already converged. Pure —
+ * exported for tests; ensureFirewall applies the result via set_rules. This
+ * is how a pre-existing fleet firewall picks up newly added base rules (e.g.
+ * the public TCP/UDP blocks) without manual work.
+ */
+export function reconcileFirewallRules(existing: FirewallRule[]): FirewallRule[] | null {
+  const missing = BASE_FIREWALL_RULES.filter((b) => !existing.some((r) => sameRuleSlot(r, b)));
+  if (missing.length === 0) return null;
+  const extras = existing
+    .filter((r) => !BASE_FIREWALL_RULES.some((b) => sameRuleSlot(r, b)))
+    .map((r) => ({
+      direction: r.direction,
+      protocol: r.protocol,
+      port: r.port,
+      source_ips: r.source_ips,
+      destination_ips: r.destination_ips,
+      description: r.description,
+    }));
+  return [...BASE_FIREWALL_RULES, ...extras];
+}
+
 export async function ensureFirewall(): Promise<number> {
   // Check if our firewall already exists
   const list = await hetznerApi(`/firewalls?name=${FIREWALL_NAME}`) as unknown as { firewalls: HetznerFirewall[] };
@@ -36,71 +100,28 @@ export async function ensureFirewall(): Promise<number> {
     const fw = firewalls[0];
     log("firewall", `Using existing firewall: id=${fw.id}`);
 
-    // Verify required base rules exist (may have been wiped by a bug)
-    const rules: FirewallRule[] = fw.rules ?? [];
-    const hasSSH = rules.some((r) => r.direction === "in" && r.protocol === "tcp" && r.port === "22");
-    const hasHTTP = rules.some((r) => r.direction === "in" && r.protocol === "tcp" && r.port === "80");
-    const hasHTTPS = rules.some((r) => r.direction === "in" && r.protocol === "tcp" && r.port === "443");
-
-    if (!hasSSH || !hasHTTP || !hasHTTPS) {
-      log("firewall", `Repairing missing base rules (SSH=${hasSSH}, HTTP=${hasHTTP}, HTTPS=${hasHTTPS})`);
-      const baseRules = [
-        { direction: "in", protocol: "tcp", port: "22", source_ips: ["0.0.0.0/0", "::/0"], description: "SSH" },
-        { direction: "in", protocol: "tcp", port: "80", source_ips: ["0.0.0.0/0", "::/0"], description: "HTTP" },
-        { direction: "in", protocol: "tcp", port: "443", source_ips: ["0.0.0.0/0", "::/0"], description: "HTTPS" },
-        { direction: "in", protocol: "icmp", source_ips: ["0.0.0.0/0", "::/0"], description: "ICMP ping" },
-      ];
-      // Merge: keep existing non-base rules, add missing base rules
-      const existingExtra = rules
-        .filter((r) => !(r.direction === "in" && r.protocol === "tcp" && r.port !== undefined && ["22", "80", "443"].includes(r.port)) &&
-                       !(r.direction === "in" && r.protocol === "icmp"))
-        .map((r) => ({ direction: r.direction, protocol: r.protocol, port: r.port, source_ips: r.source_ips, destination_ips: r.destination_ips, description: r.description }));
+    // Converge missing base rules (new base rules after an upgrade, or rules
+    // wiped by a bug), keeping any operator-added extras.
+    const desired = reconcileFirewallRules(fw.rules ?? []);
+    if (desired) {
+      log("firewall", `Updating firewall rules (${(fw.rules ?? []).length} -> ${desired.length}): re-asserting base rules`);
       await hetznerApi(`/firewalls/${fw.id}/actions/set_rules`, {
         method: "POST",
-        body: JSON.stringify({ rules: [...baseRules, ...existingExtra] }),
+        body: JSON.stringify({ rules: desired }),
       });
-      log("firewall", "Firewall rules repaired");
+      log("firewall", "Firewall rules updated");
     }
 
     return fw.id;
   }
 
-  // Create firewall with SSH, HTTP, HTTPS inbound rules
   log("firewall", "Creating Hetzner Cloud Firewall...");
   const fwCreateData = await hetznerApi("/firewalls", {
     method: "POST",
     body: JSON.stringify({
       name: FIREWALL_NAME,
       labels: { managed_by: "one-click-deploy" },
-      rules: [
-        {
-          direction: "in",
-          protocol: "tcp",
-          port: "22",
-          source_ips: ["0.0.0.0/0", "::/0"],
-          description: "SSH",
-        },
-        {
-          direction: "in",
-          protocol: "tcp",
-          port: "80",
-          source_ips: ["0.0.0.0/0", "::/0"],
-          description: "HTTP",
-        },
-        {
-          direction: "in",
-          protocol: "tcp",
-          port: "443",
-          source_ips: ["0.0.0.0/0", "::/0"],
-          description: "HTTPS",
-        },
-        {
-          direction: "in",
-          protocol: "icmp",
-          source_ips: ["0.0.0.0/0", "::/0"],
-          description: "ICMP ping",
-        },
-      ],
+      rules: BASE_FIREWALL_RULES,
     }),
   }) as unknown as WithFirewall;
   log("firewall", `Firewall created: id=${fwCreateData.firewall.id}`);

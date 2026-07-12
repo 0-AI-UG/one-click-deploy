@@ -1,3 +1,5 @@
+import { publicPortRange, type PublicProtocol } from "./db/apps.ts";
+
 export type ValidationResult<T> =
   | { valid: true; value: T }
   | { valid: false; error: string };
@@ -144,6 +146,181 @@ export function validateEnvVars(
   return { valid: true, value: result };
 }
 
+function isIpv4(addr: string): boolean {
+  const octets = addr.split(".");
+  if (octets.length !== 4) return false;
+  return octets.every((o) => /^\d{1,3}$/.test(o) && Number(o) <= 255);
+}
+
+function isIpv6(addr: string): boolean {
+  if (addr.includes(":::")) return false;
+  const halves = addr.split("::");
+  if (halves.length > 2) return false;
+  const groups = halves.flatMap((h) => (h === "" ? [] : h.split(":")));
+  // Without "::" exactly 8 groups; with "::" at most 7 (it stands in for >= 1).
+  if (halves.length === 1 && groups.length !== 8) return false;
+  if (halves.length === 2 && groups.length > 7) return false;
+  return groups.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g));
+}
+
+/**
+ * Validate a comma-separated list of IPv4/IPv6 addresses or CIDR blocks for
+ * the per-app ingress IP allowlist (Traefik ipAllowList.sourceRange).
+ * Returns the normalized list (trimmed entries, comma-joined); "" = allowlist
+ * off. Rejected garbage never reaches the rendered Traefik config.
+ */
+export function validateIpAllowlist(raw: string): ValidationResult<string> {
+  const entries = raw.split(",").map((e) => e.trim()).filter(Boolean);
+  for (const entry of entries) {
+    const [addr, prefix, ...rest] = entry.split("/");
+    if (rest.length > 0)
+      return { valid: false, error: `IP allowlist entry "${entry}" is not a valid IP or CIDR` };
+    const v4 = isIpv4(addr);
+    const v6 = !v4 && isIpv6(addr);
+    if (!v4 && !v6)
+      return { valid: false, error: `IP allowlist entry "${entry}" is not a valid IPv4/IPv6 address or CIDR` };
+    if (prefix !== undefined) {
+      const maxPrefix = v4 ? 32 : 128;
+      if (!/^\d{1,3}$/.test(prefix) || Number(prefix) > maxPrefix)
+        return { valid: false, error: `IP allowlist entry "${entry}" has an invalid prefix length (0-${maxPrefix})` };
+    }
+  }
+  return { valid: true, value: entries.join(",") };
+}
+
+/** Active HTTP health-check path (Traefik loadBalancer.healthCheck.path).
+ *  "" = disabled. Must be an absolute path with no whitespace/control chars. */
+export function validateHealthCheckPath(path: string): ValidationResult<string> {
+  const trimmed = path.trim();
+  if (!trimmed) return { valid: true, value: "" };
+  if (!trimmed.startsWith("/"))
+    return { valid: false, error: 'Health check path must start with "/"' };
+  if (trimmed.length > 200)
+    return { valid: false, error: "Health check path must be 200 characters or fewer" };
+  if (!/^[!-~]+$/.test(trimmed))
+    return { valid: false, error: "Health check path must not contain spaces or control characters" };
+  return { valid: true, value: trimmed };
+}
+
+/**
+ * Public raw TCP/UDP exposure port: must sit in the protocol's pool block
+ * (see PUBLIC_TCP_PORT_BASE / PUBLIC_UDP_PORT_BASE). Freeness is checked
+ * against the DB by callers — this only validates shape and range.
+ */
+export function validatePublicPort(port: unknown, protocol: PublicProtocol): ValidationResult<number> {
+  if (typeof port !== "number" || !Number.isInteger(port))
+    return { valid: false, error: "Public port must be an integer" };
+  const { base, count } = publicPortRange(protocol);
+  if (port < base || port >= base + count)
+    return { valid: false, error: `Public ${protocol.toUpperCase()} ports are ${base}-${base + count - 1}` };
+  return { valid: true, value: port };
+}
+
+export function isPublicProtocol(value: unknown): value is PublicProtocol {
+  return value === "tcp" || value === "udp";
+}
+
+/** Per-app ingress fields shared by deploy and the ingress-update endpoint.
+ *  Every field is optional so a partial ingress PATCH validates only what it
+ *  sends; deploy passes the full set. */
+export type IngressFieldsInput = {
+  /** Write-only plaintext; presence (truthy) means "enable basic auth". */
+  auth_password?: string;
+  rate_limit_rps?: number;
+  ip_allowlist?: string;
+  health_check_path?: string;
+  public_port?: number | "auto" | null;
+  public_protocol?: string;
+};
+
+/** Normalized ingress values (trimmed/joined) ready to persist. Only the keys
+ *  that were present in the input are set. */
+export type NormalizedIngressFields = {
+  auth_password?: string;
+  rate_limit_rps?: number;
+  ip_allowlist?: string;
+  health_check_path?: string;
+  public_port?: number | "auto" | null;
+  public_protocol?: PublicProtocol;
+};
+
+/**
+ * Single source of truth for the ingress-field rules shared by
+ * `validateDeployRequest` and `handleUpdateIngressSettings`. Returns the
+ * normalized values (or the first error) so both call sites agree on both the
+ * rules and the error strings. `httpHealthCheck` is whether the app is (or will
+ * be) HTTP-routed — password protection and an active health-check path are
+ * Traefik HTTP-router features and can't gate a raw-TCP app.
+ */
+export function validateIngressFields(
+  fields: IngressFieldsInput,
+  ctx: { httpHealthCheck: boolean },
+): ValidationResult<NormalizedIngressFields> {
+  const out: NormalizedIngressFields = {};
+
+  // Password protection is a Traefik basicAuth middleware, which only exists
+  // for HTTP routers — a raw-TCP app can't enforce it.
+  if (fields.auth_password !== undefined) {
+    if (fields.auth_password && !ctx.httpHealthCheck) {
+      return { valid: false, error: "Password protection requires the HTTP health check — it is enforced by HTTP basic auth at the ingress and cannot gate raw-TCP apps" };
+    }
+    out.auth_password = fields.auth_password;
+  }
+
+  if (fields.rate_limit_rps !== undefined) {
+    if (!isValidRateLimitRps(fields.rate_limit_rps)) {
+      return { valid: false, error: "Rate limit must be an integer 0 (unlimited) to 1000000 requests/sec" };
+    }
+    out.rate_limit_rps = fields.rate_limit_rps;
+  }
+
+  if (fields.ip_allowlist !== undefined) {
+    const allowResult = validateIpAllowlist(String(fields.ip_allowlist));
+    if (!allowResult.valid) return { valid: false, error: allowResult.error };
+    out.ip_allowlist = allowResult.value;
+  }
+
+  if (fields.health_check_path !== undefined) {
+    const pathResult = validateHealthCheckPath(String(fields.health_check_path));
+    if (!pathResult.valid) return { valid: false, error: pathResult.error };
+    // The active HTTP health check lives on the app's HTTP loadBalancer;
+    // raw-TCP apps use a TCP connect check instead.
+    if (pathResult.value && !ctx.httpHealthCheck) {
+      return { valid: false, error: "Health check path requires the HTTP health check — raw-TCP apps use a TCP connect check instead" };
+    }
+    out.health_check_path = pathResult.value;
+  }
+
+  // Raw TCP/UDP exposure is independent of HTTP publicness — an HTTP-private
+  // app may still be TCP-exposed (e.g. a database).
+  const protocol: PublicProtocol = isPublicProtocol(fields.public_protocol) ? fields.public_protocol : "tcp";
+  if (fields.public_protocol !== undefined) {
+    if (!isPublicProtocol(fields.public_protocol)) {
+      return { valid: false, error: 'Public protocol must be "tcp" or "udp"' };
+    }
+    out.public_protocol = protocol;
+  }
+  if (fields.public_port !== undefined) {
+    if (fields.public_port != null && fields.public_port !== "auto") {
+      const portRes = validatePublicPort(fields.public_port, protocol);
+      if (!portRes.valid) return { valid: false, error: portRes.error };
+    }
+    out.public_port = fields.public_port;
+  }
+
+  return { valid: true, value: out };
+}
+
+/** Public-router rate limit in requests/second; 0 = unlimited. */
+export function isValidRateLimitRps(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 1_000_000
+  );
+}
+
 export function validateHetznerToken(token: string): ValidationResult<string> {
   const trimmed = token.trim();
   if (!trimmed) return { valid: false, error: "Token is required" };
@@ -195,6 +372,7 @@ export function assertSafeHostPath(hostPath: string, appName: string): void {
     `/home/deploy/apps/${appName}/`,
     `/home/deploy/services/${appName}/`,
     `/mnt/ocd-`, // block-storage mounts created by the volume provisioner
+    `/mnt/vol-`, // pre-existing block volumes attached by id (attach-existing)
   ];
   if (!allowedPrefixes.some((p) => normalized.startsWith(p)))
     throw new Error(
@@ -329,6 +507,15 @@ export function validateDeployRequest(req: {
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   memory_mb?: number;
   public?: boolean;
+  auth_password?: string;
+  health_check?: boolean;
+  sticky?: boolean;
+  rate_limit_rps?: number;
+  ip_allowlist?: string;
+  health_check_path?: string;
+  compress?: boolean;
+  public_port?: number | "auto" | null;
+  public_protocol?: string;
 }): ValidationResult<void> {
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };
@@ -361,6 +548,21 @@ export function validateDeployRequest(req: {
   if (req.memory_mb !== undefined && !isValidMemoryMb(req.memory_mb)) {
     return { valid: false, error: `Memory: must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB} MB` };
   }
+
+  // Auth / rate limit / allowlist / health-check path / public-port rules are
+  // shared with the ingress-update endpoint — one validator, one set of errors.
+  const ingressResult = validateIngressFields(
+    {
+      auth_password: req.auth_password,
+      rate_limit_rps: req.rate_limit_rps,
+      ip_allowlist: req.ip_allowlist,
+      health_check_path: req.health_check_path,
+      public_port: req.public_port,
+      public_protocol: req.public_protocol,
+    },
+    { httpHealthCheck: req.health_check !== false },
+  );
+  if (!ingressResult.valid) return { valid: false, error: ingressResult.error };
 
   return { valid: true, value: undefined };
 }

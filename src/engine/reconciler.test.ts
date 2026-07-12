@@ -29,7 +29,6 @@ mock.module("../shared/remote/index.ts", () => ({
 // Stub ingress sync and network reconciler so they don't fire SSH.
 mock.module("./scale/traefik-manager.ts", () => ({
   syncAppIngress: mock(async () => {}),
-  removeAppIngress: mock(async () => {}),
   syncAllTraefik: mock(async () => {}),
   reconcileTraefik: mock(async () => {}),
   ensureTraefikInstalled: mock(async () => {}),

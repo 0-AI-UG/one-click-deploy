@@ -22,6 +22,7 @@ import {
   cloneAndBuild, healthCheck, getContainerLogs,
 } from "../../shared/remote/index.ts";
 import { deployTraefikPanelSite } from "../scale/traefik-manager.ts";
+import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
 
@@ -142,6 +143,13 @@ export async function bootstrapPanel(
           `Destroy that server in the Hetzner console before re-running bootstrap.`,
       };
     }
+
+    // 0.5. Resolve the managed zone's name BEFORE the server is created:
+    //    cloud-init renders the Traefik static config from this DB, and the
+    //    cached `dns_zone_name` is what gates the wildcard (DNS-01) resolver
+    //    and derives the ACME email. Best-effort — "" falls back to the
+    //    per-domain HTTP-01 path exactly as before.
+    const zoneName = opts.dnsZoneId ? await getOrResolveZoneName() : "";
 
     // 1. SSH key + firewall + private network
     onProgress("server", "Ensuring SSH key + firewall + network...");
@@ -328,13 +336,18 @@ export async function bootstrapPanel(
 
     // 10. Ingress + TLS: write the panel's own Traefik vhost (panel.yml).
     // The file is owned by bootstrap and never rewritten by app syncs.
+    // A panel domain under the managed zone selects the `*.<zone>` wildcard
+    // resolver; its HETZNER_API_KEY env file is NOT written here (secrets
+    // stay out of bootstrap SSH scripts shared with cloud-init) — the hosted
+    // panel's reconciler delivers it within one tick of first boot, so
+    // wildcard issuance may lag the health check by ~30s.
     onProgress("ingress", `Configuring reverse proxy for ${domain}...`);
     const useInternalTls = domain.endsWith(".nip.io");
     await deployTraefikPanelSite(
       serverIp,
       domain,
       hostPort,
-      useInternalTls,
+      zoneName,
       hostKey || undefined,
     );
 

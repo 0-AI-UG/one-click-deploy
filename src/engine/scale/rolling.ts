@@ -1,8 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  sshExec, transferImage, healthCheck, containerRunningCheck,
-  buildDockerRunArgs,
+  transferImage, probeAppHealth, startAppReplica,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { type ProgressFn, log, replicaBindHost } from "./types.ts";
@@ -60,37 +59,30 @@ export async function rollingRedeploy(
       emit("scale", `Draining ${replica.container_name}...`);
       await Bun.sleep(10_000);
 
-      // Recreate container
-      const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-
-      // Bind on the target server's private IPv4 so only the panel
-      // the ingress proxies (also on the private network) can reach this replica.
+      // Recreate container. Bind on the target server's private IPv4 so only
+      // the ingress proxy (also on the private network) can reach this replica.
       const replicaBindAddr = replicaBindHost(server);
 
-      let rollingExtraVols: string[] = [];
-      try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) rollingExtraVols = ev; } catch {}
-      await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
       const envVars = await resolveAppEnvVars(app);
       const envFilePath = Object.keys(envVars).length > 0
         ? `/home/deploy/apps/${app.name}/.env.deploy`
         : undefined;
-      const cmd = buildDockerRunArgs({
-        name: replica.container_name,
+      await startAppReplica(server.ipv4, {
+        containerName: replica.container_name,
         image: imageName,
         appName: app.name,
         network: null,
-        publish: { bindAddr: replicaBindAddr, hostPort: replica.host_port, containerPort: app.container_port },
+        bindAddr: replicaBindAddr,
+        hostPort: replica.host_port,
+        containerPort: app.container_port,
         envFilePath,
         volumeMount: app.volume_mount || undefined,
-        extraVolumes: rollingExtraVols,
+        extraVolumes: db.parseExtraVolumes(app.extra_volumes),
         memoryMb: app.memory_mb || undefined,
-      });
-      await sshExec(server.ipv4, asUser(cmd), hostKey);
+      }, hostKey);
 
       // Health check (running-only when the app opted out of the HTTP probe)
-      const health = app.health_check
-        ? await healthCheck(server.ipv4, replica.container_name, replicaBindAddr, replica.host_port, 5, hostKey)
-        : await containerRunningCheck(server.ipv4, replica.container_name, 5, hostKey);
+      const health = await probeAppHealth(app, server.ipv4, replica.container_name, replicaBindAddr, replica.host_port, 5, hostKey);
 
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 

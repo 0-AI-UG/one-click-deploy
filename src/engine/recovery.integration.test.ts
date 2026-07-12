@@ -59,23 +59,16 @@ const remoteMocks = {
   removeCompose: mock(async (_ip: string, name: string) => { world.composeDirs.delete(name); world.containers.delete(name); }),
   healthCheck: mock(async () => ({ healthy: true, statusCode: 200 })),
   composeHealthCheck: mock(async () => ({ healthy: true, statusCode: 200 })),
-  deployAuthProxy: mock(async (_ip: string, name: string) => { world.containers.add(`${name}-auth`); return 9999; }),
-  removeAuthProxy: mock(async (_ip: string, name: string) => { world.containers.delete(`${name}-auth`); }),
   containerExists: mock(async (_ip: string, name: string) => world.containers.has(name)),
   pauseContainer: mock(async () => {}),
   unpauseContainer: mock(async () => {}),
   restartContainer: mock(async () => {}),
   serviceHealthCheck: mock(async () => ({ healthy: true })),
-  // Unused-but-imported by destroy ops:
-  authProxyPort: (p: number) => p + 1,
 };
 if (RUN) {
   mock.module("../shared/remote/index.ts", () => remoteMocks);
   mock.module("./scale/traefik-manager.ts", () => ({
     syncAppIngress: mock(async () => {}),
-    removeAppIngress: mock(async () => {}),
-    syncServiceIngress: mock(async () => {}),
-    removeServiceIngress: mock(async () => {}),
     getPanelIngressIpv4: mock(() => null),
     syncAllTraefik: mock(async () => {}),
     reconcileTraefik: mock(async () => {}),

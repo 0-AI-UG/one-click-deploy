@@ -1,11 +1,13 @@
 import * as db from "../shared/db.ts";
 import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } from "../shared/db.ts";
-import { sshExec, healthCheck, containerRunningCheck, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck, pruneServer, buildDockerRunArgs } from "../shared/remote/index.ts";
+import { sshExec, probeAppHealth, composeHealthCheck, restartCompose, restartContainer, serviceHealthCheck, pruneServer, startAppReplica } from "../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../shared/env-crypto.ts";
 import { evaluateAutoScale } from "./scale-api.ts";
 import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
 import { reconcileTraefik } from "./scale/traefik-manager.ts";
+import { TRAEFIK_METRICS_PORT } from "./scale/traefik-config.ts";
+import { ingestServerRequestMetrics } from "./scale/request-metrics.ts";
 import { replicaBindHost } from "./scale/types.ts";
 import dbConn from "../shared/db/connection.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
@@ -26,6 +28,12 @@ let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 let tickCount = 0;
 const PRUNE_EVERY_N_TICKS = 10; // ~5 minutes at 30s/tick
+
+// Whether the fleet firewall's rule set has been converged this process.
+// ensureFirewall otherwise only runs during provisioning, so an existing
+// fleet would never pick up newly added base rules (e.g. the public TCP/UDP
+// port blocks). One-shot per engine process — a failure retries next tick.
+let firewallConverged = false;
 
 // ---------------------------------------------------------------------------
 // Per-server batched metrics collection
@@ -85,12 +93,17 @@ function parseServerMetrics(stdout: string): { cpu: number; mem: number; diskUse
 }
 
 /**
- * Single SSH call per server: collect docker stats for all containers + server
- * CPU/RAM in one shot.
+ * Single SSH call per server: collect docker stats for all containers, server
+ * CPU/RAM, and Traefik's Prometheus request counters in one shot.
  */
 async function collectServerMetrics(
   server: ServerRow,
-): Promise<{ containerStats: Map<string, { cpu: number; mem: number }>; serverMetrics: { cpu: number; mem: number; diskUsedGb: number; diskTotalGb: number } | null }> {
+): Promise<{
+  containerStats: Map<string, { cpu: number; mem: number }>;
+  serverMetrics: { cpu: number; mem: number; diskUsedGb: number; diskTotalGb: number } | null;
+  /** Raw Prometheus text from the local Traefik; null when the scrape failed. */
+  traefikMetrics: string | null;
+}> {
   const hostKey = server.ssh_host_key || undefined;
   const cmd = [
     `su - deploy -c "docker stats --no-stream --format '{{json .}}' 2>/dev/null"`,
@@ -98,19 +111,24 @@ async function collectServerMetrics(
     `top -bn1 | grep '%Cpu' | head -1`,
     `grep -E '^(MemTotal|MemAvailable):' /proc/meminfo`,
     `df -Pk / | awk 'NR==2 {print "DISK", $3, $2}'`,
+    `echo '---TRAEFIK-METRICS---'`,
+    // Subshell so a down/mid-upgrade Traefik doesn't fail the whole batch; an
+    // empty metrics section is a failed scrape (never treated as zero traffic).
+    `(curl -sf --max-time 5 http://127.0.0.1:${TRAEFIK_METRICS_PORT}/metrics || true)`,
   ].join(" && ");
 
   try {
     const result = await sshExec(server.ipv4, cmd, hostKey);
-    if (result.exitCode !== 0) return { containerStats: new Map(), serverMetrics: null };
+    if (result.exitCode !== 0) return { containerStats: new Map(), serverMetrics: null, traefikMetrics: null };
 
-    const [dockerPart, metricsPart] = result.stdout.split("---SEPARATOR---");
+    const [dockerPart, rest] = result.stdout.split("---SEPARATOR---");
+    const [metricsPart, traefikPart] = (rest || "").split("---TRAEFIK-METRICS---");
     const containerStats = parseDockerStats(dockerPart || "");
     const serverMetrics = parseServerMetrics(metricsPart || "");
-    return { containerStats, serverMetrics };
+    return { containerStats, serverMetrics, traefikMetrics: traefikPart?.trim() ? traefikPart : null };
   } catch (err) {
     log("metrics", `server ${server.ipv4}: ${err}`);
-    return { containerStats: new Map(), serverMetrics: null };
+    return { containerStats: new Map(), serverMetrics: null, traefikMetrics: null };
   }
 }
 
@@ -140,24 +158,23 @@ async function recreateReplica(
   }
   const envVars = await resolveAppEnvVars(app);
   const envFilePath = Object.keys(envVars).length > 0 ? `/home/deploy/apps/${app.name}/.env.deploy` : undefined;
-  let extraVolumes: string[] = [];
-  try { const ev = JSON.parse(app.extra_volumes); if (Array.isArray(ev)) extraVolumes = ev.filter((v: unknown): v is string => typeof v === "string"); } catch { /* ignore */ }
-  const cmd = buildDockerRunArgs({
-    name: replica.container_name,
+  // rm -f (startAppReplica's default) clears both the missing-container and
+  // wedged-container cases before re-running. If the wedged container also
+  // resists removal, the run fails on the name/port conflict and we surface
+  // it (dockerd-level intervention).
+  await startAppReplica(server.ipv4, {
+    containerName: replica.container_name,
     image,
     appName: app.name,
     network: null,
-    publish: { bindAddr: replicaBindHost(server), hostPort: replica.host_port, containerPort: app.container_port },
+    bindAddr: replicaBindHost(server),
+    hostPort: replica.host_port,
+    containerPort: app.container_port,
     envFilePath,
     volumeMount: app.volume_mount || undefined,
-    extraVolumes,
+    extraVolumes: db.parseExtraVolumes(app.extra_volumes),
     memoryMb: app.memory_mb || undefined,
-  });
-  // rm -f clears both the missing-container and wedged-container cases; then
-  // re-run. If the wedged container also resists removal, the run will fail on
-  // the name/port conflict and we surface it (dockerd-level intervention).
-  await sshExec(server.ipv4, asUser(`docker rm -f ${replica.container_name} 2>/dev/null || true`), hostKey);
-  await sshExec(server.ipv4, asUser(cmd), hostKey);
+  }, hostKey);
   log("health", `recreated ${replica.container_name} from ${image}`);
 }
 
@@ -180,9 +197,7 @@ export async function checkReplicaHealth(
   const hostKey = server.ssh_host_key || undefined;
   const bindHost = replicaBindHost(server);
   try {
-    const check = app.health_check
-      ? await healthCheck(server.ipv4, replica.container_name, bindHost, replica.host_port, 1, hostKey)
-      : await containerRunningCheck(server.ipv4, replica.container_name, 1, hostKey);
+    const check = await probeAppHealth(app, server.ipv4, replica.container_name, bindHost, replica.host_port, 1, hostKey);
 
     const current = db.getReplica(replica.id);
     if (!current || HEALTH_EXEMPT_STATUSES.has(current.status)) return;
@@ -305,7 +320,11 @@ async function processServer(work: ServerWorkItem): Promise<void> {
   const { server } = work;
 
   // --- Phase 1: One SSH call for all docker stats + server metrics ---
-  const { containerStats, serverMetrics } = await collectServerMetrics(server);
+  const { containerStats, serverMetrics, traefikMetrics } = await collectServerMetrics(server);
+
+  // Request activity from Traefik's per-service counters. On a failed scrape
+  // (null) the server is left stale so sleep decisions skip its apps.
+  ingestServerRequestMetrics(server.id, traefikMetrics);
 
   // Apply container metrics to replicas
   for (const { replica } of work.replicas) {
@@ -579,6 +598,18 @@ async function tick(): Promise<void> {
       await reconcileTraefik();
     } catch (err) {
       log("ingress", `reconcile failed: ${err}`);
+    }
+
+    // --- One-shot firewall rule convergence (only meaningful when the fleet
+    // has provider-managed servers; ensureFirewall is idempotent) ---
+    if (!firewallConverged && db.getServers().some((s) => s.provider_id)) {
+      try {
+        const { hetzner } = await import("../shared/providers/index.ts");
+        await hetzner.ensureFirewall();
+        firewallConverged = true;
+      } catch (err) {
+        log("firewall", `converge failed: ${err}`);
+      }
     }
 
     // --- Stuck-state sweep (surfaces cleanup_failed + stuck ops to op-logger) ---

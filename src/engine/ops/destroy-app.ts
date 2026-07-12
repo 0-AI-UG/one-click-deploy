@@ -3,9 +3,8 @@ import * as github from "../../shared/github.ts";
 import {
   sshExec,
   removeContainer,
-  removeAuthProxy,
 } from "../../shared/remote/index.ts";
-import { removeAppIngress } from "../scale/traefik-manager.ts";
+import { syncAllTraefik } from "../scale/traefik-manager.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -73,27 +72,6 @@ const stopAndRemoveContainers: Step<DestroyInput, { affectedServerIds: number[];
   },
 };
 
-const removeAuthProxyStep: Step<DestroyInput, { ok: boolean; failed: boolean }> = {
-  name: "remove_auth_proxy",
-  label: "Remove auth proxy",
-  async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
-    if (!app) return { ok: true, failed: false };
-    if (!app.auth_password) return { ok: true, failed: false };
-    const replicas = db.getReplicas(ctx.input.appId);
-    let failed = false;
-    for (const replica of replicas) {
-      const server = db.getServer(replica.server_id);
-      if (!server) continue;
-      const r = await softStep(ctx, `remove_auth_proxy ${replica.container_name}`, async () => {
-        await removeAuthProxy(server.ipv4, replica.container_name, server.ssh_host_key || undefined);
-      });
-      if (!r.ok) failed = true;
-    }
-    return { ok: !failed, failed };
-  },
-};
-
 // Runs AFTER delete_db_rows: ingress is a desired-state render of the DB, so
 // the app's routers only disappear from the rendered config once its rows are
 // gone. (If the row deletion was skipped because of upstream failures, this
@@ -102,9 +80,8 @@ const removeIngressRoute: Step<DestroyInput, { ok: boolean; error?: string }> = 
   name: "remove_ingress_route",
   label: "Remove ingress route",
   async run(ctx) {
-    const name = `app#${ctx.input.appId}`;
     const r = await softStep(ctx, "remove_ingress_route", async () => {
-      await removeAppIngress(name, "");
+      await syncAllTraefik();
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };
   },
@@ -201,7 +178,6 @@ const destroyAppOp: OpKindDefinition<DestroyInput> = {
   steps: [
     removeGithubWebhook,
     stopAndRemoveContainers,
-    removeAuthProxyStep,
     deleteDnsRecords,
     deleteVolume,
     deleteDbRows,

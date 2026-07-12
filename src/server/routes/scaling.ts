@@ -2,7 +2,6 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
-import { collectMetrics } from "../../engine/scale-api.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
@@ -137,7 +136,9 @@ export async function handleGetScalingEvents(request: Request, appId: number): P
 export async function handleGetAppMetrics(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");
-    await collectMetrics(appId);
+    // Serve the reconciler's already-persisted per-replica metrics
+    // (cpu_percent / memory_percent, refreshed every ≤30s tick) rather than a
+    // per-request SSH `docker stats` fan-out across every replica.
     const replicas = db.getReplicas(appId);
     return Response.json(replicas, { headers: corsHeaders });
   } catch (error) {

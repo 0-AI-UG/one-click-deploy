@@ -27,6 +27,11 @@ export {
   composeHealthCheck,
   healthCheck,
   containerRunningCheck,
+  probeAppHealth,
+  startAppReplica,
+  writeEnvDeployFile,
+  buildAppImage,
+  findDockerfile,
   getContainerLogs,
   restartContainer,
   pauseContainer,
@@ -43,11 +48,4 @@ export {
   deployConfigFile,
   pruneServer,
 } from "../../engine/hetzner/containers.ts";
-
-// Auth proxy
-export {
-  authProxyPort,
-  deployAuthProxy,
-  removeAuthProxy,
-} from "../../engine/hetzner/auth-proxy.ts";
 

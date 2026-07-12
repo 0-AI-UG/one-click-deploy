@@ -32,14 +32,9 @@ mock.module("../../shared/remote/index.ts", () => ({
   healthCheck: healthCheckMock,
   containerRunningCheck: containerRunningCheckMock,
   composeHealthCheck: mock(async () => ({ healthy: true })),
-  deployAuthProxy: mock(async () => 9999),
-  removeAuthProxy: mock(async () => {}),
 }));
 mock.module("../scale/traefik-manager.ts", () => ({
   syncAppIngress: mock(async () => {}),
-  removeAppIngress: mock(async () => {}),
-  syncServiceIngress: mock(async () => {}),
-  removeServiceIngress: mock(async () => {}),
   getPanelIngressIpv4: mock(() => null),
   syncAllTraefik: mock(async () => {}),
   reconcileTraefik: mock(async () => {}),
@@ -802,7 +797,6 @@ describe("deploy op: structure", () => {
       "setup_volume_bind_mount",
       "clone_repo",
       "build_and_run_container",
-      "deploy_auth_proxy",
       "sync_ingress",
       "health_check",
       "record_deployment_history",

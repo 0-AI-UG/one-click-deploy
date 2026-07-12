@@ -1285,6 +1285,78 @@ export const migrations: Migration[] = [
       db.run("UPDATE apps SET domain = '' WHERE public = 0");
     },
   },
+  {
+    version: 62,
+    description: "Add auth_password_hash (Traefik basicAuth replaces the auth-proxy sidecar)",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN auth_password_hash TEXT NOT NULL DEFAULT ''");
+      // Backfill existing password-protected apps. Hashed once here (not at
+      // render time): bcrypt salts differ per hash, and the ingress renderer
+      // must stay deterministic for its content-hash sync cache.
+      const rows = db
+        .query("SELECT id, auth_password FROM apps WHERE auth_password != ''")
+        .all() as Array<{ id: number; auth_password: string }>;
+      for (const row of rows) {
+        db.run("UPDATE apps SET auth_password_hash = ? WHERE id = ?", [
+          Bun.password.hashSync(row.auth_password, { algorithm: "bcrypt" }),
+          row.id,
+        ]);
+      }
+    },
+  },
+  {
+    version: 63,
+    description: "Add request-activity columns (last_request_at, requests_per_min) for traffic-based sleep",
+    up: (db) => {
+      // last_request_at stays NULL until the engine observes the app in
+      // Traefik's request counters; the idle monitor seeds it on first
+      // evaluation so the sleep window never counts from the epoch.
+      db.run("ALTER TABLE apps ADD COLUMN last_request_at TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN requests_per_min REAL NOT NULL DEFAULT 0");
+    },
+  },
+  {
+    version: 64,
+    description: "Add per-app ingress settings (sticky, rate_limit_rps, ip_allowlist, health_check_path, compress)",
+    up: (db) => {
+      // All default to "off" — rendered into Traefik dynamic config only when
+      // set, so existing apps' ingress output is byte-identical after this.
+      db.run("ALTER TABLE apps ADD COLUMN sticky INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE apps ADD COLUMN rate_limit_rps INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE apps ADD COLUMN ip_allowlist TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE apps ADD COLUMN health_check_path TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE apps ADD COLUMN compress INTEGER NOT NULL DEFAULT 0");
+    },
+  },
+  {
+    version: 65,
+    description: "Add apps.public_port/public_protocol (raw TCP/UDP exposure on the panel IP)",
+    up: (db) => {
+      // NULL = not exposed. Ports come from the fleet-wide public pool
+      // (30000-30049 tcp, 30050-30099 udp — see PUBLIC_TCP_PORT_BASE); the
+      // partial unique index is the allocation concurrency backstop, same
+      // pattern as apps.internal_port.
+      db.run("ALTER TABLE apps ADD COLUMN public_port INTEGER");
+      db.run("ALTER TABLE apps ADD COLUMN public_protocol TEXT NOT NULL DEFAULT 'tcp'");
+      db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_apps_public_port ON apps(public_port) WHERE public_port IS NOT NULL");
+    },
+  },
+  {
+    version: 66,
+    description: "Drop apps.auth_password (auth_password_hash is now the sole source of truth)",
+    up: (db) => {
+      // The plaintext password was the legacy sidecar-proxy enable-flag and was
+      // leaking to the browser. Basic auth is now driven entirely by the bcrypt
+      // auth_password_hash (backfilled in migration 62), so the plaintext is
+      // dead. DROP COLUMN leaves the table in place — the ON DELETE CASCADE
+      // children of `apps` are untouched (no rebuild needed). Guarded so re-runs
+      // and older fixtures without the column don't error.
+      const cols = db.query("PRAGMA table_info(apps)").all() as Array<{ name: string }>;
+      if (cols.some((c) => c.name === "auth_password")) {
+        db.run("ALTER TABLE apps DROP COLUMN auth_password");
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */
