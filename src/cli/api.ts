@@ -47,6 +47,15 @@ export interface App {
   desired_replicas: number;
   servers: number[];
   created_at: string;
+  public?: boolean | number;
+  internal_port?: number;
+}
+
+/** Where the app answers: its public domain, or the internal address for
+ *  private apps (which have no public ingress at all). */
+export function appAddress(app: { name: string; domain: string; public?: boolean | number }): string {
+  if (app.public === false || app.public === 0) return `${app.name}.ocd.internal:8080 (private)`;
+  return app.domain || "-";
 }
 
 let cachedApps: App[] | null = null;

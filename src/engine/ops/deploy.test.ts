@@ -50,7 +50,8 @@ mock.module("../../shared/github.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import deployOp from "./deploy.ts";
+import { enqueueOperation, getOperation } from "../../shared/db/operations.ts";
+import deployOp, { resolveAppDomain } from "./deploy.ts";
 import redeployOp from "./redeploy.ts";
 
 // Synthetic op context. Steps that don't call park/unpark can use this shape.
@@ -493,6 +494,115 @@ describe("redeploy step: health_check", () => {
   });
 });
 
+// --- Feature A: private apps ------------------------------------------------
+
+describe("resolveAppDomain", () => {
+  test("private apps get no domain regardless of settings", () => {
+    expect(resolveAppDomain({ app_name: "a", public: false }, { dns_zone_id: "z1" }, "1.2.3.4"))
+      .toEqual({ domain: "", managedDns: false });
+  });
+
+  test("explicit domain is kept; managedDns follows dns_zone_id", () => {
+    expect(resolveAppDomain({ app_name: "a", domain: "a.example.com" }, { dns_zone_id: "z1" }, "1.2.3.4"))
+      .toEqual({ domain: "a.example.com", managedDns: true });
+    expect(resolveAppDomain({ app_name: "a", domain: "a.example.com" }, {}, "1.2.3.4"))
+      .toEqual({ domain: "a.example.com", managedDns: false });
+  });
+
+  test("falls back to nip.io from the ingress IP", () => {
+    expect(resolveAppDomain({ app_name: "a" }, {}, "1.2.3.4"))
+      .toEqual({ domain: "a.1.2.3.4.nip.io", managedDns: false });
+  });
+});
+
+describe("deploy: private apps", () => {
+  const serverPrior = (server: { id: number; ipv4: string }) => ({
+    pick_or_provision_server: {
+      serverId: server.id,
+      serverIp: server.ipv4,
+      serverHostKey: "",
+      provisioned: false,
+      ingressIp: server.ipv4,
+    },
+    create_dns_record: null,
+    create_volume: null,
+  });
+
+  function makeReadyServer() {
+    return db.insertServer({
+      name: `srv-${randomSuffix()}`,
+      provider_id: `h-${randomSuffix()}`,
+      ipv4: "3.3.3.3",
+      ipv6: "",
+      type: "cx22",
+      location: "fsn1",
+      status: "ready",
+      private_ipv4: "10.0.0.3",
+    });
+  }
+
+  test("create_dns_record returns null for private apps even with a zone configured", async () => {
+    db.saveSetting("dns_zone_id", "zone-123");
+    const step = stepByName("create_dns_record");
+    const { ctx } = makeCtx({ ...baseReq("x"), domain: "", public: false });
+    const out = await step.run(ctx, serverPrior({ id: 1, ipv4: "1.1.1.1" }));
+    expect(out).toBeNull();
+    expect(dns._mocks.createRecord).not.toHaveBeenCalled();
+  });
+
+  test("insert_app_row stores an empty domain and allocates an internal port", async () => {
+    const server = makeReadyServer();
+    const name = `priv-${randomSuffix()}`;
+    const step = stepByName("insert_app_row");
+    const { ctx } = makeCtx({
+      app_name: name,
+      git_repo: "https://github.com/x/y",
+      container_port: 3000,
+      public: false,
+    });
+    const out = (await step.run(ctx, serverPrior(server))) as { appId: number; domain: string; useInternalTls: boolean };
+    expect(out.domain).toBe("");
+    expect(out.useInternalTls).toBe(false);
+    const app = db.getApp(out.appId)!;
+    expect(app.domain).toBe("");
+    expect(app.public).toBe(0);
+    expect(app.internal_port).toBeGreaterThanOrEqual(db.INTERNAL_PORT_BASE);
+  });
+
+  test("enqueue_scale_child enqueues for private apps with replicas > 1", async () => {
+    const name = `priv-${randomSuffix()}`;
+    const app = db.insertApp({
+      name,
+      domain: "",
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      public: false,
+    });
+    const parent = enqueueOperation({
+      kind: "deploy",
+      resourceKeys: [`app:create:${name}`],
+      input: {},
+      trigger: "ui",
+    });
+    const step = stepByName("enqueue_scale_child");
+    const { ctx } = makeCtx({ app_name: name, git_repo: "https://github.com/x/y", container_port: 3000, public: false, replicas: 2 });
+    (ctx as any).opId = parent.id;
+    const out = (await step.run(ctx, { insert_app_row: { appId: app.id } })) as { childOpId: number | null };
+    expect(out.childOpId).not.toBeNull();
+    expect(getOperation(out.childOpId!)?.kind).toBe("scale_up");
+    expect(db.getApp(app.id)!.desired_replicas).toBe(2);
+  });
+
+  test("enqueue_scale_child still skips public apps without a domain", async () => {
+    const step = stepByName("enqueue_scale_child");
+    const { ctx } = makeCtx({ app_name: "x", git_repo: "https://github.com/x/y", container_port: 3000, replicas: 2 });
+    const out = (await step.run(ctx, { insert_app_row: { appId: 999999 } })) as { childOpId: number | null };
+    expect(out.childOpId).toBeNull();
+  });
+});
+
 describe("deploy op: structure", () => {
   test("has the expected step sequence", () => {
     const names = deployOp.steps.map((s) => s.name);
@@ -517,5 +627,31 @@ describe("deploy op: structure", () => {
   test("kind + resource key format", () => {
     expect(deployOp.kind).toBe("deploy");
     expect(deployOp.resourceKeys({ app_name: "foo" } as any)).toEqual(["app:create:foo"]);
+  });
+});
+
+// Keep last: fills the whole internal port block (fleet app cap).
+describe("deploy step: pick_or_provision_server fleet cap", () => {
+  test("rejects a deploy once 200 apps exist", async () => {
+    const fillers: number[] = [];
+    try {
+      while (db.countApps() < db.INTERNAL_PORT_COUNT) {
+        const name = `cap-${randomSuffix()}`;
+        fillers.push(db.insertApp({
+          name,
+          domain: `${name}.example.com`,
+          git_repo: "https://github.com/x/y",
+          dockerfile_path: "Dockerfile",
+          container_port: 3000,
+          env_vars: "{}",
+        }).id);
+      }
+      const step = stepByName("pick_or_provision_server");
+      const { ctx } = makeCtx(baseReq(`cap-final-${randomSuffix()}`));
+      expect(step.run(ctx, {})).rejects.toThrow(/fleet limit of 200 apps/i);
+    } finally {
+      // Free the block again — later test files share this db.
+      for (const id of fillers) db.deleteApp(id);
+    }
   });
 });

@@ -17,7 +17,7 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
     if (!app) {
       return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
     }
-    if (replicas > 1 && (!app.domain || app.domain.endsWith(".nip.io"))) {
+    if (replicas > 1 && app.public && (!app.domain || app.domain.endsWith(".nip.io"))) {
       return Response.json({ error: "Scaling requires a custom domain. Add a domain in app settings first." }, { status: 400, headers: corsHeaders });
     }
     if (replicas > 1 && app.volume_id) {
@@ -88,7 +88,7 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
 
     if (max_replicas > 1) {
       const app = db.getApp(appId);
-      if (app && (!app.domain || app.domain.endsWith(".nip.io"))) {
+      if (app && app.public && (!app.domain || app.domain.endsWith(".nip.io"))) {
         return Response.json({ error: "Scaling requires a custom domain. Add a domain in app settings first." }, { status: 400, headers: corsHeaders });
       }
       // Volume apps cannot scale beyond 1 replica — a cloud volume can only be

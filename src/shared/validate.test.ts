@@ -271,6 +271,16 @@ describe("validateDeployRequest", () => {
   test("rejects memory_mb above maximum", () => {
     expect(validateDeployRequest({ ...validRequest, memory_mb: 99999 }).valid).toBe(false);
   });
+
+  test("rejects a private app with a domain", () => {
+    const r = validateDeployRequest({ ...validRequest, public: false, domain: "app.example.com" });
+    expect(r.valid).toBe(false);
+    if (!r.valid) expect(r.error).toMatch(/private apps cannot have a public domain/i);
+  });
+
+  test("accepts a private app without a domain", () => {
+    expect(validateDeployRequest({ ...validRequest, public: false }).valid).toBe(true);
+  });
 });
 
 describe("validateGitHubPat", () => {

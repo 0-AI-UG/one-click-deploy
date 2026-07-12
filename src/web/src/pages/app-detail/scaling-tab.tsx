@@ -35,6 +35,9 @@ interface ScalingTabProps {
 export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPolicy, actionLoading, action, loadReplicas, load, ops }: ScalingTabProps) {
   const hasVolume = Boolean(app.volume_id);
   const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica — a cloud volume can only be attached to a single server at a time.";
+  // Only public apps need a custom domain to scale — private apps have no
+  // public ingress at all, so the domain requirement doesn't apply.
+  const needsDomain = !!app.public && (!app.domain || app.domain.endsWith(".nip.io"));
   const [selectedServer, setSelectedServer] = useState<string>("");
   const [servers, setServers] = useState<ResourceServer[]>([]);
 
@@ -74,9 +77,15 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
   const showProgress = !!progressMessage;
   return (
     <div className="space-y-4">
-      {(!app.domain || app.domain.endsWith(".nip.io")) && (
+      {needsDomain && (
         <Card className="p-4">
           <p className="font-mono text-[10px] text-accent-amber font-bold flex items-center gap-1">Scaling needs a custom domain — add one in Settings. <InfoTip text="nip.io URLs are derived from a single server IP and can't be used once replicas are spread across multiple hosts." /></p>
+        </Card>
+      )}
+
+      {!app.public && (
+        <Card className="p-4">
+          <p className="font-mono text-[10px] text-muted flex items-center gap-1">Private app — no public wake page. <InfoTip text="A sleeping private app has no public URL to wake it on request; wake it from this dashboard, the CLI, or the API." /></p>
         </Card>
       )}
 
@@ -143,7 +152,10 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                 const current = replicas.length || app.desired_replicas || 1;
                 if (current < 1) return;
                 if (current === 1) {
-                  if (!await confirm("Scale to Zero", "This will sleep the app. It wakes automatically when it receives an HTTP request.")) return;
+                  const msg = app.public
+                    ? "This will sleep the app. It wakes automatically when it receives an HTTP request."
+                    : "This will sleep the app. Private apps have no public wake page — wake it from this dashboard, the CLI, or the API.";
+                  if (!await confirm("Scale to Zero", msg)) return;
                 }
                 await runScale(current - 1);
               })}
@@ -151,11 +163,11 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
             <Btn
               size="sm"
               loading={actionLoading === "scale-up"}
-              disabled={!app.domain || app.domain.endsWith(".nip.io") || hasVolume || replicas.length >= 1 && hasVolume}
+              disabled={needsDomain || hasVolume || replicas.length >= 1 && hasVolume}
               title={
                 hasVolume
                   ? volumeLockedReason
-                  : (!app.domain || app.domain.endsWith(".nip.io"))
+                  : needsDomain
                     ? "Add a custom domain to enable scaling"
                     : "Add one replica. Placement is automatic: reuse a ready server with no replica of this app, or provision a new one."
               }
@@ -191,9 +203,9 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Checkbox
-                checked={policy.autoscale_enabled && !(!app.domain || app.domain.endsWith(".nip.io"))}
+                checked={policy.autoscale_enabled && !needsDomain}
                 onChange={(v) => {
-                  if (!app.domain || app.domain.endsWith(".nip.io")) return;
+                  if (needsDomain) return;
                   setPolicy({ ...policy, autoscale_enabled: v });
                 }}
                 label="Enable autoscaling"

@@ -328,6 +328,7 @@ export function validateDeployRequest(req: {
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   memory_mb?: number;
+  public?: boolean;
 }): ValidationResult<void> {
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };
@@ -343,6 +344,10 @@ export function validateDeployRequest(req: {
   if (req.domain) {
     const domainResult = validateDomain(req.domain);
     if (!domainResult.valid) return { valid: false, error: `Domain: ${domainResult.error}` };
+  }
+
+  if (req.public === false && req.domain) {
+    return { valid: false, error: "Private apps cannot have a public domain — remove `domain` or set `public: true`" };
   }
 
   const portResult = validatePort(req.container_port);

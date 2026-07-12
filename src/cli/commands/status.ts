@@ -1,4 +1,4 @@
-import { get } from "../api.ts";
+import { get, appAddress } from "../api.ts";
 import { table, colorStatus, BOLD, RESET, DIM } from "../format.ts";
 
 interface DashboardApp {
@@ -6,6 +6,7 @@ interface DashboardApp {
   name: string;
   status: string;
   domain: string;
+  public?: boolean | number;
 }
 
 interface DashboardService {
@@ -31,7 +32,7 @@ export async function status(): Promise<void> {
   if (data.apps.length > 0) {
     table(
       ["Name", "Status", "Domain"],
-      data.apps.map((a) => [a.name, colorStatus(a.status), a.domain || "-"]),
+      data.apps.map((a) => [a.name, colorStatus(a.status), appAddress(a)]),
     );
   }
 

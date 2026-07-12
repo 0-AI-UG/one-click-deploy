@@ -1,4 +1,4 @@
-import { getApps } from "../api.ts";
+import { getApps, appAddress } from "../api.ts";
 import { table, colorStatus } from "../format.ts";
 
 export async function apps(): Promise<void> {
@@ -9,7 +9,7 @@ export async function apps(): Promise<void> {
     list.map((a) => [
       a.name,
       colorStatus(a.status),
-      a.domain || "-",
+      appAddress(a),
       a.git_repo ? a.git_repo.replace("https://github.com/", "") : "-",
     ]),
   );

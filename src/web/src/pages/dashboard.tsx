@@ -9,6 +9,7 @@ type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
   container_port: number; webhook_enabled: number;
   desired_replicas: number; volume_id: string;
+  public: number; internal_port: number;
 };
 type ServiceData = {
   id: number; name: string; service_type: string; version: string; status: string;
@@ -191,6 +192,13 @@ export function DashboardPage() {
                             <Globe size={10} />{app.domain}<ExternalLink size={8} />
                           </a>
                           <CopyButton text={`https://${app.domain}`} size={10} />
+                        </span>
+                      )}
+                      {!app.public && !app.domain && (
+                        <span className="flex items-center gap-1 text-[9px] font-mono text-muted">
+                          <Globe size={10} />{app.name}.ocd.internal:8080
+                          <CopyButton text={`${app.name}.ocd.internal:8080`} size={10} />
+                          <span className="font-mono text-[8px] font-bold border border-fg px-1 uppercase">Private</span>
                         </span>
                       )}
                       <StatusBadge status={app.status} />

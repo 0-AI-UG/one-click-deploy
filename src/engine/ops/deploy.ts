@@ -117,6 +117,19 @@ async function buildMasker(input: DeployInput, userId: string) {
   return { mask: createMasker(secretValues), githubPat };
 }
 
+/** Resolve where the app is reachable from outside. Private apps get no
+ *  domain at all — no DNS record, no public route, internal ingress only.
+ *  (PR2 adds the auto-domain branch here.) */
+export function resolveAppDomain(
+  req: { app_name: string; domain?: string; public?: boolean },
+  settings: { dns_zone_id?: string },
+  ingressIp: string,
+): { domain: string; managedDns: boolean } {
+  if (req.public === false) return { domain: "", managedDns: false };
+  if (req.domain) return { domain: req.domain, managedDns: !!settings.dns_zone_id };
+  return { domain: `${req.app_name}.${ingressIp}.nip.io`, managedDns: false };
+}
+
 // --- Steps ----------------------------------------------------------------
 
 const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
@@ -131,6 +144,13 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
     }
     const validation = validateDeployRequest(req);
     if (!validation.valid) throw new Error(validation.error);
+
+    // Hard fleet cap: every app permanently owns one internal ingress port.
+    if (db.countApps() >= db.INTERNAL_PORT_COUNT) {
+      throw new Error(
+        "Fleet limit of 200 apps reached (internal port block 20000-20199 is full). Destroy an app before deploying a new one.",
+      );
+    }
 
     // Reject unsafe volume host paths early so the user sees a clear error
     // rather than a deploy that fails deep inside docker run.
@@ -209,6 +229,7 @@ const createDnsRecord: Step<DeployInput, DnsOut> = {
     const server = prior["pick_or_provision_server"] as ServerOut;
     const settings = db.getSettings();
     const dnsZoneId = settings.dns_zone_id;
+    if (req.public === false) return null; // private apps have no public ingress
     if (!req.domain || !dnsZoneId) return null;
 
     const parts = req.domain.split(".");
@@ -349,8 +370,9 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const replica = replicas[0];
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     if (!server || replica.server_id !== server.serverId) return null;
-    const useDomain = existing.domain || `${req.app_name}.${server.ingressIp}.nip.io`;
-    const useInternalTls = !req.domain;
+    const useDomain =
+      existing.domain || resolveAppDomain(req, db.getSettings(), server.ingressIp).domain;
+    const useInternalTls = useDomain.endsWith(".nip.io");
     const dockerfilePath = existing.dockerfile_path || req.dockerfile_path || "Dockerfile";
 
     // Resolve flat env vars from the existing app's environment (idempotent).
@@ -385,8 +407,8 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const dns = prior["create_dns_record"] as DnsOut;
     const volume = prior["create_volume"] as VolumeOut;
 
-    const useDomain = req.domain || `${req.app_name}.${server.ingressIp}.nip.io`;
-    const useInternalTls = !req.domain;
+    const { domain: useDomain } = resolveAppDomain(req, db.getSettings(), server.ingressIp);
+    const useInternalTls = useDomain.endsWith(".nip.io");
     const dockerfilePath = req.dockerfile_path || "Dockerfile";
 
     // Resolve environment + flat env vars (must be reproducible; idempotent
@@ -732,7 +754,8 @@ const syncCaddyStep: Step<DeployInput, { domain: string }> = {
     const dns = prior["create_dns_record"] as DnsOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
 
-    if (req.domain && !appOut.useInternalTls && !dns) {
+    // Private apps have no public domain — nothing to resolve.
+    if (req.public !== false && req.domain && !appOut.useInternalTls && !dns) {
       const resolved = await resolveDomainIps(req.domain);
       if (resolved.length === 0) {
         throw new Error(
@@ -747,7 +770,12 @@ const syncCaddyStep: Step<DeployInput, { domain: string }> = {
     }
 
     await syncAppCaddy(appOut.appId);
-    db.appendDeployLog(appOut.appId, `[caddy] Panel ingress configured for ${appOut.domain}`);
+    db.appendDeployLog(
+      appOut.appId,
+      appOut.domain
+        ? `[caddy] Panel ingress configured for ${appOut.domain}`
+        : `[caddy] Internal ingress configured (private app)`,
+    );
     return { domain: appOut.domain };
   },
   async compensate(ctx, out, prior) {
@@ -932,7 +960,9 @@ const enqueueScaleChild: Step<DeployInput, { childOpId: number | null }> = {
   async run(ctx, prior) {
     const req = ctx.input;
     const appOut = prior["insert_app_row"] as InsertAppOut;
-    if (!req.replicas || req.replicas <= 1 || !req.domain) {
+    // Public apps need a real domain before replicas can spread across
+    // servers; private apps scale without one.
+    if (!req.replicas || req.replicas <= 1 || (req.public !== false && !req.domain)) {
       return { childOpId: null };
     }
     db.updateAppScaling(appOut.appId, {

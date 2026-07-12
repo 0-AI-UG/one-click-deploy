@@ -42,6 +42,7 @@ export type AppData = {
   sleeping_host_port?: number | null;
   public?: boolean | number;
   memory_mb?: number;
+  internal_port?: number;
 };
 
 export type ReplicaData = {
