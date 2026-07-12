@@ -42,7 +42,36 @@ export type AppRow = {
   extra_volumes: string; // JSON array of "host:container" strings
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
   health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
+  internal_port: number; // fleet-unique internal ingress port (20000-20199), owned for the app's lifetime
 };
+
+/** Internal ingress port block: every app owns one port in
+ *  [INTERNAL_PORT_BASE, INTERNAL_PORT_BASE + INTERNAL_PORT_COUNT).
+ *  The block size doubles as the hard fleet app cap. */
+export const INTERNAL_PORT_BASE = 20000;
+export const INTERNAL_PORT_COUNT = 200;
+
+export function countApps(): number {
+  const row = db.query("SELECT COUNT(*) as c FROM apps").get() as { c: number } | null;
+  return row?.c ?? 0;
+}
+
+/** Lowest free port in the internal block. The partial unique index on
+ *  apps.internal_port is the concurrency backstop; deleting an app row frees
+ *  its port automatically. Ports are never reallocated on redeploy/move/scale
+ *  because they live on the app row. */
+export function allocateInternalPort(): number {
+  const used = new Set(
+    (db.query("SELECT internal_port FROM apps WHERE internal_port > 0").all() as Array<{ internal_port: number }>)
+      .map((r) => r.internal_port),
+  );
+  for (let port = INTERNAL_PORT_BASE; port < INTERNAL_PORT_BASE + INTERNAL_PORT_COUNT; port++) {
+    if (!used.has(port)) return port;
+  }
+  throw new Error(
+    `Fleet limit of ${INTERNAL_PORT_COUNT} apps reached (internal port block ${INTERNAL_PORT_BASE}-${INTERNAL_PORT_BASE + INTERNAL_PORT_COUNT - 1} is full). Destroy an app before deploying a new one.`,
+  );
+}
 
 export type DnsRecordRow = {
   id: number;
@@ -100,24 +129,28 @@ export function insertApp(app: {
   public?: boolean;
   health_check?: boolean;
 }): AppRow {
-  return db
-    .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, health_check) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
-    )
-    .get(
-      app.name,
-      app.domain,
-      app.git_repo,
-      app.git_branch || "",
-      app.dockerfile_path,
-      app.docker_context || ".",
-      app.container_port,
-      app.env_vars,
-      app.auth_password || "",
-      app.environment_id ?? null,
-      (app.public ?? true) ? 1 : 0,
-      (app.health_check ?? true) ? 1 : 0,
-    ) as AppRow;
+  const tx = db.transaction(() => {
+    return db
+      .query(
+        "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, health_check, internal_port) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      )
+      .get(
+        app.name,
+        app.domain,
+        app.git_repo,
+        app.git_branch || "",
+        app.dockerfile_path,
+        app.docker_context || ".",
+        app.container_port,
+        app.env_vars,
+        app.auth_password || "",
+        app.environment_id ?? null,
+        (app.public ?? true) ? 1 : 0,
+        (app.health_check ?? true) ? 1 : 0,
+        allocateInternalPort(),
+      ) as AppRow;
+  });
+  return tx();
 }
 
 export function insertAppWithFirstReplica(
@@ -140,7 +173,7 @@ export function insertAppWithFirstReplica(
   const tx = db.transaction(() => {
     const appRow = db
       .query(
-        "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, health_check) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+        "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password, environment_id, public, health_check, internal_port) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
       )
       .get(
         app.name,
@@ -155,6 +188,7 @@ export function insertAppWithFirstReplica(
         app.environment_id ?? null,
         (app.public ?? true) ? 1 : 0,
         (app.health_check ?? true) ? 1 : 0,
+        allocateInternalPort(),
       ) as AppRow;
     const hostPort = nextReplicaHostPort(serverId);
     const replicaRow = db

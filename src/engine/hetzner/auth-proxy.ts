@@ -4,7 +4,9 @@ function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
-const AUTH_PROXY_PORT_OFFSET = 10000;
+// +30000 keeps auth-proxy listeners (replica host ports start at 10000) clear
+// of the internal ingress block 20000-20199.
+const AUTH_PROXY_PORT_OFFSET = 30000;
 
 export function authProxyPort(hostPort: number): number {
   return hostPort + AUTH_PROXY_PORT_OFFSET;

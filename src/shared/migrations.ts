@@ -1263,6 +1263,28 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN health_check INTEGER NOT NULL DEFAULT 1");
     },
   },
+  {
+    version: 60,
+    description: "Add apps.internal_port (fleet-unique, 20000-20199) and backfill",
+    up: (db) => {
+      // Every app permanently owns one port in the internal ingress block —
+      // the block size (200) doubles as the hard fleet app cap. The partial
+      // unique index is the concurrency backstop for allocation; a deleted
+      // app row frees its port automatically.
+      db.run("ALTER TABLE apps ADD COLUMN internal_port INTEGER NOT NULL DEFAULT 0");
+      db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_apps_internal_port ON apps(internal_port) WHERE internal_port > 0");
+      const apps = db.query("SELECT id FROM apps ORDER BY id ASC").all() as Array<{ id: number }>;
+      if (apps.length > 200) throw new Error("More than 200 apps — internal port block 20000-20199 is exhausted");
+      apps.forEach((a, i) => db.run("UPDATE apps SET internal_port = ? WHERE id = ?", [20000 + i, a.id]));
+    },
+  },
+  {
+    version: 61,
+    description: "Blank domains of private apps (no public ingress)",
+    up: (db) => {
+      db.run("UPDATE apps SET domain = '' WHERE public = 0");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

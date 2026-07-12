@@ -50,6 +50,10 @@ export {
   updateAppEnvironment,
   getAppsByEnvironmentId,
   nextReplicaHostPort,
+  countApps,
+  allocateInternalPort,
+  INTERNAL_PORT_BASE,
+  INTERNAL_PORT_COUNT,
 } from "./apps.ts";
 export type { ReplicaRow, MetricSampleRow, ScalingEventRow } from "./replicas.ts";
 export {

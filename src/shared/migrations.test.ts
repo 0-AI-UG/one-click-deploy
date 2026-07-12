@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
-import { runMigrations, type Migration } from "./migrations.ts";
+import { runMigrations, migrations, type Migration } from "./migrations.ts";
 
 function freshDb(): Database {
   const db = new Database(":memory:");
@@ -139,5 +139,42 @@ describe("runMigrations", () => {
     runMigrations(db);
     const v2 = (db.query("SELECT version FROM schema_version").get() as any).version;
     expect(v1).toBe(v2);
+  });
+
+  test("migration 60 backfills unique sequential internal ports", () => {
+    const db = freshDb();
+    db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h1')");
+    db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a1', 'a1.com', 'https://x.git')");
+    db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a2', 'a2.com', 'https://x.git')");
+    db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a3', 'a3.com', 'https://x.git')");
+    runMigrations(db);
+    const rows = db.query("SELECT internal_port FROM apps ORDER BY id ASC").all() as any[];
+    expect(rows.map((r) => r.internal_port)).toEqual([20000, 20001, 20002]);
+  });
+
+  test("migration 60 unique index rejects duplicate internal ports but allows 0", () => {
+    const db = freshDb();
+    runMigrations(db);
+    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a1', 'a1.com', 'https://x.git', 20005)");
+    expect(() =>
+      db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a2', 'a2.com', 'https://x.git', 20005)"),
+    ).toThrow();
+    // The index is partial (internal_port > 0) — unallocated rows don't collide.
+    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a3', 'a3.com', 'https://x.git', 0)");
+    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a4', 'a4.com', 'https://x.git', 0)");
+  });
+
+  test("migration 61 blanks domains of private apps only", () => {
+    const db = freshDb();
+    runMigrations(db);
+    // Re-apply migration 61 against post-migration rows (runMigrations already
+    // ran it on an empty table).
+    db.run("INSERT INTO apps (name, domain, git_repo, public, internal_port) VALUES ('pub', 'pub.example.com', 'https://x.git', 1, 20000)");
+    db.run("INSERT INTO apps (name, domain, git_repo, public, internal_port) VALUES ('priv', 'priv.example.com', 'https://x.git', 0, 20001)");
+    migrations.find((m) => m.version === 61)!.up(db);
+    const pub = db.query("SELECT domain FROM apps WHERE name = 'pub'").get() as any;
+    const priv = db.query("SELECT domain FROM apps WHERE name = 'priv'").get() as any;
+    expect(pub.domain).toBe("pub.example.com");
+    expect(priv.domain).toBe("");
   });
 });

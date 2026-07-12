@@ -40,6 +40,7 @@ export interface App {
   extra_volumes: string;
   memory_mb: number;
   health_check: number;
+  internal_port: number;
 }
 
 export interface Replica {
