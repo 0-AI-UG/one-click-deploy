@@ -4,6 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore } from "../../shared/secret-store.ts";
 import { hetzner } from "../../shared/providers/index.ts";
+import { syncZoneNameSetting } from "../../shared/dns-zone.ts";
 
 export function isSetupComplete(): boolean {
   return db.getUserCount() > 0;
@@ -115,7 +116,11 @@ export async function handleSetupComplete(request: Request): Promise<Response> {
     if (provider_token) await secretStore.set(provider.tokenKey, provider_token);
 
     // Store non-secret settings
-    if (dns_zone_id) db.saveSetting("dns_zone_id", dns_zone_id);
+    if (dns_zone_id) {
+      db.saveSetting("dns_zone_id", dns_zone_id);
+      // Cache the zone name for auto-domains (<app>.<zone>).
+      await syncZoneNameSetting(dns_zone_id);
+    }
     if (default_server_type) db.saveSetting("default_server_type", default_server_type);
     if (default_location) db.saveSetting("default_location", default_location);
 

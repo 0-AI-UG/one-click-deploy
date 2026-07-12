@@ -4,6 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore, maskToken } from "../../shared/secret-store.ts";
 import { hetzner } from "../../shared/providers/index.ts";
+import { syncZoneNameSetting } from "../../shared/dns-zone.ts";
 
 export async function handleGetSettings(request: Request): Promise<Response> {
   try {
@@ -67,6 +68,11 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
         }
       } else if (key === "github_oauth_client_id") {
         db.saveSetting(key, value);
+      } else if (key === "dns_zone_id") {
+        db.saveSetting(key, value);
+        // Cache the zone *name* for auto-domains (<app>.<zone>); an empty
+        // zone id clears it.
+        await syncZoneNameSetting(value);
       } else if (key === "github_oauth_client_secret") {
         if (value.includes("...") || value === "****") continue;
         if (value) {

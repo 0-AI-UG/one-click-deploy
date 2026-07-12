@@ -20,6 +20,7 @@ import { createMasker } from "../../shared/mask.ts";
 import { processIncomingEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
 import { getProviderToken } from "../../shared/secret-store.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { provisionServer } from "../provision-server.ts";
 import { resolve4 } from "node:dns/promises";
 import { registerOp } from "./registry.ts";
@@ -40,6 +41,10 @@ type ServerOut = {
   provisioned: boolean;
   providerServerId?: string;
   ingressIp: string;
+  /** DNS zone name for auto-domains, resolved once in this step so every
+   *  later step (and crash-replay probes) sees the same value. "" when no
+   *  zone is configured or the deploy doesn't need an auto-domain. */
+  zoneName?: string;
 };
 
 type DnsOut = {
@@ -119,15 +124,31 @@ async function buildMasker(input: DeployInput, userId: string) {
 
 /** Resolve where the app is reachable from outside. Private apps get no
  *  domain at all — no DNS record, no public route, internal ingress only.
- *  (PR2 adds the auto-domain branch here.) */
+ *  Public apps without an explicit domain get the auto-domain
+ *  `<app>.<zone>` when a DNS zone is configured; nip.io remains the
+ *  fallback only when no zone is configured (or its name is unresolvable). */
 export function resolveAppDomain(
   req: { app_name: string; domain?: string; public?: boolean },
-  settings: { dns_zone_id?: string },
+  settings: { dns_zone_id?: string; dns_zone_name?: string },
   ingressIp: string,
 ): { domain: string; managedDns: boolean } {
   if (req.public === false) return { domain: "", managedDns: false };
   if (req.domain) return { domain: req.domain, managedDns: !!settings.dns_zone_id };
+  if (settings.dns_zone_id && settings.dns_zone_name) {
+    return { domain: `${req.app_name}.${settings.dns_zone_name}`, managedDns: true };
+  }
   return { domain: `${req.app_name}.${ingressIp}.nip.io`, managedDns: false };
+}
+
+/** Settings view for resolveAppDomain inside deploy steps: the zone name from
+ *  the pick_or_provision_server output wins over the live setting so domain
+ *  resolution is deterministic across run+probe replays of the saga. */
+function domainSettings(server: ServerOut): { dns_zone_id?: string; dns_zone_name?: string } {
+  const settings = db.getSettings();
+  return {
+    dns_zone_id: settings.dns_zone_id,
+    dns_zone_name: server.zoneName ?? settings.dns_zone_name,
+  };
 }
 
 // --- Steps ----------------------------------------------------------------
@@ -162,6 +183,18 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
     const panel = db.getPanel();
     const panelServerRow = panel ? db.getServer(panel.server_id) : null;
 
+    // Auto-domain zone name: resolve (and cache) it once in this step so the
+    // whole saga — including crash-replay probes of later steps — sees one
+    // consistent value via this step's persisted output. Only needed when the
+    // deploy would actually mint an auto-domain.
+    const zoneName =
+      req.public === false || req.domain ? "" : await getOrResolveZoneName();
+    if (req.public !== false && !req.domain && settings.dns_zone_id && !zoneName) {
+      ctx.log(
+        `dns_zone_id is set but the zone name could not be resolved — falling back to nip.io`,
+      );
+    }
+
     if (req.server_id) {
       const target = db.getServer(req.server_id) as Server | null;
       if (!target || target.status !== "ready") {
@@ -174,6 +207,7 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
         serverHostKey: target.ssh_host_key || "",
         provisioned: false,
         ingressIp,
+        zoneName,
       };
     }
     const existingReady = db.getServers().find((s: Server) => s.status === "ready");
@@ -185,6 +219,7 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
         serverHostKey: existingReady.ssh_host_key || "",
         provisioned: false,
         ingressIp,
+        zoneName,
       };
     }
     const serverType = settings.default_server_type;
@@ -206,6 +241,7 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
       provisioned: true,
       providerServerId: newServer.provider_id,
       ingressIp,
+      zoneName,
     };
   },
   async compensate(ctx, out) {
@@ -227,13 +263,22 @@ const createDnsRecord: Step<DeployInput, DnsOut> = {
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
-    const settings = db.getSettings();
-    const dnsZoneId = settings.dns_zone_id;
+    const dnsZoneId = db.getSettings().dns_zone_id;
     if (req.public === false) return null; // private apps have no public ingress
-    if (!req.domain || !dnsZoneId) return null;
+    if (!dnsZoneId) return null;
 
-    const parts = req.domain.split(".");
-    const subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
+    // Same resolution as insert_app_row — covers explicit domains and
+    // auto-domains (<app>.<zone>); nip.io fallbacks get no managed record.
+    const { domain, managedDns } = resolveAppDomain(req, domainSettings(server), server.ingressIp);
+    if (!domain || !managedDns) return null;
+
+    // Record name: an auto-domain is always a direct child of the zone;
+    // explicit domains keep the strip-the-last-two-labels behavior.
+    let subdomain = req.app_name;
+    if (req.domain) {
+      const parts = req.domain.split(".");
+      subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
+    }
 
     // Idempotency: check provider for existing record.
     const dns = hetznerDns;
@@ -371,7 +416,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     if (!server || replica.server_id !== server.serverId) return null;
     const useDomain =
-      existing.domain || resolveAppDomain(req, db.getSettings(), server.ingressIp).domain;
+      existing.domain || resolveAppDomain(req, domainSettings(server), server.ingressIp).domain;
     const useInternalTls = useDomain.endsWith(".nip.io");
     const dockerfilePath = existing.dockerfile_path || req.dockerfile_path || "Dockerfile";
 
@@ -407,7 +452,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const dns = prior["create_dns_record"] as DnsOut;
     const volume = prior["create_volume"] as VolumeOut;
 
-    const { domain: useDomain } = resolveAppDomain(req, db.getSettings(), server.ingressIp);
+    const { domain: useDomain } = resolveAppDomain(req, domainSettings(server), server.ingressIp);
     const useInternalTls = useDomain.endsWith(".nip.io");
     const dockerfilePath = req.dockerfile_path || "Dockerfile";
 

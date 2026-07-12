@@ -30,9 +30,13 @@ const fakeProvider = {
   deleteServer: async () => {},
   listServers: async () => [],
 };
+const listZonesMock = mock(async () => [
+  { id: "zone-abc", name: "example.org" },
+  { id: "zone-def", name: "other.dev" },
+]);
 mock.module("../../shared/providers/index.ts", () => ({
   hetzner: fakeProvider,
-  hetznerDns: ({ id: "", name: "", listZones: async () => [], createRecord: async () => ({}), deleteRecord: async () => {} }),
+  hetznerDns: ({ id: "", name: "", listZones: listZonesMock, createRecord: async () => ({}), deleteRecord: async () => {} }),
 }));
 
 import * as db from "../../shared/db.ts";
@@ -153,6 +157,36 @@ describe("handleSaveSettings: plain db settings", () => {
     expect(s.dns_zone_id).toBe("zone-abc");
     expect(s.default_server_type).toBe("cx22");
     expect(s.default_location).toBe("fsn1");
+  });
+
+  test("saving a dns_zone_id resolves and caches the zone name", async () => {
+    const r = await handleSaveSettings(req({ dns_zone_id: "zone-def" }));
+    expect(r.status).toBe(200);
+    expect(db.getSettings().dns_zone_id).toBe("zone-def");
+    expect(db.getSettings().dns_zone_name).toBe("other.dev");
+  });
+
+  test("clearing dns_zone_id clears the cached zone name", async () => {
+    db.saveSetting("dns_zone_id", "zone-abc");
+    db.saveSetting("dns_zone_name", "example.org");
+    const r = await handleSaveSettings(req({ dns_zone_id: "" }));
+    expect(r.status).toBe(200);
+    expect(db.getSettings().dns_zone_id).toBe("");
+    expect(db.getSettings().dns_zone_name).toBe("");
+  });
+
+  test("unknown zone id leaves the zone name empty", async () => {
+    const r = await handleSaveSettings(req({ dns_zone_id: "zone-nope" }));
+    expect(r.status).toBe(200);
+    expect(db.getSettings().dns_zone_name).toBe("");
+  });
+
+  test("zone name lookup failure does not fail the save", async () => {
+    listZonesMock.mockImplementationOnce(async () => { throw new Error("dns api down"); });
+    const r = await handleSaveSettings(req({ dns_zone_id: "zone-abc" }));
+    expect(r.status).toBe(200);
+    expect(db.getSettings().dns_zone_id).toBe("zone-abc");
+    expect(db.getSettings().dns_zone_name).toBe("");
   });
 
   test("require_2fa is coerced to '1' / '0' string", async () => {

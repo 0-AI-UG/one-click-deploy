@@ -179,12 +179,44 @@ describe("deploy step: pick_or_provision_server", () => {
     const { ctx } = makeCtx(baseReq(`app-${randomSuffix()}`));
     expect(step.run(ctx, {})).rejects.toThrow(/server type/i);
   });
+
+  test("lazily resolves and caches the zone name for auto-domain deploys", async () => {
+    for (const s of db.getServers()) db.deleteServer(s.id);
+    db.insertServer({
+      name: `srv-${randomSuffix()}`,
+      provider_id: `h-${randomSuffix()}`,
+      ipv4: "9.9.9.8",
+      ipv6: "",
+      type: "cx22",
+      location: "fsn1",
+      status: "ready",
+    });
+    try {
+      // Zone id configured but the name was never resolved.
+      db.saveSetting("dns_zone_id", "zone-1"); // fake provider knows zone-1 = example.com
+      db.saveSetting("dns_zone_name", "");
+      const { ctx } = makeCtx({ app_name: `auto-${randomSuffix()}`, git_repo: "https://github.com/x/y", container_port: 3000 });
+      const out = (await step.run(ctx, {})) as { zoneName?: string };
+      expect(out.zoneName).toBe("example.com");
+      expect(db.getSettings().dns_zone_name).toBe("example.com");
+
+      // Deploys with an explicit domain don't need (or record) a zone name.
+      const { ctx: ctx2 } = makeCtx(baseReq(`auto-${randomSuffix()}`));
+      const out2 = (await step.run(ctx2, {})) as { zoneName?: string };
+      expect(out2.zoneName).toBe("");
+    } finally {
+      db.saveSetting("dns_zone_id", "");
+      db.saveSetting("dns_zone_name", "");
+    }
+  });
 });
 
 describe("deploy step: create_dns_record", () => {
   const step = stepByName("create_dns_record");
 
-  test("returns null when the request has no domain", async () => {
+  test("returns null when the request has no domain and no zone is configured", async () => {
+    db.saveSetting("dns_zone_id", "");
+    db.saveSetting("dns_zone_name", "");
     const { ctx } = makeCtx({ ...baseReq("x"), domain: "" });
     const prior = {
       pick_or_provision_server: {
@@ -274,6 +306,59 @@ describe("deploy step: create_dns_record", () => {
     const out = await step.run(ctx, prior);
     expect(out).toBeNull();
     expect(logLines.some((l) => /DNS record creation failed/i.test(l))).toBe(true);
+  });
+
+  test("auto-domain: creates an A record named after the app", async () => {
+    db.saveSetting("dns_zone_id", "zone-auto");
+    db.saveSetting("dns_zone_name", "example.com");
+    try {
+      const { ctx } = makeCtx({ ...baseReq("myapp"), app_name: "myapp", domain: "" });
+      const prior = {
+        pick_or_provision_server: {
+          serverId: 1,
+          serverIp: "1.1.1.1",
+          serverHostKey: "",
+          provisioned: false,
+          ingressIp: "6.6.6.6",
+          zoneName: "example.com",
+        },
+      };
+      const out = (await step.run(ctx, prior)) as { name: string; value: string; zoneId: string };
+      expect(out.name).toBe("myapp");
+      expect(out.value).toBe("6.6.6.6");
+      expect(dns._mocks.createRecord.mock.calls[0][0]).toMatchObject({
+        zoneId: "zone-auto",
+        name: "myapp",
+        type: "A",
+        value: "6.6.6.6",
+      });
+    } finally {
+      db.saveSetting("dns_zone_id", "");
+      db.saveSetting("dns_zone_name", "");
+    }
+  });
+
+  test("no record for the nip.io fallback (zone id set but name unresolved)", async () => {
+    db.saveSetting("dns_zone_id", "zone-auto");
+    db.saveSetting("dns_zone_name", "");
+    try {
+      const { ctx } = makeCtx({ ...baseReq("x"), domain: "" });
+      const prior = {
+        pick_or_provision_server: {
+          serverId: 1,
+          serverIp: "1.1.1.1",
+          serverHostKey: "",
+          provisioned: false,
+          ingressIp: "6.6.6.6",
+          zoneName: "",
+        },
+      };
+      expect(await step.run(ctx, prior)).toBeNull();
+      expect(dns._mocks.createRecord).not.toHaveBeenCalled();
+    } finally {
+      db.saveSetting("dns_zone_id", "");
+      db.saveSetting("dns_zone_name", "");
+    }
   });
 
   test("compensation deletes the previously created record", async () => {
@@ -500,6 +585,11 @@ describe("resolveAppDomain", () => {
   test("private apps get no domain regardless of settings", () => {
     expect(resolveAppDomain({ app_name: "a", public: false }, { dns_zone_id: "z1" }, "1.2.3.4"))
       .toEqual({ domain: "", managedDns: false });
+    expect(resolveAppDomain(
+      { app_name: "a", public: false },
+      { dns_zone_id: "z1", dns_zone_name: "example.com" },
+      "1.2.3.4",
+    )).toEqual({ domain: "", managedDns: false });
   });
 
   test("explicit domain is kept; managedDns follows dns_zone_id", () => {
@@ -509,8 +599,32 @@ describe("resolveAppDomain", () => {
       .toEqual({ domain: "a.example.com", managedDns: false });
   });
 
-  test("falls back to nip.io from the ingress IP", () => {
+  test("explicit domain beats the auto-domain", () => {
+    expect(resolveAppDomain(
+      { app_name: "a", domain: "custom.other.org" },
+      { dns_zone_id: "z1", dns_zone_name: "example.com" },
+      "1.2.3.4",
+    )).toEqual({ domain: "custom.other.org", managedDns: true });
+  });
+
+  test("auto-domain <app>.<zone> when a zone is configured and no domain given", () => {
+    expect(resolveAppDomain(
+      { app_name: "a" },
+      { dns_zone_id: "z1", dns_zone_name: "example.com" },
+      "1.2.3.4",
+    )).toEqual({ domain: "a.example.com", managedDns: true });
+  });
+
+  test("falls back to nip.io only when no zone is configured or resolvable", () => {
     expect(resolveAppDomain({ app_name: "a" }, {}, "1.2.3.4"))
+      .toEqual({ domain: "a.1.2.3.4.nip.io", managedDns: false });
+    // Zone id without a resolvable name -> nip.io, unmanaged.
+    expect(resolveAppDomain({ app_name: "a" }, { dns_zone_id: "z1" }, "1.2.3.4"))
+      .toEqual({ domain: "a.1.2.3.4.nip.io", managedDns: false });
+    expect(resolveAppDomain({ app_name: "a" }, { dns_zone_id: "z1", dns_zone_name: "" }, "1.2.3.4"))
+      .toEqual({ domain: "a.1.2.3.4.nip.io", managedDns: false });
+    // Zone name without a zone id (stale cache) -> nip.io.
+    expect(resolveAppDomain({ app_name: "a" }, { dns_zone_name: "example.com" }, "1.2.3.4"))
       .toEqual({ domain: "a.1.2.3.4.nip.io", managedDns: false });
   });
 });
@@ -600,6 +714,75 @@ describe("deploy: private apps", () => {
     const { ctx } = makeCtx({ app_name: "x", git_repo: "https://github.com/x/y", container_port: 3000, replicas: 2 });
     const out = (await step.run(ctx, { insert_app_row: { appId: 999999 } })) as { childOpId: number | null };
     expect(out.childOpId).toBeNull();
+  });
+});
+
+// --- Feature B: auto-domains --------------------------------------------------
+
+describe("deploy: auto-domains", () => {
+  function makeReadyServer() {
+    return db.insertServer({
+      name: `srv-${randomSuffix()}`,
+      provider_id: `h-${randomSuffix()}`,
+      ipv4: "3.3.3.4",
+      ipv6: "",
+      type: "cx22",
+      location: "fsn1",
+      status: "ready",
+      private_ipv4: "10.0.0.4",
+    });
+  }
+
+  const serverPrior = (server: { id: number; ipv4: string }, zoneName: string) => ({
+    pick_or_provision_server: {
+      serverId: server.id,
+      serverIp: server.ipv4,
+      serverHostKey: "",
+      provisioned: false,
+      ingressIp: server.ipv4,
+      zoneName,
+    },
+    create_dns_record: null,
+    create_volume: null,
+  });
+
+  test("insert_app_row stores <app>.<zone> using the prior step's zone name (replay-deterministic)", async () => {
+    const server = makeReadyServer();
+    const name = `auto-${randomSuffix()}`;
+    // The live setting deliberately differs from the prior-step output: the
+    // saga must keep using the value captured at pick_or_provision_server.
+    db.saveSetting("dns_zone_id", "zone-auto");
+    db.saveSetting("dns_zone_name", "changed-since.example.org");
+    try {
+      const step = stepByName("insert_app_row");
+      const { ctx } = makeCtx({ app_name: name, git_repo: "https://github.com/x/y", container_port: 3000 });
+      const out = (await step.run(ctx, serverPrior(server, "example.com"))) as {
+        appId: number; domain: string; useInternalTls: boolean;
+      };
+      expect(out.domain).toBe(`${name}.example.com`);
+      expect(out.useInternalTls).toBe(false);
+      expect(db.getApp(out.appId)!.domain).toBe(`${name}.example.com`);
+    } finally {
+      db.saveSetting("dns_zone_id", "");
+      db.saveSetting("dns_zone_name", "");
+    }
+  });
+
+  test("insert_app_row keeps the nip.io fallback when the zone name is unresolved", async () => {
+    const server = makeReadyServer();
+    const name = `auto-${randomSuffix()}`;
+    db.saveSetting("dns_zone_id", "zone-auto");
+    db.saveSetting("dns_zone_name", "");
+    try {
+      const step = stepByName("insert_app_row");
+      const { ctx } = makeCtx({ app_name: name, git_repo: "https://github.com/x/y", container_port: 3000 });
+      const out = (await step.run(ctx, serverPrior(server, ""))) as { domain: string; useInternalTls: boolean };
+      expect(out.domain).toBe(`${name}.${server.ipv4}.nip.io`);
+      expect(out.useInternalTls).toBe(true);
+    } finally {
+      db.saveSetting("dns_zone_id", "");
+      db.saveSetting("dns_zone_name", "");
+    }
   });
 });
 

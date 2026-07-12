@@ -28,7 +28,13 @@ const fakeProvider = {
 };
 mock.module("../../shared/providers/index.ts", () => ({
   hetzner: fakeProvider,
-  hetznerDns: ({ id: "", name: "", listZones: async () => [], createRecord: async () => ({}), deleteRecord: async () => {} }),
+  hetznerDns: ({
+    id: "",
+    name: "",
+    listZones: async () => [{ id: "zone-abc", name: "example.org" }],
+    createRecord: async () => ({}),
+    deleteRecord: async () => {},
+  }),
 }));
 
 mock.module("../lib/auth.ts", () => ({
@@ -186,6 +192,8 @@ describe("handleSetupComplete", () => {
     expect(await secretStore.get("hetzner_api_token")).toBe(tok);
     const settings = db.getSettings();
     expect(settings.dns_zone_id).toBe("zone-abc");
+    // Zone name resolved via the DNS provider and cached for auto-domains.
+    expect(settings.dns_zone_name).toBe("example.org");
     expect(settings.default_server_type).toBe("cx22");
     expect(settings.default_location).toBe("fsn1");
   });

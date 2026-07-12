@@ -63,6 +63,7 @@ function initSchema(instance: Database) {
   const defaults: Record<string, string> = {
     ssh_public_key: "",
     dns_zone_id: "",
+    dns_zone_name: "",
     default_server_type: "",
     default_location: "",
     require_2fa: "1",
