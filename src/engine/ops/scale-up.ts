@@ -1,6 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { scaleUp, rollbackScaleUp } from "../scale/scale-up.ts";
-import { syncAppCaddy } from "../scale/caddy-manager.ts";
+import { syncAppIngress } from "../scale/traefik-manager.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 import type { App, Replica } from "../scale/types.ts";
@@ -110,16 +110,16 @@ const addReplicas: Step<ScaleUpInput, AddOut> = {
   },
 };
 
-const syncCaddyStep: Step<ScaleUpInput, { ok: true }> = {
-  name: "sync_caddy",
-  label: "Configure Caddy",
+const syncIngressStep: Step<ScaleUpInput, { ok: true }> = {
+  name: "sync_ingress",
+  label: "Configure ingress",
   async run(ctx, prior) {
     const compute = prior["compute_target"] as ComputeOut;
     if (compute.toAdd === 0) return { ok: true };
     try {
-      await syncAppCaddy(ctx.input.appId);
+      await syncAppIngress(ctx.input.appId);
     } catch (err) {
-      ctx.log(`Caddy sync warning: ${err}`);
+      ctx.log(`Ingress sync warning: ${err}`);
     }
     return { ok: true };
   },
@@ -151,7 +151,7 @@ const scaleUpOp: OpKindDefinition<ScaleUpInput> = {
   kind: "scale_up",
   label: "Scale app up",
   resourceKeys: (input) => [`app:${input.appId}`],
-  steps: [computeTarget, addReplicas, syncCaddyStep, recordEvent],
+  steps: [computeTarget, addReplicas, syncIngressStep, recordEvent],
 };
 
 registerOp(scaleUpOp as OpKindDefinition<any>);

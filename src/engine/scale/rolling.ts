@@ -4,7 +4,7 @@ import {
   sshExec, transferImage, healthCheck, containerRunningCheck,
   buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
-import { syncAppCaddy } from "./caddy-manager.ts";
+import { syncAppIngress } from "./traefik-manager.ts";
 import { type ProgressFn, log, replicaBindHost } from "./types.ts";
 
 export async function rollingRedeploy(
@@ -47,13 +47,13 @@ export async function rollingRedeploy(
         );
       }
 
-      // Drop from the Caddy upstream list so in-flight requests drain
+      // Drop from the ingress upstream pool so in-flight requests drain
       // via the other replicas before we tear this one down.
       db.updateReplicaStatus(replica.id, "draining");
       try {
-        await syncAppCaddy(app.id);
+        await syncAppIngress(app.id);
       } catch (err) {
-        log("scale", `Caddy sync during rolling drain failed: ${err}`);
+        log("scale", `Ingress sync during rolling drain failed: ${err}`);
       }
 
       // Drain
@@ -64,7 +64,7 @@ export async function rollingRedeploy(
       const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
       // Bind on the target server's private IPv4 so only the panel
-      // Caddy (also on the private network) can reach this replica.
+      // the ingress proxies (also on the private network) can reach this replica.
       const replicaBindAddr = replicaBindHost(server);
 
       let rollingExtraVols: string[] = [];
@@ -94,11 +94,11 @@ export async function rollingRedeploy(
 
       db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
 
-      // Re-install this replica in the panel Caddy upstream list.
+      // Re-admit this replica to the ingress upstream pool.
       try {
-        await syncAppCaddy(app.id);
+        await syncAppIngress(app.id);
       } catch (err) {
-        log("scale", `Caddy sync after rolling replace failed: ${err}`);
+        log("scale", `Ingress sync after rolling replace failed: ${err}`);
       }
 
       emit("scale", `Replica ${replica.container_name} updated`);

@@ -5,7 +5,7 @@ import { resolveAppEnvVars } from "../shared/env-crypto.ts";
 import { evaluateAutoScale } from "./scale-api.ts";
 import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
-import { syncAppCaddy } from "./scale/caddy-manager.ts";
+import { reconcileTraefik } from "./scale/traefik-manager.ts";
 import { replicaBindHost } from "./scale/types.ts";
 import dbConn from "../shared/db/connection.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
@@ -292,23 +292,6 @@ async function checkServiceInstanceHealth(
 }
 
 // ---------------------------------------------------------------------------
-// Caddy route sync
-// ---------------------------------------------------------------------------
-
-async function reconcileCaddyRoutes(byApp: Map<number, ReplicaRow[]>): Promise<void> {
-  for (const [appId] of byApp) {
-    const app = db.getApp(appId);
-    if (!app || !app.domain) continue;
-    if (app.status !== "running" && app.status !== "unhealthy") continue;
-    try {
-      await syncAppCaddy(app.id);
-    } catch (err) {
-      log("caddy", `Panel route sync failed for ${app.name}: ${err}`);
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Main tick
 // ---------------------------------------------------------------------------
 
@@ -503,7 +486,7 @@ async function tick(): Promise<void> {
     };
 
     for (const replica of replicas) {
-      // Build byApp index (needed for status propagation + caddy)
+      // Build byApp index (needed for status propagation)
       const list = byApp.get(replica.app_id) ?? [];
       list.push(replica);
       byApp.set(replica.app_id, list);
@@ -590,8 +573,13 @@ async function tick(): Promise<void> {
       log("network", `reconcile failed: ${err}`);
     }
 
-    // --- Caddy route sync ---
-    await reconcileCaddyRoutes(byApp);
+    // --- Ingress drift repair: install Traefik on any ready server missing
+    // it, then desired-state sync every server's dynamic config ---
+    try {
+      await reconcileTraefik();
+    } catch (err) {
+      log("ingress", `reconcile failed: ${err}`);
+    }
 
     // --- Stuck-state sweep (surfaces cleanup_failed + stuck ops to op-logger) ---
     sweepStuckStates();

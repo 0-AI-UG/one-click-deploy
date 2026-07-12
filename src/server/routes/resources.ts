@@ -456,7 +456,7 @@ async function probeServerHost(server: { ipv4: string; ssh_host_key: string }): 
     const processes = procsStr ? parseInt(procsStr, 10) : null;
 
     // ss -tlnp lines look like:
-    //   LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* users:(("caddy",pid=123,fd=7))
+    //   LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* users:(("traefik",pid=123,fd=7))
     //   LISTEN 0 4096 *:22 *:*
     const ports: HostProbe["ports"] = [];
     const seen = new Set<string>();

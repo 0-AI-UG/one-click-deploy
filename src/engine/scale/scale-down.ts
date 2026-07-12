@@ -1,9 +1,9 @@
 import * as db from "../../shared/db.ts";
 import {
-  sshExec, deployCaddyWakePage,
+  sshExec,
   removeAuthProxy, stopContainer,
 } from "../../shared/remote/index.ts";
-import { syncAppCaddy, removeAppCaddy } from "./caddy-manager.ts";
+import { syncAppIngress } from "./traefik-manager.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
 
 export async function scaleDown(
@@ -41,14 +41,14 @@ export async function scaleDown(
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
 
-      // Drop the replica from the Caddy upstream list first so in-flight
+      // Drop the replica from the ingress upstream pool first so in-flight
       // requests drain through the remaining healthy replicas instead of
       // the one we're about to stop.
       db.updateReplicaStatus(replica.id, "draining");
       try {
-        await syncAppCaddy(app.id);
+        await syncAppIngress(app.id);
       } catch (err) {
-        log("scale", `Caddy sync during drain failed (continuing): ${err}`);
+        log("scale", `Ingress sync during drain failed (continuing): ${err}`);
       }
       emit("scale", `Waiting 10s drain for ${replica.container_name}...`);
       await Bun.sleep(10_000);
@@ -65,9 +65,10 @@ export async function scaleDown(
           throw err;
         }
         // Leave auth proxy in place (if any) — it will proxy to the stopped
-        // container during sleep, but nothing routes traffic there: Caddy is
-        // pointing at the wake page. On wake, `docker start` restores the
-        // backend without needing to re-deploy the auth proxy.
+        // container during sleep, but nothing routes traffic there: the
+        // ingress points the domain at the panel's wake page. On wake,
+        // `docker start` restores the backend without needing to re-deploy
+        // the auth proxy.
         db.markReplicaStopped(replica.id);
         emit("scale", `Replica ${replica.container_name} stopped (anchor for sleep)`);
       } else {
@@ -99,55 +100,33 @@ export async function scaleDown(
     throw new Error(`Scale-down incomplete — only removed ${removedCount} of ${toRemove.length} replicas. Some servers may need manual cleanup.`);
   }
 
-  // If going to 0, deploy wake page so HTTP requests auto-wake the app.
+  // If going to 0, record the sleeping state and re-render ingress: the
+  // desired-state renderer routes the sleeping app's public domain to the
+  // panel, which serves the 503 wake page so HTTP requests auto-wake the
+  // app. Private apps (domain = '') get no wake route — they sleep without
+  // one and wake via dashboard/CLI/API.
   if (targetCount === 0) {
     const lastRemoved = toRemove[toRemove.length - 1];
     const lastServer = db.getServer(lastRemoved.server_id);
     if (lastServer) {
       const wakeToken = crypto.randomUUID();
       db.updateAppSleepingState(app.id, lastServer.id, lastRemoved.host_port, wakeToken);
-      // Private apps (domain = '') have no public URL to serve a wake page
-      // on — they sleep without one and wake via dashboard/CLI/API.
-      if (app.domain) {
-        const panel = db.getPanel();
-        const panelDomain = panel?.domain || "";
-        // Remove the app's proxy vhost from the panel's Caddy first so the
-        // wake page route replaces it as the authoritative handler for this
-        // domain (otherwise the live vhost would shadow the wake page).
-        try {
-          await removeAppCaddy(app.name, app.domain);
-        } catch (err) {
-          log("scale", `Failed to remove panel Caddy route during sleep: ${err}`);
-        }
-        // Install the wake page on the panel server — since DNS now points
-        // at the panel, the wake page must live where the traffic lands.
-        const panelServer = panel ? db.getServer(panel.server_id) : null;
-        if (panelServer?.ipv4) {
-          const useInternalTls = app.domain.endsWith(".nip.io");
-          await deployCaddyWakePage(
-            panelServer.ipv4,
-            app.domain,
-            panelDomain,
-            app.id,
-            wakeToken,
-            useInternalTls,
-            panelServer.ssh_host_key || undefined,
-          );
-        } else {
-          log("scale", `Panel server missing — cannot install wake page for app ${app.name}`);
-        }
-      }
     }
     db.updateAppStatus(app.id, "sleeping");
+    try {
+      await syncAppIngress(app.id);
+    } catch (err) {
+      log("scale", `Ingress sync after sleep failed: ${err}`);
+    }
     emit("scale", "App scaled to zero — sleeping");
   } else {
-    // Rewrite the Caddy vhost so the upstream list matches what's left
-    // after the scale-down. The draining-phase sync above already removed
-    // the draining replicas; this second sync is belt-and-braces.
+    // Re-render ingress so the upstream pool matches what's left after the
+    // scale-down. The draining-phase sync above already removed the
+    // draining replicas; this second sync is belt-and-braces.
     try {
-      await syncAppCaddy(app.id);
+      await syncAppIngress(app.id);
     } catch (err) {
-      log("scale", `Caddy sync after scale-down failed: ${err}`);
+      log("scale", `Ingress sync after scale-down failed: ${err}`);
     }
   }
 

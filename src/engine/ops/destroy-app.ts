@@ -5,7 +5,7 @@ import {
   removeContainer,
   removeAuthProxy,
 } from "../../shared/remote/index.ts";
-import { removeAppCaddy } from "../scale/caddy-manager.ts";
+import { removeAppIngress } from "../scale/traefik-manager.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -94,14 +94,17 @@ const removeAuthProxyStep: Step<DestroyInput, { ok: boolean; failed: boolean }> 
   },
 };
 
-const removeCaddyRoute: Step<DestroyInput, { ok: boolean; error?: string }> = {
-  name: "remove_caddy_route",
-  label: "Remove Caddy route",
+// Runs AFTER delete_db_rows: ingress is a desired-state render of the DB, so
+// the app's routers only disappear from the rendered config once its rows are
+// gone. (If the row deletion was skipped because of upstream failures, this
+// re-render is a harmless no-op and the reconciler converges later.)
+const removeIngressRoute: Step<DestroyInput, { ok: boolean; error?: string }> = {
+  name: "remove_ingress_route",
+  label: "Remove ingress route",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
-    if (!app) return { ok: true };
-    const r = await softStep(ctx, "remove_caddy_route", async () => {
-      await removeAppCaddy(app.name, app.domain);
+    const name = `app#${ctx.input.appId}`;
+    const r = await softStep(ctx, "remove_ingress_route", async () => {
+      await removeAppIngress(name, "");
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };
   },
@@ -199,10 +202,10 @@ const destroyAppOp: OpKindDefinition<DestroyInput> = {
     removeGithubWebhook,
     stopAndRemoveContainers,
     removeAuthProxyStep,
-    removeCaddyRoute,
     deleteDnsRecords,
     deleteVolume,
     deleteDbRows,
+    removeIngressRoute,
     gcEmptyServers,
   ],
 };

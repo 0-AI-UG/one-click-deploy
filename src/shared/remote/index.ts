@@ -14,11 +14,8 @@ export {
 // SSH PTY (interactive terminal)
 export { spawnSshPty, type PtySession } from "../../engine/hetzner/ssh-pty.ts";
 
-// Containers (Caddy, Docker, Compose, health checks)
+// Containers (Docker, Compose, health checks)
 export {
-  deployCaddySite,
-  deployCaddyWakePage,
-  removeCaddyWakePage,
   cloneRepo,
   cloneAndBuild,
   removeContainer,

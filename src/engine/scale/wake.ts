@@ -5,7 +5,7 @@ import {
   startContainer, containerExists,
   buildDockerRunArgs,
 } from "../../shared/remote/index.ts";
-import { syncAppCaddy } from "./caddy-manager.ts";
+import { syncAppIngress } from "./traefik-manager.ts";
 import { log, replicaBindHost } from "./types.ts";
 
 export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: string }> {
@@ -111,15 +111,13 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     db.updateAppStatus(appId, "running");
     db.insertScalingEvent({ app_id: appId, event_type: "wake", from_count: 0, to_count: 1, reason: "wake request" });
 
-    // Reinstall the panel Caddy vhost so public traffic is routed back to
-    // the replica (instead of the wake page that was serving 503s while
-    // the app was asleep). syncAppCaddy also drops the stale wake-page
-    // route under `ocd-<domain>` that would otherwise keep shadowing the
-    // app route after wake.
+    // Re-render ingress so public traffic is routed back to the replica —
+    // the desired-state render replaces the wake-page routing (domain →
+    // panel) with the app's upstream pool now that the app is running.
     try {
-      await syncAppCaddy(appId);
+      await syncAppIngress(appId);
     } catch (err) {
-      log("wake", `syncAppCaddy after wake failed: ${err}`);
+      log("wake", `syncAppIngress after wake failed: ${err}`);
     }
 
     log("wake", `App ${appId} woken successfully`);

@@ -224,15 +224,15 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
   },
 };
 
-const syncCaddyStep: Step<RollbackInput, { ok: true }> = {
-  name: "sync_caddy",
-  label: "Configure Caddy",
+const syncIngressStep: Step<RollbackInput, { ok: true }> = {
+  name: "sync_ingress",
+  label: "Configure ingress",
   async run(ctx) {
     try {
-      const { syncAppCaddy } = await import("../scale/caddy-manager.ts");
-      await syncAppCaddy(ctx.input.appId);
+      const { syncAppIngress } = await import("../scale/traefik-manager.ts");
+      await syncAppIngress(ctx.input.appId);
     } catch (err) {
-      ctx.log(`Caddy sync warning: ${err}`);
+      ctx.log(`Ingress sync warning: ${err}`);
     }
     return { ok: true };
   },
@@ -295,7 +295,7 @@ const rollbackOp: OpKindDefinition<RollbackInput> = {
     checkoutTarget,
     rebuildImage,
     swapContainer,
-    syncCaddyStep,
+    syncIngressStep,
     healthCheckStep,
     recordRollback,
   ],

@@ -1,6 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { scaleDown } from "../scale/scale-down.ts";
-import { syncAppCaddy } from "../scale/caddy-manager.ts";
+import { syncAppIngress } from "../scale/traefik-manager.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 import type { App, Replica } from "../scale/types.ts";
@@ -54,19 +54,19 @@ const removeReplicas: Step<ScaleDownInput, { removed: boolean }> = {
   // No compensation — scale-down reversal is a scale-up; not worth attempting.
 };
 
-const syncCaddyStep: Step<ScaleDownInput, { ok: true }> = {
-  name: "sync_caddy",
-  label: "Configure Caddy",
+const syncIngressStep: Step<ScaleDownInput, { ok: true }> = {
+  name: "sync_ingress",
+  label: "Configure ingress",
   async run(ctx, prior) {
     const compute = prior["compute_target"] as ComputeOut;
     if (compute.toRemove === 0) return { ok: true };
-    // scaleDown already syncs Caddy. This is a belt-and-braces step that also
+    // scaleDown already syncs ingress. This is a belt-and-braces step that also
     // handles replays (where remove_replicas was a no-op but state might need
     // rewriting).
     try {
-      if (ctx.input.targetReplicas > 0) await syncAppCaddy(ctx.input.appId);
+      if (ctx.input.targetReplicas > 0) await syncAppIngress(ctx.input.appId);
     } catch (err) {
-      ctx.log(`Caddy sync warning: ${err}`);
+      ctx.log(`Ingress sync warning: ${err}`);
     }
     return { ok: true };
   },
@@ -117,7 +117,7 @@ const scaleDownOp: OpKindDefinition<ScaleDownInput> = {
   kind: "scale_down",
   label: "Scale app down",
   resourceKeys: (input) => [`app:${input.appId}`],
-  steps: [computeTarget, removeReplicas, syncCaddyStep, gcEmptyServers, recordEvent],
+  steps: [computeTarget, removeReplicas, syncIngressStep, gcEmptyServers, recordEvent],
 };
 
 registerOp(scaleDownOp as OpKindDefinition<any>);

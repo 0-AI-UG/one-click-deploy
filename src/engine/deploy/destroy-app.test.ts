@@ -33,11 +33,16 @@ mock.module("../../shared/remote/index.ts", () => ({
   describeFailure: (prefix: string) => prefix,
 }));
 
-const removeAppCaddy = mock(async () => {});
-const syncAppCaddy = mock(async () => {});
-mock.module("../scale/caddy-manager.ts", () => ({
-  removeAppCaddy,
-  syncAppCaddy,
+const removeAppIngress = mock(async () => {});
+const syncAppIngress = mock(async () => {});
+mock.module("../scale/traefik-manager.ts", () => ({
+  removeAppIngress,
+  syncAppIngress,
+  syncServiceIngress: mock(async () => {}),
+  removeServiceIngress: mock(async () => {}),
+  getPanelIngressIpv4: mock(() => null),
+  syncAllTraefik: mock(async () => {}),
+  reconcileTraefik: mock(async () => {}),
 }));
 
 const deleteGithubWebhook = mock(async (..._args: unknown[]) => {});
@@ -89,7 +94,7 @@ beforeEach(() => {
   removeContainer.mockClear();
   removeCompose.mockClear();
   removeAuthProxy.mockClear();
-  removeAppCaddy.mockClear();
+  removeAppIngress.mockClear();
   deleteGithubWebhook.mockClear();
   getGitHubPat.mockClear();
   compute._mocks.volumeDelete.mockClear();
@@ -99,14 +104,14 @@ beforeEach(() => {
   // Restore default successful behaviour (tests override as needed).
   removeContainer.mockImplementation(async () => {});
   removeCompose.mockImplementation(async () => {});
-  removeAppCaddy.mockImplementation(async () => {});
+  removeAppIngress.mockImplementation(async () => {});
   dns._mocks.deleteRecord.mockImplementation(async () => {});
   compute._mocks.volumeDelete.mockImplementation(async () => {});
   sshExec.mockImplementation(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
 });
 
 describe("destroyApp: happy path", () => {
-  test("removes containers, caddy route, DNS records, and DB rows for an app with one replica", async () => {
+  test("removes containers, ingress route, DNS records, and DB rows for an app with one replica", async () => {
     const server = freshServer();
     const app = freshApp();
     const replica = attachReplica(app.id, server.id, app.name);
@@ -125,7 +130,7 @@ describe("destroyApp: happy path", () => {
     expect(removeContainer).toHaveBeenCalledTimes(1);
     expect(removeContainer.mock.calls[0][0]).toBe("1.2.3.4");
     expect(removeContainer.mock.calls[0][1]).toBe(app.name);
-    expect(removeAppCaddy).toHaveBeenCalledTimes(1);
+    expect(removeAppIngress).toHaveBeenCalledTimes(1);
     expect(dns._mocks.deleteRecord).toHaveBeenCalledTimes(1);
 
     // DB rows gone.
@@ -247,12 +252,12 @@ describe("destroyApp: partial failure handling", () => {
     expect(db.getApp(app.id)?.status).toBe("cleanup_failed");
   });
 
-  test("Caddy removal failure is logged but does NOT mark cleanup_failed", async () => {
-    // The lifecycle code tolerates Caddy failures without setting cleanupFailed.
+  test("Ingress removal failure is logged but does NOT mark cleanup_failed", async () => {
+    // The lifecycle code tolerates ingress failures without setting cleanupFailed.
     const server = freshServer();
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
-    removeAppCaddy.mockImplementationOnce(async () => { throw new Error("caddy 503"); });
+    removeAppIngress.mockImplementationOnce(async () => { throw new Error("ingress 503"); });
     const result = await destroyApp(app.id);
     expect(result.ok).toBe(true);
     expect(db.getApp(app.id)).toBeNull();

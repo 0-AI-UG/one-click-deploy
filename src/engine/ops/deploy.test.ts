@@ -20,7 +20,7 @@ const provisionServer = mock(async (opts: { name: string }) => ({
 }));
 mock.module("../provision-server.ts", () => ({ provisionServer }));
 
-// Stub all remote + caddy + github + other deep deps so deploy.ts at least
+// Stub all remote + ingress + github + other deep deps so deploy.ts at least
 // imports cleanly even though we're only exercising selected steps.
 const healthCheckMock = mock(async () => ({ healthy: true, statusCode: 200 }));
 const containerRunningCheckMock = mock(async () => ({ healthy: true }));
@@ -32,12 +32,17 @@ mock.module("../../shared/remote/index.ts", () => ({
   healthCheck: healthCheckMock,
   containerRunningCheck: containerRunningCheckMock,
   composeHealthCheck: mock(async () => ({ healthy: true })),
-  deployAuthProxy: mock(async () => ({ caddyPort: 9999 })),
+  deployAuthProxy: mock(async () => 9999),
   removeAuthProxy: mock(async () => {}),
 }));
-mock.module("../scale/caddy-manager.ts", () => ({
-  syncAppCaddy: mock(async () => {}),
-  removeAppCaddy: mock(async () => {}),
+mock.module("../scale/traefik-manager.ts", () => ({
+  syncAppIngress: mock(async () => {}),
+  removeAppIngress: mock(async () => {}),
+  syncServiceIngress: mock(async () => {}),
+  removeServiceIngress: mock(async () => {}),
+  getPanelIngressIpv4: mock(() => null),
+  syncAllTraefik: mock(async () => {}),
+  reconcileTraefik: mock(async () => {}),
 }));
 mock.module("../scale-api.ts", () => ({
   scaleApp: mock(async () => ({ ok: true })),
@@ -798,7 +803,7 @@ describe("deploy op: structure", () => {
       "clone_repo",
       "build_and_run_container",
       "deploy_auth_proxy",
-      "sync_caddy",
+      "sync_ingress",
       "health_check",
       "record_deployment_history",
       "setup_github_webhook",

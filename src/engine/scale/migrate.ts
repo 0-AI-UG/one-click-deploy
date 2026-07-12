@@ -1,6 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { sshExec, removeAuthProxy, ensureOcdNetwork, buildDockerRunArgs } from "../../shared/remote/index.ts";
-import { syncAppCaddy } from "./caddy-manager.ts";
+import { syncAppIngress } from "./traefik-manager.ts";
 import { scaleUp } from "./scale-up.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
 import { hetzner } from "../../shared/providers/index.ts";
@@ -128,9 +128,9 @@ async function migrateStateless(
   emit("migrate", `Draining old replica ${replica.container_name}...`);
   db.updateReplicaStatus(replica.id, "draining");
   try {
-    await syncAppCaddy(app.id);
+    await syncAppIngress(app.id);
   } catch (err) {
-    log("migrate", `Caddy sync during drain failed (continuing): ${err}`);
+    log("migrate", `Ingress sync during drain failed (continuing): ${err}`);
   }
 
   emit("migrate", `Waiting 10s drain for ${replica.container_name}...`);
@@ -152,7 +152,7 @@ async function migrateStateless(
   db.deleteReplica(replica.id);
   emit("migrate", `Old replica ${replica.container_name} removed`);
 
-  await syncAppCaddy(app.id);
+  await syncAppIngress(app.id);
 
   db.updateAppScaling(app.id, {
     desired_replicas: currentCount,
@@ -221,9 +221,9 @@ async function migrateWithVolume(
   emit("migrate", `Stopping ${replica.container_name} on ${sourceServer.name}...`);
   db.updateReplicaStatus(replica.id, "draining");
   try {
-    await syncAppCaddy(app.id);
+    await syncAppIngress(app.id);
   } catch (err) {
-    log("migrate", `Caddy sync during drain failed (continuing): ${err}`);
+    log("migrate", `Ingress sync during drain failed (continuing): ${err}`);
   }
 
   const probeCmd = asUser(`docker ps -a --filter name=^${replica.container_name}$ --format '{{.Names}}'`);
@@ -368,7 +368,7 @@ async function migrateWithVolume(
     log("migrate", `Old replica row ${replica.id} already gone — skipping deleteReplica`);
   }
 
-  await syncAppCaddy(app.id);
+  await syncAppIngress(app.id);
 
   db.updateAppScaling(app.id, {
     desired_replicas: currentCount,

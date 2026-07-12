@@ -14,7 +14,7 @@ import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { rollingRedeploy } from "../scale-api.ts";
 import { wakeApp } from "../scale/wake.ts";
-import { syncAppCaddy } from "../scale/caddy-manager.ts";
+import { syncAppIngress } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -260,7 +260,7 @@ const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
           try { db.updateReplicaStatus(r.id, "running"); } catch { /* ignore */ }
         }
       }
-      await syncAppCaddy(ctx.input.appId);
+      await syncAppIngress(ctx.input.appId);
     } catch (err) {
       ctx.log(`Failed to re-sync after roll_extra_replicas compensate: ${err}`);
     }
@@ -301,15 +301,15 @@ const manageAuthProxy: Step<RedeployInput, { ok: true }> = {
   },
 };
 
-const syncCaddyStep: Step<RedeployInput, { ok: true }> = {
-  name: "sync_caddy",
-  label: "Configure Caddy",
+const syncIngressStep: Step<RedeployInput, { ok: true }> = {
+  name: "sync_ingress",
+  label: "Configure ingress",
   async run(ctx) {
     try {
-      await syncAppCaddy(ctx.input.appId);
+      await syncAppIngress(ctx.input.appId);
     } catch (err) {
-      db.appendDeployLog(ctx.input.appId, `[redeploy] Caddy sync warning: ${err}`);
-      ctx.log(`Caddy sync warning: ${err}`);
+      db.appendDeployLog(ctx.input.appId, `[redeploy] Ingress sync warning: ${err}`);
+      ctx.log(`Ingress sync warning: ${err}`);
     }
     return { ok: true };
   },
@@ -397,7 +397,7 @@ const redeployOp: OpKindDefinition<RedeployInput> = {
     pullAndBuild,
     rollExtraReplicas,
     manageAuthProxy,
-    syncCaddyStep,
+    syncIngressStep,
     healthCheckStep,
     recordDeploymentHistory,
   ],

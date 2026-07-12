@@ -1,6 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { migrateReplica, type MigrateResult, rollbackMigrateWithVolume, type VolumeMigrationContext } from "../scale/migrate.ts";
-import { syncAppCaddy } from "../scale/caddy-manager.ts";
+import { syncAppIngress } from "../scale/traefik-manager.ts";
 import { sshExec, healthCheck, containerRunningCheck } from "../../shared/remote/index.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
@@ -71,16 +71,16 @@ const markDraining: Step<MigrateInput, DrainOut> = {
   async run(ctx) {
     db.updateReplicaStatus(ctx.input.replicaId, "draining");
     try {
-      await syncAppCaddy(ctx.input.appId);
+      await syncAppIngress(ctx.input.appId);
     } catch (err) {
-      ctx.log(`Caddy sync during drain failed (continuing): ${err}`);
+      ctx.log(`Ingress sync during drain failed (continuing): ${err}`);
     }
     return { ok: true };
   },
   async compensate(ctx) {
     // Best-effort: if the transfer failed, restore the replica's routing.
     try { db.updateReplicaStatus(ctx.input.replicaId, "running"); } catch { /* ignore */ }
-    try { await syncAppCaddy(ctx.input.appId); } catch { /* ignore */ }
+    try { await syncAppIngress(ctx.input.appId); } catch { /* ignore */ }
   },
 };
 
@@ -111,9 +111,9 @@ const performMigration: Step<MigrateInput, TransferOut> = {
           ctx.log(`MANUAL RECOVERY NEEDED: volume migration rollback threw: ${rbErr}`);
         }
         try {
-          await syncAppCaddy(ctx.input.appId);
-        } catch (caddyErr) {
-          ctx.log(`Caddy resync during rollback failed: ${caddyErr}`);
+          await syncAppIngress(ctx.input.appId);
+        } catch (ingressErr) {
+          ctx.log(`Ingress resync during rollback failed: ${ingressErr}`);
         }
       }
       throw err;
@@ -146,14 +146,14 @@ const verifyReplicaHealthy: Step<MigrateInput, { ok: true; healthy: boolean }> =
   },
 };
 
-const syncCaddyStep: Step<MigrateInput, { ok: true }> = {
-  name: "sync_caddy",
-  label: "Configure Caddy",
+const syncIngressStep: Step<MigrateInput, { ok: true }> = {
+  name: "sync_ingress",
+  label: "Configure ingress",
   async run(ctx) {
     try {
-      await syncAppCaddy(ctx.input.appId);
+      await syncAppIngress(ctx.input.appId);
     } catch (err) {
-      ctx.log(`Caddy sync warning: ${err}`);
+      ctx.log(`Ingress sync warning: ${err}`);
     }
     return { ok: true };
   },
@@ -197,7 +197,7 @@ const migrateOp: OpKindDefinition<MigrateInput> = {
   kind: "migrate",
   label: "Migrate replica",
   resourceKeys: (input) => [`app:${input.appId}`],
-  steps: [loadAndValidate, preflightImage, markDraining, performMigration, verifyReplicaHealthy, syncCaddyStep, recordEvent, gcEmptyServers],
+  steps: [loadAndValidate, preflightImage, markDraining, performMigration, verifyReplicaHealthy, syncIngressStep, recordEvent, gcEmptyServers],
 };
 
 registerOp(migrateOp as OpKindDefinition<any>);

@@ -1,5 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { sshExec } from "../../shared/remote/index.ts";
+import { syncAppIngress } from "../scale/traefik-manager.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -55,6 +56,15 @@ const renameOnServers: Step<RenameAppInput, RenameOut> = {
 
     db.renameApp(ctx.input.appId, newName);
     out.dbRenamed = true;
+
+    // Re-render ingress: router/service names derive from the app name, so
+    // a rename must resync or the old routes linger until the next
+    // reconciler tick. Best-effort — the reconciler converges regardless.
+    try {
+      await syncAppIngress(ctx.input.appId);
+    } catch (err) {
+      ctx.log(`Ingress resync after rename failed (reconciler will converge): ${err}`);
+    }
     return out;
   },
   async compensate(ctx, out) {

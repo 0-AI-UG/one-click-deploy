@@ -10,9 +10,9 @@ function log(context: string, ...args: unknown[]) {
 /**
  * Reconciler pass that drags every server onto the shared private network
  * and keeps each server's /etc/hosts in sync with the `<app>.ocd.internal`
- * convention used by intra-app traffic. App entries point at 127.0.0.1 —
- * each server runs its own Caddy srv_internal that reverse-proxies to the
- * replica pool over the private network.
+ * convention used by intra-app traffic. Each server runs its own
+ * Traefik with internal entrypoints that reverse-proxy to the replica pool
+ * over the private network, so app entries point at the server itself.
  *
  * Runs inside the main reconciler tick, after replica/health work. Completes
  * in a few provider calls per new server and skips fast when everything is
@@ -51,7 +51,7 @@ export async function reconcileNetwork(): Promise<void> {
   }
 
   // Sync /etc/hosts for `<app>.ocd.internal` on every server. Each server
-  // runs its own Caddy srv_internal, so app entries point at 127.0.0.1;
+  // runs its own Traefik, so app entries point at the server itself;
   // service entries still point at the service host's private IP. Best-
   // effort — the next tick retries any server that's unreachable now.
   try {
@@ -65,19 +65,20 @@ export async function reconcileNetwork(): Promise<void> {
  * Build /etc/hosts lines and push into /etc/hosts on every materialized
  * server:
  *
- *   - `<app>.ocd.internal`      → this server's own private_ipv4 (local Caddy)
+ *   - `<app>.ocd.internal`      → this server's own private_ipv4 (local Traefik)
  *   - `<svc>.svc.ocd.internal`  → service host's private_ipv4 (direct)
  *
- * Each server runs its own Caddy srv_internal on :8080 with routes for every
- * app, so callers reach the local Caddy and it reverse-proxies to the
- * replica pool over the private network. App entries point at the *server's
- * own* private IP rather than 127.0.0.1 because Docker containers inherit
- * DNS from the host — a 127.0.0.1 entry would loop back to the container
- * itself instead of hitting the host's Caddy. The server's private IP is
- * reachable from both the host and its local containers.
+ * Each server runs its own Traefik with the :8080 compat entrypoint and the
+ * per-app internal entrypoints, so callers reach the local Traefik and it
+ * reverse-proxies to the replica pool over the private network. App entries
+ * point at the *server's own* private IP rather than 127.0.0.1 because
+ * Docker containers inherit DNS from the host — a 127.0.0.1 entry would
+ * loop back to the container itself instead of hitting the host's Traefik.
+ * The server's private IP is reachable from both the host and its local
+ * containers.
  *
  * Service entries stay as private-IP pointers to the service host because
- * services are single-instance and don't need the local Caddy indirection.
+ * services are single-instance and don't need the local proxy indirection.
  *
  * Idempotent — the block is delimited by BEGIN/END markers so repeated
  * runs just overwrite the same region.

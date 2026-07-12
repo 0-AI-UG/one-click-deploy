@@ -11,10 +11,10 @@ import {
 import { provisionServer } from "../provision-server.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import {
-  syncServiceCaddy,
-  removeServiceCaddy,
+  syncServiceIngress,
+  removeServiceIngress,
   getPanelIngressIpv4,
-} from "../scale/caddy-manager.ts";
+} from "../scale/traefik-manager.ts";
 import {
   getCatalogEntry,
   generateEnvVars,
@@ -276,7 +276,7 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
     if (!serverRow) throw new Error(`Server ${server.serverId} not found`);
     // All services bind on the private network — DB-protocol clients reach
     // them directly across the fleet, HTTP services are proxied by the
-    // panel's Caddy via the same address.
+    // panel's ingress proxy via the same address.
     const bindAddress = replicaBindHost(serverRow);
     // Credentials advertise the stable /etc/hosts alias, not the raw private
     // IP — the alias survives service migrations across servers, while
@@ -501,7 +501,7 @@ const configureHttpIngress: Step<DeployServiceInput, { ok: true; domain?: string
     const serverRow = db.getServer(server.serverId);
     const privateIp = serverRow?.private_ipv4 || "";
 
-    await syncServiceCaddy({
+    await syncServiceIngress({
       serviceName: svc.containerName,
       domain,
       serverPrivateIpv4: privateIp,
@@ -514,9 +514,9 @@ const configureHttpIngress: Step<DeployServiceInput, { ok: true; domain?: string
     const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
     if (!svc) return;
     try {
-      await removeServiceCaddy(svc.containerName);
+      await removeServiceIngress(svc.containerName);
     } catch (err) {
-      ctx.log(`Failed to remove Caddy route: ${err}`);
+      ctx.log(`Failed to remove ingress route: ${err}`);
     }
   },
 };

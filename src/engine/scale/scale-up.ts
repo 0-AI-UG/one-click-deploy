@@ -9,7 +9,7 @@ import {
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
 import { pickTargetServer } from "./server-picker.ts";
-import { syncAppCaddy } from "./caddy-manager.ts";
+import { syncAppIngress } from "./traefik-manager.ts";
 
 export async function scaleUp(
   app: App,
@@ -35,14 +35,14 @@ export async function scaleUp(
     let targetServer = await pickTargetServer(app, settings, emit, targetServerId);
     const targetHostKey = targetServer.ssh_host_key || undefined;
 
-    // Every replica listens on the same host port — the Caddy upstream
+    // Every replica listens on the same host port — the ingress upstream
     // list derives upstream ports from the replica row, and using a
     // stable hostPort keeps the cross-server container layout easy to
     // reason about.
     const hostPort = primaryHostPort;
 
     // Bind the replica on the target server's private IPv4. Traffic from
-    // the panel Caddy uses the private network, so the public NIC is
+    // the ingress layer uses the private network, so the public NIC is
     // never touched for inter-server app traffic. Fails fast if the
     // target isn't yet attached to the shared network.
     const replicaBindAddr = replicaBindHost(targetServer);
@@ -163,7 +163,7 @@ export async function scaleUp(
       ? await healthCheck(targetServer.ipv4, containerName, replicaBindAddr, hostPort, 5, targetHostKey)
       : await containerRunningCheck(targetServer.ipv4, containerName, 5, targetHostKey);
 
-    // Insert replica record BEFORE syncing Caddy so the upstream list
+    // Insert replica record BEFORE syncing ingress so the upstream pool
     // built from the DB actually includes the new replica.
     db.insertReplica({
       app_id: app.id,
@@ -173,9 +173,9 @@ export async function scaleUp(
       status: health.healthy ? "running" : "unhealthy",
     });
 
-    // Push the updated upstream list to the panel Caddy. One reload per
-    // replica is fine — Caddy's admin API applies config atomically.
-    await syncAppCaddy(app.id);
+    // Push the updated upstream pool to the fleet ingress. One re-render per
+    // replica is fine — dynamic config writes are atomic (tmp+mv).
+    await syncAppIngress(app.id);
 
     emit("scale", `Replica ${replicaNum} deployed on ${targetServer.name}`);
   }
@@ -211,11 +211,11 @@ export async function rollbackScaleUp(
     db.deleteReplica(replica.id);
   }
 
-  // Rewrite the Caddy vhost so it reflects the remaining replicas.
+  // Re-render ingress so it reflects the remaining replicas.
   try {
-    await syncAppCaddy(app.id);
+    await syncAppIngress(app.id);
   } catch (err) {
-    log("rollback", `Failed to sync Caddy after rollback: ${err}`);
+    log("rollback", `Failed to sync ingress after rollback: ${err}`);
   }
 
   // GC any servers touched by the failed scale-up. gcServerIfEmpty handles

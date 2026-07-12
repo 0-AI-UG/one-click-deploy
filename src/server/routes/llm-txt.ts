@@ -1,12 +1,12 @@
 const LLM_TXT = `# One-Click Deploy (OCD)
 
-One-Click Deploy ("OCD") is a self-hosted, open-source PaaS for Hetzner Cloud — a lightweight alternative to Heroku, Railway, and Render. Point it at a Git repo containing a Dockerfile and it provisions a Hetzner Cloud server, builds the container image, configures DNS, issues TLS (Caddy + Let's Encrypt), and serves traffic over HTTPS. It is deeply integrated with a single provider: Hetzner servers, volumes, private networks, firewalls, and Hetzner DNS.
+One-Click Deploy ("OCD") is a self-hosted, open-source PaaS for Hetzner Cloud — a lightweight alternative to Heroku, Railway, and Render. Point it at a Git repo containing a Dockerfile and it provisions a Hetzner Cloud server, builds the container image, configures DNS, issues TLS (Traefik + Let's Encrypt), and serves traffic over HTTPS. It is deeply integrated with a single provider: Hetzner servers, volumes, private networks, firewalls, and Hetzner DNS.
 
 This document covers the three things an AI agent most often needs: what the platform does, the \`.ocd-deploy.json\` manifest format, and the \`ocd\` CLI.
 
 ## Platform overview
 
-- **Deploys**: any Git repo with a Dockerfile. The panel builds the image on a Hetzner server and runs it as one or more containers behind Caddy with automatic HTTPS.
+- **Deploys**: any Git repo with a Dockerfile. The panel builds the image on a Hetzner server and runs it as one or more containers behind Traefik with automatic HTTPS.
 - **Infrastructure**: servers, persistent volumes, private networks, and firewalls are provisioned automatically on Hetzner Cloud. DNS records can be managed via Hetzner DNS.
 - **Scaling & lifecycle**: replicas (horizontal scaling), auto-scaling, restart, pause/unpause, rollback to a previous deployment, per-app memory limits.
 - **Managed services**: one-click Postgres, Redis, MySQL, and more; their connection credentials are injected into linked environments.

@@ -26,10 +26,13 @@ mock.module("../shared/remote/index.ts", () => ({
   pruneServer: mock(async () => {}),
 }));
 
-// Stub Caddy sync and network reconciler so they don't fire SSH.
-mock.module("./scale/caddy-manager.ts", () => ({
-  syncAppCaddy: mock(async () => {}),
-  removeAppCaddy: mock(async () => {}),
+// Stub ingress sync and network reconciler so they don't fire SSH.
+mock.module("./scale/traefik-manager.ts", () => ({
+  syncAppIngress: mock(async () => {}),
+  removeAppIngress: mock(async () => {}),
+  syncAllTraefik: mock(async () => {}),
+  reconcileTraefik: mock(async () => {}),
+  ensureTraefikInstalled: mock(async () => {}),
 }));
 
 mock.module("./scale/network-reconciler.ts", () => ({

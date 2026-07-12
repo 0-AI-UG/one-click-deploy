@@ -46,7 +46,7 @@ export type ServiceDefinition = {
   icon?: string;
   color?: string;
   cmd?: string[];
-  /** When true, expose this service via Caddy on a public domain (HTTP-facing). */
+  /** When true, expose this service via the panel ingress on a public domain (HTTP-facing). */
   http?: boolean;
   /** Brief description shown in the UI. */
   description?: string;
@@ -59,7 +59,7 @@ export type ServiceDefinition = {
   compose?: string;
   /** Loaded text of the bundled compose template (populated by loadCatalog). */
   composeTemplate?: string;
-  /** Which compose service Caddy proxies / health-checks (e.g. "server"). */
+  /** Which compose service the ingress proxies / health-checks (e.g. "server"). */
   composeWebService?: string;
   /** That service's internal HTTP port (e.g. 9000). */
   composeWebPort?: number;

@@ -22,7 +22,7 @@ import { saveChallenge, fetchAndDeleteChallenge } from "../../shared/db/webauthn
 function getRpConfig(request: Request) {
   const url = new URL(request.url);
   const hostname = url.hostname;
-  // Behind a TLS-terminating reverse proxy (Caddy), request.url is http://
+  // Behind a TLS-terminating reverse proxy (Traefik), request.url is http://
   // but the browser's actual origin is https://. Use the Origin header when
   // available, otherwise infer from X-Forwarded-Proto or default to https.
   const browserOrigin =

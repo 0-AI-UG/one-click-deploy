@@ -199,7 +199,7 @@ export async function waitForServer(
         return true;
       }
       // SSH works but cloud-init still running — check what's happening
-      const ps = await sshExec(ip, "ps -eo comm= | grep -E 'apt|dpkg|curl|docker|caddy|cloud-init' | head -1");
+      const ps = await sshExec(ip, "ps -eo comm= | grep -E 'apt|dpkg|curl|docker|traefik|cloud-init' | head -1");
       const running = ps.stdout.trim();
       const detail = running ? `installing ${running}` : "finishing setup";
       log("wait", `Not ready yet — ${detail}`);

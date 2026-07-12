@@ -3,7 +3,7 @@ import { parseEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
 import { sshExec, restartContainer, serviceHealthCheck, pauseContainer, unpauseContainer, getContainerLogs, removeCompose, getComposeLogs } from "../../shared/remote/index.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
-import { removeServiceCaddy } from "../scale/caddy-manager.ts";
+import { removeServiceIngress } from "../scale/traefik-manager.ts";
 
 /** Compose-kind services live here (apps use /home/deploy/apps). */
 const SERVICES_BASE_DIR = "/home/deploy/services";
@@ -96,16 +96,16 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
       db.deleteServiceInstance(instance.id);
     }
 
-    // Remove Caddy route on the panel for HTTP-facing services. Best-effort —
+    // Remove the panel ingress route for HTTP-facing services. Best-effort —
     // a missing route is a no-op so this is safe to call unconditionally.
     try {
       const creds = JSON.parse(service.credentials || "{}");
       if (creds.domain) {
-        await removeServiceCaddy(service.name);
-        log("destroy", `Removed Caddy route for ${creds.domain}`);
+        await removeServiceIngress(service.name);
+        log("destroy", `Removed ingress route for ${creds.domain}`);
       }
     } catch (err) {
-      log("destroy", `Failed to remove Caddy route: ${err}`);
+      log("destroy", `Failed to remove ingress route: ${err}`);
     }
 
     if (cleanupFailed) {

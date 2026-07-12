@@ -19,8 +19,9 @@ import * as db from "../../shared/db.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
-  cloneAndBuild, deployCaddySite, healthCheck, getContainerLogs,
+  cloneAndBuild, healthCheck, getContainerLogs,
 } from "../../shared/remote/index.ts";
+import { deployTraefikPanelSite } from "../scale/traefik-manager.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
 
@@ -186,7 +187,7 @@ export async function bootstrapPanel(
     onProgress("server", `Server created: ${serverIp}`);
 
     // No domain supplied → derive a self-resolving <ip>.nip.io domain now that
-    // we know the IP, and serve it with Caddy's internal (self-signed) cert.
+    // we know the IP, and serve it with Traefik's default (self-signed) cert.
     // This is the "no domain, no DNS" path; the browser warns on first visit.
     if (!domain) {
       domain = `${serverIp.replace(/\./g, "-")}.nip.io`;
@@ -325,10 +326,11 @@ export async function bootstrapPanel(
       (line) => onProgress("build", line),
     );
 
-    // 10. Caddy + TLS
-    onProgress("caddy", `Configuring reverse proxy for ${domain}...`);
+    // 10. Ingress + TLS: write the panel's own Traefik vhost (panel.yml).
+    // The file is owned by bootstrap and never rewritten by app syncs.
+    onProgress("ingress", `Configuring reverse proxy for ${domain}...`);
     const useInternalTls = domain.endsWith(".nip.io");
-    await deployCaddySite(
+    await deployTraefikPanelSite(
       serverIp,
       domain,
       hostPort,
@@ -337,8 +339,8 @@ export async function bootstrapPanel(
     );
 
     // 11. Health check. The panel container binds to 127.0.0.1 (cloneAndBuild
-    // default), and the panel's own Caddy reaches it via localhost, so we
-    // probe the same address here.
+    // default), and the host Traefik reaches it via localhost, so we probe
+    // the same address here.
     onProgress("health", "Checking panel health...");
     const health = await healthCheck(
       serverIp,
@@ -354,7 +356,7 @@ export async function bootstrapPanel(
 
     // 12. Public reachability. The health check above only proves the container
     //     is up on the server's loopback — it says nothing about whether the
-    //     operator can actually reach https://domain. For a real domain, Caddy
+    //     operator can actually reach https://domain. For a real domain, Traefik
     //     cannot issue a Let's Encrypt cert until DNS points at the server, so
     //     verify that here and report it honestly instead of claiming success
     //     the operator can't act on. (.nip.io uses an internal cert and needs

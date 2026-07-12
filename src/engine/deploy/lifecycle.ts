@@ -12,7 +12,7 @@ import {
   containerRunningCheck,
   describeFailure,
 } from "../../shared/remote/index.ts";
-import { removeAppCaddy, syncAppCaddy } from "../scale/caddy-manager.ts";
+import { removeAppIngress, syncAppIngress } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 
@@ -69,7 +69,7 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
             log("destroyApp", `Failed to remove auth proxy for ${replica.container_name}: ${e}`);
           }
         }
-        // App directories live on the tenant server. Caddy routes are
+        // App directories live on the tenant server. Ingress routes are
         // removed from the panel server once, after this loop.
         try {
           await sshExec(replicaServer.ipv4, `rm -rf /home/deploy/apps/${app.name}`, hostKey);
@@ -80,11 +80,11 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
       db.deleteReplica(replica.id);
     }
 
-    // Remove the app's Caddy vhost from the panel ingress.
+    // Remove the app from the fleet ingress config.
     try {
-      await removeAppCaddy(app.name, app.domain);
+      await removeAppIngress(app.name, app.domain);
     } catch (err) {
-      log("destroyApp", `Failed to remove panel Caddy route: ${err}`);
+      log("destroyApp", `Failed to remove panel ingress route: ${err}`);
     }
 
     const dnsRecords = db.getDnsRecords(appId);
@@ -310,14 +310,14 @@ export async function pauseApp(appId: number): Promise<{ ok: boolean; error?: st
     }
 
     db.updateAppStatus(appId, "paused");
-    // Drop the paused replicas from the Caddy upstream pool so external
+    // Drop the paused replicas from the ingress upstream pool so external
     // traffic gets a clean 503 instead of flapping through the passive
     // health-check window on a frozen TCP-accepting-but-not-serving
     // backend.
     try {
-      await syncAppCaddy(appId);
+      await syncAppIngress(appId);
     } catch (err) {
-      log("pauseApp", `syncAppCaddy after pause failed (non-fatal): ${err}`);
+      log("pauseApp", `syncAppIngress after pause failed (non-fatal): ${err}`);
     }
     log("pauseApp", `App id=${appId} paused`);
     return { ok: true };
@@ -353,13 +353,13 @@ export async function unpauseApp(appId: number): Promise<{ ok: boolean; error?: 
     }
     // With no replicas there is nothing running — "stopped", not "running".
     db.updateAppStatus(appId, replicas.length === 0 ? "stopped" : allHealthy ? "running" : "unhealthy");
-    // Re-add the replicas to the Caddy upstream pool now that they're
+    // Re-add the replicas to the ingress upstream pool now that they're
     // live again. The reconciler would pick this up within 30s anyway,
     // but waiting means the first requests after unpause hit stale 503s.
     try {
-      await syncAppCaddy(appId);
+      await syncAppIngress(appId);
     } catch (err) {
-      log("unpauseApp", `syncAppCaddy after unpause failed (non-fatal): ${err}`);
+      log("unpauseApp", `syncAppIngress after unpause failed (non-fatal): ${err}`);
     }
 
     log("unpauseApp", `App id=${appId} unpaused`);

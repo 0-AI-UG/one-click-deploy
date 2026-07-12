@@ -1,6 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { wakeApp } from "../scale/wake.ts";
-import { syncAppCaddy } from "../scale/caddy-manager.ts";
+import { syncAppIngress } from "../scale/traefik-manager.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -9,7 +9,7 @@ type WakeInput = { appId: number };
 type CheckOut = { wasSleeping: boolean };
 
 // wakeApp() is itself the recovery routine: starts containers, health-checks,
-// upserts replica rows, clears sleeping state, syncs Caddy, and records an
+// upserts replica rows, clears sleeping state, syncs ingress, and records an
 // event. We wrap it as a single step and skip on replay if the app is no
 // longer sleeping. No compensations — a partial wake is resolved by
 // re-enqueueing another wake op.
@@ -42,14 +42,14 @@ const startContainers: Step<WakeInput, { ok: boolean; skipped?: boolean }> = {
   },
 };
 
-const syncCaddyStep: Step<WakeInput, { ok: true }> = {
-  name: "sync_caddy",
-  label: "Configure Caddy",
+const syncIngressStep: Step<WakeInput, { ok: true }> = {
+  name: "sync_ingress",
+  label: "Configure ingress",
   async run(ctx) {
     try {
-      await syncAppCaddy(ctx.input.appId);
+      await syncAppIngress(ctx.input.appId);
     } catch (err) {
-      ctx.log(`Caddy sync warning: ${err}`);
+      ctx.log(`Ingress sync warning: ${err}`);
     }
     return { ok: true };
   },
@@ -59,7 +59,7 @@ const wakeOp: OpKindDefinition<WakeInput> = {
   kind: "wake",
   label: "Wake app",
   resourceKeys: (input) => [`app:${input.appId}`],
-  steps: [checkSleeping, startContainers, syncCaddyStep],
+  steps: [checkSleeping, startContainers, syncIngressStep],
 };
 
 registerOp(wakeOp as OpKindDefinition<any>);

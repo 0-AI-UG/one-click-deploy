@@ -100,7 +100,7 @@ export const terminalWsHandlers = {
     sessionsByUser.set(data.userId, (sessionsByUser.get(data.userId) ?? 0) + 1);
 
     // Application-level heartbeat every 25s. WebSocket control-frame pings
-    // are often swallowed by reverse proxies (Caddy, Cloudflare, etc.), so we
+    // are often swallowed by reverse proxies (Traefik, Cloudflare, etc.), so we
     // send a real data frame that the client recognises and ignores. This
     // keeps the connection alive through any intermediary.
     const heartbeat = new TextEncoder().encode("\x00");

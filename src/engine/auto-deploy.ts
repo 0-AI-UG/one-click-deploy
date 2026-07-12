@@ -13,7 +13,7 @@ export type AutoDeployConfig = {
   /**
    * Public domain for the panel. Optional: when omitted, bootstrap derives a
    * `<server-ip>.nip.io` domain after the server is created and serves it with
-   * a self-signed (Caddy internal) cert — no DNS setup or real domain needed.
+   * a self-signed (Traefik default) cert — no DNS setup or real domain needed.
    */
   domain?: string;
   server_type?: string;

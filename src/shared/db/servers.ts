@@ -11,7 +11,7 @@ export type ServerRow = {
   status: string;
   ssh_host_key: string;
   /** Private IPv4 on the shared `ocd-net` Hetzner network. Empty string until
-   *  the reconciler attaches the server. Used by Caddy upstreams + internal
+   *  the reconciler attaches the server. Used by ingress upstreams + internal
    *  DNS so traffic stays off the public NIC. */
   private_ipv4: string;
   created_at: string;

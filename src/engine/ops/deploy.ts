@@ -12,7 +12,7 @@ import {
   removeAuthProxy,
   containerExists,
 } from "../../shared/remote/index.ts";
-import { syncAppCaddy, removeAppCaddy } from "../scale/caddy-manager.ts";
+import { syncAppIngress, removeAppIngress } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
@@ -79,7 +79,7 @@ type BuildOut = {
   imageTag: string;
 };
 
-type AuthProxyOut = { caddyPort: number } | null;
+type AuthProxyOut = { proxyPort: number } | null;
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [engine:deploy:${context}]`, ...args);
@@ -748,9 +748,9 @@ const deployAuthProxyStep: Step<DeployInput, AuthProxyOut> = {
     const exists = await containerExists(server.serverIp, proxyName, server.serverHostKey || undefined);
     if (!exists) return null;
     const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
-    const caddyPort = authProxyPort(appOut?.hostPort ?? 0);
+    const proxyPort = authProxyPort(appOut?.hostPort ?? 0);
     ctx.log(`adopting existing auth proxy container ${proxyName}`);
-    return { caddyPort };
+    return { proxyPort };
   },
   async probeCompensated(ctx, _out, prior) {
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
@@ -766,7 +766,7 @@ const deployAuthProxyStep: Step<DeployInput, AuthProxyOut> = {
     const tenantServerRow = db.getServer(server.serverId);
     if (!tenantServerRow) throw new Error(`Server ${server.serverId} not found`);
     const containerBindAddr = replicaBindHost(tenantServerRow);
-    const caddyPort = await deployAuthProxy(
+    const proxyPort = await deployAuthProxy(
       server.serverIp,
       req.app_name,
       req.auth_password,
@@ -774,8 +774,8 @@ const deployAuthProxyStep: Step<DeployInput, AuthProxyOut> = {
       containerBindAddr,
       server.serverHostKey || undefined,
     );
-    db.appendDeployLog(appOut.appId, `[auth] Auth proxy deployed on port ${caddyPort}`);
-    return { caddyPort };
+    db.appendDeployLog(appOut.appId, `[auth] Auth proxy deployed on port ${proxyPort}`);
+    return { proxyPort };
   },
   async compensate(ctx, out, prior) {
     if (!out) return;
@@ -790,9 +790,9 @@ const deployAuthProxyStep: Step<DeployInput, AuthProxyOut> = {
   },
 };
 
-const syncCaddyStep: Step<DeployInput, { domain: string }> = {
-  name: "sync_caddy",
-  label: "Configure Caddy",
+const syncIngressStep: Step<DeployInput, { domain: string }> = {
+  name: "sync_ingress",
+  label: "Configure ingress",
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
@@ -814,12 +814,12 @@ const syncCaddyStep: Step<DeployInput, { domain: string }> = {
       }
     }
 
-    await syncAppCaddy(appOut.appId);
+    await syncAppIngress(appOut.appId);
     db.appendDeployLog(
       appOut.appId,
       appOut.domain
-        ? `[caddy] Panel ingress configured for ${appOut.domain}`
-        : `[caddy] Internal ingress configured (private app)`,
+        ? `[ingress] Public ingress configured for ${appOut.domain}`
+        : `[ingress] Internal ingress configured (private app)`,
     );
     return { domain: appOut.domain };
   },
@@ -828,9 +828,9 @@ const syncCaddyStep: Step<DeployInput, { domain: string }> = {
     const appOut = prior["insert_app_row"] as InsertAppOut;
     if (!appOut) return;
     try {
-      await removeAppCaddy(appOut.containerName, out.domain);
+      await removeAppIngress(appOut.containerName, out.domain);
     } catch (err) {
-      ctx.log(`Failed to remove Caddy site: ${err}`);
+      ctx.log(`Failed to remove ingress route: ${err}`);
     }
   },
 };
@@ -1005,9 +1005,11 @@ const enqueueScaleChild: Step<DeployInput, { childOpId: number | null }> = {
   async run(ctx, prior) {
     const req = ctx.input;
     const appOut = prior["insert_app_row"] as InsertAppOut;
-    // Public apps need a real domain before replicas can spread across
-    // servers; private apps scale without one.
-    if (!req.replicas || req.replicas <= 1 || (req.public !== false && !req.domain)) {
+    // Public apps need a domain before replicas can spread across servers;
+    // gate on the RESOLVED domain (insert_app_row output) — an auto-domain
+    // deploy has no req.domain but still gets one. Private apps scale
+    // without any domain.
+    if (!req.replicas || req.replicas <= 1 || (req.public !== false && !appOut.domain)) {
       return { childOpId: null };
     }
     db.updateAppScaling(appOut.appId, {
@@ -1091,7 +1093,7 @@ const deployOp: OpKindDefinition<DeployInput> = {
     cloneRepoStep,
     buildAndRunContainer,
     deployAuthProxyStep,
-    syncCaddyStep,
+    syncIngressStep,
     healthCheckStep,
     recordDeploymentHistory,
     setupGithubWebhook,

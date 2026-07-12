@@ -1,6 +1,8 @@
+import { traefikInstallScript } from "../../engine/scale/traefik-config.ts";
+
 /**
  * Generate a cloud-init user-data script for provisioning servers.
- * The base script installs Docker, Caddy, Bun, and hardens SSH.
+ * The base script installs Docker, Traefik, Bun, and hardens SSH.
  * Provider-specific packages/commands can be injected.
  */
 export function cloudInitScript(opts?: {
@@ -72,44 +74,14 @@ APT::Periodic::Unattended-Upgrade "1";
 AUTOUPGRADE
 systemctl enable unattended-upgrades
 
-# Install Caddy
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || true
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
-apt-get update -qq || true
-apt-get install -y -qq caddy || { sleep 10; wait_for_apt; apt-get install -y -qq caddy; }
-
-# Configure Caddy with JSON config for admin API support
-mkdir -p /etc/caddy/sites
-cat > /etc/caddy/caddy.json <<'CADDYJSON'
-{
-  "admin": {
-    "listen": "localhost:2019"
-  },
-  "apps": {
-    "http": {
-      "servers": {
-        "srv0": {
-          "listen": [":80", ":443"],
-          "routes": []
-        }
-      }
-    }
-  }
-}
-CADDYJSON
-
-# Override systemd to use JSON config
-mkdir -p /etc/systemd/system/caddy.service.d
-cat > /etc/systemd/system/caddy.service.d/override.conf <<'OVERRIDE'
-[Service]
-ExecStart=
-ExecStart=/usr/bin/caddy run --config /etc/caddy/caddy.json
-ExecReload=/usr/bin/caddy reload --config /etc/caddy/caddy.json
-OVERRIDE
-
-systemctl daemon-reload
-systemctl enable caddy
-systemctl restart caddy
+# Install Traefik (pinned release, arch-detected) + ocd-traefik systemd unit.
+# Same script the reconciler uses to backfill servers over SSH — run it in a
+# subshell so its 'set -e' can't abort the rest of cloud-init.
+cat > /tmp/ocd-traefik-install.sh <<'TRAEFIK_INSTALL'
+${traefikInstallScript()}
+TRAEFIK_INSTALL
+bash /tmp/ocd-traefik-install.sh
+rm -f /tmp/ocd-traefik-install.sh
 
 # Install Bun runtime (for webhook receiver)
 curl -fsSL https://bun.sh/install | bash

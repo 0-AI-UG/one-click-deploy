@@ -71,9 +71,14 @@ const remoteMocks = {
 };
 if (RUN) {
   mock.module("../shared/remote/index.ts", () => remoteMocks);
-  mock.module("./scale/caddy-manager.ts", () => ({
-    syncAppCaddy: mock(async () => {}),
-    removeAppCaddy: mock(async () => {}),
+  mock.module("./scale/traefik-manager.ts", () => ({
+    syncAppIngress: mock(async () => {}),
+    removeAppIngress: mock(async () => {}),
+    syncServiceIngress: mock(async () => {}),
+    removeServiceIngress: mock(async () => {}),
+    getPanelIngressIpv4: mock(() => null),
+    syncAllTraefik: mock(async () => {}),
+    reconcileTraefik: mock(async () => {}),
   }));
   mock.module("./scale-api.ts", () => ({ scaleApp: mock(async () => ({ ok: true })) }));
   mock.module("../shared/github.ts", () => ({
