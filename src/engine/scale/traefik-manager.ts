@@ -237,8 +237,9 @@ export async function ensureTraefikInstalled(server: ServerAccess): Promise<void
 
 /**
  * Reconciler entrypoint: make sure every ready server runs ocd-traefik, then
- * drift-repair every server's dynamic config. This is also what populates
- * dynamic configs right after the manual Caddy→Traefik cutover.
+ * drift-repair every server's dynamic config and the panel's own vhost. This
+ * is also what populates dynamic configs right after the manual
+ * Caddy→Traefik cutover.
  */
 export async function reconcileTraefik(): Promise<void> {
   for (const server of db.getServers()) {
@@ -255,13 +256,46 @@ export async function reconcileTraefik(): Promise<void> {
     }
   }
   await syncAllTraefik();
+  try {
+    await reconcilePanelSite();
+  } catch (err) {
+    log("panel", `panel vhost reconcile failed: ${err}`);
+  }
+}
+
+// Hash of the last panel.yml successfully written, keyed by panel server ipv4.
+const lastPanelHashByServer = new Map<string, string>();
+
+/**
+ * Drift-repair the panel's own vhost from DB state. Bootstrap writes the
+ * first panel.yml (via deployTraefikPanelSite, before a panel row exists);
+ * this keeps it converged afterwards, so a wiped /etc/traefik/dynamic or a
+ * rebuilt panel server heals within one reconciler tick instead of leaving
+ * the control plane unroutable. Content-hashed: steady-state ticks write
+ * nothing, so live panel WebSocket/terminal sessions are never disturbed.
+ */
+export async function reconcilePanelSite(): Promise<void> {
+  const panel = db.getPanel();
+  if (!panel || !panel.domain || !panel.host_port) return;
+  const server = getPanelAccess();
+  if (!server) return;
+  const content = renderPanelConfig(
+    panel.domain,
+    panel.host_port,
+    panel.domain.endsWith(".nip.io"),
+  );
+  const hash = contentHash(content);
+  if (lastPanelHashByServer.get(server.ipv4) === hash) return;
+  await writeRemoteConfigAtomic(server, TRAEFIK_PANEL_CONFIG_PATH, content);
+  lastPanelHashByServer.set(server.ipv4, hash);
+  log("panel", `wrote panel.yml on ${server.name} (${panel.domain})`);
 }
 
 /**
  * Write the panel's own vhost to /etc/traefik/dynamic/panel.yml. Called from
- * panel bootstrap (and nowhere else) — the engine's ocd.yml renderer never
- * touches this file, so panel WebSocket/terminal sessions survive app syncs.
- * Runs against an explicit server because bootstrap's DB has no panel row
+ * panel bootstrap — the engine's ocd.yml renderer never touches this file,
+ * and after bootstrap reconcilePanelSite() owns keeping it converged. Runs
+ * against an explicit server because bootstrap's DB has no panel row
  * relationship to lean on yet.
  */
 export async function deployTraefikPanelSite(
