@@ -1,5 +1,7 @@
 import path from "path";
+import * as db from "../shared/db.ts";
 import { corsHeaders, securityHeaders, htmlCsp } from "./lib/cors.ts";
+import { wakePageResponse } from "./lib/wake-page.ts";
 import { tryTerminalUpgrade, terminalWsHandlers } from "./routes/terminal.ts";
 import { apiRoutes } from "./routes.ts";
 import { startEngineInProcess } from "../engine/entrypoint.ts";
@@ -77,6 +79,15 @@ export const server = Bun.serve({
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
+
+    // Sleeping apps: Traefik routes their public domains at the panel, which
+    // answers any request on such a Host with the 503 wake page (the page
+    // triggers the wake and polls until the app is back).
+    const wake = wakePageResponse(request, {
+      getAppByDomain: (domain) => db.getAppByDomain(domain),
+      getPanelDomain: () => db.getPanel()?.domain || "",
+    });
+    if (wake) return wake;
 
     const url = new URL(request.url);
 
