@@ -8,7 +8,7 @@ interface DashboardApp {
   domain: string;
   public?: boolean | number;
   internal_port?: number;
-  health_check?: boolean | number;
+  internal_protocol?: string;
 }
 
 interface DashboardService {

@@ -6,8 +6,8 @@ import * as db from "./db.ts";
 import { platformEnvVars, resolveAppEnvVars, serializeEnvVars } from "./env-crypto.ts";
 
 describe("platformEnvVars", () => {
-  test("HTTP app (health_check=1) gets an http:// internal URL", () => {
-    const vars = platformEnvVars({ name: "api", internal_port: 20003, health_check: 1 });
+  test("HTTP-routed app (internal_protocol=http) gets an http:// internal URL", () => {
+    const vars = platformEnvVars({ name: "api", internal_port: 20003, internal_protocol: "http" });
     expect(vars).toEqual({
       OCD_INTERNAL_URL: "http://api.ocd.internal:20003",
       OCD_INTERNAL_HOST: "api.ocd.internal",
@@ -15,8 +15,8 @@ describe("platformEnvVars", () => {
     });
   });
 
-  test("non-HTTP app (health_check=0) gets a tcp:// internal URL", () => {
-    const vars = platformEnvVars({ name: "queue", internal_port: 20017, health_check: 0 });
+  test("TCP-routed app (internal_protocol=tcp) gets a tcp:// internal URL", () => {
+    const vars = platformEnvVars({ name: "queue", internal_port: 20017, internal_protocol: "tcp" });
     expect(vars).toEqual({
       OCD_INTERNAL_URL: "tcp://queue.ocd.internal:20017",
       OCD_INTERNAL_HOST: "queue.ocd.internal",

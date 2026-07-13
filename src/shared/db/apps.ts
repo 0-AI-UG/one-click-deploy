@@ -42,13 +42,17 @@ export type AppRow = {
   sleeping_server_id: number | null;
   sleeping_host_port: number | null;
   scale_to_zero_after: number;
-  wake_token: string | null;
   webhook_wait_for_ci: number;
   environment_id: number | null;
   public: number;
   extra_volumes: string; // JSON array of "host:container" strings
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
   health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
+  /** Internal routing protocol on the app's internal entrypoint: 'http' =
+   *  Traefik HTTP router (L7), 'tcp' = raw TCP pass-through. Decoupled from
+   *  health_check (which only controls the container probe) — see migration 67.
+   *  Auth-protected apps are always effectively HTTP-routed regardless. */
+  internal_protocol: string; // 'http' | 'tcp'
   internal_port: number; // fleet-unique internal ingress port (20000-20199), owned for the app's lifetime
   /** ISO timestamp of the last request observed in Traefik's per-service
    *  counters (public + internal traffic alike). NULL until the engine has
@@ -80,6 +84,9 @@ export const PUBLIC_UDP_PORT_BASE = 30050;
 export const PUBLIC_UDP_PORT_COUNT = 50;
 
 export type PublicProtocol = "tcp" | "udp";
+
+/** Internal routing protocol on the app's internal entrypoint. */
+export type InternalProtocol = "http" | "tcp";
 
 export function publicPortRange(protocol: PublicProtocol): { base: number; count: number } {
   return protocol === "udp"
@@ -207,6 +214,10 @@ type InsertAppFields = {
   environment_id?: number;
   public?: boolean;
   health_check?: boolean;
+  /** Internal routing protocol. Omitted → derived from health_check (http when
+   *  health_check is on, tcp when off) so callers that only set health_check
+   *  keep the historical routing coupling. */
+  internal_protocol?: InternalProtocol;
   /** Public raw TCP/UDP exposure: "auto" = lowest free port, number =
    *  specific port, omit/null = not exposed. */
   public_port?: number | "auto" | null;
@@ -234,9 +245,15 @@ function resolvePublicPort(app: InsertAppFields): number | null {
 // tx). resolvePublicPort/allocateInternalPort run here so both paths allocate
 // identically.
 function insertAppRow(app: InsertAppFields): AppRow {
+  const healthCheck = app.health_check ?? true;
+  // Internal routing protocol is explicit, but when a caller only sets
+  // health_check we derive it from that flag to preserve the pre-migration-67
+  // coupling (http when probing, tcp when not) — identical behavior on day one.
+  const internalProtocol: InternalProtocol =
+    app.internal_protocol ?? (healthCheck ? "http" : "tcp");
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, public, health_check, internal_port, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, public, health_check, internal_protocol, internal_port, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -250,7 +267,8 @@ function insertAppRow(app: InsertAppFields): AppRow {
       hashAuthPassword(app.auth_password || ""),
       app.environment_id ?? null,
       (app.public ?? true) ? 1 : 0,
-      (app.health_check ?? true) ? 1 : 0,
+      healthCheck ? 1 : 0,
+      internalProtocol,
       allocateInternalPort(),
       app.sticky ? 1 : 0,
       app.rate_limit_rps ?? 0,
@@ -349,12 +367,12 @@ export function updateAppStatus(id: number, status: string): void {
   db.query("UPDATE apps SET status = ? WHERE id = ?").run(status, id);
 }
 
-export function updateAppSleepingState(id: number, serverId: number, hostPort: number, wakeToken: string): void {
-  db.query("UPDATE apps SET sleeping_server_id = ?, sleeping_host_port = ?, wake_token = ? WHERE id = ?").run(serverId, hostPort, wakeToken, id);
+export function updateAppSleepingState(id: number, serverId: number, hostPort: number): void {
+  db.query("UPDATE apps SET sleeping_server_id = ?, sleeping_host_port = ? WHERE id = ?").run(serverId, hostPort, id);
 }
 
 export function clearAppSleepingState(id: number): void {
-  db.query("UPDATE apps SET sleeping_server_id = NULL, sleeping_host_port = NULL, wake_token = NULL WHERE id = ?").run(id);
+  db.query("UPDATE apps SET sleeping_server_id = NULL, sleeping_host_port = NULL WHERE id = ?").run(id);
 }
 
 export function touchAppLastRequest(id: number, atMs: number = Date.now()): void {
@@ -479,6 +497,13 @@ export function updateAppAuthPassword(id: number, authPassword: string): void {
 
 export function updateAppPublic(id: number, isPublic: boolean): void {
   db.query("UPDATE apps SET public = ? WHERE id = ?").run(isPublic ? 1 : 0, id);
+}
+
+/** Set the internal routing protocol ('http' | 'tcp'). Pure Traefik-config
+ *  change for the routing itself; the app's OCD_INTERNAL_URL scheme only
+ *  refreshes on its next (re)deploy. Callers re-sync ingress after persisting. */
+export function updateAppInternalProtocol(id: number, protocol: InternalProtocol): void {
+  db.query("UPDATE apps SET internal_protocol = ? WHERE id = ?").run(protocol, id);
 }
 
 export function updateAppWebhook(

@@ -24,7 +24,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [portEdit, setPortEdit] = useState<number>(0);
   const [memEdit, setMemEdit] = useState<number>(0);
   const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
-  const [ingressForm, setIngressForm] = useState<IngressForm>({ sticky: false, rate_limit_rps: 0, ip_allowlist: "", health_check_path: "", compress: false, public_protocol: "off", public_port: "", auth_enabled: false, auth_password: "" });
+  const [ingressForm, setIngressForm] = useState<IngressForm>({ sticky: false, rate_limit_rps: 0, ip_allowlist: "", health_check_path: "", compress: false, public_protocol: "off", public_port: "", auth_enabled: false, auth_password: "", internal_protocol: "http" });
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
   const [replicas, setReplicas] = useState<ReplicaData[]>([]);
@@ -133,6 +133,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
         // value. Blank field + enabled = keep current password.
         auth_enabled: !!app.auth_enabled,
         auth_password: "",
+        internal_protocol: app.internal_protocol === "tcp" ? "tcp" : "http",
       });
       if (app.volume_mount) {
         const parts = String(app.volume_mount).split(":");

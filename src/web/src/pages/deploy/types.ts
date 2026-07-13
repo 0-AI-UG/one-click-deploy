@@ -26,6 +26,7 @@ export type DeployManifest = {
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   memory_mb?: number;
   health_check?: boolean;
+  internal_protocol?: "http" | "tcp";
 };
 
 export type ParsedManifest = {
@@ -70,7 +71,8 @@ export type FormState = {
   extra_volumes: Array<{ host_path: string; container_path: string }>;
   server_id: string; // "" = auto
   memory_mb: string; // "" / "0" = platform default
-  health_check: boolean; // false = skip the HTTP probe (manifest passthrough, no UI control)
+  health_check: boolean; // HTTP probe after deploy; independent of internal_protocol
+  internal_protocol: "http" | "tcp"; // internal routing protocol (L7 vs raw TCP)
   sticky: boolean; // sticky sessions on the ingress service
   rate_limit_rps: string; // "" / "0" = unlimited
   ip_allowlist: string; // comma-separated IPs/CIDRs, "" = open

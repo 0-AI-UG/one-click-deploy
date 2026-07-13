@@ -197,6 +197,7 @@ ${BOLD}Options:${RESET}
   if (manifest.public !== undefined) body.public = manifest.public;
   if (manifest.memory_mb) body.memory_mb = manifest.memory_mb;
   if (manifest.health_check === false) body.health_check = false;
+  if (manifest.internal_protocol) body.internal_protocol = manifest.internal_protocol;
 
   if (manifest.volume?.size) {
     body.volume_size = manifest.volume.size;

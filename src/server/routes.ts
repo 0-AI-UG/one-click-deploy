@@ -35,7 +35,7 @@ import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail } from "./routes/resources.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
-import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleWakeApp, handleWakeStatus, handleMigrateReplica } from "./routes/scaling.ts";
+import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
 import {
   handleEnableWebhook,
   handleUpdateWebhookSettings,
@@ -260,15 +260,10 @@ export const apiRoutes = {
     },
   },
 
-  // Public wake endpoints (no auth — called from the wake page on the app's domain)
-  "/api/apps/:appId/wake": {
-    POST: (req: Request) => handleWakeApp(req, appIdFrom(req)),
-    OPTIONS: () => new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } }),
-  },
-  "/api/apps/:appId/wake-status": {
-    GET: (req: Request) => handleWakeStatus(req, appIdFrom(req)),
-    OPTIONS: () => new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } }),
-  },
+  // (Wake is now transparent: sleeping apps' Traefik routers point at the
+  // in-process hold-and-forward waker — see src/engine/scale/waker.ts. There is
+  // no browser wake page or token dance. The dashboard "wake" button just scales
+  // a sleeping app up, which routes through the wake op via handleScaleApp.)
 
   // --- Admin: Settings ---
   "/api/admin/settings": {

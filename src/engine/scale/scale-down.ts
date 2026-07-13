@@ -4,6 +4,7 @@ import {
   stopContainer,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
+import { reconcileWakerPorts } from "./waker.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
 
 export async function scaleDown(
@@ -88,22 +89,27 @@ export async function scaleDown(
   }
 
   // If going to 0, record the sleeping state and re-render ingress: the
-  // desired-state renderer routes the sleeping app's public domain to the
-  // panel, which serves the 503 wake page so HTTP requests auto-wake the
-  // app. Private apps (domain = '') get no wake route — they sleep without
-  // one and wake via dashboard/CLI/API.
+  // desired-state renderer now points ALL of the app's routers (internal,
+  // public HTTP, public raw TCP/UDP) at the panel waker, so any connection —
+  // browser, internal caller, or raw socket — transparently wakes the app and
+  // is held-and-forwarded. Then open the app's raw-TCP/UDP waker listener so a
+  // raw connection can arrive immediately (before the next reconciler tick).
   if (targetCount === 0) {
     const lastRemoved = toRemove[toRemove.length - 1];
     const lastServer = db.getServer(lastRemoved.server_id);
     if (lastServer) {
-      const wakeToken = crypto.randomUUID();
-      db.updateAppSleepingState(app.id, lastServer.id, lastRemoved.host_port, wakeToken);
+      db.updateAppSleepingState(app.id, lastServer.id, lastRemoved.host_port);
     }
     db.updateAppStatus(app.id, "sleeping");
     try {
       await syncAppIngress(app.id);
     } catch (err) {
       log("scale", `Ingress sync after sleep failed: ${err}`);
+    }
+    try {
+      reconcileWakerPorts();
+    } catch (err) {
+      log("scale", `Waker port open after sleep failed: ${err}`);
     }
     emit("scale", "App scaled to zero — sleeping");
   } else {

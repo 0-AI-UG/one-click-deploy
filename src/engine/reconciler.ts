@@ -6,6 +6,7 @@ import { evaluateAutoScale } from "./scale-api.ts";
 import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
 import { reconcileTraefik } from "./scale/traefik-manager.ts";
+import { reconcileWakerPorts } from "./scale/waker.ts";
 import { TRAEFIK_METRICS_PORT } from "./scale/traefik-config.ts";
 import { ingestServerRequestMetrics } from "./scale/request-metrics.ts";
 import { replicaBindHost } from "./scale/types.ts";
@@ -598,6 +599,15 @@ async function tick(): Promise<void> {
       await reconcileTraefik();
     } catch (err) {
       log("ingress", `reconcile failed: ${err}`);
+    }
+
+    // --- Waker port convergence: open/close the per-app raw TCP/UDP listeners
+    // that sleeping apps' routers point at (the shared HTTP listener is always
+    // up). Local, in-process, cheap. ---
+    try {
+      reconcileWakerPorts();
+    } catch (err) {
+      log("waker", `port reconcile failed: ${err}`);
     }
 
     // --- One-shot firewall rule convergence (only meaningful when the fleet

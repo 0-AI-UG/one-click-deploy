@@ -13,7 +13,7 @@ export {
   getRecentServerMetrics,
   pruneOldServerMetrics,
 } from "./servers.ts";
-export type { AppRow, AppIngressSettings, DnsRecordRow, PublicProtocol } from "./apps.ts";
+export type { AppRow, AppIngressSettings, DnsRecordRow, PublicProtocol, InternalProtocol } from "./apps.ts";
 export {
   getApps,
   getApp,
@@ -47,6 +47,7 @@ export {
   updateAppMemory,
   updateAppAuthPassword,
   updateAppPublic,
+  updateAppInternalProtocol,
   updateAppWebhook,
   updateAppWebhookWaitForCi,
   updateAppScaling,

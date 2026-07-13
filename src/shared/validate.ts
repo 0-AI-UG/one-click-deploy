@@ -1,4 +1,4 @@
-import { publicPortRange, type PublicProtocol } from "./db/apps.ts";
+import { publicPortRange, type PublicProtocol, type InternalProtocol } from "./db/apps.ts";
 
 export type ValidationResult<T> =
   | { valid: true; value: T }
@@ -220,6 +220,24 @@ export function isPublicProtocol(value: unknown): value is PublicProtocol {
   return value === "tcp" || value === "udp";
 }
 
+export function isInternalProtocol(value: unknown): value is InternalProtocol {
+  return value === "http" || value === "tcp";
+}
+
+/**
+ * Resolve a deploy request's internal routing protocol. Explicit
+ * `internal_protocol` wins; when omitted it is derived from `health_check`
+ * (http when health_check is on/undefined, tcp when off) so old callers that
+ * only set health_check keep the historical HTTP↔TCP routing coupling.
+ */
+export function resolveInternalProtocol(
+  internalProtocol: unknown,
+  healthCheck: boolean | undefined,
+): InternalProtocol {
+  if (isInternalProtocol(internalProtocol)) return internalProtocol;
+  return healthCheck === false ? "tcp" : "http";
+}
+
 /** Per-app ingress fields shared by deploy and the ingress-update endpoint.
  *  Every field is optional so a partial ingress PATCH validates only what it
  *  sends; deploy passes the full set. */
@@ -248,21 +266,22 @@ export type NormalizedIngressFields = {
  * Single source of truth for the ingress-field rules shared by
  * `validateDeployRequest` and `handleUpdateIngressSettings`. Returns the
  * normalized values (or the first error) so both call sites agree on both the
- * rules and the error strings. `httpHealthCheck` is whether the app is (or will
- * be) HTTP-routed — password protection and an active health-check path are
- * Traefik HTTP-router features and can't gate a raw-TCP app.
+ * rules and the error strings. `httpRouted` is whether the app is (or will be)
+ * HTTP-routed (internal_protocol='http') — password protection and an active
+ * health-check path are Traefik HTTP-router features and can't gate a
+ * raw-TCP-routed app.
  */
 export function validateIngressFields(
   fields: IngressFieldsInput,
-  ctx: { httpHealthCheck: boolean },
+  ctx: { httpRouted: boolean },
 ): ValidationResult<NormalizedIngressFields> {
   const out: NormalizedIngressFields = {};
 
   // Password protection is a Traefik basicAuth middleware, which only exists
-  // for HTTP routers — a raw-TCP app can't enforce it.
+  // for HTTP routers — a raw-TCP-routed app can't enforce it.
   if (fields.auth_password !== undefined) {
-    if (fields.auth_password && !ctx.httpHealthCheck) {
-      return { valid: false, error: "Password protection requires the HTTP health check — it is enforced by HTTP basic auth at the ingress and cannot gate raw-TCP apps" };
+    if (fields.auth_password && !ctx.httpRouted) {
+      return { valid: false, error: "Password protection requires HTTP internal routing — it is enforced by HTTP basic auth at the ingress and cannot gate raw-TCP apps (set internal_protocol to 'http')" };
     }
     out.auth_password = fields.auth_password;
   }
@@ -284,9 +303,9 @@ export function validateIngressFields(
     const pathResult = validateHealthCheckPath(String(fields.health_check_path));
     if (!pathResult.valid) return { valid: false, error: pathResult.error };
     // The active HTTP health check lives on the app's HTTP loadBalancer;
-    // raw-TCP apps use a TCP connect check instead.
-    if (pathResult.value && !ctx.httpHealthCheck) {
-      return { valid: false, error: "Health check path requires the HTTP health check — raw-TCP apps use a TCP connect check instead" };
+    // raw-TCP-routed apps use a TCP connect check instead.
+    if (pathResult.value && !ctx.httpRouted) {
+      return { valid: false, error: "Health check path requires HTTP internal routing — raw-TCP apps use a TCP connect check instead (set internal_protocol to 'http')" };
     }
     out.health_check_path = pathResult.value;
   }
@@ -483,6 +502,9 @@ export function validateDeployManifest(
   if ("health_check" in obj && typeof obj.health_check !== "boolean")
     return { ok: false, error: '"health_check" must be a boolean' };
 
+  if ("internal_protocol" in obj && !isInternalProtocol(obj.internal_protocol))
+    return { ok: false, error: '"internal_protocol" must be "http" or "tcp"' };
+
   return { ok: true, manifest: raw as import("./rpc.ts").DeployManifest };
 }
 
@@ -509,6 +531,7 @@ export function validateDeployRequest(req: {
   public?: boolean;
   auth_password?: string;
   health_check?: boolean;
+  internal_protocol?: string;
   sticky?: boolean;
   rate_limit_rps?: number;
   ip_allowlist?: string;
@@ -549,6 +572,15 @@ export function validateDeployRequest(req: {
     return { valid: false, error: `Memory: must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB} MB` };
   }
 
+  if (req.internal_protocol !== undefined && !isInternalProtocol(req.internal_protocol)) {
+    return { valid: false, error: 'Internal protocol must be "http" or "tcp"' };
+  }
+
+  // Internal routing protocol: explicit value wins, else derived from
+  // health_check for backward compatibility. Auth / health-check-path rules
+  // key off the resolved routing protocol (they are HTTP-router features).
+  const internalProtocol = resolveInternalProtocol(req.internal_protocol, req.health_check);
+
   // Auth / rate limit / allowlist / health-check path / public-port rules are
   // shared with the ingress-update endpoint — one validator, one set of errors.
   const ingressResult = validateIngressFields(
@@ -560,7 +592,7 @@ export function validateDeployRequest(req: {
       public_port: req.public_port,
       public_protocol: req.public_protocol,
     },
-    { httpHealthCheck: req.health_check !== false },
+    { httpRouted: internalProtocol === "http" },
   );
   if (!ingressResult.valid) return { valid: false, error: ingressResult.error };
 

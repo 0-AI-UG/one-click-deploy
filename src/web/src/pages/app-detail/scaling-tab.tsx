@@ -35,9 +35,10 @@ interface ScalingTabProps {
 export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPolicy, actionLoading, action, loadReplicas, load, ops }: ScalingTabProps) {
   const hasVolume = Boolean(app.volume_id);
   const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica — a cloud volume can only be attached to a single server at a time.";
-  // Only public apps need a custom domain to scale — private apps have no
-  // public ingress at all, so the domain requirement doesn't apply.
-  const needsDomain = !!app.public && (!app.domain || app.domain.endsWith(".nip.io"));
+  // No custom-domain requirement: the panel is the sole public ingress and
+  // load-balances across replicas over the private network, so nip.io
+  // auto-domains scale just like custom domains. Only volumes lock an app to
+  // a single replica.
   const [selectedServer, setSelectedServer] = useState<string>("");
   const [servers, setServers] = useState<ResourceServer[]>([]);
 
@@ -77,12 +78,6 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
   const showProgress = !!progressMessage;
   return (
     <div className="space-y-4">
-      {needsDomain && (
-        <Card className="p-4">
-          <p className="font-mono text-[10px] text-accent-amber font-bold flex items-center gap-1">Scaling needs a custom domain — add one in Settings. <InfoTip text="nip.io URLs are derived from a single server IP and can't be used once replicas are spread across multiple hosts." /></p>
-        </Card>
-      )}
-
       {!app.public && (
         <Card className="p-4">
           <p className="font-mono text-[10px] text-muted flex items-center gap-1">Private app — no public wake page. <InfoTip text="A sleeping private app has no public URL to wake it on request; wake it from this dashboard, the CLI, or the API." /></p>
@@ -163,13 +158,11 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
             <Btn
               size="sm"
               loading={actionLoading === "scale-up"}
-              disabled={needsDomain || hasVolume || replicas.length >= 1 && hasVolume}
+              disabled={hasVolume}
               title={
                 hasVolume
                   ? volumeLockedReason
-                  : needsDomain
-                    ? "Add a custom domain to enable scaling"
-                    : "Add one replica. Placement is automatic: reuse a ready server with no replica of this app, or provision a new one."
+                  : "Add one replica. Placement is automatic: reuse a ready server with no replica of this app, or provision a new one."
               }
               onClick={() => action("scale-up", async () => {
                 const current = replicas.length || app.desired_replicas || 1;
@@ -203,9 +196,8 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Checkbox
-                checked={policy.autoscale_enabled && !needsDomain}
+                checked={policy.autoscale_enabled}
                 onChange={(v) => {
-                  if (needsDomain) return;
                   setPolicy({ ...policy, autoscale_enabled: v });
                 }}
                 label="Enable autoscaling"

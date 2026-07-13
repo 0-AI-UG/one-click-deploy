@@ -8,10 +8,13 @@
 //   web / websecure   — :80/:443 public ingress. Only the panel server ever
 //                       gets routers on these (public app domains, managed
 //                       services, ACME); on workers they sit idle.
-//   int20000-int20199 — one entrypoint per app `internal_port`. HTTP apps get
-//                       an HTTP router, health_check=0 apps a raw TCP router,
-//                       so one address `<app>.ocd.internal:<internal_port>`
-//                       works for both protocols.
+//   int20000-int20199 — one entrypoint per app `internal_port`. Apps with
+//                       internal_protocol='http' (or any auth-protected app)
+//                       get an HTTP router; internal_protocol='tcp' apps a raw
+//                       TCP router, so one address
+//                       `<app>.ocd.internal:<internal_port>` works for both
+//                       protocols. The routing protocol is an explicit app
+//                       field, independent of the health_check probe flag.
 //   pub30000-pub30049 / pubu30050-pubu30099 — public raw TCP/UDP pool
 //                       (apps.public_port). Routed on the panel only:
 //                       `<panel-ip>:<port>` forwards raw to the app's
@@ -44,6 +47,59 @@ export const TRAEFIK_METRICS_PORT = 8899;
  *  password-only; basicAuth needs a user, so every htpasswd entry uses this
  *  one (UI copy tells visitors to sign in as "admin"). */
 export const BASIC_AUTH_USER = "admin";
+
+// --- Hold-and-forward waker ---------------------------------------------------
+//
+// Sleeping apps (scale-to-zero) can't serve, but a connection to one must not
+// fail — it must transparently wake the app, wait, and be forwarded. That job
+// belongs to the WAKER, an in-process TCP/HTTP proxy that runs on the PANEL
+// (src/engine/scale/waker.ts). While an app sleeps, its Traefik routers point
+// at the waker instead of a (non-existent) replica pool; when it wakes, the
+// reconciler re-renders them back to the real replicas. This replaced the old
+// browser-only 503 "wake page", which did nothing for internal callers, raw
+// TCP/UDP ports, or any non-browser HTTP client.
+//
+// Topology: ONE waker on the panel (like public ingress, which already
+// centralizes there). Every server's Traefik reaches it over the private
+// network at `<panel-private-ip>:<waker-port>`. Tradeoff: the panel is a wake
+// choke point / SPOF for cold starts — but it is already the choke point for
+// all public ingress, ACME and the control plane, so this adds no new failure
+// domain. The alternative (a waker per server) would duplicate the DB access
+// and wake coordination on every worker for no real gain.
+
+/** The waker's single HTTP listener. Sleeping apps' HTTP routers (internal
+ *  `<app>.ocd.internal:<port>` and public `<domain>`) forward here; the waker
+ *  resolves the app from the forwarded `Host` header, wakes it, holds the
+ *  request, then proxies to the real upstream. */
+export const WAKER_HTTP_PORT = 8896;
+
+/** Base of the waker's per-app raw-TCP listener block. A sleeping raw-TCP app
+ *  (internal_protocol='tcp', or one exposed on a public `pub*` port) gets a
+ *  dedicated waker port = WAKER_TCP_PORT_BASE + (internal_port - base); the
+ *  waker resolves the app from the port a connection arrived on (raw sockets
+ *  carry no Host). Mirrors the int20000-20199 block 1:1, so the port is stable
+ *  for the app's lifetime and never collides. */
+export const WAKER_TCP_PORT_BASE = 21000;
+
+/** Base of the waker's per-app UDP listener block (public `pubu*` ports),
+ *  offset past the TCP block so the two never overlap. */
+export const WAKER_UDP_PORT_BASE = 21200;
+
+/** Waker raw-TCP port for an app, derived from its internal port. Shared by the
+ *  app's internal-tcp and public-tcp sleeping routers — both dial the same
+ *  upstream once awake, so one listener serves both. */
+export function wakerTcpPort(internalPort: number): number {
+  return WAKER_TCP_PORT_BASE + (internalPort - db.INTERNAL_PORT_BASE);
+}
+
+/** Waker UDP port for an app, derived from its internal port. */
+export function wakerUdpPort(internalPort: number): number {
+  return WAKER_UDP_PORT_BASE + (internalPort - db.INTERNAL_PORT_BASE);
+}
+
+/** Shared Traefik HTTP service name every sleeping app's HTTP router targets —
+ *  a single load balancer pointing at the panel waker's HTTP listener. */
+export const WAKER_HTTP_SERVICE = "ocd-waker-http";
 
 export const TRAEFIK_STATIC_CONFIG_PATH = "/etc/traefik/traefik.yml";
 /** JSON access log, one line per request. Rotated by logrotate (see
@@ -285,10 +341,16 @@ export type DesiredApp = {
   /** Public domain; "" for private apps. */
   domain: string;
   internalPort: number;
-  /** health_check flag: true → HTTP routing, false → raw TCP routing. */
+  /** Explicit internal routing protocol: 'http' → HTTP router, 'tcp' → raw TCP
+   *  router. Auth-protected apps are forced HTTP regardless (see httpRouted). */
+  internalProtocol: "http" | "tcp";
+  /** health_check flag: drives the active HTTP health-check probe target only
+   *  (loadBalancer.healthCheck), NOT the routing protocol. */
   httpProbe: boolean;
   isPublic: boolean;
-  /** sleeping/waking — the public domain routes to the panel's wake page. */
+  /** sleeping/waking — all of the app's routers (internal, public HTTP, public
+   *  raw TCP/UDP) point at the panel waker instead of a replica pool, so any
+   *  connection transparently wakes it and is held-and-forwarded. */
   asleep: boolean;
   /** htpasswd bcrypt hash for the basicAuth middleware; "" when the app has
    *  no password. Persisted at set-time (apps.auth_password_hash) so renders
@@ -323,9 +385,15 @@ export type DesiredService = {
 export type DesiredState = {
   apps: DesiredApp[];
   services: DesiredService[];
-  /** The panel container's host port on the panel server's loopback —
-   *  target for sleeping apps' wake-page routing. Null when no panel. */
+  /** The panel container's host port on the panel server's loopback. Null when
+   *  no panel. No longer consumed by the renderer (sleeping apps route to the
+   *  waker, not the panel) — retained in the snapshot for callers/tests. */
   panelHostPort: number | null;
+  /** The panel server's private IPv4 — where every server's Traefik reaches the
+   *  waker (`<ip>:<waker-port>`) to route sleeping apps. Null until the network
+   *  reconciler has attached the panel; sleeping apps then render no waker
+   *  route (they fall back to rendering nothing, as before). */
+  panelPrivateIpv4: string | null;
   /** Managed DNS zone name (settings `dns_zone_name`); "" when none. Drives
    *  the wildcard-cert TLS selection in publicTls — threaded through the
    *  snapshot so the renderer stays pure. */
@@ -346,7 +414,7 @@ export type DesiredState = {
  * check skips it per-request, and if it stays failing the reconciler
  * auto-restarts it.
  */
-function buildUpstreams(appId: number): string[] {
+export function buildUpstreams(appId: number): string[] {
   const replicas = db
     .getReplicas(appId)
     .filter((r) => r.status === "running" || r.status === "unhealthy");
@@ -372,6 +440,7 @@ export function collectDesiredState(): DesiredState {
       name: app.name,
       domain: app.domain,
       internalPort: app.internal_port,
+      internalProtocol: app.internal_protocol === "tcp" ? "tcp" as const : "http" as const,
       httpProbe: !!app.health_check,
       isPublic: !!app.public,
       asleep: app.status === "sleeping" || app.status === "waking",
@@ -411,10 +480,12 @@ export function collectDesiredState(): DesiredState {
   services.sort((a, b) => a.name.localeCompare(b.name));
 
   const panel = db.getPanel();
+  const panelServer = panel ? db.getServer(panel.server_id) : null;
   return {
     apps,
     services,
     panelHostPort: panel?.host_port ?? null,
+    panelPrivateIpv4: panelServer?.private_ipv4 || null,
     zoneName: db.getSettings()["dns_zone_name"] ?? "",
   };
 }
@@ -460,9 +531,9 @@ export function publicTls(domain: string, zoneName: string): TlsConfig {
  *     acceptable: internal callers that ignore the Set-Cookie simply keep
  *     getting load-balanced.
  *   - active HTTP health check — failing replicas leave rotation between
- *     reconciler ticks instead of relying on retry-based failover. HTTP apps
- *     only; health_check=0 apps keep the TCP connect check on their tcp
- *     service (and their public HTTP fallback service has no probe target).
+ *     reconciler ticks instead of relying on retry-based failover. Gated on
+ *     the health_check probe flag; TCP-routed apps (internal_protocol='tcp')
+ *     keep the TCP connect check on their tcp service instead.
  */
 function httpLoadBalancer(app: DesiredApp): Record<string, unknown> {
   const lb: Record<string, unknown> = {
@@ -484,14 +555,18 @@ function httpLoadBalancer(app: DesiredApp): Record<string, unknown> {
  *
  * Every server gets the internal routers (per-app entrypoint); only the
  * panel (`isPanel`) additionally gets public routers: app domains,
- * managed-service domains, the global web→websecure redirect, and wake-page
- * routing (sleeping public apps' domains point at the panel container, which
- * serves the 503 wake page from src/server/lib/wake-page.ts).
+ * managed-service domains, and the global web→websecure redirect.
  *
- * Apps with zero servable upstreams render nothing — their routers simply
- * disappear from the file, which is the desired-state equivalent of the old
- * route removal calls. Output key order is deterministic so the manager's
- * content-hash cache can skip no-op writes.
+ * A SLEEPING app (no servable upstreams) does not disappear — every one of its
+ * routers (internal HTTP/TCP, public HTTP, public raw TCP/UDP) is pointed at
+ * the panel WAKER instead of a replica pool, so any connection transparently
+ * wakes the app and is held-and-forwarded (see the waker header above and
+ * waker.ts). The reconciler re-renders back to real replicas once it wakes.
+ * The only case that still renders nothing is a sleeping app before the panel
+ * has a private IP (panelPrivateIpv4 null) — there is nowhere to route yet.
+ *
+ * Output key order is deterministic so the manager's content-hash cache can
+ * skip no-op writes.
  */
 export function renderDynamicConfig(
   state: DesiredState,
@@ -508,53 +583,75 @@ export function renderDynamicConfig(
   let needRetry = false;
   let needSecHeaders = false;
   let needSvcHeaders = false;
-  let needPanelService = false;
+  // Whether any router pointed at the shared waker HTTP service this render, so
+  // the one load balancer to `<panel-private-ip>:WAKER_HTTP_PORT` is emitted.
+  let needWakerHttp = false;
+  const wakerIp = state.panelPrivateIpv4;
 
   for (const app of state.apps) {
     const svcName = `app-${app.name}`;
     const hasUpstreams = app.upstreams.length > 0;
+    // A sleeping app routes to the waker instead of a replica pool — but only
+    // once the panel has a private IP to reach it at. Without one there is
+    // nowhere to route, so it renders nothing (the pre-waker fallback).
+    const routeToWaker = app.asleep && wakerIp != null;
+    // Does this app render any routers this pass? Awake apps with a servable
+    // pool, or sleeping apps we can point at the waker.
+    const renders = hasUpstreams || routeToWaker;
 
-    // basicAuth middleware for password-protected apps, attached to every
-    // HTTP router — internal traffic went through the old auth proxy too,
-    // so the protection surface is unchanged. Every router that takes
-    // middlewares only renders when upstreams exist, so gating on that keeps
-    // orphan middlewares out of the config (e.g. sleeping apps).
+    // basicAuth middleware for password-protected apps, attached to every HTTP
+    // router — internal traffic went through the old auth proxy too, so the
+    // protection surface is unchanged. Rendered for sleeping apps too: Traefik
+    // enforces basicAuth *before* forwarding to the waker, so a password-gated
+    // app can't be woken or reached unauthenticated during its cold start.
     const authMiddlewares: string[] = [];
-    if (app.authHash && hasUpstreams) {
+    if (app.authHash && renders) {
       httpMiddlewares[`auth-${app.name}`] = {
         basicAuth: { users: [`${BASIC_AUTH_USER}:${app.authHash}`] },
       };
       authMiddlewares.push(`auth-${app.name}`);
     }
 
-    // Auth-protected apps are always HTTP-routed, even with health_check=0:
-    // basicAuth only exists for HTTP routers, and the old auth proxy was an
-    // HTTP server that every upstream (including TCP-routed ones) sat
-    // behind, so such apps were already HTTP-only in practice. A raw TCP
-    // router would silently bypass the password. New deploys reject the
-    // combo (see validateDeployRequest); this keeps existing rows protected.
-    const httpRouted = app.httpProbe || !!app.authHash;
+    // Routing protocol is the explicit internal_protocol field. Auth-protected
+    // apps are always HTTP-routed even when internal_protocol='tcp': basicAuth
+    // only exists for HTTP routers, and a raw TCP router would silently bypass
+    // the password. New deploys reject the auth+tcp combo (see
+    // validateDeployRequest); this keeps any pre-existing rows protected.
+    const httpRouted = app.internalProtocol === "http" || !!app.authHash;
 
-    if (hasUpstreams && httpRouted) {
-      httpServices[svcName] = { loadBalancer: httpLoadBalancer(app) };
-      // Internal router on every server: the app's own entrypoint.
+    if (renders && httpRouted) {
+      // Internal HTTP router on every server: the app's own entrypoint. Awake →
+      // the replica pool; asleep → the shared waker HTTP service (resolves the
+      // app from the forwarded `<app>.ocd.internal` Host, holds, forwards).
+      if (routeToWaker) {
+        needWakerHttp = true;
+      } else {
+        httpServices[svcName] = { loadBalancer: httpLoadBalancer(app) };
+      }
       httpRouters[`int-${app.name}`] = {
         entryPoints: [entrypointName(app.internalPort)],
         rule: "PathPrefix(`/`)",
         middlewares: [...authMiddlewares, "retry"],
-        service: svcName,
+        service: routeToWaker ? WAKER_HTTP_SERVICE : svcName,
       };
       needRetry = true;
-    } else if (hasUpstreams) {
-      // health_check=0: raw TCP pass-through with active TCP health checks —
-      // the direct replacement for Caddy's passive checks in TCP mode
-      // (requires Traefik >= 3.5).
-      tcpServices[svcName] = {
-        loadBalancer: {
-          servers: app.upstreams.map((u) => ({ address: u })),
-          healthCheck: { interval: "10s", timeout: "3s" },
-        },
-      };
+    } else if (renders) {
+      // internal_protocol='tcp': raw TCP pass-through. Awake → the replica pool
+      // with active TCP health checks (the direct replacement for Caddy's
+      // passive checks; requires Traefik >= 3.5). Asleep → the app's dedicated
+      // waker TCP port (the waker resolves the app from the port, holds, pipes).
+      if (routeToWaker) {
+        tcpServices[svcName] = {
+          loadBalancer: { servers: [{ address: `${wakerIp}:${wakerTcpPort(app.internalPort)}` }] },
+        };
+      } else {
+        tcpServices[svcName] = {
+          loadBalancer: {
+            servers: app.upstreams.map((u) => ({ address: u })),
+            healthCheck: { interval: "10s", timeout: "3s" },
+          },
+        };
+      }
       tcpRouters[`int-${app.name}`] = {
         entryPoints: [entrypointName(app.internalPort)],
         rule: "HostSNI(`*`)",
@@ -566,11 +663,10 @@ export function renderDynamicConfig(
     // owns the public ingress IP. Deliberately independent of isPublic/domain
     // (an HTTP-private app can still be TCP-exposed, e.g. a database) and of
     // basicAuth (raw sockets have no HTTP auth; the user opted into raw
-    // exposure explicitly). Raw pass-through, no TLS termination. Sleeping
-    // apps render no route: there is no wake-page equivalent for raw sockets,
-    // so a connect to a sleeping app simply fails until it is woken by HTTP
-    // traffic or the panel.
-    if (opts.isPanel && app.publicPort != null && !app.asleep && hasUpstreams) {
+    // exposure explicitly). Raw pass-through, no TLS termination. Sleeping apps
+    // now route to the app's dedicated waker port instead of dropping the route
+    // — this is the case that previously simply failed until woken elsewhere.
+    if (opts.isPanel && app.publicPort != null && renders) {
       if (app.publicProtocol === "udp") {
         // UDP has no routing rule concept and UDP loadBalancers support no
         // health checks — the emitted shape is just entrypoint → dial pool.
@@ -580,7 +676,9 @@ export function renderDynamicConfig(
         };
         udpServices[`pubudp-${app.name}`] = {
           loadBalancer: {
-            servers: app.upstreams.map((u) => ({ address: u })),
+            servers: routeToWaker
+              ? [{ address: `${wakerIp}:${wakerUdpPort(app.internalPort)}` }]
+              : app.upstreams.map((u) => ({ address: u })),
           },
         };
       } else {
@@ -590,68 +688,63 @@ export function renderDynamicConfig(
           service: `pubtcp-${app.name}`,
         };
         tcpServices[`pubtcp-${app.name}`] = {
-          loadBalancer: {
-            servers: app.upstreams.map((u) => ({ address: u })),
-            healthCheck: { interval: "10s", timeout: "3s" },
-          },
+          loadBalancer: routeToWaker
+            ? { servers: [{ address: `${wakerIp}:${wakerTcpPort(app.internalPort)}` }] }
+            : {
+                servers: app.upstreams.map((u) => ({ address: u })),
+                healthCheck: { interval: "10s", timeout: "3s" },
+              },
         };
       }
     }
 
-    // Public route: panel only, public apps with a domain.
-    if (!opts.isPanel || !app.isPublic || !app.domain) continue;
+    // Public route: panel only, public apps with a domain, that render at all.
+    if (!opts.isPanel || !app.isPublic || !app.domain || !renders) continue;
 
-    if (app.asleep && state.panelHostPort != null) {
-      // Sleeping/waking: route the domain to the panel container, which
-      // serves the 503 wake page (and wakes the app) for foreign hosts.
-      httpRouters[`pub-${app.name}`] = {
-        entryPoints: ["websecure"],
-        rule: `Host(\`${app.domain}\`)`,
-        service: "ocd-panel",
-        tls: publicTls(app.domain, state.zoneName),
+    // Public-only middleware chain, cheapest rejection first: the IP allowlist
+    // and rate limit turn unwanted traffic away before basicAuth spends bcrypt
+    // CPU verifying it (an unauthenticated flood must not become a hashing
+    // DoS); compress and sec-headers only shape responses that made it through.
+    // Built identically whether the router points at the replicas (awake) or
+    // the waker (asleep) — the allowlist and password must gate the wake too.
+    // Internal routers skip all of this except auth — app-to-app is trusted.
+    const pubMiddlewares: string[] = [];
+    if (app.ipAllowlist.length > 0) {
+      httpMiddlewares[`allowlist-${app.name}`] = {
+        ipAllowList: { sourceRange: app.ipAllowlist },
       };
-      needPanelService = true;
-    } else if (!app.asleep && hasUpstreams) {
-      // The public router proxies HTTP to the replicas even for
-      // health_check=0 apps (same as the old public vhost), so make sure an
-      // HTTP service exists for TCP apps too.
-      if (!httpServices[svcName]) {
-        httpServices[svcName] = { loadBalancer: httpLoadBalancer(app) };
-      }
-      // Public-only middleware chain, cheapest rejection first: the IP
-      // allowlist and rate limit turn unwanted traffic away before basicAuth
-      // spends bcrypt CPU verifying it (an unauthenticated flood must not
-      // become a hashing DoS); compress and sec-headers only shape responses
-      // that made it through. Internal routers skip all of this except auth —
-      // app-to-app traffic is trusted.
-      const pubMiddlewares: string[] = [];
-      if (app.ipAllowlist.length > 0) {
-        httpMiddlewares[`allowlist-${app.name}`] = {
-          ipAllowList: { sourceRange: app.ipAllowlist },
-        };
-        pubMiddlewares.push(`allowlist-${app.name}`);
-      }
-      if (app.rateLimitRps > 0) {
-        httpMiddlewares[`ratelimit-${app.name}`] = {
-          rateLimit: { average: app.rateLimitRps, burst: app.rateLimitRps * 2 },
-        };
-        pubMiddlewares.push(`ratelimit-${app.name}`);
-      }
-      pubMiddlewares.push(...authMiddlewares);
-      if (app.compress) {
-        httpMiddlewares[`compress-${app.name}`] = { compress: {} };
-        pubMiddlewares.push(`compress-${app.name}`);
-      }
-      httpRouters[`pub-${app.name}`] = {
-        entryPoints: ["websecure"],
-        rule: `Host(\`${app.domain}\`)`,
-        middlewares: [...pubMiddlewares, "sec-headers", "retry"],
-        service: svcName,
-        tls: publicTls(app.domain, state.zoneName),
-      };
-      needRetry = true;
-      needSecHeaders = true;
+      pubMiddlewares.push(`allowlist-${app.name}`);
     }
+    if (app.rateLimitRps > 0) {
+      httpMiddlewares[`ratelimit-${app.name}`] = {
+        rateLimit: { average: app.rateLimitRps, burst: app.rateLimitRps * 2 },
+      };
+      pubMiddlewares.push(`ratelimit-${app.name}`);
+    }
+    pubMiddlewares.push(...authMiddlewares);
+    if (app.compress) {
+      httpMiddlewares[`compress-${app.name}`] = { compress: {} };
+      pubMiddlewares.push(`compress-${app.name}`);
+    }
+
+    if (routeToWaker) {
+      // Sleeping: the domain resolves to the waker, which wakes+holds+forwards.
+      needWakerHttp = true;
+    } else if (!httpServices[svcName]) {
+      // Awake: the public router proxies HTTP to the replicas even for
+      // internal_protocol='tcp' apps (same as the old public vhost), so make
+      // sure an HTTP service exists for TCP-routed apps too.
+      httpServices[svcName] = { loadBalancer: httpLoadBalancer(app) };
+    }
+    httpRouters[`pub-${app.name}`] = {
+      entryPoints: ["websecure"],
+      rule: `Host(\`${app.domain}\`)`,
+      middlewares: [...pubMiddlewares, "sec-headers", "retry"],
+      service: routeToWaker ? WAKER_HTTP_SERVICE : svcName,
+      tls: publicTls(app.domain, state.zoneName),
+    };
+    needRetry = true;
+    needSecHeaders = true;
   }
 
   // Managed services: single-upstream public vhosts on the panel.
@@ -686,11 +779,13 @@ export function renderDynamicConfig(
     };
   }
 
-  if (needPanelService && state.panelHostPort != null) {
-    httpServices["ocd-panel"] = {
-      loadBalancer: {
-        servers: [{ url: `http://127.0.0.1:${state.panelHostPort}` }],
-      },
+  if (needWakerHttp && wakerIp) {
+    // One shared load balancer for every sleeping app's HTTP router, pointing
+    // at the panel waker's HTTP listener over the private network. passHostHeader
+    // defaults on, so the waker sees the original `<app>.ocd.internal` / public
+    // domain Host and resolves the app from it.
+    httpServices[WAKER_HTTP_SERVICE] = {
+      loadBalancer: { servers: [{ url: `http://${wakerIp}:${WAKER_HTTP_PORT}` }] },
     };
   }
   if (needRetry) {
@@ -744,7 +839,7 @@ export function renderDynamicConfig(
  * bootstrap/redeploy and never rewritten by the ocd.yml renderer, so panel
  * WebSocket/terminal sessions are never disturbed by app syncs. All names in
  * here (`panel`, `panel-web`, `panel-redirect-https`) are disjoint from the
- * ocd.yml namespace (`app-*`, `svc-*`, `ocd-panel`, …) — the file provider
+ * ocd.yml namespace (`app-*`, `svc-*`, `ocd-waker-http`, …) — the file provider
  * rejects duplicate definitions across files.
  */
 export function renderPanelConfig(

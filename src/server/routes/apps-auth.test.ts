@@ -43,7 +43,7 @@ describe("app response scrubbing", () => {
     const app = makeApp({ auth_password: "hunter2" });
     // Populate the other secret-bearing columns so we can assert they're stripped.
     db.updateAppWebhook(app.id, true, "whsec_shhh", "main", "gh-1");
-    db.updateAppSleepingState(app.id, 1, 10001, "wake-tok-xyz");
+    db.updateAppSleepingState(app.id, 1, 10001);
 
     const res = await handleGetApps(new Request("http://x/api/apps"));
     const apps = (await res.json()) as Array<Record<string, unknown>>;
@@ -97,12 +97,27 @@ describe("ingress endpoint: password set/clear", () => {
     expect(db.getApp(app.id)!.auth_password_hash).toBe(before);
   });
 
-  test("rejects a password on a raw-TCP app (health_check off), same rule as deploy", async () => {
-    const app = makeApp({ health_check: false });
+  test("rejects a password on a raw-TCP-routed app (internal_protocol tcp), same rule as deploy", async () => {
+    const app = makeApp({ internal_protocol: "tcp" });
     const res = await ingressReq(app.id, { auth_password: "s3cret" });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toMatch(/requires the HTTP health check/i);
+    expect(body.error).toMatch(/requires HTTP internal routing/i);
     expect(db.getApp(app.id)!.auth_password_hash).toBe("");
+  });
+
+  test("rejects a password when switching an app to internal_protocol tcp in the same request", async () => {
+    const app = makeApp();
+    const res = await ingressReq(app.id, { internal_protocol: "tcp", auth_password: "s3cret" });
+    expect(res.status).toBe(400);
+    expect(db.getApp(app.id)!.auth_password_hash).toBe("");
+  });
+
+  test("persists internal_protocol changes and re-syncs ingress", async () => {
+    const app = makeApp();
+    expect(db.getApp(app.id)!.internal_protocol).toBe("http");
+    const res = await ingressReq(app.id, { internal_protocol: "tcp" });
+    expect(res.status).toBe(200);
+    expect(db.getApp(app.id)!.internal_protocol).toBe("tcp");
   });
 });

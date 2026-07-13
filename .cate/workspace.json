@@ -53,6 +53,10 @@
       "type": "terminal",
       "title": "Claude Code 2"
     },
+    "f49bcefa-c3e6-4338-8ad7-c4df6cf1954d": {
+      "type": "terminal",
+      "title": "Claude Code 3"
+    },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
       "title": "Canvas"
@@ -71,9 +75,9 @@
           },
           "size": {
             "width": 640,
-            "height": 470.5
+            "height": 590.5
           },
-          "zOrder": 104,
+          "zOrder": 244,
           "creationIndex": 0,
           "animationState": "idle",
           "dockLayout": {
@@ -96,7 +100,7 @@
             "width": 640,
             "height": 400
           },
-          "zOrder": 105,
+          "zOrder": 241,
           "creationIndex": 1,
           "animationState": "idle",
           "dockLayout": {
@@ -107,12 +111,35 @@
             ],
             "activeIndex": 0
           }
+        },
+        "2740fa3c-e45c-4610-9dbe-385616f78ede": {
+          "id": "2740fa3c-e45c-4610-9dbe-385616f78ede",
+          "panelId": "f49bcefa-c3e6-4338-8ad7-c4df6cf1954d",
+          "origin": {
+            "x": -40,
+            "y": 800
+          },
+          "size": {
+            "width": 640,
+            "height": 590.5
+          },
+          "zOrder": 243,
+          "creationIndex": 2,
+          "animationState": "idle",
+          "dockLayout": {
+            "type": "tabs",
+            "id": "4d975f7f-27aa-4f42-ac3e-3e6e483f10e4",
+            "panelIds": [
+              "f49bcefa-c3e6-4338-8ad7-c4df6cf1954d"
+            ],
+            "activeIndex": 0
+          }
         }
       },
-      "zoomLevel": 0.87236974736666,
+      "zoomLevel": 0.7165301231005697,
       "viewportOffset": {
-        "x": -417.63589901003144,
-        "y": 78.40834475334441
+        "x": 126.27986272883825,
+        "y": -111.11862923082538
       }
     }
   }

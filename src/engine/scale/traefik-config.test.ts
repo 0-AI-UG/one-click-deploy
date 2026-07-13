@@ -17,6 +17,9 @@ import {
   TRAEFIK_ENV_PATH,
   TRAEFIK_LOGROTATE_PATH,
   TRAEFIK_METRICS_PORT,
+  WAKER_HTTP_PORT,
+  wakerTcpPort,
+  wakerUdpPort,
 } from "./traefik-config.ts";
 
 // The db module (and its temp data dir) is shared across all test files in
@@ -41,6 +44,7 @@ function makeApp(opts: {
   domain?: string;
   isPublic?: boolean;
   healthCheck?: boolean;
+  internalProtocol?: "http" | "tcp";
   authPassword?: string;
   replicaStatus?: string | null; // null = no replica at all
   hostPort?: number;
@@ -63,6 +67,7 @@ function makeApp(opts: {
     env_vars: "{}",
     public: opts.isPublic ?? true,
     health_check: opts.healthCheck ?? true,
+    internal_protocol: opts.internalProtocol,
     auth_password: opts.authPassword,
     sticky: opts.sticky,
     rate_limit_rps: opts.rateLimitRps,
@@ -263,6 +268,33 @@ describe("renderDynamicConfig", () => {
     ]);
   });
 
+  test("routing follows internal_protocol, not health_check: http probe + tcp routing → TCP router", () => {
+    // Decoupling: an app can run the HTTP probe (health_check=1) yet route raw
+    // TCP internally (internal_protocol='tcp'). Routing must key off the
+    // explicit protocol, not the probe flag.
+    const server = makeServer("10.0.1.30");
+    const app = makeApp({ server, healthCheck: true, internalProtocol: "tcp", hostPort: 10080 });
+    expect(app.health_check).toBe(1);
+    expect(app.internal_protocol).toBe("tcp");
+    const cfg = parse(renderDynamicConfig(stateFor(app.name), { isPanel: false }));
+    // TCP router, no HTTP router.
+    expect(cfg.tcp.routers[`int-${app.name}`].rule).toBe("HostSNI(`*`)");
+    expect(cfg.http?.routers?.[`int-${app.name}`]).toBeUndefined();
+  });
+
+  test("routing follows internal_protocol, not health_check: no probe + http routing → HTTP router", () => {
+    // Inverse: no HTTP probe (health_check=0) but explicit HTTP routing.
+    const server = makeServer("10.0.1.31");
+    const app = makeApp({ server, healthCheck: false, internalProtocol: "http", hostPort: 10081 });
+    expect(app.health_check).toBe(0);
+    expect(app.internal_protocol).toBe("http");
+    const cfg = parse(renderDynamicConfig(stateFor(app.name), { isPanel: false }));
+    // HTTP router, no TCP router. The active health-check path is gated on the
+    // probe flag, so this HTTP loadBalancer carries no healthCheck block.
+    expect(cfg.http.routers[`int-${app.name}`].rule).toBe("PathPrefix(`/`)");
+    expect(cfg.tcp?.routers?.[`int-${app.name}`]).toBeUndefined();
+  });
+
   test("auth-protected app renders deterministically (hash persisted, not re-derived)", () => {
     const server = makeServer("10.0.1.15");
     const app = makeApp({ server, authPassword: "hunter2", hostPort: 10062 });
@@ -316,7 +348,7 @@ describe("renderDynamicConfig", () => {
     expect(cfg.http.routers[`pub-${app.name}`].tls).toEqual({});
   });
 
-  test("sleeping public app routes its domain to the panel service (wake page)", () => {
+  test("sleeping public app routes its domain (and internal router) to the waker", () => {
     const panelServer = makeServer("10.0.1.8");
     db.deletePanel(); // panel is a singleton shared across test files
     db.insertPanel({
@@ -334,21 +366,51 @@ describe("renderDynamicConfig", () => {
       status: "sleeping",
     });
     const state = stateFor(app.name);
-    expect(state.panelHostPort).toBe(3001);
+    // Panel private IP is where every server's Traefik reaches the waker.
+    expect(state.panelPrivateIpv4).toBe("10.0.1.8");
     const cfg = parse(renderDynamicConfig(state, { isPanel: true }));
 
+    // Public domain router → shared waker HTTP service (not the old ocd-panel).
     const pub = cfg.http.routers[`pub-${app.name}`];
-    expect(pub.service).toBe("ocd-panel");
+    expect(pub.service).toBe("ocd-waker-http");
     expect(pub.rule).toBe("Host(`sleepy.example.com`)");
-    expect(cfg.http.services["ocd-panel"].loadBalancer.servers).toEqual([
-      { url: "http://127.0.0.1:3001" },
+    expect(cfg.http.services["ocd-waker-http"].loadBalancer.servers).toEqual([
+      { url: `http://10.0.1.8:${WAKER_HTTP_PORT}` },
     ]);
-    // No upstream pool for the sleeping app itself.
+    // The old panel wake service is gone.
+    expect(cfg.http.services["ocd-panel"]).toBeUndefined();
+    // Internal router also points at the waker (internal callers wake it too).
+    expect(cfg.http.routers[`int-${app.name}`].service).toBe("ocd-waker-http");
+    // No real upstream pool for the sleeping app itself.
     expect(cfg.http.services[`app-${app.name}`]).toBeUndefined();
-    expect(cfg.http.routers[`int-${app.name}`]).toBeUndefined();
-    // Workers don't render the wake route.
+    // Workers render the internal waker router (internal traffic originates
+    // anywhere) but not the panel-only public one.
     const worker = parse(renderDynamicConfig(state, { isPanel: false }));
+    expect(worker.http.routers[`int-${app.name}`].service).toBe("ocd-waker-http");
     expect(worker.http?.routers?.[`pub-${app.name}`]).toBeUndefined();
+    db.deletePanel();
+  });
+
+  test("sleeping app renders nothing when the panel has no private IP (no waker to reach)", () => {
+    // Panel server without a private_ipv4 — nowhere to route the waker.
+    const panelServer = db.insertServer({
+      name: `srv-${randomSuffix()}`, provider_id: `h-${randomSuffix()}`,
+      ipv4: "203.0.113.10", ipv6: "", type: "cx22", location: "fsn1", status: "ready",
+    });
+    db.deletePanel();
+    db.insertPanel({
+      server_id: panelServer.id, name: `panel-${randomSuffix()}`,
+      domain: "panel.example.com", git_repo: "https://github.com/x/panel",
+      container_port: 3001, host_port: 3001,
+    });
+    const app = makeApp({
+      server: panelServer, domain: "nowaker.example.com",
+      replicaStatus: "stopped", status: "sleeping",
+    });
+    const state = stateFor(app.name);
+    expect(state.panelPrivateIpv4).toBeNull();
+    const cfg = renderDynamicConfig(state, { isPanel: true });
+    expect(cfg).not.toContain(app.name);
     db.deletePanel();
   });
 
@@ -563,18 +625,94 @@ describe("renderDynamicConfig", () => {
     expect(panel.http?.routers?.[`pub-${app.name}`]).toBeUndefined();
   });
 
-  test("sleeping app renders no public TCP/UDP route (raw sockets have no wake page)", () => {
-    const server = makeServer("10.0.3.5");
+  test("sleeping app routes its public raw TCP port to the app's waker TCP port", () => {
+    const panelServer = makeServer("10.0.3.5");
+    db.deletePanel();
+    db.insertPanel({
+      server_id: panelServer.id, name: `panel-${randomSuffix()}`,
+      domain: "panel.example.com", git_repo: "https://github.com/x/panel",
+      container_port: 3001, host_port: 3001,
+    });
     const app = makeApp({
-      server,
+      server: panelServer,
       isPublic: false,
       domain: "",
       publicPort: 30042,
       replicaStatus: "stopped",
       status: "sleeping",
     });
-    const panel = renderDynamicConfig(stateFor(app.name), { isPanel: true });
-    expect(panel).not.toContain(`pubtcp-${app.name}`);
+    const panel = parse(renderDynamicConfig(stateFor(app.name), { isPanel: true }));
+    // The public TCP router now exists (previously it simply failed) and its
+    // service dials the app's dedicated waker TCP port on the panel private IP.
+    expect(panel.tcp.routers[`pubtcp-${app.name}`].entryPoints).toEqual(["pub30042"]);
+    expect(panel.tcp.services[`pubtcp-${app.name}`].loadBalancer).toEqual({
+      servers: [{ address: `10.0.3.5:${wakerTcpPort(app.internal_port)}` }],
+    });
+    // Waker service has no active health check (the waker is always up).
+    expect(panel.tcp.services[`pubtcp-${app.name}`].loadBalancer.healthCheck).toBeUndefined();
+    db.deletePanel();
+  });
+
+  test("sleeping raw-TCP app: internal router points at the app's waker TCP port on every server", () => {
+    const panelServer = makeServer("10.0.3.6");
+    db.deletePanel();
+    db.insertPanel({
+      server_id: panelServer.id, name: `panel-${randomSuffix()}`,
+      domain: "panel.example.com", git_repo: "https://github.com/x/panel",
+      container_port: 3001, host_port: 3001,
+    });
+    const app = makeApp({
+      server: panelServer, internalProtocol: "tcp", isPublic: false, domain: "",
+      replicaStatus: "stopped", status: "sleeping",
+    });
+    const worker = parse(renderDynamicConfig(stateFor(app.name), { isPanel: false }));
+    expect(worker.tcp.routers[`int-${app.name}`].rule).toBe("HostSNI(`*`)");
+    expect(worker.tcp.services[`app-${app.name}`].loadBalancer).toEqual({
+      servers: [{ address: `10.0.3.6:${wakerTcpPort(app.internal_port)}` }],
+    });
+    db.deletePanel();
+  });
+
+  test("sleeping app routes its public UDP port to the app's waker UDP port", () => {
+    const panelServer = makeServer("10.0.3.7");
+    db.deletePanel();
+    db.insertPanel({
+      server_id: panelServer.id, name: `panel-${randomSuffix()}`,
+      domain: "panel.example.com", git_repo: "https://github.com/x/panel",
+      container_port: 3001, host_port: 3001,
+    });
+    const app = makeApp({
+      server: panelServer, publicPort: 30091, publicProtocol: "udp",
+      replicaStatus: "stopped", status: "sleeping",
+    });
+    const panel = parse(renderDynamicConfig(stateFor(app.name), { isPanel: true }));
+    expect(panel.udp.routers[`pubudp-${app.name}`].entryPoints).toEqual(["pubu30091"]);
+    expect(panel.udp.services[`pubudp-${app.name}`].loadBalancer).toEqual({
+      servers: [{ address: `10.0.3.7:${wakerUdpPort(app.internal_port)}` }],
+    });
+    db.deletePanel();
+  });
+
+  test("password-protected sleeping app keeps basicAuth in front of the waker", () => {
+    const panelServer = makeServer("10.0.3.8");
+    db.deletePanel();
+    db.insertPanel({
+      server_id: panelServer.id, name: `panel-${randomSuffix()}`,
+      domain: "panel.example.com", git_repo: "https://github.com/x/panel",
+      container_port: 3001, host_port: 3001,
+    });
+    const app = makeApp({
+      server: panelServer, authPassword: "hunter2", domain: "gated-sleep.example.com",
+      replicaStatus: "stopped", status: "sleeping",
+    });
+    const cfg = parse(renderDynamicConfig(stateFor(app.name), { isPanel: true }));
+    // The wake path must stay password-gated: auth middleware renders and is
+    // attached to both the internal and public waker routers.
+    expect(cfg.http.middlewares[`auth-${app.name}`]).toBeDefined();
+    expect(cfg.http.routers[`int-${app.name}`].middlewares).toEqual([`auth-${app.name}`, "retry"]);
+    expect(cfg.http.routers[`pub-${app.name}`].middlewares).toContain(`auth-${app.name}`);
+    expect(cfg.http.routers[`pub-${app.name}`].service).toBe("ocd-waker-http");
+    db.deletePanel();
   });
 
   test("output is deterministic (stable key order) for the content-hash cache", () => {

@@ -200,4 +200,38 @@ describe("runMigrations", () => {
     expect(cols).not.toContain("auth_password");
     expect(cols).toContain("auth_password_hash");
   });
+
+  test("migration 67 adds internal_protocol defaulting to http", () => {
+    const db = freshDb();
+    runMigrations(db);
+    const cols = (db.query("PRAGMA table_info(apps)").all() as any[]).map((c) => c.name);
+    expect(cols).toContain("internal_protocol");
+    // New rows that don't specify it get the column default.
+    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('defapp', 'd.example.com', 'https://x.git', 20000)");
+    const row = db.query("SELECT internal_protocol FROM apps WHERE name = 'defapp'").get() as any;
+    expect(row.internal_protocol).toBe("http");
+  });
+
+  test("migration 67 backfills internal_protocol from health_check (http when 1, tcp when 0)", () => {
+    // Minimal pre-67 apps table (the migration only touches internal_protocol
+    // and reads health_check), like the migration-62 test.
+    const db = new Database(":memory:");
+    db.run("CREATE TABLE apps (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, health_check INTEGER NOT NULL DEFAULT 1)");
+    db.run("INSERT INTO apps (name, health_check) VALUES ('httpapp', 1)");
+    db.run("INSERT INTO apps (name, health_check) VALUES ('tcpapp', 0)");
+    migrations.find((m) => m.version === 67)!.up(db);
+    const httpApp = db.query("SELECT internal_protocol FROM apps WHERE name = 'httpapp'").get() as any;
+    const tcpApp = db.query("SELECT internal_protocol FROM apps WHERE name = 'tcpapp'").get() as any;
+    expect(httpApp.internal_protocol).toBe("http");
+    expect(tcpApp.internal_protocol).toBe("tcp");
+  });
+
+  test("migration 68 drops apps.wake_token (the browser wake page is gone)", () => {
+    const db = freshDb();
+    runMigrations(db);
+    const cols = (db.query("PRAGMA table_info(apps)").all() as any[]).map((c) => c.name);
+    // The token authenticated the old browser wake page; the hold-and-forward
+    // waker needs none, so the column is dropped.
+    expect(cols).not.toContain("wake_token");
+  });
 });

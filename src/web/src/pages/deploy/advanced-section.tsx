@@ -18,13 +18,11 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
       <Field label="Replicas">
         <input
           type="number"
-          value={form.domain ? form.replicas : "1"}
+          value={form.replicas}
           onChange={set("replicas")}
           min="1"
-          disabled={!form.domain}
-          title={!form.domain ? "Add a custom domain to enable scaling" : undefined}
         />
-        {!form.domain && <p className="text-[9px] text-muted mt-1">Requires a custom domain</p>}
+        <p className="text-[9px] text-muted mt-1">The panel load-balances across replicas over the private network — a custom domain is not required.</p>
       </Field>
       <Field label="Auth Password">
         <input
@@ -67,6 +65,23 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           label="Public access (expose via public domain)"
         />
         {!form.public && <p className="text-[9px] text-muted mt-1">App will only be reachable over the internal network</p>}
+      </div>
+      <Field label={<>Internal Protocol <InfoTip text="How Traefik routes internal traffic on <app>.ocd.internal. HTTP = L7 routing (required for password protection and an active health-check path). TCP = raw pass-through for non-HTTP protocols (databases, game servers)." /></>}>
+        <select
+          value={form.internal_protocol}
+          onChange={set("internal_protocol")}
+        >
+          <option value="http">HTTP (L7 routing)</option>
+          <option value="tcp">TCP (raw pass-through)</option>
+        </select>
+      </Field>
+      <div>
+        <Checkbox
+          checked={form.health_check}
+          onChange={(v) => setForm((f) => ({ ...f, health_check: v }))}
+          label="HTTP health check after deploy"
+        />
+        <p className="text-[9px] text-muted mt-1">Probe <span className="font-mono">/</span> on the exposed port after each deploy/scale. Turn off for apps that don't answer HTTP there; the platform then only checks the container is running.</p>
       </div>
       <Field label={<>Rate Limit <InfoTip text="Requests per second allowed on the public domain. 0 or blank = unlimited. Internal traffic is never limited." /></>}>
         <input

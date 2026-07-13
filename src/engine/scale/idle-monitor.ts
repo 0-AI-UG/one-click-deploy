@@ -69,9 +69,9 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
 
   const canScaleToZero = replicas.length === 1 && app.min_replicas === 0;
   // HTTP-routed apps (same predicate as the ingress renderer) have Traefik
-  // request counters; raw-TCP apps (health_check=0, no auth) don't, so they
-  // keep the legacy CPU sustained-idle heuristic below.
-  const httpRouted = !!app.health_check || !!app.auth_password_hash;
+  // request counters; raw-TCP apps (internal_protocol='tcp', no auth) don't, so
+  // they keep the legacy CPU sustained-idle heuristic below.
+  const httpRouted = app.internal_protocol === "http" || !!app.auth_password_hash;
 
   // Scale-to-zero, request-driven: sleep once the app has had zero requests
   // (public + internal — an app called by another app never sleeps) for its

@@ -1357,6 +1357,38 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 67,
+    description:
+      "Add apps.internal_protocol ('http'|'tcp'); backfill from health_check to preserve routing",
+    up: (db) => {
+      // The internal routing protocol (whether Traefik speaks HTTP or raw TCP
+      // on the app's internal entrypoint) used to be implied by the
+      // health_check flag: health_check=1 → HTTP router, health_check=0 → TCP.
+      // That conflated two independent concerns — HOW we probe the container
+      // vs. HOW internal traffic is routed. This column makes routing explicit.
+      //
+      // Backfill exactly reproduces the old coupling so day-one behavior is
+      // byte-identical: 'http' where health_check=1, 'tcp' otherwise.
+      db.run("ALTER TABLE apps ADD COLUMN internal_protocol TEXT NOT NULL DEFAULT 'http'");
+      db.run("UPDATE apps SET internal_protocol = 'tcp' WHERE health_check = 0");
+    },
+  },
+  {
+    version: 68,
+    description: "Drop apps.wake_token (the browser wake page is gone; the hold-and-forward waker needs no token)",
+    up: (db) => {
+      // The wake_token authenticated the old browser wake page's /wake and
+      // /wake-status calls. Waking is now transparent: sleeping apps' Traefik
+      // routers point at the in-process hold-and-forward waker, which calls
+      // wakeApp directly — no token, no page, no polling. The column is dead.
+      // Guarded so re-runs and older fixtures without the column don't error.
+      const cols = db.query("PRAGMA table_info(apps)").all() as Array<{ name: string }>;
+      if (cols.some((c) => c.name === "wake_token")) {
+        db.run("ALTER TABLE apps DROP COLUMN wake_token");
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

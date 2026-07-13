@@ -107,9 +107,9 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     db.updateAppStatus(appId, "running");
     db.insertScalingEvent({ app_id: appId, event_type: "wake", from_count: 0, to_count: 1, reason: "wake request" });
 
-    // Re-render ingress so public traffic is routed back to the replica —
-    // the desired-state render replaces the wake-page routing (domain →
-    // panel) with the app's upstream pool now that the app is running.
+    // Re-render ingress so traffic is routed back to the replica — the
+    // desired-state render replaces the waker routing (every router → panel
+    // waker) with the app's real upstream pool now that the app is running.
     try {
       await syncAppIngress(appId);
     } catch (err) {

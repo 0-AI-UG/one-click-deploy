@@ -21,6 +21,8 @@ export type IngressForm = {
   auth_enabled: boolean;
   /** Write-only new password. Blank while enabled = keep the current password. */
   auth_password: string;
+  /** Internal routing protocol: 'http' (L7) or 'tcp' (raw pass-through). */
+  internal_protocol: "http" | "tcp";
 };
 
 const PUBLIC_PORT_RANGES = { tcp: "30000–30049", udp: "30050–30099" } as const;
@@ -141,15 +143,30 @@ export function SettingsTab({
         </div>
 
         <Field
+          label={<span className="flex items-center gap-2"><Network size={14} className="text-fg" /> Internal Protocol <InfoTip text="How Traefik routes internal traffic on <app>.ocd.internal. HTTP = L7 routing (required for password protection and an active health-check path). TCP = raw pass-through for non-HTTP protocols. The OCD_INTERNAL_URL scheme refreshes on the next redeploy." /></span>}
+        >
+          <select
+            value={ingressForm.internal_protocol}
+            onChange={(e) => setIngressForm({ ...ingressForm, internal_protocol: e.target.value as IngressForm["internal_protocol"] })}
+          >
+            <option value="http">HTTP (L7 routing)</option>
+            <option value="tcp">TCP (raw pass-through)</option>
+          </select>
+        </Field>
+
+        <Field
           label={<span className="flex items-center gap-2"><Lock size={14} className="text-fg" /> Password Protection</span>}
-          hint={ingressForm.auth_enabled
-            ? 'HTTP basic auth — visitors sign in with username "admin". Leave the field blank to keep the current password.'
-            : "Requires the HTTP health check."}
+          hint={ingressForm.internal_protocol === "tcp"
+            ? "Requires HTTP internal routing — switch Internal Protocol to HTTP."
+            : ingressForm.auth_enabled
+              ? 'HTTP basic auth — visitors sign in with username "admin". Leave the field blank to keep the current password.'
+              : "Gates the app behind HTTP basic auth."}
         >
           <div className="space-y-2">
             <div className="flex justify-end">
               <Checkbox
                 checked={ingressForm.auth_enabled}
+                disabled={ingressForm.internal_protocol === "tcp"}
                 onChange={(v) => setIngressForm({ ...ingressForm, auth_enabled: v, auth_password: v ? ingressForm.auth_password : "" })}
                 label="Require a password"
               />
@@ -191,14 +208,14 @@ export function SettingsTab({
         </Field>
 
         <Field
-          label={<span className="flex items-center gap-2">Health Check Path <InfoTip text="Active HTTP health check — replicas failing this path leave rotation within seconds. Requires the HTTP health check." /></span>}
+          label={<span className="flex items-center gap-2">Health Check Path <InfoTip text="Active HTTP health check — replicas failing this path leave rotation within seconds. Requires HTTP internal routing." /></span>}
         >
           <input
             type="text"
             value={ingressForm.health_check_path}
             onChange={(e) => setIngressForm({ ...ingressForm, health_check_path: e.target.value })}
             placeholder="/healthz"
-            disabled={app.health_check === 0 || app.health_check === false}
+            disabled={ingressForm.internal_protocol === "tcp"}
           />
         </Field>
 
@@ -266,6 +283,7 @@ export function SettingsTab({
                     : {};
                 await put(`/api/apps/${appId}/ingress`, {
                   ...authField,
+                  internal_protocol: ingressForm.internal_protocol,
                   sticky: ingressForm.sticky,
                   rate_limit_rps: ingressForm.rate_limit_rps,
                   ip_allowlist: ingressForm.ip_allowlist,

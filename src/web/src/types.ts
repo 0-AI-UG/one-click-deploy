@@ -46,6 +46,7 @@ export type AppData = {
   memory_mb?: number;
   internal_port?: number;
   health_check?: boolean | number;
+  internal_protocol?: string; // 'http' | 'tcp'
   sticky?: boolean | number;
   rate_limit_rps?: number;
   ip_allowlist?: string;
@@ -234,6 +235,7 @@ export type DeployBody = {
   server_id?: number;
   memory_mb?: number;
   health_check?: boolean;
+  internal_protocol?: "http" | "tcp";
   sticky?: boolean;
   rate_limit_rps?: number;
   ip_allowlist?: string;

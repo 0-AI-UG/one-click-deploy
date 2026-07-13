@@ -5,7 +5,7 @@ import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
-import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB, isPublicProtocol, validateIngressFields } from "../../shared/validate.ts";
+import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB, isPublicProtocol, isInternalProtocol, validateIngressFields } from "../../shared/validate.ts";
 import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-manager.ts";
 import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
@@ -18,7 +18,7 @@ import { enqueue } from "../ipc/enqueue.ts";
 export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
   const envRow = app.environment_id ? db.getEnvironment(app.environment_id as number) : null;
   const panelIp = app.public_port != null ? getPanelIngressIpv4() : null;
-  const { auth_password_hash, wake_token, webhook_secret, ...safe } = app;
+  const { auth_password_hash, webhook_secret, ...safe } = app;
   return {
     ...safe,
     env_vars: [],
@@ -257,6 +257,8 @@ export async function handleUpdateIngressSettings(request: Request, appId: numbe
       /** null = unexpose, "auto" = lowest free pool port, number = specific pool port. */
       public_port?: number | "auto" | null;
       public_protocol?: string;
+      /** 'http' | 'tcp' — internal routing protocol. Omit = leave unchanged. */
+      internal_protocol?: string;
     };
 
     const app = db.getApp(appId);
@@ -269,6 +271,16 @@ export async function handleUpdateIngressSettings(request: Request, appId: numbe
       ? body.public_protocol
       : (app.public_protocol === "udp" ? "udp" : "tcp");
 
+    // Effective internal routing protocol: explicit body value wins, else keep
+    // the app's current one. Drives whether auth / health-check-path (HTTP
+    // router features) are permitted.
+    if (body.internal_protocol !== undefined && !isInternalProtocol(body.internal_protocol)) {
+      return Response.json({ ok: false, error: 'Internal protocol must be "http" or "tcp"' }, { status: 400, headers: corsHeaders });
+    }
+    const effectiveInternalProtocol = isInternalProtocol(body.internal_protocol)
+      ? body.internal_protocol
+      : (app.internal_protocol === "tcp" ? "tcp" : "http");
+
     // One validator, shared with validateDeployRequest — auth/health-path/rate-
     // limit/allowlist/public-port rules and their error strings live in one place.
     const validation = validateIngressFields(
@@ -280,7 +292,7 @@ export async function handleUpdateIngressSettings(request: Request, appId: numbe
         public_port: body.public_port,
         public_protocol: (body.public_port !== undefined || body.public_protocol !== undefined) ? effectivePublicProtocol : undefined,
       },
-      { httpHealthCheck: !!app.health_check },
+      { httpRouted: effectiveInternalProtocol === "http" },
     );
     if (!validation.valid) return Response.json({ ok: false, error: validation.error }, { status: 400, headers: corsHeaders });
     const norm = validation.value;
@@ -319,6 +331,13 @@ export async function handleUpdateIngressSettings(request: Request, appId: numbe
         }
         db.updateAppPublicExposure(appId, body.public_port, protocol);
       }
+    }
+
+    // Internal routing protocol: persisted here (pure routing change). The
+    // OCD_INTERNAL_URL scheme injected into the container only refreshes on the
+    // app's next (re)deploy — the routing itself flips immediately below.
+    if (isInternalProtocol(body.internal_protocol) && body.internal_protocol !== app.internal_protocol) {
+      db.updateAppInternalProtocol(appId, body.internal_protocol);
     }
 
     db.updateAppIngressSettings(appId, fields);

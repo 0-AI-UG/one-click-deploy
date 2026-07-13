@@ -503,6 +503,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           environment_id: environmentId ?? undefined,
           public: req.public,
           health_check: req.health_check,
+          internal_protocol: req.internal_protocol,
           sticky: req.sticky,
           rate_limit_rps: req.rate_limit_rps,
           ip_allowlist: req.ip_allowlist,
@@ -962,10 +963,13 @@ const enqueueScaleChild: Step<DeployInput, { childOpId: number | null }> = {
   async run(ctx, prior) {
     const req = ctx.input;
     const appOut = prior["insert_app_row"] as InsertAppOut;
-    // Public apps need a domain before replicas can spread across servers;
-    // gate on the RESOLVED domain (insert_app_row output) — an auto-domain
-    // deploy has no req.domain but still gets one. Private apps scale
-    // without any domain.
+    // Scaling only needs a route the panel can fan out over the private
+    // network — which every deployed app has: private apps route via their
+    // internal entrypoint, public apps via the panel (custom domain OR the
+    // auto <app>.<panel-ip>.nip.io, which points at the panel and
+    // load-balances across all replicas). nip.io is no longer a barrier —
+    // post-Traefik the panel is the sole public ingress. The only genuine
+    // blocker is a public app that somehow resolved to no domain at all.
     if (!req.replicas || req.replicas <= 1 || (req.public !== false && !appOut.domain)) {
       return { childOpId: null };
     }

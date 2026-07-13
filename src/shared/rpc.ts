@@ -46,6 +46,7 @@ export type App = {
   volume_mount: string;
   extra_volumes: string; // JSON array of "host:container" strings
   health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
+  internal_protocol: string; // 'http' | 'tcp' — internal routing protocol (independent of health_check)
   sticky: number; // 1 = sticky sessions (cookie-based) on the app's ingress service
   rate_limit_rps: number; // public-router rate limit in req/s; 0 = unlimited
   ip_allowlist: string; // comma-separated IPs/CIDRs gating the public router; "" = open
@@ -125,13 +126,14 @@ export type DeployRequest = {
   webhook_branch?: string; // Branch to watch, defaults to "main"
   webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
   webhook_wait_for_ci?: boolean; // Wait for CI checks to pass before deploying
-  auth_password?: string; // If set, the ingress enforces HTTP basic auth (username "admin"). Requires health_check !== false
+  auth_password?: string; // If set, the ingress enforces HTTP basic auth (username "admin"). Requires internal_protocol 'http' (the default)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
   public?: boolean; // Whether the app is publicly accessible (default true)
   extra_volumes?: Array<{ host_path: string; container_path: string }>; // Additional volume mounts
   server_id?: number; // If set, deploy to this specific server instead of auto-selecting
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
   health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
+  internal_protocol?: "http" | "tcp"; // Internal routing protocol; omit to derive from health_check (http when probing, tcp when not)
   sticky?: boolean; // Sticky sessions (cookie-based) on the app's ingress service
   rate_limit_rps?: number; // Public-router rate limit in req/s; omit / 0 = unlimited
   ip_allowlist?: string; // Comma-separated IPs/CIDRs gating the public router; omit / "" = open
@@ -193,6 +195,7 @@ export type DeployManifest = {
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
   health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
+  internal_protocol?: "http" | "tcp"; // Internal routing protocol; omit to derive from health_check
 };
 
 export type ParsedManifest = {

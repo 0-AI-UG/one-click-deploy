@@ -34,12 +34,12 @@ export interface App {
   deployed_by: string;
   sleeping_server_id: number | null;
   sleeping_host_port: number | null;
-  wake_token: string | null;
   environment_id: number | null;
   public: number;
   extra_volumes: string;
   memory_mb: number;
   health_check: number;
+  internal_protocol: string; // 'http' | 'tcp' — internal routing protocol
   internal_port: number;
   last_request_at: string | null;
   requests_per_min: number;

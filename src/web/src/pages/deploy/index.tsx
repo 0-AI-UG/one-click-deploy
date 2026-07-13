@@ -141,6 +141,7 @@ const EMPTY_FORM: FormState = {
   server_id: "",
   memory_mb: "",
   health_check: true,
+  internal_protocol: "http",
   sticky: false,
   rate_limit_rps: "",
   ip_allowlist: "",
@@ -194,6 +195,9 @@ export function DeployPage() {
       extra_volumes: m.extra_volumes ?? f.extra_volumes,
       memory_mb: m.memory_mb ? String(m.memory_mb) : f.memory_mb,
       health_check: m.health_check ?? f.health_check,
+      // Explicit manifest value wins; else derive from health_check (the old
+      // coupling) so manifests that only set health_check keep their routing.
+      internal_protocol: m.internal_protocol ?? (m.health_check === false ? "tcp" : f.internal_protocol),
     }));
 
     if (m.env && m.env.length > 0) {
@@ -232,6 +236,7 @@ export function DeployPage() {
       replicas: "1",
       memory_mb: "",
       health_check: true,
+      internal_protocol: "http",
     }));
     if (result.env_vars.length > 0) {
       const next: Record<string, string> = {};
@@ -456,6 +461,7 @@ export function DeployPage() {
       server_id: form.server_id ? parseInt(form.server_id, 10) : undefined,
       memory_mb: form.memory_mb ? parseInt(form.memory_mb, 10) : undefined,
       health_check: form.health_check === false ? false : undefined,
+      internal_protocol: form.internal_protocol,
       sticky: form.sticky || undefined,
       rate_limit_rps: form.rate_limit_rps ? parseInt(form.rate_limit_rps, 10) : undefined,
       ip_allowlist: form.ip_allowlist.trim() || undefined,

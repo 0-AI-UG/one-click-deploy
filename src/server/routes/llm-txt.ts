@@ -11,7 +11,7 @@ This document covers the three things an AI agent most often needs: what the pla
 - **Scaling & lifecycle**: replicas (horizontal scaling), auto-scaling, restart, pause/unpause, rollback to a previous deployment, per-app memory limits.
 - **Managed services**: one-click Postgres, Redis, MySQL, and more; their connection credentials are injected into linked environments.
 - **Environments**: named groups of env vars (plain or secret) that can be shared across apps; changing an environment redeploys its linked apps.
-- **Internal networking**: every app has a stable private address \`<app>.ocd.internal:<internal-port>\` reachable from other apps on the private network (private apps have only this address). The platform injects \`OCD_INTERNAL_URL\` (\`http://<app>.ocd.internal:<port>\`, or \`tcp://\` for \`health_check: false\` apps), \`OCD_INTERNAL_HOST\`, and \`OCD_INTERNAL_PORT\` into every app container; a user-defined env var with the same key takes precedence.
+- **Internal networking**: every app has a stable private address \`<app>.ocd.internal:<internal-port>\` reachable from other apps on the private network (private apps have only this address). The internal routing protocol is set by \`internal_protocol\` (\`"http"\` L7 routing, or \`"tcp"\` raw pass-through; defaults to \`"http"\`, or \`"tcp"\` when \`health_check: false\`). The platform injects \`OCD_INTERNAL_URL\` (\`http://<app>.ocd.internal:<port>\` for HTTP-routed apps, \`tcp://\` for TCP-routed ones), \`OCD_INTERNAL_HOST\`, and \`OCD_INTERNAL_PORT\` into every app container; a user-defined env var with the same key takes precedence.
 - **Webhooks**: auto-deploy on git push, optionally scoped to a branch and path prefix, optionally waiting for CI checks to pass first.
 - **Observability & access**: log streaming, a web terminal, and \`ocd ssh\` for running commands in app containers or on servers.
 - **Auth**: passkeys, TOTP, GitHub OAuth, multi-user RBAC.
@@ -73,6 +73,7 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
   "public": "boolean — whether the app is publicly accessible (default: true)",
   "memory_mb": "number — per-container memory ceiling in MB (--memory/--memory-swap). Omit or 0 to use the platform default (512). Allowed: 0 or 128–32768.",
   "health_check": "boolean — set false for apps that don't speak HTTP on the exposed port (databases, queue workers); the platform then only verifies the container stays running (default: true)",
+  "internal_protocol": "string — internal routing protocol: \"http\" (L7 routing) or \"tcp\" (raw pass-through). Omit to derive from health_check (http when probing, tcp when not). Password protection and health_check_path require \"http\".",
   "extra_volumes": [
     {
       "host_path": "string — absolute path on the host machine",

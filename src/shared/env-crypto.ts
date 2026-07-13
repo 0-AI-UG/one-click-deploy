@@ -175,14 +175,16 @@ export async function processIncomingEnvVars(
 }
 
 /** Platform-injected env vars every app container receives: its own stable
- *  internal address behind the local Traefik. HTTP apps (health_check=1) get
- *  an `http://` URL; non-HTTP apps (health_check=0) get `tcp://`. User-defined
- *  vars with the same key always win over these (users may have hand-set them). */
+ *  internal address behind the local Traefik. HTTP-routed apps
+ *  (internal_protocol='http') get an `http://` URL; TCP-routed apps
+ *  (internal_protocol='tcp') get `tcp://` — the scheme mirrors how Traefik
+ *  actually speaks on the internal entrypoint. User-defined vars with the same
+ *  key always win over these (users may have hand-set them). */
 export function platformEnvVars(
-  app: Pick<AppRow, "name" | "internal_port" | "health_check">,
+  app: Pick<AppRow, "name" | "internal_port" | "internal_protocol">,
 ): Record<string, string> {
   const host = `${app.name}.ocd.internal`;
-  const scheme = app.health_check ? "http" : "tcp";
+  const scheme = app.internal_protocol === "tcp" ? "tcp" : "http";
   return {
     OCD_INTERNAL_URL: `${scheme}://${host}:${app.internal_port}`,
     OCD_INTERNAL_HOST: host,

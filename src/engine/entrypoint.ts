@@ -1,6 +1,7 @@
 import { startEngine, stopEngine } from "./engine.ts";
 import "./ops/index.ts"; // register op kinds
 import { startReconciler, stopReconciler } from "./reconciler.ts";
+import { startWaker, stopWaker } from "./scale/waker.ts";
 import { patchConsoleForOpLogs } from "./op-logger.ts";
 import db from "../shared/db/connection.ts";
 
@@ -36,6 +37,13 @@ export function startEngineInProcess(): void {
     log("startEngine failed:", err);
   });
   startReconciler();
+  // The hold-and-forward waker runs in this (panel) process so it can call
+  // wakeApp and read the DB directly. Sleeping apps' Traefik routers point at it.
+  try {
+    startWaker();
+  } catch (err) {
+    log("startWaker failed:", err);
+  }
 }
 
 export function stopEngineInProcess(): void {
@@ -43,6 +51,7 @@ export function stopEngineInProcess(): void {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = null;
   stopReconciler();
+  stopWaker();
   stopEngine();
   started = false;
 }

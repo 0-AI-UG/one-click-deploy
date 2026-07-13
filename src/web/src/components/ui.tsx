@@ -333,11 +333,11 @@ export function Table({ headers, children }: { headers: string[]; children: Reac
 }
 
 // --- Checkbox ---
-export function Checkbox({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
+export function Checkbox({ checked, onChange, label, disabled = false }: { checked: boolean; onChange: (v: boolean) => void; label?: string; disabled?: boolean }) {
   return (
-    <label className="inline-flex items-center gap-2 cursor-pointer group">
+    <label className={`inline-flex items-center gap-2 group ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}>
       <span
-        onClick={(e) => { e.preventDefault(); onChange(!checked); }}
+        onClick={(e) => { e.preventDefault(); if (!disabled) onChange(!checked); }}
         className={`w-4 h-4 border-2 border-fg flex-shrink-0 flex items-center justify-center transition-colors ${checked ? "bg-accent" : "bg-bg-raised group-hover:bg-alt"}`}
       >
         {checked && <span className="block w-2 h-2 bg-fg" />}

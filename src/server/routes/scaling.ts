@@ -16,9 +16,11 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
     if (!app) {
       return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
     }
-    if (replicas > 1 && app.public && (!app.domain || app.domain.endsWith(".nip.io"))) {
-      return Response.json({ error: "Scaling requires a custom domain. Add a domain in app settings first." }, { status: 400, headers: corsHeaders });
-    }
+    // No domain requirement: the panel is the sole public ingress and fans out
+    // to all replicas over the private network, so a nip.io auto-domain
+    // (<app>.<panel-ip>.nip.io → the panel) load-balances just as well as a
+    // custom domain. The nip.io↔custom-domain difference is only TLS and IP
+    // stability, both orthogonal to replica count.
     if (replicas > 1 && app.volume_id) {
       return Response.json({ error: "Apps with persistent storage cannot have more than 1 replica." }, { status: 400, headers: corsHeaders });
     }
@@ -26,7 +28,8 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
     // Sleeping/waking apps keep one replica row as a "stopped anchor" so
     // count comparisons against `replicas` are misleading — scaling to 1
     // looks like a no-op even though the app is asleep. Route any scale-up
-    // request through the wake op instead.
+    // request through the wake op instead. The idempotency key coalesces
+    // repeated wake clicks for the same sleeping app into one op.
     if ((app.status === "sleeping" || app.status === "waking") && replicas >= 1) {
       const { opId } = enqueue({
         kind: "wake",
@@ -34,7 +37,7 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
         input: { appId },
         trigger: "ui",
         triggeredBy: payload.userId,
-        idempotencyKey: app.wake_token ? `wake:${appId}:${app.wake_token}` : undefined,
+        idempotencyKey: `wake:${appId}`,
       });
       return Response.json({ op_id: opId }, { headers: corsHeaders });
     }
@@ -87,11 +90,9 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
 
     if (max_replicas > 1) {
       const app = db.getApp(appId);
-      if (app && app.public && (!app.domain || app.domain.endsWith(".nip.io"))) {
-        return Response.json({ error: "Scaling requires a custom domain. Add a domain in app settings first." }, { status: 400, headers: corsHeaders });
-      }
       // Volume apps cannot scale beyond 1 replica — a cloud volume can only be
-      // attached to a single server.
+      // attached to a single server. (No custom-domain requirement: nip.io
+      // auto-domains route through the panel and load-balance across replicas.)
       if (app && app.volume_id) {
         return Response.json({ error: "Apps with persistent storage cannot have more than 1 replica." }, { status: 400, headers: corsHeaders });
       }
@@ -156,54 +157,6 @@ export async function handleGetAppMetricsHistory(request: Request, appId: number
   } catch (error) {
     return handleError(error);
   }
-}
-
-const wakeCorsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-/** Token-authenticated — called by the wake page served from the app's domain. */
-export async function handleWakeApp(request: Request, appId: number): Promise<Response> {
-  try {
-    const app = db.getApp(appId);
-    if (!app) return Response.json({ error: "Not found" }, { status: 404, headers: wakeCorsHeaders });
-    const token = new URL(request.url).searchParams.get("token");
-    if (!token || token !== app.wake_token) {
-      return Response.json({ error: "Forbidden" }, { status: 403, headers: wakeCorsHeaders });
-    }
-    if (app.status === "waking") return Response.json({ ok: true, status: "waking" }, { headers: wakeCorsHeaders });
-    if (app.status !== "sleeping") return Response.json({ ok: true, status: app.status }, { headers: wakeCorsHeaders });
-    // Coalesce wake requests for the same sleeping session via idempotency
-    // key — the wake token is rotated when the app sleeps, so two concurrent
-    // wake requests during the same sleep collapse to one op.
-    const { opId } = enqueue({
-      kind: "wake",
-      resourceKeys: [`app:${appId}`],
-      input: { appId },
-      trigger: "wake_page",
-      idempotencyKey: `wake:${appId}:${app.wake_token}`,
-    });
-    return Response.json({ ok: true, status: "waking", op_id: opId }, { headers: wakeCorsHeaders });
-  } catch (error) {
-    return Response.json({ error: "Internal error" }, { status: 500, headers: wakeCorsHeaders });
-  }
-}
-
-/** Token-authenticated — polled by the wake page to check when the app is ready. */
-export async function handleWakeStatus(request: Request, appId: number): Promise<Response> {
-  const app = db.getApp(appId);
-  if (!app) return Response.json({ error: "Not found" }, { status: 404, headers: wakeCorsHeaders });
-  const token = new URL(request.url).searchParams.get("token");
-  // If wake_token was cleared, the app already woke — return current status
-  if (!app.wake_token) {
-    return Response.json({ status: app.status }, { headers: wakeCorsHeaders });
-  }
-  if (!token || token !== app.wake_token) {
-    return Response.json({ error: "Forbidden" }, { status: 403, headers: wakeCorsHeaders });
-  }
-  return Response.json({ status: app.status }, { headers: wakeCorsHeaders });
 }
 
 export async function handleMigrateReplica(request: Request, appId: number, replicaId: number): Promise<Response> {

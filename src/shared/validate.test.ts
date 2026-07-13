@@ -286,6 +286,27 @@ describe("validateDeployRequest", () => {
     expect(validateDeployRequest({ ...validRequest, auth_password: "pw", health_check: true }).valid).toBe(true);
   });
 
+  test("internal_protocol must be http or tcp", () => {
+    expect(validateDeployRequest({ ...validRequest, internal_protocol: "http" }).valid).toBe(true);
+    expect(validateDeployRequest({ ...validRequest, internal_protocol: "tcp" }).valid).toBe(true);
+    const r = validateDeployRequest({ ...validRequest, internal_protocol: "grpc" as any });
+    expect(r.valid).toBe(false);
+    if (!r.valid) expect(r.error).toMatch(/internal protocol must be/i);
+  });
+
+  test("rejects auth_password when internal_protocol is tcp (even with the HTTP probe on)", () => {
+    // Decoupling: the auth rule now keys off routing, not the probe flag.
+    const r = validateDeployRequest({ ...validRequest, auth_password: "pw", internal_protocol: "tcp", health_check: true });
+    expect(r.valid).toBe(false);
+    if (!r.valid) expect(r.error).toMatch(/requires HTTP internal routing/i);
+  });
+
+  test("explicit internal_protocol http overrides health_check: false for the auth rule", () => {
+    // health_check:false would derive tcp, but an explicit http routing wins,
+    // so auth is allowed.
+    expect(validateDeployRequest({ ...validRequest, auth_password: "pw", internal_protocol: "http", health_check: false }).valid).toBe(true);
+  });
+
   test("rejects a private app with a domain", () => {
     const r = validateDeployRequest({ ...validRequest, public: false, domain: "app.example.com" });
     expect(r.valid).toBe(false);
@@ -571,7 +592,7 @@ describe("validateIngressFields (shared by deploy + ingress endpoint)", () => {
   test("normalizes allowlist and health path, passes through rate limit", () => {
     const r = validateIngressFields(
       { ip_allowlist: " 10.0.0.0/8 , 203.0.113.7 ", health_check_path: " /healthz ", rate_limit_rps: 100 },
-      { httpHealthCheck: true },
+      { httpRouted: true },
     );
     expect(r.valid).toBe(true);
     if (r.valid) {
@@ -581,12 +602,12 @@ describe("validateIngressFields (shared by deploy + ingress endpoint)", () => {
     }
   });
 
-  test("password + health-path require HTTP routing (httpHealthCheck=false rejects)", () => {
-    expect(validateIngressFields({ auth_password: "pw" }, { httpHealthCheck: false }).valid).toBe(false);
-    expect(validateIngressFields({ health_check_path: "/healthz" }, { httpHealthCheck: false }).valid).toBe(false);
+  test("password + health-path require HTTP routing (httpRouted=false rejects)", () => {
+    expect(validateIngressFields({ auth_password: "pw" }, { httpRouted: false }).valid).toBe(false);
+    expect(validateIngressFields({ health_check_path: "/healthz" }, { httpRouted: false }).valid).toBe(false);
     // Empty values don't trip the gate.
-    expect(validateIngressFields({ auth_password: "" }, { httpHealthCheck: false }).valid).toBe(true);
-    expect(validateIngressFields({ health_check_path: "" }, { httpHealthCheck: false }).valid).toBe(true);
+    expect(validateIngressFields({ auth_password: "" }, { httpRouted: false }).valid).toBe(true);
+    expect(validateIngressFields({ health_check_path: "" }, { httpRouted: false }).valid).toBe(true);
   });
 
   test("deploy and ingress agree: same rule yields the same error string", () => {
@@ -594,16 +615,16 @@ describe("validateIngressFields (shared by deploy + ingress endpoint)", () => {
       app_name: "a", git_repo: "https://github.com/x/y.git", container_port: 3000,
       auth_password: "pw", health_check: false,
     });
-    const viaHelper = validateIngressFields({ auth_password: "pw" }, { httpHealthCheck: false });
+    const viaHelper = validateIngressFields({ auth_password: "pw" }, { httpRouted: false });
     expect(viaDeploy.valid).toBe(false);
     expect(viaHelper.valid).toBe(false);
     if (!viaDeploy.valid && !viaHelper.valid) expect(viaDeploy.error).toBe(viaHelper.error);
   });
 
   test("range-checks public port against the resolved protocol", () => {
-    expect(validateIngressFields({ public_port: 30001, public_protocol: "tcp" }, { httpHealthCheck: true }).valid).toBe(true);
-    expect(validateIngressFields({ public_port: 30001, public_protocol: "udp" }, { httpHealthCheck: true }).valid).toBe(false);
-    expect(validateIngressFields({ public_protocol: "sctp" }, { httpHealthCheck: true }).valid).toBe(false);
-    expect(validateIngressFields({ public_port: "auto" }, { httpHealthCheck: true }).valid).toBe(true);
+    expect(validateIngressFields({ public_port: 30001, public_protocol: "tcp" }, { httpRouted: true }).valid).toBe(true);
+    expect(validateIngressFields({ public_port: 30001, public_protocol: "udp" }, { httpRouted: true }).valid).toBe(false);
+    expect(validateIngressFields({ public_protocol: "sctp" }, { httpRouted: true }).valid).toBe(false);
+    expect(validateIngressFields({ public_port: "auto" }, { httpRouted: true }).valid).toBe(true);
   });
 });

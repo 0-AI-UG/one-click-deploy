@@ -10,6 +10,7 @@ type AppData = {
   container_port: number; webhook_enabled: number;
   desired_replicas: number; volume_id: string;
   public: number; internal_port: number; health_check: number;
+  internal_protocol?: string;
 };
 type ServiceData = {
   id: number; name: string; service_type: string; version: string; status: string;
@@ -197,7 +198,7 @@ export function DashboardPage() {
                       {!app.public && !app.domain && (
                         <span className="flex items-center gap-1 text-[9px] font-mono text-muted">
                           <Globe size={10} />{app.name}.ocd.internal:{app.internal_port}
-                          <CopyButton text={`${app.health_check ? "http" : "tcp"}://${app.name}.ocd.internal:${app.internal_port}`} size={10} />
+                          <CopyButton text={`${app.internal_protocol === "tcp" ? "tcp" : "http"}://${app.name}.ocd.internal:${app.internal_port}`} size={10} />
                           <span className="font-mono text-[8px] font-bold border border-fg px-1 uppercase">Private</span>
                         </span>
                       )}
