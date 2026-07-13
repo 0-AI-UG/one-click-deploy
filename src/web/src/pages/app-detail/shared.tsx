@@ -31,10 +31,13 @@ const isLive = (status?: string) => status == null || LIVE_STATUSES.has(status);
  * been collected yet.
  */
 export function CpuUsage({ cpuPercent, limitCores, status }: { cpuPercent?: number; limitCores?: number; status?: string }) {
-  if (!isLive(status) || cpuPercent == null) return <>—</>;
-  const used = cpuPercent / 100;
-  if (!limitCores) return <>{cpuPercent.toFixed(1)}%</>;
-  return <>{used.toFixed(2)} / {limitCores} vCPU</>;
+  let text = "—";
+  if (isLive(status) && cpuPercent != null) {
+    text = limitCores ? `${(cpuPercent / 100).toFixed(2)} / ${limitCores} vCPU` : `${cpuPercent.toFixed(1)}%`;
+  }
+  // Smaller than the table baseline so "used / allowed" fits the width the bare
+  // percentage used to occupy.
+  return <span className="text-[10px]">{text}</span>;
 }
 
 /**
@@ -44,10 +47,12 @@ export function CpuUsage({ cpuPercent, limitCores, status }: { cpuPercent?: numb
  * back to the percentage when absolute figures haven't been collected yet.
  */
 export function MemUsage({ memoryPercent, usedMb, limitMb, status }: { memoryPercent?: number; usedMb?: number; limitMb?: number; status?: string }) {
-  if (!isLive(status)) return <>—</>;
-  if (usedMb != null && limitMb) return <>{fmtMem(usedMb)} / {fmtMem(limitMb)}</>;
-  if (memoryPercent == null) return <>—</>;
-  return <>{memoryPercent.toFixed(1)}%</>;
+  let text = "—";
+  if (isLive(status)) {
+    if (usedMb != null && limitMb) text = `${fmtMem(usedMb)} / ${fmtMem(limitMb)}`;
+    else if (memoryPercent != null) text = `${memoryPercent.toFixed(1)}%`;
+  }
+  return <span className="text-[10px]">{text}</span>;
 }
 
 export function Sparkline({ values, color = "#3b82f6" }: { values: number[]; color?: string }) {

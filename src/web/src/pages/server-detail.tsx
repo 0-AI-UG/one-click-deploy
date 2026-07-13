@@ -137,14 +137,16 @@ function portDot(port: number, address: string): string {
   return "bg-accent-amber";
 }
 
-// Traefik's migration binds large fixed port blocks — one internal ingress
-// entrypoint per app slot (20000-20199, see INTERNAL_PORT_BASE/COUNT in
-// src/shared/db/apps.ts) plus a waker mirror block (21000-21399). These are held
-// for the fleet's lifetime whether or not a slot is in use, so we collapse each
-// block into a single summary chip instead of flooding the view with ~200 chips.
+// Traefik reserves several large fixed port blocks as static entrypoints and
+// binds them for the fleet's lifetime, whether or not a slot is in use — so a
+// raw socket scan sees dozens/hundreds of near-identical listeners. We collapse
+// each block into a single summary chip instead of flooding the view. Ranges
+// mirror the constants in src/shared/db/apps.ts (INTERNAL_PORT_*, PUBLIC_*).
+// tone "blue" = private-net only, "amber" = publicly exposed via the firewall.
 const PORT_GROUPS = [
-  { key: "traefik ingress", lo: 20000, hi: 20199 },
-  { key: "waker", lo: 21000, hi: 21399 },
+  { key: "traefik ingress", lo: 20000, hi: 20199, tone: "blue", note: "internal per-app ingress, one entrypoint per app slot" },
+  { key: "waker", lo: 21000, hi: 21399, tone: "blue", note: "scale-to-zero waker mirror ports" },
+  { key: "public tcp/udp", lo: 30000, hi: 30099, tone: "amber", note: "public raw TCP/UDP app pool" },
 ] as const;
 
 function portGroupKey(port: number): string | null {
@@ -314,10 +316,10 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
             {portBlocks.map((g) => (
               <span
                 key={g.key}
-                title={`${g.count} Traefik ${g.key} entrypoints listening in ${g.lo}-${g.hi} (one per app slot, held for the fleet's lifetime)`}
-                className="inline-flex items-center gap-1.5 border border-accent-blue/40 bg-alt px-2 py-0.5 font-mono text-[10px] font-bold text-fg"
+                title={`${g.count} listening in ${g.lo}-${g.hi} — ${g.note}, held for the fleet's lifetime`}
+                className={`inline-flex items-center gap-1.5 border ${g.tone === "amber" ? "border-accent-amber/40" : "border-accent-blue/40"} bg-alt px-2 py-0.5 font-mono text-[10px] font-bold text-fg`}
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-accent-blue" />
+                <span className={`w-1.5 h-1.5 rounded-full ${g.tone === "amber" ? "bg-accent-amber" : "bg-accent-blue"}`} />
                 {g.key} {g.lo}-{g.hi} · {g.count}
               </span>
             ))}
