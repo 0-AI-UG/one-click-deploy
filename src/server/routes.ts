@@ -30,6 +30,7 @@ import {
   handleGetDeployments,
   handleRollbackApp,
   handleIntrospectRepo,
+  handleIntrospectStack,
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
@@ -91,6 +92,13 @@ import {
   handleInjectService,
   handleUninjectService,
 } from "./routes/services.ts";
+import {
+  handleDeployStack,
+  handleGetStacks,
+  handleGetStack,
+  handleGetStackLog,
+  handleDestroyStack,
+} from "./routes/stacks.ts";
 
 function appIdFrom(req: Request): number {
   const url = new URL(req.url);
@@ -135,6 +143,12 @@ function serviceInjectPartsFrom(req: Request): { serviceId: number; environmentI
 function environmentIdFrom(req: Request): number {
   const url = new URL(req.url);
   const match = url.pathname.match(/\/api\/environments\/(\d+)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function stackIdFrom(req: Request): number {
+  const url = new URL(req.url);
+  const match = url.pathname.match(/\/api\/stacks\/(\d+)/);
   return match ? parseInt(match[1], 10) : 0;
 }
 
@@ -214,6 +228,7 @@ export const apiRoutes = {
   "/api/apps": { GET: (req: Request) => handleGetApps(req) },
   "/api/apps/deploy": { POST: (req: Request) => handleDeploy(req) },
   "/api/repos/introspect": { GET: (req: Request) => handleIntrospectRepo(req) },
+  "/api/repos/introspect-stack": { GET: (req: Request) => handleIntrospectStack(req) },
   "/api/deploy-session": {
     GET: (req: Request) => handleGetDeploySession(req),
     POST: (req: Request) => handleSaveDeploySession(req),
@@ -353,6 +368,19 @@ export const apiRoutes = {
   },
   "/api/environments/:id/apps/detach": {
     POST: (req: Request) => handleDetachAppFromEnvironment(req, environmentIdFrom(req)),
+  },
+
+  // --- Stacks ---
+  "/api/stacks": {
+    GET: (req: Request) => handleGetStacks(req),
+    POST: (req: Request) => handleDeployStack(req),
+  },
+  "/api/stacks/:id": {
+    GET: (req: Request) => handleGetStack(req, stackIdFrom(req)),
+    DELETE: (req: Request) => handleDestroyStack(req, stackIdFrom(req)),
+  },
+  "/api/stacks/:id/log": {
+    GET: (req: Request) => handleGetStackLog(req, stackIdFrom(req)),
   },
 
   // --- Operation Engine ---

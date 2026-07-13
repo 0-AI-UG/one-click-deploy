@@ -11,6 +11,7 @@ import { PasswordResetPage } from "./pages/password-reset.tsx";
 import { SetupPage } from "./pages/setup.tsx";
 import { DashboardPage } from "./pages/dashboard.tsx";
 import { DeployPage } from "./pages/deploy/index.tsx";
+import { StackDeployPage } from "./pages/deploy/stack-builder.tsx";
 import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail/index.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
@@ -24,6 +25,7 @@ import { DeployServicePage } from "./pages/deploy-service.tsx";
 import { ServiceDeployProgressPage } from "./pages/service-deploy-progress.tsx";
 import { ServiceDetailPage } from "./pages/service-detail.tsx";
 import { EnvironmentsPage } from "./pages/environments.tsx";
+import { StacksPage } from "./pages/stacks.tsx";
 import { DeviceAuthPage } from "./pages/device-auth.tsx";
 import { EnginePage } from "./pages/engine.tsx";
 import { EngineOpDetailPage } from "./pages/engine-op-detail.tsx";
@@ -133,6 +135,8 @@ export function App() {
     content = <DashboardPage />;
   } else if (hash === "#/deploy") {
     content = <DeployPage />;
+  } else if (hash === "#/deploy/stack") {
+    content = <StackDeployPage />;
   } else if (hash.startsWith("#/deploy/progress")) {
     const parts = hash.split("/");
     const opId = parts[3] ? parseInt(parts[3], 10) : null;
@@ -163,6 +167,8 @@ export function App() {
     }
   } else if (hash === "#/environments") {
     content = <EnvironmentsPage />;
+  } else if (hash === "#/stacks") {
+    content = <StacksPage />;
   } else if (hash.startsWith("#/resources/volumes/")) {
     const volumeId = decodeURIComponent(hash.split("/")[3] || "");
     content = volumeId ? <VolumeDetailPage volumeId={volumeId} /> : <ResourcesPage />;

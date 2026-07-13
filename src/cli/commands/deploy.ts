@@ -1,41 +1,13 @@
-import { readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
 import { resolve } from "node:path";
 import { get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
-import { promptLine, promptHidden } from "../prompt.ts";
-import type { DeployManifest, DeployRequest } from "../../shared/rpc.ts";
+import { getGitRepo, readManifest, collectEnvVars } from "../manifest.ts";
+import type { DeployRequest } from "../../shared/rpc.ts";
 
 interface Environment {
   id: number;
   name: string;
-}
-
-function getGitRepo(): string {
-  try {
-    const url = execSync("git remote get-url origin", { encoding: "utf-8" }).trim();
-    const sshMatch = url.match(/^git@github\.com:(.+?)(?:\.git)?$/);
-    if (sshMatch) return `https://github.com/${sshMatch[1]}`;
-    return url.replace(/\.git$/, "");
-  } catch {
-    console.error(`${RED}Not a git repository (or no remote "origin" configured)${RESET}`);
-    process.exit(1);
-  }
-}
-
-function readManifest(path: string): DeployManifest {
-  try {
-    const raw = readFileSync(path, "utf-8");
-    return JSON.parse(raw) as DeployManifest;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      console.error(`${RED}Manifest not found: ${path}${RESET}`);
-    } else {
-      console.error(`${RED}Failed to read manifest: ${err instanceof Error ? err.message : err}${RESET}`);
-    }
-    process.exit(1);
-  }
 }
 
 async function resolveEnvironment(nameOrId: string): Promise<Environment> {
@@ -92,55 +64,6 @@ function parseFlags(args: string[]): {
   if (!manifestPath) manifestPath = ".ocd-deploy.json";
 
   return { manifestPath, domain, envName, sets, help };
-}
-
-// Resolve the manifest's env[] section into concrete values: --set overrides,
-// then manifest defaults, then interactive prompts for required vars.
-async function collectEnvVars(
-  manifest: DeployManifest,
-  sets: Record<string, string>,
-): Promise<Array<{ key: string; value: string; secret?: boolean }>> {
-  const out: Array<{ key: string; value: string; secret?: boolean }> = [];
-  const remaining = { ...sets };
-
-  const toPrompt: NonNullable<DeployManifest["env"]> = [];
-  for (const entry of manifest.env || []) {
-    if (entry.key in remaining) {
-      out.push({ key: entry.key, value: remaining[entry.key], secret: entry.secret });
-      delete remaining[entry.key];
-    } else if (entry.default !== undefined) {
-      out.push({ key: entry.key, value: entry.default, secret: entry.secret });
-    } else if (entry.required) {
-      toPrompt.push(entry);
-    }
-  }
-
-  // Extra --set keys not declared in the manifest
-  for (const [key, value] of Object.entries(remaining)) {
-    out.push({ key, value });
-  }
-
-  if (toPrompt.length > 0) {
-    if (!process.stdin.isTTY) {
-      console.error(
-        `${RED}Missing required env vars: ${toPrompt.map((e) => e.key).join(", ")}${RESET}`,
-      );
-      console.error(`Provide them with --set=KEY=VALUE or link an environment with --env=<name|id>.`);
-      process.exit(1);
-    }
-    console.log(`\n${BOLD}Required environment variables${RESET}`);
-    for (const entry of toPrompt) {
-      const hint = entry.description ? ` ${DIM}(${entry.description})${RESET}` : "";
-      const question = `  ${entry.key}${hint}: `;
-      let value = "";
-      while (!value) {
-        value = entry.secret ? await promptHidden(question) : await promptLine(question);
-      }
-      out.push({ key: entry.key, value, secret: entry.secret });
-    }
-  }
-
-  return out;
 }
 
 export async function deploy(args: string[]): Promise<void> {

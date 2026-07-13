@@ -22,6 +22,8 @@ There are three ways to deploy an app:
 2. **\`.ocd-deploy.json\` manifest**: committed to the repo to pre-configure the deploy flow so users just click "Deploy" without filling in any settings. Documented below.
 3. **\`ocd\` CLI**: deploy the current git checkout from the terminal. Documented at the end of this file.
 
+To deploy **several apps and managed services together** as one ordered, health-gated unit, use a **stack** (an \`ocd-stack.json\` manifest) — via \`ocd stack up\` or the web panel's Deploy → Stack tab. See "The ocd-stack.json manifest" below.
+
 # The .ocd-deploy.json manifest
 
 ## File name
@@ -169,6 +171,53 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 - Provide a \`default\` for non-sensitive configuration that works out of the box (e.g. \`NODE_ENV=production\`).
 - Add a \`description\` to help the deployer understand what each variable is for.
 
+# The ocd-stack.json manifest (multi-app stacks)
+
+A **stack** deploys several apps and managed services together from one compose-style manifest, with dependency ordering and credential/URL wiring handled for you. Deploy a stack from the CLI (\`ocd stack up\`) or the web panel (Deploy → Stack tab: paste the repo, tweak any option, deploy).
+
+## File name
+
+\`ocd-stack.json\`, conventionally at the repo root. It **references** each app's own \`.ocd-deploy.json\` by path — it does not inline per-app build/env config.
+
+## Schema
+
+- \`name\` (string, required) — stack name. Every member is named \`<name>-<key>\` and is fleet-globally unique (e.g. stack \`blog\` + app key \`web\` → app \`blog-web\`).
+- \`description\` (string, optional).
+- \`services\` (object, optional) — map of service key → managed service:
+  - \`type\` (string, required) — catalog type: \`postgres\`, \`redis\`, \`mysql\`, ...
+  - \`version\` (string), \`volume_size\` (number, GB), \`env_overrides\` (object) — all optional.
+- \`apps\` (object, required) — map of app key → app:
+  - \`manifest\` (string, required) — path to that app's \`.ocd-deploy.json\`, relative to \`ocd-stack.json\`.
+  - \`needs\` (string[], optional) — keys of services/apps this app depends on.
+  - \`domain\` (string), \`public\` (boolean) — optional overrides of the app manifest.
+
+## Semantics
+
+- **Ordering + readiness**: \`needs\` forms a dependency graph. Services deploy first, then apps in dependency order — an app only starts once everything it needs is deployed **and healthy** (deploys are health-gated). Dependency cycles are rejected.
+- **Wiring**: a stack owns one auto-created environment. Services inject their credentials into it; each app publishes its private internal URL as \`<KEY>_URL\` (the uppercased app key), so a dependent reaches a sibling without knowing its real name or DNS. An app with \`needs: ["api"]\` sees an \`API_URL\` env var.
+- **Reconcile**: \`ocd stack up\` redeploys every app in the manifest, and separately destroys members recorded under the stack but no longer listed.
+- **Atomic**: if any member fails, the whole run rolls back — members deployed in that run are destroyed.
+- **Capacity**: the fleet has a hard 200-app cap; a stack that would exceed it is rejected before anything deploys.
+
+## Example: ocd-stack.json
+
+\`\`\`json
+{
+  "$schema": 1,
+  "name": "blog",
+  "description": "API + web frontend on Postgres",
+  "services": {
+    "db": { "type": "postgres", "version": "16", "volume_size": 10 }
+  },
+  "apps": {
+    "api": { "manifest": "services/api/.ocd-deploy.json", "needs": ["db"] },
+    "web": { "manifest": "services/web/.ocd-deploy.json", "needs": ["api"], "public": true }
+  }
+}
+\`\`\`
+
+Pairs with the two \`.ocd-deploy.json\` files from the monorepo example above: \`api\` receives the Postgres credentials from the \`db\` service (via the stack environment), and \`web\` receives \`API_URL\` pointing at \`api\`. Because \`web\` needs \`api\` and \`api\` needs \`db\`, they deploy in the order db → api → web, each waiting for the previous to become healthy.
+
 # The ocd CLI
 
 \`ocd\` is a single-binary CLI (Linux, macOS, Windows) for driving a One-Click Deploy panel from the terminal.
@@ -204,6 +253,7 @@ ocd pause <app>              Stop an app without deleting it
 ocd unpause <app>            Start a paused app again
 ocd envs <subcommand>        Manage environments and their variables
 ocd services                 List managed services (Postgres, Redis, ...)
+ocd stack <up|down|ls|status|logs>  Deploy/manage multi-app stacks (ocd-stack.json)
 ocd servers                  List Hetzner servers and the apps on them
 ocd ssh <app> <cmd>          Run a command inside an app container
 ocd ssh <app> -i             Interactive shell inside an app container
@@ -222,6 +272,18 @@ ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>] [--set=KEY=VALUE ...
 Run from inside a git repo with an \`origin\` remote. Reads the manifest (default: \`./.ocd-deploy.json\`) for the app name, build settings, port, env vars, webhook, volume, and scaling configuration, then streams deploy progress step by step until it completes or fails. \`--domain\` sets a custom domain.
 
 Env vars from the manifest's \`env[]\` section are included automatically: entries with a \`default\` are sent as-is, \`--set=KEY=VALUE\` (repeatable) overrides or adds values, and \`required\` vars still missing a value are prompted for interactively (hidden input when \`secret\`). In non-interactive shells, missing required vars fail the deploy with a message listing them; provide them via \`--set\`. Alternatively, \`--env\` links the app to an existing environment, which then supplies all variables (manifest env vars and \`--set\` are ignored).
+
+### ocd stack
+
+\`\`\`
+ocd stack up [manifest] [--set=<app>.KEY=VALUE ...]   Deploy a stack (default manifest: ocd-stack.json)
+ocd stack down <name> [--yes]                         Destroy a stack and every member
+ocd stack ls                                           List stacks
+ocd stack status <name>                                Show a stack's apps and services
+ocd stack logs <name>                                  Print a stack's combined deploy log
+\`\`\`
+
+\`ocd stack up\` reads \`ocd-stack.json\` and each referenced \`.ocd-deploy.json\`, collects env vars per app (manifest defaults are sent as-is; \`--set=<app>.KEY=VALUE\` targets one app while \`--set=KEY=VALUE\` is a fallback for any app declaring KEY; required vars still missing are prompted for), then deploys the whole stack in dependency order and streams progress. Run it from inside the git repo whose \`origin\` remote holds the apps. Re-running it reconciles: apps in the manifest are redeployed, members dropped from the manifest are destroyed. See "The ocd-stack.json manifest" above for the format and wiring semantics.
 
 ### ocd envs
 

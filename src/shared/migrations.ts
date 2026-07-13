@@ -1445,6 +1445,28 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 73,
+    description: "Add stacks table and apps.stack_id / services.stack_id (multi-app manifest deploys)",
+    up: (db) => {
+      // A stack groups many apps + managed services deployed from a single
+      // ocd-stack.json manifest as one ordered, health-gated unit. environment_id
+      // links to the auto-created shared environment members inherit credentials
+      // from. Teardown is explicit via the destroy_stack op, so no ON DELETE
+      // CASCADE is needed here. stack_id on apps/services is nullable — members
+      // not belonging to a stack keep it NULL, mirroring apps.environment_id.
+      db.run(`CREATE TABLE IF NOT EXISTS stacks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        environment_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'deploying',
+        deploy_log TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run("ALTER TABLE apps ADD COLUMN stack_id INTEGER");
+      db.run("ALTER TABLE services ADD COLUMN stack_id INTEGER");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

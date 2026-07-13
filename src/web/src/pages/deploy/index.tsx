@@ -8,6 +8,7 @@ import { ReceiptSection } from "./receipt-section.tsx";
 import { EnvSection } from "./env-section.tsx";
 import { AdvancedSection } from "./advanced-section.tsx";
 import { ServicesGridSection } from "./services-grid.tsx";
+import { DeployModeTabs } from "./mode-tabs.tsx";
 import type { IntrospectResult, ManifestEnvDef, FormState } from "./types.ts";
 import type { DeployBody } from "../../types.ts";
 
@@ -450,7 +451,9 @@ export function DeployPage() {
           </span>
         )}
       </div>
-      <p className="text-fg-dim text-sm mb-7">Paste a repo. We detect the rest.</p>
+      <p className="text-fg-dim text-sm mb-5">Paste a repo. We detect the rest.</p>
+
+      <DeployModeTabs active="app" />
 
       {pendingSession && (
         <div className="mb-5 border-2 border-fg bg-bg-card px-4 py-3 flex items-center justify-between gap-3 animate-fade-in">

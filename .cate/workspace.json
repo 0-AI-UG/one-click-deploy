@@ -81,7 +81,7 @@
             "width": 640,
             "height": 590.5
           },
-          "zOrder": 460,
+          "zOrder": 492,
           "creationIndex": 0,
           "animationState": "idle",
           "dockLayout": {
@@ -104,7 +104,7 @@
             "width": 640,
             "height": 400
           },
-          "zOrder": 479,
+          "zOrder": 486,
           "creationIndex": 1,
           "animationState": "idle",
           "dockLayout": {
@@ -127,7 +127,7 @@
             "width": 640,
             "height": 400
           },
-          "zOrder": 480,
+          "zOrder": 482,
           "creationIndex": 2,
           "animationState": "idle",
           "dockLayout": {
@@ -148,9 +148,9 @@
           },
           "size": {
             "width": 640,
-            "height": 400
+            "height": 580
           },
-          "zOrder": 477,
+          "zOrder": 493,
           "creationIndex": 3,
           "animationState": "idle",
           "dockLayout": {
@@ -163,10 +163,10 @@
           }
         }
       },
-      "zoomLevel": 0.8571449598323584,
+      "zoomLevel": 0.8825399692274654,
       "viewportOffset": {
-        "x": 135.34380829389409,
-        "y": -439.27942224493796
+        "x": -457.74601033799354,
+        "y": -466.0057416039392
       }
     }
   }

@@ -45,6 +45,7 @@ export type AppRow = {
   scale_to_zero_after: number;
   webhook_wait_for_ci: number;
   environment_id: number | null;
+  stack_id: number | null;
   public: number;
   extra_volumes: string; // JSON array of "host:container" strings
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default

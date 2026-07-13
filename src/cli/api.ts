@@ -12,6 +12,10 @@ export async function put<T>(path: string, body?: unknown): Promise<T> {
   return apiRequest<T>("PUT", path, body);
 }
 
+export async function del<T>(path: string, body?: unknown): Promise<T> {
+  return apiRequest<T>("DELETE", path, body);
+}
+
 async function apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   const config = requireConfig();
   const url = `${config.panel_url}${path}`;

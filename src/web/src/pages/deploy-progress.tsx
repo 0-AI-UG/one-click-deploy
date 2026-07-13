@@ -49,22 +49,30 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
   const succeeded = status === "done";
   const failed = terminal && !succeeded;
   const errorMessage = op?.error?.message ?? null;
+  const isStack = (op as any)?.kind === "deploy_stack";
   const appName = (op as any)?.input?.app_name ?? "";
   const domain = (op as any)?.input?.domain ?? "";
+  const stackName = (op as any)?.input?.name ?? "";
 
-  // Redirect to app detail on success. We need an appId — pull it from the
-  // insert_app_row step output.
+  // Redirect on success: stacks go to the Stacks page; single apps go to their
+  // app detail (appId pulled from the insert_app_row step output).
   useEffect(() => {
     if (!succeeded) return;
-    const insertStep = steps.find((s) => s.step === "insert_app_row" && s.status === "ok");
-    const appId = insertStep?.output && typeof insertStep.output === "object"
-      ? (insertStep.output as { appId?: number }).appId
-      : undefined;
+    let target = "#/";
+    if (isStack) {
+      target = "#/stacks";
+    } else {
+      const insertStep = steps.find((s) => s.step === "insert_app_row" && s.status === "ok");
+      const appId = insertStep?.output && typeof insertStep.output === "object"
+        ? (insertStep.output as { appId?: number }).appId
+        : undefined;
+      if (appId) target = `#/apps/${appId}`;
+    }
     const t = setTimeout(() => {
-      window.location.hash = appId ? `#/apps/${appId}` : "#/";
+      window.location.hash = target;
     }, 1200);
     return () => clearTimeout(t);
-  }, [succeeded, steps.length]);
+  }, [succeeded, steps.length, isStack]);
 
   const collapsed = collapseForwardSteps(steps);
   const completedCount = collapsed.filter((s) => s.status === "ok" || s.status === "skipped").length;
@@ -73,7 +81,7 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
 
   const lastForward = [...steps].reverse().find((s) => s.phase === "forward");
   const currentLine = succeeded
-    ? domain ? `Live at https://${domain}` : "Deploy complete"
+    ? isStack ? `Stack "${stackName}" deployed` : domain ? `Live at https://${domain}` : "Deploy complete"
     : failed
       ? errorMessage || `Deploy ${status}`
       : lastForward

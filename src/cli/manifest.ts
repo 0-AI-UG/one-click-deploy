@@ -1,0 +1,92 @@
+import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { BOLD, DIM, RED, RESET } from "./format.ts";
+import { promptLine, promptHidden } from "./prompt.ts";
+import type { DeployManifest } from "../shared/rpc.ts";
+
+/** Derive the app's git repo URL from the current directory's `origin` remote. */
+export function getGitRepo(): string {
+  try {
+    const url = execSync("git remote get-url origin", { encoding: "utf-8" }).trim();
+    const sshMatch = url.match(/^git@github\.com:(.+?)(?:\.git)?$/);
+    if (sshMatch) return `https://github.com/${sshMatch[1]}`;
+    return url.replace(/\.git$/, "");
+  } catch {
+    console.error(`${RED}Not a git repository (or no remote "origin" configured)${RESET}`);
+    process.exit(1);
+  }
+}
+
+/** Read + JSON.parse a `.ocd-deploy.json` manifest, exiting on error. */
+export function readManifest(path: string): DeployManifest {
+  try {
+    const raw = readFileSync(path, "utf-8");
+    return JSON.parse(raw) as DeployManifest;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      console.error(`${RED}Manifest not found: ${path}${RESET}`);
+    } else {
+      console.error(`${RED}Failed to read manifest: ${err instanceof Error ? err.message : err}${RESET}`);
+    }
+    process.exit(1);
+  }
+}
+
+/**
+ * Resolve the manifest's env[] section into concrete values: --set overrides
+ * (per-app `sets`), then a shared `fallback` lookup (used only for declared
+ * vars, never added as extras), then manifest defaults, then interactive
+ * prompts for required vars. `header` labels the prompt group.
+ */
+export async function collectEnvVars(
+  manifest: DeployManifest,
+  sets: Record<string, string>,
+  opts?: { fallback?: Record<string, string>; header?: string },
+): Promise<Array<{ key: string; value: string; secret?: boolean }>> {
+  const fallback = opts?.fallback || {};
+  const header = opts?.header || "Required environment variables";
+  const out: Array<{ key: string; value: string; secret?: boolean }> = [];
+  const remaining = { ...sets };
+
+  const toPrompt: NonNullable<DeployManifest["env"]> = [];
+  for (const entry of manifest.env || []) {
+    if (entry.key in remaining) {
+      out.push({ key: entry.key, value: remaining[entry.key], secret: entry.secret });
+      delete remaining[entry.key];
+    } else if (entry.key in fallback) {
+      out.push({ key: entry.key, value: fallback[entry.key], secret: entry.secret });
+    } else if (entry.default !== undefined) {
+      out.push({ key: entry.key, value: entry.default, secret: entry.secret });
+    } else if (entry.required) {
+      toPrompt.push(entry);
+    }
+  }
+
+  // Extra --set keys not declared in the manifest (app-specific sets only;
+  // shared fallback keys that match no declared var are intentionally ignored).
+  for (const [key, value] of Object.entries(remaining)) {
+    out.push({ key, value });
+  }
+
+  if (toPrompt.length > 0) {
+    if (!process.stdin.isTTY) {
+      console.error(
+        `${RED}Missing required env vars: ${toPrompt.map((e) => e.key).join(", ")}${RESET}`,
+      );
+      console.error(`Provide them with --set=KEY=VALUE or link an environment with --env=<name|id>.`);
+      process.exit(1);
+    }
+    console.log(`\n${BOLD}${header}${RESET}`);
+    for (const entry of toPrompt) {
+      const hint = entry.description ? ` ${DIM}(${entry.description})${RESET}` : "";
+      const question = `  ${entry.key}${hint}: `;
+      let value = "";
+      while (!value) {
+        value = entry.secret ? await promptHidden(question) : await promptLine(question);
+      }
+      out.push({ key: entry.key, value, secret: entry.secret });
+    }
+  }
+
+  return out;
+}

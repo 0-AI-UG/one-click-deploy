@@ -181,3 +181,18 @@ export {
   updateEnvironment,
   deleteEnvironment,
 } from "./environments.ts";
+export type { StackRow } from "./stacks.ts";
+export {
+  insertStack,
+  getStack,
+  getStackByName,
+  getStacks,
+  updateStackStatus,
+  appendStackLog,
+  getStackLog,
+  deleteStack,
+  getAppsByStackId,
+  getServicesByStackId,
+  setAppStack,
+  setServiceStack,
+} from "./stacks.ts";

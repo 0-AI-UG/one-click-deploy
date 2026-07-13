@@ -213,6 +213,31 @@ export type DeployManifest = {
   public_protocol?: "tcp" | "udp"; // Pool for public_port (default "tcp")
 };
 
+export type StackManifest = {
+  $schema?: number;
+  name: string;                       // stack name; members become <name>-<key>
+  description?: string;
+  services?: Record<string, {         // key → managed service
+    type: string;                     // catalog type (postgres, redis, ...)
+    version?: string;
+    volume_size?: number;
+    env_overrides?: Record<string, string>;
+  }>;
+  apps: Record<string, {              // key → app
+    manifest: string;                 // path to a .ocd-deploy.json, relative to ocd-stack.json
+    needs?: string[];                 // keys of services/apps this app depends on
+    domain?: string;                  // override
+    public?: boolean;                 // override
+  }>;
+};
+
+export type StackDeployRequest = {
+  name: string;
+  services: Array<{ key: string; type: string; version?: string; volume_size?: number;
+                    env_overrides?: Record<string, string>; needs?: string[] }>;
+  apps: Array<Omit<DeployRequest, "environment_id"> & { key: string; needs?: string[] }>;
+};
+
 export type ParsedManifest = {
   path: string;
   dir: string;

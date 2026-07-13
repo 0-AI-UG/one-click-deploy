@@ -12,6 +12,7 @@ export type ServiceRow = {
   env_vars: string;
   credentials: string;
   desired_instances: number;
+  stack_id: number | null;
   created_at: string;
 };
 

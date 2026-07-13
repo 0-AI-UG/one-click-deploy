@@ -9,7 +9,8 @@
 
 import { parseGitHubRepo, getGitHubPat } from "./github.ts";
 import { validateDeployManifest } from "./validate.ts";
-import type { ParsedManifest } from "./rpc.ts";
+import { buildStackAppSpec, resolveRepoPath, repoDirOf, type StackAppSpec } from "./stack-spec.ts";
+import type { ParsedManifest, StackManifest, StackDeployRequest, DeployManifest } from "./rpc.ts";
 
 export type IntrospectResult = {
   ok: true;
@@ -302,6 +303,153 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
     detected_port,
     env_vars,
     manifests,
+    notes,
+  };
+}
+
+// --- Stack introspection ----------------------------------------------------
+// Resolves an `ocd-stack.json` manifest and every per-app `.ocd-deploy.json` it
+// references, all from a GitHub repo, so the web deploy page can build a stack
+// without the local filesystem the CLI's `ocd stack up` reads from.
+
+export type StackIntrospectResult =
+  | {
+      ok: true;
+      owner: string;
+      repo: string;
+      default_branch: string;
+      branches: string[];
+      stack_path: string;
+      name: string;
+      description?: string;
+      services: StackDeployRequest["services"];
+      apps: Array<{
+        manifest_path: string;
+        env: NonNullable<DeployManifest["env"]>;
+        spec: StackAppSpec; // ready to POST once env_vars are filled in
+      }>;
+      notes: string[];
+    }
+  | { ok: false; error: string };
+
+export async function introspectStack(
+  url: string,
+  userId?: string,
+  ref?: string,
+  stackPath = "ocd-stack.json",
+): Promise<StackIntrospectResult> {
+  let parsed: { owner: string; repo: string; ref?: string };
+  try {
+    parsed = parseGitHubRepo(url);
+  } catch {
+    return { ok: false, error: "Paste a GitHub repo link like https://github.com/owner/repo." };
+  }
+  const { owner, repo, ref: urlRef } = parsed;
+  const token = await getGitHubPat(userId);
+  const requestedRef = ref || urlRef;
+
+  const repoRes = await ghFetch(`/repos/${owner}/${repo}`, token);
+  if (repoRes.status === 404)
+    return { ok: false, error: "Repository not found. If it's private, link your GitHub account in Account settings." };
+  if (repoRes.status === 401 || repoRes.status === 403)
+    return { ok: false, error: "GitHub denied the request — your token may be missing or out of API quota." };
+  if (!repoRes.ok) return { ok: false, error: `GitHub error (HTTP ${repoRes.status})` };
+  const repoData = await repoRes.json();
+  const default_branch: string = repoData.default_branch || "main";
+  const fetchRef: string = requestedRef || default_branch;
+
+  const branchesRes = await ghFetch(`/repos/${owner}/${repo}/branches?per_page=100`, token);
+  let branches: string[] = [];
+  if (branchesRes.ok) {
+    try {
+      branches = ((await branchesRes.json()) as Array<{ name: string }>).map((b) => b.name);
+      branches.sort((a, b) => (a === default_branch ? -1 : b === default_branch ? 1 : a.localeCompare(b)));
+    } catch {
+      branches = [];
+    }
+  }
+  if (branches.length === 0) branches = [default_branch];
+
+  const stackRaw = await fetchRawFile(owner, repo, fetchRef, stackPath, token);
+  if (!stackRaw)
+    return { ok: false, error: `No ${stackPath} found on "${fetchRef}". Add a stack manifest to the repo, or pick another branch.` };
+
+  let manifest: StackManifest;
+  try {
+    manifest = JSON.parse(stackRaw) as StackManifest;
+  } catch {
+    return { ok: false, error: `${stackPath} is not valid JSON.` };
+  }
+  if (!manifest.name || typeof manifest.name !== "string")
+    return { ok: false, error: `${stackPath} is missing a "name".` };
+  if (!manifest.apps || Object.keys(manifest.apps).length === 0)
+    return { ok: false, error: `${stackPath} declares no apps.` };
+
+  const stackDir = repoDirOf(stackPath);
+  const notes: string[] = [];
+
+  const services: StackDeployRequest["services"] = Object.entries(manifest.services || {}).map(
+    ([key, svc]) => ({
+      key,
+      type: svc.type,
+      version: svc.version,
+      volume_size: svc.volume_size,
+      env_overrides: svc.env_overrides,
+    }),
+  );
+
+  // Fetch every referenced app manifest in parallel, preserving key order.
+  const appEntries = Object.entries(manifest.apps);
+  const rawManifests = await Promise.all(
+    appEntries.map(([, entry]) =>
+      fetchRawFile(owner, repo, fetchRef, resolveRepoPath(stackDir, entry.manifest), token),
+    ),
+  );
+
+  const apps: Extract<StackIntrospectResult, { ok: true }>["apps"] = [];
+  for (let i = 0; i < appEntries.length; i++) {
+    const [key, entry] = appEntries[i];
+    const manifestPath = resolveRepoPath(stackDir, entry.manifest);
+    const content = rawManifests[i];
+    if (!content) {
+      return { ok: false, error: `App "${key}" references ${manifestPath}, which we couldn't read on "${fetchRef}".` };
+    }
+    let appManifest: DeployManifest;
+    try {
+      const result = validateDeployManifest(JSON.parse(content));
+      if (!result.ok) return { ok: false, error: `App "${key}" (${manifestPath}): ${result.error}` };
+      appManifest = result.manifest;
+    } catch {
+      return { ok: false, error: `App "${key}" (${manifestPath}) is not valid JSON.` };
+    }
+    apps.push({
+      manifest_path: manifestPath,
+      env: appManifest.env ?? [],
+      spec: buildStackAppSpec(key, entry, appManifest, url, repoDirOf(manifestPath)),
+    });
+  }
+
+  // Validate dependency edges up front (mirrors the deploy_stack plan step).
+  const appKeys = new Set(appEntries.map(([k]) => k));
+  const serviceKeys = new Set(services.map((s) => s.key));
+  for (const a of apps) {
+    for (const n of a.spec.needs ?? []) {
+      if (!appKeys.has(n) && !serviceKeys.has(n))
+        return { ok: false, error: `App "${a.spec.key}" needs unknown key "${n}".` };
+    }
+  }
+
+  return {
+    ok: true,
+    owner,
+    repo,
+    default_branch,
+    branches,
+    stack_path: stackPath,
+    name: manifest.name,
+    description: manifest.description,
+    services,
+    apps,
     notes,
   };
 }

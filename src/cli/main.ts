@@ -9,6 +9,7 @@ import { rollback } from "./commands/rollback.ts";
 import { pause, unpause } from "./commands/pause.ts";
 import { envs } from "./commands/envs.ts";
 import { services } from "./commands/services.ts";
+import { stack } from "./commands/stack.ts";
 import { servers } from "./commands/servers.ts";
 import { ssh } from "./commands/ssh.ts";
 import { BOLD, DIM, RESET } from "./format.ts";
@@ -28,6 +29,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   unpause,
   envs,
   services,
+  stack,
   servers,
   ssh,
 };
@@ -50,6 +52,7 @@ ${BOLD}Commands:${RESET}
   pause <app>            Pause an app
   unpause <app>          Unpause an app
   services               List services
+  stack <up|down|ls|status|logs>   Manage multi-app stacks
   servers                List servers
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session

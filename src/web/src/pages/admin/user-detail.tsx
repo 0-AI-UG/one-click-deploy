@@ -30,6 +30,14 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    label: "Stacks",
+    permissions: [
+      { key: "stacks.deploy", label: "Deploy stacks" },
+      { key: "stacks.view", label: "View stacks" },
+      { key: "stacks.destroy", label: "Destroy stacks" },
+    ],
+  },
+  {
     label: "Servers",
     permissions: [
       { key: "servers.view", label: "View server list" },
