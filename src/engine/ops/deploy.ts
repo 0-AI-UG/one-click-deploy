@@ -1,6 +1,7 @@
 import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import dbInstance, * as db from "../../shared/db.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
+import { isNotFoundError } from "../../shared/providers/errors.ts";
 import {
   sshExec,
   cloneRepo,
@@ -15,7 +16,7 @@ import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
 import { createMasker } from "../../shared/mask.ts";
-import { processIncomingEnvVars, serializeEnvVars, platformEnvVars } from "../../shared/env-crypto.ts";
+import { processIncomingEnvVars, serializeEnvVars, parseEnvVars, platformEnvVars } from "../../shared/env-crypto.ts";
 import { getProviderToken } from "../../shared/secret-store.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
@@ -295,17 +296,17 @@ const createDnsRecord: Step<DeployInput, DnsOut> = {
   },
   async compensate(ctx, out) {
     if (!out) return;
-    try {
-      const dns = hetznerDns;
-      await dns.deleteRecord({
-        zoneId: out.zoneId,
-        name: out.name,
-        type: out.type,
-        value: out.value,
-      });
-    } catch (err) {
-      ctx.log(`Failed to delete DNS record: ${err}`);
-    }
+    // deleteRecord matches by name+type+value and is idempotent (a missing
+    // record is a no-op — see the forward-step note), so let a genuine failure
+    // PROPAGATE rather than orphan an A record that points at a server for an
+    // app that no longer exists behind a clean `compensated`.
+    const dns = hetznerDns;
+    await dns.deleteRecord({
+      zoneId: out.zoneId,
+      name: out.name,
+      type: out.type,
+      value: out.value,
+    });
   },
 };
 
@@ -329,13 +330,15 @@ const createVolume: Step<DeployInput, VolumeOut> = {
   },
   async probeCompensated(_ctx, out) {
     if (!out) return true;
+    const compute = hetzner;
+    if (!compute.volumes) return true;
     try {
-      const compute = hetzner;
-      if (!compute.volumes) return true;
       await compute.volumes.get(out.volumeId);
       return false;
-    } catch {
-      return true;
+    } catch (err) {
+      // Only a definitive not-found means "already deleted"; a transient error
+      // must fall through to run the delete rather than leak the volume.
+      return isNotFoundError(err);
     }
   },
   async run(ctx, prior) {
@@ -375,12 +378,17 @@ const createVolume: Step<DeployInput, VolumeOut> = {
   },
   async compensate(ctx, out) {
     if (!out) return;
+    const compute = hetzner;
+    // Detach is best-effort (may already be detached) and must not mask the
+    // delete. Let a genuine delete failure PROPAGATE — orphaning the created
+    // cloud volume behind a clean `compensated` is a silent leak.
+    // probeCompensated short-circuits once the volume is gone, so retries stay
+    // idempotent.
+    try { await compute.volumes?.detach(out.volumeId); } catch { /* already detached */ }
     try {
-      const compute = hetzner;
-      try { await compute.volumes?.detach(out.volumeId); } catch { /* already detached */ }
       await compute.volumes?.delete(out.volumeId);
     } catch (err) {
-      ctx.log(`Failed to delete volume ${out.volumeId}: ${err}`);
+      if (!isNotFoundError(err)) throw err; // already gone = success; else surface
     }
   },
 };
@@ -439,33 +447,41 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const dockerfilePath = req.dockerfile_path || "Dockerfile";
 
     // Resolve environment + flat env vars (must be reproducible; idempotent
-    // env creation uses unique-name retry).
+    // env creation uses unique-name retry). A deploy's env_vars are the caller's
+    // already-merged manifest defaults + --set overrides (existing-wins keys are
+    // dropped client-side). We LAYER them onto the target environment — linked
+    // or freshly created — overwriting by key.
     let environmentId: number | null = req.environment_id ?? null;
     const flatEnvVars: Record<string, string> = {};
 
+    const incoming =
+      req.env_vars &&
+      (Array.isArray(req.env_vars) ? req.env_vars.length > 0 : Object.keys(req.env_vars).length > 0)
+        ? await processIncomingEnvVars(req.env_vars)
+        : null;
+
+    const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
     if (environmentId) {
       const envRow = db.getEnvironment(environmentId);
       if (envRow) {
-        const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
-        Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
+        // Overlay incoming vars on top of the linked env and persist (overwrite
+        // by key). Idempotent: a retry re-overlays the same keys.
+        if (incoming && incoming.entries.length > 0) {
+          const overlaid = new Set(incoming.entries.map((e) => e.key));
+          const base = parseEnvVars(envRow.env_vars).entries.filter((e) => !overlaid.has(e.key));
+          db.updateEnvironment(envRow.id, envRow.name, serializeEnvVars([...base, ...incoming.entries]));
+        }
+        Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(db.getEnvironment(environmentId)!.env_vars));
       }
-    } else if (
-      req.env_vars &&
-      (Array.isArray(req.env_vars) ? req.env_vars.length > 0 : Object.keys(req.env_vars).length > 0)
-    ) {
-      const processedEnv = await processIncomingEnvVars(req.env_vars);
-      const rawEntries = Array.isArray(req.env_vars)
-        ? req.env_vars
-        : Object.entries(req.env_vars).map(([k, v]) => ({ key: k, value: v as string }));
-      for (const e of rawEntries) flatEnvVars[e.key] = e.value;
-
+    } else if (incoming && incoming.entries.length > 0) {
       let envName = req.app_name;
       let suffix = 1;
       while (db.getEnvironments().find((e) => e.name === envName)) {
         envName = `${req.app_name}-${suffix++}`;
       }
-      const envRow = db.insertEnvironment(envName, serializeEnvVars(processedEnv.entries));
+      const envRow = db.insertEnvironment(envName, serializeEnvVars(incoming.entries));
       environmentId = envRow.id;
+      Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
     }
 
     const extraVolumes = (req.extra_volumes || []).map(
@@ -540,12 +556,12 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
   },
   async compensate(ctx, out) {
     if (!out) return;
-    try { db.deleteReplica(out.replicaId); } catch (err) {
-      ctx.log(`Failed to delete replica ${out.replicaId}: ${err}`);
-    }
-    try { db.deleteApp(out.appId); } catch (err) {
-      ctx.log(`Failed to delete app ${out.appId}: ${err}`);
-    }
+    // DB teardown of the half-created app. Deleting an already-gone row is a
+    // no-op (so retry is safe, and probeCompensated skips once the app row is
+    // gone); let a genuine failure PROPAGATE rather than leave an orphaned app
+    // row behind a clean `compensated`.
+    db.deleteReplica(out.replicaId);
+    db.deleteApp(out.appId);
   },
 };
 
@@ -726,11 +742,11 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
     if (!server || !appOut) return;
-    try {
-      await removeContainer(server.serverIp, appOut.containerName, server.serverHostKey || undefined);
-    } catch (err) {
-      ctx.log(`Failed to remove container: ${err}`);
-    }
+    // Let a genuine failure to remove the container PROPAGATE so a leaked
+    // container surfaces as `compensation_failed` rather than a false-clean
+    // `compensated`. probeCompensated short-circuits this step once the
+    // container is gone, so re-running the compensate is safe.
+    await removeContainer(server.serverIp, appOut.containerName, server.serverHostKey || undefined);
   },
 };
 
@@ -862,6 +878,9 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
   },
   async compensate(ctx, out) {
     if (!out) return;
+    // Deliberately best-effort: a deployment_history row is audit metadata, not
+    // a live resource — a stray row for a failed deploy leaks nothing, so it
+    // must not block the rollback from reaching `compensated`.
     try {
       dbInstance.run("DELETE FROM deployment_history WHERE id = ?", [out.deploymentId]);
     } catch (err) {
@@ -928,6 +947,11 @@ const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webho
     const req = ctx.input;
     const { githubPat } = await buildMasker(req, ctx.triggeredBy);
     if (!githubPat) return;
+    // Deliberately best-effort: webhook setup is a non-fatal forward step (it
+    // returns ok:false instead of throwing), and GitHub's DELETE is NOT
+    // idempotent — a resumed compensate would 404 on an already-deleted hook
+    // and falsely escalate. A stray webhook is low-stakes (it targets a deleted
+    // app's endpoint), so we don't block the rollback on it.
     try {
       await github.deleteWebhook({ gitRepo: req.git_repo, webhookId, token: githubPat });
     } catch (err) {

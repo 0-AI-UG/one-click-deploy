@@ -10,8 +10,9 @@ import { AdvancedSection } from "./advanced-section.tsx";
 import { ServicesGridSection } from "./services-grid.tsx";
 import { StackSection, useStackForm } from "./stack-section.tsx";
 import { useHasPermission } from "../../stores/auth.ts";
+import { mergeEnv } from "../../../../shared/env-merge.ts";
 import type { IntrospectResult, AppIntrospect, ManifestEnvDef, FormState } from "./types.ts";
-import type { DeployBody } from "../../types.ts";
+import type { DeployBody, EnvironmentData } from "../../types.ts";
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
@@ -114,7 +115,12 @@ export function DeployPage() {
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [extraEnv, setExtraEnv] = useState<Array<{ key: string; value: string }>>([]);
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<number | null>(null);
+  const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
   const [servicesOpen, setServicesOpen] = useState(false);
+
+  useEffect(() => {
+    get("/api/environments").then(setEnvironments).catch(() => {});
+  }, []);
 
   const [introspect, setIntrospect] = useState<IntrospectResult | null>(null);
   const [introspecting, setIntrospecting] = useState(false);
@@ -415,24 +421,33 @@ export function DeployPage() {
     if (!form.app_name || !form.git_repo)
       return showToast("App name and git repo are required", "error");
 
-    if (manifestEnvDefs.length > 0 && !selectedEnvironmentId) {
-      const missing = manifestEnvDefs.filter((e) => e.required && !envValues[e.key]?.trim());
-      if (missing.length > 0)
-        return showToast(`Required: ${missing.map((e) => e.key).join(", ")}`, "error");
-    }
-
-    // If using an existing environment, don't send env_vars
-    let envArray: Array<{ key: string; value: string; secret: boolean }> | undefined;
-    if (!selectedEnvironmentId) {
-      envArray = [];
-      for (const [key, value] of Object.entries(envValues)) {
-        const def = manifestEnvDefs.find((d) => d.key === key);
-        envArray.push({ key, value, secret: def?.secret ?? false });
-      }
-      extraEnv.forEach((v) => {
-        if (v.key) envArray!.push({ key: v.key, value: v.value, secret: false });
-      });
-    }
+    // Unified env model: one app is a stack of one. The manifest/detected env
+    // inputs are the app's defaults; the "add env var" rows are --set overrides.
+    // Keys the reused environment already defines are dropped from `entries`
+    // (existing wins), so we always send both env_vars and environment_id and
+    // let the engine layer them.
+    const existingKeys = new Set<string>(
+      (selectedEnvironmentId
+        ? environments.find((e) => e.id === selectedEnvironmentId)?.env_vars ?? []
+        : []
+      ).map((v) => v.key),
+    );
+    const defs = Object.keys(envValues).map((key) => {
+      const d = manifestEnvDefs.find((m) => m.key === key);
+      return {
+        key,
+        default: envValues[key],
+        required: d?.required,
+        secret: d?.secret,
+        description: d?.description,
+      };
+    });
+    const overrides: Record<string, string> = {};
+    for (const v of extraEnv) if (v.key.trim()) overrides[v.key] = v.value;
+    const merged = mergeEnv([{ app: form.app_name || "app", defs }], overrides, existingKeys);
+    if (merged.requiredMissing.length > 0)
+      return showToast(`Required: ${merged.requiredMissing.map((m) => m.key).join(", ")}`, "error");
+    const envArray = merged.entries.length > 0 ? merged.entries : undefined;
 
     const body: DeployBody = {
       app_name: form.app_name,
@@ -497,6 +512,11 @@ export function DeployPage() {
     if (!stackPayload) return;
     if (stackForm.missingRequired.length > 0)
       return showToast(`Required: ${stackForm.missingRequired.join(", ")}`, "error");
+    if (stackForm.conflicts.length > 0)
+      return showToast(
+        `Env conflict: ${stackForm.conflicts.map((c) => c.key).join(", ")}`,
+        "error",
+      );
     setStackDeploying(true);
     (async () => {
       try {
@@ -655,6 +675,7 @@ export function DeployPage() {
                     manifestEnvDefs={manifestEnvDefs}
                     selectedEnvironmentId={selectedEnvironmentId}
                     onEnvironmentChange={setSelectedEnvironmentId}
+                    environments={environments}
                   />
                   <AdvancedSection
                     form={form}
@@ -683,12 +704,29 @@ export function DeployPage() {
               />
               <SummaryRow label="Branch" value={form.git_branch || stack.default_branch} />
             </div>
+            {stackForm.conflicts.length > 0 && (
+              <div className="border-t-2 border-fg/15 px-4 py-3 font-mono text-[10px] text-accent-red space-y-1">
+                <div className="font-bold uppercase tracking-wider">Env conflict</div>
+                {stackForm.conflicts.map((c) => (
+                  <div key={c.key} className="text-fg-dim">
+                    <span className="font-bold text-fg">{c.key}</span>: {c.values.join(" vs ")}
+                  </div>
+                ))}
+                <div className="text-muted">Give these apps the same value to resolve.</div>
+              </div>
+            )}
             {canStack ? (
               <button
                 type="button"
                 onClick={handleStackDeploy}
-                disabled={stackDeploying || stackForm.missingRequired.length > 0}
-                title={stackForm.missingRequired.length > 0 ? `Fill required: ${stackForm.missingRequired.join(", ")}` : undefined}
+                disabled={stackDeploying || stackForm.missingRequired.length > 0 || stackForm.conflicts.length > 0}
+                title={
+                  stackForm.missingRequired.length > 0
+                    ? `Fill required: ${stackForm.missingRequired.join(", ")}`
+                    : stackForm.conflicts.length > 0
+                      ? `Resolve env conflicts: ${stackForm.conflicts.map((c) => c.key).join(", ")}`
+                      : undefined
+                }
                 className="group w-full border-t-2 border-fg bg-accent hover:bg-accent-h active:bg-accent-h disabled:opacity-60 disabled:cursor-not-allowed py-4 flex items-center justify-center gap-2.5 font-mono text-sm font-bold uppercase tracking-[0.2em] text-fg transition-colors"
               >
                 {stackDeploying

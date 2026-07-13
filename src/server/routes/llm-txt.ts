@@ -194,7 +194,7 @@ A **stack** deploys several apps and managed services together from one compose-
 ## Semantics
 
 - **Ordering + readiness**: \`needs\` forms a dependency graph. Services deploy first, then apps in dependency order — an app only starts once everything it needs is deployed **and healthy** (deploys are health-gated). Dependency cycles are rejected.
-- **Wiring**: a stack owns one auto-created environment. Services inject their credentials into it; each app publishes its private internal URL as \`<KEY>_URL\` (the uppercased app key), so a dependent reaches a sibling without knowing its real name or DNS. An app with \`needs: ["api"]\` sees an \`API_URL\` env var.
+- **Wiring**: a stack owns one shared environment — auto-created, or an existing one reused via \`--env\` / the web panel's env picker (only when the stack is first created). Every member's own \`env[]\` vars are merged into it (see the env-merge rules under \`ocd stack up\`), services inject their credentials into it, and each app publishes its private internal URL as \`<KEY>_URL\` (the uppercased app key), so a dependent reaches a sibling without knowing its real name or DNS. An app with \`needs: ["api"]\` sees an \`API_URL\` env var.
 - **Reconcile**: \`ocd stack up\` redeploys every app in the manifest, and separately destroys members recorded under the stack but no longer listed.
 - **Atomic**: if any member fails, the whole run rolls back — members deployed in that run are destroyed.
 - **Capacity**: the fleet has a hard 200-app cap; a stack that would exceed it is rejected before anything deploys.
@@ -271,19 +271,28 @@ ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>] [--set=KEY=VALUE ...
 
 Run from inside a git repo with an \`origin\` remote. Reads the manifest (default: \`./.ocd-deploy.json\`) for the app name, build settings, port, env vars, webhook, volume, and scaling configuration, then streams deploy progress step by step until it completes or fails. \`--domain\` sets a custom domain.
 
-Env vars from the manifest's \`env[]\` section are included automatically: entries with a \`default\` are sent as-is, \`--set=KEY=VALUE\` (repeatable) overrides or adds values, and \`required\` vars still missing a value are prompted for interactively (hidden input when \`secret\`). In non-interactive shells, missing required vars fail the deploy with a message listing them; provide them via \`--set\`. Alternatively, \`--env\` links the app to an existing environment, which then supplies all variables (manifest env vars and \`--set\` are ignored).
+Env vars from the manifest's \`env[]\` section are included automatically: entries with a \`default\` are sent as-is, \`--set=KEY=VALUE\` (repeatable) overrides or adds values, and \`required\` vars still missing a value are prompted for interactively (hidden input when \`secret\`). In non-interactive shells, missing required vars fail the deploy with a message listing them; provide them via \`--set\`. \`--env\` links the app to an existing environment: the manifest's env vars are then **layered on top** of it — a value already present in the environment wins (the manifest default is skipped), keys the environment lacks are added, and \`--set\` overrides everything.
 
 ### ocd stack
 
 \`\`\`
-ocd stack up [manifest] [--set=<app>.KEY=VALUE ...]   Deploy a stack (default manifest: ocd-stack.json)
+ocd stack up [manifest] [--env=<name|id>] [--set=<app>.KEY=VALUE ...]   Deploy a stack (default manifest: ocd-stack.json)
 ocd stack down <name> [--yes]                         Destroy a stack and every member
 ocd stack ls                                           List stacks
 ocd stack status <name>                                Show a stack's apps and services
 ocd stack logs <name>                                  Print a stack's combined deploy log
 \`\`\`
 
-\`ocd stack up\` reads \`ocd-stack.json\` and each referenced \`.ocd-deploy.json\`, collects env vars per app (manifest defaults are sent as-is; \`--set=<app>.KEY=VALUE\` targets one app while \`--set=KEY=VALUE\` is a fallback for any app declaring KEY; required vars still missing are prompted for), then deploys the whole stack in dependency order and streams progress. Run it from inside the git repo whose \`origin\` remote holds the apps. Re-running it reconciles: apps in the manifest are redeployed, members dropped from the manifest are destroyed. See "The ocd-stack.json manifest" above for the format and wiring semantics.
+\`ocd stack up\` reads \`ocd-stack.json\` and each referenced \`.ocd-deploy.json\`, then deploys the whole stack in dependency order and streams progress. Run it from inside the git repo whose \`origin\` remote holds the apps. Re-running it reconciles: apps in the manifest are redeployed, members dropped from the manifest are destroyed. See "The ocd-stack.json manifest" above for the format and wiring semantics.
+
+Because every member shares one environment, env vars from all the apps' \`env[]\` sections are **merged into that single shared environment** rather than collected per app:
+
+- Where only one app declares a key (or only one supplies a non-empty default), that value is used.
+- Where several apps declare the same key with **different** defaults, the deploy is refused — unless a \`--set\` or an existing env var resolves it.
+- \`--set=KEY=VALUE\` (and \`--set=<app>.KEY=VALUE\`, which also targets the shared key) overrides everything; \`--env=<name|id>\` reuses an existing environment whose values win over manifest defaults (\`--set\` still overrides). Precedence: \`--set\` > existing env var > manifest default.
+- \`required\` vars still missing a value after merging are prompted for once.
+
+\`--env\` is only honored when the stack is first created; on later re-ups the stack keeps the environment it already owns.
 
 ### ocd envs
 

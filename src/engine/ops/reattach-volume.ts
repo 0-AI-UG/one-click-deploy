@@ -110,22 +110,26 @@ const detachFromSource: Step<ReattachVolumeInput, { ok: true }> = {
   async compensate(ctx, _out, prior) {
     const v = prior["validate"] as ValidateOut | undefined;
     if (!v) return;
-    // Roll the volume back onto the source app.
-    try {
-      await hetzner.volumes.attach(ctx.input.volumeId, v.fromProviderServerId);
-      await ensureBindMount({
-        serverIp: v.fromServerIp,
-        hostKey: v.fromHostKey,
-        volumeId: ctx.input.volumeId,
-        hostMountPath: v.fromHostMountPath,
-        appId: ctx.input.fromAppId,
-      });
-      db.updateAppVolume(ctx.input.fromAppId, ctx.input.volumeId, v.fromVolumeMount);
-      await recreateAppContainer(ctx.input.fromAppId, v.fromVolumeMount, db.parseExtraVolumes(v.fromExtraVolumes));
-      ctx.log(`Re-attached volume ${ctx.input.volumeId} to source app ${ctx.input.fromAppId}`);
-    } catch (err) {
-      ctx.log(`MANUAL RECOVERY NEEDED: re-attach to source failed: ${err}`);
-    }
+    // Roll the volume back onto the source app. Do NOT swallow failures here:
+    // this is a RESTORE — if the volume can't be re-attached, or the source
+    // container can't be brought back, the source app is left broken with its
+    // volume stranded on the target. That must surface as `compensation_failed`
+    // (reconciler retries, operators see it), not be hidden behind a clean
+    // `compensated` under a "MANUAL RECOVERY NEEDED" log line. probeCompensated
+    // short-circuits this step once the volume is back on source, so re-running
+    // after a partial restore is safe/idempotent.
+    await hetzner.volumes.attach(ctx.input.volumeId, v.fromProviderServerId);
+    await ensureBindMount({
+      serverIp: v.fromServerIp,
+      hostKey: v.fromHostKey,
+      volumeId: ctx.input.volumeId,
+      hostMountPath: v.fromHostMountPath,
+      appId: ctx.input.fromAppId,
+    });
+    db.updateAppVolume(ctx.input.fromAppId, ctx.input.volumeId, v.fromVolumeMount);
+    const result = await recreateAppContainer(ctx.input.fromAppId, v.fromVolumeMount, db.parseExtraVolumes(v.fromExtraVolumes));
+    if (!result.ok) throw new Error(result.error || "Failed to recreate source container during reattach rollback");
+    ctx.log(`Re-attached volume ${ctx.input.volumeId} to source app ${ctx.input.fromAppId}`);
   },
   async probeCompensated(ctx, _out, prior) {
     const v = prior["validate"] as ValidateOut | undefined;

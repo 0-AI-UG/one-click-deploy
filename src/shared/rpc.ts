@@ -233,6 +233,8 @@ export type StackManifest = {
 
 export type StackDeployRequest = {
   name: string;
+  environment_id?: number; // Reuse an existing environment instead of auto-creating one (only honored when the stack is first created)
+  env_vars?: Array<{ key: string; value: string; secret?: boolean }>; // Already-merged member env (manifest defaults + --set), written into the shared environment
   services: Array<{ key: string; type: string; version?: string; volume_size?: number;
                     env_overrides?: Record<string, string>; needs?: string[] }>;
   apps: Array<Omit<DeployRequest, "environment_id"> & { key: string; needs?: string[] }>;

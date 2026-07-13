@@ -176,31 +176,43 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
     try { db.updateAppStatus(target.appId, target.previousStatus); } catch (err) {
       ctx.log(`Failed to restore previous status: ${err}`);
     }
-    // Best-effort: restart the prior container image if we captured one.
+    // Restore the prior container image if we captured one. This is a RESTORE
+    // (bring the app back to its pre-rollback serving state), so do NOT swallow
+    // failures: if the restart throws or the restored container comes back
+    // unhealthy the app is left dead, and that must surface as
+    // `compensation_failed` (reconciler retries, operators see it) rather than
+    // hide behind a clean `compensated`. startAppReplica removes any stale
+    // same-named container first, so re-running the compensate is safe.
     const snap = out?.priorSnapshot;
     if (!snap) return;
-    try {
-      const app = db.getApp(target.appId);
-      const server = db.getServer(target.serverId);
-      if (!app || !server) return;
-      const hostKey = server.ssh_host_key || undefined;
-      await startAppReplica(server.ipv4, {
-        containerName: app.name,
-        image: snap.image,
-        appName: app.name,
-        network: null,
-        bindAddr: snap.bindAddr,
-        hostPort: snap.hostPort,
-        containerPort: snap.containerPort,
-        envFilePath: snap.envFilePath || undefined,
-        volumeMount: snap.volumeMount || undefined,
-        extraVolumes: snap.extraVolumes,
-        memoryMb: app.memory_mb || undefined,
-        cpus: app.cpu_limit || undefined,
-      }, hostKey);
-      ctx.log(`Restored prior container image ${snap.image}`);
-    } catch (err) {
-      ctx.log(`Failed to restore prior container: ${err}`);
+    const app = db.getApp(target.appId);
+    const server = db.getServer(target.serverId);
+    if (!app || !server) return;
+    const hostKey = server.ssh_host_key || undefined;
+    await startAppReplica(server.ipv4, {
+      containerName: app.name,
+      image: snap.image,
+      appName: app.name,
+      network: null,
+      bindAddr: snap.bindAddr,
+      hostPort: snap.hostPort,
+      containerPort: snap.containerPort,
+      envFilePath: snap.envFilePath || undefined,
+      volumeMount: snap.volumeMount || undefined,
+      extraVolumes: snap.extraVolumes,
+      memoryMb: app.memory_mb || undefined,
+      cpus: app.cpu_limit || undefined,
+    }, hostKey);
+    const health = await probeAppHealth(app, server.ipv4, app.name, snap.bindAddr, snap.hostPort, 5, hostKey);
+    const replicas = db.getReplicas(target.appId);
+    const first = replicas[0];
+    if (first) db.updateReplicaStatus(first.id, health.healthy ? "running" : "unhealthy");
+    db.updateAppStatus(target.appId, health.healthy ? "running" : "unhealthy");
+    ctx.log(`Restored prior container image ${snap.image} (healthy=${health.healthy})`);
+    // An `inconclusive` probe (couldn't reach the host over SSH) is not proof
+    // of failure, so don't escalate on that alone.
+    if (!health.healthy && !health.inconclusive) {
+      throw new Error(`Rollback restored the previous container for ${app.name} but it is unhealthy`);
     }
   },
 };

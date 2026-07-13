@@ -3,6 +3,36 @@ import { execSync } from "node:child_process";
 import { BOLD, DIM, RED, RESET } from "./format.ts";
 import { promptLine, promptHidden } from "./prompt.ts";
 import type { DeployManifest } from "../shared/rpc.ts";
+import type { RequiredMissing } from "../shared/env-merge.ts";
+
+/**
+ * Prompt (grouped) for required env vars that the merge could not fill from a
+ * default, a --set, or an existing environment. Non-TTY → hard error listing
+ * the missing keys. Returns concrete entries to append to the deploy env.
+ */
+export async function promptRequired(
+  missing: RequiredMissing[],
+  header = "Required environment variables",
+): Promise<Array<{ key: string; value: string; secret: boolean }>> {
+  if (missing.length === 0) return [];
+  if (!process.stdin.isTTY) {
+    console.error(`${RED}Missing required env vars: ${missing.map((e) => e.key).join(", ")}${RESET}`);
+    console.error(`Provide them with --set=KEY=VALUE or link an environment with --env=<name|id>.`);
+    process.exit(1);
+  }
+  console.log(`\n${BOLD}${header}${RESET}`);
+  const out: Array<{ key: string; value: string; secret: boolean }> = [];
+  for (const entry of missing) {
+    const hint = entry.description ? ` ${DIM}(${entry.description})${RESET}` : "";
+    const question = `  ${entry.key}${hint}: `;
+    let value = "";
+    while (!value) {
+      value = entry.secret ? await promptHidden(question) : await promptLine(question);
+    }
+    out.push({ key: entry.key, value, secret: entry.secret });
+  }
+  return out;
+}
 
 /** Derive the app's git repo URL from the current directory's `origin` remote. */
 export function getGitRepo(): string {

@@ -3,10 +3,13 @@ import {
   Box, Database, Globe, Lock, ArrowRight, ChevronDown, ChevronRight,
   Settings2, Plus, X,
 } from "lucide-react";
+import { get } from "../../api/client.ts";
+import { mergeEnv, type AppEnvDefs } from "../../../../shared/env-merge.ts";
+import { NeoSelect } from "../../components/neo-select.tsx";
 import { StackAppOptions } from "./stack-app-options.tsx";
 import type { StackPayload } from "./types.ts";
 import type {
-  StackAppSpec, StackServiceSpec, StackEnvDef, StackDeployBody,
+  StackAppSpec, StackServiceSpec, StackEnvDef, StackDeployBody, EnvironmentData,
 } from "../../types.ts";
 
 // Per-app env values: appKey -> (envKey -> value)
@@ -28,6 +31,13 @@ export function useStackForm(stack: StackPayload | null, branch: string) {
   const [services, setServices] = useState<StackServiceSpec[]>([]);
   const [env, setEnv] = useState<EnvState>({});
   const [openApp, setOpenApp] = useState<Set<string>>(new Set());
+  // null = auto-create a fresh environment; a number = reuse that environment.
+  const [environmentId, setEnvironmentId] = useState<number | null>(null);
+  const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
+
+  useEffect(() => {
+    get("/api/environments").then(setEnvironments).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!stack) {
@@ -77,6 +87,30 @@ export function useStackForm(stack: StackPayload | null, branch: string) {
     return miss;
   }, [specs, envDefsByKey, env]);
 
+  // Unified env merge across all members. Each app's current input value acts as
+  // that app's effective default, so two apps agreeing merge and disagreeing
+  // conflict. Keys already covered by the reused environment are dropped from
+  // `entries`. `conflicts` block the deploy in the parent page.
+  const merged = useMemo(() => {
+    const existingKeys = new Set<string>(
+      (environmentId != null
+        ? environments.find((e) => e.id === environmentId)?.env_vars ?? []
+        : []
+      ).map((v) => v.key),
+    );
+    const appDefs: AppEnvDefs[] = specs.map((spec) => ({
+      app: spec.key,
+      defs: (envDefsByKey.get(spec.key) ?? []).map((d) => ({
+        key: d.key,
+        default: env[spec.key]?.[d.key] ?? d.default,
+        required: d.required,
+        secret: d.secret,
+        description: d.description,
+      })),
+    }));
+    return mergeEnv(appDefs, {}, existingKeys);
+  }, [specs, env, envDefsByKey, environmentId, environments]);
+
   const setEnvValue = (appKey: string, envKey: string, value: string) =>
     setEnv((s) => ({ ...s, [appKey]: { ...(s[appKey] || {}), [envKey]: value } }));
 
@@ -95,27 +129,30 @@ export function useStackForm(stack: StackPayload | null, branch: string) {
 
   const buildBody = (): StackDeployBody => {
     const apps: StackDeployBody["apps"] = specs.map((spec) => {
-      const defs = envDefsByKey.get(spec.key) ?? [];
-      const vals = env[spec.key] || {};
-      const env_vars = defs
-        .map((d) => ({ key: d.key, value: (vals[d.key] ?? "").trim(), secret: d.secret }))
-        .filter((e) => e.value !== "");
-      // Prune empty extra-volume rows before sending.
+      // Prune empty extra-volume rows before sending. Per-app env is no longer
+      // sent — the stack's shared environment owns env now (see `merged`).
+      const { env_vars: _drop, ...rest } = spec;
       const extra_volumes = spec.extra_volumes?.filter((v) => v.host_path && v.container_path);
       return {
-        ...spec,
+        ...rest,
         git_branch: branch || undefined,
         extra_volumes: extra_volumes && extra_volumes.length > 0 ? extra_volumes : undefined,
-        env_vars: env_vars.length > 0 ? env_vars : undefined,
       };
     });
-    return { name: stack?.name ?? "", services, apps };
+    return {
+      name: stack?.name ?? "",
+      environment_id: environmentId ?? undefined,
+      env_vars: merged.entries.length ? merged.entries : undefined,
+      services,
+      apps,
+    };
   };
 
   return {
-    specs, services, env, openApp,
+    specs, services, env, openApp, environmentId, environments,
     envDefsByKey, manifestPathByKey, allKeys, missingRequired,
-    setEnvValue, patchSpec, patchService, toggleApp, buildBody,
+    conflicts: merged.conflicts,
+    setEnvValue, patchSpec, patchService, toggleApp, setEnvironmentId, buildBody,
   };
 }
 
@@ -168,13 +205,36 @@ function ServiceRow({ svc, onChange }: { svc: StackServiceSpec; onChange: (patch
 // a compact card with its required env inline and full options behind a toggle.
 export function StackSection({ form }: { form: StackForm }) {
   const {
-    specs, services, env, openApp,
+    specs, services, env, openApp, environmentId, environments,
     envDefsByKey, manifestPathByKey, allKeys,
-    setEnvValue, patchSpec, patchService, toggleApp,
+    setEnvValue, patchSpec, patchService, toggleApp, setEnvironmentId,
   } = form;
 
   return (
     <div className="p-5 space-y-5">
+      {/* Environment */}
+      {environments.length > 0 && (
+        <div>
+          <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-2">Environment</div>
+          <NeoSelect
+            value={environmentId != null ? String(environmentId) : "new"}
+            onChange={(v) => setEnvironmentId(v === "new" ? null : parseInt(v))}
+            options={[
+              { value: "new", label: "Create new environment" },
+              ...environments.map((e) => ({
+                value: String(e.id),
+                label: `${e.name} (${e.env_vars.length} var${e.env_vars.length !== 1 ? "s" : ""})`,
+              })),
+            ]}
+          />
+          <p className="font-mono text-[9px] text-muted mt-1.5">
+            {environmentId != null
+              ? "Reusing this environment. The stack layers its service creds and <KEY>_URL vars on top."
+              : "A fresh environment is created and owned by this stack."}
+          </p>
+        </div>
+      )}
+
       {/* Services */}
       {services.length > 0 && (
         <div>

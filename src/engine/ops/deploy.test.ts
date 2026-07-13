@@ -679,6 +679,30 @@ describe("deploy: private apps", () => {
     expect(app.internal_port).toBeGreaterThanOrEqual(db.INTERNAL_PORT_BASE);
   });
 
+  test("insert_app_row layers env_vars on top of a linked environment (existing wins, new keys added)", async () => {
+    const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
+    const server = makeReadyServer();
+    const linked = db.insertEnvironment(
+      `linked-${randomSuffix()}`,
+      serializeEnvVars([{ key: "KEEP", value: "orig", secret: false, updated_at: "t" }]),
+    );
+    const step = stepByName("insert_app_row");
+    // KEEP already lives in the env (should persist); ADDED is new (should land).
+    const { ctx } = makeCtx({
+      app_name: `link-${randomSuffix()}`,
+      git_repo: "https://github.com/x/y",
+      container_port: 3000,
+      public: false,
+      environment_id: linked.id,
+      env_vars: [{ key: "ADDED", value: "new", secret: false }],
+    });
+    const out = (await step.run(ctx, serverPrior(server))) as { environmentId: number };
+    expect(out.environmentId).toBe(linked.id);
+    const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
+    const flat = await resolveEnvVarsForDeploy(db.getEnvironment(linked.id)!.env_vars);
+    expect(flat).toEqual({ KEEP: "orig", ADDED: "new" });
+  });
+
   test("finalize_deploy sets desired_replicas for private apps with replicas > 1", async () => {
     const name = `priv-${randomSuffix()}`;
     const app = db.insertApp({

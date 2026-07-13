@@ -53,13 +53,13 @@
       "type": "terminal",
       "title": "Claude Code 2"
     },
-    "f49bcefa-c3e6-4338-8ad7-c4df6cf1954d": {
-      "type": "terminal",
-      "title": "Claude Code 3"
-    },
     "bc4bbf2c-03fb-4591-9eb0-79810bc4538a": {
       "type": "terminal",
       "title": "Claude Code 4"
+    },
+    "28c381f4-bc50-467e-800d-1c73de0e1416": {
+      "type": "terminal",
+      "title": "Terminal 1"
     },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
@@ -79,9 +79,9 @@
           },
           "size": {
             "width": 640,
-            "height": 590.5
+            "height": 780
           },
-          "zOrder": 492,
+          "zOrder": 513,
           "creationIndex": 0,
           "animationState": "idle",
           "dockLayout": {
@@ -116,29 +116,6 @@
             "activeIndex": 0
           }
         },
-        "2740fa3c-e45c-4610-9dbe-385616f78ede": {
-          "id": "2740fa3c-e45c-4610-9dbe-385616f78ede",
-          "panelId": "f49bcefa-c3e6-4338-8ad7-c4df6cf1954d",
-          "origin": {
-            "x": -40,
-            "y": 800
-          },
-          "size": {
-            "width": 640,
-            "height": 400
-          },
-          "zOrder": 482,
-          "creationIndex": 2,
-          "animationState": "idle",
-          "dockLayout": {
-            "type": "tabs",
-            "id": "4d975f7f-27aa-4f42-ac3e-3e6e483f10e4",
-            "panelIds": [
-              "f49bcefa-c3e6-4338-8ad7-c4df6cf1954d"
-            ],
-            "activeIndex": 0
-          }
-        },
         "39928835-5815-4937-99b5-f8ea5c2b8cf5": {
           "id": "39928835-5815-4937-99b5-f8ea5c2b8cf5",
           "panelId": "bc4bbf2c-03fb-4591-9eb0-79810bc4538a",
@@ -148,9 +125,9 @@
           },
           "size": {
             "width": 640,
-            "height": 580
+            "height": 640
           },
-          "zOrder": 493,
+          "zOrder": 518,
           "creationIndex": 3,
           "animationState": "idle",
           "dockLayout": {
@@ -161,12 +138,35 @@
             ],
             "activeIndex": 0
           }
+        },
+        "f0bdb9a0-0451-46ea-846a-aa2c710ece02": {
+          "id": "f0bdb9a0-0451-46ea-846a-aa2c710ece02",
+          "panelId": "28c381f4-bc50-467e-800d-1c73de0e1416",
+          "origin": {
+            "x": 1340,
+            "y": 600
+          },
+          "size": {
+            "width": 640,
+            "height": 640
+          },
+          "zOrder": 517,
+          "creationIndex": 4,
+          "animationState": "idle",
+          "dockLayout": {
+            "type": "tabs",
+            "id": "54cc4209-4a0d-46d0-a66c-51a0bc25bf2b",
+            "panelIds": [
+              "28c381f4-bc50-467e-800d-1c73de0e1416"
+            ],
+            "activeIndex": 0
+          }
         }
       },
-      "zoomLevel": 0.8825399692274654,
+      "zoomLevel": 1.0374132809090293,
       "viewportOffset": {
-        "x": -457.74601033799354,
-        "y": -466.0057416039392
+        "x": -612.6060463089887,
+        "y": -724.920218436307
       }
     }
   }

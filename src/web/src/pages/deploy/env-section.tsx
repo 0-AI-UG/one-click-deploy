@@ -1,5 +1,3 @@
-import { useState, useEffect } from "react";
-import { get } from "../../api/client.ts";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import type { ManifestEnvDef } from "./types.ts";
 import type { EnvironmentData } from "../../types.ts";
@@ -10,17 +8,15 @@ type Props = {
   manifestEnvDefs: ManifestEnvDef[];
   selectedEnvironmentId: number | null;
   onEnvironmentChange: (id: number | null) => void;
+  environments: EnvironmentData[];
 };
 
-export function EnvSection({ envValues, setEnvValues, manifestEnvDefs, selectedEnvironmentId, onEnvironmentChange }: Props) {
-  const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
-
-  useEffect(() => {
-    get("/api/environments").then(setEnvironments).catch(() => {});
-  }, []);
-
+export function EnvSection({ envValues, setEnvValues, manifestEnvDefs, selectedEnvironmentId, onEnvironmentChange, environments }: Props) {
   const envKeys = Object.keys(envValues);
-  const showEnvInputs = !selectedEnvironmentId && envKeys.length > 0;
+  // Manifest/detected inputs stay visible even with an environment selected: the
+  // merge drops keys the environment already defines, so these are additive —
+  // they let the user supply vars the environment doesn't have.
+  const showEnvInputs = envKeys.length > 0;
   const selectedEnv = environments.find((e) => e.id === selectedEnvironmentId);
 
   return (

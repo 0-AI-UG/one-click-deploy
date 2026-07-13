@@ -1,5 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { hetzner } from "../../shared/providers/index.ts";
+import { isNotFoundError } from "../../shared/providers/errors.ts";
 import {
   sshExec,
   pullAndRunService,
@@ -217,12 +218,30 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
   },
   async compensate(ctx, out) {
     if (!out || out.skipped) return;
+    const compute = hetzner;
+    // Detach is best-effort (may already be detached) and must not mask the
+    // delete. Let a genuine delete failure PROPAGATE — orphaning the created
+    // cloud volume behind a clean `compensated` is a silent leak.
+    // probeCompensated short-circuits once the volume is gone, so retries stay
+    // idempotent.
+    try { await compute.volumes?.detach(out.volumeId); } catch { /* already detached */ }
     try {
-      const compute = hetzner;
-      try { await compute.volumes?.detach(out.volumeId); } catch { /* already detached */ }
       await compute.volumes?.delete(out.volumeId);
     } catch (err) {
-      ctx.log(`Failed to delete volume ${out.volumeId}: ${err}`);
+      if (!isNotFoundError(err)) throw err; // already gone = success; else surface
+    }
+  },
+  async probeCompensated(_ctx, out) {
+    if (!out || out.skipped) return true;
+    const compute = hetzner;
+    if (!compute.volumes) return true;
+    try {
+      await compute.volumes.get(out.volumeId);
+      return false;
+    } catch (err) {
+      // Only a definitive not-found means "already deleted"; a transient error
+      // must fall through to run the delete rather than leak the volume.
+      return isNotFoundError(err);
     }
   },
 };
@@ -311,10 +330,11 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
   },
   async compensate(ctx, out) {
     if (!out) return;
-    try { db.deleteServiceInstance(out.instanceId); }
-    catch (err) { ctx.log(`Failed to delete service instance: ${err}`); }
-    try { db.deleteService(out.serviceId); }
-    catch (err) { ctx.log(`Failed to delete service row: ${err}`); }
+    // DB teardown of the half-registered service. Deleting an already-gone row
+    // is a no-op (so retry is safe); let a genuine failure PROPAGATE rather
+    // than orphan the service/instance rows behind a clean `compensated`.
+    db.deleteServiceInstance(out.instanceId);
+    db.deleteService(out.serviceId);
   },
 };
 
@@ -397,14 +417,19 @@ const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
     if (!server || !svc) return;
-    try {
-      await sshExec(
-        server.serverIp,
-        `su - deploy -c "docker rm -f ${svc.containerName} 2>/dev/null || true"`,
-        server.serverHostKey || undefined,
-      );
-    } catch (err) {
-      ctx.log(`Failed to remove container ${svc.containerName}: ${err}`);
+    // `docker rm -f ... || true` tolerates an already-removed container
+    // (idempotent), so the remote command exits 0 for docker's own errors. A
+    // nonzero exit here is therefore an SSH transport failure — i.e. we could
+    // NOT reach the host to remove the container. Surface that as
+    // `compensation_failed` instead of leaving the container leaked behind a
+    // clean `compensated`.
+    const r = await sshExec(
+      server.serverIp,
+      `su - deploy -c "docker rm -f ${svc.containerName} 2>/dev/null || true"`,
+      server.serverHostKey || undefined,
+    );
+    if (r.exitCode !== 0) {
+      throw new Error(`Could not reach ${server.serverIp} over SSH to remove container ${svc.containerName} (ssh exit ${r.exitCode})`);
     }
   },
 };

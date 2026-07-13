@@ -303,6 +303,10 @@ export type StackAppResolved = {
 
 export type StackDeployBody = {
   name: string;
+  environment_id?: number; // Reuse an existing environment instead of auto-creating one
+  // Stack-level shared env (already merged across all members) written into the
+  // stack's environment. Members no longer carry per-app env_vars.
+  env_vars?: Array<{ key: string; value: string; secret: boolean }>;
   services: StackServiceSpec[];
   apps: StackAppSpec[];
 };

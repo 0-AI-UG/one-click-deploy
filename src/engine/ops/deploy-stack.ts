@@ -7,6 +7,7 @@ import {
 import {
   parseEnvVars,
   serializeEnvVars,
+  processIncomingEnvVars,
   platformEnvVars,
   type EnvVarEntry,
 } from "../../shared/env-crypto.ts";
@@ -23,6 +24,10 @@ type PlanOut = {
   environmentId: number;
   levels: string[][];
   createdStack: boolean;
+  // True only when this run minted a fresh environment. A reused (pre-existing)
+  // environment must survive rollback, so compensation keys off this, not
+  // createdStack.
+  createdEnv: boolean;
 };
 
 type EnqueueChildrenOut = { childIds: number[] };
@@ -132,29 +137,69 @@ const plan: Step<DeployStackInput, PlanOut> = {
     }
 
     // Idempotent upsert: reuse an existing stack (resume) or create it + env.
+    let stackId: number;
+    let envId: number;
+    let createdStack: boolean;
+    let createdEnv: boolean;
     const existing = db.getStackByName(req.name);
     if (existing) {
-      const envId = existing.environment_id;
-      if (!envId) throw new Error(`Stack "${req.name}" has no environment`);
+      if (!existing.environment_id) throw new Error(`Stack "${req.name}" has no environment`);
+      stackId = existing.id;
+      envId = existing.environment_id;
+      createdStack = false;
+      createdEnv = false;
       ctx.log(`reusing existing stack #${existing.id} (env ${envId})`);
-      return { stackId: existing.id, environmentId: envId, levels, createdStack: false };
+    } else {
+      // First-time creation. If the caller named an existing environment, attach
+      // it (additive: the stack layers its members' env, <KEY>_URL and service
+      // creds on top of whatever it already holds) instead of minting a fresh one.
+      if (req.environment_id != null) {
+        const env = db.getEnvironment(req.environment_id);
+        if (!env) throw new Error(`Environment ${req.environment_id} not found`);
+        envId = env.id;
+        createdEnv = false;
+        ctx.log(`reusing existing environment "${env.name}" (${env.id})`);
+      } else {
+        let envName = `${req.name}-stack-env`;
+        let suffix = 1;
+        while (db.getEnvironments().find((e) => e.name === envName)) {
+          envName = `${req.name}-stack-env-${suffix++}`;
+        }
+        const env = db.insertEnvironment(envName, "");
+        envId = env.id;
+        createdEnv = true;
+        ctx.log(`created environment "${envName}" (${env.id})`);
+      }
+      const stack = db.insertStack({ name: req.name, environment_id: envId });
+      stackId = stack.id;
+      createdStack = true;
+      ctx.log(`created stack #${stack.id} (env ${envId})`);
     }
 
-    let envName = `${req.name}-stack-env`;
-    let suffix = 1;
-    while (db.getEnvironments().find((e) => e.name === envName)) {
-      envName = `${req.name}-stack-env-${suffix++}`;
+    // Write the caller's already-merged member env (manifest defaults + --set,
+    // conflict-checked and existing-wins-filtered client-side) into the shared
+    // environment. Overlay by key; runs every deploy so re-ups reconcile env.
+    if (req.env_vars && req.env_vars.length > 0) {
+      const incoming = (await processIncomingEnvVars(req.env_vars)).entries;
+      const envRow = db.getEnvironment(envId)!;
+      const overlaid = new Set(incoming.map((e) => e.key));
+      const base = parseEnvVars(envRow.env_vars).entries.filter((e) => !overlaid.has(e.key));
+      db.updateEnvironment(envId, envRow.name, serializeEnvVars([...base, ...incoming]));
+      ctx.log(`applied ${incoming.length} stack env var(s)`);
     }
-    const env = db.insertEnvironment(envName, "");
-    const stack = db.insertStack({ name: req.name, environment_id: env.id });
-    ctx.log(`created stack #${stack.id} with environment "${envName}" (${env.id})`);
-    db.appendStackLog(stack.id, `[plan] ${req.services.length} service(s), ${req.apps.length} app(s), ${levels.length} level(s)`);
-    return { stackId: stack.id, environmentId: env.id, levels, createdStack: true };
+
+    db.appendStackLog(stackId, `[plan] ${req.services.length} service(s), ${req.apps.length} app(s), ${levels.length} level(s)`);
+    return { stackId, environmentId: envId, levels, createdStack, createdEnv };
   },
   async compensate(ctx, out) {
     if (!out || !out.createdStack) return;
-    try { db.deleteStack(out.stackId); } catch (err) { ctx.log(`deleteStack failed: ${err}`); }
-    try { db.deleteEnvironment(out.environmentId); } catch (err) { ctx.log(`deleteEnvironment failed: ${err}`); }
+    // DB teardown of the stack + environment created this run. Deleting an
+    // already-gone row is a no-op (so retry is safe); let a genuine failure
+    // PROPAGATE rather than orphan the stack/env rows behind a clean
+    // `compensated`. A reused environment is left in place — we didn't create
+    // it, so we don't destroy it.
+    db.deleteStack(out.stackId);
+    if (out.createdEnv) db.deleteEnvironment(out.environmentId);
   },
 };
 
@@ -258,7 +303,9 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
             idempotencyKey: idk,
           });
         } else {
-          const { key: _k, needs: _n, ...deployFields } = appReq;
+          // Drop per-app env_vars: the stack merged them into the shared env in
+          // `plan` (with conflict checks), so members deploy against it directly.
+          const { key: _k, needs: _n, env_vars: _e, ...deployFields } = appReq;
           row = enqueueOperation({
             kind: "deploy",
             resourceKeys: [`app:create:${name}`],

@@ -1,5 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { hetzner } from "../../shared/providers/index.ts";
+import { isNotFoundError } from "../../shared/providers/errors.ts";
 import {
   getOrCreateLocalKeyPair,
   waitForServer,
@@ -76,11 +77,10 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
   },
   async compensate(ctx, out) {
     if (!out) return;
-    try {
-      db.deleteServer(out.serverId);
-    } catch (err) {
-      ctx.log(`deleteServer(${out.serverId}) failed: ${err}`);
-    }
+    // Delete of an already-gone row is a no-op (so retry is safe); let a
+    // genuine failure PROPAGATE rather than orphan the placeholder server row
+    // behind a clean `compensated`.
+    db.deleteServer(out.serverId);
   },
 };
 
@@ -129,11 +129,26 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
   },
   async compensate(ctx, out) {
     if (!out?.providerId) return;
+    // Deleting the cloud server is a real teardown — swallowing a failure would
+    // leak a billable Hetzner server behind a clean `compensated`. Delete is
+    // idempotent (an already-gone server is success), but any other failure
+    // must PROPAGATE so it surfaces as `compensation_failed`.
     try {
-      const compute = hetzner;
-      await compute.deleteServer(out.providerId);
+      await hetzner.deleteServer(out.providerId);
     } catch (err) {
-      ctx.log(`compute.deleteServer(${out.providerId}) failed (tolerating): ${err}`);
+      if (!isNotFoundError(err)) throw err;
+    }
+  },
+  async probeCompensated(_ctx, out) {
+    if (!out?.providerId) return true;
+    try {
+      await hetzner.getServer(out.providerId);
+      return false; // still exists — compensate must run
+    } catch (err) {
+      // Only a definitive not-found means "already deleted". A transient error
+      // (5xx / rate-limit / network) must NOT skip the delete, or we'd leak the
+      // server — fall through to run compensate, which tolerates not-found.
+      return isNotFoundError(err);
     }
   },
 };

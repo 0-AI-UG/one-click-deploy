@@ -114,4 +114,70 @@ describe("deploy_stack plan step", () => {
     expect(second.createdStack).toBe(false);
     expect(second.stackId).toBe(first.stackId);
   });
+
+  test("reuses a caller-supplied environment instead of creating a fresh one", async () => {
+    const existing = db.insertEnvironment(`shared-${randomSuffix()}`, "");
+    const name = `s-${randomSuffix()}`;
+    const input = { ...req(name, [app("web")]), environment_id: existing.id };
+    const ctx = makeCtx(input);
+    const out = (await planStep.run(ctx, {})) as {
+      environmentId: number; createdStack: boolean; createdEnv: boolean;
+    };
+    expect(out.environmentId).toBe(existing.id);
+    expect(out.createdStack).toBe(true);
+    expect(out.createdEnv).toBe(false);
+    expect(db.getStackByName(name)!.environment_id).toBe(existing.id);
+  });
+
+  test("writes the merged stack env_vars into the shared environment", async () => {
+    const name = `s-${randomSuffix()}`;
+    const input = {
+      ...req(name, [app("web")]),
+      env_vars: [{ key: "SHARED", value: "v1", secret: false }],
+    } as StackDeployRequest;
+    const out = (await planStep.run(makeCtx(input), {})) as { environmentId: number };
+    const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
+    const flat = await resolveEnvVarsForDeploy(db.getEnvironment(out.environmentId)!.env_vars);
+    expect(flat.SHARED).toBe("v1");
+  });
+
+  test("stack env_vars overlay a reused environment without dropping its other keys", async () => {
+    const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
+    const existing = db.insertEnvironment(
+      `shared-${randomSuffix()}`,
+      serializeEnvVars([{ key: "KEEP", value: "orig", secret: false, updated_at: "t" }]),
+    );
+    const name = `s-${randomSuffix()}`;
+    const input = {
+      ...req(name, [app("web")]),
+      environment_id: existing.id,
+      env_vars: [{ key: "ADDED", value: "new", secret: false }],
+    } as StackDeployRequest;
+    await planStep.run(makeCtx(input), {});
+    const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
+    const flat = await resolveEnvVarsForDeploy(db.getEnvironment(existing.id)!.env_vars);
+    expect(flat).toEqual({ KEEP: "orig", ADDED: "new" });
+  });
+
+  test("rejects a reuse of a non-existent environment", async () => {
+    const input = { ...req(`s-${randomSuffix()}`, [app("web")]), environment_id: 999999 };
+    await expect(planStep.run(makeCtx(input), {})).rejects.toThrow(/not found/i);
+  });
+
+  test("compensation preserves a reused environment but destroys a self-created one", async () => {
+    const existing = db.insertEnvironment(`shared-${randomSuffix()}`, "");
+    // Reuse: env must survive rollback.
+    const reuseInput = { ...req(`s-${randomSuffix()}`, [app("web")]), environment_id: existing.id };
+    const reuseOut = (await planStep.run(makeCtx(reuseInput), {})) as any;
+    await planStep.compensate!(makeCtx(reuseInput), reuseOut, {});
+    expect(db.getEnvironment(existing.id)).not.toBeNull();
+    expect(db.getStackByName(reuseInput.name)).toBeNull();
+
+    // Auto-created: env is torn down with the stack.
+    const freshInput = req(`s-${randomSuffix()}`, [app("web")]);
+    const freshOut = (await planStep.run(makeCtx(freshInput), {})) as any;
+    await planStep.compensate!(makeCtx(freshInput), freshOut, {});
+    expect(db.getEnvironment(freshOut.environmentId)).toBeNull();
+    expect(db.getStackByName(freshInput.name)).toBeNull();
+  });
 });

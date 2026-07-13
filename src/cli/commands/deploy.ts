@@ -2,12 +2,14 @@ import { resolve } from "node:path";
 import { get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
-import { getGitRepo, readManifest, collectEnvVars } from "../manifest.ts";
+import { getGitRepo, readManifest, promptRequired } from "../manifest.ts";
+import { mergeEnv } from "../../shared/env-merge.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
 
 interface Environment {
   id: number;
   name: string;
+  env_vars?: Array<{ key: string }>;
 }
 
 async function resolveEnvironment(nameOrId: string): Promise<Environment> {
@@ -141,16 +143,19 @@ ${BOLD}Options:${RESET}
 
   if (manifest.extra_volumes?.length) body.extra_volumes = manifest.extra_volumes;
 
+  // Unified env resolution: manifest defaults + --set, layered on top of a
+  // linked environment when one is given. Existing env values win; --set
+  // overrides everything.
+  let existingKeys = new Set<string>();
   if (envName) {
-    // The server ignores env_vars when environment_id is set — the linked
-    // environment supplies all variables, so skip manifest env collection.
     const env = await resolveEnvironment(envName);
     body.environment_id = env.id;
+    existingKeys = new Set((env.env_vars || []).map((v) => v.key));
     console.log(`${DIM}Env:${RESET}      ${env.name}`);
-  } else {
-    const envVars = await collectEnvVars(manifest, sets);
-    if (envVars.length > 0) body.env_vars = envVars;
   }
+  const merged = mergeEnv([{ app: name, defs: manifest.env || [] }], sets, existingKeys);
+  const entries = [...merged.entries, ...(await promptRequired(merged.requiredMissing))];
+  if (entries.length > 0) body.env_vars = entries;
 
   console.log(`\nDeploying ${BOLD}${name}${RESET}...`);
 

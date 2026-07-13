@@ -1,6 +1,17 @@
 import { sshExec } from "./ssh.ts";
 import { asUser, log, OCD_IMAGE_LABEL } from "./container-common.ts";
 
+// `docker image prune -a` reclaims tagged-but-unreferenced images. A deploy's
+// freshly built `${app}:latest` is unreferenced for the brief build-before-swap
+// window (the old container still runs the previous image, the new container
+// isn't started yet), so an unguarded prune that fires mid-deploy deletes the
+// new image and the swap's `docker run` then fails "Unable to find image". The
+// `until` filter only removes images created before now-minus-this-window, so
+// anything built in the last few minutes is protected — far longer than the
+// seconds-long swap gap, while genuinely stale images are still reclaimed.
+// (Filters AND together, so this can only ever prune fewer images, never more.)
+const PRUNE_MIN_IMAGE_AGE = "10m";
+
 /**
  * Prune dangling Docker images and trim the git repo after a successful build.
  * Runs in the background (fire-and-forget) so it doesn't slow down deploys.
@@ -63,7 +74,7 @@ export async function pruneServer(ip: string, hostKey?: string) {
         // Still preserve OCD-managed containers (sleeping anchors) so wake
         // stays fast and their images survive the image prune below.
         `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
-        `docker image prune -af 2>&1 | tail -1`,
+        `docker image prune -af --filter until=${PRUNE_MIN_IMAGE_AGE} 2>&1 | tail -1`,
         `docker builder prune -af 2>&1 | tail -1`,
       ]
     : [
@@ -71,7 +82,7 @@ export async function pruneServer(ip: string, hostKey?: string) {
         // containers, and all build cache (always reproducible from sources).
         // Excludes OCD-managed containers so sleeping anchors are never swept.
         `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
-        `docker image prune -a -f --filter label=${OCD_IMAGE_LABEL} 2>&1 | tail -1`,
+        `docker image prune -a -f --filter label=${OCD_IMAGE_LABEL} --filter until=${PRUNE_MIN_IMAGE_AGE} 2>&1 | tail -1`,
         `docker image prune -f 2>&1 | tail -1`,
         `docker builder prune -af 2>&1 | tail -1`,
       ];

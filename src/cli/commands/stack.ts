@@ -4,7 +4,8 @@ import { get, post, del } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, colorStatus, table } from "../format.ts";
 import { promptLine } from "../prompt.ts";
-import { getGitRepo, readManifest, collectEnvVars } from "../manifest.ts";
+import { getGitRepo, readManifest, promptRequired } from "../manifest.ts";
+import { mergeEnv, type AppEnvDefs } from "../../shared/env-merge.ts";
 import { buildStackAppSpec, resolveRepoPath, repoDirOf } from "../../shared/stack-spec.ts";
 import type { StackManifest, StackDeployRequest } from "../../shared/rpc.ts";
 
@@ -95,11 +96,29 @@ ${BOLD}Arguments:${RESET}
 
 ${BOLD}Options:${RESET}
   --set=<app>.KEY=VALUE      Set an env var for one app (repeatable)
-  --set=KEY=VALUE            Set an env var for all apps as a fallback`);
+  --set=KEY=VALUE            Set an env var for all apps as a fallback
+  --env=<name|id>            Reuse an existing environment for the stack instead
+                             of auto-creating one (only on first creation)`);
+}
+
+type ResolvedEnv = { id: number; name: string; env_vars?: Array<{ key: string }> };
+
+async function resolveEnvironment(nameOrId: string): Promise<ResolvedEnv> {
+  const list = await get<ResolvedEnv[]>("/api/environments");
+  const id = parseInt(nameOrId, 10);
+  const byId = !isNaN(id) ? list.find((e) => e.id === id) : undefined;
+  if (byId) return byId;
+  const lower = nameOrId.toLowerCase();
+  const byName = list.find((e) => e.name.toLowerCase() === lower);
+  if (byName) return byName;
+  console.error(`${RED}Environment not found: ${nameOrId}${RESET}`);
+  console.error(`Available: ${list.map((e) => e.name).join(", ") || "(none)"}`);
+  process.exit(1);
 }
 
 async function stackUp(args: string[]): Promise<void> {
   let manifestPath = "";
+  let envRef = "";
   const rawSets: string[] = [];
   for (const arg of args) {
     if (arg === "--help" || arg === "-h") {
@@ -107,6 +126,8 @@ async function stackUp(args: string[]): Promise<void> {
       process.exit(0);
     } else if (arg.startsWith("--set=")) {
       rawSets.push(arg.slice(6));
+    } else if (arg.startsWith("--env=")) {
+      envRef = arg.slice(6);
     } else if (!arg.startsWith("--") && !manifestPath) {
       manifestPath = arg;
     }
@@ -169,25 +190,53 @@ async function stackUp(args: string[]): Promise<void> {
     });
   }
 
-  // Apps
+  // Apps. Members share one environment, so env vars are merged across all
+  // apps (not collected per-app) into a single stack env.
   const apps: AppElement[] = [];
+  const appEnvDefs: AppEnvDefs[] = [];
   for (const [key, entry] of Object.entries(manifest.apps)) {
     const appManifest = readManifest(resolve(baseDir, entry.manifest));
-    const envVars = await collectEnvVars(appManifest, appSets[key] || {}, {
-      fallback: globalSets,
-      header: `Required environment variables for ${key}`,
-    });
+    appEnvDefs.push({ app: key, defs: appManifest.env || [] });
     // Dockerfile paths resolve relative to the app manifest's dir (repo-root-
     // relative, assuming the stack manifest sits at the repo root).
     const manifestDir = repoDirOf(resolveRepoPath("", entry.manifest));
-    apps.push(buildAppElement(key, entry, appManifest, repo, envVars, manifestDir));
+    apps.push(buildAppElement(key, entry, appManifest, repo, [], manifestDir));
   }
 
-  const body: StackDeployRequest = { name: manifest.name, services, apps };
+  // Resolve the target environment (reused or, if omitted, auto-created) so we
+  // know which keys already exist — existing values win over manifest defaults.
+  const reused = envRef ? await resolveEnvironment(envRef) : undefined;
+  const existingKeys = new Set((reused?.env_vars || []).map((v) => v.key));
+
+  // --set overrides target the shared env; app-scoped (`app.KEY`) and global
+  // (`KEY`) both resolve to one key here, app-scoped last so it wins.
+  const overrides: Record<string, string> = { ...globalSets };
+  for (const perApp of Object.values(appSets)) Object.assign(overrides, perApp);
+
+  const merged = mergeEnv(appEnvDefs, overrides, existingKeys);
+  if (merged.conflicts.length > 0) {
+    console.error(`\n${RED}Env var conflicts — apps disagree on a default and nothing resolves it:${RESET}`);
+    for (const c of merged.conflicts) {
+      console.error(`  ${BOLD}${c.key}${RESET}: ${c.apps.join(", ")} disagree — values: ${c.values.join(" | ")}`);
+    }
+    console.error(`Resolve with --set=${merged.conflicts[0].key}=VALUE or an existing environment.`);
+    process.exit(1);
+  }
+  const prompted = await promptRequired(merged.requiredMissing, "Required environment variables (stack)");
+  const env_vars = [...merged.entries, ...prompted];
+
+  const body: StackDeployRequest = {
+    name: manifest.name,
+    environment_id: reused?.id,
+    env_vars: env_vars.length > 0 ? env_vars : undefined,
+    services,
+    apps,
+  };
 
   console.log(
     `\nDeploying stack ${BOLD}${manifest.name}${RESET} (${services.length} service(s), ${apps.length} app(s))...`,
   );
+  if (reused) console.log(`${DIM}Env:${RESET}   reusing environment ${reused.name}`);
 
   const { op_id } = await post<{ op_id: number }>("/api/stacks", body);
   const result = await followOp(op_id);

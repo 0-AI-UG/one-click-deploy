@@ -69,28 +69,35 @@ const renameOnServers: Step<RenameAppInput, RenameOut> = {
   },
   async compensate(ctx, out) {
     if (!out) return;
+    // Revert the DB name first: it is the source of truth the reconciler and
+    // ingress render from, so a failure to revert it is a real DB/reality
+    // divergence — let it PROPAGATE to `compensation_failed` rather than hide
+    // behind a clean `compensated`. Renaming to a name it may already hold is a
+    // harmless no-op, so re-running the compensate is safe.
     if (out.dbRenamed) {
-      try { db.renameApp(ctx.input.appId, out.oldName); } catch (err) {
-        ctx.log(`Failed to revert app name in DB: ${err}`);
-      }
+      db.renameApp(ctx.input.appId, out.oldName);
     }
     for (const serverId of out.serversRenamed) {
       const server = db.getServer(serverId);
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
-      try {
-        await sshExec(
-          server.ipv4,
-          `su - deploy -c "docker rename ${out.newName} ${out.oldName} 2>/dev/null || true"`,
-          hostKey,
-        );
-        await sshExec(
-          server.ipv4,
-          `su - deploy -c "mv /home/deploy/apps/${out.newName} /home/deploy/apps/${out.oldName} 2>/dev/null || true"`,
-          hostKey,
-        );
-      } catch (err) {
-        ctx.log(`Failed to revert rename on server ${serverId}: ${err}`);
+      // `docker rename`/`mv ... || true` are idempotent (no-op when the newName
+      // artifact is already gone), so the remote command exits 0 for those. A
+      // nonzero exit is therefore an SSH transport failure — we couldn't reach
+      // the host to un-rename, leaving the container/dir name diverged from the
+      // reverted DB. Surface that instead of swallowing it.
+      const r1 = await sshExec(
+        server.ipv4,
+        `su - deploy -c "docker rename ${out.newName} ${out.oldName} 2>/dev/null || true"`,
+        hostKey,
+      );
+      const r2 = await sshExec(
+        server.ipv4,
+        `su - deploy -c "mv /home/deploy/apps/${out.newName} /home/deploy/apps/${out.oldName} 2>/dev/null || true"`,
+        hostKey,
+      );
+      if (r1.exitCode !== 0 || r2.exitCode !== 0) {
+        throw new Error(`Could not reach server ${serverId} over SSH to revert rename of app ${ctx.input.appId}`);
       }
     }
   },

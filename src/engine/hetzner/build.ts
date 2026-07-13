@@ -44,6 +44,27 @@ export async function buildAppImage(
     log("build", `Docker build stderr: ${result.stderr.slice(0, 500)}`);
     throw new Error(describeFailure("Docker build failed", result));
   }
+  // A zero exit from `docker build` is not proof the image is loadable locally:
+  // a concurrent prune can sweep the just-built (still-unreferenced) image, or a
+  // buildx container-driver builder can leave it in the build cache without
+  // `--load`. Either way `-t name:latest` "succeeds" yet `docker run` then fails
+  // "Unable to find image". Callers swap on the strength of this build
+  // (build-before-destroy), so verify the tag actually resolves before we return
+  // — failing here keeps the running container untouched instead of tearing it
+  // down for an image that isn't there. (The prune race itself is fixed in
+  // prune.ts via an age guard; this is the belt-and-suspenders check.)
+  const present = await sshExec(
+    ip,
+    asUser(`docker image inspect ${opts.imageTag} >/dev/null 2>&1 && echo ok || echo missing`),
+    hostKey,
+  );
+  if (present.stdout.trim() !== "ok") {
+    throw new Error(
+      `Docker build reported success but image ${opts.imageTag} is not present in the local image store ` +
+        `(swept by a concurrent prune, or built into a buildx cache without \`--load\`). ` +
+        `Refusing to swap the running container.`,
+    );
+  }
 }
 
 // Shared git clone/pull logic used by cloneAndBuild.

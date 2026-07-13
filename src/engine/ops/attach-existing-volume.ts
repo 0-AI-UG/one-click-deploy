@@ -59,12 +59,14 @@ const attachVolume: Step<AttachExistingVolumeInput, { hostMountPath: string }> =
     return { hostMountPath: hostMountPathFor(ctx.input.volumeId) };
   },
   async compensate(ctx) {
-    try {
-      await hetzner.volumes.detach(ctx.input.volumeId);
-      ctx.log(`Detached volume ${ctx.input.volumeId}`);
-    } catch (err) {
-      ctx.log(`Failed to detach volume ${ctx.input.volumeId}: ${err}`);
-    }
+    // probeCompensated already short-circuits when the volume is no longer on
+    // the target server, so if we reach here the volume really is still
+    // attached and must come off. Do NOT swallow a detach failure: leaving a
+    // pre-existing volume stranded on the wrong server behind a clean
+    // `compensated` is a silent inconsistency — let it propagate to
+    // `compensation_failed` instead.
+    await hetzner.volumes.detach(ctx.input.volumeId);
+    ctx.log(`Detached volume ${ctx.input.volumeId}`);
   },
   async probeCompensated(ctx, _out, prior) {
     const target = prior["validate"] as ValidateOut | undefined;
@@ -129,11 +131,13 @@ const attachToApp: Step<AttachExistingVolumeInput, AttachToAppOut> = {
       } catch (err) { ctx.log(`restore scaling failed: ${err}`); }
     }
     const app = db.getApp(ctx.input.appId);
-    if (app) {
-      try {
-        await recreateAppContainer(ctx.input.appId, undefined, db.parseExtraVolumes(app.extra_volumes));
-      } catch (err) { ctx.log(`recreate (volume-less) during rollback failed: ${err}`); }
-    }
+    if (!app) return;
+    // Do NOT swallow a failed recreate: leaving the app with no serving
+    // container behind a clean `compensated` is the silent-rollback bug. Let it
+    // propagate so a dead app surfaces as `compensation_failed`.
+    // recreateAppContainer is idempotent, so re-running the compensate is safe.
+    const result = await recreateAppContainer(ctx.input.appId, undefined, db.parseExtraVolumes(app.extra_volumes));
+    if (!result.ok) throw new Error(result.error || "Failed to recreate volume-less container during rollback");
   },
 };
 

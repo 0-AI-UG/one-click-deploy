@@ -74,6 +74,15 @@ export async function checkReplicaHealth(
   try {
     const check = await probeAppHealth(app, server.ipv4, replica.container_name, bindHost, replica.host_port, 1, hostKey);
 
+    // The probe couldn't reach the host (SSH dropped — typically sshd
+    // MaxStartups throttling this tick's concurrent burst). That's not evidence
+    // the container is down, so leave the status/tick counters untouched and let
+    // the next tick re-probe rather than flap the app to unhealthy.
+    if (check.inconclusive) {
+      log("health", `inconclusive probe for ${replica.container_name} (ssh unreachable); leaving status unchanged`);
+      return;
+    }
+
     const current = db.getReplica(replica.id);
     if (!current || HEALTH_EXEMPT_STATUSES.has(current.status)) return;
     // Never fight an in-flight engine op holding this app's lock. A deploy /
@@ -146,6 +155,13 @@ export async function checkServiceInstanceHealth(
     const check = await serviceHealthCheck(
       server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey,
     );
+
+    // SSH to the host was dropped, not a real check failure — skip this tick
+    // (see checkReplicaHealth for the reasoning).
+    if (check.inconclusive) {
+      log("health", `inconclusive probe for ${instance.container_name} (ssh unreachable); leaving status unchanged`);
+      return;
+    }
 
     const current = db.getServiceInstance(instance.id);
     if (!current || HEALTH_EXEMPT_STATUSES.has(current.status)) return;

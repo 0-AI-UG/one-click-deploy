@@ -1,5 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { hetzner } from "../../shared/providers/index.ts";
+import { isNotFoundError } from "../../shared/providers/errors.ts";
 import { recreateAppContainer } from "../deploy/index.ts";
 import { registerOp } from "./registry.ts";
 import {
@@ -66,12 +67,19 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
   },
   async compensate(ctx, out) {
     if (!out) return;
+    // Detach is best-effort: the volume may already be detached (or never
+    // reached the attach), and a benign "already detached" here must not mask
+    // the delete below.
+    try { await hetzner.volumes.detach(out.volumeId); } catch { /* already detached */ }
+    // Do NOT swallow a delete failure: leaving the just-created cloud volume
+    // behind a clean `compensated` status is a silent leak. Delete is
+    // idempotent (an already-gone volume is success); any other failure
+    // propagates so the op ends `compensation_failed`.
     try {
-      try { await hetzner.volumes.detach(out.volumeId); } catch { /* already detached */ }
       await hetzner.volumes.delete(out.volumeId);
       ctx.log(`Deleted volume ${out.volumeId}`);
     } catch (err) {
-      ctx.log(`Failed to delete volume ${out.volumeId}: ${err}`);
+      if (!isNotFoundError(err)) throw err;
     }
   },
   async probeCompensated(_ctx, out) {
@@ -79,8 +87,10 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
     try {
       await hetzner.volumes.get(out.volumeId);
       return false;
-    } catch {
-      return true;
+    } catch (err) {
+      // Only a definitive not-found means "already deleted"; a transient error
+      // must fall through to run the delete rather than leak the volume.
+      return isNotFoundError(err);
     }
   },
 };
@@ -131,10 +141,10 @@ const attachToApp: Step<AttachVolumeInput, AttachToAppOut> = {
     return { priorMinReplicas, priorMaxReplicas, volumeMount };
   },
   async compensate(ctx, out) {
-    // Clear the volume + restore the prior scaling floor, then best-effort
-    // recreate the container without the volume so the app returns to its
-    // pre-op running state (the cloud volume is deleted by create_volume's
-    // compensate, which runs after this one).
+    // Clear the volume + restore the prior scaling floor, then recreate the
+    // container without the volume so the app returns to its pre-op running
+    // state (the cloud volume is deleted by create_volume's compensate, which
+    // runs after this one).
     try { db.updateAppVolume(ctx.input.appId, "", ""); } catch (err) { ctx.log(`clear volume failed: ${err}`); }
     if (out) {
       try {
@@ -145,11 +155,14 @@ const attachToApp: Step<AttachVolumeInput, AttachToAppOut> = {
       } catch (err) { ctx.log(`restore scaling failed: ${err}`); }
     }
     const app = db.getApp(ctx.input.appId);
-    if (app) {
-      try {
-        await recreateAppContainer(ctx.input.appId, undefined, db.parseExtraVolumes(app.extra_volumes));
-      } catch (err) { ctx.log(`recreate (volume-less) during rollback failed: ${err}`); }
-    }
+    if (!app) return;
+    // Do NOT swallow a failed recreate: leaving the app with no serving
+    // container behind a clean `compensated` is the silent-rollback bug we're
+    // fixing. Let it propagate so a dead app surfaces as `compensation_failed`
+    // (reconciler retries, operators see it). recreateAppContainer is
+    // idempotent, so re-running the compensate is safe.
+    const result = await recreateAppContainer(ctx.input.appId, undefined, db.parseExtraVolumes(app.extra_volumes));
+    if (!result.ok) throw new Error(result.error || "Failed to recreate volume-less container during rollback");
   },
 };
 

@@ -89,20 +89,44 @@ async function processServer(work: ServerWorkItem): Promise<void> {
     );
   }
 
-  // --- Phase 2: Health checks in parallel for all containers on this server ---
-  const healthChecks: Promise<void>[] = [];
+  // --- Phase 2: Health checks for all containers on this server ---
+  // Each check opens 1-2 fresh SSH connections (no multiplexing), and every
+  // server's containers are probed every tick. Firing them all at once let a
+  // busy server exceed sshd's MaxStartups (default 10 concurrent handshakes),
+  // which drops connections and produced false "unhealthy" flaps. Cap the
+  // per-server concurrency below that ceiling; checks are short so this costs
+  // little wall-clock.
+  const checks: Array<() => Promise<void>> = [];
 
   for (const { replica, app } of work.replicas) {
     if (replica.status === "stopped" || replica.status === "paused" || replica.status === "sleeping" || replica.status === "waking") continue;
-    healthChecks.push(checkReplicaHealth(replica, app, server));
+    checks.push(() => checkReplicaHealth(replica, app, server));
   }
 
   for (const { instance, service } of work.serviceInstances) {
     if (instance.status === "paused" || instance.status === "stopped") continue;
-    healthChecks.push(checkServiceInstanceHealth(instance, service, server));
+    checks.push(() => checkServiceInstanceHealth(instance, service, server));
   }
 
-  await Promise.all(healthChecks);
+  await runWithConcurrency(checks, HEALTH_CHECK_CONCURRENCY);
+}
+
+// Kept comfortably under sshd's default MaxStartups (10:30:100) so a tick's
+// probe burst never trips connection throttling on a single host.
+const HEALTH_CHECK_CONCURRENCY = 5;
+
+// Run thunks with a bounded number in flight at once. Each rejection is
+// swallowed per-task (the health checks already catch their own errors); this
+// only governs scheduling.
+async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      await tasks[i]();
+    }
+  });
+  await Promise.all(workers);
 }
 
 async function tick(): Promise<void> {

@@ -193,37 +193,46 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
   async compensate(ctx, out) {
     const snap = (out as BuildOut | undefined)?.rollback;
     if (!snap) return;
-    try {
-      const app = db.getApp(ctx.input.appId);
-      const replicas = db.getReplicas(ctx.input.appId);
-      const first = replicas[0];
-      const server = first ? db.getServer(first.server_id) : null;
-      if (!app || !server) return;
-      const hostKey = server.ssh_host_key || undefined;
-      await startAppReplica(server.ipv4, {
-        containerName: snap.containerName,
-        image: snap.image,
-        appName: app.name,
-        network: null,
-        bindAddr: snap.bindAddr,
-        hostPort: snap.hostPort,
-        containerPort: snap.containerPort,
-        envFilePath: snap.envFilePath || undefined,
-        volumeMount: snap.volumeMount || undefined,
-        extraVolumes: snap.extraVolumes,
-        memoryMb: snap.memoryMb ?? undefined,
-        cpus: snap.cpus ?? undefined,
-      }, hostKey);
-      const health = await probeAppHealth(app, server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey);
-      if (first) db.updateReplicaStatus(first.id, health.healthy ? "running" : "unhealthy");
-      db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
-      db.appendDeployLog(ctx.input.appId, `[rollback] Restored previous image after failed redeploy (healthy=${health.healthy})`);
-      ctx.log(`Rolled back to previous image ${snap.image} (healthy=${health.healthy})`);
-      // Drop the rollback tag now that it's the live image again; leaving it
-      // would pin the image and defeat the periodic prune.
-      await sshExec(server.ipv4, asUser(`docker rmi ${snap.image} 2>/dev/null || true`), hostKey).catch(() => {});
-    } catch (err) {
-      ctx.log(`Failed to roll back to previous container: ${err}`);
+    const app = db.getApp(ctx.input.appId);
+    const replicas = db.getReplicas(ctx.input.appId);
+    const first = replicas[0];
+    const server = first ? db.getServer(first.server_id) : null;
+    if (!app || !server) return;
+    const hostKey = server.ssh_host_key || undefined;
+    // Restore the previous container from the pinned :rollback image. Do NOT
+    // swallow failures here: if the restore throws (image gone) or comes back
+    // unhealthy, the app is left with no working container, and that must
+    // surface as `compensation_failed` (reconciler retries, operators see it)
+    // rather than be hidden behind a clean-looking `compensated` status. That
+    // silent-success swallow is exactly why a failed rollback previously left
+    // an app dead while the op reported it had been compensated.
+    await startAppReplica(server.ipv4, {
+      containerName: snap.containerName,
+      image: snap.image,
+      appName: app.name,
+      network: null,
+      bindAddr: snap.bindAddr,
+      hostPort: snap.hostPort,
+      containerPort: snap.containerPort,
+      envFilePath: snap.envFilePath || undefined,
+      volumeMount: snap.volumeMount || undefined,
+      extraVolumes: snap.extraVolumes,
+      memoryMb: snap.memoryMb ?? undefined,
+      cpus: snap.cpus ?? undefined,
+    }, hostKey);
+    const health = await probeAppHealth(app, server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey);
+    if (first) db.updateReplicaStatus(first.id, health.healthy ? "running" : "unhealthy");
+    db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
+    db.appendDeployLog(ctx.input.appId, `[rollback] Restored previous image after failed redeploy (healthy=${health.healthy})`);
+    ctx.log(`Rolled back to previous image ${snap.image} (healthy=${health.healthy})`);
+    // Drop the rollback tag now that it's the live image again; leaving it
+    // would pin the image and defeat the periodic prune. Best-effort.
+    await sshExec(server.ipv4, asUser(`docker rmi ${snap.image} 2>/dev/null || true`), hostKey).catch(() => {});
+    // The restore ran but the app still isn't serving — escalate. An
+    // `inconclusive` probe (couldn't reach the host over SSH) is not proof of
+    // failure, so don't escalate on that alone.
+    if (!health.healthy && !health.inconclusive) {
+      throw new Error(`Rollback restored the previous container for ${app.name} but it is unhealthy`);
     }
   },
 };
