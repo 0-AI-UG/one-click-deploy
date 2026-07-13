@@ -53,9 +53,11 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
                   ? "bg-accent text-fg"
                   : op.status === "running"
                     ? "bg-accent-blue text-white"
-                    : op.status === "failed" || op.status === "compensated"
-                      ? "bg-accent-red text-white"
-                      : op.status === "compensating"
+                    : op.status === "compensation_failed"
+                      ? "bg-accent-red text-white border-dashed"
+                      : op.status === "failed" || op.status === "compensated"
+                        ? "bg-accent-red text-white"
+                        : op.status === "compensating"
                         ? "bg-accent-amber text-fg"
                         : "bg-alt text-fg"
               }`}
@@ -121,6 +123,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
                 <span className={`font-mono text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 border-2 border-fg ${
                   c.status === "done" ? "bg-accent text-fg"
                     : c.status === "running" ? "bg-accent-blue text-white"
+                    : c.status === "compensation_failed" ? "bg-accent-red text-white border-dashed"
                     : c.status === "failed" || c.status === "compensated" ? "bg-accent-red text-white"
                     : "bg-alt text-fg"
                 }`}>{c.status}</span>

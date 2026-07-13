@@ -106,7 +106,7 @@ export function listRecentOperations(limit = 50): OperationRow[] {
   return db
     .query(
       `SELECT * FROM operations
-        WHERE status IN ('done','failed','cancelled','compensated')
+        WHERE status IN ('done','failed','cancelled','compensated','compensation_failed')
         ORDER BY COALESCE(finished_at, enqueued_at) DESC
         LIMIT ?`,
     )

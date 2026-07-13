@@ -45,7 +45,7 @@ export function EngineOpLogsPage({ opId }: { opId: number }) {
             setRows((prev) => [...prev, ...incoming]);
           }
           setLoaded(true);
-          const terminal = ["done", "failed", "cancelled", "compensated"].includes(data.status);
+          const terminal = ["done", "failed", "cancelled", "compensated", "compensation_failed"].includes(data.status);
           if (terminal && incoming.length === 0) return;
           if (!active && incoming.length === 0) return;
         } catch {

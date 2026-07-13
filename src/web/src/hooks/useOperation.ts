@@ -20,6 +20,7 @@ export type OperationStatus =
   | "failed"
   | "compensating"
   | "compensated"
+  | "compensation_failed"
   | "cancelled";
 
 export type OperationView = {
@@ -53,6 +54,7 @@ export const TERMINAL_STATUSES = new Set<OperationStatus>([
   "failed",
   "cancelled",
   "compensated",
+  "compensation_failed",
 ]);
 
 export function isTerminal(status: OperationStatus | string | null | undefined): boolean {

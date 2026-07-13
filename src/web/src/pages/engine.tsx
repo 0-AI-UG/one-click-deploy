@@ -20,6 +20,7 @@ function statusColor(status: string): string {
   if (status === "running") return "bg-accent-blue text-white";
   if (status === "pending") return "bg-alt text-fg";
   if (status === "failed" || status === "compensated") return "bg-accent-red text-white";
+  if (status === "compensation_failed") return "bg-accent-red text-white border-dashed";
   if (status === "compensating") return "bg-accent-amber text-fg";
   if (status === "cancelled") return "bg-alt text-fg-dim";
   return "bg-alt text-fg";

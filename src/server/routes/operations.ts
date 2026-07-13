@@ -157,7 +157,7 @@ export async function handleOperationEvents(request: Request, id: number): Promi
     while (Date.now() < deadline) {
       const op = getOperation(id);
       if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
-      const terminal = ["done", "failed", "cancelled", "compensated"].includes(op.status);
+      const terminal = ["done", "failed", "cancelled", "compensated", "compensation_failed"].includes(op.status);
       // Step rows mutate in place at the same seq (started → ok), so an
       // exclusive `since` cursor misses the final transition of the last
       // step(s). On terminal, re-send the full list so the client lands on
@@ -202,7 +202,7 @@ export async function handleGetOperationLogs(request: Request, id: number): Prom
       while (Date.now() < deadline) {
         const logs = getOpLogs(id, since, 1000);
         const cur = getOperation(id)!;
-        const terminal = ["done", "failed", "cancelled", "compensated"].includes(cur.status);
+        const terminal = ["done", "failed", "cancelled", "compensated", "compensation_failed"].includes(cur.status);
         if (logs.length > 0 || terminal) {
           return Response.json(
             { status: cur.status, logs },
