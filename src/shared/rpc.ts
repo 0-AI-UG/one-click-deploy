@@ -197,14 +197,17 @@ export type DeployManifest = {
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
   cpu_limit?: number; // Per-container CPU ceiling in cores (fractional allowed). Omit / 0 → platform default
-  health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
-  internal_protocol?: "http" | "tcp"; // Internal routing protocol; omit to derive from health_check
-  // Ingress / routing (same rules as the deploy request). Sticky sessions and
-  // an active health-check path require internal_protocol 'http'.
+  // HTTP health check. enabled:false skips the HTTP probe and only verifies the
+  // container runs (default true). path is the endpoint both the post-deploy
+  // probe and Traefik's rotation check request (default /; setting one also
+  // turns on Traefik's continuous check). A path requires internal_protocol 'http'.
+  health_check?: { enabled?: boolean; path?: string };
+  internal_protocol?: "http" | "tcp"; // Internal routing protocol; omit to derive from health_check.enabled
+  // Ingress / routing (same rules as the deploy request). Sticky sessions
+  // require internal_protocol 'http'.
   sticky?: boolean; // Sticky sessions (cookie-based) on the app's ingress service
   rate_limit_rps?: number; // Public-router rate limit in req/s; omit / 0 = unlimited
   ip_allowlist?: string; // Comma-separated IPs/CIDRs gating the public router; omit / "" = open
-  health_check_path?: string; // Active HTTP health-check path (e.g. /healthz); requires HTTP internal routing
   compress?: boolean; // Response compression on the public router
   public_port?: number | "auto" | null; // Public raw TCP/UDP exposure: "auto" = lowest free pool port, number = specific pool port, omit = none
   public_protocol?: "tcp" | "udp"; // Pool for public_port (default "tcp")

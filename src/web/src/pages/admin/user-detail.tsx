@@ -145,7 +145,7 @@ export function UserDetailPage({ userId }: { userId: string }) {
         <div>
           <h1 className="font-mono font-bold text-sm text-fg uppercase">{user.username}</h1>
           <p className="text-[9px] text-muted font-mono mt-0.5 uppercase tracking-wider">
-            {user.isAdmin ? "Admin — has all permissions" : "User — permissions managed below"}
+            {user.isAdmin ? "Admin; has all permissions" : "User; permissions managed below"}
           </p>
         </div>
         {user.isAdmin && (

@@ -502,8 +502,24 @@ export function validateDeployManifest(
   if ("cpu_limit" in obj && !isValidCpuLimit(obj.cpu_limit))
     return { ok: false, error: `"cpu_limit" must be 0 (default) or a number ${MIN_CPU_LIMIT}–${MAX_CPU_LIMIT} cores` };
 
-  if ("health_check" in obj && typeof obj.health_check !== "boolean")
-    return { ok: false, error: '"health_check" must be a boolean' };
+  // health_check is one nested object { enabled?, path? } so the toggle and its
+  // path read as a single feature (mirrors the deploy UI). enabled drives the
+  // HTTP-vs-running probe; path feeds both the post-deploy probe and Traefik's
+  // rotation check and is validated below via the shared ingress rules.
+  let healthEnabled: boolean | undefined;
+  let healthPath: string | undefined;
+  if ("health_check" in obj && obj.health_check != null) {
+    const hc = obj.health_check;
+    if (typeof hc !== "object" || Array.isArray(hc))
+      return { ok: false, error: '"health_check" must be an object with optional "enabled" and "path"' };
+    const h = hc as Record<string, unknown>;
+    if ("enabled" in h && typeof h.enabled !== "boolean")
+      return { ok: false, error: '"health_check.enabled" must be a boolean' };
+    if ("path" in h && typeof h.path !== "string")
+      return { ok: false, error: '"health_check.path" must be a string' };
+    healthEnabled = h.enabled as boolean | undefined;
+    healthPath = h.path as string | undefined;
+  }
 
   if ("internal_protocol" in obj && !isInternalProtocol(obj.internal_protocol))
     return { ok: false, error: '"internal_protocol" must be "http" or "tcp"' };
@@ -519,11 +535,11 @@ export function validateDeployManifest(
   // health-check-path HTTP-routing rule keys off the manifest's resolved
   // internal protocol (explicit internal_protocol, else derived from health_check).
   const httpRouted =
-    resolveInternalProtocol(obj.internal_protocol, obj.health_check as boolean | undefined) === "http";
+    resolveInternalProtocol(obj.internal_protocol, healthEnabled) === "http";
   const ingressInput: IngressFieldsInput = {};
   if ("rate_limit_rps" in obj) ingressInput.rate_limit_rps = obj.rate_limit_rps as number;
   if ("ip_allowlist" in obj) ingressInput.ip_allowlist = obj.ip_allowlist as string;
-  if ("health_check_path" in obj) ingressInput.health_check_path = obj.health_check_path as string;
+  if (healthPath !== undefined) ingressInput.health_check_path = healthPath;
   if ("public_port" in obj) ingressInput.public_port = obj.public_port as number | "auto" | null;
   if ("public_protocol" in obj) ingressInput.public_protocol = obj.public_protocol as string;
   const ingressResult = validateIngressFields(ingressInput, { httpRouted });

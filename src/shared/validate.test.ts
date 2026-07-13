@@ -615,7 +615,7 @@ describe("validateDeployManifest", () => {
       sticky: true,
       rate_limit_rps: 100,
       ip_allowlist: "10.0.0.0/8, 203.0.113.7",
-      health_check_path: "/healthz",
+      health_check: { enabled: true, path: "/healthz" },
       compress: true,
       public_port: 30001,
       public_protocol: "tcp",
@@ -628,16 +628,28 @@ describe("validateDeployManifest", () => {
     expect(validateDeployManifest({ name: "x", compress: 1 }).ok).toBe(false);
   });
 
-  test("rejects an invalid rate_limit_rps / ip_allowlist / health_check_path", () => {
+  test("rejects an invalid rate_limit_rps / ip_allowlist / health_check.path", () => {
     expect(validateDeployManifest({ name: "x", rate_limit_rps: -1 }).ok).toBe(false);
     expect(validateDeployManifest({ name: "x", ip_allowlist: "not-an-ip" }).ok).toBe(false);
-    expect(validateDeployManifest({ name: "x", health_check_path: "healthz" }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", health_check: { path: "healthz" } }).ok).toBe(false);
   });
 
-  test("rejects health_check_path on a raw-TCP manifest", () => {
-    expect(validateDeployManifest({ name: "x", internal_protocol: "tcp", health_check_path: "/healthz" }).ok).toBe(false);
-    // health_check:false derives tcp routing, so the path is rejected there too
-    expect(validateDeployManifest({ name: "x", health_check: false, health_check_path: "/healthz" }).ok).toBe(false);
+  test("rejects a malformed health_check object", () => {
+    expect(validateDeployManifest({ name: "x", health_check: true }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", health_check: { enabled: "yes" } }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", health_check: { path: 1 } }).ok).toBe(false);
+  });
+
+  test("accepts a nested health_check with enabled and path", () => {
+    expect(validateDeployManifest({ name: "x", health_check: { enabled: false } }).ok).toBe(true);
+    expect(validateDeployManifest({ name: "x", health_check: { path: "/healthz" } }).ok).toBe(true);
+    expect(validateDeployManifest({ name: "x", health_check: {} }).ok).toBe(true);
+  });
+
+  test("rejects health_check.path on a raw-TCP manifest", () => {
+    expect(validateDeployManifest({ name: "x", internal_protocol: "tcp", health_check: { path: "/healthz" } }).ok).toBe(false);
+    // enabled:false derives tcp routing, so the path is rejected there too
+    expect(validateDeployManifest({ name: "x", health_check: { enabled: false, path: "/healthz" } }).ok).toBe(false);
   });
 
   test("rejects a public_port outside its protocol pool", () => {

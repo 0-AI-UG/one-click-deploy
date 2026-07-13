@@ -38,7 +38,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
   // Request-rate scaling needs Traefik request counters, which only exist for
   // HTTP-routed apps (raw-TCP apps have none). Matches the engine predicate.
   const httpRouted = app.internal_protocol !== "tcp";
-  const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica — a cloud volume can only be attached to a single server at a time.";
+  const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica; a cloud volume can only be attached to a single server at a time.";
   // No custom-domain requirement: the panel is the sole public ingress and
   // load-balances across replicas over the private network, so nip.io
   // auto-domains scale just like custom domains. Only volumes lock an app to
@@ -99,7 +99,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
     <div className="space-y-4">
       {!app.public && (
         <Card className="p-4">
-          <p className="font-mono text-[10px] text-muted flex items-center gap-1">Private app — no public wake page. <InfoTip text="A sleeping private app has no public URL to wake it on request; wake it from this dashboard, the CLI, or the API." /></p>
+          <p className="font-mono text-[10px] text-muted flex items-center gap-1">Private app; no public wake page. <InfoTip text="A sleeping private app has no public URL to wake it on request; wake it from this dashboard, the CLI, or the API." /></p>
         </Card>
       )}
 
@@ -119,7 +119,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
 
           {replicas.length === 0 && (
             <span className="font-mono text-[9px] text-muted ml-1">
-              {app.status === "sleeping" ? "— sleeping" : ""}
+              {app.status === "sleeping" ? "sleeping" : ""}
             </span>
           )}
 
@@ -172,7 +172,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                 if (current === 1) {
                   const msg = app.public
                     ? "This will sleep the app. It wakes automatically when it receives an HTTP request."
-                    : "This will sleep the app. Private apps have no public wake page — wake it from this dashboard, the CLI, or the API.";
+                    : "This will sleep the app. Private apps have no public wake page; wake it from this dashboard, the CLI, or the API.";
                   if (!await confirm("Scale to Zero", msg)) return;
                 }
                 await runScale(current - 1);
@@ -270,7 +270,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                 />
               </Field>
               {httpRouted && (
-                <Field label={<span className="flex items-center gap-1">Req/min <InfoTip text="Target requests/min per replica (HTTP apps only). Scales up when average traffic per replica exceeds this — an HPA-style signal alongside CPU/memory, whichever demands more replicas wins. 0 disables request-based scaling." /></span>}>
+                <Field label={<span className="flex items-center gap-1">Req/min <InfoTip text="Target requests/min per replica (HTTP apps only). Scales up when average traffic per replica exceeds this; an HPA-style signal alongside CPU/memory, whichever demands more replicas wins. 0 disables request-based scaling." /></span>}>
                   <input
                     type="number"
                     min={0}

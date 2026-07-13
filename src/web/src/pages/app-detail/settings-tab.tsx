@@ -4,7 +4,7 @@ import { NeoSelect } from "../../components/neo-select.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe, Cpu, Network } from "lucide-react";
-import { InfoTip } from "./shared.tsx";
+import { HealthCheckField, InfoTip } from "./shared.tsx";
 import type { AppData } from "../../types.ts";
 
 export type IngressForm = {
@@ -93,10 +93,10 @@ export function SettingsTab({
         </Field>
 
         <Field
-          label={<span className="flex items-center gap-2"><Globe size={14} className="text-fg" /> Public Access</span>}
-          hint={!isPublic ? "App will only be reachable over the internal network" : undefined}
+          label={<span className="flex items-center gap-2"><Globe size={14} className="text-fg" /> Public Domain <InfoTip text="Serve the app on a public HTTPS domain. Off = internal network only. (The public TCP/UDP port is separate.)" /></span>}
+          hint={!isPublic ? "No public domain; the app's HTTP is internal-only" : undefined}
         >
-          <div className="flex justify-end">
+          <div className="flex justify-start">
             <Checkbox checked={isPublic} onChange={setIsPublic} label="Expose via public domain" />
           </div>
         </Field>
@@ -112,7 +112,7 @@ export function SettingsTab({
           />
         </Field>
 
-        <Field label={<span className="flex items-center gap-2"><HardDrive size={14} className="text-fg" /> Memory Limit (MB) <InfoTip text="Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save & redeploy." /></span>}>
+        <Field label={<span className="flex items-center gap-2"><HardDrive size={14} className="text-fg" /> Memory Limit (MB) <InfoTip text="Container memory cap. Blank/0 = default (512 MB)." /></span>}>
           <input
             type="number"
             min={0}
@@ -122,7 +122,7 @@ export function SettingsTab({
           />
         </Field>
 
-        <Field label={<span className="flex items-center gap-2"><Cpu size={14} className="text-fg" /> CPU Limit (cores) <InfoTip text="Container CPU ceiling in cores; fractional allowed (e.g. 0.5, 2). 0 or blank uses the platform default (1 core). Applied on save & redeploy." /></span>}>
+        <Field label={<span className="flex items-center gap-2"><Cpu size={14} className="text-fg" /> CPU Limit (cores) <InfoTip text="Container CPU cap in cores (fractional ok, e.g. 0.5). Blank/0 = default (1)." /></span>}>
           <input
             type="number"
             min={0}
@@ -165,7 +165,7 @@ export function SettingsTab({
         </div>
 
         <Field
-          label={<span className="flex items-center gap-2"><Network size={14} className="text-fg" /> Internal Protocol <InfoTip text="How Traefik reaches this app on its internal address (<app>.ocd.internal). HTTP (L7) terminates and understands requests; it's what powers password protection, active health-check paths and cookie sticky sessions. TCP is a raw byte pass-through for non-HTTP protocols (Postgres, Redis, game servers, custom binary); Traefik can only connection-check it, not read it. Switching refreshes the OCD_INTERNAL_URL scheme on the next redeploy." /></span>}
+          label={<span className="flex items-center gap-2"><Network size={14} className="text-fg" /> Internal Protocol <InfoTip text="How Traefik reaches the app internally. HTTP enables passwords, health paths and sticky sessions; TCP is a raw pass-through for non-HTTP services (Postgres, Redis, game servers)." /></span>}
         >
           <NeoSelect
             value={ingressForm.internal_protocol}
@@ -192,13 +192,13 @@ export function SettingsTab({
         {httpRouted && (
           <>
             <Field
-              label={<span className="flex items-center gap-2"><Lock size={14} className="text-fg" /> Password Protection <InfoTip text='HTTP basic auth at the ingress. Visitors sign in with username "admin" and this password. Gates both the internal address and the public domain. Requires HTTP internal routing: raw TCP has no request layer to send a login challenge over.' /></span>}
+              label={<span className="flex items-center gap-2"><Lock size={14} className="text-fg" /> Password Protection <InfoTip text='HTTP basic auth at the ingress (username: admin). HTTP routing only.' /></span>}
               hint={ingressForm.auth_enabled
                 ? 'HTTP basic auth. Visitors sign in with username "admin". Leave the field blank to keep the current password.'
                 : "Gates the app behind HTTP basic auth."}
             >
               <div className="space-y-2">
-                <div className="flex justify-end">
+                <div className="flex justify-start">
                   <Checkbox
                     checked={ingressForm.auth_enabled}
                     onChange={(v) => setIngressForm({ ...ingressForm, auth_enabled: v, auth_password: v ? ingressForm.auth_password : "" })}
@@ -216,21 +216,16 @@ export function SettingsTab({
               </div>
             </Field>
 
-            <Field
-              label={<span className="flex items-center gap-2">Health Check Path <InfoTip text="Active HTTP probe on the internal service: Traefik GETs this path every 10s (3s timeout) and pulls a replica from rotation within seconds of it failing. Requires HTTP internal routing; raw-TCP apps instead get a passive TCP-connect check (open a socket, no path). Leave blank to disable the HTTP probe." /></span>}
-            >
-              <input
-                type="text"
-                value={ingressForm.health_check_path}
-                onChange={(e) => setIngressForm({ ...ingressForm, health_check_path: e.target.value })}
-                placeholder="/healthz"
-              />
-            </Field>
+            <HealthCheckField
+              enabled={ingressForm.health_check}
+              path={ingressForm.health_check_path}
+              onChange={(next) => setIngressForm({ ...ingressForm, ...next })}
+            />
 
             <Field
-              label={<span className="flex items-center gap-2">Sticky Sessions <InfoTip text="Pins each visitor to one replica via an ocd_sticky cookie so their session keeps landing on the same container. Because it rides on a cookie it only works with HTTP internal routing; raw TCP has nowhere to set one." /></span>}
+              label={<span className="flex items-center gap-2">Sticky Sessions <InfoTip text="Keep each visitor on the same replica via a cookie. HTTP routing only." /></span>}
             >
-              <div className="flex justify-end">
+              <div className="flex justify-start">
                 <Checkbox
                   checked={ingressForm.sticky}
                   onChange={(v) => setIngressForm({ ...ingressForm, sticky: v })}
@@ -238,16 +233,48 @@ export function SettingsTab({
                 />
               </div>
             </Field>
+          </>
+        )}
+
+        {/* Public-domain-only middleware: the rate limiter, allowlist and gzip
+            all run on the public L7 router, so they no-op until the app is
+            exposed via a public domain. Hide them until then rather than
+            showing controls that silently do nothing. */}
+        {app.public && (
+          <>
+            <Field
+              label={<span className="flex items-center gap-2">Rate Limit <InfoTip text="Max requests/sec per client IP on the public domain. 0 = unlimited." /></span>}
+              hint="requests/sec on the public domain, 0 = unlimited"
+            >
+              <input
+                type="number"
+                min={0}
+                value={ingressForm.rate_limit_rps || ""}
+                onChange={(e) => setIngressForm({ ...ingressForm, rate_limit_rps: parseInt(e.target.value) || 0 })}
+                placeholder="0 (unlimited)"
+              />
+            </Field>
 
             <Field
-              label={<span className="flex items-center gap-2">HTTP Health Check <InfoTip text="Probe / on the exposed port after each deploy and scale. Turn off for apps that don't answer HTTP there; the platform then only checks the container is running. HTTP routing only. Unlike the other ingress settings this takes effect on the app's next (re)deploy or scale, not immediately." /></span>}
-              hint="applied on the next deploy or scale"
+              label={<span className="flex items-center gap-2">IP Allowlist <InfoTip text="Only these IPs/CIDRs may reach the public domain. Blank = open to all." /></span>}
+              hint={ingressForm.ip_allowlist ? "only these IPs/CIDRs can reach the public domain" : undefined}
             >
-              <div className="flex justify-end">
+              <input
+                type="text"
+                value={ingressForm.ip_allowlist}
+                onChange={(e) => setIngressForm({ ...ingressForm, ip_allowlist: e.target.value })}
+                placeholder="comma-separated IPs or CIDRs"
+              />
+            </Field>
+
+            <Field
+              label={<span className="flex items-center gap-2">Compression <InfoTip text="gzip responses on the public domain." /></span>}
+            >
+              <div className="flex justify-start">
                 <Checkbox
-                  checked={ingressForm.health_check}
-                  onChange={(v) => setIngressForm({ ...ingressForm, health_check: v })}
-                  label="Probe after deploy"
+                  checked={ingressForm.compress}
+                  onChange={(v) => setIngressForm({ ...ingressForm, compress: v })}
+                  label="Compress responses on the public domain"
                 />
               </div>
             </Field>
@@ -255,44 +282,7 @@ export function SettingsTab({
         )}
 
         <Field
-          label={<span className="flex items-center gap-2">Rate Limit <InfoTip text="Caps requests/sec per client IP on the public domain (short bursts of up to 2× are allowed). Enforced by the public L7 router, so it has no effect on apps that aren't exposed via a public domain, nor on the internal address. 0 = unlimited." /></span>}
-          hint="requests/sec on the public domain, 0 = unlimited"
-        >
-          <input
-            type="number"
-            min={0}
-            value={ingressForm.rate_limit_rps || ""}
-            onChange={(e) => setIngressForm({ ...ingressForm, rate_limit_rps: parseInt(e.target.value) || 0 })}
-            placeholder="0 (unlimited)"
-          />
-        </Field>
-
-        <Field
-          label={<span className="flex items-center gap-2">IP Allowlist <InfoTip text="Only these source IPs/CIDRs may reach the public domain; everyone else gets 403. Checked before password auth, so blocked traffic never reaches the app or costs a bcrypt check. Comma-separated, e.g. 203.0.113.4, 10.0.0.0/8. Empty = open to all. Applies to the public domain only." /></span>}
-          hint={ingressForm.ip_allowlist ? "only these IPs/CIDRs can reach the public domain" : undefined}
-        >
-          <input
-            type="text"
-            value={ingressForm.ip_allowlist}
-            onChange={(e) => setIngressForm({ ...ingressForm, ip_allowlist: e.target.value })}
-            placeholder="comma-separated IPs or CIDRs"
-          />
-        </Field>
-
-        <Field
-          label={<span className="flex items-center gap-2">Compression <InfoTip text="gzip-compresses responses on the public domain when the client advertises Accept-Encoding. Runs on the public L7 router only; no effect on the internal address or on raw TCP/UDP traffic." /></span>}
-        >
-          <div className="flex justify-end">
-            <Checkbox
-              checked={ingressForm.compress}
-              onChange={(v) => setIngressForm({ ...ingressForm, compress: v })}
-              label="Compress responses on the public domain"
-            />
-          </div>
-        </Field>
-
-        <Field
-          label={<span className="flex items-center gap-2">Public TCP/UDP Port <InfoTip text="Forwards a dedicated public port on the panel's IP straight through to the app's replicas: raw, with no TLS, auth or middleware. For game servers, databases, MQTT and the like. Completely independent of the public HTTP domain and of the internal protocol above. Blank port = auto-assign from the pool." /></span>}
+          label={<span className="flex items-center gap-2">Public TCP/UDP Port <InfoTip text="A raw public port straight to the app (game servers, databases, MQTT). Separate from the public domain. Blank = auto-assign." /></span>}
           hint={app.public_address
             ? `reachable at ${app.public_address} (${(app.public_protocol || "tcp").toUpperCase()})`
             : ingressForm.public_protocol !== "off"

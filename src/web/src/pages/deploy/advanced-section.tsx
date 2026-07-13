@@ -2,7 +2,7 @@ import { Plus, Minus, AlertTriangle } from "lucide-react";
 import { Btn, Checkbox, Field, Divider } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { Label } from "./shared.tsx";
-import { InfoTip } from "../app-detail/shared.tsx";
+import { HealthCheckField, InfoTip } from "../app-detail/shared.tsx";
 import type { FormState } from "./types.ts";
 
 type Props = {
@@ -23,7 +23,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
   const httpRouted = form.internal_protocol === "http";
   return (
     <div className="space-y-3">
-      <Field label={<>Replicas <InfoTip text="The panel load-balances across replicas over the private network — a custom domain is not required." /></>}>
+      <Field label={<>Replicas <InfoTip text="Run this many copies behind a load balancer." /></>}>
         <input
           type="number"
           value={form.replicas}
@@ -31,7 +31,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           min="1"
         />
       </Field>
-      <Field label={<>Volume Size (GB) <InfoTip text="Attach a persistent volume of this size, mounted at the volume path. Blank or 0 = no persistent volume." /></>}>
+      <Field label={<>Volume Size (GB) <InfoTip text="Persistent disk mounted at the volume path. Blank/0 = none." /></>}>
         <input
           type="number"
           value={form.volume_size}
@@ -47,7 +47,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           onChange={set("volume_path")}
         />
       </Field>
-      <Field label={<>Memory Limit (MB) <InfoTip text="Container memory ceiling. Blank or 0 uses the platform default (512)." /></>}>
+      <Field label={<>Memory Limit (MB) <InfoTip text="Container memory cap. Blank/0 = default (512 MB)." /></>}>
         <input
           type="number"
           value={form.memory_mb}
@@ -56,7 +56,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           min="0"
         />
       </Field>
-      <Field label={<>CPU Limit (cores) <InfoTip text="Container CPU ceiling in cores; fractional allowed (e.g. 0.5, 2). Blank or 0 uses the platform default (1)." /></>}>
+      <Field label={<>CPU Limit (cores) <InfoTip text="Container CPU cap in cores (fractional ok, e.g. 0.5). Blank/0 = default (1)." /></>}>
         <input
           type="number"
           value={form.cpu_limit}
@@ -67,10 +67,10 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
         />
       </Field>
       <Field
-        label={<>Public Access <InfoTip text="Expose the app on a public domain. When off, it's only reachable over the internal network." /></>}
-        hint={!form.public ? "App will only be reachable over the internal network" : undefined}
+        label={<>Public Domain <InfoTip text="Serve the app on a public HTTPS domain. Off = internal network only. (The public TCP/UDP port below is separate.)" /></>}
+        hint={!form.public ? "No public domain; the app's HTTP is internal-only" : undefined}
       >
-        <div className="flex justify-end">
+        <div className="flex justify-start">
           <Checkbox
             checked={form.public}
             onChange={(v) => setForm((f) => ({ ...f, public: v }))}
@@ -78,7 +78,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           />
         </div>
       </Field>
-      <Field label={<>Internal Protocol <InfoTip text="How Traefik reaches this app on its internal address (<app>.ocd.internal). HTTP (L7) terminates and understands requests; it powers password protection, active health-check paths and cookie sticky sessions. TCP is a raw byte pass-through for non-HTTP protocols (Postgres, Redis, game servers); Traefik can only connection-check it." /></>}>
+      <Field label={<>Internal Protocol <InfoTip text="How Traefik reaches the app internally. HTTP enables passwords, health paths and sticky sessions; TCP is a raw pass-through for non-HTTP services (Postgres, Redis, game servers)." /></>}>
         <NeoSelect
           value={form.internal_protocol}
           onChange={(v) => {
@@ -102,7 +102,7 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
           disappear entirely on raw-TCP routing rather than sitting disabled. */}
       {httpRouted && (
         <>
-          <Field label={<>Password Protection <InfoTip text='HTTP basic auth at the ingress. Visitors sign in with username "admin" and this password. Gates both the internal address and the public domain. Requires HTTP internal routing.' /></>}>
+          <Field label={<>Password Protection <InfoTip text='HTTP basic auth at the ingress (username: admin). HTTP routing only.' /></>}>
             <input
               type="password"
               value={form.auth_password}
@@ -110,16 +110,13 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
               placeholder="Optional login gate"
             />
           </Field>
-          <Field label={<>Health Check Path <InfoTip text="Active HTTP probe on the internal service: Traefik GETs this path and pulls a replica from rotation within seconds of it failing. Requires HTTP internal routing. Blank = disabled." /></>}>
-            <input
-              type="text"
-              value={form.health_check_path}
-              onChange={set("health_check_path")}
-              placeholder="/healthz"
-            />
-          </Field>
-          <Field label={<>Sticky Sessions <InfoTip text="Pins each visitor to one replica via an ocd_sticky cookie so their session keeps landing on the same container. Rides on a cookie, so it needs HTTP internal routing." /></>}>
-            <div className="flex justify-end">
+          <HealthCheckField
+            enabled={form.health_check}
+            path={form.health_check_path}
+            onChange={(next) => setForm((f) => ({ ...f, ...next }))}
+          />
+          <Field label={<>Sticky Sessions <InfoTip text="Keep each visitor on the same replica via a cookie. HTTP routing only." /></>}>
+            <div className="flex justify-start">
               <Checkbox
                 checked={form.sticky}
                 onChange={(v) => setForm((f) => ({ ...f, sticky: v }))}
@@ -127,48 +124,47 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
               />
             </div>
           </Field>
-          <Field label={<>HTTP Health Check <InfoTip text="Probe / on the exposed port after each deploy/scale. Turn off for apps that don't answer HTTP there; the platform then only checks the container is running. HTTP routing only — raw-TCP apps always use the container-running check." /></>}>
-            <div className="flex justify-end">
+        </>
+      )}
+      {/* Public-domain-only middleware: the rate limiter, allowlist and gzip all
+          live on the public L7 router, so they do nothing until the app is
+          exposed via a public domain. Hide them until then rather than showing
+          controls that silently no-op. */}
+      {form.public && (
+        <>
+          <Field
+            label={<>Rate Limit <InfoTip text="Max requests/sec per client IP on the public domain. 0 = unlimited." /></>}
+            hint="requests/sec on the public domain, 0 = unlimited"
+          >
+            <input
+              type="number"
+              value={form.rate_limit_rps}
+              onChange={set("rate_limit_rps")}
+              placeholder="0 (unlimited)"
+              min="0"
+            />
+          </Field>
+          <Field label={<>IP Allowlist <InfoTip text="Only these IPs/CIDRs may reach the public domain. Blank = open to all." /></>}>
+            <input
+              type="text"
+              value={form.ip_allowlist}
+              onChange={set("ip_allowlist")}
+              placeholder="comma-separated IPs or CIDRs"
+            />
+          </Field>
+          <Field label={<>Compression <InfoTip text="gzip responses on the public domain." /></>}>
+            <div className="flex justify-start">
               <Checkbox
-                checked={form.health_check}
-                onChange={(v) => setForm((f) => ({ ...f, health_check: v }))}
-                label="Probe after deploy"
+                checked={form.compress}
+                onChange={(v) => setForm((f) => ({ ...f, compress: v }))}
+                label="Compress responses on the public domain"
               />
             </div>
           </Field>
         </>
       )}
       <Field
-        label={<>Rate Limit <InfoTip text="Requests per second allowed on the public domain. 0 or blank = unlimited. Internal traffic is never limited." /></>}
-        hint="requests/sec on the public domain, 0 = unlimited"
-      >
-        <input
-          type="number"
-          value={form.rate_limit_rps}
-          onChange={set("rate_limit_rps")}
-          placeholder="0 (unlimited)"
-          min="0"
-        />
-      </Field>
-      <Field label={<>IP Allowlist <InfoTip text="Only these IPs/CIDRs can reach the public domain; everyone else gets 403. Comma-separated, e.g. 203.0.113.4, 10.0.0.0/8. Blank = open to all." /></>}>
-        <input
-          type="text"
-          value={form.ip_allowlist}
-          onChange={set("ip_allowlist")}
-          placeholder="comma-separated IPs or CIDRs"
-        />
-      </Field>
-      <Field label={<>Compression <InfoTip text="gzip-compresses responses on the public domain when the client advertises Accept-Encoding. Public router only; no effect on the internal address or raw TCP/UDP." /></>}>
-        <div className="flex justify-end">
-          <Checkbox
-            checked={form.compress}
-            onChange={(v) => setForm((f) => ({ ...f, compress: v }))}
-            label="Compress responses on the public domain"
-          />
-        </div>
-      </Field>
-      <Field
-        label={<>Public TCP/UDP Port <InfoTip text="Forwards a dedicated public port on the panel IP raw to the app — for game servers, databases, MQTT. Independent of the public domain and the internal protocol. Blank port = auto-assign." /></>}
+        label={<>Public TCP/UDP Port <InfoTip text="A raw public port straight to the app (game servers, databases, MQTT). Separate from the public domain. Blank = auto-assign." /></>}
         hint={form.public_protocol !== "off" ? `pool ${PUBLIC_PORT_RANGES[form.public_protocol]}` : undefined}
       >
         <div className="flex gap-2">

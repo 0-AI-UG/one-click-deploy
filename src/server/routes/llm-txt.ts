@@ -1,6 +1,6 @@
 const LLM_TXT = `# One-Click Deploy (OCD)
 
-One-Click Deploy ("OCD") is a self-hosted, open-source PaaS for Hetzner Cloud — a lightweight alternative to Heroku, Railway, and Render. Point it at a Git repo containing a Dockerfile and it provisions a Hetzner Cloud server, builds the container image, configures DNS, issues TLS (Traefik + Let's Encrypt), and serves traffic over HTTPS. It is deeply integrated with a single provider: Hetzner servers, volumes, private networks, firewalls, and Hetzner DNS.
+One-Click Deploy ("OCD") is a self-hosted, open-source PaaS for Hetzner Cloud, a lightweight alternative to Heroku, Railway, and Render. Point it at a Git repo containing a Dockerfile and it provisions a Hetzner Cloud server, builds the container image, configures DNS, issues TLS (Traefik + Let's Encrypt), and serves traffic over HTTPS. It is deeply integrated with a single provider: Hetzner servers, volumes, private networks, firewalls, and Hetzner DNS.
 
 This document covers the three things an AI agent most often needs: what the platform does, the \`.ocd-deploy.json\` manifest format, and the \`ocd\` CLI.
 
@@ -11,16 +11,16 @@ This document covers the three things an AI agent most often needs: what the pla
 - **Scaling & lifecycle**: replicas (horizontal scaling), auto-scaling, restart, pause/unpause, rollback to a previous deployment, per-app memory & CPU limits.
 - **Managed services**: one-click Postgres, Redis, MySQL, and more; their connection credentials are injected into linked environments.
 - **Environments**: named groups of env vars (plain or secret) that can be shared across apps; changing an environment redeploys its linked apps.
-- **Internal networking**: every app has a stable private address \`<app>.ocd.internal:<internal-port>\` reachable from other apps on the private network (private apps have only this address). The internal routing protocol is set by \`internal_protocol\` (\`"http"\` L7 routing, or \`"tcp"\` raw pass-through; defaults to \`"http"\`, or \`"tcp"\` when \`health_check: false\`). The platform injects \`OCD_INTERNAL_URL\` (\`http://<app>.ocd.internal:<port>\` for HTTP-routed apps, \`tcp://\` for TCP-routed ones), \`OCD_INTERNAL_HOST\`, and \`OCD_INTERNAL_PORT\` into every app container; a user-defined env var with the same key takes precedence.
+- **Internal networking**: every app has a stable private address \`<app>.ocd.internal:<internal-port>\` reachable from other apps on the private network (private apps have only this address). The internal routing protocol is set by \`internal_protocol\` (\`"http"\` L7 routing, or \`"tcp"\` raw pass-through; defaults to \`"http"\`, or \`"tcp"\` when \`health_check.enabled\` is false). The platform injects \`OCD_INTERNAL_URL\` (\`http://<app>.ocd.internal:<port>\` for HTTP-routed apps, \`tcp://\` for TCP-routed ones), \`OCD_INTERNAL_HOST\`, and \`OCD_INTERNAL_PORT\` into every app container; a user-defined env var with the same key takes precedence.
 - **Webhooks**: auto-deploy on git push, optionally scoped to a branch and path prefix, optionally waiting for CI checks to pass first.
 - **Observability & access**: log streaming, a web terminal, and \`ocd ssh\` for running commands in app containers or on servers.
 - **Auth**: passkeys, TOTP, GitHub OAuth, multi-user RBAC.
 
 There are three ways to deploy an app:
 
-1. **Web panel** — paste a GitHub repo URL. The panel introspects the repo (Dockerfiles, \`EXPOSE\` port, \`.env.example\` variables, and any \`.ocd-deploy.json\` manifests) and pre-fills the deploy form.
-2. **\`.ocd-deploy.json\` manifest** — committed to the repo to pre-configure the deploy flow so users just click "Deploy" without filling in any settings. Documented below.
-3. **\`ocd\` CLI** — deploy the current git checkout from the terminal. Documented at the end of this file.
+1. **Web panel**: paste a GitHub repo URL. The panel introspects the repo (Dockerfiles, \`EXPOSE\` port, \`.env.example\` variables, and any \`.ocd-deploy.json\` manifests) and pre-fills the deploy form.
+2. **\`.ocd-deploy.json\` manifest**: committed to the repo to pre-configure the deploy flow so users just click "Deploy" without filling in any settings. Documented below.
+3. **\`ocd\` CLI**: deploy the current git checkout from the terminal. Documented at the end of this file.
 
 # The .ocd-deploy.json manifest
 
@@ -35,57 +35,59 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
 \`\`\`json
 {
   "$schema": 1,
-  "$llm": "string — URL to the llm.txt that documents this manifest format (lets AI agents fetch the latest schema)",
-  "name": "string (required) — display name shown in the deploy UI",
-  "description": "string — short description shown when picking a service",
-  "icon": "string — URL to a small logo/icon",
+  "$llm": "string: URL to the llm.txt that documents this manifest format (lets AI agents fetch the latest schema)",
+  "name": "string (required): display name shown in the deploy UI",
+  "description": "string: short description shown when picking a service",
+  "icon": "string: URL to a small logo/icon",
 
   "build": {
-    "dockerfile": "string — path to Dockerfile, relative to this file's directory (default: Dockerfile)",
-    "context": "string — Docker build context path, relative to the repo root (default: \".\" i.e. the repo root)",
-    "container_port": "number — port the app listens on inside the container (1–65535)"
+    "dockerfile": "string: path to Dockerfile, relative to this file's directory (default: Dockerfile)",
+    "context": "string: Docker build context path, relative to the repo root (default: \".\" i.e. the repo root)",
+    "container_port": "number: port the app listens on inside the container (1–65535)"
   },
 
   "env": [
     {
-      "key": "string (required) — environment variable name, e.g. DATABASE_URL",
-      "description": "string — explains what this variable is for (shown as hint in UI)",
-      "default": "string — pre-filled value; omit for secrets the user must provide",
-      "required": "boolean — if true, deploy is blocked until the user fills this in",
-      "secret": "boolean — if true, the input field is masked in the UI"
+      "key": "string (required): environment variable name, e.g. DATABASE_URL",
+      "description": "string: explains what this variable is for (shown as hint in UI)",
+      "default": "string: pre-filled value; omit for secrets the user must provide",
+      "required": "boolean: if true, deploy is blocked until the user fills this in",
+      "secret": "boolean: if true, the input field is masked in the UI"
     }
   ],
 
   "volume": {
-    "size": "number — suggested persistent volume size in GB",
-    "path": "string — mount path inside the container (must start with /)"
+    "size": "number: suggested persistent volume size in GB",
+    "path": "string: mount path inside the container (must start with /)"
   },
 
   "webhook": {
-    "enabled": "boolean — enable auto-deploy on git push",
-    "branch": "string — branch to watch (default: repo's default branch)",
-    "path": "string — only redeploy when files under this path prefix change",
-    "wait_for_ci": "boolean — wait for CI checks to pass before deploying (default: false)"
+    "enabled": "boolean: enable auto-deploy on git push",
+    "branch": "string: branch to watch (default: repo's default branch)",
+    "path": "string: only redeploy when files under this path prefix change",
+    "wait_for_ci": "boolean: wait for CI checks to pass before deploying (default: false)"
   },
 
-  "suggested_app_name": "string — suggested app name (DNS-safe: lowercase, digits, hyphens)",
-  "replicas": "number — desired replica count (default: 1)",
-  "public": "boolean — whether the app is publicly accessible (default: true)",
-  "memory_mb": "number — per-container memory ceiling in MB (--memory/--memory-swap). Omit or 0 to use the platform default (512). Allowed: 0 or 128–32768.",
-  "cpu_limit": "number — per-container CPU ceiling in cores (--cpus), fractional allowed. Omit or 0 to use the platform default (1). Allowed: 0 or 0.1–32.",
-  "health_check": "boolean — set false for apps that don't speak HTTP on the exposed port (databases, queue workers); the platform then only verifies the container stays running (default: true)",
-  "internal_protocol": "string — internal routing protocol: \"http\" (L7 routing) or \"tcp\" (raw pass-through). Omit to derive from health_check (http when probing, tcp when not). Password protection, sticky sessions and health_check_path require \"http\".",
-  "sticky": "boolean — cookie-based sticky sessions on the app's ingress service; requires internal_protocol \"http\" (default: false)",
-  "rate_limit_rps": "number — public-domain rate limit in requests/sec per client IP; 0 = unlimited (default: 0)",
-  "ip_allowlist": "string — comma-separated IPs/CIDRs allowed to reach the public domain, e.g. \"203.0.113.4, 10.0.0.0/8\"; empty = open to all",
-  "health_check_path": "string — active HTTP health-check path (e.g. \"/healthz\"); replicas failing it leave the load-balancer rotation. Requires internal_protocol \"http\"; empty = off",
-  "compress": "boolean — gzip responses on the public domain (default: false)",
-  "public_port": "number | \"auto\" — expose a raw public TCP/UDP port on the panel IP (game servers, databases, MQTT); \"auto\" picks the lowest free pool port. Independent of the public HTTP domain. Omit for no raw exposure",
-  "public_protocol": "string — pool for public_port: \"tcp\" (30000-30049) or \"udp\" (30050-30099); default \"tcp\"",
+  "suggested_app_name": "string: suggested app name (DNS-safe: lowercase, digits, hyphens)",
+  "replicas": "number: desired replica count (default: 1)",
+  "public": "boolean: whether the app is publicly accessible (default: true)",
+  "memory_mb": "number: per-container memory ceiling in MB (--memory/--memory-swap). Omit or 0 to use the platform default (512). Allowed: 0 or 128–32768.",
+  "cpu_limit": "number: per-container CPU ceiling in cores (--cpus), fractional allowed. Omit or 0 to use the platform default (1). Allowed: 0 or 0.1–32.",
+  "health_check": {
+    "enabled": "boolean. Set false for apps that don't speak HTTP on the exposed port (databases, queue workers); the platform then only verifies the container stays running (default: true)",
+    "path": "string. Endpoint the post-deploy probe and Traefik's rotation check both request, e.g. \"/healthz\" (default: \"/\"). Setting a path also enables Traefik's continuous check, which drops failing replicas from rotation. Requires internal_protocol \"http\""
+  },
+  "internal_protocol": "string. Internal routing protocol: \"http\" (L7 routing) or \"tcp\" (raw pass-through). Omit to derive from health_check.enabled (http when probing, tcp when not). Password protection, sticky sessions and health_check.path require \"http\".",
+  "sticky": "boolean. Cookie-based sticky sessions on the app's ingress service; requires internal_protocol \"http\" (default: false)",
+  "rate_limit_rps": "number. Public-domain rate limit in requests/sec per client IP; 0 = unlimited (default: 0)",
+  "ip_allowlist": "string. Comma-separated IPs/CIDRs allowed to reach the public domain, e.g. \"203.0.113.4, 10.0.0.0/8\"; empty = open to all",
+  "compress": "boolean. gzip responses on the public domain (default: false)",
+  "public_port": "number | \"auto\". Expose a raw public TCP/UDP port on the panel IP (game servers, databases, MQTT); \"auto\" picks the lowest free pool port. Independent of the public HTTP domain. Omit for no raw exposure",
+  "public_protocol": "string. Pool for public_port: \"tcp\" (30000-30049) or \"udp\" (30050-30099); default \"tcp\"",
   "extra_volumes": [
     {
-      "host_path": "string — absolute path on the host machine",
-      "container_path": "string — absolute mount path inside the container"
+      "host_path": "string: absolute path on the host machine",
+      "container_path": "string: absolute mount path inside the container"
     }
   ]
 }
@@ -101,7 +103,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 - Paths must not contain \`..\`.
 - \`env[].key\` must match \`/^[A-Za-z_][A-Za-z0-9_]*$/\`. Reserved prefixes (\`DOCKER_\`, \`PATH\`, \`HOME\`, \`LD_\`, \`DYLD_\`) are blocked.
 - A repo can have up to 10 manifest files. Extra manifests beyond 10 are ignored.
-- Deployed apps are health-checked with an HTTP request to \`/\` on the exposed port; a deploy that never answers is rolled back. For non-HTTP apps (databases, queue workers) set \`"health_check": false\` so the platform only verifies the container stays running.
+- Deployed apps are health-checked with an HTTP request to \`health_check.path\` (default \`/\`) on the exposed port; a deploy that never answers is rolled back. For non-HTTP apps (databases, queue workers) set \`"health_check": { "enabled": false }\` so the platform only verifies the container stays running.
 
 ## Example: Single service
 
@@ -163,7 +165,7 @@ All fields except \`name\` are optional. Unknown fields are ignored for forward 
 ## Guidelines for env vars
 
 - Use \`required: true\` for variables that have no sensible default and must be provided by the deployer.
-- Use \`secret: true\` for credentials, API keys, and connection strings — the UI will mask these inputs.
+- Use \`secret: true\` for credentials, API keys, and connection strings; the UI will mask these inputs.
 - Provide a \`default\` for non-sensitive configuration that works out of the box (e.g. \`NODE_ENV=production\`).
 - Add a \`description\` to help the deployer understand what each variable is for.
 
@@ -219,7 +221,7 @@ ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>] [--set=KEY=VALUE ...
 
 Run from inside a git repo with an \`origin\` remote. Reads the manifest (default: \`./.ocd-deploy.json\`) for the app name, build settings, port, env vars, webhook, volume, and scaling configuration, then streams deploy progress step by step until it completes or fails. \`--domain\` sets a custom domain.
 
-Env vars from the manifest's \`env[]\` section are included automatically: entries with a \`default\` are sent as-is, \`--set=KEY=VALUE\` (repeatable) overrides or adds values, and \`required\` vars still missing a value are prompted for interactively (hidden input when \`secret\`). In non-interactive shells, missing required vars fail the deploy with a message listing them — provide them via \`--set\`. Alternatively, \`--env\` links the app to an existing environment, which then supplies all variables (manifest env vars and \`--set\` are ignored).
+Env vars from the manifest's \`env[]\` section are included automatically: entries with a \`default\` are sent as-is, \`--set=KEY=VALUE\` (repeatable) overrides or adds values, and \`required\` vars still missing a value are prompted for interactively (hidden input when \`secret\`). In non-interactive shells, missing required vars fail the deploy with a message listing them; provide them via \`--set\`. Alternatively, \`--env\` links the app to an existing environment, which then supplies all variables (manifest env vars and \`--set\` are ignored).
 
 ### ocd envs
 

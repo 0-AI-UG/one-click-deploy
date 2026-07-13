@@ -223,7 +223,7 @@ export function TerminalPage({ kind, id }: Props) {
       <div className="flex items-center gap-3 mb-4">
         <Btn variant="ghost" onClick={() => window.history.back()}><ArrowLeft size={14} /></Btn>
         <h1 className="font-mono font-bold text-sm text-fg uppercase">
-          Terminal — {kind} #{id}
+          Terminal: {kind} #{id}
         </h1>
         <span className={`font-mono text-[9px] uppercase tracking-wider ${statusColor}`}>{status}</span>
       </div>
@@ -240,7 +240,7 @@ export function TerminalPage({ kind, id }: Props) {
             <div className="font-mono text-xs text-accent-amber uppercase tracking-wider text-center">
               {status === "connecting" ? <span className="inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Connecting</span>
                 : status === "ended" ? <>Session ended<br /><button className="mt-2 underline text-[10px] cursor-pointer" onClick={connect}>reconnect</button></>
-                : <><span className="inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Disconnected — reconnecting</span><br /><button className="mt-2 underline text-[10px] cursor-pointer" onClick={() => { backoffRef.current = 500; connect(); }}>reconnect now</button></>
+                : <><span className="inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Disconnected, reconnecting</span><br /><button className="mt-2 underline text-[10px] cursor-pointer" onClick={() => { backoffRef.current = 500; connect(); }}>reconnect now</button></>
               }
             </div>
           </div>

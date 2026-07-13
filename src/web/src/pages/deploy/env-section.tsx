@@ -40,7 +40,7 @@ export function EnvSection({ envValues, setEnvValues, manifestEnvDefs, selectedE
               { value: "new", label: "Create new environment" },
               ...environments.map((env) => ({
                 value: String(env.id),
-                label: `${env.name} — ${env.env_vars.length} var${env.env_vars.length !== 1 ? "s" : ""}`,
+                label: `${env.name} (${env.env_vars.length} var${env.env_vars.length !== 1 ? "s" : ""})`,
               })),
             ]}
           />
@@ -50,7 +50,7 @@ export function EnvSection({ envValues, setEnvValues, manifestEnvDefs, selectedE
       {selectedEnv && (
         <div className="space-y-1">
           <p className="font-mono text-[9px] text-muted uppercase tracking-wider">
-            Using environment "{selectedEnv.name}" — edit variables on the{" "}
+            Using environment "{selectedEnv.name}". Edit variables on the{" "}
             <a href="#/environments" className="font-bold text-accent-blue hover:underline">Environments page</a>
           </p>
           {selectedEnv.env_vars.length > 0 && (

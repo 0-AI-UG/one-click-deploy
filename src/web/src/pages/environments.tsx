@@ -98,7 +98,7 @@ export function EnvironmentsPage() {
   const attachApp = async (envId: number, appId: number) => {
     try {
       await post(`/api/environments/${envId}/apps`, { app_id: appId });
-      showToast("App attached — redeploying", "success");
+      showToast("App attached, redeploying", "success");
       load();
     } catch (err: any) {
       showToast(err.message || "Failed to attach", "error");

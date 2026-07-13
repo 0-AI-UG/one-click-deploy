@@ -146,7 +146,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
               {selected.recommendedMemoryMb ? (
                 <div className="bg-alt border-2 border-fg/30 px-3 py-2">
                   <p className="font-mono text-[9px] text-muted">
-                    Needs ~{(selected.recommendedMemoryMb / 1024).toFixed(0)}GB RAM — a larger server is provisioned automatically. <InfoTip text="Reusing a small existing server may be tight on memory." />
+                    Needs ~{(selected.recommendedMemoryMb / 1024).toFixed(0)}GB RAM. A larger server is provisioned automatically. <InfoTip text="Reusing a small existing server may be tight on memory." />
                   </p>
                 </div>
               ) : null}
@@ -239,7 +239,7 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
                     value={environmentId ? String(environmentId) : ""}
                     onChange={(v) => setEnvironmentId(v ? Number(v) : null)}
                     options={[
-                      { value: "", label: "None — add manually later" },
+                      { value: "", label: "None (add manually later)" },
                       ...environments.map((e) => ({ value: String(e.id), label: e.name })),
                     ]}
                   />

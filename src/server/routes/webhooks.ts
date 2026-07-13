@@ -29,7 +29,7 @@ async function waitForCi(appId: number, sha: string): Promise<boolean> {
           git_commit: sha.slice(0, 7),
           status: "failed",
           source: "webhook",
-          deploy_log: `CI checks failed for commit ${sha.slice(0, 7)} — deploy skipped`,
+          deploy_log: `CI checks failed for commit ${sha.slice(0, 7)}; deploy skipped`,
         });
         return false;
       }
@@ -44,7 +44,7 @@ async function waitForCi(appId: number, sha: string): Promise<boolean> {
     git_commit: sha.slice(0, 7),
     status: "failed",
     source: "webhook",
-    deploy_log: `CI checks timed out after 30 minutes for commit ${sha.slice(0, 7)} — deploy skipped`,
+    deploy_log: `CI checks timed out after 30 minutes for commit ${sha.slice(0, 7)}; deploy skipped`,
   });
   return false;
 }

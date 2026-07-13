@@ -807,7 +807,7 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
     // the container-is-running verification.
     const httpProbe = req.health_check !== false;
     const health = httpProbe
-      ? await healthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined)
+      ? await healthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined, req.health_check_path)
       : await containerRunningCheck(server.serverIp, req.app_name, 10, server.serverHostKey || undefined);
 
     if (health.healthy) {

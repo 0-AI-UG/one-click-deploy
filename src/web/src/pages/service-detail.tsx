@@ -172,7 +172,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
       </div>
 
       {service.status === "paused" && (
-        <PausedBanner message="Service is paused — container is frozen">
+        <PausedBanner message="Service is paused; container is frozen">
           <PermissionGate permission="services.manage">
             <Btn size="xs" loading={actionLoading === "unpause"} onClick={() => action("unpause", "Unpause")}>
               <Play size={12} /> Unpause

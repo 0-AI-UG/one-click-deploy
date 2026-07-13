@@ -33,7 +33,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
 };
 
 function printUsage(): void {
-  console.log(`${BOLD}ocd${RESET} — One-Click Deploy CLI v${VERSION}
+  console.log(`${BOLD}ocd${RESET}: One-Click Deploy CLI v${VERSION}
 
 ${BOLD}Usage:${RESET} ocd <command> [args]
 

@@ -1,4 +1,5 @@
 import { Info } from "lucide-react";
+import { Checkbox, Field } from "../../components/ui";
 
 export function InfoTip({ text }: { text: string }) {
   return (
@@ -8,6 +9,52 @@ export function InfoTip({ text }: { text: string }) {
         {text}
       </span>
     </span>
+  );
+}
+
+/**
+ * The app's HTTP health check, as one control shared by the deploy form and the
+ * settings tab. `health_check` is the master switch — it gates both the
+ * post-deploy/scale probe and Traefik's continuous rotation check — and
+ * `health_check_path` is the single path both of those probes request (blank =
+ * the root `/` for the deploy probe; Traefik's continuous check needs an
+ * explicit path). They used to be two separate fields that read as duplicates;
+ * keeping them in one component here is what keeps the two pages in sync.
+ * `onChange` hands back both values so each page maps them into its own state.
+ */
+export function HealthCheckField({
+  enabled,
+  path,
+  onChange,
+}: {
+  enabled: boolean;
+  path: string;
+  onChange: (next: { health_check: boolean; health_check_path: string }) => void;
+}) {
+  return (
+    <Field
+      align="start"
+      label={<span className="flex items-center gap-2">Health Check <InfoTip text="Checks the app answers HTTP after each deploy and periodically while running; failing replicas restart or leave rotation. Off = only verify the container runs (non-HTTP apps). HTTP routing only." /></span>}
+      hint="applied on the next deploy or scale"
+    >
+      <div className="space-y-2">
+        <div className="flex justify-start">
+          <Checkbox
+            checked={enabled}
+            onChange={(v) => onChange({ health_check: v, health_check_path: v ? path : "" })}
+            label="Check over HTTP"
+          />
+        </div>
+        {enabled && (
+          <input
+            type="text"
+            value={path}
+            onChange={(e) => onChange({ health_check: enabled, health_check_path: e.target.value })}
+            placeholder="/healthz (blank probes /)"
+          />
+        )}
+      </div>
+    </Field>
   );
 }
 

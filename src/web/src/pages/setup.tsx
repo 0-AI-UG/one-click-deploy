@@ -155,7 +155,7 @@ export function SetupPage() {
                 align="start"
                 hint={<>Find it at <a href="https://dns.hetzner.com" target="_blank" rel="noreferrer" className="underline hover:text-fg">dns.hetzner.com</a> → your zone (the ID in the URL). Leave blank to manage DNS yourself.</>}
               >
-                <input type="text" value={form.dns_zone_id} onChange={set("dns_zone_id")} placeholder="Optional — auto-creates DNS records" />
+                <input type="text" value={form.dns_zone_id} onChange={set("dns_zone_id")} placeholder="Optional; auto-creates DNS records" />
               </Field>
               <div className="text-[9px] font-mono uppercase tracking-wider text-muted -mt-1">
                 {typesLoading ? <span className="inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Loading server types</span> : serverTypes.length === 0 ? "Enter a valid Hetzner token to load server types" : `${serverTypes.length} server types available`}

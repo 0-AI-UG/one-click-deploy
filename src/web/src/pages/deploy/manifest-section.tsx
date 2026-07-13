@@ -82,7 +82,7 @@ export function ManifestSection({ detected, selectedManifest, onSelect, onClear 
           </span>
           {detected.manifests[0].manifest.description && (
             <span className="font-mono text-[10px] text-fg-dim">
-              — {detected.manifests[0].manifest.description}
+              ({detected.manifests[0].manifest.description})
             </span>
           )}
         </div>

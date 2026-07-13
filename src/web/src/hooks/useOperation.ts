@@ -415,7 +415,7 @@ export function trackOperationInToast(
         ? "Added to queue"
         : lastStatus === "running"
           ? lastStep
-            ? `Working on it — ${humanizeStep(lastStep)}…`
+            ? `Working on it: ${humanizeStep(lastStep)}…`
             : "Working on it…"
           : lastStatus === "compensating"
             ? "Rolling back…"

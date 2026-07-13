@@ -43,12 +43,14 @@ export type DeployManifest = {
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   memory_mb?: number;
   cpu_limit?: number;
-  health_check?: boolean;
+  // Nested so the toggle and its path read as one feature (mirrors the deploy
+  // UI and the manifest schema). enabled defaults true; path feeds both the
+  // post-deploy probe and Traefik's rotation check.
+  health_check?: { enabled?: boolean; path?: string };
   internal_protocol?: "http" | "tcp";
   sticky?: boolean;
   rate_limit_rps?: number;
   ip_allowlist?: string;
-  health_check_path?: string;
   compress?: boolean;
   public_port?: number | "auto" | null;
   public_protocol?: "tcp" | "udp";

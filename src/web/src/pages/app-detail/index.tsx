@@ -249,7 +249,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
       </div>
 
       {app.status === "paused" && (
-        <PausedBanner message="App is paused — containers are frozen and not serving traffic">
+        <PausedBanner message="App is paused; containers are frozen and not serving traffic">
           <PermissionGate permission="apps.pause">
             <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
               <Play size={12} /> Unpause

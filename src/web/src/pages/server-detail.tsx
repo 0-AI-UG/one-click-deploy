@@ -316,7 +316,7 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
             {portBlocks.map((g) => (
               <span
                 key={g.key}
-                title={`${g.count} listening in ${g.lo}-${g.hi} — ${g.note}, held for the fleet's lifetime`}
+                title={`${g.count} listening in ${g.lo}-${g.hi}: ${g.note}, held for the fleet's lifetime`}
                 className={`inline-flex items-center gap-1.5 border ${g.tone === "amber" ? "border-accent-amber/40" : "border-accent-blue/40"} bg-alt px-2 py-0.5 font-mono text-[10px] font-bold text-fg`}
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${g.tone === "amber" ? "bg-accent-amber" : "bg-accent-blue"}`} />

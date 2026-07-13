@@ -79,7 +79,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
     : failed
       ? errorMessage || `Deploy ${status}`
       : lastForward
-        ? `${humanizeStep(lastForward.step)}${lastForward.detail ? ` — ${lastForward.detail}` : ""}`
+        ? `${humanizeStep(lastForward.step)}${lastForward.detail ? `: ${lastForward.detail}` : ""}`
         : status === "pending" ? "Added to queue" : "Starting";
 
   const pill = succeeded
@@ -160,7 +160,7 @@ export function ServiceDeployProgressPage({ opId }: { opId: number | null }) {
                   </span>
                   <span className="whitespace-pre-wrap break-all">
                     {ev.status}
-                    {ev.detail ? ` — ${ev.detail}` : ""}
+                    {ev.detail ? `: ${ev.detail}` : ""}
                   </span>
                 </div>
               );

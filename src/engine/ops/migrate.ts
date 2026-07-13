@@ -134,7 +134,7 @@ const verifyReplicaHealthy: Step<MigrateInput, { ok: true; healthy: boolean }> =
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
     const health = app.health_check
-      ? await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey)
+      ? await healthCheck(server.ipv4, replica.container_name, bindAddr, replica.host_port, 5, hostKey, app.health_check_path ?? undefined)
       : await containerRunningCheck(server.ipv4, replica.container_name, 5, hostKey);
     if (!health.healthy) {
       // Surface to the reconciler sweep — stays in cleanup_failed bucket so

@@ -77,7 +77,7 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
     : failed
       ? errorMessage || `Deploy ${status}`
       : lastForward
-        ? `${humanizeStep(lastForward.step)}${lastForward.detail ? ` — ${lastForward.detail}` : ""}`
+        ? `${humanizeStep(lastForward.step)}${lastForward.detail ? `: ${lastForward.detail}` : ""}`
         : status === "pending" ? "Added to queue" : "Starting";
 
   const pill = succeeded

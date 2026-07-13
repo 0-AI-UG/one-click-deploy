@@ -238,7 +238,7 @@ export function VolumeDetailPage({ volumeId }: { volumeId: string }) {
             ) : !filePath ? (
               <EmptyState message="Click a file on the left to view its contents" />
             ) : fileView?.binary ? (
-              <EmptyState message="Binary file — preview not available" icon={FileWarning} />
+              <EmptyState message="Binary file: preview not available" icon={FileWarning} />
             ) : (
               <pre className="border-2 border-fg bg-alt/40 p-3 font-mono text-[11px] leading-relaxed max-h-[60vh] overflow-auto whitespace-pre-wrap break-all">
                 {fileView?.content || ""}

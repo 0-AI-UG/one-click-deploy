@@ -63,7 +63,7 @@ export function EnvVarEditor({ entries, onChange, readOnly, label }: Props) {
                   onChange(next);
                 }}
                 className="text-muted hover:text-fg transition-colors flex-shrink-0"
-                title={v.secret ? "Encrypted — click to make plaintext (you'll need to re-enter the value)" : "Plaintext — click to encrypt"}
+                title={v.secret ? "Encrypted. Click to make plaintext (you'll need to re-enter the value)" : "Plaintext. Click to encrypt"}
               >
                 {v.secret ? <Lock size={14} /> : <Unlock size={14} />}
               </button>

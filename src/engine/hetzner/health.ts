@@ -49,11 +49,21 @@ async function inspectRunning(ip: string, containerName: string, hostKey?: strin
   return inspect.stdout.trim() === "true";
 }
 
+// Normalize a configured health path into a curl-safe request path. Empty
+// (the default for apps.health_check_path) probes the root; a value without a
+// leading slash gets one so `curl` builds a valid URL.
+function probePath(path?: string): string {
+  if (!path) return "/";
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
 // HTTP probe on the container's published port (runs as root, no su hop).
-async function httpProbe(ip: string, bindHost: string, port: number, hostKey?: string): Promise<number> {
+// `path` is the app's configured health-check path (defaults to `/`), so the
+// post-deploy probe hits the same endpoint Traefik's active check uses.
+async function httpProbe(ip: string, bindHost: string, port: number, hostKey?: string, path?: string): Promise<number> {
   const curl = await sshExec(
     ip,
-    `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://${bindHost}:${port}/`,
+    `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://${bindHost}:${port}${probePath(path)}`,
     hostKey,
   );
   return parseInt(curl.stdout.trim(), 10);
@@ -70,8 +80,9 @@ async function httpProbeStep(
   passLabel: string,
   retryLabel: string,
   hostKey?: string,
+  path?: string,
 ): Promise<ProbeStep> {
-  const statusCode = await httpProbe(ip, bindHost, port, hostKey);
+  const statusCode = await httpProbe(ip, bindHost, port, hostKey, path);
   if (statusCode >= 200 && statusCode < 500) {
     return { done: true, log: `${passLabel}: HTTP ${statusCode}`, result: { healthy: true, statusCode } };
   }
@@ -155,10 +166,11 @@ export async function healthCheck(
   bindHost: string,
   port: number,
   maxAttempts = 5,
-  hostKey?: string
+  hostKey?: string,
+  path?: string,
 ): Promise<HealthResult> {
   return runHealthProbe(
-    `Checking health of ${containerName} on ${ip} via ${bindHost}:${port}`,
+    `Checking health of ${containerName} on ${ip} via ${bindHost}:${port}${probePath(path)}`,
     maxAttempts,
     async (i) => {
       if (!(await inspectRunning(ip, containerName, hostKey))) {
@@ -173,7 +185,7 @@ export async function healthCheck(
       // server's private IPv4 for tenant apps, 127.0.0.1 for the panel.
       return httpProbeStep(
         ip, bindHost, port, i, maxAttempts,
-        "Health check passed", "Health check returned", hostKey,
+        "Health check passed", "Health check returned", hostKey, path,
       );
     },
   );
@@ -214,7 +226,7 @@ export async function containerRunningCheck(
  * result shape either way.
  */
 export async function probeAppHealth(
-  app: { health_check: number },
+  app: { health_check: number; health_check_path?: string | null },
   ip: string,
   containerName: string,
   bindHost: string,
@@ -223,7 +235,7 @@ export async function probeAppHealth(
   hostKey?: string,
 ): Promise<{ healthy: boolean; statusCode?: number; error?: string }> {
   return app.health_check
-    ? healthCheck(ip, containerName, bindHost, port, maxAttempts, hostKey)
+    ? healthCheck(ip, containerName, bindHost, port, maxAttempts, hostKey, app.health_check_path ?? undefined)
     : containerRunningCheck(ip, containerName, maxAttempts, hostKey);
 }
 

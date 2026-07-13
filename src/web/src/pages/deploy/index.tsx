@@ -75,12 +75,12 @@ export function DeployPage() {
 
     setSelectedManifest(idx);
     setForm((f) => {
-      // Explicit manifest value wins; else derive from health_check (the old
-      // coupling) so manifests that only set health_check keep their routing.
-      const internal_protocol = m.internal_protocol ?? (m.health_check === false ? "tcp" : f.internal_protocol);
-      // A raw-TCP app can't answer the post-deploy HTTP probe — keep the form's
+      // Explicit manifest value wins; else derive from health_check.enabled (the
+      // old coupling) so manifests that only toggle the check keep their routing.
+      const internal_protocol = m.internal_protocol ?? (m.health_check?.enabled === false ? "tcp" : f.internal_protocol);
+      // A raw-TCP app can't answer the post-deploy HTTP probe, so keep the form's
       // health_check consistent with the resolved routing protocol.
-      const health_check = internal_protocol === "tcp" ? false : (m.health_check ?? f.health_check);
+      const health_check = internal_protocol === "tcp" ? false : (m.health_check?.enabled ?? f.health_check);
       // Raw public exposure is expressed by public_protocol and/or public_port
       // (a bare public_port defaults to the tcp pool).
       const exposed = m.public_protocol != null || m.public_port != null;
@@ -111,7 +111,7 @@ export function DeployPage() {
         sticky: m.sticky ?? f.sticky,
         rate_limit_rps: m.rate_limit_rps !== undefined ? String(m.rate_limit_rps) : f.rate_limit_rps,
         ip_allowlist: m.ip_allowlist ?? f.ip_allowlist,
-        health_check_path: m.health_check_path ?? f.health_check_path,
+        health_check_path: m.health_check?.path ?? f.health_check_path,
         compress: m.compress ?? f.compress,
         public_protocol: m.public_protocol ?? (exposed ? "tcp" : f.public_protocol),
         public_port: typeof m.public_port === "number"
@@ -343,7 +343,7 @@ export function DeployPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (introspecting)
-      return showToast("Hold on — still peeking at the repo", "info");
+      return showToast("Hold on, still peeking at the repo", "info");
     if (!form.app_name || !form.git_repo)
       return showToast("App name and git repo are required", "error");
 

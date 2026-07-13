@@ -66,7 +66,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
             {app.domain && app.public ? (
               <div className="flex justify-between items-center"><span className="text-muted">Public URL</span><span className="flex items-center gap-1"><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="text-accent-blue font-bold hover:underline">https://{app.domain}</a><CopyButton text={`https://${app.domain}`} /><a href={`https://${app.domain}`} target="_blank" rel="noopener" className="p-1 text-muted hover:text-fg"><ExternalLink size={10} /></a></span></div>
             ) : (
-              <div className="flex justify-between items-center"><span className="text-muted">Public Access</span><span className="flex items-center gap-1"><span className="text-fg-dim font-bold">Disabled</span><span className="font-mono text-[8px] font-bold border border-fg px-1 uppercase">Private</span></span></div>
+              <div className="flex justify-between items-center"><span className="text-muted">Public Domain</span><span className="flex items-center gap-1"><span className="text-fg-dim font-bold">Disabled</span><span className="font-mono text-[8px] font-bold border border-fg px-1 uppercase">Private</span></span></div>
             )}
             <div className="flex justify-between items-center">
               <span className="text-muted flex items-center gap-1">Internal URL <InfoTip text="Reachable from other apps on the private network. Set this in env vars when one app needs to call another." /></span>
