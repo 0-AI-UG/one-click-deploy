@@ -98,6 +98,7 @@ import {
   handleGetStackLog,
   handleDestroyStack,
 } from "./routes/stacks.ts";
+import { VERSION } from "../shared/version.ts";
 
 function appIdFrom(req: Request): number {
   const url = new URL(req.url);
@@ -156,7 +157,7 @@ export const apiRoutes = {
   // --- Health probe (public, used by Docker HEALTHCHECK and reverse proxies) ---
   "/api/health": {
     GET: () =>
-      new Response(JSON.stringify({ ok: true }), {
+      new Response(JSON.stringify({ ok: true, version: VERSION }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),

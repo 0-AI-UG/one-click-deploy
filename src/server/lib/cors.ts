@@ -1,5 +1,7 @@
 // Same-origin by default. Set CORS_ORIGIN to an explicit origin (or "*" only
 // if you really need it) to enable cross-origin API access.
+import { VERSION } from "../../shared/version.ts";
+
 const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "";
 const IS_PROD = process.env.NODE_ENV === "production";
 
@@ -20,6 +22,9 @@ export const securityHeaders: Record<string, string> = {
   "X-Frame-Options": "DENY",
   "Referrer-Policy": "no-referrer",
   "Cross-Origin-Opener-Policy": "same-origin",
+  // Lets the CLI (and other clients) detect the backend version from any
+  // response so it can warn when the CLI is behind. See src/cli/api.ts.
+  "X-OCD-Version": VERSION,
   ...(IS_PROD
     ? { "Strict-Transport-Security": "max-age=31536000; includeSubDomains" }
     : {}),

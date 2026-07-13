@@ -26,7 +26,7 @@ describe("platformEnvVars", () => {
 });
 
 describe("resolveAppEnvVars platform injection", () => {
-  function makeApp(opts: { environment_id?: number; health_check?: boolean } = {}) {
+  function makeApp(opts: { environment_id?: number; health_check?: boolean; internal_protocol?: "http" | "tcp" } = {}) {
     const name = `envtest-${randomSuffix()}`;
     return db.insertApp({
       name,
@@ -37,6 +37,7 @@ describe("resolveAppEnvVars platform injection", () => {
       env_vars: "{}",
       environment_id: opts.environment_id,
       health_check: opts.health_check,
+      internal_protocol: opts.internal_protocol,
     });
   }
 
@@ -66,8 +67,8 @@ describe("resolveAppEnvVars platform injection", () => {
     expect(vars.OCD_INTERNAL_PORT).toBe(String(app.internal_port));
   });
 
-  test("tcp scheme for a health_check=false app", async () => {
-    const app = makeApp({ health_check: false });
+  test("tcp scheme for a tcp-routed app", async () => {
+    const app = makeApp({ internal_protocol: "tcp" });
     const vars = await resolveAppEnvVars(app);
     expect(vars.OCD_INTERNAL_URL).toBe(`tcp://${app.name}.ocd.internal:${app.internal_port}`);
   });

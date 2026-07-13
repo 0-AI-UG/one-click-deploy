@@ -1,4 +1,22 @@
 import { requireConfig } from "./config.ts";
+import { VERSION } from "./version.ts";
+import { DIM, RESET, YELLOW } from "./format.ts";
+
+// Warn at most once per process when the backend reports a different version
+// than this CLI, so a stale CLI (issue: version drift was invisible) is
+// obvious without nagging on every request.
+let versionWarned = false;
+function checkBackendVersion(res: Response): void {
+  if (versionWarned) return;
+  const backend = res.headers.get("X-OCD-Version");
+  // "dev" = running from source; nothing meaningful to compare.
+  if (!backend || VERSION === "dev" || backend === "dev" || backend === VERSION) return;
+  versionWarned = true;
+  console.error(
+    `${YELLOW}⚠ ocd CLI v${VERSION} differs from the panel (v${backend}).${RESET} ` +
+      `${DIM}Reinstall the CLI from your panel to update.${RESET}`,
+  );
+}
 
 export async function get<T>(path: string): Promise<T> {
   return apiRequest<T>("GET", path);
@@ -16,18 +34,49 @@ export async function del<T>(path: string, body?: unknown): Promise<T> {
   return apiRequest<T>("DELETE", path, body);
 }
 
+/**
+ * An HTTP/transport failure talking to the panel. Carries the request context
+ * and status so callers can surface a useful message and decide whether to
+ * retry. `status` is 0 for a transport-level failure (DNS/connection reset).
+ */
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly method: string,
+    public readonly path: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+
+  /** Transient gateway / network conditions worth retrying a poll through. */
+  get isTransient(): boolean {
+    return this.status === 0 || this.status === 502 || this.status === 503 || this.status === 504;
+  }
+}
+
 async function apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   const config = requireConfig();
   const url = `${config.panel_url}${path}`;
 
-  const res = await fetch(url, {
-    method,
-    headers: {
-      "Authorization": `Bearer ${config.token}`,
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        "Authorization": `Bearer ${config.token}`,
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    // Transport-level failure (panel unreachable, connection reset, DNS, …).
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new ApiError(0, method, path, `${method} ${path} — could not reach panel: ${detail}`);
+  }
+
+  checkBackendVersion(res);
 
   if (res.status === 401) {
     console.error("Session expired. Run `ocd login` again.");
@@ -35,8 +84,14 @@ async function apiRequest<T>(method: string, path: string, body?: unknown): Prom
   }
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
-    throw new Error(err.error || `HTTP ${res.status}`);
+    const err = (await res.json().catch(() => null)) as { error?: string } | null;
+    const server = err?.error ? `: ${err.error}` : "";
+    throw new ApiError(
+      res.status,
+      method,
+      path,
+      `${method} ${path} → HTTP ${res.status} ${res.statusText}${server}`,
+    );
   }
 
   return res.json() as Promise<T>;

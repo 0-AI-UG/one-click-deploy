@@ -297,13 +297,16 @@ describe("validateDeployRequest", () => {
     expect(validateDeployRequest({ ...validRequest, cpu_limit: 0.333333 }).valid).toBe(false);
   });
 
-  test("rejects auth_password on a raw-TCP app (health_check: false)", () => {
-    expect(validateDeployRequest({ ...validRequest, auth_password: "pw", health_check: false }).valid).toBe(false);
+  test("rejects auth_password on a raw-TCP app (internal_protocol: tcp)", () => {
+    expect(validateDeployRequest({ ...validRequest, auth_password: "pw", internal_protocol: "tcp" }).valid).toBe(false);
   });
 
-  test("accepts auth_password when the HTTP probe is on (default or explicit)", () => {
+  test("accepts auth_password on an HTTP-routed app regardless of the probe flag", () => {
+    // Decoupled: internal_protocol defaults to http, so health_check:false no
+    // longer implies tcp routing — auth is allowed in every combination below.
     expect(validateDeployRequest({ ...validRequest, auth_password: "pw" }).valid).toBe(true);
     expect(validateDeployRequest({ ...validRequest, auth_password: "pw", health_check: true }).valid).toBe(true);
+    expect(validateDeployRequest({ ...validRequest, auth_password: "pw", health_check: false }).valid).toBe(true);
   });
 
   test("internal_protocol must be http or tcp", () => {
@@ -321,9 +324,9 @@ describe("validateDeployRequest", () => {
     if (!r.valid) expect(r.error).toMatch(/requires HTTP internal routing/i);
   });
 
-  test("explicit internal_protocol http overrides health_check: false for the auth rule", () => {
-    // health_check:false would derive tcp, but an explicit http routing wins,
-    // so auth is allowed.
+  test("http routing allows auth even with the HTTP probe disabled", () => {
+    // Routing and probe are independent: http routing permits basic auth
+    // regardless of health_check.
     expect(validateDeployRequest({ ...validRequest, auth_password: "pw", internal_protocol: "http", health_check: false }).valid).toBe(true);
   });
 
@@ -365,8 +368,8 @@ describe("validateDeployRequest", () => {
     if (!r.valid) expect(r.error).toMatch(/must start with/i);
   });
 
-  test("rejects health_check_path on a raw-TCP app (health_check: false)", () => {
-    expect(validateDeployRequest({ ...validRequest, health_check_path: "/healthz", health_check: false }).valid).toBe(false);
+  test("rejects health_check_path on a raw-TCP app (internal_protocol: tcp)", () => {
+    expect(validateDeployRequest({ ...validRequest, health_check_path: "/healthz", internal_protocol: "tcp" }).valid).toBe(false);
   });
 
   test("accepts public raw exposure: auto or an in-range port, even for HTTP-private apps", () => {
@@ -618,8 +621,9 @@ describe("validateDeployManifest", () => {
 
   test("rejects health_check.path on a raw-TCP manifest", () => {
     expect(validateDeployManifest({ name: "x", internal_protocol: "tcp", health_check: { path: "/healthz" } }).ok).toBe(false);
-    // enabled:false derives tcp routing, so the path is rejected there too
-    expect(validateDeployManifest({ name: "x", health_check: { enabled: false, path: "/healthz" } }).ok).toBe(false);
+    // Decoupled: enabled:false no longer implies tcp routing (defaults to http),
+    // so a path alongside a disabled probe is accepted at the routing rule.
+    expect(validateDeployManifest({ name: "x", health_check: { enabled: false, path: "/healthz" } }).ok).toBe(true);
   });
 
   test("rejects a public_port outside its protocol pool", () => {
@@ -654,7 +658,7 @@ describe("validateIngressFields (shared by deploy + ingress endpoint)", () => {
   test("deploy and ingress agree: same rule yields the same error string", () => {
     const viaDeploy = validateDeployRequest({
       app_name: "a", git_repo: "https://github.com/x/y.git", container_port: 3000,
-      auth_password: "pw", health_check: false,
+      auth_password: "pw", internal_protocol: "tcp",
     });
     const viaHelper = validateIngressFields({ auth_password: "pw" }, { httpRouted: false });
     expect(viaDeploy.valid).toBe(false);

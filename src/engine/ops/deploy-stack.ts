@@ -148,6 +148,9 @@ const plan: Step<DeployStackInput, PlanOut> = {
       envId = existing.environment_id;
       createdStack = false;
       createdEnv = false;
+      // Reflect the in-progress re-up in `stack ls` (and reset any prior
+      // 'failed'); finalize flips it back to 'running' on success.
+      db.updateStackStatus(stackId, "deploying");
       ctx.log(`reusing existing stack #${existing.id} (env ${envId})`);
     } else {
       // First-time creation. If the caller named an existing environment, attach
@@ -192,12 +195,20 @@ const plan: Step<DeployStackInput, PlanOut> = {
     return { stackId, environmentId: envId, levels, createdStack, createdEnv };
   },
   async compensate(ctx, out) {
-    if (!out || !out.createdStack) return;
-    // DB teardown of the stack + environment created this run. Deleting an
-    // already-gone row is a no-op (so retry is safe); let a genuine failure
-    // PROPAGATE rather than orphan the stack/env rows behind a clean
-    // `compensated`. A reused environment is left in place — we didn't create
-    // it, so we don't destroy it.
+    if (!out) return;
+    if (!out.createdStack) {
+      // Reconcile of a pre-existing stack failed: we didn't create the stack
+      // (or its env) this run, so we leave both in place — but mark the stack
+      // 'failed' so a rolled-back re-up doesn't silently linger as 'running'
+      // or stuck 'deploying'. The stack row + log survive for `ocd stack logs`.
+      db.updateStackStatus(out.stackId, "failed");
+      return;
+    }
+    // First-time creation failed: DB teardown of the stack + environment
+    // created this run. Deleting an already-gone row is a no-op (so retry is
+    // safe); let a genuine failure PROPAGATE rather than orphan the stack/env
+    // rows behind a clean `compensated`. A reused environment is left in place —
+    // we didn't create it, so we don't destroy it.
     db.deleteStack(out.stackId);
     if (out.createdEnv) db.deleteEnvironment(out.environmentId);
   },

@@ -252,11 +252,10 @@ function resolvePublicPort(app: InsertAppFields): number | null {
 // identically.
 function insertAppRow(app: InsertAppFields): AppRow {
   const healthCheck = app.health_check ?? true;
-  // Internal routing protocol is explicit, but when a caller only sets
-  // health_check we derive it from that flag to preserve the pre-migration-67
-  // coupling (http when probing, tcp when not) — identical behavior on day one.
-  const internalProtocol: InternalProtocol =
-    app.internal_protocol ?? (healthCheck ? "http" : "tcp");
+  // Internal routing protocol is an explicit, first-class field (independent of
+  // health_check): use the caller's value or default to "http". Raw-TCP apps
+  // (e.g. databases) must set internal_protocol: "tcp" explicitly.
+  const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
       "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, public, health_check, internal_protocol, internal_port, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",

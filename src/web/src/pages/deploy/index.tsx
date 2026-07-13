@@ -144,12 +144,10 @@ export function DeployPage() {
 
     setSelectedManifest(idx);
     setForm((f) => {
-      // Explicit manifest value wins; else derive from health_check.enabled (the
-      // old coupling) so manifests that only toggle the check keep their routing.
-      const internal_protocol = m.internal_protocol ?? (m.health_check?.enabled === false ? "tcp" : f.internal_protocol);
-      // A raw-TCP app can't answer the post-deploy HTTP probe, so keep the form's
-      // health_check consistent with the resolved routing protocol.
-      const health_check = internal_protocol === "tcp" ? false : (m.health_check?.enabled ?? f.health_check);
+      // internal_protocol and health_check are independent (routing vs probe):
+      // take each from the manifest's explicit value, else keep the form default.
+      const internal_protocol = m.internal_protocol ?? f.internal_protocol;
+      const health_check = m.health_check?.enabled ?? f.health_check;
       // Raw public exposure is expressed by public_protocol and/or public_port
       // (a bare public_port defaults to the tcp pool).
       const exposed = m.public_protocol != null || m.public_port != null;

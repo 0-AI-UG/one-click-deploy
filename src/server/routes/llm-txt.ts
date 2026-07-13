@@ -11,7 +11,7 @@ This document covers the three things an AI agent most often needs: what the pla
 - **Scaling & lifecycle**: replicas (horizontal scaling), auto-scaling, restart, pause/unpause, rollback to a previous deployment, per-app memory & CPU limits.
 - **Managed services**: one-click Postgres, Redis, MySQL, and more; their connection credentials are injected into linked environments.
 - **Environments**: named groups of env vars (plain or secret) that can be shared across apps; changing an environment redeploys its linked apps.
-- **Internal networking**: every app has a stable private address \`<app>.ocd.internal:<internal-port>\` reachable from other apps on the private network (private apps have only this address). The internal routing protocol is set by \`internal_protocol\` (\`"http"\` L7 routing, or \`"tcp"\` raw pass-through; defaults to \`"http"\`, or \`"tcp"\` when \`health_check.enabled\` is false). The platform injects \`OCD_INTERNAL_URL\` (\`http://<app>.ocd.internal:<port>\` for HTTP-routed apps, \`tcp://\` for TCP-routed ones), \`OCD_INTERNAL_HOST\`, and \`OCD_INTERNAL_PORT\` into every app container; a user-defined env var with the same key takes precedence.
+- **Internal networking**: every app has a stable private address \`<app>.ocd.internal:<internal-port>\` reachable from other apps on the private network (private apps have only this address). The internal routing protocol is set by \`internal_protocol\` (\`"http"\` L7 routing, or \`"tcp"\` raw pass-through; defaults to \`"http"\`). The platform injects \`OCD_INTERNAL_URL\` (\`http://<app>.ocd.internal:<port>\` for HTTP-routed apps, \`tcp://\` for TCP-routed ones), \`OCD_INTERNAL_HOST\`, and \`OCD_INTERNAL_PORT\` into every app container; a user-defined env var with the same key takes precedence.
 - **Webhooks**: auto-deploy on git push, optionally scoped to a branch and path prefix, optionally waiting for CI checks to pass first.
 - **Observability & access**: log streaming, a web terminal, and \`ocd ssh\` for running commands in app containers or on servers.
 - **Auth**: passkeys, TOTP, GitHub OAuth, multi-user RBAC.
@@ -79,7 +79,7 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
     "enabled": "boolean. Set false for apps that don't speak HTTP on the exposed port (databases, queue workers); the platform then only verifies the container stays running (default: true)",
     "path": "string. Endpoint the post-deploy probe and Traefik's rotation check both request, e.g. \"/healthz\" (default: \"/\"). Setting a path also enables Traefik's continuous check, which drops failing replicas from rotation. Requires internal_protocol \"http\""
   },
-  "internal_protocol": "string. Internal routing protocol: \"http\" (L7 routing) or \"tcp\" (raw pass-through). Omit to derive from health_check.enabled (http when probing, tcp when not). Password protection, sticky sessions and health_check.path require \"http\".",
+  "internal_protocol": "string. Internal routing protocol: \"http\" (L7 routing) or \"tcp\" (raw pass-through). Defaults to \"http\". Password protection, sticky sessions and health_check.path require \"http\".",
   "sticky": "boolean. Cookie-based sticky sessions on the app's ingress service; requires internal_protocol \"http\" (default: false)",
   "rate_limit_rps": "number. Public-domain rate limit in requests/sec per client IP; 0 = unlimited (default: 0)",
   "ip_allowlist": "string. Comma-separated IPs/CIDRs allowed to reach the public domain, e.g. \"203.0.113.4, 10.0.0.0/8\"; empty = open to all",

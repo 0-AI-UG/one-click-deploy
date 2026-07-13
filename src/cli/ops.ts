@@ -1,5 +1,5 @@
-import { get, post, put, resolveApp, type App } from "./api.ts";
-import { CYAN, GREEN, RED, RESET } from "./format.ts";
+import { get, post, put, resolveApp, ApiError, type App } from "./api.ts";
+import { CYAN, DIM, GREEN, RED, RESET, YELLOW } from "./format.ts";
 
 export interface OperationEventPoll {
   status: "pending" | "running" | "done" | "failed" | "compensating" | "compensated" | "cancelled";
@@ -16,16 +16,50 @@ export interface OperationEventPoll {
 
 export const TERMINAL = new Set(["done", "failed", "cancelled", "compensated"]);
 
+// The op runs server-side regardless of our connection, so a transient gateway
+// blip (panel restart/redeploy mid-op) shouldn't abort following it. Retry the
+// long-poll a bounded number of times, backing off, before giving up.
+const MAX_TRANSIENT_RETRIES = 10;
+const RETRY_BACKOFF_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /**
  * Poll an operation until it reaches a terminal state, printing step events
  * as they arrive. Returns ok=true only if the op completed successfully.
+ *
+ * Resilient to transient gateway/network failures: a 502/503/504 or dropped
+ * connection is retried (with backoff) rather than aborting, since the op keeps
+ * running server-side. Only a terminal op status or exhausted retries stop us.
  */
 export async function followOp(opId: number): Promise<{ ok: boolean; error?: string }> {
   let lastSeq = 0;
+  let transientRetries = 0;
   while (true) {
-    const poll = await get<OperationEventPoll>(
-      `/api/operations/${opId}/events?since=${lastSeq}&wait=15000`,
-    );
+    let poll: OperationEventPoll;
+    try {
+      poll = await get<OperationEventPoll>(
+        `/api/operations/${opId}/events?since=${lastSeq}&wait=15000`,
+      );
+      transientRetries = 0;
+    } catch (err) {
+      if (err instanceof ApiError && err.isTransient && transientRetries < MAX_TRANSIENT_RETRIES) {
+        transientRetries++;
+        console.log(
+          `  ${YELLOW}reconnecting${RESET} ${DIM}(panel unreachable, attempt ${transientRetries}/${MAX_TRANSIENT_RETRIES})${RESET}`,
+        );
+        await sleep(RETRY_BACKOFF_MS);
+        continue;
+      }
+      // Give up following, but the op may still be running server-side.
+      const detail = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        error: `lost contact with panel while following op #${opId} (${detail}); it may still be running — check its status`,
+      };
+    }
 
     for (const event of poll.steps) {
       if (event.phase === "compensate") {

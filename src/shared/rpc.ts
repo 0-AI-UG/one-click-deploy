@@ -135,7 +135,7 @@ export type DeployRequest = {
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
   cpu_limit?: number; // Per-container CPU ceiling in cores (fractional allowed). Omit / 0 → platform default
   health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
-  internal_protocol?: "http" | "tcp"; // Internal routing protocol; omit to derive from health_check (http when probing, tcp when not)
+  internal_protocol?: "http" | "tcp"; // Internal routing protocol (independent of health_check); omit → "http". Raw-TCP apps must set "tcp".
   sticky?: boolean; // Sticky sessions (cookie-based) on the app's ingress service
   rate_limit_rps?: number; // Public-router rate limit in req/s; omit / 0 = unlimited
   ip_allowlist?: string; // Comma-separated IPs/CIDRs gating the public router; omit / "" = open
@@ -202,7 +202,7 @@ export type DeployManifest = {
   // probe and Traefik's rotation check request (default /; setting one also
   // turns on Traefik's continuous check). A path requires internal_protocol 'http'.
   health_check?: { enabled?: boolean; path?: string };
-  internal_protocol?: "http" | "tcp"; // Internal routing protocol; omit to derive from health_check.enabled
+  internal_protocol?: "http" | "tcp"; // Internal routing protocol (independent of health_check.enabled); omit → "http". Raw-TCP apps (e.g. databases) must set "tcp".
   // Ingress / routing (same rules as the deploy request). Sticky sessions
   // require internal_protocol 'http'.
   sticky?: boolean; // Sticky sessions (cookie-based) on the app's ingress service

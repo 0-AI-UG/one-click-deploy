@@ -56,7 +56,7 @@ function makeServer() {
   });
 }
 
-function makeApp(opts: { healthCheck?: boolean; authPassword?: string } = {}) {
+function makeApp(opts: { healthCheck?: boolean; authPassword?: string; internalProtocol?: "http" | "tcp" } = {}) {
   return insertApp({
     name: `idle-app-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
     domain: "",
@@ -65,6 +65,7 @@ function makeApp(opts: { healthCheck?: boolean; authPassword?: string } = {}) {
     container_port: 3000,
     env_vars: "{}",
     health_check: opts.healthCheck ?? true,
+    internal_protocol: opts.internalProtocol,
     auth_password: opts.authPassword,
   });
 }
@@ -197,7 +198,7 @@ describe("evaluateAutoScale", () => {
   // counters, so they keep the legacy CPU sustained-idle sleep path.
   test("legacy sustained-idle (TCP app): first idle tick sets idleSince and does NOT sleep", async () => {
     const server = makeServer();
-    const app = makeApp({ healthCheck: false });
+    const app = makeApp({ internalProtocol: "tcp", healthCheck: false });
     setAutoscale(app.id, { min_replicas: 0, scale_to_zero_after: 300 });
     const r = insertReplica({
       app_id: app.id,
@@ -216,7 +217,7 @@ describe("evaluateAutoScale", () => {
 
   test("legacy sustained-idle (TCP app): second tick after idleTimeout elapsed sleeps (desired=0) and clears tracker", async () => {
     const server = makeServer();
-    const app = makeApp({ healthCheck: false });
+    const app = makeApp({ internalProtocol: "tcp", healthCheck: false });
     setAutoscale(app.id, { min_replicas: 0, scale_to_zero_after: 1 });
     const r = insertReplica({
       app_id: app.id,
@@ -237,7 +238,7 @@ describe("evaluateAutoScale", () => {
 
   test("legacy path: at-target metrics clear an existing idleSince entry", async () => {
     const server = makeServer();
-    const app = makeApp({ healthCheck: false });
+    const app = makeApp({ internalProtocol: "tcp", healthCheck: false });
     setAutoscale(app.id, { min_replicas: 0 });
     const r = insertReplica({
       app_id: app.id,
@@ -516,7 +517,7 @@ describe("evaluateAutoScale", () => {
 
   test("request-rate: TCP app ignores req/min (no Traefik counter)", async () => {
     const server = makeServer();
-    const app = makeApp({ healthCheck: false }); // TCP-routed, no auth
+    const app = makeApp({ internalProtocol: "tcp", healthCheck: false }); // TCP-routed, no auth
     setAutoscale(app.id, { req_threshold: 100, max_replicas: 4 });
     const r = insertReplica({
       app_id: app.id,

@@ -196,9 +196,9 @@ describe("renderDynamicConfig", () => {
     expect(cfg).not.toContain("compat-");
   });
 
-  test("health_check=0 app: TCP router with HostSNI(`*`) + TCP health check, no compat router", () => {
+  test("tcp-routed app: TCP router with HostSNI(`*`) + TCP health check, no compat router", () => {
     const server = makeServer("10.0.1.3");
-    const app = makeApp({ server, healthCheck: false, hostPort: 10050 });
+    const app = makeApp({ server, internalProtocol: "tcp", healthCheck: false, hostPort: 10050 });
     const cfg = parse(renderDynamicConfig(stateFor(app.name), { isPanel: false }));
 
     const router = cfg.tcp.routers[`int-${app.name}`];
@@ -258,9 +258,9 @@ describe("renderDynamicConfig", () => {
     expect(cfg.http.middlewares[`auth-${app.name}`]).toBeUndefined();
   });
 
-  test("auth-protected health_check=0 app routes as HTTP with basicAuth (no TCP bypass)", () => {
+  test("auth-protected tcp-routed app routes as HTTP with basicAuth (no TCP bypass)", () => {
     const server = makeServer("10.0.1.14");
-    const app = makeApp({ server, authPassword: "hunter2", healthCheck: false, hostPort: 10061 });
+    const app = makeApp({ server, authPassword: "hunter2", internalProtocol: "tcp", healthCheck: false, hostPort: 10061 });
     const cfg = parse(renderDynamicConfig(stateFor(app.name), { isPanel: false }));
 
     // A raw TCP router would skip basicAuth entirely; the old auth proxy was
@@ -489,7 +489,7 @@ describe("renderDynamicConfig", () => {
   test("active HTTP health check: path on the HTTP loadBalancer; TCP apps keep the plain TCP check", () => {
     const server = makeServer("10.0.2.3");
     const httpApp = makeApp({ server, healthCheckPath: "/healthz", hostPort: 10110 });
-    const tcpApp = makeApp({ server, healthCheck: false, isPublic: false, domain: "", hostPort: 10111 });
+    const tcpApp = makeApp({ server, internalProtocol: "tcp", healthCheck: false, isPublic: false, domain: "", hostPort: 10111 });
     // Simulate a stale row: a path set on a TCP-routed app must not render.
     db.updateAppIngressSettings(tcpApp.id, { health_check_path: "/healthz" });
 

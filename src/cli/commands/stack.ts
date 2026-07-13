@@ -18,6 +18,7 @@ interface StackListItem {
   created_at: string;
   app_count: number;
   service_count: number;
+  environment_id?: number | null;
 }
 
 interface StackDetail {
@@ -97,8 +98,10 @@ ${BOLD}Arguments:${RESET}
 ${BOLD}Options:${RESET}
   --set=<app>.KEY=VALUE      Set an env var for one app (repeatable)
   --set=KEY=VALUE            Set an env var for all apps as a fallback
-  --env=<name|id>            Reuse an existing environment for the stack instead
-                             of auto-creating one (only on first creation)`);
+  --env=<name|id>            Reuse an existing environment when first creating
+                             the stack (auto-created otherwise). On re-ups the
+                             stack's linked environment is remembered, so --env
+                             is not needed to resume.`);
 }
 
 type ResolvedEnv = { id: number; name: string; env_vars?: Array<{ key: string }> };
@@ -114,6 +117,20 @@ async function resolveEnvironment(nameOrId: string): Promise<ResolvedEnv> {
   console.error(`${RED}Environment not found: ${nameOrId}${RESET}`);
   console.error(`Available: ${list.map((e) => e.name).join(", ") || "(none)"}`);
   process.exit(1);
+}
+
+/** The environment an already-created stack is linked to (the server keeps this
+ *  association across re-ups), or null if the stack doesn't exist yet. */
+async function linkedStackEnvId(name: string): Promise<number | null> {
+  const list = await get<StackListItem[]>("/api/stacks");
+  const lower = name.toLowerCase();
+  const found = list.find((s) => s.name.toLowerCase() === lower);
+  return found?.environment_id ?? null;
+}
+
+async function findEnvironmentById(id: number): Promise<ResolvedEnv | undefined> {
+  const list = await get<ResolvedEnv[]>("/api/environments");
+  return list.find((e) => e.id === id);
 }
 
 async function stackUp(args: string[]): Promise<void> {
@@ -205,7 +222,18 @@ async function stackUp(args: string[]): Promise<void> {
 
   // Resolve the target environment (reused or, if omitted, auto-created) so we
   // know which keys already exist — existing values win over manifest defaults.
-  const reused = envRef ? await resolveEnvironment(envRef) : undefined;
+  let reused = envRef ? await resolveEnvironment(envRef) : undefined;
+  let resumed = false;
+  // Resume: an already-created stack stays linked to its environment
+  // server-side, so even without --env we seed existing keys from that env —
+  // otherwise a re-up re-prompts for (and re-requires) vars already stored.
+  if (!reused) {
+    const linkedId = await linkedStackEnvId(manifest.name);
+    if (linkedId != null) {
+      reused = await findEnvironmentById(linkedId);
+      resumed = !!reused;
+    }
+  }
   const existingKeys = new Set((reused?.env_vars || []).map((v) => v.key));
 
   // --set overrides target the shared env; app-scoped (`app.KEY`) and global
@@ -236,7 +264,11 @@ async function stackUp(args: string[]): Promise<void> {
   console.log(
     `\nDeploying stack ${BOLD}${manifest.name}${RESET} (${services.length} service(s), ${apps.length} app(s))...`,
   );
-  if (reused) console.log(`${DIM}Env:${RESET}   reusing environment ${reused.name}`);
+  if (reused) {
+    console.log(
+      `${DIM}Env:${RESET}   reusing ${resumed ? "linked" : ""} environment ${reused.name}`.replace("  ", " "),
+    );
+  }
 
   const { op_id } = await post<{ op_id: number }>("/api/stacks", body);
   const result = await followOp(op_id);
@@ -244,6 +276,9 @@ async function stackUp(args: string[]): Promise<void> {
     console.log(`\n${GREEN}Stack deploy complete!${RESET}`);
   } else {
     console.error(`\n${RED}Stack deploy failed: ${result.error || "unknown error"}${RESET}`);
+    console.error(
+      `${DIM}Check progress with:${RESET} ocd stack logs ${manifest.name}   ${DIM}·${RESET}   ocd stack ls`,
+    );
     process.exit(1);
   }
 }

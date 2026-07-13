@@ -225,17 +225,18 @@ export function isInternalProtocol(value: unknown): value is InternalProtocol {
 }
 
 /**
- * Resolve a deploy request's internal routing protocol. Explicit
- * `internal_protocol` wins; when omitted it is derived from `health_check`
- * (http when health_check is on/undefined, tcp when off) so old callers that
- * only set health_check keep the historical HTTP↔TCP routing coupling.
+ * Resolve a deploy request's internal routing protocol. `internal_protocol` is
+ * an explicit, first-class field (the deploy UI exposes it as an "internal
+ * routing layer" select): a valid explicit value wins, otherwise it defaults to
+ * "http". It is intentionally independent of `health_check` — routing (L7 HTTP
+ * vs raw TCP pass-through) and the post-deploy probe (HTTP vs container-running)
+ * are orthogonal, so a raw-TCP app (e.g. a database) must set
+ * `internal_protocol: "tcp"` explicitly rather than relying on `health_check`.
  */
 export function resolveInternalProtocol(
   internalProtocol: unknown,
-  healthCheck: boolean | undefined,
 ): InternalProtocol {
-  if (isInternalProtocol(internalProtocol)) return internalProtocol;
-  return healthCheck === false ? "tcp" : "http";
+  return isInternalProtocol(internalProtocol) ? internalProtocol : "http";
 }
 
 /** Per-app ingress fields shared by deploy and the ingress-update endpoint.
@@ -493,7 +494,6 @@ export function validateDeployManifest(
   // path read as a single feature (mirrors the deploy UI). enabled drives the
   // HTTP-vs-running probe; path feeds both the post-deploy probe and Traefik's
   // rotation check and is validated below via the shared ingress rules.
-  let healthEnabled: boolean | undefined;
   let healthPath: string | undefined;
   if ("health_check" in obj && obj.health_check != null) {
     const hc = obj.health_check;
@@ -504,7 +504,6 @@ export function validateDeployManifest(
       return { ok: false, error: '"health_check.enabled" must be a boolean' };
     if ("path" in h && typeof h.path !== "string")
       return { ok: false, error: '"health_check.path" must be a string' };
-    healthEnabled = h.enabled as boolean | undefined;
     healthPath = h.path as string | undefined;
   }
 
@@ -520,9 +519,9 @@ export function validateDeployManifest(
   // Rate limit / allowlist / health-check path / public port+protocol share the
   // deploy request's rules — one validator, one set of error strings. The
   // health-check-path HTTP-routing rule keys off the manifest's resolved
-  // internal protocol (explicit internal_protocol, else derived from health_check).
+  // internal protocol (explicit internal_protocol, else the "http" default).
   const httpRouted =
-    resolveInternalProtocol(obj.internal_protocol, healthEnabled) === "http";
+    resolveInternalProtocol(obj.internal_protocol) === "http";
   const ingressInput: IngressFieldsInput = {};
   if ("rate_limit_rps" in obj) ingressInput.rate_limit_rps = obj.rate_limit_rps as number;
   if ("ip_allowlist" in obj) ingressInput.ip_allowlist = obj.ip_allowlist as string;
@@ -622,10 +621,10 @@ export function validateDeployRequest(req: {
     return { valid: false, error: 'Internal protocol must be "http" or "tcp"' };
   }
 
-  // Internal routing protocol: explicit value wins, else derived from
-  // health_check for backward compatibility. Auth / health-check-path rules
-  // key off the resolved routing protocol (they are HTTP-router features).
-  const internalProtocol = resolveInternalProtocol(req.internal_protocol, req.health_check);
+  // Internal routing protocol: explicit value wins, else the "http" default
+  // (independent of health_check). Auth / health-check-path rules key off the
+  // resolved routing protocol (they are HTTP-router features).
+  const internalProtocol = resolveInternalProtocol(req.internal_protocol);
 
   // Auth / rate limit / allowlist / health-check path / public-port rules are
   // shared with the ingress-update endpoint — one validator, one set of errors.

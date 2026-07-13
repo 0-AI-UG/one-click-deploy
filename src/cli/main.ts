@@ -13,8 +13,7 @@ import { stack } from "./commands/stack.ts";
 import { servers } from "./commands/servers.ts";
 import { ssh } from "./commands/ssh.ts";
 import { BOLD, DIM, RESET } from "./format.ts";
-
-const VERSION = "0.1.0";
+import { VERSION } from "./version.ts";
 
 const commands: Record<string, (args: string[]) => Promise<void>> = {
   login,
@@ -61,6 +60,26 @@ ${BOLD}Commands:${RESET}
 ${DIM}App/server arguments accept name or numeric ID.${RESET}`);
 }
 
+/** Best-effort: print the logged-in panel's version alongside the CLI's, so a
+ *  stale CLI is easy to spot. Silent if not logged in or the panel is down. */
+async function printBackendVersion(): Promise<void> {
+  try {
+    const { loadConfig } = await import("./config.ts");
+    const config = loadConfig();
+    if (!config?.panel_url) return;
+    const res = await fetch(`${config.panel_url}/api/health`);
+    const backend = res.headers.get("X-OCD-Version") || (await res.json().catch(() => null) as { version?: string } | null)?.version;
+    if (!backend) return;
+    if (VERSION !== "dev" && backend !== VERSION) {
+      console.log(`panel v${backend} ${DIM}(CLI is behind — reinstall from your panel)${RESET}`);
+    } else {
+      console.log(`panel v${backend}`);
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
 async function main(): Promise<void> {
   const cmd = process.argv[2];
 
@@ -71,6 +90,7 @@ async function main(): Promise<void> {
 
   if (cmd === "version" || cmd === "--version" || cmd === "-v") {
     console.log(`ocd v${VERSION}`);
+    await printBackendVersion();
     return;
   }
 
