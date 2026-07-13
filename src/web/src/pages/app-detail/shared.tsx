@@ -17,14 +17,21 @@ function fmtMem(mb: number): string {
   return `${Math.round(mb)} MB`;
 }
 
+// Statuses in which a container is actually running and reporting live docker
+// stats. Anything else (stopped/sleeping, paused, deploying) has no live usage
+// — its stored numbers are stale, so we show nothing rather than mislead.
+const LIVE_STATUSES = new Set(["running", "unhealthy"]);
+const isLive = (status?: string) => status == null || LIVE_STATUSES.has(status);
+
 /**
  * Render a container's CPU as "cores used / allowed vCPU" rather than a bare
  * percentage, which is ambiguous (docker's CPUPerc is percent of one core, so
- * 100% = one full core — not the whole server). Falls back to the percentage
- * when the core ceiling hasn't been collected yet.
+ * 100% = one full core — not the whole server). Shows "—" for non-running
+ * containers, and falls back to the percentage when the core ceiling hasn't
+ * been collected yet.
  */
-export function CpuUsage({ cpuPercent, limitCores }: { cpuPercent?: number; limitCores?: number }) {
-  if (cpuPercent == null) return <>—</>;
+export function CpuUsage({ cpuPercent, limitCores, status }: { cpuPercent?: number; limitCores?: number; status?: string }) {
+  if (!isLive(status) || cpuPercent == null) return <>—</>;
   const used = cpuPercent / 100;
   if (!limitCores) return <>{cpuPercent.toFixed(1)}%</>;
   return <>{used.toFixed(2)} / {limitCores} vCPU</>;
@@ -33,10 +40,11 @@ export function CpuUsage({ cpuPercent, limitCores }: { cpuPercent?: number; limi
 /**
  * Render a container's memory as "used / limit", where the limit is the
  * container's own `--memory` ceiling (docker's MemPerc is a fraction of that
- * ceiling, not of server RAM). Falls back to the percentage when absolute
- * figures haven't been collected yet.
+ * ceiling, not of server RAM). Shows "—" for non-running containers, and falls
+ * back to the percentage when absolute figures haven't been collected yet.
  */
-export function MemUsage({ memoryPercent, usedMb, limitMb }: { memoryPercent?: number; usedMb?: number; limitMb?: number }) {
+export function MemUsage({ memoryPercent, usedMb, limitMb, status }: { memoryPercent?: number; usedMb?: number; limitMb?: number; status?: string }) {
+  if (!isLive(status)) return <>—</>;
   if (usedMb != null && limitMb) return <>{fmtMem(usedMb)} / {fmtMem(limitMb)}</>;
   if (memoryPercent == null) return <>—</>;
   return <>{memoryPercent.toFixed(1)}%</>;

@@ -348,8 +348,8 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
                   </td>
                   <td className="py-2 px-3 text-fg-dim">{r.host_port}</td>
                   <td className="py-2 px-3"><StatusBadge status={r.status} /></td>
-                  <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={r.cpu_percent} limitCores={r.cpu_limit_cores} /></td>
-                  <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={r.memory_percent} usedMb={r.memory_used_mb} limitMb={r.memory_limit_mb} /></td>
+                  <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={r.cpu_percent} limitCores={r.cpu_limit_cores} status={r.status} /></td>
+                  <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={r.memory_percent} usedMb={r.memory_used_mb} limitMb={r.memory_limit_mb} status={r.status} /></td>
                   <td className="py-2 px-3"><Sparkline values={series} /></td>
                   <td className="py-2 px-3">
                     <PermissionGate permission="terminal.access">
@@ -384,8 +384,8 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
                       <td className="py-2 px-3 text-fg-dim">{i.container_name}</td>
                       <td className="py-2 px-3 text-fg-dim">{i.host_port}</td>
                       <td className="py-2 px-3"><StatusBadge status={i.status} /></td>
-                      <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={i.cpu_percent} limitCores={i.cpu_limit_cores} /></td>
-                      <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={i.memory_percent} usedMb={i.memory_used_mb} limitMb={i.memory_limit_mb} /></td>
+                      <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={i.cpu_percent} limitCores={i.cpu_limit_cores} status={i.status} /></td>
+                      <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={i.memory_percent} usedMb={i.memory_used_mb} limitMb={i.memory_limit_mb} status={i.status} /></td>
                     </tr>
                   ))
                 : []

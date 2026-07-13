@@ -78,8 +78,13 @@ export function updateReplicaStatus(id: number, status: string): void {
 }
 
 export function markReplicaStopped(id: number): void {
+  // Zero the metrics: a stopped container reports no docker stats, so the
+  // reconciler would otherwise leave the last-seen values frozen and stale.
   db.query(
-    "UPDATE replicas SET status = 'stopped', stopped_at = datetime('now') WHERE id = ?"
+    `UPDATE replicas SET status = 'stopped', stopped_at = datetime('now'),
+       cpu_percent = 0, memory_percent = 0,
+       cpu_limit_cores = 0, memory_used_mb = 0, memory_limit_mb = 0
+     WHERE id = ?`
   ).run(id);
 }
 

@@ -4,6 +4,7 @@ import { sshExec, removeCompose } from "../../shared/remote/index.ts";
 
 const SERVICES_BASE_DIR = "/home/deploy/services";
 import { hetzner } from "../../shared/providers/index.ts";
+import { syncAllTraefik } from "../scale/traefik-manager.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -124,6 +125,20 @@ const deleteDbRows: Step<DestroyServiceInput, { ok: true }> = {
   },
 };
 
+const syncIngress: Step<DestroyServiceInput, { ok: true }> = {
+  name: "sync_ingress",
+  label: "Re-render Traefik ingress",
+  async run(ctx) {
+    // The service's public HTTP vhost (if any) is derived from DB state, so
+    // once its rows are gone a full re-render drops the router. Best-effort:
+    // reconcileTraefik heals any straggler on the next tick regardless.
+    await softStep(ctx, "sync_traefik", async () => {
+      await syncAllTraefik();
+    });
+    return { ok: true };
+  },
+};
+
 const gcEmptyServers: Step<DestroyServiceInput, { ok: true }> = {
   name: "gc_empty_servers",
   label: "GC empty servers",
@@ -148,6 +163,7 @@ const destroyServiceOp: OpKindDefinition<DestroyServiceInput> = {
     stopAndRemoveContainers,
     deleteVolumes,
     deleteDbRows,
+    syncIngress,
     gcEmptyServers,
   ],
 };

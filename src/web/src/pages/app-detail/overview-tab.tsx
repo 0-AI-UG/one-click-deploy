@@ -112,8 +112,8 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
                   </td>
                   <td className="py-2 px-3 text-fg-dim">{r.host_port}</td>
                   <td className="py-2 px-3"><StatusBadge status={r.status} /></td>
-                  <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={r.cpu_percent} limitCores={r.cpu_limit_cores} /></td>
-                  <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={r.memory_percent} usedMb={r.memory_used_mb} limitMb={r.memory_limit_mb} /></td>
+                  <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={r.cpu_percent} limitCores={r.cpu_limit_cores} status={r.status} /></td>
+                  <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={r.memory_percent} usedMb={r.memory_used_mb} limitMb={r.memory_limit_mb} status={r.status} /></td>
                   <td className="py-2 px-3"><Sparkline values={series} /></td>
                   <td className="py-2 px-3">
                     <div className="flex items-center gap-1">
