@@ -301,22 +301,6 @@ export type StackAppResolved = {
   spec: StackAppSpec;
 };
 
-export type StackIntrospectResult =
-  | {
-      ok: true;
-      owner: string;
-      repo: string;
-      default_branch: string;
-      branches: string[];
-      stack_path: string;
-      name: string;
-      description?: string;
-      services: StackServiceSpec[];
-      apps: StackAppResolved[];
-      notes: string[];
-    }
-  | { ok: false; error: string };
-
 export type StackDeployBody = {
   name: string;
   services: StackServiceSpec[];

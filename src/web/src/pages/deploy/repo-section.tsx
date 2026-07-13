@@ -10,7 +10,8 @@ type Props = {
 };
 
 export function RepoSection({ form, set, introspecting, introspect }: Props) {
-  const detected = introspect?.ok === true ? introspect : null;
+  const detected = introspect?.ok === true && introspect.kind === "app" ? introspect : null;
+  const stack = introspect?.ok === true && introspect.kind === "stack" ? introspect.stack : null;
 
   return (
     <div className="p-5">
@@ -32,6 +33,17 @@ export function RepoSection({ form, set, introspecting, introspect }: Props) {
             <>
               <Loader2 size={12} className="animate-spin text-fg" />
               <span className="text-fg-dim">Peeking at the repo</span>
+            </>
+          )}
+          {!introspecting && stack && (
+            <>
+              <Check size={12} strokeWidth={3} className="text-fg bg-accent border-2 border-fg" />
+              <span className="text-fg">
+                Stack · {stack.apps.length} app{stack.apps.length === 1 ? "" : "s"}
+                {stack.services.length > 0
+                  ? ` · ${stack.services.length} service${stack.services.length === 1 ? "" : "s"}`
+                  : ""}
+              </span>
             </>
           )}
           {!introspecting && detected && (

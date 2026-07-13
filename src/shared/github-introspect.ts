@@ -12,8 +12,28 @@ import { validateDeployManifest } from "./validate.ts";
 import { buildStackAppSpec, resolveRepoPath, repoDirOf, type StackAppSpec } from "./stack-spec.ts";
 import type { ParsedManifest, StackManifest, StackDeployRequest, DeployManifest } from "./rpc.ts";
 
+// The stack payload resolved from an `ocd-stack.json` — every service plus every
+// per-app `.ocd-deploy.json` it references, ready for the builder to edit.
+export type StackPayload = {
+  stack_path: string;
+  name: string;
+  description?: string;
+  services: StackDeployRequest["services"];
+  apps: Array<{
+    manifest_path: string;
+    env: NonNullable<DeployManifest["env"]>;
+    spec: StackAppSpec; // ready to POST once env_vars are filled in
+  }>;
+  notes: string[];
+};
+
+// `introspectRepo` returns a discriminated result: repos with an `ocd-stack.json`
+// come back as `kind: "stack"` (the deploy page renders the stack builder);
+// everything else is `kind: "app"` (the single-app form). The choice is implicit —
+// the caller never picks a mode.
 export type IntrospectResult = {
   ok: true;
+  kind: "app";
   owner: string;
   repo: string;
   default_branch: string;
@@ -24,6 +44,14 @@ export type IntrospectResult = {
   env_vars: Array<{ key: string; value: string }>;
   manifests: ParsedManifest[];
   notes: string[];
+} | {
+  ok: true;
+  kind: "stack";
+  owner: string;
+  repo: string;
+  default_branch: string;
+  branches: string[];
+  stack: StackPayload;
 } | {
   ok: false;
   error: string;
@@ -141,7 +169,12 @@ function pickEnvExample(paths: string[], dockerfilePath: string | null): string 
   return envPaths.sort((a, b) => a.split("/").length - b.split("/").length)[0] ?? null;
 }
 
-export async function introspectRepo(url: string, userId?: string, ref?: string): Promise<IntrospectResult> {
+export async function introspectRepo(
+  url: string,
+  userId?: string,
+  ref?: string,
+  stackPath?: string,
+): Promise<IntrospectResult> {
   let parsed: { owner: string; repo: string; ref?: string };
   try {
     parsed = parseGitHubRepo(url);
@@ -210,6 +243,7 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
   if (!treeRes.ok) {
     return {
       ok: true,
+      kind: "app",
       owner,
       repo,
       default_branch,
@@ -227,6 +261,21 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
     .filter((e: { type: string }) => e.type === "blob")
     .map((e: { path: string }) => e.path);
   if (tree.truncated) notes.push("Repo is large — some files may have been skipped.");
+
+  // Stack detection is implicit: an `ocd-stack.json` (an explicit override path,
+  // else the shallowest one in the tree) means this repo is a stack, so we
+  // resolve it and hand back a stack-kind result instead of the single-app form.
+  const detectedStackPath =
+    stackPath && paths.includes(stackPath)
+      ? stackPath
+      : paths
+          .filter((p) => /(^|\/)ocd-stack\.json$/.test(p))
+          .sort((a, b) => a.split("/").length - b.split("/").length)[0];
+  if (detectedStackPath) {
+    const resolved = await resolveStack(owner, repo, fetchRef, detectedStackPath, token);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    return { ok: true, kind: "stack", owner, repo, default_branch, branches, stack: resolved.stack };
+  }
 
   // 3. Discover .ocd-deploy.json manifests
   const manifestPaths = paths
@@ -294,6 +343,7 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
 
   return {
     ok: true,
+    kind: "app",
     owner,
     repo,
     default_branch,
@@ -307,72 +357,23 @@ export async function introspectRepo(url: string, userId?: string, ref?: string)
   };
 }
 
-// --- Stack introspection ----------------------------------------------------
+// --- Stack resolution -------------------------------------------------------
 // Resolves an `ocd-stack.json` manifest and every per-app `.ocd-deploy.json` it
 // references, all from a GitHub repo, so the web deploy page can build a stack
-// without the local filesystem the CLI's `ocd stack up` reads from.
+// without the local filesystem the CLI's `ocd stack up` reads from. Called by
+// `introspectRepo` once the tree scan detects a stack manifest — the repo info
+// and branch list are already fetched, so this only reads the manifests.
 
-export type StackIntrospectResult =
-  | {
-      ok: true;
-      owner: string;
-      repo: string;
-      default_branch: string;
-      branches: string[];
-      stack_path: string;
-      name: string;
-      description?: string;
-      services: StackDeployRequest["services"];
-      apps: Array<{
-        manifest_path: string;
-        env: NonNullable<DeployManifest["env"]>;
-        spec: StackAppSpec; // ready to POST once env_vars are filled in
-      }>;
-      notes: string[];
-    }
-  | { ok: false; error: string };
-
-export async function introspectStack(
-  url: string,
-  userId?: string,
-  ref?: string,
-  stackPath = "ocd-stack.json",
-): Promise<StackIntrospectResult> {
-  let parsed: { owner: string; repo: string; ref?: string };
-  try {
-    parsed = parseGitHubRepo(url);
-  } catch {
-    return { ok: false, error: "Paste a GitHub repo link like https://github.com/owner/repo." };
-  }
-  const { owner, repo, ref: urlRef } = parsed;
-  const token = await getGitHubPat(userId);
-  const requestedRef = ref || urlRef;
-
-  const repoRes = await ghFetch(`/repos/${owner}/${repo}`, token);
-  if (repoRes.status === 404)
-    return { ok: false, error: "Repository not found. If it's private, link your GitHub account in Account settings." };
-  if (repoRes.status === 401 || repoRes.status === 403)
-    return { ok: false, error: "GitHub denied the request — your token may be missing or out of API quota." };
-  if (!repoRes.ok) return { ok: false, error: `GitHub error (HTTP ${repoRes.status})` };
-  const repoData = await repoRes.json();
-  const default_branch: string = repoData.default_branch || "main";
-  const fetchRef: string = requestedRef || default_branch;
-
-  const branchesRes = await ghFetch(`/repos/${owner}/${repo}/branches?per_page=100`, token);
-  let branches: string[] = [];
-  if (branchesRes.ok) {
-    try {
-      branches = ((await branchesRes.json()) as Array<{ name: string }>).map((b) => b.name);
-      branches.sort((a, b) => (a === default_branch ? -1 : b === default_branch ? 1 : a.localeCompare(b)));
-    } catch {
-      branches = [];
-    }
-  }
-  if (branches.length === 0) branches = [default_branch];
-
+async function resolveStack(
+  owner: string,
+  repo: string,
+  fetchRef: string,
+  stackPath: string,
+  token: string | null,
+): Promise<{ ok: true; stack: StackPayload } | { ok: false; error: string }> {
   const stackRaw = await fetchRawFile(owner, repo, fetchRef, stackPath, token);
   if (!stackRaw)
-    return { ok: false, error: `No ${stackPath} found on "${fetchRef}". Add a stack manifest to the repo, or pick another branch.` };
+    return { ok: false, error: `Could not read ${stackPath} on "${fetchRef}".` };
 
   let manifest: StackManifest;
   try {
@@ -387,6 +388,7 @@ export async function introspectStack(
 
   const stackDir = repoDirOf(stackPath);
   const notes: string[] = [];
+  const repoUrl = `https://github.com/${owner}/${repo}`;
 
   const services: StackDeployRequest["services"] = Object.entries(manifest.services || {}).map(
     ([key, svc]) => ({
@@ -406,7 +408,7 @@ export async function introspectStack(
     ),
   );
 
-  const apps: Extract<StackIntrospectResult, { ok: true }>["apps"] = [];
+  const apps: StackPayload["apps"] = [];
   for (let i = 0; i < appEntries.length; i++) {
     const [key, entry] = appEntries[i];
     const manifestPath = resolveRepoPath(stackDir, entry.manifest);
@@ -425,7 +427,7 @@ export async function introspectStack(
     apps.push({
       manifest_path: manifestPath,
       env: appManifest.env ?? [],
-      spec: buildStackAppSpec(key, entry, appManifest, url, repoDirOf(manifestPath)),
+      spec: buildStackAppSpec(key, entry, appManifest, repoUrl, repoDirOf(manifestPath)),
     });
   }
 
@@ -441,15 +443,13 @@ export async function introspectStack(
 
   return {
     ok: true,
-    owner,
-    repo,
-    default_branch,
-    branches,
-    stack_path: stackPath,
-    name: manifest.name,
-    description: manifest.description,
-    services,
-    apps,
-    notes,
+    stack: {
+      stack_path: stackPath,
+      name: manifest.name,
+      description: manifest.description,
+      services,
+      apps,
+      notes,
+    },
   };
 }

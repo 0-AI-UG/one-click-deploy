@@ -30,7 +30,6 @@ import {
   handleGetDeployments,
   handleRollbackApp,
   handleIntrospectRepo,
-  handleIntrospectStack,
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
@@ -228,7 +227,6 @@ export const apiRoutes = {
   "/api/apps": { GET: (req: Request) => handleGetApps(req) },
   "/api/apps/deploy": { POST: (req: Request) => handleDeploy(req) },
   "/api/repos/introspect": { GET: (req: Request) => handleIntrospectRepo(req) },
-  "/api/repos/introspect-stack": { GET: (req: Request) => handleIntrospectStack(req) },
   "/api/deploy-session": {
     GET: (req: Request) => handleGetDeploySession(req),
     POST: (req: Request) => handleSaveDeploySession(req),

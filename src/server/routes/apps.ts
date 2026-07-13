@@ -7,7 +7,7 @@ import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
 import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB, isValidCpuLimit, MIN_CPU_LIMIT, MAX_CPU_LIMIT, isPublicProtocol, isInternalProtocol, validateIngressFields } from "../../shared/validate.ts";
 import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-manager.ts";
-import { introspectRepo, introspectStack } from "../../shared/github-introspect.ts";
+import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
@@ -31,28 +31,12 @@ export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
   };
 }
 
+// One introspect endpoint for both deploy modes: `introspectRepo` detects an
+// `ocd-stack.json` and returns a `kind: "stack"` result, else `kind: "app"`.
+// The optional `path` param overrides which stack manifest to resolve.
 export async function handleIntrospectRepo(request: Request): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.deploy");
-    const params = new URL(request.url).searchParams;
-    const url = params.get("url") || "";
-    const ref = params.get("ref") || undefined;
-    if (!url) {
-      return Response.json(
-        { ok: false, error: "Missing repo URL" },
-        { status: 400, headers: corsHeaders },
-      );
-    }
-    const result = await introspectRepo(url, payload.userId, ref);
-    return Response.json(result, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
-export async function handleIntrospectStack(request: Request): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "stacks.deploy");
     const params = new URL(request.url).searchParams;
     const url = params.get("url") || "";
     const ref = params.get("ref") || undefined;
@@ -63,7 +47,7 @@ export async function handleIntrospectStack(request: Request): Promise<Response>
         { status: 400, headers: corsHeaders },
       );
     }
-    const result = await introspectStack(url, payload.userId, ref, path);
+    const result = await introspectRepo(url, payload.userId, ref, path);
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

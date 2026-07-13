@@ -82,7 +82,7 @@ export function StacksPage() {
           </p>
         </div>
         <PermissionGate permission="stacks.deploy">
-          <Btn size="sm" variant="primary" onClick={() => { window.location.hash = "#/deploy/stack"; }}>
+          <Btn size="sm" variant="primary" onClick={() => { window.location.hash = "#/deploy"; }}>
             <Boxes size={12} /> New stack
           </Btn>
         </PermissionGate>

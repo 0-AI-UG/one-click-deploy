@@ -1,8 +1,8 @@
 import { Check, Package, Settings2 } from "lucide-react";
-import type { IntrospectResult } from "./types.ts";
+import type { AppIntrospect } from "./types.ts";
 
 type Props = {
-  detected: IntrospectResult & { ok: true };
+  detected: AppIntrospect;
   selectedManifest: number | null;
   onSelect: (idx: number) => void;
   onClear: () => void;

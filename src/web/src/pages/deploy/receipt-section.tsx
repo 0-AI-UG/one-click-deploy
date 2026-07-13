@@ -3,7 +3,7 @@ import { AlertTriangle, Check } from "lucide-react";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { Field } from "../../components/ui.tsx";
 import { get } from "../../api/client.ts";
-import type { IntrospectResult, FormState } from "./types.ts";
+import type { AppIntrospect, FormState } from "./types.ts";
 
 type ServerOption = { id: number; name: string; type: string; location: string; status: string };
 
@@ -11,7 +11,7 @@ type Props = {
   form: FormState;
   set: (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void;
   setForm: React.Dispatch<React.SetStateAction<FormState>>;
-  detected: (IntrospectResult & { ok: true }) | null;
+  detected: AppIntrospect | null;
   onBranchChange: (branch: string) => void;
 };
 

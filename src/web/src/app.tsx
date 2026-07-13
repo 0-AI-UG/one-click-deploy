@@ -11,7 +11,6 @@ import { PasswordResetPage } from "./pages/password-reset.tsx";
 import { SetupPage } from "./pages/setup.tsx";
 import { DashboardPage } from "./pages/dashboard.tsx";
 import { DeployPage } from "./pages/deploy/index.tsx";
-import { StackDeployPage } from "./pages/deploy/stack-builder.tsx";
 import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail/index.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
@@ -136,7 +135,10 @@ export function App() {
   } else if (hash === "#/deploy") {
     content = <DeployPage />;
   } else if (hash === "#/deploy/stack") {
-    content = <StackDeployPage />;
+    // Stack deploy is unified into the single Deploy page (detection is implicit);
+    // redirect old links there.
+    window.location.replace("#/deploy");
+    content = <DeployPage />;
   } else if (hash.startsWith("#/deploy/progress")) {
     const parts = hash.split("/");
     const opId = parts[3] ? parseInt(parts[3], 10) : null;

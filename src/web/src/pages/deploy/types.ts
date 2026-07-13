@@ -1,3 +1,5 @@
+import type { StackServiceSpec, StackAppResolved } from "../../types.ts";
+
 export type CatalogEntry = {
   type: string;
   label: string;
@@ -60,9 +62,23 @@ export type ParsedManifest = {
   manifest: DeployManifest;
 };
 
+// Resolved stack payload embedded in a `kind: "stack"` introspect result.
+export type StackPayload = {
+  stack_path: string;
+  name: string;
+  description?: string;
+  services: StackServiceSpec[];
+  apps: StackAppResolved[];
+  notes: string[];
+};
+
+// The deploy mode is implicit: repos with an `ocd-stack.json` come back as
+// `kind: "stack"`, everything else as `kind: "app"`. The single Deploy page
+// picks its flow from this discriminator.
 export type IntrospectResult =
   | {
       ok: true;
+      kind: "app";
       owner: string;
       repo: string;
       default_branch: string;
@@ -74,7 +90,20 @@ export type IntrospectResult =
       manifests: ParsedManifest[];
       notes: string[];
     }
+  | {
+      ok: true;
+      kind: "stack";
+      owner: string;
+      repo: string;
+      default_branch: string;
+      branches: string[];
+      stack: StackPayload;
+    }
   | { ok: false; error: string; suggested_app_name?: string };
+
+// The single-app introspect shape — narrowed from the discriminated result for
+// the app-only sections (manifest picker, receipt) that read Dockerfile/port/etc.
+export type AppIntrospect = Extract<IntrospectResult, { ok: true; kind: "app" }>;
 
 export type FormState = {
   app_name: string;

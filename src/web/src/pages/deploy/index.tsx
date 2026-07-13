@@ -1,15 +1,16 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, showToast } from "../../components/ui.tsx";
-import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown, Settings2, CheckCircle2 } from "lucide-react";
+import { Rocket, RotateCcw, X, Save, Loader2, Database, ChevronDown, Settings2, CheckCircle2, Boxes, Lock } from "lucide-react";
 import { RepoSection } from "./repo-section.tsx";
 import { ManifestSection } from "./manifest-section.tsx";
 import { ReceiptSection } from "./receipt-section.tsx";
 import { EnvSection } from "./env-section.tsx";
 import { AdvancedSection } from "./advanced-section.tsx";
 import { ServicesGridSection } from "./services-grid.tsx";
-import { DeployModeTabs } from "./mode-tabs.tsx";
-import type { IntrospectResult, ManifestEnvDef, FormState } from "./types.ts";
+import { StackSection, useStackForm } from "./stack-section.tsx";
+import { useHasPermission } from "../../stores/auth.ts";
+import type { IntrospectResult, AppIntrospect, ManifestEnvDef, FormState } from "./types.ts";
 import type { DeployBody } from "../../types.ts";
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
@@ -17,6 +18,62 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-3">
       <span className="text-[9px] uppercase tracking-wider text-muted shrink-0">{label}</span>
       <span className="text-fg truncate text-right">{value}</span>
+    </div>
+  );
+}
+
+// Stack header shown once a repo resolves to a stack: the stack name, a branch
+// selector (re-introspects on change), and an Advanced disclosure holding the
+// manifest-path override for repos whose stack file isn't the auto-detected one.
+function StackAdvanced({
+  stackName, branch, branches, onBranchChange,
+  stackPath, detectedPath, onStackPathChange, open, onToggle,
+}: {
+  stackName: string;
+  branch: string;
+  branches: string[];
+  onBranchChange: (b: string) => void;
+  stackPath: string;
+  detectedPath: string;
+  onStackPathChange: (p: string) => void;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const inputCls =
+    "bg-bg border-2 border-fg/40 px-2 py-1 font-mono text-[11px] text-fg placeholder:text-muted focus:outline-none focus:border-fg";
+  return (
+    <div className="px-5 py-4 space-y-3">
+      <div className="flex items-center gap-3 flex-wrap">
+        <Boxes size={14} className="text-fg" />
+        <span className="font-mono text-[13px] font-bold text-fg uppercase">{stackName}</span>
+        {branches.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-[9px] uppercase tracking-wider text-muted">Branch</span>
+            <select value={branch} onChange={(e) => onBranchChange(e.target.value)} className={`${inputCls} cursor-pointer`}>
+              {branches.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onToggle}
+          className="ml-auto inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-fg-dim hover:text-fg"
+        >
+          <Settings2 size={11} /> Advanced
+          <ChevronDown size={11} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+      </div>
+      {open && (
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[9px] uppercase tracking-wider text-muted">Manifest</span>
+          <input
+            value={stackPath}
+            placeholder={detectedPath}
+            onChange={(e) => onStackPathChange(e.target.value)}
+            className={`${inputCls} w-64`}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -63,13 +120,18 @@ export function DeployPage() {
   const [introspecting, setIntrospecting] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const introspectSeq = useRef(0);
+  // Manual override for which ocd-stack.json to resolve; blank = auto-detect.
+  const [stackPath, setStackPath] = useState("");
+  const [stackAdvancedOpen, setStackAdvancedOpen] = useState(false);
+  const [stackDeploying, setStackDeploying] = useState(false);
+  const canStack = useHasPermission("stacks.deploy");
 
   const [selectedManifest, setSelectedManifest] = useState<number | null>(null);
   const [manifestEnvDefs, setManifestEnvDefs] = useState<ManifestEnvDef[]>([]);
 
   const [form, setForm] = useState<FormState>({ ...EMPTY_FORM });
 
-  function applyManifest(idx: number, result: IntrospectResult & { ok: true }) {
+  function applyManifest(idx: number, result: AppIntrospect) {
     const pm = result.manifests[idx];
     if (!pm) return;
     const m = pm.manifest;
@@ -142,7 +204,7 @@ export function DeployPage() {
     }
   }
 
-  function clearManifest(result: IntrospectResult & { ok: true }) {
+  function clearManifest(result: AppIntrospect) {
     setSelectedManifest(null);
     setManifestEnvDefs([]);
     setForm((f) => ({
@@ -242,7 +304,7 @@ export function DeployPage() {
   }, [form, envValues, extraEnv, manifestEnvDefs, selectedEnvironmentId]);
 
   // --- Repo introspection ---
-  const runIntrospect = useCallback(async (url: string, ref: string | undefined) => {
+  const runIntrospect = useCallback(async (url: string, ref: string | undefined, path?: string) => {
     if (!/github\.com[/:][^/]+\/[^/]+/.test(url)) {
       setIntrospect(null);
       setIntrospecting(false);
@@ -254,11 +316,13 @@ export function DeployPage() {
     try {
       const qs = new URLSearchParams({ url });
       if (ref) qs.set("ref", ref);
+      if (path) qs.set("path", path);
       const result: IntrospectResult = await get(`/api/repos/introspect?${qs.toString()}`);
       if (mySeq !== introspectSeq.current) return;
       setIntrospect(result);
       setRevealed(true);
-      if (result.ok) {
+      // Stack repos seed their editor via useStackForm; nothing to apply here.
+      if (result.ok && result.kind === "app") {
         // Manifest set can differ between branches — reset selection on every fetch.
         setSelectedManifest(null);
         setManifestEnvDefs([]);
@@ -287,7 +351,7 @@ export function DeployPage() {
             });
           }
         }
-      } else if (result.suggested_app_name) {
+      } else if (!result.ok && result.suggested_app_name) {
         setForm((f) => ({ ...f, app_name: f.app_name || result.suggested_app_name! }));
       }
     } catch (err: any) {
@@ -315,20 +379,20 @@ export function DeployPage() {
       return;
     }
     const timer = setTimeout(() => {
-      runIntrospect(url, undefined);
+      runIntrospect(url, undefined, stackPath.trim() || undefined);
     }, 500);
     return () => clearTimeout(timer);
-  }, [form.git_repo, runIntrospect]);
+  }, [form.git_repo, stackPath, runIntrospect]);
 
-  // Fired when the user picks a branch from the receipt dropdown — re-run
-  // introspection on that ref so manifests / Dockerfiles / env reflect it.
+  // Fired when the user picks a branch (app receipt dropdown or stack branch
+  // select) — re-run introspection on that ref so manifests / apps / env reflect it.
   const handleBranchChange = useCallback(
     (branch: string) => {
       setForm((f) => ({ ...f, git_branch: branch }));
       const url = form.git_repo.trim();
-      if (url) runIntrospect(url, branch);
+      if (url) runIntrospect(url, branch, stackPath.trim() || undefined);
     },
-    [form.git_repo, runIntrospect],
+    [form.git_repo, stackPath, runIntrospect],
   );
 
   const set =
@@ -343,6 +407,9 @@ export function DeployPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // Stack repos deploy via their own button (handleStackDeploy); ignore an
+    // Enter-key form submit so it can't fall through to the app deploy path.
+    if (introspect?.ok && introspect.kind === "stack") return;
     if (introspecting)
       return showToast("Hold on, still peeking at the repo", "info");
     if (!form.app_name || !form.git_repo)
@@ -416,8 +483,38 @@ export function DeployPage() {
     })();
   };
 
-  const detected = introspect?.ok === true ? introspect : null;
-  const showReceipt = revealed && (selectedManifest !== null || !detected || detected.manifests.length <= 1);
+  // The introspect result is a discriminated union — split it into the app form
+  // path and the stack path. Only one is ever non-null.
+  const detected = introspect?.ok === true && introspect.kind === "app" ? introspect : null;
+  const stack = introspect?.ok === true && introspect.kind === "stack" ? introspect : null;
+  const stackPayload = stack?.stack ?? null;
+  const stackBranch = form.git_branch || stack?.default_branch || "";
+
+  // Hook is always called (stable order); it no-ops when stackPayload is null.
+  const stackForm = useStackForm(stackPayload, stackBranch);
+
+  const handleStackDeploy = () => {
+    if (!stackPayload) return;
+    if (stackForm.missingRequired.length > 0)
+      return showToast(`Required: ${stackForm.missingRequired.join(", ")}`, "error");
+    setStackDeploying(true);
+    (async () => {
+      try {
+        const res = (await post("/api/stacks", stackForm.buildBody())) as { op_id?: number };
+        if (!res?.op_id) throw new Error("No op_id returned");
+        window.location.hash = `#/deploy/progress/${res.op_id}`;
+      } catch (err: any) {
+        showToast(err?.message || "Failed to enqueue stack deploy", "error");
+        setStackDeploying(false);
+      }
+    })();
+  };
+
+  const showReceipt = revealed && (
+    stack
+      ? true
+      : (selectedManifest !== null || !detected || detected.manifests.length <= 1)
+  );
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -440,20 +537,22 @@ export function DeployPage() {
   return (
     <div className="max-w-4xl mx-auto px-4 py-6">
       <div className="flex items-center gap-2 mb-1">
-        <Rocket size={18} className="text-fg" />
-        <h1 className="font-mono font-bold text-sm text-fg uppercase">Deploy</h1>
-        {saveStatus === "saving" && (
+        {stack ? <Boxes size={18} className="text-fg" /> : <Rocket size={18} className="text-fg" />}
+        <h1 className="font-mono font-bold text-sm text-fg uppercase">{stack ? "Deploy Stack" : "Deploy"}</h1>
+        {saveStatus === "saving" && !stack && (
           <Loader2 size={12} className="ml-auto animate-spin text-fg-dim" />
         )}
-        {saveStatus === "saved" && (
+        {saveStatus === "saved" && !stack && (
           <span className="ml-auto flex items-center gap-1.5 font-mono text-[9px] text-fg-dim uppercase tracking-wider">
             <Save size={10} /> Saved
           </span>
         )}
       </div>
-      <p className="text-fg-dim text-sm mb-5">Paste a repo. We detect the rest.</p>
-
-      <DeployModeTabs active="app" />
+      <p className="text-fg-dim text-sm mb-5">
+        {stack
+          ? "We found a stack in this repo. Tweak any app or service, then deploy them together."
+          : "Paste a repo. We detect the rest."}
+      </p>
 
       {pendingSession && (
         <div className="mb-5 border-2 border-fg bg-bg-card px-4 py-3 flex items-center justify-between gap-3 animate-fade-in">
@@ -489,7 +588,29 @@ export function DeployPage() {
             introspect={introspect}
           />
 
-          {revealed && detected && detected.manifests.length > 0 && (
+          {/* --- Stack mode: manifest/branch override + member editor --- */}
+          {stack && stackPayload && (
+            <StackAdvanced
+              stackName={stackPayload.name}
+              branch={form.git_branch || stack.default_branch}
+              branches={stack.branches}
+              onBranchChange={handleBranchChange}
+              stackPath={stackPath}
+              detectedPath={stackPayload.stack_path}
+              onStackPathChange={setStackPath}
+              open={stackAdvancedOpen}
+              onToggle={() => setStackAdvancedOpen((o) => !o)}
+            />
+          )}
+          {stack && stackPayload && <StackSection form={stackForm} />}
+          {stack && stackPayload && stackPayload.notes.length > 0 && (
+            <ul className="px-5 py-3 font-mono text-[9px] text-muted list-disc pl-9 space-y-0.5">
+              {stackPayload.notes.map((n, i) => <li key={i}>{n}</li>)}
+            </ul>
+          )}
+
+          {/* --- App mode: manifest picker + receipt + advanced --- */}
+          {!stack && revealed && detected && detected.manifests.length > 0 && (
             <ManifestSection
               detected={detected}
               selectedManifest={selectedManifest}
@@ -498,7 +619,7 @@ export function DeployPage() {
             />
           )}
 
-          {showReceipt && (
+          {!stack && showReceipt && (
             <ReceiptSection
               form={form}
               set={set}
@@ -508,7 +629,7 @@ export function DeployPage() {
             />
           )}
 
-          {showReceipt && (
+          {!stack && showReceipt && (
             <div>
               <button
                 type="button"
@@ -548,7 +669,42 @@ export function DeployPage() {
           )}
         </div>
 
-        {showReceipt && (
+        {/* --- Right column: shared "Ready to deploy" receipt --- */}
+        {showReceipt && stack && stackPayload && (
+          <div className="lg:sticky lg:top-6 border-2 border-fg bg-bg-raised shadow-neo">
+            <div className="px-4 py-2.5 border-b-2 border-fg bg-accent flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-fg">
+              <CheckCircle2 size={12} /> Ready to deploy
+            </div>
+            <div className="p-4 font-mono text-[11px] space-y-2.5">
+              <SummaryRow label="Stack" value={stackPayload.name} />
+              <SummaryRow
+                label="Members"
+                value={`${stackForm.specs.length} app(s) · ${stackForm.services.length} service(s)`}
+              />
+              <SummaryRow label="Branch" value={form.git_branch || stack.default_branch} />
+            </div>
+            {canStack ? (
+              <button
+                type="button"
+                onClick={handleStackDeploy}
+                disabled={stackDeploying || stackForm.missingRequired.length > 0}
+                title={stackForm.missingRequired.length > 0 ? `Fill required: ${stackForm.missingRequired.join(", ")}` : undefined}
+                className="group w-full border-t-2 border-fg bg-accent hover:bg-accent-h active:bg-accent-h disabled:opacity-60 disabled:cursor-not-allowed py-4 flex items-center justify-center gap-2.5 font-mono text-sm font-bold uppercase tracking-[0.2em] text-fg transition-colors"
+              >
+                {stackDeploying
+                  ? <Loader2 size={18} className="animate-spin" />
+                  : <Boxes size={18} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />}
+                Deploy stack
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 border-t-2 border-fg/15 px-4 py-4 font-mono text-[10px] text-muted">
+                <Lock size={12} className="shrink-0" /> You don't have permission to deploy stacks.
+              </div>
+            )}
+          </div>
+        )}
+
+        {showReceipt && !stack && (
           <div className="lg:sticky lg:top-6 border-2 border-fg bg-bg-raised shadow-neo">
             <div className="px-4 py-2.5 border-b-2 border-fg bg-accent flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-fg">
               <CheckCircle2 size={12} /> Ready to deploy
@@ -584,16 +740,18 @@ export function DeployPage() {
         </div>
       </form>
 
-      <div className="mt-6 text-center">
-        <button
-          type="button"
-          onClick={() => setServicesOpen((v) => !v)}
-          className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-fg-dim hover:text-fg underline transition-colors"
-        >
-          <Database size={11} />
-          {servicesOpen ? "Hide services" : "Deploy a database or service instead"}
-        </button>
-      </div>
+      {!stack && (
+        <div className="mt-6 text-center">
+          <button
+            type="button"
+            onClick={() => setServicesOpen((v) => !v)}
+            className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-fg-dim hover:text-fg underline transition-colors"
+          >
+            <Database size={11} />
+            {servicesOpen ? "Hide services" : "Deploy a database or service instead"}
+          </button>
+        </div>
+      )}
 
       {servicesOpen && (
         <div className="mt-4">
