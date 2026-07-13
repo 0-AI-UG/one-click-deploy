@@ -59,9 +59,9 @@ export function SettingsTab({
   actionLoading, action, ops,
 }: SettingsTabProps) {
   // Password, active health-check paths and cookie sticky sessions are HTTP/L7
-  // concepts — raw-TCP internal routing can't carry them, so they're gated here.
+  // concepts; raw-TCP internal routing can't carry them, so they only render
+  // when the internal protocol is HTTP.
   const httpRouted = ingressForm.internal_protocol === "http";
-  const REQUIRES_HTTP = "Requires HTTP internal routing — switch Internal Protocol to HTTP.";
   return (
     <div className="space-y-4">
       <Card className="p-4">
@@ -144,11 +144,11 @@ export function SettingsTab({
         <div className="flex items-center gap-2 mb-3">
           <Network size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Ingress</h3>
-          <InfoTip text="Applied to the proxy config immediately on save — no rebuild or redeploy." />
+          <InfoTip text="Applied to the proxy config immediately on save; no rebuild or redeploy." />
         </div>
 
         <Field
-          label={<span className="flex items-center gap-2"><Network size={14} className="text-fg" /> Internal Protocol <InfoTip text="How Traefik reaches this app on its internal address (<app>.ocd.internal). HTTP (L7) terminates and understands requests — it's what powers password protection, active health-check paths and cookie sticky sessions. TCP is a raw byte pass-through for non-HTTP protocols (Postgres, Redis, game servers, custom binary); Traefik can only connection-check it, not read it. Switching refreshes the OCD_INTERNAL_URL scheme on the next redeploy." /></span>}
+          label={<span className="flex items-center gap-2"><Network size={14} className="text-fg" /> Internal Protocol <InfoTip text="How Traefik reaches this app on its internal address (<app>.ocd.internal). HTTP (L7) terminates and understands requests; it's what powers password protection, active health-check paths and cookie sticky sessions. TCP is a raw byte pass-through for non-HTTP protocols (Postgres, Redis, game servers, custom binary); Traefik can only connection-check it, not read it. Switching refreshes the OCD_INTERNAL_URL scheme on the next redeploy." /></span>}
         >
           <NeoSelect
             value={ingressForm.internal_protocol}
@@ -168,33 +168,59 @@ export function SettingsTab({
           />
         </Field>
 
-        <Field
-          label={<span className="flex items-center gap-2"><Lock size={14} className="text-fg" /> Password Protection <InfoTip text='HTTP basic auth at the ingress — visitors sign in with username "admin" and this password. Gates both the internal address and the public domain. Requires HTTP internal routing: raw TCP has no request layer to send a login challenge over.' /></span>}
-          hint={!httpRouted
-            ? REQUIRES_HTTP
-            : ingressForm.auth_enabled
-              ? 'HTTP basic auth — visitors sign in with username "admin". Leave the field blank to keep the current password.'
-              : "Gates the app behind HTTP basic auth."}
-        >
-          <div className="space-y-2">
-            <div className="flex justify-end">
-              <Checkbox
-                checked={httpRouted && ingressForm.auth_enabled}
-                disabled={!httpRouted}
-                onChange={(v) => setIngressForm({ ...ingressForm, auth_enabled: v, auth_password: v ? ingressForm.auth_password : "" })}
-                label="Require a password"
-              />
-            </div>
-            {httpRouted && ingressForm.auth_enabled && (
+        {/* HTTP/L7-only settings live directly under the protocol select; they
+            disappear entirely on raw-TCP routing rather than sitting disabled. */}
+        {httpRouted && (
+          <>
+            <Field
+              label={<span className="flex items-center gap-2"><Lock size={14} className="text-fg" /> Password Protection <InfoTip text='HTTP basic auth at the ingress. Visitors sign in with username "admin" and this password. Gates both the internal address and the public domain. Requires HTTP internal routing: raw TCP has no request layer to send a login challenge over.' /></span>}
+              hint={ingressForm.auth_enabled
+                ? 'HTTP basic auth. Visitors sign in with username "admin". Leave the field blank to keep the current password.'
+                : "Gates the app behind HTTP basic auth."}
+            >
+              <div className="space-y-2">
+                <div className="flex justify-end">
+                  <Checkbox
+                    checked={ingressForm.auth_enabled}
+                    onChange={(v) => setIngressForm({ ...ingressForm, auth_enabled: v, auth_password: v ? ingressForm.auth_password : "" })}
+                    label="Require a password"
+                  />
+                </div>
+                {ingressForm.auth_enabled && (
+                  <input
+                    type="password"
+                    value={ingressForm.auth_password}
+                    onChange={(e) => setIngressForm({ ...ingressForm, auth_password: e.target.value })}
+                    placeholder={app.auth_enabled ? "(unchanged)" : "New password"}
+                  />
+                )}
+              </div>
+            </Field>
+
+            <Field
+              label={<span className="flex items-center gap-2">Health Check Path <InfoTip text="Active HTTP probe on the internal service: Traefik GETs this path every 10s (3s timeout) and pulls a replica from rotation within seconds of it failing. Requires HTTP internal routing; raw-TCP apps instead get a passive TCP-connect check (open a socket, no path). Leave blank to disable the HTTP probe." /></span>}
+            >
               <input
-                type="password"
-                value={ingressForm.auth_password}
-                onChange={(e) => setIngressForm({ ...ingressForm, auth_password: e.target.value })}
-                placeholder={app.auth_enabled ? "(unchanged)" : "New password"}
+                type="text"
+                value={ingressForm.health_check_path}
+                onChange={(e) => setIngressForm({ ...ingressForm, health_check_path: e.target.value })}
+                placeholder="/healthz"
               />
-            )}
-          </div>
-        </Field>
+            </Field>
+
+            <Field
+              label={<span className="flex items-center gap-2">Sticky Sessions <InfoTip text="Pins each visitor to one replica via an ocd_sticky cookie so their session keeps landing on the same container. Because it rides on a cookie it only works with HTTP internal routing; raw TCP has nowhere to set one." /></span>}
+            >
+              <div className="flex justify-end">
+                <Checkbox
+                  checked={ingressForm.sticky}
+                  onChange={(v) => setIngressForm({ ...ingressForm, sticky: v })}
+                  label="Pin visitors to one replica"
+                />
+              </div>
+            </Field>
+          </>
+        )}
 
         <Field
           label={<span className="flex items-center gap-2">Rate Limit <InfoTip text="Caps requests/sec per client IP on the public domain (short bursts of up to 2× are allowed). Enforced by the public L7 router, so it has no effect on apps that aren't exposed via a public domain, nor on the internal address. 0 = unlimited." /></span>}
@@ -210,7 +236,7 @@ export function SettingsTab({
         </Field>
 
         <Field
-          label={<span className="flex items-center gap-2">IP Allowlist <InfoTip text="Only these source IPs/CIDRs may reach the public domain — everyone else gets 403. Checked before password auth, so blocked traffic never reaches the app or costs a bcrypt check. Comma-separated, e.g. 203.0.113.4, 10.0.0.0/8. Empty = open to all. Applies to the public domain only." /></span>}
+          label={<span className="flex items-center gap-2">IP Allowlist <InfoTip text="Only these source IPs/CIDRs may reach the public domain; everyone else gets 403. Checked before password auth, so blocked traffic never reaches the app or costs a bcrypt check. Comma-separated, e.g. 203.0.113.4, 10.0.0.0/8. Empty = open to all. Applies to the public domain only." /></span>}
           hint={ingressForm.ip_allowlist ? "only these IPs/CIDRs can reach the public domain" : undefined}
         >
           <input
@@ -222,34 +248,7 @@ export function SettingsTab({
         </Field>
 
         <Field
-          label={<span className="flex items-center gap-2">Health Check Path <InfoTip text="Active HTTP probe on the internal service: Traefik GETs this path every 10s (3s timeout) and pulls a replica from rotation within seconds of it failing. Requires HTTP internal routing. Raw-TCP apps can't be probed this way — they instead get a passive TCP-connect check (open a socket, no path). Leave blank to disable the HTTP probe." /></span>}
-          hint={!httpRouted ? "Raw-TCP apps use a passive TCP-connect check instead — no path applies." : undefined}
-        >
-          <input
-            type="text"
-            value={ingressForm.health_check_path}
-            onChange={(e) => setIngressForm({ ...ingressForm, health_check_path: e.target.value })}
-            placeholder="/healthz"
-            disabled={!httpRouted}
-          />
-        </Field>
-
-        <Field
-          label={<span className="flex items-center gap-2">Sticky Sessions <InfoTip text="Pins each visitor to one replica via an ocd_sticky cookie so their session keeps landing on the same container. Because it rides on a cookie it only works with HTTP internal routing — raw TCP has nowhere to set one." /></span>}
-          hint={!httpRouted ? REQUIRES_HTTP : undefined}
-        >
-          <div className="flex justify-end">
-            <Checkbox
-              checked={httpRouted && ingressForm.sticky}
-              disabled={!httpRouted}
-              onChange={(v) => setIngressForm({ ...ingressForm, sticky: v })}
-              label="Pin visitors to one replica"
-            />
-          </div>
-        </Field>
-
-        <Field
-          label={<span className="flex items-center gap-2">Compression <InfoTip text="gzip-compresses responses on the public domain when the client advertises Accept-Encoding. Runs on the public L7 router only — no effect on the internal address or on raw TCP/UDP traffic." /></span>}
+          label={<span className="flex items-center gap-2">Compression <InfoTip text="gzip-compresses responses on the public domain when the client advertises Accept-Encoding. Runs on the public L7 router only; no effect on the internal address or on raw TCP/UDP traffic." /></span>}
         >
           <div className="flex justify-end">
             <Checkbox
@@ -261,7 +260,7 @@ export function SettingsTab({
         </Field>
 
         <Field
-          label={<span className="flex items-center gap-2">Public TCP/UDP Port <InfoTip text="Forwards a dedicated public port on the panel's IP straight through to the app's replicas — raw, with no TLS, auth or middleware. For game servers, databases, MQTT and the like. Completely independent of the public HTTP domain and of the internal protocol above. Blank port = auto-assign from the pool." /></span>}
+          label={<span className="flex items-center gap-2">Public TCP/UDP Port <InfoTip text="Forwards a dedicated public port on the panel's IP straight through to the app's replicas: raw, with no TLS, auth or middleware. For game servers, databases, MQTT and the like. Completely independent of the public HTTP domain and of the internal protocol above. Blank port = auto-assign from the pool." /></span>}
           hint={app.public_address
             ? `reachable at ${app.public_address} (${(app.public_protocol || "tcp").toUpperCase()})`
             : ingressForm.public_protocol !== "off"
