@@ -7,109 +7,9 @@ import { ManifestSection } from "./manifest-section.tsx";
 import { ReceiptSection } from "./receipt-section.tsx";
 import { EnvSection } from "./env-section.tsx";
 import { AdvancedSection } from "./advanced-section.tsx";
+import { ServicesGridSection } from "./services-grid.tsx";
 import type { IntrospectResult, ManifestEnvDef, FormState } from "./types.ts";
 import type { DeployBody } from "../../types.ts";
-
-type CatalogEntry = {
-  type: string;
-  label: string;
-  versions: string[];
-  defaultPort: number;
-  icon?: string;
-  color?: string;
-  category?: string;
-  http?: boolean;
-  description?: string;
-};
-
-function groupByCategory(entries: CatalogEntry[]): [string, CatalogEntry[]][] {
-  const buckets = new Map<string, CatalogEntry[]>();
-  for (const e of entries) {
-    const key = e.category || "other";
-    const list = buckets.get(key) || [];
-    list.push(e);
-    buckets.set(key, list);
-  }
-  for (const list of buckets.values()) {
-    list.sort((a, b) => a.label.localeCompare(b.label));
-  }
-  return Array.from(buckets.entries()).sort(([a], [b]) => {
-    if (a === "other") return 1;
-    if (b === "other") return -1;
-    return a.localeCompare(b);
-  });
-}
-
-function ServicesGridSection({ onClose }: { onClose: () => void }) {
-  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    get("/api/services/catalog")
-      .then((data: CatalogEntry[]) => {
-        setCatalog(data);
-        setLoaded(true);
-      })
-      .catch(() => setLoaded(true));
-  }, []);
-
-  return (
-    <div className="border-2 border-fg bg-bg animate-fade-in">
-      <div className="px-4 py-2 border-b-2 border-fg bg-alt flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Database size={12} className="text-fg" />
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-fg">Deploy a service</span>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-fg-dim hover:text-fg transition-colors"
-          aria-label="Close"
-        >
-          <X size={14} />
-        </button>
-      </div>
-      <div className="p-4">
-        {!loaded ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 size={16} className="animate-spin text-fg-dim" />
-          </div>
-        ) : catalog.length === 0 ? (
-          <div className="font-mono text-[10px] text-fg-dim text-center py-6">No services available</div>
-        ) : (
-          <div className="space-y-5">
-            {groupByCategory(catalog).map(([category, entries]) => (
-              <div key={category}>
-                <div className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg-dim mb-2">
-                  {category}
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-                  {entries.map((entry) => (
-                    <a
-                      key={entry.type}
-                      href={`#/deploy-service/${entry.type}`}
-                      className="flex items-start gap-2 border-2 border-fg/20 hover:border-fg bg-bg hover:bg-alt p-2.5 transition-colors"
-                    >
-                      <div className={`w-7 h-7 ${entry.color || "bg-gray-500"} flex items-center justify-center text-white font-mono text-[9px] font-bold shrink-0`}>
-                        {entry.icon || entry.label.slice(0, 2)}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono text-[10px] font-bold text-fg uppercase truncate">{entry.label}</div>
-                        {entry.description && (
-                          <div className="font-mono text-[9px] text-fg-dim mt-0.5 line-clamp-2">{entry.description}</div>
-                        )}
-                      </div>
-                    </a>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
@@ -140,6 +40,7 @@ const EMPTY_FORM: FormState = {
   extra_volumes: [],
   server_id: "",
   memory_mb: "",
+  cpu_limit: "",
   health_check: true,
   internal_protocol: "http",
   sticky: false,
@@ -173,32 +74,53 @@ export function DeployPage() {
     const m = pm.manifest;
 
     setSelectedManifest(idx);
-    setForm((f) => ({
-      ...f,
-      app_name: m.suggested_app_name || f.app_name || result.suggested_app_name,
-      git_branch: f.git_branch || (result.default_branch !== "main" ? result.default_branch : ""),
-      container_port: m.build?.container_port
-        ? String(m.build.container_port)
-        : result.detected_port
-          ? String(result.detected_port)
-          : f.container_port,
-      dockerfile_path: m.build?.dockerfile || f.dockerfile_path,
-      docker_context: m.build?.context || f.docker_context,
-      volume_size: m.volume?.size ? String(m.volume.size) : f.volume_size,
-      volume_path: m.volume?.path || f.volume_path,
-      webhook_enabled: m.webhook?.enabled ?? f.webhook_enabled,
-      webhook_branch: m.webhook?.branch || result.default_branch,
-      webhook_path: m.webhook?.path || f.webhook_path,
-      webhook_wait_for_ci: m.webhook?.wait_for_ci ?? f.webhook_wait_for_ci,
-      replicas: m.replicas ? String(m.replicas) : f.replicas,
-      public: m.public ?? f.public,
-      extra_volumes: m.extra_volumes ?? f.extra_volumes,
-      memory_mb: m.memory_mb ? String(m.memory_mb) : f.memory_mb,
-      health_check: m.health_check ?? f.health_check,
+    setForm((f) => {
       // Explicit manifest value wins; else derive from health_check (the old
       // coupling) so manifests that only set health_check keep their routing.
-      internal_protocol: m.internal_protocol ?? (m.health_check === false ? "tcp" : f.internal_protocol),
-    }));
+      const internal_protocol = m.internal_protocol ?? (m.health_check === false ? "tcp" : f.internal_protocol);
+      // A raw-TCP app can't answer the post-deploy HTTP probe — keep the form's
+      // health_check consistent with the resolved routing protocol.
+      const health_check = internal_protocol === "tcp" ? false : (m.health_check ?? f.health_check);
+      // Raw public exposure is expressed by public_protocol and/or public_port
+      // (a bare public_port defaults to the tcp pool).
+      const exposed = m.public_protocol != null || m.public_port != null;
+      return {
+        ...f,
+        app_name: m.suggested_app_name || f.app_name || result.suggested_app_name,
+        git_branch: f.git_branch || (result.default_branch !== "main" ? result.default_branch : ""),
+        container_port: m.build?.container_port
+          ? String(m.build.container_port)
+          : result.detected_port
+            ? String(result.detected_port)
+            : f.container_port,
+        dockerfile_path: m.build?.dockerfile || f.dockerfile_path,
+        docker_context: m.build?.context || f.docker_context,
+        volume_size: m.volume?.size ? String(m.volume.size) : f.volume_size,
+        volume_path: m.volume?.path || f.volume_path,
+        webhook_enabled: m.webhook?.enabled ?? f.webhook_enabled,
+        webhook_branch: m.webhook?.branch || result.default_branch,
+        webhook_path: m.webhook?.path || f.webhook_path,
+        webhook_wait_for_ci: m.webhook?.wait_for_ci ?? f.webhook_wait_for_ci,
+        replicas: m.replicas ? String(m.replicas) : f.replicas,
+        public: m.public ?? f.public,
+        extra_volumes: m.extra_volumes ?? f.extra_volumes,
+        memory_mb: m.memory_mb ? String(m.memory_mb) : f.memory_mb,
+        cpu_limit: m.cpu_limit ? String(m.cpu_limit) : f.cpu_limit,
+        health_check,
+        internal_protocol,
+        sticky: m.sticky ?? f.sticky,
+        rate_limit_rps: m.rate_limit_rps !== undefined ? String(m.rate_limit_rps) : f.rate_limit_rps,
+        ip_allowlist: m.ip_allowlist ?? f.ip_allowlist,
+        health_check_path: m.health_check_path ?? f.health_check_path,
+        compress: m.compress ?? f.compress,
+        public_protocol: m.public_protocol ?? (exposed ? "tcp" : f.public_protocol),
+        public_port: typeof m.public_port === "number"
+          ? String(m.public_port)
+          : m.public_port === "auto"
+            ? ""
+            : f.public_port,
+      };
+    });
 
     if (m.env && m.env.length > 0) {
       setManifestEnvDefs(m.env);
@@ -235,8 +157,16 @@ export function DeployPage() {
       webhook_wait_for_ci: false,
       replicas: "1",
       memory_mb: "",
+      cpu_limit: "",
       health_check: true,
       internal_protocol: "http",
+      sticky: false,
+      rate_limit_rps: "",
+      ip_allowlist: "",
+      health_check_path: "",
+      compress: false,
+      public_protocol: "off",
+      public_port: "",
     }));
     if (result.env_vars.length > 0) {
       const next: Record<string, string> = {};
@@ -460,6 +390,7 @@ export function DeployPage() {
         : undefined,
       server_id: form.server_id ? parseInt(form.server_id, 10) : undefined,
       memory_mb: form.memory_mb ? parseInt(form.memory_mb, 10) : undefined,
+      cpu_limit: form.cpu_limit ? parseFloat(form.cpu_limit) : undefined,
       health_check: form.health_check === false ? false : undefined,
       internal_protocol: form.internal_protocol,
       sticky: form.sticky || undefined,

@@ -3,7 +3,7 @@
 //
 // An app that scaled to zero (status 'sleeping') has no replicas to serve, yet
 // a connection to it must not fail. While it sleeps, the ingress renderer
-// (traefik-config.ts) points ALL of the app's Traefik routers at this waker
+// (traefik-render.ts) points ALL of the app's Traefik routers at this waker
 // instead of a replica pool. A connection then, transparently:
 //
 //   1. RESOLVE  — figure out which app the connection is for.
@@ -29,7 +29,8 @@
 // ingress already centralizes on the panel; the panel is a cold-start choke
 // point, but it is already the choke point for public ingress / ACME / the
 // control plane, so no new failure domain is introduced. See the "waker" header
-// in traefik-config.ts for the port constants and router wiring.
+// in traefik-constants.ts for the port constants and traefik-render.ts for the
+// router wiring.
 //
 // This replaced the browser-only 503 "wake page", which woke nothing for
 // internal callers, raw TCP/UDP ports, or any non-browser HTTP client.
@@ -37,12 +38,12 @@
 import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { wakeApp } from "./wake.ts";
+import { buildUpstreams } from "./traefik-render.ts";
 import {
-  buildUpstreams,
   wakerTcpPort,
   wakerUdpPort,
   WAKER_HTTP_PORT,
-} from "./traefik-config.ts";
+} from "./traefik-constants.ts";
 
 function log(...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [waker]`, ...args);

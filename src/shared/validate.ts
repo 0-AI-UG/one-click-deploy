@@ -499,11 +499,35 @@ export function validateDeployManifest(
   if ("memory_mb" in obj && !isValidMemoryMb(obj.memory_mb))
     return { ok: false, error: `"memory_mb" must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB}` };
 
+  if ("cpu_limit" in obj && !isValidCpuLimit(obj.cpu_limit))
+    return { ok: false, error: `"cpu_limit" must be 0 (default) or a number ${MIN_CPU_LIMIT}–${MAX_CPU_LIMIT} cores` };
+
   if ("health_check" in obj && typeof obj.health_check !== "boolean")
     return { ok: false, error: '"health_check" must be a boolean' };
 
   if ("internal_protocol" in obj && !isInternalProtocol(obj.internal_protocol))
     return { ok: false, error: '"internal_protocol" must be "http" or "tcp"' };
+
+  if ("sticky" in obj && typeof obj.sticky !== "boolean")
+    return { ok: false, error: '"sticky" must be a boolean' };
+
+  if ("compress" in obj && typeof obj.compress !== "boolean")
+    return { ok: false, error: '"compress" must be a boolean' };
+
+  // Rate limit / allowlist / health-check path / public port+protocol share the
+  // deploy request's rules — one validator, one set of error strings. The
+  // health-check-path HTTP-routing rule keys off the manifest's resolved
+  // internal protocol (explicit internal_protocol, else derived from health_check).
+  const httpRouted =
+    resolveInternalProtocol(obj.internal_protocol, obj.health_check as boolean | undefined) === "http";
+  const ingressInput: IngressFieldsInput = {};
+  if ("rate_limit_rps" in obj) ingressInput.rate_limit_rps = obj.rate_limit_rps as number;
+  if ("ip_allowlist" in obj) ingressInput.ip_allowlist = obj.ip_allowlist as string;
+  if ("health_check_path" in obj) ingressInput.health_check_path = obj.health_check_path as string;
+  if ("public_port" in obj) ingressInput.public_port = obj.public_port as number | "auto" | null;
+  if ("public_protocol" in obj) ingressInput.public_protocol = obj.public_protocol as string;
+  const ingressResult = validateIngressFields(ingressInput, { httpRouted });
+  if (!ingressResult.valid) return { ok: false, error: ingressResult.error };
 
   return { ok: true, manifest: raw as import("./rpc.ts").DeployManifest };
 }
@@ -520,6 +544,20 @@ export function isValidMemoryMb(value: unknown): value is number {
   );
 }
 
+/** Per-app container CPU ceiling bounds (cores). 0 means "platform default".
+ *  Fractional values are allowed (docker's --cpus flag), so we don't require an
+ *  integer — only a finite value in range with sane precision. */
+export const MIN_CPU_LIMIT = 0.1;
+export const MAX_CPU_LIMIT = 32;
+
+export function isValidCpuLimit(value: unknown): value is number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  if (value === 0) return true;
+  // Reject nonsense precision (e.g. 0.333333) that docker would round oddly.
+  if (Math.round(value * 100) !== value * 100) return false;
+  return value >= MIN_CPU_LIMIT && value <= MAX_CPU_LIMIT;
+}
+
 export function validateDeployRequest(req: {
   app_name: string;
   domain?: string;
@@ -528,6 +566,7 @@ export function validateDeployRequest(req: {
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   memory_mb?: number;
+  cpu_limit?: number;
   public?: boolean;
   auth_password?: string;
   health_check?: boolean;
@@ -570,6 +609,10 @@ export function validateDeployRequest(req: {
 
   if (req.memory_mb !== undefined && !isValidMemoryMb(req.memory_mb)) {
     return { valid: false, error: `Memory: must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB} MB` };
+  }
+
+  if (req.cpu_limit !== undefined && !isValidCpuLimit(req.cpu_limit)) {
+    return { valid: false, error: `CPU: must be 0 (default) or a number ${MIN_CPU_LIMIT}–${MAX_CPU_LIMIT} cores` };
   }
 
   if (req.internal_protocol !== undefined && !isInternalProtocol(req.internal_protocol)) {

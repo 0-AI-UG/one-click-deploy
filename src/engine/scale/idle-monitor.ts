@@ -57,20 +57,50 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
   }
 
   const count = replicas.length;
-  const avgCpu = replicas.reduce((sum, r) => sum + r.cpu_percent, 0) / count;
+  // docker stats CPUPerc is "cores used × 100" (100% = one whole core), NOT a
+  // fraction of the container's --cpus ceiling. Normalize each replica against
+  // its own CPU limit so the threshold means "% of the app's allowed CPU" —
+  // matching how memory_percent already behaves (docker MemPerc = used/--memory)
+  // and how K8s HPA measures utilization against the pod's limit. Without this,
+  // an app capped at 0.5 cores could never reach an 80% threshold, and one
+  // given 2 cores would scale up at 40% of its real headroom. Prefer the
+  // scraped per-replica ceiling; fall back to the app's configured limit, then
+  // to 1 core (DEFAULT_CPUS) for a replica not yet scraped.
+  const cpuLimitFallback = app.cpu_limit || 1;
+  const avgCpu = replicas.reduce((sum, r) => {
+    const limitCores = r.cpu_limit_cores > 0 ? r.cpu_limit_cores : cpuLimitFallback;
+    return sum + r.cpu_percent / limitCores;
+  }, 0) / count;
   const avgMem = replicas.reduce((sum, r) => sum + r.memory_percent, 0) / count;
+  const serverIds = [...new Set(replicas.map((r) => r.server_id))];
+
+  // HTTP-routed apps (same predicate as the ingress renderer) have Traefik
+  // request counters; raw-TCP apps (internal_protocol='tcp', no auth) don't, so
+  // request-rate scaling and the request-driven sleep path only apply to them.
+  const httpRouted = app.internal_protocol === "http" || !!app.auth_password_hash;
 
   // Volume apps can never scale beyond 1 replica (cloud volumes attach 1:1).
   // Treat them as capped at 1 even if their stored max_replicas is higher.
   const effectiveMax = app.volume_id ? Math.min(1, app.max_replicas) : app.max_replicas;
 
-  // Utilization ratio vs. the configured thresholds. >1 means over target.
-  const ratio = Math.max(
-    avgCpu / app.autoscale_cpu_threshold,
-    avgMem / app.autoscale_mem_threshold,
-  );
+  // Utilization ratios vs. the configured thresholds. >1 means over target.
+  // CPU and memory are the universal saturation signals (every app has them).
+  // Request rate is an additional HPA-style "Pods" metric: each metric proposes
+  // a desired replica count and the highest (max) wins. It only participates
+  // for HTTP apps with a configured target and fresh Traefik metrics —
+  // otherwise it drops out and CPU/RAM alone drive the decision (a stale scrape
+  // must never zero the signal, or it would look like idle traffic).
+  const cpuRatio = avgCpu / app.autoscale_cpu_threshold;
+  const memRatio = avgMem / app.autoscale_mem_threshold;
+  const reqScalingOn = httpRouted && app.autoscale_req_threshold > 0 && requestMetricsFresh(serverIds);
+  // requests_per_min is the app-wide total; compare the per-replica average to
+  // the target so ceil(count * ratio) converges to the right replica count.
+  const reqRatio = reqScalingOn
+    ? (app.requests_per_min / count) / app.autoscale_req_threshold
+    : 0;
+  const ratio = Math.max(cpuRatio, memRatio, reqRatio);
 
-  log("autoscale", `App ${appId}: avgCPU=${avgCpu.toFixed(1)}% avgMem=${avgMem.toFixed(1)}% ratio=${ratio.toFixed(2)} replicas=${count} min=${app.min_replicas} max=${effectiveMax}${app.volume_id ? " (volume-capped)" : ""}`);
+  log("autoscale", `App ${appId}: avgCPU=${avgCpu.toFixed(1)}% avgMem=${avgMem.toFixed(1)}%${reqScalingOn ? ` rpm=${app.requests_per_min.toFixed(0)} reqRatio=${reqRatio.toFixed(2)}` : ""} ratio=${ratio.toFixed(2)} replicas=${count} min=${app.min_replicas} max=${effectiveMax}${app.volume_id ? " (volume-capped)" : ""}`);
 
   // --- Scale up (proportional, HPA formula) ---
   if (ratio > 1 + TOLERANCE && count < effectiveMax) {
@@ -90,10 +120,6 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
   }
 
   const canScaleToZero = count === 1 && app.min_replicas === 0;
-  // HTTP-routed apps (same predicate as the ingress renderer) have Traefik
-  // request counters; raw-TCP apps (internal_protocol='tcp', no auth) don't, so
-  // they keep the legacy CPU sustained-idle heuristic below.
-  const httpRouted = app.internal_protocol === "http" || !!app.auth_password_hash;
 
   // --- Scale-to-zero, request-driven ---
   // Sleep once the app has had zero requests (public + internal — an app called
@@ -101,7 +127,6 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
   if (canScaleToZero && httpRouted) {
     idleSince.delete(appId); // CPU idle tracker is only for the legacy path
     const idleTimeout = app.scale_to_zero_after ?? 300;
-    const serverIds = [...new Set(replicas.map((r) => r.server_id))];
     // Fail safe: a failed scrape is "unknown", not "zero traffic" — no sleep
     // decision until this tick's metrics arrived from every replica's server.
     if (!requestMetricsFresh(serverIds)) {

@@ -39,7 +39,7 @@ mock.module("../scale/traefik-manager.ts", () => ({
   syncAllTraefik: mock(async () => {}),
   reconcileTraefik: mock(async () => {}),
 }));
-mock.module("../scale-api.ts", () => ({
+mock.module("../scale/index.ts", () => ({
   rollingRedeploy: mock(async () => ({ ok: true })),
 }));
 mock.module("../../shared/github.ts", () => ({

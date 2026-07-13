@@ -24,6 +24,8 @@ export type IngressForm = {
   auth_password: string;
   /** Internal routing protocol: 'http' (L7) or 'tcp' (raw pass-through). */
   internal_protocol: "http" | "tcp";
+  /** Post-deploy HTTP probe on/off. L7-only; applies on the next (re)deploy/scale. */
+  health_check: boolean;
 };
 
 const PUBLIC_PORT_RANGES = { tcp: "30000–30049", udp: "30050–30099" } as const;
@@ -39,6 +41,8 @@ interface SettingsTabProps {
   setPortEdit: (v: number) => void;
   memEdit: number;
   setMemEdit: (v: number) => void;
+  cpuEdit: number;
+  setCpuEdit: (v: number) => void;
   volumeForm: { size: number; mount_path: string };
   setVolumeForm: (f: { size: number; mount_path: string }) => void;
   ingressForm: IngressForm;
@@ -54,6 +58,7 @@ export function SettingsTab({
   isPublic, setIsPublic,
   portEdit, setPortEdit,
   memEdit, setMemEdit,
+  cpuEdit, setCpuEdit,
   volumeForm, setVolumeForm,
   ingressForm, setIngressForm,
   actionLoading, action, ops,
@@ -107,13 +112,24 @@ export function SettingsTab({
           />
         </Field>
 
-        <Field label={<span className="flex items-center gap-2"><Cpu size={14} className="text-fg" /> Memory Limit (MB) <InfoTip text="Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save & redeploy." /></span>}>
+        <Field label={<span className="flex items-center gap-2"><HardDrive size={14} className="text-fg" /> Memory Limit (MB) <InfoTip text="Container memory ceiling. 0 or blank uses the platform default (512 MB). Applied on save & redeploy." /></span>}>
           <input
             type="number"
             min={0}
             value={memEdit || ""}
             onChange={(e) => setMemEdit(parseInt(e.target.value) || 0)}
             placeholder="512 (platform default)"
+          />
+        </Field>
+
+        <Field label={<span className="flex items-center gap-2"><Cpu size={14} className="text-fg" /> CPU Limit (cores) <InfoTip text="Container CPU ceiling in cores; fractional allowed (e.g. 0.5, 2). 0 or blank uses the platform default (1 core). Applied on save & redeploy." /></span>}>
+          <input
+            type="number"
+            min={0}
+            step={0.1}
+            value={cpuEdit || ""}
+            onChange={(e) => setCpuEdit(parseFloat(e.target.value) || 0)}
+            placeholder="1 (platform default)"
           />
         </Field>
       </Card>
@@ -130,6 +146,7 @@ export function SettingsTab({
                 container_port: portEdit,
                 public: isPublic,
                 memory_mb: memEdit,
+                cpu_limit: cpuEdit,
               })) as { op_id?: number };
               if (res?.op_id) {
                 trackOperationInToast(res.op_id, "Saving & redeploying");
@@ -154,12 +171,14 @@ export function SettingsTab({
             value={ingressForm.internal_protocol}
             onChange={(v) => {
               const internal_protocol = v as IngressForm["internal_protocol"];
-              // Password, an active health-check path and cookie sticky sessions
-              // are L7-only; clear them when dropping to raw TCP so we never save
-              // a combination the ingress endpoint rejects.
+              // Password, an active health-check path, cookie sticky sessions and
+              // the post-deploy HTTP probe are L7-only; clear them when dropping to
+              // raw TCP so we never save a combination the ingress endpoint rejects
+              // (a raw-TCP app can't answer an HTTP probe). Restore the default
+              // probe when returning to HTTP routing.
               setIngressForm(internal_protocol === "tcp"
-                ? { ...ingressForm, internal_protocol, auth_enabled: false, auth_password: "", sticky: false, health_check_path: "" }
-                : { ...ingressForm, internal_protocol });
+                ? { ...ingressForm, internal_protocol, auth_enabled: false, auth_password: "", sticky: false, health_check_path: "", health_check: false }
+                : { ...ingressForm, internal_protocol, health_check: true });
             }}
             options={[
               { value: "http", label: "HTTP (L7 routing)" },
@@ -216,6 +235,19 @@ export function SettingsTab({
                   checked={ingressForm.sticky}
                   onChange={(v) => setIngressForm({ ...ingressForm, sticky: v })}
                   label="Pin visitors to one replica"
+                />
+              </div>
+            </Field>
+
+            <Field
+              label={<span className="flex items-center gap-2">HTTP Health Check <InfoTip text="Probe / on the exposed port after each deploy and scale. Turn off for apps that don't answer HTTP there; the platform then only checks the container is running. HTTP routing only. Unlike the other ingress settings this takes effect on the app's next (re)deploy or scale, not immediately." /></span>}
+              hint="applied on the next deploy or scale"
+            >
+              <div className="flex justify-end">
+                <Checkbox
+                  checked={ingressForm.health_check}
+                  onChange={(v) => setIngressForm({ ...ingressForm, health_check: v })}
+                  label="Probe after deploy"
                 />
               </div>
             </Field>
@@ -297,6 +329,7 @@ export function SettingsTab({
               size="sm"
               variant="primary"
               loading={actionLoading === "save-ingress"}
+              disabled={ops.isBusy}
               onClick={() => action("save-ingress", async () => {
                 // Password is write-only. Disabled → clear ("").  Enabled with a
                 // typed value → set it. Enabled but blank → omit (keep current).
@@ -312,6 +345,7 @@ export function SettingsTab({
                   rate_limit_rps: ingressForm.rate_limit_rps,
                   ip_allowlist: ingressForm.ip_allowlist,
                   health_check_path: ingressForm.health_check_path,
+                  health_check: ingressForm.health_check,
                   compress: ingressForm.compress,
                   public_port: ingressForm.public_protocol === "off"
                     ? null

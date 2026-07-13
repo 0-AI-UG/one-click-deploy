@@ -8,9 +8,13 @@ import {
   publicTls,
   renderDynamicConfig,
   renderPanelConfig,
+} from "./traefik-render.ts";
+import {
   traefikInstallScript,
   traefikStaticConfig,
   traefikSystemdUnit,
+} from "./traefik-provision.ts";
+import {
   BASIC_AUTH_USER,
   TRAEFIK_ACCESS_LOG_PATH,
   TRAEFIK_ACME_DNS_PATH,
@@ -20,7 +24,7 @@ import {
   WAKER_HTTP_PORT,
   wakerTcpPort,
   wakerUdpPort,
-} from "./traefik-config.ts";
+} from "./traefik-constants.ts";
 
 // The db module (and its temp data dir) is shared across all test files in
 // the bun test process, so every fixture uses unique names and assertions

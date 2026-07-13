@@ -5,7 +5,7 @@ import {
   transferImage, probeAppHealth, startAppReplica,
 } from "../../shared/remote/index.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
-import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
+import { type ProgressFn, log, type App, type Replica, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 import { pickTargetServer } from "./server-picker.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 
@@ -90,6 +90,7 @@ export async function scaleUp(
         bindAddr: replicaBindAddr,
         containerName: containerNameForBuild,
         memoryMb: app.memory_mb || undefined,
+        cpus: app.cpu_limit || undefined,
         hostKey: targetHostKey,
       };
       const logLine = (line: string) => emit("scale", line);
@@ -109,17 +110,7 @@ export async function scaleUp(
     // Skipped on rebuildFallback: cloneAndBuild already started the container.
     if (!rebuildFallback) {
       await startAppReplica(targetServer.ipv4, {
-        containerName,
-        image: imageName,
-        appName: app.name,
-        network: null, // scale-up replicas historically don't join ocd-net
-        bindAddr: replicaBindAddr,
-        hostPort,
-        containerPort: app.container_port,
-        envVars: await resolveAppEnvVars(app),
-        volumeMount: app.volume_mount || undefined,
-        extraVolumes: scaleExtraVols,
-        memoryMb: app.memory_mb || undefined,
+        ...appReplicaRunOpts(app, targetServer, { containerName, hostPort, envVars: await resolveAppEnvVars(app) }),
       }, targetHostKey);
     }
 

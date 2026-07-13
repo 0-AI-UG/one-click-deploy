@@ -71,7 +71,7 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
 export async function handleUpdateScalingPolicy(request: Request, appId: number): Promise<Response> {
   try {
     await requirePermission(request, "scaling.manage");
-    const { min_replicas, max_replicas, autoscale_enabled, cpu_threshold, mem_threshold, cooldown, scale_to_zero_after } = await request.json() as {
+    const { min_replicas, max_replicas, autoscale_enabled, cpu_threshold, mem_threshold, cooldown, scale_to_zero_after, req_threshold } = await request.json() as {
       min_replicas: number;
       max_replicas: number;
       autoscale_enabled: boolean;
@@ -79,6 +79,7 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
       mem_threshold: number;
       cooldown?: number;
       scale_to_zero_after?: number;
+      req_threshold?: number;
     };
 
     if (min_replicas < 0 || max_replicas < min_replicas) {
@@ -103,6 +104,7 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
       autoscale_mem_threshold: mem_threshold,
       ...(typeof cooldown === "number" ? { autoscale_cooldown: cooldown } : {}),
       ...(typeof scale_to_zero_after === "number" ? { scale_to_zero_after } : {}),
+      ...(typeof req_threshold === "number" ? { autoscale_req_threshold: req_threshold } : {}),
     });
 
     return Response.json({ ok: true }, { headers: corsHeaders });

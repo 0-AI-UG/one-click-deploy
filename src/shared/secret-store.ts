@@ -58,22 +58,40 @@ export async function getEncryptionKey(): Promise<CryptoKey> {
   return _sharedEncryptionKey;
 }
 
+/** Encrypt a single plaintext value. */
+export async function encryptValue(plaintext: string): Promise<{ encrypted_value: string; iv: string }> {
+  const key = await getEncryptionKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(plaintext),
+  );
+  return {
+    encrypted_value: Buffer.from(ciphertext).toString("base64"),
+    iv: Buffer.from(iv).toString("base64"),
+  };
+}
+
+/** Decrypt a single encrypted value. */
+export async function decryptValue(encrypted_value: string, iv: string): Promise<string> {
+  const key = await getEncryptionKey();
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: Buffer.from(iv, "base64") },
+    key,
+    Buffer.from(encrypted_value, "base64"),
+  );
+  return new TextDecoder().decode(decrypted);
+}
+
 // Encrypted SQLite storage (AES-GCM, key derived from JWT_SECRET via HKDF)
 class DbSecretStore implements SecretStore {
-  private async getKey(): Promise<CryptoKey> {
-    return getEncryptionKey();
-  }
-
   async get(key: string): Promise<string | null> {
     const { default: db } = await import("./db.ts");
     const row = db.query("SELECT encrypted_value, iv FROM encrypted_secrets WHERE key = ?").get(key) as { encrypted_value: string; iv: string } | null;
     if (!row) return null;
     try {
-      const encKey = await this.getKey();
-      const iv = Buffer.from(row.iv, "base64");
-      const ciphertext = Buffer.from(row.encrypted_value, "base64");
-      const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, encKey, ciphertext);
-      return new TextDecoder().decode(decrypted);
+      return await decryptValue(row.encrypted_value, row.iv);
     } catch (err) {
       log("get", `Failed to decrypt secret ${key}:`, err);
       return null;
@@ -82,16 +100,8 @@ class DbSecretStore implements SecretStore {
 
   async set(key: string, value: string): Promise<void> {
     const { default: db } = await import("./db.ts");
-    const encKey = await this.getKey();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv },
-      encKey,
-      new TextEncoder().encode(value),
-    );
-    const ivB64 = Buffer.from(iv).toString("base64");
-    const ctB64 = Buffer.from(ciphertext).toString("base64");
-    db.query("INSERT OR REPLACE INTO encrypted_secrets (key, encrypted_value, iv) VALUES (?, ?, ?)").run(key, ctB64, ivB64);
+    const { encrypted_value, iv } = await encryptValue(value);
+    db.query("INSERT OR REPLACE INTO encrypted_secrets (key, encrypted_value, iv) VALUES (?, ?, ?)").run(key, encrypted_value, iv);
   }
 
   async delete(key: string): Promise<void> {

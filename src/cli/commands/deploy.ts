@@ -196,8 +196,16 @@ ${BOLD}Options:${RESET}
   if (manifest.replicas) body.replicas = manifest.replicas;
   if (manifest.public !== undefined) body.public = manifest.public;
   if (manifest.memory_mb) body.memory_mb = manifest.memory_mb;
+  if (manifest.cpu_limit) body.cpu_limit = manifest.cpu_limit;
   if (manifest.health_check === false) body.health_check = false;
   if (manifest.internal_protocol) body.internal_protocol = manifest.internal_protocol;
+  if (manifest.sticky) body.sticky = true;
+  if (manifest.rate_limit_rps !== undefined) body.rate_limit_rps = manifest.rate_limit_rps;
+  if (manifest.ip_allowlist) body.ip_allowlist = manifest.ip_allowlist;
+  if (manifest.health_check_path) body.health_check_path = manifest.health_check_path;
+  if (manifest.compress) body.compress = true;
+  if (manifest.public_port !== undefined) body.public_port = manifest.public_port;
+  if (manifest.public_protocol) body.public_protocol = manifest.public_protocol;
 
   if (manifest.volume?.size) {
     body.volume_size = manifest.volume.size;

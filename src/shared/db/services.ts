@@ -1,5 +1,6 @@
 import db from "./connection.ts";
 import type { ResourceUsage } from "./replicas.ts";
+import * as health from "./_metrics-health.ts";
 
 export type ServiceRow = {
   id: number;
@@ -140,7 +141,7 @@ export function getServiceInstancesByServer(serverId: number): ServiceInstanceRo
 }
 
 export function updateServiceInstanceStatus(id: number, status: string): void {
-  db.query("UPDATE service_instances SET status = ? WHERE id = ?").run(status, id);
+  health.updateStatus("service_instances", id, status);
 }
 
 export function updateServiceInstanceMetrics(
@@ -149,32 +150,19 @@ export function updateServiceInstanceMetrics(
   memoryPercent: number,
   usage?: ResourceUsage,
 ): void {
-  db.query(
-    `UPDATE service_instances SET cpu_percent = ?, memory_percent = ?,
-       cpu_limit_cores = ?, memory_used_mb = ?, memory_limit_mb = ?,
-       last_health_at = datetime('now') WHERE id = ?`
-  ).run(
-    cpuPercent,
-    memoryPercent,
-    usage?.cpuLimitCores ?? 0,
-    usage?.memoryUsedMb ?? 0,
-    usage?.memoryLimitMb ?? 0,
-    id,
-  );
+  health.updateMetrics("service_instances", id, cpuPercent, memoryPercent, usage);
 }
 
 export function touchServiceInstanceHealth(id: number): void {
-  db.query("UPDATE service_instances SET last_health_at = datetime('now') WHERE id = ?").run(id);
+  health.touchHealth("service_instances", id);
 }
 
 export function incrementServiceInstanceUnhealthyTicks(id: number): number {
-  db.query("UPDATE service_instances SET unhealthy_ticks = unhealthy_ticks + 1 WHERE id = ?").run(id);
-  const row = db.query("SELECT unhealthy_ticks FROM service_instances WHERE id = ?").get(id) as { unhealthy_ticks: number } | null;
-  return row?.unhealthy_ticks ?? 0;
+  return health.incrementUnhealthyTicks("service_instances", id);
 }
 
 export function resetServiceInstanceUnhealthyTicks(id: number): void {
-  db.query("UPDATE service_instances SET unhealthy_ticks = 0 WHERE id = ?").run(id);
+  health.resetUnhealthyTicks("service_instances", id);
 }
 
 export function deleteServiceInstance(id: number): void {

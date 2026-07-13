@@ -30,7 +30,7 @@ mock.module("../../shared/services/catalog.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import { destroyService } from "./service-lifecycle.ts";
+import { destroyServiceCore as destroyService } from "./service-lifecycle.ts";
 
 function freshServer() {
   return db.insertServer({

@@ -5,7 +5,7 @@ import {
   startContainer, containerExists,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
-import { log, replicaBindHost } from "./types.ts";
+import { log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 
 export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("wake", `Waking app ${appId}`);
@@ -57,17 +57,7 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
       // The container provably doesn't exist here (fast path failed), so skip
       // the rm -f round-trip.
       await startAppReplica(server.ipv4, {
-        containerName,
-        image: `${app.name}:latest`,
-        appName: app.name,
-        network: null,
-        bindAddr,
-        hostPort,
-        containerPort: app.container_port,
-        envFilePath,
-        volumeMount: app.volume_mount || undefined,
-        extraVolumes: db.parseExtraVolumes(app.extra_volumes),
-        memoryMb: app.memory_mb || undefined,
+        ...appReplicaRunOpts(app, server, { containerName, hostPort, envFilePath }),
         removeExisting: false,
       }, hostKey);
     }

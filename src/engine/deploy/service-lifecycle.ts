@@ -1,8 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
-import { sshExec, restartContainer, serviceHealthCheck, pauseContainer, unpauseContainer, getContainerLogs, removeCompose, getComposeLogs } from "../../shared/remote/index.ts";
+import { sshExec, getContainerLogs, removeCompose, getComposeLogs } from "../../shared/remote/index.ts";
 import { hetzner } from "../../shared/providers/index.ts";
-import { getCatalogEntry } from "../../shared/services/catalog.ts";
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
 
 /** Compose-kind services live here (apps use /home/deploy/apps). */
@@ -24,7 +23,10 @@ function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [service-lifecycle:${context}]`, ...args);
 }
 
-export async function destroyService(serviceId: number): Promise<{ ok: boolean; error?: string }> {
+// Single imperative teardown for a service. The destroy_server cascade drives
+// this directly; the standalone destroy_service op reimplements the same steps
+// as a saga (see ops/destroy-service.ts).
+export async function destroyServiceCore(serviceId: number): Promise<{ ok: boolean; error?: string }> {
   log("destroy", `Destroying service id=${serviceId}`);
   try {
     const service = db.getService(serviceId);
@@ -129,100 +131,6 @@ export async function destroyService(serviceId: number): Promise<{ ok: boolean; 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log("destroy", `Failed: ${msg}`);
-    return { ok: false, error: msg };
-  }
-}
-
-export async function restartService(serviceId: number): Promise<{ ok: boolean; error?: string }> {
-  log("restart", `Restarting service id=${serviceId}`);
-  try {
-    const service = db.getService(serviceId);
-    if (!service) throw new Error("Service not found");
-    const catalog = getCatalogEntry(service.service_type);
-    if (!catalog) throw new Error("Unknown service type");
-
-    const instances = db.getServiceInstances(serviceId);
-    if (instances.length === 0) throw new Error("Service has no instances");
-
-    let allHealthy = true;
-    for (const instance of instances) {
-      const server = db.getServer(instance.server_id);
-      if (!server) { allHealthy = false; continue; }
-      const hostKey = server.ssh_host_key || undefined;
-
-      await restartContainer(server.ipv4, instance.container_name, hostKey);
-
-      const health = await serviceHealthCheck(
-        server.ipv4, instance.container_name, catalog.healthCmd, 5, hostKey
-      );
-      db.updateServiceInstanceStatus(instance.id, health.healthy ? "running" : "unhealthy");
-      if (!health.healthy) allHealthy = false;
-    }
-
-    db.updateServiceStatus(serviceId, allHealthy ? "running" : "unhealthy");
-    log("restart", `Service id=${serviceId} restarted`);
-    return { ok: true };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log("restart", `Failed: ${msg}`);
-    return { ok: false, error: msg };
-  }
-}
-
-export async function pauseService(serviceId: number): Promise<{ ok: boolean; error?: string }> {
-  log("pause", `Pausing service id=${serviceId}`);
-  try {
-    const service = db.getService(serviceId);
-    if (!service) throw new Error("Service not found");
-
-    const instances = db.getServiceInstances(serviceId);
-    for (const instance of instances) {
-      const server = db.getServer(instance.server_id);
-      if (!server) continue;
-      await pauseContainer(server.ipv4, instance.container_name, server.ssh_host_key || undefined);
-      db.updateServiceInstanceStatus(instance.id, "paused");
-    }
-
-    db.updateServiceStatus(serviceId, "paused");
-    log("pause", `Service id=${serviceId} paused`);
-    return { ok: true };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log("pause", `Failed: ${msg}`);
-    return { ok: false, error: msg };
-  }
-}
-
-export async function unpauseService(serviceId: number): Promise<{ ok: boolean; error?: string }> {
-  log("unpause", `Unpausing service id=${serviceId}`);
-  try {
-    const service = db.getService(serviceId);
-    if (!service) throw new Error("Service not found");
-    const catalog = getCatalogEntry(service.service_type);
-    if (!catalog) throw new Error("Unknown service type");
-
-    const instances = db.getServiceInstances(serviceId);
-    let allHealthy = true;
-    for (const instance of instances) {
-      const server = db.getServer(instance.server_id);
-      if (!server) { allHealthy = false; continue; }
-      const hostKey = server.ssh_host_key || undefined;
-
-      await unpauseContainer(server.ipv4, instance.container_name, hostKey);
-
-      const health = await serviceHealthCheck(
-        server.ipv4, instance.container_name, catalog.healthCmd, 5, hostKey
-      );
-      db.updateServiceInstanceStatus(instance.id, health.healthy ? "running" : "unhealthy");
-      if (!health.healthy) allHealthy = false;
-    }
-
-    db.updateServiceStatus(serviceId, allHealthy ? "running" : "unhealthy");
-    log("unpause", `Service id=${serviceId} unpaused`);
-    return { ok: true };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log("unpause", `Failed: ${msg}`);
     return { ok: false, error: msg };
   }
 }

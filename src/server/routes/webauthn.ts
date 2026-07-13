@@ -92,6 +92,89 @@ function userResponse(user: db.UserRow) {
   };
 }
 
+type RpConfig = ReturnType<typeof getRpConfig>;
+
+/** Generate registration options shared by both register flows */
+function buildRegistrationOptions(rp: RpConfig, user: db.UserRow, existing: db.WebAuthnCredential[]) {
+  return generateRegistrationOptions({
+    rpName: rp.rpName,
+    rpID: rp.rpID,
+    userName: user.username,
+    userDisplayName: user.username,
+    attestationType: "none",
+    authenticatorSelection: {
+      residentKey: "preferred",
+      userVerification: "preferred",
+    },
+    excludeCredentials: existing.map((c) => ({
+      id: c.id,
+      transports: credentialTransports(c),
+    })),
+  });
+}
+
+/**
+ * Verify a registration response and, if valid, persist the credential and
+ * enable WebAuthn for the user. Returns whether verification succeeded so the
+ * caller can record failures against its own rate-limit keys.
+ */
+async function verifyAndStoreRegistration(
+  rp: RpConfig,
+  challenge: string,
+  userId: string,
+  credential: RegistrationResponseJSON,
+  name?: string,
+): Promise<boolean> {
+  const verification = await verifyRegistrationResponse({
+    response: credential,
+    expectedChallenge: challenge,
+    expectedOrigin: rp.origin,
+    expectedRPID: rp.rpID,
+  });
+
+  if (!verification.verified || !verification.registrationInfo) return false;
+
+  const { credential: verifiedCredential, credentialDeviceType, credentialBackedUp } =
+    verification.registrationInfo;
+
+  db.insertWebAuthnCredential({
+    id: verifiedCredential.id,
+    userId,
+    publicKey: verifiedCredential.publicKey,
+    counter: verifiedCredential.counter,
+    deviceType: credentialDeviceType,
+    backedUp: credentialBackedUp,
+    transports: credential.response.transports ?? [],
+    name: name || "Passkey",
+  });
+  db.enableWebAuthn(userId);
+  return true;
+}
+
+/**
+ * Run authentication verification against a stored credential. Returns the raw
+ * (unverified) result so each caller records failure against its own keys.
+ */
+function verifyStoredAuthentication(
+  rp: RpConfig,
+  challenge: string,
+  credential: AuthenticationResponseJSON,
+  storedCredential: db.WebAuthnCredential,
+) {
+  return verifyAuthenticationResponse({
+    response: credential,
+    expectedChallenge: challenge,
+    expectedOrigin: rp.origin,
+    expectedRPID: rp.rpID,
+    credential: {
+      id: storedCredential.id,
+      publicKey: new Uint8Array(storedCredential.public_key),
+      counter: storedCredential.counter,
+      transports: credentialTransports(storedCredential),
+    },
+  });
+}
+
 // ────────────────────────────────────────────────────
 // Registration (authenticated user adding a passkey)
 // ────────────────────────────────────────────────────
@@ -106,21 +189,7 @@ export async function handleWebAuthnRegisterOptions(request: Request): Promise<R
     const existing = db.getWebAuthnCredentials(userId);
     const rp = getRpConfig(request);
 
-    const options = await generateRegistrationOptions({
-      rpName: rp.rpName,
-      rpID: rp.rpID,
-      userName: user.username,
-      userDisplayName: user.username,
-      attestationType: "none",
-      authenticatorSelection: {
-        residentKey: "preferred",
-        userVerification: "preferred",
-      },
-      excludeCredentials: existing.map((c) => ({
-        id: c.id,
-        transports: credentialTransports(c),
-      })),
-    });
+    const options = await buildRegistrationOptions(rp, user, existing);
 
     saveChallenge(userId, options.challenge, "register");
     return Response.json(options, { headers: corsHeaders });
@@ -147,31 +216,11 @@ export async function handleWebAuthnRegisterVerify(request: Request): Promise<Re
     }
 
     const rp = getRpConfig(request);
-    const verification = await verifyRegistrationResponse({
-      response: body.credential,
-      expectedChallenge: challenge,
-      expectedOrigin: rp.origin,
-      expectedRPID: rp.rpID,
-    });
-
-    if (!verification.verified || !verification.registrationInfo) {
+    const verified = await verifyAndStoreRegistration(rp, challenge, userId, body.credential, body.name);
+    if (!verified) {
       recordFailure(request);
       return Response.json({ error: "Verification failed" }, { status: 400, headers: corsHeaders });
     }
-
-    const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
-
-    db.insertWebAuthnCredential({
-      id: credential.id,
-      userId,
-      publicKey: credential.publicKey,
-      counter: credential.counter,
-      deviceType: credentialDeviceType,
-      backedUp: credentialBackedUp,
-      transports: body.credential.response.transports ?? [],
-      name: body.name || "Passkey",
-    });
-    db.enableWebAuthn(userId);
 
     return Response.json({ verified: true }, { headers: corsHeaders });
   } catch (error) {
@@ -201,21 +250,7 @@ export async function handleWebAuthnRegisterOptionsFromLogin(request: Request): 
     const existing = db.getWebAuthnCredentials(userId);
     const rp = getRpConfig(request);
 
-    const options = await generateRegistrationOptions({
-      rpName: rp.rpName,
-      rpID: rp.rpID,
-      userName: user.username,
-      userDisplayName: user.username,
-      attestationType: "none",
-      authenticatorSelection: {
-        residentKey: "preferred",
-        userVerification: "preferred",
-      },
-      excludeCredentials: existing.map((c) => ({
-        id: c.id,
-        transports: credentialTransports(c),
-      })),
-    });
+    const options = await buildRegistrationOptions(rp, user, existing);
 
     saveChallenge(userId, options.challenge, "register_from_login");
     return Response.json(options, { headers: corsHeaders });
@@ -245,31 +280,12 @@ export async function handleWebAuthnRegisterVerifyFromLogin(request: Request): P
     }
 
     const rp = getRpConfig(request);
-    const verification = await verifyRegistrationResponse({
-      response: body.credential,
-      expectedChallenge: challenge,
-      expectedOrigin: rp.origin,
-      expectedRPID: rp.rpID,
-    });
-
-    if (!verification.verified || !verification.registrationInfo) {
+    const verified = await verifyAndStoreRegistration(rp, challenge, userId, body.credential, body.name);
+    if (!verified) {
       recordFailure(request);
       return Response.json({ error: "Verification failed" }, { status: 400, headers: corsHeaders });
     }
 
-    const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
-
-    db.insertWebAuthnCredential({
-      id: credential.id,
-      userId,
-      publicKey: credential.publicKey,
-      counter: credential.counter,
-      deviceType: credentialDeviceType,
-      backedUp: credentialBackedUp,
-      transports: body.credential.response.transports ?? [],
-      name: body.name || "Passkey",
-    });
-    db.enableWebAuthn(userId);
     db.incrementTokenVersion(userId);
     const freshUser = db.getUserById(userId)!;
 
@@ -350,18 +366,7 @@ export async function handleWebAuthnLoginVerify(request: Request): Promise<Respo
     }
 
     const rp = getRpConfig(request);
-    const verification = await verifyAuthenticationResponse({
-      response: body.credential,
-      expectedChallenge: challenge,
-      expectedOrigin: rp.origin,
-      expectedRPID: rp.rpID,
-      credential: {
-        id: storedCredential.id,
-        publicKey: new Uint8Array(storedCredential.public_key),
-        counter: storedCredential.counter,
-        transports: credentialTransports(storedCredential),
-      },
-    });
+    const verification = await verifyStoredAuthentication(rp, challenge, body.credential, storedCredential);
 
     if (!verification.verified) {
       recordFailure(request);
@@ -491,18 +496,7 @@ export async function handlePasswordResetWebAuthnVerify(request: Request): Promi
     }
 
     const rp = getRpConfig(request);
-    const verification = await verifyAuthenticationResponse({
-      response: body.credential,
-      expectedChallenge: challenge,
-      expectedOrigin: rp.origin,
-      expectedRPID: rp.rpID,
-      credential: {
-        id: storedCredential.id,
-        publicKey: new Uint8Array(storedCredential.public_key),
-        counter: storedCredential.counter,
-        transports: credentialTransports(storedCredential),
-      },
-    });
+    const verification = await verifyStoredAuthentication(rp, challenge, body.credential, storedCredential);
 
     if (!verification.verified) {
       recordFailureKeys(keys);

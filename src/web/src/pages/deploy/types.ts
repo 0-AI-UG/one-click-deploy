@@ -1,3 +1,20 @@
+export type CatalogEntry = {
+  type: string;
+  label: string;
+  versions: string[];
+  defaultPort: number;
+  requiredEnvVars: Array<{ key: string; label: string; generate?: string; default?: string }>;
+  editableSecrets?: Array<{ key: string; label: string; generate?: string }>;
+  defaultVolumeSize: number;
+  icon?: string;
+  color?: string;
+  http?: boolean;
+  stateless?: boolean;
+  description?: string;
+  category?: string;
+  recommendedMemoryMb?: number;
+};
+
 export type ManifestEnvDef = {
   key: string;
   description?: string;
@@ -25,8 +42,16 @@ export type DeployManifest = {
   public?: boolean;
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   memory_mb?: number;
+  cpu_limit?: number;
   health_check?: boolean;
   internal_protocol?: "http" | "tcp";
+  sticky?: boolean;
+  rate_limit_rps?: number;
+  ip_allowlist?: string;
+  health_check_path?: string;
+  compress?: boolean;
+  public_port?: number | "auto" | null;
+  public_protocol?: "tcp" | "udp";
 };
 
 export type ParsedManifest = {
@@ -71,6 +96,7 @@ export type FormState = {
   extra_volumes: Array<{ host_path: string; container_path: string }>;
   server_id: string; // "" = auto
   memory_mb: string; // "" / "0" = platform default
+  cpu_limit: string; // "" / "0" = platform default; fractional cores allowed
   health_check: boolean; // HTTP probe after deploy; independent of internal_protocol
   internal_protocol: "http" | "tcp"; // internal routing protocol (L7 vs raw TCP)
   sticky: boolean; // sticky sessions on the ingress service

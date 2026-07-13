@@ -528,6 +528,9 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       if (typeof req.memory_mb === "number" && req.memory_mb > 0) {
         db.updateAppMemory(result.app.id, req.memory_mb);
       }
+      if (typeof req.cpu_limit === "number" && req.cpu_limit > 0) {
+        db.updateAppCpu(result.app.id, req.cpu_limit);
+      }
       return result;
     })();
 
@@ -718,6 +721,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         bindAddr: containerBindAddr,
         skipClone: true,
         memoryMb: req.memory_mb || undefined,
+        cpus: req.cpu_limit || undefined,
         hostKey: server.serverHostKey || undefined,
       },
       (line) => {

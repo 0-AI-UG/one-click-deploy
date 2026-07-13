@@ -45,7 +45,7 @@ export async function migrateReplica(
   rollbackCtx?: VolumeMigrationContext,
 ): Promise<MigrateResult> {
   try {
-    const app = db.getApp(appId) as App | null;
+    const app = db.getApp(appId);
     if (!app) throw new Error("App not found");
 
     const targetServer = db.getServer(targetServerId);
@@ -53,7 +53,7 @@ export async function migrateReplica(
       throw new Error("Target server not found or not ready");
     }
 
-    const allReplicas = db.getReplicas(appId) as Replica[];
+    const allReplicas = db.getReplicas(appId);
     const replica = allReplicas.find((r) => r.id === replicaId);
 
     // Idempotent-success probe: on saga retry after a successful migration that
@@ -328,7 +328,7 @@ async function migrateWithVolume(
   }
 
   // Phase D — Start new replica on target, unless a prior attempt already did.
-  const replicasBeforeScale = db.getReplicas(app.id) as Replica[];
+  const replicasBeforeScale = db.getReplicas(app.id);
   const preExistingTarget = replicasBeforeScale.find(
     (r) => r.server_id === targetServer.id && r.id !== replica.id,
   );
@@ -345,7 +345,7 @@ async function migrateWithVolume(
   }
 
   // Phase E — Drop old replica row if it's still around.
-  const replicasAfterScale = db.getReplicas(app.id) as Replica[];
+  const replicasAfterScale = db.getReplicas(app.id);
   if (replicasAfterScale.some((r) => r.id === replica.id)) {
     db.deleteReplica(replica.id);
   } else {
@@ -483,6 +483,7 @@ async function restartSourceReplica(
     volumeMount: rb.originalVolumeMount || undefined,
     extraVolumes: db.parseExtraVolumes(app.extra_volumes),
     memoryMb: app.memory_mb || undefined,
+    cpus: app.cpu_limit || undefined,
   }, sourceHostKey);
   logLine(`Restarted source container ${containerName} on ${sourceServer.name}`);
 }

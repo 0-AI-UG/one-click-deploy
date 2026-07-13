@@ -73,7 +73,7 @@ if (RUN) {
     syncAllTraefik: mock(async () => {}),
     reconcileTraefik: mock(async () => {}),
   }));
-  mock.module("./scale-api.ts", () => ({ convergeAppReplicas: mock(async () => {}) }));
+  mock.module("./scale/index.ts", () => ({ convergeAppReplicas: mock(async () => {}) }));
   mock.module("../shared/github.ts", () => ({
     getGitHubPat: async () => null,
     deleteWebhook: async () => {},

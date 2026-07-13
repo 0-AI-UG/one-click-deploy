@@ -1,4 +1,4 @@
-import { traefikInstallScript } from "../../engine/scale/traefik-config.ts";
+import { traefikInstallScript } from "../../engine/scale/traefik-provision.ts";
 
 /**
  * Generate a cloud-init user-data script for provisioning servers.

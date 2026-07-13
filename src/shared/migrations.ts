@@ -1408,6 +1408,27 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 70,
+    description: "Add per-app cpu_limit (fractional cores) to apps (0 = platform default)",
+    up: (db) => {
+      // 0 means "use the platform default" (DEFAULT_CPUS in hetzner/containers).
+      // A positive value overrides the container's --cpus ceiling. Fractional
+      // cores are allowed (e.g. 0.5, 2), matching docker's --cpus flag.
+      db.run("ALTER TABLE apps ADD COLUMN cpu_limit REAL NOT NULL DEFAULT 0");
+    },
+  },
+  {
+    version: 71,
+    description: "Add autoscale_req_threshold (target req/min per replica for HTTP request-based scaling; 0 = off)",
+    up: (db) => {
+      // HPA-style request-rate metric: target requests/min PER REPLICA (same
+      // unit as apps.requests_per_min). 0 disables it, leaving CPU/RAM as the
+      // only scaling signals. Only applies to HTTP-routed apps — raw-TCP apps
+      // have no Traefik request counter.
+      db.run("ALTER TABLE apps ADD COLUMN autoscale_req_threshold INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

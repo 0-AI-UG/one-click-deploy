@@ -28,12 +28,16 @@ import {
   collectDesiredState,
   renderDynamicConfig,
   renderPanelConfig,
+} from "./traefik-render.ts";
+import {
   traefikStaticConfig,
   traefikSystemdUnit,
+} from "./traefik-provision.ts";
+import {
   TRAEFIK_ENV_PATH,
   TRAEFIK_PANEL_CONFIG_PATH,
   TRAEFIK_VERSION,
-} from "./traefik-config.ts";
+} from "./traefik-constants.ts";
 
 function makePanelServer(ipv4: string) {
   return insertServer({

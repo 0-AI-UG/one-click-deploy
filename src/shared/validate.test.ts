@@ -277,6 +277,27 @@ describe("validateDeployRequest", () => {
     expect(validateDeployRequest({ ...validRequest, memory_mb: 99999 }).valid).toBe(false);
   });
 
+  test("accepts cpu_limit of 0 (platform default)", () => {
+    expect(validateDeployRequest({ ...validRequest, cpu_limit: 0 }).valid).toBe(true);
+  });
+
+  test("accepts fractional cpu_limit within bounds", () => {
+    expect(validateDeployRequest({ ...validRequest, cpu_limit: 0.5 }).valid).toBe(true);
+    expect(validateDeployRequest({ ...validRequest, cpu_limit: 2 }).valid).toBe(true);
+  });
+
+  test("rejects cpu_limit below minimum", () => {
+    expect(validateDeployRequest({ ...validRequest, cpu_limit: 0.05 }).valid).toBe(false);
+  });
+
+  test("rejects cpu_limit above maximum", () => {
+    expect(validateDeployRequest({ ...validRequest, cpu_limit: 64 }).valid).toBe(false);
+  });
+
+  test("rejects cpu_limit with nonsense precision", () => {
+    expect(validateDeployRequest({ ...validRequest, cpu_limit: 0.333333 }).valid).toBe(false);
+  });
+
   test("rejects auth_password on a raw-TCP app (health_check: false)", () => {
     expect(validateDeployRequest({ ...validRequest, auth_password: "pw", health_check: false }).valid).toBe(false);
   });
@@ -585,6 +606,44 @@ describe("validateDeployManifest", () => {
 
   test("rejects replicas <1", () => {
     expect(validateDeployManifest({ name: "x", replicas: 0 }).ok).toBe(false);
+  });
+
+  test("accepts a full ingress manifest", () => {
+    const r = validateDeployManifest({
+      name: "x",
+      internal_protocol: "http",
+      sticky: true,
+      rate_limit_rps: 100,
+      ip_allowlist: "10.0.0.0/8, 203.0.113.7",
+      health_check_path: "/healthz",
+      compress: true,
+      public_port: 30001,
+      public_protocol: "tcp",
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  test("rejects non-boolean sticky / compress", () => {
+    expect(validateDeployManifest({ name: "x", sticky: "yes" }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", compress: 1 }).ok).toBe(false);
+  });
+
+  test("rejects an invalid rate_limit_rps / ip_allowlist / health_check_path", () => {
+    expect(validateDeployManifest({ name: "x", rate_limit_rps: -1 }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", ip_allowlist: "not-an-ip" }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", health_check_path: "healthz" }).ok).toBe(false);
+  });
+
+  test("rejects health_check_path on a raw-TCP manifest", () => {
+    expect(validateDeployManifest({ name: "x", internal_protocol: "tcp", health_check_path: "/healthz" }).ok).toBe(false);
+    // health_check:false derives tcp routing, so the path is rejected there too
+    expect(validateDeployManifest({ name: "x", health_check: false, health_check_path: "/healthz" }).ok).toBe(false);
+  });
+
+  test("rejects a public_port outside its protocol pool", () => {
+    expect(validateDeployManifest({ name: "x", public_port: 30051, public_protocol: "tcp" }).ok).toBe(false);
+    expect(validateDeployManifest({ name: "x", public_port: "auto" }).ok).toBe(true);
+    expect(validateDeployManifest({ name: "x", public_protocol: "sctp" }).ok).toBe(false);
   });
 });
 

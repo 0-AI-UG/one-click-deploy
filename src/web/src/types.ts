@@ -39,11 +39,13 @@ export type AppData = {
   autoscale_cpu_threshold?: number;
   autoscale_mem_threshold?: number;
   autoscale_cooldown?: number;
+  autoscale_req_threshold?: number;
   scale_to_zero_after?: number;
   sleeping_server_id?: number | null;
   sleeping_host_port?: number | null;
   public?: boolean | number;
   memory_mb?: number;
+  cpu_limit?: number;
   internal_port?: number;
   health_check?: boolean | number;
   internal_protocol?: string; // 'http' | 'tcp'
@@ -241,6 +243,7 @@ export type DeployBody = {
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
   server_id?: number;
   memory_mb?: number;
+  cpu_limit?: number;
   health_check?: boolean;
   internal_protocol?: "http" | "tcp";
   sticky?: boolean;

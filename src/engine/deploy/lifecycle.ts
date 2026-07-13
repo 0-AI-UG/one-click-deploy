@@ -18,7 +18,10 @@ function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [deploy:${context}]`, ...args);
 }
 
-export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: string }> {
+// Single imperative teardown for an app. The destroy_server cascade drives this
+// directly; the standalone destroy_app op reimplements the same steps as a saga
+// (see ops/destroy-app.ts).
+export async function destroyAppCore(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("destroyApp", `Destroying app id=${appId}`);
   try {
     const app = db.getApp(appId);
@@ -131,66 +134,8 @@ export async function destroyApp(appId: number): Promise<{ ok: boolean; error?: 
   }
 }
 
-export async function destroyServer(serverId: number): Promise<{ ok: boolean; error?: string }> {
-  log("destroyServer", `Destroying server id=${serverId}`);
-  try {
-    if (db.getPanel()?.server_id === serverId) {
-      throw new Error("Cannot destroy the panel's server");
-    }
-    const server = db.getServer(serverId);
-    if (!server) throw new Error("Server not found");
-
-    const apps = db.getApps(serverId);
-    for (const app of apps) {
-      await destroyApp(app.id);
-    }
-
-    // If this server hosts the self-deployed panel, clean up its DNS record
-    // and volume too. The panel lives in its own table (not `apps`), so the
-    // loop above wouldn't touch it. Note: if the panel is destroying the
-    // server it's running on, it will `docker rm` itself mid-request — so
-    // these cleanups MUST run before deleteServer.
-    const panel = db.getPanel();
-    if (panel && panel.server_id === serverId) {
-      if (panel.dns_zone_id && panel.dns_name && panel.dns_type && panel.dns_value) {
-        try {
-          const dns = hetznerDns;
-          await dns.deleteRecord({
-            zoneId: panel.dns_zone_id,
-            name: panel.dns_name,
-            type: panel.dns_type,
-            value: panel.dns_value,
-          });
-          log("destroyServer", `Deleted panel DNS record ${panel.dns_name}/${panel.dns_type}`);
-        } catch (err) {
-          log("destroyServer", `Failed to delete panel DNS record:`, err instanceof Error ? err.message : err);
-        }
-      }
-      if (panel.volume_id) {
-        try {
-          const compute = hetzner;
-          await compute.volumes?.delete(panel.volume_id);
-          log("destroyServer", `Deleted panel volume ${panel.volume_id}`);
-        } catch (err) {
-          log("destroyServer", `Failed to delete panel volume ${panel.volume_id}:`, err instanceof Error ? err.message : err);
-        }
-      }
-      // The panel row will cascade-delete via FK when the server row goes,
-      // but clear it explicitly for clarity.
-      db.deletePanel();
-    }
-
-    const compute = hetzner;
-    await compute.deleteServer(server.provider_id);
-    db.deleteServer(serverId);
-    log("destroyServer", `Server id=${serverId} destroyed successfully`);
-    return { ok: true };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log("destroyServer", `Failed:`, msg);
-    return { ok: false, error: msg };
-  }
-}
+/** @deprecated Kept as a stable name for the deploy/index.ts re-export. */
+export const destroyApp = destroyAppCore;
 
 export async function restartApp(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("restartApp", `Restarting app id=${appId}`);
@@ -265,6 +210,7 @@ export async function recreateAppContainer(
       volumeMount: volumeMount || undefined,
       extraVolumes: extraVolumes || [],
       memoryMb: app.memory_mb || undefined,
+      cpus: app.cpu_limit || undefined,
     }, hostKey);
 
     // Health check (running-only when the app opted out of the HTTP probe)

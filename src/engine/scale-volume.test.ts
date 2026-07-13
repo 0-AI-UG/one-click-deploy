@@ -12,7 +12,7 @@ import { describe, test, expect } from "bun:test";
 // needed — and mock.module is process-global in Bun, so adding them here would
 // leak into sibling test files.
 import * as db from "../shared/db.ts";
-import { convergeAppReplicas } from "./scale-api.ts";
+import { convergeAppReplicas } from "./scale/index.ts";
 
 function freshServer(suffix: string) {
   return db.insertServer({

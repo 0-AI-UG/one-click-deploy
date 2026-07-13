@@ -57,6 +57,10 @@
       "type": "terminal",
       "title": "Claude Code 3"
     },
+    "bc4bbf2c-03fb-4591-9eb0-79810bc4538a": {
+      "type": "terminal",
+      "title": "Claude Code 4"
+    },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
       "title": "Canvas"
@@ -70,14 +74,14 @@
           "id": "5f8cca04-8eb4-450f-82f7-f7d91c2e11ca",
           "panelId": "66557708-db74-4961-9c72-97d24c826c9e",
           "origin": {
-            "x": -39,
-            "y": 169.5
+            "x": -60,
+            "y": 180
           },
           "size": {
             "width": 640,
             "height": 590.5
           },
-          "zOrder": 244,
+          "zOrder": 371,
           "creationIndex": 0,
           "animationState": "idle",
           "dockLayout": {
@@ -100,7 +104,7 @@
             "width": 640,
             "height": 400
           },
-          "zOrder": 241,
+          "zOrder": 362,
           "creationIndex": 1,
           "animationState": "idle",
           "dockLayout": {
@@ -123,7 +127,7 @@
             "width": 640,
             "height": 590.5
           },
-          "zOrder": 243,
+          "zOrder": 373,
           "creationIndex": 2,
           "animationState": "idle",
           "dockLayout": {
@@ -134,12 +138,35 @@
             ],
             "activeIndex": 0
           }
+        },
+        "39928835-5815-4937-99b5-f8ea5c2b8cf5": {
+          "id": "39928835-5815-4937-99b5-f8ea5c2b8cf5",
+          "panelId": "bc4bbf2c-03fb-4591-9eb0-79810bc4538a",
+          "origin": {
+            "x": 660,
+            "y": 600
+          },
+          "size": {
+            "width": 640,
+            "height": 400
+          },
+          "zOrder": 369,
+          "creationIndex": 3,
+          "animationState": "idle",
+          "dockLayout": {
+            "type": "tabs",
+            "id": "24442dc3-5dba-4d63-9e77-e7ab91ccf0d8",
+            "panelIds": [
+              "bc4bbf2c-03fb-4591-9eb0-79810bc4538a"
+            ],
+            "activeIndex": 0
+          }
         }
       },
-      "zoomLevel": 0.7165301231005697,
+      "zoomLevel": 0.8001253114568084,
       "viewportOffset": {
-        "x": 126.27986272883825,
-        "y": -111.11862923082538
+        "x": 142.46491279209363,
+        "y": -506.83724737306943
       }
     }
   }

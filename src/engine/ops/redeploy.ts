@@ -8,7 +8,7 @@ import {
 } from "../../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
-import { rollingRedeploy } from "../scale-api.ts";
+import { rollingRedeploy } from "../scale/index.ts";
 import { wakeApp } from "../scale/wake.ts";
 import { syncAppIngress } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -36,6 +36,7 @@ type RollbackSnapshot = {
   volumeMount: string | null;
   extraVolumes: string[];
   memoryMb: number | null;
+  cpus: number | null;
 };
 type BuildOut = {
   imageTag: string;
@@ -149,6 +150,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
           volumeMount: app.volume_mount || null,
           extraVolumes,
           memoryMb: app.memory_mb ?? null,
+          cpus: app.cpu_limit ?? null,
         };
       }
     } catch (err) {
@@ -169,6 +171,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       containerName: first.container_name,
       skipClone: true,
       memoryMb: app.memory_mb || undefined,
+      cpus: app.cpu_limit || undefined,
       hostKey: server.ssh_host_key || undefined,
     };
     const logLine = (line: string) => {
@@ -209,6 +212,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
         volumeMount: snap.volumeMount || undefined,
         extraVolumes: snap.extraVolumes,
         memoryMb: snap.memoryMb ?? undefined,
+        cpus: snap.cpus ?? undefined,
       }, hostKey);
       const health = await probeAppHealth(app, server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey);
       if (first) db.updateReplicaStatus(first.id, health.healthy ? "running" : "unhealthy");

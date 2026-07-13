@@ -10,7 +10,7 @@ export async function pickTargetServer(
 ): Promise<Server> {
   // Explicit placement: caller chose a specific server
   if (preferredServerId) {
-    const preferred = db.getServer(preferredServerId) as Server | null;
+    const preferred = db.getServer(preferredServerId);
     if (!preferred) throw new Error(`Target server ${preferredServerId} not found`);
     if (preferred.status !== "ready") throw new Error(`Target server ${preferred.name} is not ready (status: ${preferred.status})`);
     emit("scale", `Placing replica on ${preferred.name} (user-selected)`);
@@ -19,8 +19,8 @@ export async function pickTargetServer(
 
   // Capacity-aware placement: score each server by load + affinity and pick
   // the best candidate. Servers above 85% combined load are skipped.
-  const allServers = db.getServers() as Server[];
-  const appReplicas = db.getReplicas(app.id) as { server_id: number }[];
+  const allServers = db.getServers();
+  const appReplicas = db.getReplicas(app.id);
   const replicasByServer = new Map<number, number>();
   for (const r of appReplicas) {
     replicasByServer.set(r.server_id, (replicasByServer.get(r.server_id) || 0) + 1);

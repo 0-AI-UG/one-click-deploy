@@ -166,6 +166,7 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
       volumeMount: app.volume_mount || undefined,
       extraVolumes: db.parseExtraVolumes(app.extra_volumes),
       memoryMb: app.memory_mb || undefined,
+      cpus: app.cpu_limit || undefined,
     }, hostKey);
     return { containerName: app.name, priorSnapshot };
   },
@@ -195,6 +196,7 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
         volumeMount: snap.volumeMount || undefined,
         extraVolumes: snap.extraVolumes,
         memoryMb: app.memory_mb || undefined,
+        cpus: app.cpu_limit || undefined,
       }, hostKey);
       ctx.log(`Restored prior container image ${snap.image}`);
     } catch (err) {

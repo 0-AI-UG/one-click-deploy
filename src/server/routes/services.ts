@@ -4,10 +4,11 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, serializeEnvVars, encryptValue } from "../../shared/env-crypto.ts";
 import type { EnvVarEntry } from "../../shared/env-crypto.ts";
-import type { ServiceDeployRequest } from "../../engine/deploy/deploy-service.ts";
+import type { ServiceDeployRequest } from "../../engine/ops/deploy-service.ts";
 import { getServiceLogs } from "../../engine/deploy/service-lifecycle.ts";
 import { getCatalogEntries, getCatalogEntry } from "../../shared/services/catalog.ts";
 import { enqueue } from "../ipc/enqueue.ts";
+import { enqueueOp } from "./_ops.ts";
 
 // --- Catalog ---
 
@@ -113,68 +114,20 @@ export async function handleDeployService(request: Request): Promise<Response> {
 
 // --- Lifecycle ---
 
-export async function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "services.destroy");
-    const { opId } = enqueue({
-      kind: "destroy_service",
-      resourceKeys: [`service:${serviceId}`],
-      input: { serviceId },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
+export function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
+  return enqueueOp(request, { permission: "services.destroy", kind: "destroy_service", resourceKeys: [`service:${serviceId}`], input: { serviceId } });
 }
 
-export async function handleRestartService(request: Request, serviceId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "services.manage");
-    const { opId } = enqueue({
-      kind: "restart_service",
-      resourceKeys: [`service:${serviceId}`],
-      input: { serviceId },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
+export function handleRestartService(request: Request, serviceId: number): Promise<Response> {
+  return enqueueOp(request, { permission: "services.manage", kind: "restart_service", resourceKeys: [`service:${serviceId}`], input: { serviceId } });
 }
 
-export async function handlePauseService(request: Request, serviceId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "services.manage");
-    const { opId } = enqueue({
-      kind: "pause_service",
-      resourceKeys: [`service:${serviceId}`],
-      input: { serviceId },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
+export function handlePauseService(request: Request, serviceId: number): Promise<Response> {
+  return enqueueOp(request, { permission: "services.manage", kind: "pause_service", resourceKeys: [`service:${serviceId}`], input: { serviceId } });
 }
 
-export async function handleUnpauseService(request: Request, serviceId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "services.manage");
-    const { opId } = enqueue({
-      kind: "unpause_service",
-      resourceKeys: [`service:${serviceId}`],
-      input: { serviceId },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
+export function handleUnpauseService(request: Request, serviceId: number): Promise<Response> {
+  return enqueueOp(request, { permission: "services.manage", kind: "unpause_service", resourceKeys: [`service:${serviceId}`], input: { serviceId } });
 }
 
 // --- Logs ---

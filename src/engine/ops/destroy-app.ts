@@ -7,24 +7,10 @@ import {
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import { registerOp } from "./registry.ts";
+import { softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
 type DestroyInput = { appId: number };
-
-// Destroy steps are best-effort: each logs its failures and continues.
-// No compensations — there is nothing to undo for a deletion that partially
-// succeeded. We surface partial failures via detail strings only.
-
-async function softStep<T>(ctx: { log: (s: string) => void }, name: string, fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
-  try {
-    const value = await fn();
-    return { ok: true, value };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    ctx.log(`[${name}] failed (continuing): ${msg}`);
-    return { ok: false, error: msg };
-  }
-}
 
 const removeGithubWebhook: Step<DestroyInput, { ok: boolean; error?: string }> = {
   name: "remove_github_webhook",
@@ -132,12 +118,7 @@ const deleteDbRows: Step<DestroyInput, { ok: true }> = {
   async run(ctx, prior) {
     // Gate: if ANY upstream destroy step partially failed, do not delete DB
     // rows. Mark the app `cleanup_failed` and surface to the reconciler.
-    const failedSteps: string[] = [];
-    for (const [name, out] of Object.entries(prior)) {
-      if (!out || typeof out !== "object") continue;
-      const o = out as { ok?: boolean; failed?: boolean; error?: string };
-      if (o.failed === true || o.ok === false) failedSteps.push(name);
-    }
+    const failedSteps = runDbCleanupGate(prior);
     if (failedSteps.length > 0) {
       try { db.updateAppStatus(ctx.input.appId, "cleanup_failed"); } catch { /* ignore */ }
       ctx.log(`Some resources could not be cleaned up (failed: ${failedSteps.join(", ")}) — app marked cleanup_failed`);
@@ -156,20 +137,7 @@ const deleteDbRows: Step<DestroyInput, { ok: true }> = {
   },
 };
 
-const gcEmptyServers: Step<DestroyInput, { ok: true }> = {
-  name: "gc_empty_servers",
-  label: "GC empty servers",
-  async run(ctx, prior) {
-    const containers = prior["stop_and_remove_containers"] as { affectedServerIds: number[] } | undefined;
-    const ids = containers?.affectedServerIds || [];
-    for (const sid of ids) {
-      await softStep(ctx, `gc_server ${sid}`, async () => {
-        await db.gcServerIfEmpty(sid);
-      });
-    }
-    return { ok: true };
-  },
-};
+const gcEmptyServers = makeGcEmptyServersStep<DestroyInput>("stop_and_remove_containers");
 
 const destroyAppOp: OpKindDefinition<DestroyInput> = {
   kind: "destroy_app",

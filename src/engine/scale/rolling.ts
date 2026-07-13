@@ -4,7 +4,7 @@ import {
   transferImage, probeAppHealth, startAppReplica,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
-import { type ProgressFn, log, replicaBindHost } from "./types.ts";
+import { type ProgressFn, log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 
 export async function rollingRedeploy(
   appId: number,
@@ -68,17 +68,7 @@ export async function rollingRedeploy(
         ? `/home/deploy/apps/${app.name}/.env.deploy`
         : undefined;
       await startAppReplica(server.ipv4, {
-        containerName: replica.container_name,
-        image: imageName,
-        appName: app.name,
-        network: null,
-        bindAddr: replicaBindAddr,
-        hostPort: replica.host_port,
-        containerPort: app.container_port,
-        envFilePath,
-        volumeMount: app.volume_mount || undefined,
-        extraVolumes: db.parseExtraVolumes(app.extra_volumes),
-        memoryMb: app.memory_mb || undefined,
+        ...appReplicaRunOpts(app, server, { containerName: replica.container_name, hostPort: replica.host_port, envFilePath }),
       }, hostKey);
 
       // Health check (running-only when the app opted out of the HTTP probe)

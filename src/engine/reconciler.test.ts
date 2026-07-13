@@ -58,8 +58,9 @@ import {
 } from "../shared/db/replicas.ts";
 import { insertApp } from "../shared/db/apps.ts";
 import { insertServer } from "../shared/db/servers.ts";
-import { evaluateAutoScale } from "./scale-api.ts";
-import { checkReplicaHealth, parseDockerStats, parseContainerLimits, parseDockerSizeToMb } from "./reconciler.ts";
+import { evaluateAutoScale } from "./scale/index.ts";
+import { checkReplicaHealth } from "./health.ts";
+import { parseDockerStats, parseContainerLimits, parseDockerSizeToMb } from "./metrics-parse.ts";
 
 function makeServer() {
   return insertServer({

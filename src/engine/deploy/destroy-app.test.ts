@@ -48,7 +48,38 @@ mock.module("../../shared/github.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import { destroyApp, destroyServer } from "./lifecycle.ts";
+import { destroyApp } from "./lifecycle.ts";
+import destroyServerOp from "../ops/destroy-server.ts";
+
+// destroyServer() (the imperative lifecycle helper) was removed; the destroy
+// server flow now lives in the destroy_server op. Drive that op end-to-end with
+// a synthetic context, mirroring how the engine executor runs its steps in
+// order. Best-effort steps swallow their own errors; only `preflight` throws,
+// which maps to ok:false here.
+async function destroyServer(serverId: number): Promise<{ ok: boolean; error?: string }> {
+  const ctx = {
+    opId: 1,
+    kind: "destroy_server",
+    input: { serverId },
+    trigger: "user" as const,
+    triggeredBy: "",
+    parentId: null,
+    attempt: 1,
+    isCancelRequested: () => false,
+    log: () => {},
+    park: () => {},
+    unpark: () => {},
+  } as any;
+  const prior: Record<string, unknown> = {};
+  try {
+    for (const step of destroyServerOp.steps) {
+      prior[step.name] = await step.run(ctx, prior);
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 function freshServer() {
   return db.insertServer({

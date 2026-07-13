@@ -3,6 +3,11 @@
 
 type Holder = { opId: number; kind: string };
 
+// Sentinel holder id for non-operation critical sections (e.g. a direct
+// ingress re-sync in an HTTP handler) that must serialize against engine
+// operations but aren't themselves operations with a real op id.
+export const NON_OP_HOLDER = -1;
+
 const holders = new Map<string, Holder>();
 
 export function tryAcquire(

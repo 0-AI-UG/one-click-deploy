@@ -5,10 +5,12 @@ import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
-import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB, isPublicProtocol, isInternalProtocol, validateIngressFields } from "../../shared/validate.ts";
+import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB, isValidCpuLimit, MIN_CPU_LIMIT, MAX_CPU_LIMIT, isPublicProtocol, isInternalProtocol, validateIngressFields } from "../../shared/validate.ts";
 import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-manager.ts";
 import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
+import { enqueueOp } from "./_ops.ts";
+import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
  *  public raw TCP/UDP address, a boolean `auth_enabled` flag, and strips every
@@ -119,68 +121,20 @@ export async function handleDeploy(request: Request): Promise<Response> {
   }
 }
 
-export async function handleDestroyApp(request: Request, appId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "apps.destroy");
-    const { opId } = enqueue({
-      kind: "destroy_app",
-      resourceKeys: [`app:${appId}`],
-      input: { appId },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
+export function handleDestroyApp(request: Request, appId: number): Promise<Response> {
+  return enqueueOp(request, { permission: "apps.destroy", kind: "destroy_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }
 
-export async function handleRestartApp(request: Request, appId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "apps.restart");
-    const { opId } = enqueue({
-      kind: "restart_app",
-      resourceKeys: [`app:${appId}`],
-      input: { appId },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
+export function handleRestartApp(request: Request, appId: number): Promise<Response> {
+  return enqueueOp(request, { permission: "apps.restart", kind: "restart_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }
 
-export async function handlePauseApp(request: Request, appId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "apps.pause");
-    const { opId } = enqueue({
-      kind: "pause_app",
-      resourceKeys: [`app:${appId}`],
-      input: { appId },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
+export function handlePauseApp(request: Request, appId: number): Promise<Response> {
+  return enqueueOp(request, { permission: "apps.pause", kind: "pause_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }
 
-export async function handleUnpauseApp(request: Request, appId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "apps.pause");
-    const { opId } = enqueue({
-      kind: "unpause_app",
-      resourceKeys: [`app:${appId}`],
-      input: { appId },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
+export function handleUnpauseApp(request: Request, appId: number): Promise<Response> {
+  return enqueueOp(request, { permission: "apps.pause", kind: "unpause_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }
 
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
@@ -191,6 +145,7 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       environment_id?: number | null;
       public?: boolean;
       memory_mb?: number;
+      cpu_limit?: number;
     };
 
     if (body.container_port !== undefined) {
@@ -206,6 +161,13 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
         return Response.json({ ok: false, error: `Memory must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB} MB` }, { headers: corsHeaders });
       }
       db.updateAppMemory(appId, body.memory_mb);
+    }
+
+    if (body.cpu_limit !== undefined) {
+      if (!isValidCpuLimit(body.cpu_limit)) {
+        return Response.json({ ok: false, error: `CPU must be 0 (default) or a number ${MIN_CPU_LIMIT}–${MAX_CPU_LIMIT} cores` }, { headers: corsHeaders });
+      }
+      db.updateAppCpu(appId, body.cpu_limit);
     }
 
     if (body.environment_id !== undefined) {
@@ -254,6 +216,9 @@ export async function handleUpdateIngressSettings(request: Request, appId: numbe
       ip_allowlist?: string;
       health_check_path?: string;
       compress?: boolean;
+      /** Post-deploy HTTP probe on/off; takes effect on the next (re)deploy/scale.
+       *  L7-only — forced off below whenever routing is TCP. */
+      health_check?: boolean;
       /** null = unexpose, "auto" = lowest free pool port, number = specific pool port. */
       public_port?: number | "auto" | null;
       public_protocol?: string;
@@ -297,56 +262,83 @@ export async function handleUpdateIngressSettings(request: Request, appId: numbe
     if (!validation.valid) return Response.json({ ok: false, error: validation.error }, { status: 400, headers: corsHeaders });
     const norm = validation.value;
 
-    const fields: Parameters<typeof db.updateAppIngressSettings>[1] = {};
-    if (body.sticky !== undefined) fields.sticky = !!body.sticky;
-    if (body.compress !== undefined) fields.compress = !!body.compress;
-    if (norm.rate_limit_rps !== undefined) fields.rate_limit_rps = norm.rate_limit_rps;
-    if (norm.ip_allowlist !== undefined) fields.ip_allowlist = norm.ip_allowlist;
-    if (norm.health_check_path !== undefined) fields.health_check_path = norm.health_check_path;
-
-    // Password protection: write-only plaintext in, bcrypt hash stored. Empty
-    // string clears the hash (disables auth); a non-empty value enables/replaces.
-    if (norm.auth_password !== undefined) {
-      db.updateAppAuthPassword(appId, norm.auth_password);
+    // Serialize this direct ingress re-sync against engine operations on the
+    // same app. A redeploy also re-renders this app's Traefik config, so the
+    // two touching it concurrently could clobber each other. Hold the app lock
+    // for the DB writes + sync; if an op already holds it, tell the caller to
+    // retry (the UI also disables the button while an op is in flight).
+    const acq = tryAcquire([`app:${appId}`], NON_OP_HOLDER, "ingress_sync");
+    if (!acq.ok) {
+      return Response.json(
+        { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
+        { status: 409, headers: corsHeaders },
+      );
     }
+    try {
+      const fields: Parameters<typeof db.updateAppIngressSettings>[1] = {};
+      if (body.sticky !== undefined) fields.sticky = !!body.sticky;
+      if (body.compress !== undefined) fields.compress = !!body.compress;
+      if (norm.rate_limit_rps !== undefined) fields.rate_limit_rps = norm.rate_limit_rps;
+      if (norm.ip_allowlist !== undefined) fields.ip_allowlist = norm.ip_allowlist;
+      if (norm.health_check_path !== undefined) fields.health_check_path = norm.health_check_path;
 
-    // Public raw TCP/UDP exposure. Deliberately independent of `public`
-    // (HTTP publicness) — an HTTP-private app can still be TCP-exposed
-    // (e.g. a database). Pure Traefik-config change like the rest of this
-    // endpoint: expose/unexpose post-deploy, no rebuild. Range/protocol already
-    // validated above; only DB allocation/freeness is checked here.
-    if (body.public_port !== undefined) {
-      const protocol: "tcp" | "udp" = isPublicProtocol(effectivePublicProtocol) ? effectivePublicProtocol : "tcp";
-      if (body.public_port === null) {
-        db.updateAppPublicExposure(appId, null, protocol);
-      } else if (body.public_port === "auto") {
-        // Idempotent: keep the current port unless the protocol changed.
-        if (app.public_port == null || app.public_protocol !== protocol) {
-          db.updateAppPublicExposure(appId, db.allocatePublicPort(protocol), protocol);
-        }
-      } else {
-        const holder = db.getAppByPublicPort(body.public_port);
-        if (holder && holder.id !== appId) {
-          return Response.json({ ok: false, error: `Port ${body.public_port} is already used by "${holder.name}"` }, { status: 409, headers: corsHeaders });
-        }
-        db.updateAppPublicExposure(appId, body.public_port, protocol);
+      // Post-deploy HTTP probe. It's L7-only (a raw-TCP app can't answer it), so
+      // force it off whenever routing is TCP — matching the deploy form's
+      // protocol↔probe coupling — otherwise honor the explicit toggle. Unlike the
+      // other fields this only bites on the next (re)deploy/scale, not the live
+      // Traefik config.
+      if (effectiveInternalProtocol === "tcp") {
+        if (app.health_check) fields.health_check = false;
+      } else if (body.health_check !== undefined) {
+        fields.health_check = !!body.health_check;
       }
-    }
 
-    // Internal routing protocol: persisted here (pure routing change). The
-    // OCD_INTERNAL_URL scheme injected into the container only refreshes on the
-    // app's next (re)deploy — the routing itself flips immediately below.
-    if (isInternalProtocol(body.internal_protocol) && body.internal_protocol !== app.internal_protocol) {
-      db.updateAppInternalProtocol(appId, body.internal_protocol);
-    }
+      // Password protection: write-only plaintext in, bcrypt hash stored. Empty
+      // string clears the hash (disables auth); a non-empty value enables/replaces.
+      if (norm.auth_password !== undefined) {
+        db.updateAppAuthPassword(appId, norm.auth_password);
+      }
 
-    db.updateAppIngressSettings(appId, fields);
-    await syncAppIngress(appId);
-    const updated = db.getApp(appId);
-    return Response.json(
-      { ok: true, public_port: updated?.public_port ?? null, public_protocol: updated?.public_protocol ?? "tcp" },
-      { headers: corsHeaders },
-    );
+      // Public raw TCP/UDP exposure. Deliberately independent of `public`
+      // (HTTP publicness) — an HTTP-private app can still be TCP-exposed
+      // (e.g. a database). Pure Traefik-config change like the rest of this
+      // endpoint: expose/unexpose post-deploy, no rebuild. Range/protocol already
+      // validated above; only DB allocation/freeness is checked here.
+      if (body.public_port !== undefined) {
+        const protocol: "tcp" | "udp" = isPublicProtocol(effectivePublicProtocol) ? effectivePublicProtocol : "tcp";
+        if (body.public_port === null) {
+          db.updateAppPublicExposure(appId, null, protocol);
+        } else if (body.public_port === "auto") {
+          // Idempotent: keep the current port unless the protocol changed.
+          if (app.public_port == null || app.public_protocol !== protocol) {
+            db.updateAppPublicExposure(appId, db.allocatePublicPort(protocol), protocol);
+          }
+        } else {
+          const holder = db.getAppByPublicPort(body.public_port);
+          if (holder && holder.id !== appId) {
+            return Response.json({ ok: false, error: `Port ${body.public_port} is already used by "${holder.name}"` }, { status: 409, headers: corsHeaders });
+          }
+          db.updateAppPublicExposure(appId, body.public_port, protocol);
+        }
+      }
+
+      // Internal routing protocol: persisted here (pure routing change). The
+      // OCD_INTERNAL_URL scheme injected into the container only refreshes on the
+      // app's next (re)deploy — the routing itself flips immediately below.
+      if (isInternalProtocol(body.internal_protocol) && body.internal_protocol !== app.internal_protocol) {
+        db.updateAppInternalProtocol(appId, body.internal_protocol);
+      }
+
+      db.updateAppIngressSettings(appId, fields);
+      await syncAppIngress(appId);
+      const updated = db.getApp(appId);
+      return Response.json(
+        { ok: true, public_port: updated?.public_port ?? null, public_protocol: updated?.public_protocol ?? "tcp" },
+        { headers: corsHeaders },
+      );
+    } finally {
+      release([`app:${appId}`]);
+    }
   } catch (error) {
     return handleError(error);
   }

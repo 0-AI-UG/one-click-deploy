@@ -37,6 +37,7 @@ export type AppRow = {
   autoscale_cpu_threshold: number;
   autoscale_mem_threshold: number;
   autoscale_cooldown: number;
+  autoscale_req_threshold: number; // target req/min per replica for HTTP request-based scaling; 0 = off
   last_scale_at: string | null;
   deployed_by: string;
   sleeping_server_id: number | null;
@@ -47,6 +48,7 @@ export type AppRow = {
   public: number;
   extra_volumes: string; // JSON array of "host:container" strings
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
+  cpu_limit: number; // per-container CPU ceiling in cores (fractional allowed); 0 = platform default
   health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
   /** Internal routing protocol on the app's internal entrypoint: 'http' =
    *  Traefik HTTP router (L7), 'tcp' = raw TCP pass-through. Decoupled from
@@ -197,6 +199,9 @@ export type AppIngressSettings = {
   ip_allowlist?: string;
   health_check_path?: string;
   compress?: boolean;
+  /** Post-deploy HTTP probe on/off. Applies on the app's next (re)deploy or
+   *  scale — unlike the rest of these, it isn't a live Traefik-config change. */
+  health_check?: boolean;
 };
 
 type InsertAppFields = {
@@ -485,6 +490,12 @@ export function updateAppMemory(id: number, memoryMb: number): void {
   db.query("UPDATE apps SET memory_mb = ? WHERE id = ?").run(memoryMb, id);
 }
 
+/** Set the per-app CPU ceiling in cores (fractional allowed). 0 = use the
+ *  platform default. Applied to the container on the next (re)deploy / scale. */
+export function updateAppCpu(id: number, cpuLimit: number): void {
+  db.query("UPDATE apps SET cpu_limit = ? WHERE id = ?").run(cpuLimit, id);
+}
+
 /** Set (or clear) the app password. Takes write-only plaintext, stores only the
  *  bcrypt hash — a non-empty `authPassword` enables basic auth, "" disables it.
  *  Callers re-sync ingress after persisting (pure Traefik-config change). */
@@ -532,6 +543,7 @@ export function updateAppScaling(id: number, fields: {
   autoscale_cpu_threshold?: number;
   autoscale_mem_threshold?: number;
   autoscale_cooldown?: number;
+  autoscale_req_threshold?: number;
   scale_to_zero_after?: number;
   last_scale_at?: string;
 }): void {
@@ -544,6 +556,7 @@ export function updateAppScaling(id: number, fields: {
   if (fields.autoscale_cpu_threshold !== undefined) { sets.push("autoscale_cpu_threshold = ?"); values.push(fields.autoscale_cpu_threshold); }
   if (fields.autoscale_mem_threshold !== undefined) { sets.push("autoscale_mem_threshold = ?"); values.push(fields.autoscale_mem_threshold); }
   if (fields.autoscale_cooldown !== undefined) { sets.push("autoscale_cooldown = ?"); values.push(fields.autoscale_cooldown); }
+  if (fields.autoscale_req_threshold !== undefined) { sets.push("autoscale_req_threshold = ?"); values.push(fields.autoscale_req_threshold); }
   if (fields.scale_to_zero_after !== undefined) { sets.push("scale_to_zero_after = ?"); values.push(fields.scale_to_zero_after); }
   if (fields.last_scale_at !== undefined) { sets.push("last_scale_at = ?"); values.push(fields.last_scale_at); }
   if (sets.length === 0) return;
@@ -562,6 +575,7 @@ export function updateAppIngressSettings(id: number, fields: AppIngressSettings)
   if (fields.ip_allowlist !== undefined) { sets.push("ip_allowlist = ?"); values.push(fields.ip_allowlist); }
   if (fields.health_check_path !== undefined) { sets.push("health_check_path = ?"); values.push(fields.health_check_path); }
   if (fields.compress !== undefined) { sets.push("compress = ?"); values.push(fields.compress ? 1 : 0); }
+  if (fields.health_check !== undefined) { sets.push("health_check = ?"); values.push(fields.health_check ? 1 : 0); }
   if (sets.length === 0) return;
   values.push(id);
   db.query(`UPDATE apps SET ${sets.join(", ")} WHERE id = ?`).run(...values);

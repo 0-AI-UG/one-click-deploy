@@ -4,23 +4,7 @@ import { Card, Btn, showToast, Spinner, CopyButton, Field } from "../components/
 import { NeoSelect } from "../components/neo-select.tsx";
 import { InfoTip } from "./app-detail/shared.tsx";
 import { Database, Loader2, Eye, EyeOff, ArrowLeft, RefreshCw } from "lucide-react";
-
-type CatalogEntry = {
-  type: string;
-  label: string;
-  versions: string[];
-  defaultPort: number;
-  requiredEnvVars: Array<{ key: string; label: string; generate?: string; default?: string }>;
-  editableSecrets?: Array<{ key: string; label: string; generate?: string }>;
-  defaultVolumeSize: number;
-  icon?: string;
-  color?: string;
-  http?: boolean;
-  stateless?: boolean;
-  description?: string;
-  category?: string;
-  recommendedMemoryMb?: number;
-};
+import type { CatalogEntry } from "./deploy/types.ts";
 
 type Environment = {
   id: number;

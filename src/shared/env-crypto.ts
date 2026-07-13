@@ -1,5 +1,7 @@
-import { getEncryptionKey } from "./secret-store.ts";
+import { encryptValue, decryptValue } from "./secret-store.ts";
 import type { AppRow } from "./db/apps.ts";
+
+export { encryptValue, decryptValue };
 
 export const SECRET_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
 
@@ -44,32 +46,6 @@ export function parseEnvVars(raw: string | null | undefined): EnvVarsV2 {
 /** Serialize env var entries for DB storage. */
 export function serializeEnvVars(entries: EnvVarEntry[]): string {
   return JSON.stringify({ version: 2, entries });
-}
-
-/** Encrypt a single plaintext value. */
-export async function encryptValue(plaintext: string): Promise<{ encrypted_value: string; iv: string }> {
-  const key = await getEncryptionKey();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    new TextEncoder().encode(plaintext),
-  );
-  return {
-    encrypted_value: Buffer.from(ciphertext).toString("base64"),
-    iv: Buffer.from(iv).toString("base64"),
-  };
-}
-
-/** Decrypt a single encrypted value. */
-export async function decryptValue(encrypted_value: string, iv: string): Promise<string> {
-  const key = await getEncryptionKey();
-  const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: Buffer.from(iv, "base64") },
-    key,
-    Buffer.from(encrypted_value, "base64"),
-  );
-  return new TextDecoder().decode(decrypted);
 }
 
 /** Decrypt all entries and return a flat Record<string, string> for container deploy. */

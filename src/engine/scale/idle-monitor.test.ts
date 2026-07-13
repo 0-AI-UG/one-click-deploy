@@ -96,6 +96,7 @@ function setAutoscale(appId: number, fields: {
   scale_to_zero_after?: number;
   volume_id?: string;
   last_scale_at?: string | null;
+  req_threshold?: number;
 }) {
   const { default: conn } = require("../../shared/db/connection.ts");
   conn.run(
@@ -108,7 +109,8 @@ function setAutoscale(appId: number, fields: {
       scale_to_zero_after = ?,
       volume_id = ?,
       status = ?,
-      last_scale_at = ?
+      last_scale_at = ?,
+      autoscale_req_threshold = ?
      WHERE id = ?`,
     [
       fields.cpu_threshold ?? 70,
@@ -120,9 +122,15 @@ function setAutoscale(appId: number, fields: {
       fields.volume_id ?? "",
       fields.status ?? "running",
       fields.last_scale_at ?? null,
+      fields.req_threshold ?? 0,
       appId,
     ],
   );
+}
+
+function setRequestsPerMin(appId: number, rpm: number) {
+  const { default: conn } = require("../../shared/db/connection.ts");
+  conn.run("UPDATE apps SET requests_per_min = ? WHERE id = ?", [rpm, appId]);
 }
 
 describe("evaluateAutoScale", () => {
@@ -377,6 +385,178 @@ describe("evaluateAutoScale", () => {
     await evaluateAutoScale(app.id);
 
     expect(desiredOf(app.id)).toBe(0);
+  });
+
+  // --- CPU normalized against the per-app --cpus limit ---
+  // docker CPUPerc is cores-used×100, so the threshold must be read relative to
+  // the container's CPU ceiling, not a bare 1-core assumption.
+
+  function setCpuLimit(appId: number, cores: number) {
+    const { default: conn } = require("../../shared/db/connection.ts");
+    conn.run("UPDATE apps SET cpu_limit = ? WHERE id = ?", [cores, appId]);
+  }
+
+  test("cpu limit 0.5: a fully-pegged half-core replica (cpu_percent=50) scales up", async () => {
+    const server = makeServer();
+    const app = makeApp();
+    setAutoscale(app.id, { cpu_threshold: 80, max_replicas: 4 });
+    setCpuLimit(app.id, 0.5);
+    const r = insertReplica({
+      app_id: app.id, server_id: server.id, host_port: 21070,
+      container_name: `c-cpu-half-${Date.now()}`, status: "running",
+    });
+    // 50% of a core = 100% of a 0.5-core limit. Scraped ceiling = 0.5.
+    updateReplicaMetrics(r.id, 50, 10, { cpuLimitCores: 0.5, memoryUsedMb: 0, memoryLimitMb: 0 });
+
+    await evaluateAutoScale(app.id);
+
+    // Normalized util 100% / threshold 80% = 1.25 -> ceil(1*1.25) = 2. Raw
+    // (unnormalized) 50/80 = 0.625 would have held at 1.
+    expect(desiredOf(app.id)).toBe(2);
+  });
+
+  test("cpu limit 2: 0.8 core used of 2 allowed (cpu_percent=80) does NOT scale up", async () => {
+    const server = makeServer();
+    const app = makeApp();
+    setAutoscale(app.id, { cpu_threshold: 80, max_replicas: 4 });
+    setCpuLimit(app.id, 2);
+    const r = insertReplica({
+      app_id: app.id, server_id: server.id, host_port: 21071,
+      container_name: `c-cpu-two-${Date.now()}`, status: "running",
+    });
+    // cpu_percent 80 = 0.8 core = 40% of a 2-core limit.
+    updateReplicaMetrics(r.id, 80, 10, { cpuLimitCores: 2, memoryUsedMb: 0, memoryLimitMb: 0 });
+
+    await evaluateAutoScale(app.id);
+
+    // Normalized util 40% is below the 80% threshold. Raw 80/80 = 1.0 would
+    // have sat on the scale-up boundary.
+    expect(desiredOf(app.id)).toBe(1);
+  });
+
+  test("cpu limit falls back to app.cpu_limit when the replica ceiling is unscraped (0)", async () => {
+    const server = makeServer();
+    const app = makeApp();
+    setAutoscale(app.id, { cpu_threshold: 80, max_replicas: 4 });
+    setCpuLimit(app.id, 0.5);
+    const r = insertReplica({
+      app_id: app.id, server_id: server.id, host_port: 21072,
+      container_name: `c-cpu-fallback-${Date.now()}`, status: "running",
+    });
+    // cpu_limit_cores left at 0 (not yet scraped) -> fall back to app.cpu_limit=0.5.
+    updateReplicaMetrics(r.id, 50, 10);
+
+    await evaluateAutoScale(app.id);
+
+    expect(desiredOf(app.id)).toBe(2);
+  });
+
+  // --- Request-rate scaling (HPA-style third metric, HTTP apps only) ---
+
+  test("request-rate: high req/min per replica scales up even when CPU/mem are low", async () => {
+    const server = makeServer();
+    const app = makeApp(); // health_check=true => HTTP-routed
+    setAutoscale(app.id, { req_threshold: 100, max_replicas: 4 });
+    const r = insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 21060,
+      container_name: `c-req-up-${Date.now()}`,
+      status: "running",
+    });
+    updateReplicaMetrics(r.id, 5, 5); // CPU/mem idle
+    setRequestsPerMin(app.id, 300); // 300 rpm / 1 replica / 100 target = ratio 3
+    markMetricsFresh(server.id);
+
+    await evaluateAutoScale(app.id);
+
+    // ceil(1 * 3) = 3 replicas driven purely by request rate.
+    expect(desiredOf(app.id)).toBe(3);
+  });
+
+  test("request-rate: stale metrics fall back to CPU/mem (no request-driven scale-up)", async () => {
+    const server = makeServer();
+    const app = makeApp();
+    setAutoscale(app.id, { req_threshold: 100, max_replicas: 4 });
+    const r = insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 21061,
+      container_name: `c-req-stale-${Date.now()}`,
+      status: "running",
+    });
+    updateReplicaMetrics(r.id, 5, 5);
+    setRequestsPerMin(app.id, 300);
+    // metrics NOT marked fresh — a stale scrape must not act as a load signal
+
+    await evaluateAutoScale(app.id);
+
+    expect(desiredOf(app.id)).toBe(1);
+  });
+
+  test("request-rate: threshold 0 disables the request signal", async () => {
+    const server = makeServer();
+    const app = makeApp();
+    setAutoscale(app.id, { req_threshold: 0, max_replicas: 4 });
+    const r = insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 21062,
+      container_name: `c-req-off-${Date.now()}`,
+      status: "running",
+    });
+    updateReplicaMetrics(r.id, 5, 5);
+    setRequestsPerMin(app.id, 9999);
+    markMetricsFresh(server.id);
+
+    await evaluateAutoScale(app.id);
+
+    expect(desiredOf(app.id)).toBe(1);
+  });
+
+  test("request-rate: TCP app ignores req/min (no Traefik counter)", async () => {
+    const server = makeServer();
+    const app = makeApp({ healthCheck: false }); // TCP-routed, no auth
+    setAutoscale(app.id, { req_threshold: 100, max_replicas: 4 });
+    const r = insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 21063,
+      container_name: `c-req-tcp-${Date.now()}`,
+      status: "running",
+    });
+    updateReplicaMetrics(r.id, 5, 5);
+    setRequestsPerMin(app.id, 300);
+    markMetricsFresh(server.id);
+
+    await evaluateAutoScale(app.id);
+
+    expect(desiredOf(app.id)).toBe(1);
+  });
+
+  test("request-rate: high traffic holds replicas up (blocks CPU-idle scale-down)", async () => {
+    const server = makeServer();
+    const app = makeApp();
+    setAutoscale(app.id, { req_threshold: 100, min_replicas: 1, max_replicas: 4 });
+    const r1 = insertReplica({
+      app_id: app.id, server_id: server.id, host_port: 21064,
+      container_name: `c-req-hold-a-${Date.now()}`, status: "running",
+    });
+    const r2 = insertReplica({
+      app_id: app.id, server_id: server.id, host_port: 21065,
+      container_name: `c-req-hold-b-${Date.now()}`, status: "running",
+    });
+    const { default: conn } = require("../../shared/db/connection.ts");
+    conn.run("UPDATE apps SET desired_replicas = 2 WHERE id = ?", [app.id]);
+    updateReplicaMetrics(r1.id, 3, 3); // CPU idle would otherwise scale down to 1
+    updateReplicaMetrics(r2.id, 3, 3);
+    setRequestsPerMin(app.id, 220); // 220 / 2 replicas / 100 = ratio 1.1 (within hold band)
+    markMetricsFresh(server.id);
+
+    await evaluateAutoScale(app.id);
+
+    // Request load keeps the ratio at target — no scale-down despite idle CPU.
+    expect(desiredOf(app.id)).toBe(2);
   });
 
   test("volume-capped: max_replicas is clamped to 1 regardless of stored value", async () => {

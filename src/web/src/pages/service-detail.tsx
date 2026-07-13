@@ -5,6 +5,8 @@ import { trackOperationInToast, useResourceOperations } from "../hooks/useOperat
 import { NeoSelect } from "../components/neo-select.tsx";
 import { LogViewer } from "../components/log-viewer.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
+import { TabBar } from "../components/tab-bar.tsx";
+import { PausedBanner } from "../components/paused-banner.tsx";
 import {
   RotateCcw, Pause, Play, Trash2, Server as ServerIcon,
   Link2, Unlink, ScrollText, ArrowLeft, RefreshCw, Terminal,
@@ -119,7 +121,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const tabs = [
     { key: "overview", label: "Overview" },
     { key: "logs", label: "Logs" },
-  ];
+  ] as const;
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
@@ -170,37 +172,17 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
       </div>
 
       {service.status === "paused" && (
-        <div className="flex items-center gap-2 px-4 py-2.5 mb-4 border-2 border-fg bg-alt">
-          <Pause size={12} className="text-muted" />
-          <span className="font-mono text-[10px] text-muted font-bold uppercase tracking-wider">
-            Service is paused — container is frozen
-          </span>
-          <div className="ml-auto">
-            <PermissionGate permission="services.manage">
-              <Btn size="xs" loading={actionLoading === "unpause"} onClick={() => action("unpause", "Unpause")}>
-                <Play size={12} /> Unpause
-              </Btn>
-            </PermissionGate>
-          </div>
-        </div>
+        <PausedBanner message="Service is paused — container is frozen">
+          <PermissionGate permission="services.manage">
+            <Btn size="xs" loading={actionLoading === "unpause"} onClick={() => action("unpause", "Unpause")}>
+              <Play size={12} /> Unpause
+            </Btn>
+          </PermissionGate>
+        </PausedBanner>
       )}
 
       {/* Tabs */}
-      <div className="flex border-b-2 border-fg mb-4">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key as typeof tab)}
-            className={`px-4 py-2 font-mono text-[10px] font-bold uppercase tracking-wider border-b-2 -mb-[2px] transition-all ${
-              tab === t.key
-                ? "border-fg text-fg bg-accent"
-                : "border-transparent text-muted hover:text-fg"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <TabBar tabs={tabs} active={tab} onChange={setTab} />
 
       {tab === "overview" && (
         <div className="space-y-4">

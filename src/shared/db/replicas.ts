@@ -1,4 +1,5 @@
 import db from "./connection.ts";
+import * as health from "./_metrics-health.ts";
 
 export type ReplicaRow = {
   id: number;
@@ -74,7 +75,7 @@ export function getReplicasByServer(serverId: number): ReplicaRow[] {
 }
 
 export function updateReplicaStatus(id: number, status: string): void {
-  db.query("UPDATE replicas SET status = ? WHERE id = ?").run(status, id);
+  health.updateStatus("replicas", id, status);
 }
 
 export function markReplicaStopped(id: number): void {
@@ -108,18 +109,7 @@ export function updateReplicaMetrics(
   memoryPercent: number,
   usage?: ResourceUsage,
 ): void {
-  db.query(
-    `UPDATE replicas SET cpu_percent = ?, memory_percent = ?,
-       cpu_limit_cores = ?, memory_used_mb = ?, memory_limit_mb = ?,
-       last_health_at = datetime('now') WHERE id = ?`
-  ).run(
-    cpuPercent,
-    memoryPercent,
-    usage?.cpuLimitCores ?? 0,
-    usage?.memoryUsedMb ?? 0,
-    usage?.memoryLimitMb ?? 0,
-    id,
-  );
+  health.updateMetrics("replicas", id, cpuPercent, memoryPercent, usage);
 }
 
 export function deleteReplica(id: number): void {
@@ -131,17 +121,15 @@ export function getAllReplicas(): ReplicaRow[] {
 }
 
 export function touchReplicaHealth(id: number): void {
-  db.query("UPDATE replicas SET last_health_at = datetime('now') WHERE id = ?").run(id);
+  health.touchHealth("replicas", id);
 }
 
 export function incrementUnhealthyTicks(id: number): number {
-  db.query("UPDATE replicas SET unhealthy_ticks = unhealthy_ticks + 1 WHERE id = ?").run(id);
-  const row = db.query("SELECT unhealthy_ticks FROM replicas WHERE id = ?").get(id) as { unhealthy_ticks: number } | null;
-  return row?.unhealthy_ticks ?? 0;
+  return health.incrementUnhealthyTicks("replicas", id);
 }
 
 export function resetUnhealthyTicks(id: number): void {
-  db.query("UPDATE replicas SET unhealthy_ticks = 0 WHERE id = ?").run(id);
+  health.resetUnhealthyTicks("replicas", id);
 }
 
 export function insertMetricSample(sample: {

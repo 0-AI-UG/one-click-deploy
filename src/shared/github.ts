@@ -1,4 +1,4 @@
-
+import { resolveGitHubToken } from "./github-token.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [github:${context}]`, ...args);
@@ -192,7 +192,5 @@ export async function getCommitCiStatus(opts: {
 }
 
 export async function getGitHubPat(userId?: string): Promise<string | null> {
-  const { resolveGitHubToken } = await import("./github-token.ts");
-  const token = await resolveGitHubToken(userId);
-  return token || null;
+  return (await resolveGitHubToken(userId)) || null;
 }

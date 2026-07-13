@@ -1,25 +1,12 @@
 import * as db from "../../shared/db.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
-import { destroyApp } from "../deploy/lifecycle.ts";
-import { destroyService } from "../deploy/service-lifecycle.ts";
+import { destroyAppCore } from "../deploy/lifecycle.ts";
+import { destroyServiceCore } from "../deploy/service-lifecycle.ts";
 import { registerOp } from "./registry.ts";
+import { softStep, runDbCleanupGate } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
 type DestroyServerInput = { serverId: number };
-
-async function softStep<T>(
-  ctx: { log: (s: string) => void },
-  name: string,
-  fn: () => Promise<T>,
-): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
-  try {
-    return { ok: true, value: await fn() };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    ctx.log(`[${name}] failed (continuing): ${msg}`);
-    return { ok: false, error: msg };
-  }
-}
 
 const preflight: Step<DestroyServerInput, { ok: true }> = {
   name: "preflight",
@@ -42,7 +29,7 @@ const destroyAppsOnServer: Step<DestroyServerInput, { appIds: number[]; failed: 
     let failed = false;
     for (const app of apps) {
       const r = await softStep(ctx, `destroy_app ${app.name}`, async () => {
-        const result = await destroyApp(app.id);
+        const result = await destroyAppCore(app.id);
         if (!result.ok) throw new Error(result.error || "destroyApp returned ok=false");
       });
       if (!r.ok) failed = true;
@@ -59,7 +46,7 @@ const destroyServicesOnServer: Step<DestroyServerInput, { serviceIds: number[]; 
     let failed = false;
     for (const svc of services) {
       const r = await softStep(ctx, `destroy_service ${svc.name}`, async () => {
-        const result = await destroyService(svc.id);
+        const result = await destroyServiceCore(svc.id);
         if (!result.ok) throw new Error(result.error || "destroyService returned ok=false");
       });
       if (!r.ok) failed = true;
@@ -117,12 +104,7 @@ const deleteDbRows: Step<DestroyServerInput, { ok: true }> = {
   name: "delete_db_rows",
   label: "Delete DB rows",
   async run(ctx, prior) {
-    const failedSteps: string[] = [];
-    for (const [name, out] of Object.entries(prior)) {
-      if (!out || typeof out !== "object") continue;
-      const o = out as { ok?: boolean; failed?: boolean };
-      if (o.failed === true || o.ok === false) failedSteps.push(name);
-    }
+    const failedSteps = runDbCleanupGate(prior);
     if (failedSteps.length > 0) {
       try {
         db.updateServerStatus(ctx.input.serverId, "cleanup_failed");

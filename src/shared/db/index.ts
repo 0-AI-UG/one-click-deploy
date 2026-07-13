@@ -45,6 +45,7 @@ export {
   updateAppExtraVolumes,
   parseExtraVolumes,
   updateAppMemory,
+  updateAppCpu,
   updateAppAuthPassword,
   updateAppPublic,
   updateAppInternalProtocol,

@@ -22,10 +22,23 @@ import {
 } from "../../shared/services/catalog.ts";
 import { parseEnvVars, serializeEnvVars, encryptValue } from "../../shared/env-crypto.ts";
 import type { EnvVarEntry } from "../../shared/env-crypto.ts";
-import type { ServiceDeployRequest } from "../deploy/deploy-service.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 import type { Server } from "../../shared/rpc.ts";
+
+// Public request shape for the `deploy_service` engine op — consumed by the
+// HTTP route that enqueues the op and by the op implementation itself.
+export type ServiceDeployRequest = {
+  name: string;
+  service_type: string;
+  version?: string;
+  volume_size?: number;
+  env_overrides?: Record<string, string>;
+  environment_id?: number;
+  env_prefix?: string;
+  /** Optional custom domain for HTTP-facing services; falls back to nip.io. */
+  domain?: string;
+};
 
 type DeployServiceInput = ServiceDeployRequest;
 

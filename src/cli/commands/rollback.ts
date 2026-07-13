@@ -1,6 +1,5 @@
-import { get, post, resolveApp } from "../api.ts";
-import { followOp } from "../ops.ts";
-import { GREEN, RED, RESET } from "../format.ts";
+import { get, resolveApp } from "../api.ts";
+import { runAppOp } from "../ops.ts";
 
 interface Deployment {
   id: number;
@@ -28,15 +27,13 @@ export async function rollback(args: string[]): Promise<void> {
   }
 
   console.log(`Rolling back ${app.name} to deployment #${previous.id}...`);
-  const { op_id } = await post<{ op_id: number }>(`/api/apps/${app.id}/rollback`, {
-    deployment_id: previous.id,
+  await runAppOp({
+    args,
+    command: "rollback",
+    app,
+    endpoint: "rollback",
+    body: { deployment_id: previous.id },
+    verb: "Rollback",
+    done: "Rolled back",
   });
-  const result = await followOp(op_id);
-
-  if (result.ok) {
-    console.log(`${GREEN}Rolled back ${app.name}${RESET}`);
-  } else {
-    console.error(`${RED}Rollback failed: ${result.error || "unknown error"}${RESET}`);
-    process.exit(1);
-  }
 }

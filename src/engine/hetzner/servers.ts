@@ -38,7 +38,7 @@ const ANY_SOURCE = ["0.0.0.0/0", "::/0"];
 
 /**
  * Base inbound rules every fleet server gets. The public raw TCP/UDP blocks
- * (apps.public_port pool, see traefik-config.ts) are opened fleet-wide like
+ * (apps.public_port pool, see traefik-provision.ts) are opened fleet-wide like
  * 80/443: only the panel's Traefik ever routes them, on workers nothing
  * listens there (replicas bind private IPs) — same stance as the
  * 20000-20199 internal block staying unreachable.

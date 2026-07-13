@@ -6,23 +6,10 @@ const SERVICES_BASE_DIR = "/home/deploy/services";
 import { hetzner } from "../../shared/providers/index.ts";
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
 import { registerOp } from "./registry.ts";
+import { softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
 type DestroyServiceInput = { serviceId: number };
-
-async function softStep<T>(
-  ctx: { log: (s: string) => void },
-  name: string,
-  fn: () => Promise<T>,
-): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
-  try {
-    return { ok: true, value: await fn() };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    ctx.log(`[${name}] failed (continuing): ${msg}`);
-    return { ok: false, error: msg };
-  }
-}
 
 const removeEnvFromLinkedEnvironments: Step<DestroyServiceInput, { ok: true }> = {
   name: "remove_env_vars_from_linked_environments",
@@ -101,12 +88,7 @@ const deleteDbRows: Step<DestroyServiceInput, { ok: true }> = {
   name: "delete_db_rows",
   label: "Delete DB rows",
   async run(ctx, prior) {
-    const failedSteps: string[] = [];
-    for (const [name, out] of Object.entries(prior)) {
-      if (!out || typeof out !== "object") continue;
-      const o = out as { ok?: boolean; failed?: boolean };
-      if (o.failed === true || o.ok === false) failedSteps.push(name);
-    }
+    const failedSteps = runDbCleanupGate(prior);
     if (failedSteps.length > 0) {
       try { db.updateServiceStatus(ctx.input.serviceId, "cleanup_failed"); } catch { /* ignore */ }
       ctx.log(`Some resources could not be cleaned up (failed: ${failedSteps.join(", ")}) — service marked cleanup_failed`);
@@ -139,20 +121,7 @@ const syncIngress: Step<DestroyServiceInput, { ok: true }> = {
   },
 };
 
-const gcEmptyServers: Step<DestroyServiceInput, { ok: true }> = {
-  name: "gc_empty_servers",
-  label: "GC empty servers",
-  async run(ctx, prior) {
-    const containers = prior["stop_and_remove_instance_container"] as { affectedServerIds: number[] } | undefined;
-    const ids = containers?.affectedServerIds || [];
-    for (const sid of ids) {
-      await softStep(ctx, `gc_server ${sid}`, async () => {
-        await db.gcServerIfEmpty(sid);
-      });
-    }
-    return { ok: true };
-  },
-};
+const gcEmptyServers = makeGcEmptyServersStep<DestroyServiceInput>("stop_and_remove_instance_container");
 
 const destroyServiceOp: OpKindDefinition<DestroyServiceInput> = {
   kind: "destroy_service",

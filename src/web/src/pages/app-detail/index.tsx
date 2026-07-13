@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { get, post, del } from "../../api/client.ts";
 import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
+import { TabBar } from "../../components/tab-bar.tsx";
+import { PausedBanner } from "../../components/paused-banner.tsx";
 import { trackOperationInToast, useResourceOperations } from "../../hooks/useOperation.ts";
 import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
@@ -23,8 +25,9 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [isPublic, setIsPublic] = useState(true);
   const [portEdit, setPortEdit] = useState<number>(0);
   const [memEdit, setMemEdit] = useState<number>(0);
+  const [cpuEdit, setCpuEdit] = useState<number>(0);
   const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
-  const [ingressForm, setIngressForm] = useState<IngressForm>({ sticky: false, rate_limit_rps: 0, ip_allowlist: "", health_check_path: "", compress: false, public_protocol: "off", public_port: "", auth_enabled: false, auth_password: "", internal_protocol: "http" });
+  const [ingressForm, setIngressForm] = useState<IngressForm>({ sticky: false, rate_limit_rps: 0, ip_allowlist: "", health_check_path: "", compress: false, public_protocol: "off", public_port: "", auth_enabled: false, auth_password: "", internal_protocol: "http", health_check: true });
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
   const [replicas, setReplicas] = useState<ReplicaData[]>([]);
@@ -39,6 +42,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
     mem_threshold: number;
     cooldown: number;
     scale_to_zero_after: number;
+    req_threshold: number;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -108,6 +112,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
         mem_threshold: app.autoscale_mem_threshold ?? 80,
         cooldown: app.autoscale_cooldown ?? 300,
         scale_to_zero_after: app.scale_to_zero_after ?? 300,
+        req_threshold: app.autoscale_req_threshold ?? 0,
       });
     }
   }, [tab, app]);
@@ -121,6 +126,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
       setIsPublic(!!app.public);
       setPortEdit(app.container_port || 0);
       setMemEdit(app.memory_mb || 0);
+      setCpuEdit(app.cpu_limit || 0);
       setIngressForm({
         sticky: !!app.sticky,
         rate_limit_rps: app.rate_limit_rps || 0,
@@ -134,6 +140,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
         auth_enabled: !!app.auth_enabled,
         auth_password: "",
         internal_protocol: app.internal_protocol === "tcp" ? "tcp" : "http",
+        health_check: !!(app.health_check ?? 1),
       });
       if (app.volume_mount) {
         const parts = String(app.volume_mount).split(":");
@@ -186,7 +193,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
     { key: "scaling", label: "Scaling" },
     { key: "webhooks", label: "Webhooks" },
     { key: "settings", label: "Settings" },
-  ];
+  ] as const;
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
@@ -242,34 +249,16 @@ export function AppDetailPage({ appId }: { appId: number }) {
       </div>
 
       {app.status === "paused" && (
-        <div className="flex items-center gap-2 px-4 py-2.5 mb-4 border-2 border-fg bg-alt">
-          <Pause size={12} className="text-muted" />
-          <span className="font-mono text-[10px] text-muted font-bold uppercase tracking-wider">
-            App is paused — containers are frozen and not serving traffic
-          </span>
-          <div className="ml-auto">
-            <PermissionGate permission="apps.pause">
-              <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
-                <Play size={12} /> Unpause
-              </Btn>
-            </PermissionGate>
-          </div>
-        </div>
+        <PausedBanner message="App is paused — containers are frozen and not serving traffic">
+          <PermissionGate permission="apps.pause">
+            <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
+              <Play size={12} /> Unpause
+            </Btn>
+          </PermissionGate>
+        </PausedBanner>
       )}
 
-      <div className="flex border-b-2 border-fg mb-4">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key as typeof tab)}
-            className={`px-4 py-2 font-mono text-[10px] font-bold uppercase tracking-wider border-b-2 -mb-[2px] transition-all ${
-              tab === t.key
-                ? "border-fg text-fg bg-accent"
-                : "border-transparent text-muted hover:text-fg"
-            }`}
-          >{t.label}</button>
-        ))}
-      </div>
+      <TabBar tabs={tabs} active={tab} onChange={setTab} />
 
       {tab === "overview" && (
         <OverviewTab
@@ -343,6 +332,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
           setPortEdit={setPortEdit}
           memEdit={memEdit}
           setMemEdit={setMemEdit}
+          cpuEdit={cpuEdit}
+          setCpuEdit={setCpuEdit}
           volumeForm={volumeForm}
           setVolumeForm={setVolumeForm}
           ingressForm={ingressForm}

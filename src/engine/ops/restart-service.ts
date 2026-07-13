@@ -1,7 +1,6 @@
 import * as db from "../../shared/db.ts";
-import { restartContainer, serviceHealthCheck, restartCompose, composeHealthCheck } from "../../shared/remote/index.ts";
-import { getCatalogEntry } from "../../shared/services/catalog.ts";
-import { replicaBindHost } from "../scale/types.ts";
+import { restartContainer, restartCompose } from "../../shared/remote/index.ts";
+import { forEachServiceInstance } from "./service-instances.ts";
 
 const SERVICES_BASE_DIR = "/home/deploy/services";
 import { registerOp } from "./registry.ts";
@@ -30,36 +29,13 @@ const restartAllInstances: Step<RestartServiceInput, { allHealthy: boolean; skip
   async run(ctx, prior) {
     const pre = prior["check_precondition"] as Precond | undefined;
     if (pre && !pre.runnable) return { allHealthy: true, skipped: true };
-    const service = db.getService(ctx.input.serviceId);
-    if (!service) throw new Error("Service not found");
-    const catalog = getCatalogEntry(service.service_type);
-    if (!catalog) throw new Error("Unknown service type");
-
-    const instances = db.getServiceInstances(ctx.input.serviceId);
-    if (instances.length === 0) throw new Error("Service has no instances");
-
-    const isCompose = service.deploy_kind === "compose";
-    let allHealthy = true;
-    for (const inst of instances) {
-      const server = db.getServer(inst.server_id);
-      if (!server) { allHealthy = false; continue; }
-      const hostKey = server.ssh_host_key || undefined;
-      let health;
-      if (isCompose) {
-        await restartCompose(server.ipv4, inst.container_name, hostKey, SERVICES_BASE_DIR);
-        health = await composeHealthCheck(
-          server.ipv4, inst.container_name, replicaBindHost(server), inst.host_port, 5, hostKey, SERVICES_BASE_DIR,
-        );
-      } else {
-        await restartContainer(server.ipv4, inst.container_name, hostKey);
-        health = await serviceHealthCheck(
-          server.ipv4, inst.container_name, catalog.healthCmd, 5, hostKey,
-        );
-      }
-      db.updateServiceInstanceStatus(inst.id, health.healthy ? "running" : "unhealthy");
-      if (!health.healthy) allHealthy = false;
-    }
-    db.updateServiceStatus(ctx.input.serviceId, allHealthy ? "running" : "unhealthy");
+    const { allHealthy } = await forEachServiceInstance(ctx.input.serviceId, {
+      withHealth: true,
+      requireInstances: true,
+      baseDir: SERVICES_BASE_DIR,
+      plain: (server, inst, hostKey) => restartContainer(server.ipv4, inst.container_name, hostKey),
+      compose: (server, inst, hostKey, baseDir) => restartCompose(server.ipv4, inst.container_name, hostKey, baseDir),
+    });
     return { allHealthy };
   },
 };

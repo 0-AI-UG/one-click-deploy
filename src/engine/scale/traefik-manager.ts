@@ -1,5 +1,5 @@
 // Traefik ingress manager — owns every server's /etc/traefik/dynamic/ocd.yml.
-// Renders the fleet's desired routing state from the DB (traefik-config.ts)
+// Renders the fleet's desired routing state from the DB (traefik-render.ts)
 // and ships it to each server over SSH with an atomic tmp+mv write; Traefik's
 // file provider hot-reloads it with zero restarts and without dropping
 // established connections on unchanged routers.
@@ -16,19 +16,23 @@ import {
   collectDesiredState,
   renderDynamicConfig,
   renderPanelConfig,
+} from "./traefik-render.ts";
+import {
   traefikEnvFile,
   traefikInstallScript,
   traefikStaticConfig,
   traefikSystemdUnit,
+} from "./traefik-provision.ts";
+import {
   TRAEFIK_DYNAMIC_CONFIG_PATH,
   TRAEFIK_ENV_PATH,
   TRAEFIK_PANEL_CONFIG_PATH,
   TRAEFIK_STATIC_CONFIG_PATH,
   TRAEFIK_UNIT_PATH,
   TRAEFIK_VERSION,
-} from "./traefik-config.ts";
+} from "./traefik-constants.ts";
 
-export { internalAppUrl, TRAEFIK_VERSION } from "./traefik-config.ts";
+export { internalAppUrl, TRAEFIK_VERSION } from "./traefik-constants.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [traefik-mgr:${context}]`, ...args);

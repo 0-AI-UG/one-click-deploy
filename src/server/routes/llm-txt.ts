@@ -8,7 +8,7 @@ This document covers the three things an AI agent most often needs: what the pla
 
 - **Deploys**: any Git repo with a Dockerfile. The panel builds the image on a Hetzner server and runs it as one or more containers behind Traefik with automatic HTTPS.
 - **Infrastructure**: servers, persistent volumes, private networks, and firewalls are provisioned automatically on Hetzner Cloud. DNS records can be managed via Hetzner DNS.
-- **Scaling & lifecycle**: replicas (horizontal scaling), auto-scaling, restart, pause/unpause, rollback to a previous deployment, per-app memory limits.
+- **Scaling & lifecycle**: replicas (horizontal scaling), auto-scaling, restart, pause/unpause, rollback to a previous deployment, per-app memory & CPU limits.
 - **Managed services**: one-click Postgres, Redis, MySQL, and more; their connection credentials are injected into linked environments.
 - **Environments**: named groups of env vars (plain or secret) that can be shared across apps; changing an environment redeploys its linked apps.
 - **Internal networking**: every app has a stable private address \`<app>.ocd.internal:<internal-port>\` reachable from other apps on the private network (private apps have only this address). The internal routing protocol is set by \`internal_protocol\` (\`"http"\` L7 routing, or \`"tcp"\` raw pass-through; defaults to \`"http"\`, or \`"tcp"\` when \`health_check: false\`). The platform injects \`OCD_INTERNAL_URL\` (\`http://<app>.ocd.internal:<port>\` for HTTP-routed apps, \`tcp://\` for TCP-routed ones), \`OCD_INTERNAL_HOST\`, and \`OCD_INTERNAL_PORT\` into every app container; a user-defined env var with the same key takes precedence.
@@ -72,8 +72,16 @@ Place it anywhere in your repo. For monorepos, add one per deployable service (e
   "replicas": "number — desired replica count (default: 1)",
   "public": "boolean — whether the app is publicly accessible (default: true)",
   "memory_mb": "number — per-container memory ceiling in MB (--memory/--memory-swap). Omit or 0 to use the platform default (512). Allowed: 0 or 128–32768.",
+  "cpu_limit": "number — per-container CPU ceiling in cores (--cpus), fractional allowed. Omit or 0 to use the platform default (1). Allowed: 0 or 0.1–32.",
   "health_check": "boolean — set false for apps that don't speak HTTP on the exposed port (databases, queue workers); the platform then only verifies the container stays running (default: true)",
-  "internal_protocol": "string — internal routing protocol: \"http\" (L7 routing) or \"tcp\" (raw pass-through). Omit to derive from health_check (http when probing, tcp when not). Password protection and health_check_path require \"http\".",
+  "internal_protocol": "string — internal routing protocol: \"http\" (L7 routing) or \"tcp\" (raw pass-through). Omit to derive from health_check (http when probing, tcp when not). Password protection, sticky sessions and health_check_path require \"http\".",
+  "sticky": "boolean — cookie-based sticky sessions on the app's ingress service; requires internal_protocol \"http\" (default: false)",
+  "rate_limit_rps": "number — public-domain rate limit in requests/sec per client IP; 0 = unlimited (default: 0)",
+  "ip_allowlist": "string — comma-separated IPs/CIDRs allowed to reach the public domain, e.g. \"203.0.113.4, 10.0.0.0/8\"; empty = open to all",
+  "health_check_path": "string — active HTTP health-check path (e.g. \"/healthz\"); replicas failing it leave the load-balancer rotation. Requires internal_protocol \"http\"; empty = off",
+  "compress": "boolean — gzip responses on the public domain (default: false)",
+  "public_port": "number | \"auto\" — expose a raw public TCP/UDP port on the panel IP (game servers, databases, MQTT); \"auto\" picks the lowest free pool port. Independent of the public HTTP domain. Omit for no raw exposure",
+  "public_protocol": "string — pool for public_port: \"tcp\" (30000-30049) or \"udp\" (30050-30099); default \"tcp\"",
   "extra_volumes": [
     {
       "host_path": "string — absolute path on the host machine",

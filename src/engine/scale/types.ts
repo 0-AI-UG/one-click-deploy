@@ -1,88 +1,50 @@
+import * as db from "../../shared/db.ts";
+import type { AppRow, ReplicaRow, ServerRow } from "../../shared/db.ts";
+
 export type ProgressFn = (step: string, detail: string) => void;
 
-export interface App {
-  id: number;
-  name: string;
-  domain: string;
-  git_repo: string;
-  git_branch: string;
-  dockerfile_path: string;
-  docker_context: string;
-  container_port: number;
-  env_vars: string;
-  status: string;
-  deploy_log: string;
-  created_at: string;
-  volume_id: string;
-  volume_mount: string;
-  webhook_enabled: number;
-  webhook_secret: string;
-  webhook_branch: string;
-  webhook_path: string;
-  webhook_wait_for_ci: number;
-  github_webhook_id: string;
-  auth_password_hash: string;
-  desired_replicas: number;
-  min_replicas: number;
-  max_replicas: number;
-  autoscale_enabled: number;
-  autoscale_cpu_threshold: number;
-  autoscale_mem_threshold: number;
-  autoscale_cooldown: number;
-  scale_to_zero_after: number;
-  last_scale_at: string | null;
-  deployed_by: string;
-  sleeping_server_id: number | null;
-  sleeping_host_port: number | null;
-  environment_id: number | null;
-  public: number;
-  extra_volumes: string;
-  memory_mb: number;
-  health_check: number;
-  internal_protocol: string; // 'http' | 'tcp' — internal routing protocol
-  internal_port: number;
-  last_request_at: string | null;
-  requests_per_min: number;
-  sticky: number;
-  rate_limit_rps: number;
-  ip_allowlist: string;
-  health_check_path: string;
-  compress: number;
-  public_port: number | null;
-  public_protocol: string;
-}
-
-export interface Replica {
-  id: number;
-  app_id: number;
-  server_id: number;
-  host_port: number;
-  container_name: string;
-  status: string;
-  cpu_percent: number;
-  memory_percent: number;
-  last_health_at: string | null;
-  unhealthy_ticks: number;
-  stopped_at: string | null;
-  created_at: string;
-}
-
-export interface Server {
-  id: number;
-  name: string;
-  provider_id: string;
-  ipv4: string;
-  ipv6: string;
-  type: string;
-  location: string;
-  status: string;
-  ssh_host_key: string;
-  private_ipv4: string;
-  created_at: string;
-}
+// The scale engine operates directly on the shared DB row types — single-source
+// the columns rather than hand-re-enumerating them here.
+export type App = AppRow;
+export type Replica = ReplicaRow;
+export type Server = ServerRow;
 
 export function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [scale:${context}]`, ...args);
+}
+
+/**
+ * Shared `startAppReplica` options for the FORWARD-create paths (scale-up,
+ * wake, rolling redeploy, health recreate) that source everything from the
+ * live app row. Snapshot/compensation paths (rollback, redeploy) source from a
+ * captured snapshot instead and build their own options. Pass one of
+ * `envFilePath` (pre-existing file) or `envVars` (rewritten from the DB).
+ */
+export function appReplicaRunOpts(
+  app: App,
+  server: Server,
+  opts: {
+    containerName: string;
+    hostPort: number;
+    envFilePath?: string;
+    envVars?: Record<string, string>;
+  },
+) {
+  return {
+    containerName: opts.containerName,
+    image: `${app.name}:latest`,
+    appName: app.name,
+    network: null as string | null, // replicas historically don't join ocd-net
+    bindAddr: replicaBindHost(server),
+    hostPort: opts.hostPort,
+    containerPort: app.container_port,
+    envFilePath: opts.envFilePath,
+    envVars: opts.envVars,
+    volumeMount: app.volume_mount || undefined,
+    extraVolumes: db.parseExtraVolumes(app.extra_volumes),
+    memoryMb: app.memory_mb || undefined,
+    cpus: app.cpu_limit || undefined,
+  };
 }
 
 /**

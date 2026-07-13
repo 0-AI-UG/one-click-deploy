@@ -182,7 +182,10 @@ export function DashboardPage() {
               <div className="divide-y divide-fg/10">
                 {apps.map((app) => {
                   const rowBusy = !!appBusyKind(app.id);
-                  const disableRow = ops.isBusy;
+                  // Scope disabling to this app's own in-flight op — the engine
+                  // serializes per `app:${id}`, so another app being busy is
+                  // irrelevant here.
+                  const disableRow = rowBusy;
                   return (
                   <div key={app.id} className={`px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${app.status === "paused" ? "opacity-50" : ""} ${rowBusy ? "bg-alt/30" : ""}`}>
                     <div className="flex items-center gap-4 min-w-0">
@@ -284,7 +287,9 @@ export function DashboardPage() {
               <div className="divide-y divide-fg/10">
                 {services.map((svc) => {
                   const rowBusy = !!svcBusyKind(svc.id);
-                  const disableRow = ops.isBusy;
+                  // Scope disabling to this service's own in-flight op (engine
+                  // serializes per `service:${id}`).
+                  const disableRow = rowBusy;
                   return (
                   <div key={svc.id} className={`px-4 py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${svc.status === "paused" ? "opacity-50" : ""} ${rowBusy ? "bg-alt/30" : ""}`}>
                     <div className="flex items-center gap-4 min-w-0">

@@ -1,148 +1,28 @@
-// Traefik config generation — the pure half of the ingress stack. This module
-// turns DB state into Traefik config strings and never touches the network;
-// traefik-manager.ts owns delivery (SSH writes, install, caching).
+// Traefik dynamic-config render — the desired-state half of the ingress stack.
+// Snapshots DB routing state (collectDesiredState) and renders the per-server
+// /etc/traefik/dynamic/ocd.yml + the panel's panel.yml from it. Pure: no
+// network, no SSH. traefik-provision.ts owns the static config; traefik-manager.ts
+// owns delivery.
 //
-// One Traefik instance runs on *every* server (systemd unit `ocd-traefik`)
-// with an identical static config:
-//
-//   web / websecure   — :80/:443 public ingress. Only the panel server ever
-//                       gets routers on these (public app domains, managed
-//                       services, ACME); on workers they sit idle.
-//   int20000-int20199 — one entrypoint per app `internal_port`. Apps with
-//                       internal_protocol='http' (or any auth-protected app)
-//                       get an HTTP router; internal_protocol='tcp' apps a raw
-//                       TCP router, so one address
-//                       `<app>.ocd.internal:<internal_port>` works for both
-//                       protocols. The routing protocol is an explicit app
-//                       field, independent of the health_check probe flag.
-//   pub30000-pub30049 / pubu30050-pubu30099 — public raw TCP/UDP pool
-//                       (apps.public_port). Routed on the panel only:
-//                       `<panel-ip>:<port>` forwards raw to the app's
-//                       replicas over the private network.
-//
-// The 200-port block is fixed forever (it doubles as the fleet app cap).
-// Static config rarely changes; when it does, the reconciler converges every
-// server (rewrite + service restart) within one tick — steady-state ticks
-// never restart. Dynamic state lives in /etc/traefik/dynamic/ocd.yml, re-rendered
-// from the DB as a whole (desired-state, not incremental edits) and picked
-// up by the file provider's watcher. The panel's own vhost lives in a
-// separate panel.yml owned by bootstrap (see deployTraefikPanelSite) — app
-// syncs never disturb panel WebSocket/terminal sessions.
+// Dynamic state lives in /etc/traefik/dynamic/ocd.yml, re-rendered from the DB
+// as a whole (desired-state, not incremental edits) and picked up by the file
+// provider's watcher. The panel's own vhost lives in a separate panel.yml owned
+// by bootstrap (see deployTraefikPanelSite) — app syncs never disturb panel
+// WebSocket/terminal sessions.
 //
 // All emitted "YAML" is JSON (JSON is valid YAML) — no serializer dependency.
 
 import * as db from "../../shared/db.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
-
-/** Pinned Traefik release installed on every server. v3.5+ is required for
- *  TCP server health checks (`tcp.services.*.loadBalancer.healthCheck`),
- *  which replace Caddy's passive checks for health_check=0 apps. */
-export const TRAEFIK_VERSION = "3.7.7";
-
-/** Prometheus metrics entrypoint. The reconciler scrapes it per tick over SSH
- *  (curl from localhost) to drive request-rate-based scale-to-zero. */
-export const TRAEFIK_METRICS_PORT = 8899;
-
-/** Fixed username for password-protected apps. The old auth-proxy sidecar was
- *  password-only; basicAuth needs a user, so every htpasswd entry uses this
- *  one (UI copy tells visitors to sign in as "admin"). */
-export const BASIC_AUTH_USER = "admin";
-
-// --- Hold-and-forward waker ---------------------------------------------------
-//
-// Sleeping apps (scale-to-zero) can't serve, but a connection to one must not
-// fail — it must transparently wake the app, wait, and be forwarded. That job
-// belongs to the WAKER, an in-process TCP/HTTP proxy that runs on the PANEL
-// (src/engine/scale/waker.ts). While an app sleeps, its Traefik routers point
-// at the waker instead of a (non-existent) replica pool; when it wakes, the
-// reconciler re-renders them back to the real replicas. This replaced the old
-// browser-only 503 "wake page", which did nothing for internal callers, raw
-// TCP/UDP ports, or any non-browser HTTP client.
-//
-// Topology: ONE waker on the panel (like public ingress, which already
-// centralizes there). Every server's Traefik reaches it over the private
-// network at `<panel-private-ip>:<waker-port>`. Tradeoff: the panel is a wake
-// choke point / SPOF for cold starts — but it is already the choke point for
-// all public ingress, ACME and the control plane, so this adds no new failure
-// domain. The alternative (a waker per server) would duplicate the DB access
-// and wake coordination on every worker for no real gain.
-
-/** The waker's single HTTP listener. Sleeping apps' HTTP routers (internal
- *  `<app>.ocd.internal:<port>` and public `<domain>`) forward here; the waker
- *  resolves the app from the forwarded `Host` header, wakes it, holds the
- *  request, then proxies to the real upstream. */
-export const WAKER_HTTP_PORT = 8896;
-
-/** Base of the waker's per-app raw-TCP listener block. A sleeping raw-TCP app
- *  (internal_protocol='tcp', or one exposed on a public `pub*` port) gets a
- *  dedicated waker port = WAKER_TCP_PORT_BASE + (internal_port - base); the
- *  waker resolves the app from the port a connection arrived on (raw sockets
- *  carry no Host). Mirrors the int20000-20199 block 1:1, so the port is stable
- *  for the app's lifetime and never collides. */
-export const WAKER_TCP_PORT_BASE = 21000;
-
-/** Base of the waker's per-app UDP listener block (public `pubu*` ports),
- *  offset past the TCP block so the two never overlap. */
-export const WAKER_UDP_PORT_BASE = 21200;
-
-/** Waker raw-TCP port for an app, derived from its internal port. Shared by the
- *  app's internal-tcp and public-tcp sleeping routers — both dial the same
- *  upstream once awake, so one listener serves both. */
-export function wakerTcpPort(internalPort: number): number {
-  return WAKER_TCP_PORT_BASE + (internalPort - db.INTERNAL_PORT_BASE);
-}
-
-/** Waker UDP port for an app, derived from its internal port. */
-export function wakerUdpPort(internalPort: number): number {
-  return WAKER_UDP_PORT_BASE + (internalPort - db.INTERNAL_PORT_BASE);
-}
-
-/** Shared Traefik HTTP service name every sleeping app's HTTP router targets —
- *  a single load balancer pointing at the panel waker's HTTP listener. */
-export const WAKER_HTTP_SERVICE = "ocd-waker-http";
-
-export const TRAEFIK_STATIC_CONFIG_PATH = "/etc/traefik/traefik.yml";
-/** JSON access log, one line per request. Rotated by logrotate (see
- *  traefikInstallScript) so a busy fleet never fills the disk. */
-export const TRAEFIK_ACCESS_LOG_PATH = "/var/log/traefik/access.log";
-export const TRAEFIK_LOGROTATE_PATH = "/etc/logrotate.d/ocd-traefik";
-export const TRAEFIK_UNIT_PATH = "/etc/systemd/system/ocd-traefik.service";
-export const TRAEFIK_DYNAMIC_DIR = "/etc/traefik/dynamic";
-export const TRAEFIK_DYNAMIC_CONFIG_PATH = `${TRAEFIK_DYNAMIC_DIR}/ocd.yml`;
-export const TRAEFIK_PANEL_CONFIG_PATH = `${TRAEFIK_DYNAMIC_DIR}/panel.yml`;
-export const TRAEFIK_ACME_PATH = "/etc/traefik/acme.json";
-/** Separate cert storage for the DNS-01 wildcard resolver — Traefik requires
- *  a distinct storage file per certificatesResolver (two resolvers sharing
- *  one acme.json corrupt each other's state). */
-export const TRAEFIK_ACME_DNS_PATH = "/etc/traefik/acme-dns.json";
-/** systemd EnvironmentFile carrying the Hetzner DNS token (HETZNER_API_KEY)
- *  for the wildcard resolver's lego provider. Delivered by the reconciler to
- *  the panel server ONLY (see traefik-manager.ts); the unit references it
- *  with a `-` prefix so workers without the file still boot. */
-export const TRAEFIK_ENV_PATH = "/etc/traefik/traefik.env";
-
-function entrypointName(internalPort: number): string {
-  return `int${internalPort}`;
-}
-
-/** Entrypoint carrying an app's public raw TCP/UDP port (`pub30001`,
- *  `pubu30050`, …). One per port in the two public pool blocks. */
-export function publicPortEntrypoint(port: number, protocol: "tcp" | "udp"): string {
-  return protocol === "udp" ? `pubu${port}` : `pub${port}`;
-}
-
-function internalHost(appName: string): string {
-  return `${appName}.ocd.internal`;
-}
-
-/**
- * Stable URL an app can use to reach another app over the local Traefik's
- * per-app internal entrypoint. Callers should use this in env vars / service
- * discovery.
- */
-export function internalAppUrl(appName: string, internalPort: number): string {
-  return `http://${internalHost(appName)}:${internalPort}`;
-}
+import {
+  BASIC_AUTH_USER,
+  WAKER_HTTP_PORT,
+  WAKER_HTTP_SERVICE,
+  wakerTcpPort,
+  wakerUdpPort,
+  entrypointName,
+  publicPortEntrypoint,
+} from "./traefik-constants.ts";
 
 /** Return an object with keys inserted in sorted order — JSON.stringify then
  *  emits them deterministically, which the content-hash sync cache relies on. */
@@ -150,188 +30,6 @@ function sortKeys<T>(obj: Record<string, T>): Record<string, T> {
   const out: Record<string, T> = {};
   for (const key of Object.keys(obj).sort()) out[key] = obj[key];
   return out;
-}
-
-// --- Static config -----------------------------------------------------------
-
-/** Contact email for the Let's Encrypt account. Without one Traefik never
- *  reuses the account persisted in acme.json and registers a fresh LE account
- *  on every process start's first issuance — burning LE's 10-accounts/IP/3h
- *  limit under restart loops. Operator-set `acme_email` wins; else derive a
- *  stable address from the configured DNS zone; else none (nip.io-only
- *  fleets never issue). */
-export function acmeEmail(): string {
-  const settings = db.getSettings();
-  if (settings["acme_email"]) return settings["acme_email"];
-  if (settings["dns_zone_name"]) return `admin@${settings["dns_zone_name"]}`;
-  return "";
-}
-
-/**
- * The static config installed at /etc/traefik/traefik.yml — identical on
- * every server in the fleet. Written at install time and kept converged by
- * the reconciler (reconcileTraefik compares content hashes and rewrites +
- * restarts on drift), so changes here roll out fleet-wide within one tick.
- * The ACME resolver is inert on workers: no router references it there.
- */
-export function traefikStaticConfig(): string {
-  const entryPoints: Record<string, { address: string }> = {
-    web: { address: ":80" },
-    websecure: { address: ":443" },
-    // Prometheus metrics for the reconciler's per-tick scrape. Bound like the
-    // other entrypoints, but the Hetzner cloud firewall only opens 22/80/443
-    // publicly — same not-internet-reachable stance as the 20000-20199 block.
-    metrics: { address: `:${TRAEFIK_METRICS_PORT}` },
-  };
-  for (
-    let port = db.INTERNAL_PORT_BASE;
-    port < db.INTERNAL_PORT_BASE + db.INTERNAL_PORT_COUNT;
-    port++
-  ) {
-    entryPoints[entrypointName(port)] = { address: `:${port}` };
-  }
-  // Public raw TCP/UDP pool (apps.public_port). Reserved fleet-wide up front
-  // because entrypoints are static-config-only — exposing an app must never
-  // need a Traefik restart. Only the panel ever routes these; the base
-  // firewall opens the block everywhere but on workers nothing listens.
-  for (
-    let port = db.PUBLIC_TCP_PORT_BASE;
-    port < db.PUBLIC_TCP_PORT_BASE + db.PUBLIC_TCP_PORT_COUNT;
-    port++
-  ) {
-    entryPoints[publicPortEntrypoint(port, "tcp")] = { address: `:${port}` };
-  }
-  for (
-    let port = db.PUBLIC_UDP_PORT_BASE;
-    port < db.PUBLIC_UDP_PORT_BASE + db.PUBLIC_UDP_PORT_COUNT;
-    port++
-  ) {
-    entryPoints[publicPortEntrypoint(port, "udp")] = { address: `:${port}/udp` };
-  }
-  const email = acmeEmail();
-  // Wildcard resolver only when a DNS zone is managed — `*.<zone>` needs
-  // DNS-01, and without a zone there is nothing to issue for. The resolver
-  // is inert on workers (no router references it there) and on the panel
-  // until the reconciler delivers HETZNER_API_KEY via the env file.
-  const zone = db.getSettings()["dns_zone_name"] ?? "";
-  const config = {
-    entryPoints,
-    providers: {
-      file: { directory: TRAEFIK_DYNAMIC_DIR, watch: true },
-    },
-    certificatesResolvers: {
-      letsencrypt: {
-        acme: {
-          ...(email ? { email } : {}),
-          storage: TRAEFIK_ACME_PATH,
-          httpChallenge: { entryPoint: "web" },
-        },
-      },
-      ...(zone
-        ? {
-            "letsencrypt-dns": {
-              acme: {
-                ...(email ? { email } : {}),
-                storage: TRAEFIK_ACME_DNS_PATH,
-                dnsChallenge: { provider: "hetzner" },
-              },
-            },
-          }
-        : {}),
-    },
-    // Per-service request counters (traefik_service_requests_total) feed the
-    // idle monitor's traffic-based sleep decisions.
-    metrics: { prometheus: { entryPoint: "metrics" } },
-    // JSON access log for per-request debugging across the fleet. Buffered
-    // (flushed every ~100 lines) so logging never serializes request handling.
-    accessLog: {
-      filePath: TRAEFIK_ACCESS_LOG_PATH,
-      format: "json",
-      bufferingSize: 100,
-    },
-    api: { dashboard: false },
-  };
-  return JSON.stringify(config, null, 2);
-}
-
-/** systemd unit for the host-level Traefik. Restart=always — the proxy is
- *  the server's only ingress, it must survive crashes unattended. */
-export function traefikSystemdUnit(): string {
-  return `[Unit]
-Description=OCD Traefik ingress
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-EnvironmentFile=-${TRAEFIK_ENV_PATH}
-ExecStart=/usr/local/bin/traefik --configFile=${TRAEFIK_STATIC_CONFIG_PATH}
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-`;
-}
-
-/**
- * Idempotent bash script that installs the pinned Traefik release and brings
- * the `ocd-traefik` service up. Shared verbatim by cloud-init (fresh
- * provisioning) and the reconciler's install backfill over SSH:
- * download the static binary (arch-detected, re-downloaded when the installed
- * version differs from the pin), write the static config, create the dynamic
- * dir, lock down acme.json, install the systemd unit. Ends with an
- * unconditional restart so binary/static-config updates actually take effect
- * on servers where the service is already running.
- */
-export function traefikInstallScript(): string {
-  return `set -e
-TRAEFIK_ARCH=$(uname -m)
-case "$TRAEFIK_ARCH" in
-  x86_64) TRAEFIK_ARCH=amd64 ;;
-  aarch64) TRAEFIK_ARCH=arm64 ;;
-esac
-if ! /usr/local/bin/traefik version 2>/dev/null | grep -q "${TRAEFIK_VERSION}"; then
-  curl -fsSL -o /tmp/traefik.tar.gz "https://github.com/traefik/traefik/releases/download/v${TRAEFIK_VERSION}/traefik_v${TRAEFIK_VERSION}_linux_\${TRAEFIK_ARCH}.tar.gz"
-  tar -xzf /tmp/traefik.tar.gz -C /tmp traefik
-  install -m 755 /tmp/traefik /usr/local/bin/traefik
-  rm -f /tmp/traefik.tar.gz /tmp/traefik
-fi
-mkdir -p ${TRAEFIK_DYNAMIC_DIR}
-mkdir -p ${TRAEFIK_ACCESS_LOG_PATH.substring(0, TRAEFIK_ACCESS_LOG_PATH.lastIndexOf("/"))}
-cat > ${TRAEFIK_LOGROTATE_PATH} <<'OCD_TRAEFIK_LOGROTATE'
-${TRAEFIK_ACCESS_LOG_PATH} {
-  daily
-  rotate 7
-  compress
-  missingok
-  notifempty
-  copytruncate
-}
-OCD_TRAEFIK_LOGROTATE
-cat > ${TRAEFIK_STATIC_CONFIG_PATH} <<'OCD_TRAEFIK_STATIC'
-${traefikStaticConfig()}
-OCD_TRAEFIK_STATIC
-touch ${TRAEFIK_ACME_PATH} ${TRAEFIK_ACME_DNS_PATH}
-chmod 600 ${TRAEFIK_ACME_PATH} ${TRAEFIK_ACME_DNS_PATH}
-cat > ${TRAEFIK_UNIT_PATH} <<'OCD_TRAEFIK_UNIT'
-${traefikSystemdUnit()}
-OCD_TRAEFIK_UNIT
-systemctl daemon-reload
-systemctl enable ocd-traefik
-systemctl restart ocd-traefik
-`;
-}
-
-/**
- * Content of ${TRAEFIK_ENV_PATH}: the Hetzner API token the `letsencrypt-dns`
- * resolver's lego provider reads as HETZNER_API_KEY. Deliberately NOT part of
- * traefikInstallScript()/cloud-init — user data is shared verbatim by every
- * provisioned server and the secret belongs on the panel server only. The
- * reconciler delivers it there within one tick of first boot (wildcard
- * issuance simply starts a tick later on a fresh panel).
- */
-export function traefikEnvFile(hetznerToken: string): string {
-  return `HETZNER_API_KEY=${hetznerToken}`;
 }
 
 // --- Desired state -----------------------------------------------------------

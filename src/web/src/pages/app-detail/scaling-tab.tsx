@@ -16,6 +16,7 @@ interface ScalingPolicy {
   mem_threshold: number;
   cooldown: number;
   scale_to_zero_after: number;
+  req_threshold: number;
 }
 
 interface ScalingTabProps {
@@ -34,6 +35,9 @@ interface ScalingTabProps {
 
 export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPolicy, actionLoading, action, loadReplicas, load, ops }: ScalingTabProps) {
   const hasVolume = Boolean(app.volume_id);
+  // Request-rate scaling needs Traefik request counters, which only exist for
+  // HTTP-routed apps (raw-TCP apps have none). Matches the engine predicate.
+  const httpRouted = app.internal_protocol !== "tcp";
   const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica — a cloud volume can only be attached to a single server at a time.";
   // No custom-domain requirement: the panel is the sole public ingress and
   // load-balances across replicas over the private network, so nip.io
@@ -221,7 +225,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                 }}
                 label="Enable autoscaling"
               />
-              <InfoTip text="Reconciler checks CPU/memory every 30s and scales between min and max replicas." />
+              <InfoTip text="Reconciler checks CPU/memory (and request rate for HTTP apps) every 30s and scales between min and max replicas." />
             </div>
 
             <div>
@@ -245,7 +249,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                   onChange={(e) => setPolicy({ ...policy, max_replicas: parseInt(e.target.value) || 1 })}
                 />
               </Field>
-              <Field label={<span className="flex items-center gap-1">CPU % <InfoTip text="Average CPU above this triggers scale-up. Scale-down kicks in below half this value." /></span>}>
+              <Field label={<span className="flex items-center gap-1">CPU % <InfoTip text="Average CPU use as a percent of the app's CPU limit (--cpus), not the whole server. Above this triggers scale-up; the autoscaler scales down proportionally when it drops below." /></span>}>
                 <input
                   type="number"
                   min={1}
@@ -255,7 +259,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                   onChange={(e) => setPolicy({ ...policy, cpu_threshold: parseInt(e.target.value) || 0 })}
                 />
               </Field>
-              <Field label={<span className="flex items-center gap-1">Mem % <InfoTip text="Average memory above this triggers scale-up. Scale-down kicks in below half this value." /></span>}>
+              <Field label={<span className="flex items-center gap-1">Mem % <InfoTip text="Average memory use as a percent of the app's memory limit, not the whole server. Above this triggers scale-up; the autoscaler scales down proportionally when it drops below." /></span>}>
                 <input
                   type="number"
                   min={1}
@@ -265,6 +269,17 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                   onChange={(e) => setPolicy({ ...policy, mem_threshold: parseInt(e.target.value) || 0 })}
                 />
               </Field>
+              {httpRouted && (
+                <Field label={<span className="flex items-center gap-1">Req/min <InfoTip text="Target requests/min per replica (HTTP apps only). Scales up when average traffic per replica exceeds this — an HPA-style signal alongside CPU/memory, whichever demands more replicas wins. 0 disables request-based scaling." /></span>}>
+                  <input
+                    type="number"
+                    min={0}
+                    value={policy.req_threshold}
+                    disabled={!policy.autoscale_enabled}
+                    onChange={(e) => setPolicy({ ...policy, req_threshold: parseInt(e.target.value) || 0 })}
+                  />
+                </Field>
+              )}
               <Field label={<span className="flex items-center gap-1">Cooldown s <InfoTip text="Minimum seconds between scaling actions to prevent flapping." /></span>}>
                 <input
                   type="number"
