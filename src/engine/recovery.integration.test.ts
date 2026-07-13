@@ -38,12 +38,10 @@ if (RUN) mock.module("./provision-server.ts", () => ({ provisionServer }));
 // Track the simulated docker world: containers and dirs that "exist" on the host.
 type FakeWorld = {
   containers: Set<string>;
-  composeDirs: Set<string>;
   shouldBuildFail: boolean;
 };
 const world: FakeWorld = {
   containers: new Set(),
-  composeDirs: new Set(),
   shouldBuildFail: false,
 };
 
@@ -56,9 +54,7 @@ const remoteMocks = {
     return { imageTag: `${opts.name}:latest` };
   }),
   removeContainer: mock(async (_ip: string, name: string) => { world.containers.delete(name); }),
-  removeCompose: mock(async (_ip: string, name: string) => { world.composeDirs.delete(name); world.containers.delete(name); }),
   healthCheck: mock(async () => ({ healthy: true, statusCode: 200 })),
-  composeHealthCheck: mock(async () => ({ healthy: true, statusCode: 200 })),
   containerExists: mock(async (_ip: string, name: string) => world.containers.has(name)),
   pauseContainer: mock(async () => {}),
   unpauseContainer: mock(async () => {}),
@@ -149,7 +145,6 @@ const baseDeployReq = (name: string) => ({
 beforeEach(() => {
   // Reset world + provider mocks per test.
   world.containers.clear();
-  world.composeDirs.clear();
   world.shouldBuildFail = false;
   for (const m of Object.values(remoteMocks)) {
     if (typeof m === "function" && "mockClear" in (m as any)) (m as any).mockClear();

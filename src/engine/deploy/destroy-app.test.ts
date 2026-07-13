@@ -15,18 +15,12 @@ mock.module("../../shared/providers/index.ts", () => ({
 
 const sshExec = mock(async (..._args: unknown[]) => ({ exitCode: 0, stdout: "", stderr: "" }));
 const removeContainer = mock(async (..._args: unknown[]) => {});
-const removeCompose = mock(async (..._args: unknown[]) => {});
 mock.module("../../shared/remote/index.ts", () => ({
   sshExec,
   removeContainer,
-  removeCompose,
   restartContainer: mock(async () => {}),
   pauseContainer: mock(async () => {}),
   unpauseContainer: mock(async () => {}),
-  restartCompose: mock(async () => {}),
-  pauseCompose: mock(async () => {}),
-  unpauseCompose: mock(async () => {}),
-  composeHealthCheck: mock(async () => ({ healthy: true })),
   healthCheck: mock(async () => ({ healthy: true })),
   describeFailure: (prefix: string) => prefix,
 }));
@@ -117,7 +111,6 @@ function attachReplica(appId: number, serverId: number, name: string) {
 beforeEach(() => {
   sshExec.mockClear();
   removeContainer.mockClear();
-  removeCompose.mockClear();
   syncAllTraefik.mockClear();
   deleteGithubWebhook.mockClear();
   getGitHubPat.mockClear();
@@ -127,7 +120,6 @@ beforeEach(() => {
 
   // Restore default successful behaviour (tests override as needed).
   removeContainer.mockImplementation(async () => {});
-  removeCompose.mockImplementation(async () => {});
   syncAllTraefik.mockImplementation(async () => {});
   dns._mocks.deleteRecord.mockImplementation(async () => {});
   compute._mocks.volumeDelete.mockImplementation(async () => {});

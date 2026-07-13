@@ -1,0 +1,116 @@
+import * as db from "../../shared/db.ts";
+import { hetzner } from "../../shared/providers/index.ts";
+import { recreateAppContainer } from "../deploy/index.ts";
+import { removeVolumeBindMount } from "../hetzner/host-mounts.ts";
+import { registerOp } from "./registry.ts";
+import { softStep } from "./_shared.ts";
+import type { OpKindDefinition, Step } from "../types.ts";
+
+// Detach a volume from an app. This is a pure REMOVAL, so it follows the
+// destroy pattern: every step is best-effort (softStep) and there are no
+// compensations — nothing to undo for a detach that partially succeeded. The
+// reconciler converges any leftover container state on its next pass.
+
+type DetachVolumeInput = { appId: number };
+
+type ValidateOut = {
+  volumeId: string;
+  hostMountPath: string;
+  serverIp: string;
+  hostKey: string;
+  hasServer: boolean;
+  extraVolumes: string;
+};
+
+const validate: Step<DetachVolumeInput, ValidateOut> = {
+  name: "validate",
+  label: "Validate preconditions",
+  async run(ctx) {
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App not found");
+    if (!app.volume_id) throw new Error("App has no volume attached");
+    const reps = db.getReplicas(ctx.input.appId);
+    const server = reps[0] ? db.getServer(reps[0].server_id) : null;
+    // Tear down the bind mount before Hetzner pulls the device so we don't
+    // leave a dangling /mnt/ocd-*-data behind.
+    const hostMountPath = app.volume_mount?.split(":")[0] || `/mnt/ocd-${app.name}-data`;
+    return {
+      volumeId: app.volume_id,
+      hostMountPath,
+      serverIp: server?.ipv4 || "",
+      hostKey: server?.ssh_host_key || "",
+      hasServer: !!server,
+      extraVolumes: app.extra_volumes,
+    };
+  },
+};
+
+const removeBindMount: Step<DetachVolumeInput, { ok: boolean }> = {
+  name: "remove_bind_mount",
+  label: "Remove bind mount",
+  async run(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    if (!v.hasServer) return { ok: true };
+    const r = await softStep(ctx, "remove_bind_mount", async () => {
+      await removeVolumeBindMount({
+        serverIp: v.serverIp,
+        hostKey: v.hostKey || undefined,
+        hostMountPath: v.hostMountPath,
+        blockName: `app-${ctx.input.appId}`,
+      });
+    });
+    return { ok: r.ok };
+  },
+};
+
+const detachVolume: Step<DetachVolumeInput, { ok: boolean }> = {
+  name: "detach_volume",
+  label: "Detach volume",
+  async run(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    const r = await softStep(ctx, "detach_volume", async () => {
+      await hetzner.volumes.detach(v.volumeId);
+    });
+    return { ok: r.ok };
+  },
+};
+
+const clearAppVolume: Step<DetachVolumeInput, { ok: true }> = {
+  name: "clear_app_volume",
+  label: "Clear volume from app",
+  async run(ctx) {
+    await softStep(ctx, "clear_app_volume", async () => {
+      db.updateAppVolume(ctx.input.appId, "", "");
+    });
+    return { ok: true };
+  },
+};
+
+const recreateContainer: Step<DetachVolumeInput, { ok: boolean }> = {
+  name: "recreate_container",
+  label: "Recreate container without volume",
+  async run(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    const r = await softStep(ctx, "recreate_container", async () => {
+      const result = await recreateAppContainer(
+        ctx.input.appId,
+        undefined,
+        db.parseExtraVolumes(v.extraVolumes),
+      );
+      if (!result.ok) throw new Error(result.error || "Failed to recreate container");
+    });
+    return { ok: r.ok };
+  },
+};
+
+const detachVolumeOp: OpKindDefinition<DetachVolumeInput> = {
+  kind: "detach_volume",
+  label: "Detach volume",
+  resourceKeys: (input) => [`app:${input.appId}`],
+  steps: [validate, removeBindMount, detachVolume, clearAppVolume, recreateContainer],
+};
+
+registerOp(detachVolumeOp as OpKindDefinition<any>);
+
+export default detachVolumeOp;
+export type { DetachVolumeInput };

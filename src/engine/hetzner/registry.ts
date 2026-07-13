@@ -13,8 +13,8 @@ export type GhcrAuth = {
 /**
  * Authenticate against ghcr.io into a *per-deploy* DOCKER_CONFIG dir instead
  * of the user's persistent `~/.docker/config.json`. The returned `envPrefix`
- * must be prepended to subsequent `docker pull` / `docker build` / `docker
- * compose` invocations that need the credentials; `cleanup()` removes the
+ * must be prepended to subsequent `docker pull` / `docker build` invocations
+ * that need the credentials; `cleanup()` removes the
  * config dir so the token never outlives the deploy.
  */
 export async function dockerLoginGhcr(

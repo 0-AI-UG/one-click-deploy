@@ -8,23 +8,16 @@ export {
   getOrCreateLocalKeyPair,
   captureHostKey,
   waitForServer,
-  describeFailure,
 } from "../../engine/hetzner/ssh.ts";
 
 // SSH PTY (interactive terminal)
 export { spawnSshPty, type PtySession } from "../../engine/hetzner/ssh-pty.ts";
 
-// Containers (Docker, Compose, health checks)
+// Containers (Docker, health checks)
 export {
   cloneRepo,
   cloneAndBuild,
   removeContainer,
-  restartCompose,
-  pauseCompose,
-  unpauseCompose,
-  removeCompose,
-  getComposeLogs,
-  composeHealthCheck,
   healthCheck,
   containerRunningCheck,
   probeAppHealth,
@@ -43,7 +36,6 @@ export {
   ensureOcdNetwork,
   buildDockerRunArgs,
   pullAndRunService,
-  pullAndRunComposeService,
   serviceHealthCheck,
   deployConfigFile,
   pruneServer,

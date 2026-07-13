@@ -365,15 +365,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
     const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
     const containerPath = req.volume_path || "/data";
     // Host bind-mount setup happens in a later step (setup_volume_bind_mount)
-    // once we have an app.id to tag the fstab block with. For non-Hetzner
-    // providers we still need the directory to exist before docker run.
-    if (compute.id !== "hetzner") {
-      await sshExec(
-        server.serverIp,
-        `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`,
-        server.serverHostKey || undefined,
-      );
-    }
+    // once we have an app.id to tag the fstab block with.
     ctx.log(`Volume ready (${req.volume_size}GB at ${containerPath})`);
     return {
       volumeId: vol.providerId,
@@ -563,8 +555,6 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
   async run(ctx, prior) {
     const volume = prior["create_volume"] as VolumeOut;
     if (!volume) return { ok: true };
-    const compute = hetzner;
-    if (compute.id !== "hetzner") return { ok: true };
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
     const hostMountPath = volume.volumeMount.split(":")[0];
@@ -593,8 +583,6 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
   async compensate(ctx, _out, prior) {
     const volume = prior["create_volume"] as VolumeOut;
     if (!volume) return;
-    const compute = hetzner;
-    if (compute.id !== "hetzner") return;
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
     if (!server || !appOut) return;

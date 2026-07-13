@@ -2,6 +2,7 @@ import * as db from "../../shared/db.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
+import { tryAcquire, release, NON_OP_HOLDER } from "../scheduler.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [net-recon:${context}]`, ...args);
@@ -35,6 +36,15 @@ export async function reconcileNetwork(): Promise<void> {
   const servers = db.getServers().filter((s) => s.provider_id);
   for (const server of servers) {
     if (server.private_ipv4) continue;
+    // Serialize the attach + private_ipv4 write against engine ops on this
+    // server (provision_server / destroy_server / migrate). Without the lock we
+    // could attach — or stamp a private IP onto — a server an op is concurrently
+    // tearing down. Non-blocking: skip a busy server and retry next tick.
+    const lock = tryAcquire([`server:${server.id}`], NON_OP_HOLDER, "net_attach");
+    if (!lock.ok) {
+      log("attach", `server ${server.name}: held by ${lock.heldBy.kind}#${lock.heldBy.opId} — skip`);
+      continue;
+    }
     try {
       log("attach", `Attaching server ${server.name} (${server.provider_id})`);
       await compute.networks.attachServer(server.provider_id, networkId);
@@ -47,6 +57,8 @@ export async function reconcileNetwork(): Promise<void> {
       }
     } catch (err) {
       log("attach", `Failed to attach ${server.name}: ${err}`);
+    } finally {
+      release([`server:${server.id}`]);
     }
   }
 

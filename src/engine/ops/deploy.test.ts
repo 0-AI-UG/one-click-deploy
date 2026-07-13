@@ -28,10 +28,8 @@ mock.module("../../shared/remote/index.ts", () => ({
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
   cloneAndBuild: mock(async () => {}),
   removeContainer: mock(async () => {}),
-  removeCompose: mock(async () => {}),
   healthCheck: healthCheckMock,
   containerRunningCheck: containerRunningCheckMock,
-  composeHealthCheck: mock(async () => ({ healthy: true })),
 }));
 mock.module("../scale/traefik-manager.ts", () => ({
   syncAppIngress: mock(async () => {}),

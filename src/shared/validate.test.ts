@@ -8,7 +8,6 @@ import {
   validateHetznerToken,
   validateDeployRequest,
   validateGitHubPat,
-  validateComposeWebService,
   validateDeployManifest,
   assertSafeHostPath,
   validateIpAllowlist,
@@ -500,35 +499,6 @@ describe("validateGitHubPat", () => {
   test("rejects embedded non-printable chars (NUL, tab)", () => {
     expect(validateGitHubPat("x".repeat(20) + "\0" + "x".repeat(20)).valid).toBe(false);
     expect(validateGitHubPat("x".repeat(20) + "\t" + "x".repeat(20)).valid).toBe(false);
-  });
-});
-
-describe("validateComposeWebService", () => {
-  test("accepts typical compose service names", () => {
-    expect(validateComposeWebService("web").valid).toBe(true);
-    expect(validateComposeWebService("api_v2").valid).toBe(true);
-    expect(validateComposeWebService("Worker-1").valid).toBe(true);
-  });
-
-  test("rejects empty / whitespace-only", () => {
-    expect(validateComposeWebService("").valid).toBe(false);
-    expect(validateComposeWebService("   ").valid).toBe(false);
-  });
-
-  test("rejects names starting with hyphen or underscore", () => {
-    expect(validateComposeWebService("-web").valid).toBe(false);
-    expect(validateComposeWebService("_web").valid).toBe(false);
-  });
-
-  test("rejects spaces and special chars", () => {
-    expect(validateComposeWebService("my app").valid).toBe(false);
-    expect(validateComposeWebService("my.app").valid).toBe(false);
-    expect(validateComposeWebService("my/app").valid).toBe(false);
-  });
-
-  test("rejects >63 chars", () => {
-    expect(validateComposeWebService("a".repeat(64)).valid).toBe(false);
-    expect(validateComposeWebService("a".repeat(63)).valid).toBe(true);
   });
 });
 

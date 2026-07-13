@@ -246,18 +246,16 @@ async function migrateWithVolume(
     if (onSource) {
       // Tear down the source bind mount (if any) before Hetzner pulls the
       // device — otherwise we leave a dangling bind on the source server.
-      if (compute.id === "hetzner") {
-        try {
-          const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
-          await removeVolumeBindMount({
-            serverIp: sourceServer.ipv4,
-            hostKey: sourceHostKey,
-            hostMountPath: `/mnt/ocd-${app.name}-data`,
-            blockName: `app-${app.id}`,
-          });
-        } catch (err) {
-          log("migrate", `removeVolumeBindMount on source failed (continuing): ${err}`);
-        }
+      try {
+        const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+        await removeVolumeBindMount({
+          serverIp: sourceServer.ipv4,
+          hostKey: sourceHostKey,
+          hostMountPath: `/mnt/ocd-${app.name}-data`,
+          blockName: `app-${app.id}`,
+        });
+      } catch (err) {
+        log("migrate", `removeVolumeBindMount on source failed (continuing): ${err}`);
       }
       emit("migrate", `Detaching volume from ${sourceServer.name}...`);
       await volumeOps.detach(volumeId);
@@ -291,7 +289,7 @@ async function migrateWithVolume(
   // Phase C — Mount path + volume_mount DB row. Convention matches
   // handleReattachVolume in src/server/routes/volumes.ts.
   const hostMountPath = `/mnt/ocd-${app.name}-data`;
-  if (compute.id === "hetzner") {
+  {
     const { ensureVolumeBindMount } = await import("../hetzner/host-mounts.ts");
     // Allow automount to settle after attach.
     await Bun.sleep(3000);
@@ -313,8 +311,6 @@ async function migrateWithVolume(
       }
     }
     if (lastErr) throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-  } else {
-    await sshExec(targetServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, targetHostKey);
   }
 
   // Persist the canonical mount string so deploy/scale paths see the same value
@@ -443,8 +439,8 @@ export async function rollbackMigrateWithVolume(
   }
 }
 
-// Reconstruct a `docker run` for a non-compose replica that was destroyed on
-// the source before rollback. We use the original volume mount because by the
+// Reconstruct a `docker run` for a replica that was destroyed on the source
+// before rollback. We use the original volume mount because by the
 // time this runs the volume has been re-attached to source. Throws on failure
 // so the caller can surface MANUAL RECOVERY NEEDED.
 async function restartSourceReplica(

@@ -4,7 +4,6 @@ export type CatalogEntry = {
   versions: string[];
   defaultPort: number;
   requiredEnvVars: Array<{ key: string; label: string; generate?: string; default?: string }>;
-  editableSecrets?: Array<{ key: string; label: string; generate?: string }>;
   defaultVolumeSize: number;
   icon?: string;
   color?: string;
@@ -12,7 +11,6 @@ export type CatalogEntry = {
   stateless?: boolean;
   description?: string;
   category?: string;
-  recommendedMemoryMb?: number;
 };
 
 export type ManifestEnvDef = {

@@ -1,4 +1,4 @@
-// Barrel module: the container/build/compose/health/service helpers were split
+// Barrel module: the container/build/health/service helpers were split
 // into per-concern modules (see the sibling files below). This file re-exports
 // the same public surface so existing importers (shared/remote, tests) keep the
 // concrete `hetzner/containers.ts` path.
@@ -25,16 +25,6 @@ export { transferImage } from "./image-transfer.ts";
 export { findDockerfile, buildAppImage, cloneRepo, cloneAndBuild } from "./build.ts";
 
 export {
-  pullAndRunComposeService,
-  restartCompose,
-  pauseCompose,
-  unpauseCompose,
-  removeCompose,
-  getComposeLogs,
-} from "./compose.ts";
-
-export {
-  composeHealthCheck,
   healthCheck,
   containerRunningCheck,
   probeAppHealth,

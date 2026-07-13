@@ -371,7 +371,13 @@ export function SettingsTab({
                   loading={actionLoading === "detach-vol"}
                   onClick={async () => {
                     if (await confirm("Detach Volume", "Detach this volume? Data is preserved on the volume itself.", true)) {
-                      await action("detach-vol", () => post(`/api/volumes/detach`, { app_id: appId }));
+                      await action("detach-vol", async () => {
+                        const res = (await post(`/api/volumes/detach`, { app_id: appId })) as { op_id?: number };
+                        if (res?.op_id) {
+                          trackOperationInToast(res.op_id, "Detaching volume");
+                          ops.track(res.op_id);
+                        }
+                      });
                     }
                   }}
                 >Detach Volume</Btn>
@@ -408,11 +414,17 @@ export function SettingsTab({
                   size="sm"
                   variant="primary"
                   loading={actionLoading === "attach-vol"}
-                  onClick={() => action("attach-vol", () => post(`/api/volumes/attach`, {
-                    app_id: appId,
-                    size: volumeForm.size,
-                    mount_path: volumeForm.mount_path || "/data",
-                  }))}
+                  onClick={() => action("attach-vol", async () => {
+                    const res = (await post(`/api/volumes/attach`, {
+                      app_id: appId,
+                      size: volumeForm.size,
+                      mount_path: volumeForm.mount_path || "/data",
+                    })) as { op_id?: number };
+                    if (res?.op_id) {
+                      trackOperationInToast(res.op_id, "Attaching volume");
+                      ops.track(res.op_id);
+                    }
+                  })}
                 >Attach Volume</Btn>
               </div>
             </PermissionGate>

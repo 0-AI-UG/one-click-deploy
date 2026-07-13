@@ -9,28 +9,6 @@ export type ServiceEnvVar = {
   default?: string;
 };
 
-/** A secret value generated at deploy time and written to the service's env. */
-export type ServiceSecretSpec = {
-  key: string;
-  /** password = 24 alnum chars, strong-password = 24 chars w/ guaranteed
-   *  upper+lower+digit+symbol (for policies like Zitadel's), masterkey = exactly
-   *  32 alnum chars, secret-key = 50 url-safe chars, token = 64 hex chars. */
-  generate: "password" | "strong-password" | "masterkey" | "secret-key" | "token";
-  /** When set, the secret is user-editable in the deploy form under this label
-   *  (e.g. an admin password). Unlabeled secrets stay internal/auto-generated. */
-  label?: string;
-};
-
-/** Maps a base-volume subdirectory into a specific compose service's data path. */
-export type ServiceVolumeSubpath = {
-  /** Compose service name (e.g. "postgresql"). */
-  service: string;
-  /** Subdirectory under the base volume mount (e.g. "database"). */
-  subpath: string;
-  /** Path inside that container the subdir is bound to (e.g. "/var/lib/postgresql/data"). */
-  container: string;
-};
-
 export type ServiceDefinition = {
   type: string;
   label: string;
@@ -52,35 +30,6 @@ export type ServiceDefinition = {
   description?: string;
   /** Free-form category tag (e.g. "ai", "database", "search"). */
   category?: string;
-
-  // --- Multi-container (compose-backed) services ---------------------------
-  /** Filename of a bundled compose template under catalog/compose/. Presence of
-   *  this field makes the service "compose-kind" instead of single-container. */
-  compose?: string;
-  /** Loaded text of the bundled compose template (populated by loadCatalog). */
-  composeTemplate?: string;
-  /** Which compose service the ingress proxies / health-checks (e.g. "server"). */
-  composeWebService?: string;
-  /** That service's internal HTTP port (e.g. 9000). */
-  composeWebPort?: number;
-  /** Generated secrets (beyond requiredEnvVars) written to the env file. */
-  secrets?: ServiceSecretSpec[];
-  /** Per-component bind mounts carved out of the single base volume. */
-  volumeSubpaths?: ServiceVolumeSubpath[];
-  /** Map of credential-field name -> env key to surface in the UI (e.g.
-   *  { "admin_password": "AUTHENTIK_BOOTSTRAP_PASSWORD" }). */
-  surfaceCredentials?: Record<string, string>;
-  /** For compose services, inject the selected `version` into the env file
-   *  under this key so the template can pin its image tag (e.g. "AUTHENTIK_TAG"). */
-  versionEnvKey?: string;
-  /** For HTTP services that must know their public hostname at startup (e.g.
-   *  Zitadel's ZITADEL_EXTERNALDOMAIN), inject the resolved domain under this key. */
-  domainEnvKey?: string;
-  /** Server type to provision for this service (overrides the default when it
-   *  needs more resources than a typical single container). */
-  minServerType?: string;
-  /** Advisory memory footprint (MB) used for UI warnings / sizing. */
-  recommendedMemoryMb?: number;
 };
 
 function randomFromAlphabet(alphabet: string, len: number): string {
@@ -90,44 +39,6 @@ function randomFromAlphabet(alphabet: string, len: number): string {
 
 function randomPassword(len = 24): string {
   return randomFromAlphabet("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", len);
-}
-
-/** Password guaranteed to contain lower+upper+digit+symbol, for strict policies
- *  (e.g. Zitadel's first-admin). Symbol set excludes $ ' " ` \ to stay safe in
- *  env files and docker-compose ${VAR} interpolation. */
-function strongPassword(len = 24): string {
-  const lower = "abcdefghijklmnopqrstuvwxyz";
-  const upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const digit = "0123456789";
-  // Symbols safe in env files / ${VAR} interpolation: no $ ' " ` \ # =.
-  const symbol = "!@%^*-_+.";
-  const all = lower + upper + digit + symbol;
-  const pick = (set: string) => set[crypto.getRandomValues(new Uint8Array(1))[0] % set.length];
-  const chars = [pick(lower), pick(upper), pick(digit), pick(symbol)];
-  while (chars.length < len) chars.push(pick(all));
-  // Fisher–Yates shuffle so the guaranteed chars aren't always at the front.
-  for (let i = chars.length - 1; i > 0; i--) {
-    const j = crypto.getRandomValues(new Uint8Array(1))[0] % (i + 1);
-    [chars[i], chars[j]] = [chars[j], chars[i]];
-  }
-  return chars.join("");
-}
-
-function generateSecret(kind: ServiceSecretSpec["generate"]): string {
-  switch (kind) {
-    case "password":
-      return randomPassword();
-    case "strong-password":
-      return strongPassword();
-    case "masterkey":
-      // Zitadel requires a masterkey of exactly 32 bytes.
-      return randomPassword(32);
-    case "secret-key":
-      // 50 url-safe chars — used for app signing keys (e.g. AUTHENTIK_SECRET_KEY).
-      return randomFromAlphabet("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_", 50);
-    case "token":
-      return randomFromAlphabet("0123456789abcdef", 64);
-  }
 }
 
 export function generateEnvVars(def: ServiceDefinition): Record<string, string> {
@@ -140,9 +51,6 @@ export function generateEnvVars(def: ServiceDefinition): Record<string, string> 
     } else if (v.default) {
       env[v.key] = v.default;
     }
-  }
-  for (const s of def.secrets || []) {
-    env[s.key] = generateSecret(s.generate);
   }
   return env;
 }
@@ -171,11 +79,6 @@ function loadCatalog(): Record<string, ServiceDefinition> {
     const def = JSON.parse(raw) as ServiceDefinition;
     if (!def.type) throw new Error(`Service catalog entry ${file} missing "type" field`);
     if (entries[def.type]) throw new Error(`Duplicate service type "${def.type}" (in ${file})`);
-    if (def.compose) {
-      // Compose-kind services ship a bundled docker-compose template alongside
-      // the JSON definition; load it eagerly so the engine has it in hand.
-      def.composeTemplate = readFileSync(join(dir, "compose", def.compose), "utf8");
-    }
     entries[def.type] = def;
   }
   return entries;

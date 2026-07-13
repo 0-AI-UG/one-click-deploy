@@ -1,66 +1,41 @@
 import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
+import { enqueue } from "../ipc/enqueue.ts";
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
-import { sshExec } from "../../shared/remote/index.ts";
-import { recreateAppContainer } from "../../engine/deploy/index.ts";
-import {
-  ensureVolumeBindMount,
-  removeVolumeBindMount,
-} from "../../engine/hetzner/host-mounts.ts";
 
-const { parseExtraVolumes } = db;
+// Volume management is a multi-step infra saga (Hetzner volume create/attach +
+// SSH bind-mount + container recreate + app-state writes). These handlers are
+// thin: they do a cheap permission + read-only precondition check for good UX
+// (fast 400s with a clear message), then enqueue the corresponding engine op
+// and return its op_id. The op re-validates authoritatively under the app lock
+// (guarding TOCTOU) and carries the compensation + crash-resume logic.
+
+function badRequest(error: string): Response {
+  return Response.json({ ok: false, error }, { status: 400, headers: corsHeaders });
+}
 
 export async function handleAttachVolume(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "volumes.create");
+    const payload = await requirePermission(request, "volumes.create");
     const { app_id, size, mount_path } = await request.json() as { app_id: number; size: number; mount_path?: string };
 
     const app = db.getApp(app_id);
-    if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
-    if (app.volume_id) return Response.json({ ok: false, error: "App already has a volume attached" }, { headers: corsHeaders });
+    if (!app) return badRequest("App not found");
+    if (app.volume_id) return badRequest("App already has a volume attached");
     const reps = db.getReplicas(app_id);
-    if (reps.length === 0) return Response.json({ ok: false, error: "App has no replicas" }, { headers: corsHeaders });
-    if (reps.length > 1) return Response.json({ ok: false, error: "Cannot attach a volume to an app with more than 1 replica. Scale down to 1 first." }, { headers: corsHeaders });
-    const server = db.getServer(reps[0].server_id);
-    if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
-    const hostKey = server.ssh_host_key || undefined;
+    if (reps.length === 0) return badRequest("App has no replicas");
+    if (reps.length > 1) return badRequest("Cannot attach a volume to an app with more than 1 replica. Scale down to 1 first.");
+    if (!db.getServer(reps[0].server_id)) return badRequest("Server not found");
 
-    const compute = hetzner;
-    const suffix = Date.now().toString(36).slice(-4);
-    const volName = `ocd-${app.name}-${suffix}`;
-    const vol = await compute.volumes!.create({
-      name: volName,
-      sizeGb: size,
-      serverId: server.provider_id,
-      location: server.location,
+    const { opId } = enqueue({
+      kind: "attach_volume",
+      resourceKeys: [`app:${app_id}`],
+      input: { appId: app_id, sizeGb: size, mountPath: mount_path },
+      trigger: "ui",
+      triggeredBy: payload.userId,
     });
-
-    const hostMountPath = `/mnt/${volName}`;
-    const containerPath = mount_path || "/data";
-    if (compute.id === "hetzner") {
-      await Bun.sleep(3000);
-      await ensureVolumeBindMount({
-        serverIp: server.ipv4,
-        hostKey,
-        hetznerVolumeId: String(vol.providerId),
-        hostMountPath,
-        blockName: `app-${app.id}`,
-      });
-    } else {
-      await sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
-    }
-    const volumeMount = `${hostMountPath}:${containerPath}`;
-
-    db.updateAppVolume(app_id, String(vol.providerId), volumeMount);
-    // A volume locks the app to a single server: force min/max replicas to 1
-    // so autoscale + manual scaling cannot ever bring up replica 2+.
-    db.updateAppScaling(app_id, { min_replicas: Math.min(1, app.min_replicas), max_replicas: 1 });
-    const result = await recreateAppContainer(app_id, volumeMount, parseExtraVolumes(app.extra_volumes));
-    if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
-
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -68,49 +43,25 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
 
 export async function handleAttachExistingVolume(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "volumes.manage");
+    const payload = await requirePermission(request, "volumes.manage");
     const { app_id, volume_id, mount_path } = await request.json() as { app_id: number; volume_id: string; mount_path?: string };
 
     const app = db.getApp(app_id);
-    if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
-    if (app.volume_id) return Response.json({ ok: false, error: "App already has a volume attached" }, { headers: corsHeaders });
+    if (!app) return badRequest("App not found");
+    if (app.volume_id) return badRequest("App already has a volume attached");
     const reps = db.getReplicas(app_id);
-    if (reps.length === 0) return Response.json({ ok: false, error: "App has no replicas" }, { headers: corsHeaders });
-    if (reps.length > 1) return Response.json({ ok: false, error: "Cannot attach a volume to an app with more than 1 replica. Scale down to 1 first." }, { headers: corsHeaders });
-    const server = db.getServer(reps[0].server_id);
-    if (!server) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
-    const hostKey = server.ssh_host_key || undefined;
+    if (reps.length === 0) return badRequest("App has no replicas");
+    if (reps.length > 1) return badRequest("Cannot attach a volume to an app with more than 1 replica. Scale down to 1 first.");
+    if (!db.getServer(reps[0].server_id)) return badRequest("Server not found");
 
-    const compute = hetzner;
-    const volInfo = await compute.volumes!.get(volume_id);
-    if (volInfo.location && volInfo.location !== server.location) {
-      return Response.json({ ok: false, error: `Cannot attach: volume is in ${volInfo.location} but server is in ${server.location}` }, { headers: corsHeaders });
-    }
-
-    await compute.volumes!.attach(volume_id, server.provider_id);
-    const hostMountPath = `/mnt/vol-${volume_id}`;
-    const containerPath = mount_path || "/data";
-    if (compute.id === "hetzner") {
-      await Bun.sleep(3000);
-      await ensureVolumeBindMount({
-        serverIp: server.ipv4,
-        hostKey,
-        hetznerVolumeId: volume_id,
-        hostMountPath,
-        blockName: `app-${app.id}`,
-      });
-    } else {
-      await sshExec(server.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, hostKey);
-    }
-    const volumeMount = `${hostMountPath}:${containerPath}`;
-
-    db.updateAppVolume(app_id, volume_id, volumeMount);
-    // A volume locks the app to a single server: force min/max replicas to 1.
-    db.updateAppScaling(app_id, { min_replicas: Math.min(1, app.min_replicas), max_replicas: 1 });
-    const result = await recreateAppContainer(app_id, volumeMount, parseExtraVolumes(app.extra_volumes));
-    if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
-
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    const { opId } = enqueue({
+      kind: "attach_existing_volume",
+      resourceKeys: [`app:${app_id}`],
+      input: { appId: app_id, volumeId: volume_id, mountPath: mount_path },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -118,37 +69,21 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
 
 export async function handleDetachVolume(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "volumes.manage");
+    const payload = await requirePermission(request, "volumes.manage");
     const { app_id } = await request.json() as { app_id: number };
 
     const app = db.getApp(app_id);
-    if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
-    if (!app.volume_id) return Response.json({ ok: false, error: "App has no volume attached" }, { headers: corsHeaders });
+    if (!app) return badRequest("App not found");
+    if (!app.volume_id) return badRequest("App has no volume attached");
 
-    const compute = hetzner;
-    // Tear down the bind mount before Hetzner pulls the device so we don't
-    // leave a dangling /mnt/ocd-*-data behind.
-    if (compute.id === "hetzner") {
-      const reps = db.getReplicas(app_id);
-      const server = reps[0] ? db.getServer(reps[0].server_id) : null;
-      if (server) {
-        const hostMountPath = (app.volume_mount?.split(":")[0]) || `/mnt/ocd-${app.name}-data`;
-        try {
-          await removeVolumeBindMount({
-            serverIp: server.ipv4,
-            hostKey: server.ssh_host_key || undefined,
-            hostMountPath,
-            blockName: `app-${app.id}`,
-          });
-        } catch { /* best-effort */ }
-      }
-    }
-    await compute.volumes!.detach(app.volume_id);
-    db.updateAppVolume(app_id, "", "");
-    const result = await recreateAppContainer(app_id, undefined, parseExtraVolumes(app.extra_volumes));
-    if (!result.ok) return Response.json({ ok: false, error: result.error || "Failed to recreate container" }, { headers: corsHeaders });
-
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    const { opId } = enqueue({
+      kind: "detach_volume",
+      resourceKeys: [`app:${app_id}`],
+      input: { appId: app_id },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -156,64 +91,25 @@ export async function handleDetachVolume(request: Request): Promise<Response> {
 
 export async function handleReattachVolume(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "volumes.manage");
+    const payload = await requirePermission(request, "volumes.manage");
     const { volume_id, from_app_id, to_app_id, mount_path } = await request.json() as {
       volume_id: string; from_app_id: number; to_app_id: number; mount_path?: string;
     };
 
     const fromApp = db.getApp(from_app_id);
-    if (!fromApp) return Response.json({ ok: false, error: "Source app not found" }, { headers: corsHeaders });
+    if (!fromApp) return badRequest("Source app not found");
     const toApp = db.getApp(to_app_id);
-    if (!toApp) return Response.json({ ok: false, error: "Target app not found" }, { headers: corsHeaders });
-    if (toApp.volume_id) return Response.json({ ok: false, error: "Target app already has a volume" }, { headers: corsHeaders });
+    if (!toApp) return badRequest("Target app not found");
+    if (toApp.volume_id) return badRequest("Target app already has a volume");
 
-    const fromReps = db.getReplicas(from_app_id);
-    const toReps = db.getReplicas(to_app_id);
-    const fromServer = fromReps[0] ? db.getServer(fromReps[0].server_id) : null;
-    const toServer = toReps[0] ? db.getServer(toReps[0].server_id) : null;
-    if (!fromServer || !toServer) return Response.json({ ok: false, error: "Server not found" }, { headers: corsHeaders });
-    if (fromServer.location !== toServer.location) {
-      return Response.json({ ok: false, error: `Cannot reattach: volume in ${fromServer.location}, target in ${toServer.location}` }, { headers: corsHeaders });
-    }
-
-    const compute = hetzner;
-    // Source-side cleanup before detach (Hetzner only).
-    if (compute.id === "hetzner") {
-      const fromHostMount = (fromApp.volume_mount?.split(":")[0]) || `/mnt/ocd-${fromApp.name}-data`;
-      try {
-        await removeVolumeBindMount({
-          serverIp: fromServer.ipv4,
-          hostKey: fromServer.ssh_host_key || undefined,
-          hostMountPath: fromHostMount,
-          blockName: `app-${fromApp.id}`,
-        });
-      } catch { /* best-effort */ }
-    }
-    await compute.volumes!.detach(volume_id);
-    db.updateAppVolume(from_app_id, "", "");
-    await recreateAppContainer(from_app_id, undefined, parseExtraVolumes(fromApp.extra_volumes));
-
-    await compute.volumes!.attach(volume_id, toServer.provider_id);
-    const hostMountPath = `/mnt/ocd-${toApp.name}-data`;
-    const containerPath = mount_path || "/data";
-    const toHostKey = toServer.ssh_host_key || undefined;
-    if (compute.id === "hetzner") {
-      await Bun.sleep(3000);
-      await ensureVolumeBindMount({
-        serverIp: toServer.ipv4,
-        hostKey: toHostKey,
-        hetznerVolumeId: volume_id,
-        hostMountPath,
-        blockName: `app-${toApp.id}`,
-      });
-    } else {
-      await sshExec(toServer.ipv4, `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`, toHostKey);
-    }
-    const volumeMount = `${hostMountPath}:${containerPath}`;
-    db.updateAppVolume(to_app_id, volume_id, volumeMount);
-    await recreateAppContainer(to_app_id, volumeMount, parseExtraVolumes(toApp.extra_volumes));
-
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    const { opId } = enqueue({
+      kind: "reattach_volume",
+      resourceKeys: [`app:${from_app_id}`, `app:${to_app_id}`],
+      input: { volumeId: volume_id, fromAppId: from_app_id, toAppId: to_app_id, mountPath: mount_path },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -221,11 +117,17 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
 
 export async function handleResizeVolume(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "volumes.manage");
+    const payload = await requirePermission(request, "volumes.manage");
     const { volume_id, size } = await request.json() as { volume_id: string; size: number };
-    const compute = hetzner;
-    await compute.volumes!.resize(volume_id, size);
-    return Response.json({ ok: true }, { headers: corsHeaders });
+
+    const { opId } = enqueue({
+      kind: "resize_volume",
+      resourceKeys: [`volume:${volume_id}`],
+      input: { volumeId: volume_id, sizeGb: size },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

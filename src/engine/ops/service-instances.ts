@@ -1,23 +1,17 @@
 import * as db from "../../shared/db.ts";
 import type { ServerRow, ServiceInstanceRow } from "../../shared/db.ts";
-import { serviceHealthCheck, composeHealthCheck } from "../../shared/remote/index.ts";
+import { serviceHealthCheck } from "../../shared/remote/index.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
-import { replicaBindHost } from "../scale/types.ts";
 
 type InstanceAction = (
   server: ServerRow,
   inst: ServiceInstanceRow,
   hostKey: string | undefined,
-  baseDir: string,
 ) => Promise<void>;
 
 type ForEachOptions = {
-  /** Action for single-container (`docker run`) services. */
+  /** Action to run against each instance's container. */
   plain: InstanceAction;
-  /** Action for bundled `docker-compose` services. */
-  compose: InstanceAction;
-  /** Base dir for compose projects, passed through to compose actions/health checks. */
-  baseDir: string;
   /**
    * When true, run a health check after each action and aggregate running/unhealthy
    * status. When false (pause), skip the health check + catalog guard and set 'paused'.
@@ -29,7 +23,7 @@ type ForEachOptions = {
 
 /**
  * Fan out an instance-level action across every instance of a service, resolving
- * the server per instance, branching on `deploy_kind`, and aggregating status.
+ * the server per instance and aggregating status.
  */
 export async function forEachServiceInstance(
   serviceId: number,
@@ -41,7 +35,6 @@ export async function forEachServiceInstance(
   const catalog = opts.withHealth ? getCatalogEntry(service.service_type) : null;
   if (opts.withHealth && !catalog) throw new Error("Unknown service type");
 
-  const isCompose = service.deploy_kind === "compose";
   const instances = db.getServiceInstances(serviceId);
   if (opts.requireInstances && instances.length === 0) {
     throw new Error("Service has no instances");
@@ -55,19 +48,11 @@ export async function forEachServiceInstance(
       continue;
     }
     const hostKey = server.ssh_host_key || undefined;
-    if (isCompose) {
-      await opts.compose(server, inst, hostKey, opts.baseDir);
-    } else {
-      await opts.plain(server, inst, hostKey, opts.baseDir);
-    }
+    await opts.plain(server, inst, hostKey);
     if (opts.withHealth) {
-      const health = isCompose
-        ? await composeHealthCheck(
-            server.ipv4, inst.container_name, replicaBindHost(server), inst.host_port, 5, hostKey, opts.baseDir,
-          )
-        : await serviceHealthCheck(
-            server.ipv4, inst.container_name, catalog!.healthCmd, 5, hostKey,
-          );
+      const health = await serviceHealthCheck(
+        server.ipv4, inst.container_name, catalog!.healthCmd, 5, hostKey,
+      );
       db.updateServiceInstanceStatus(inst.id, health.healthy ? "running" : "unhealthy");
       if (!health.healthy) allHealthy = false;
     } else {

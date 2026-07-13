@@ -162,7 +162,6 @@ export function DashboardPage() {
         <div className="flex gap-2">
           <Btn onClick={load} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>
           <PermissionGate permission="apps.deploy">
-            <Btn onClick={() => { window.location.hash = "#/deploy"; }} variant="ghost"><Database size={13} /> New Service</Btn>
             <Btn onClick={() => { window.location.hash = "#/deploy"; }} variant="primary">Deploy New App</Btn>
           </PermissionGate>
         </div>

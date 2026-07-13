@@ -19,8 +19,6 @@ const restartContainerMock = mock(async () => {});
 mock.module("../shared/remote/index.ts", () => ({
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
   healthCheck: healthCheckMock,
-  composeHealthCheck: mock(async () => ({ healthy: true })),
-  restartCompose: mock(async () => {}),
   restartContainer: restartContainerMock,
   serviceHealthCheck: mock(async () => ({ healthy: true })),
   pruneServer: mock(async () => {}),

@@ -97,69 +97,6 @@ async function httpProbeStep(
   };
 }
 
-export async function composeHealthCheck(
-  ip: string,
-  projectName: string,
-  bindHost: string,
-  port: number,
-  maxAttempts = 5,
-  hostKey?: string,
-  baseDir = "/home/deploy/apps"
-): Promise<HealthResult> {
-  return runHealthProbe(
-    `Checking compose health of ${projectName} on ${ip} via ${bindHost}:${port}`,
-    maxAttempts,
-    async (i) => {
-      // Check all services are running via `docker compose ps --format json`.
-      const appDir = `${baseDir}/${projectName}`;
-      const ps = await sshExec(
-        ip,
-        asUser(`cd ${appDir} && docker compose -p ${projectName} ps --format json 2>/dev/null`),
-        hostKey,
-      );
-      if (ps.exitCode !== 0) {
-        return {
-          done: false,
-          retryLog: `Compose ps failed (attempt ${i + 1}/${maxAttempts})`,
-          finalResult: { healthy: false, error: "Failed to check compose services" },
-        };
-      }
-
-      // Parse service statuses — docker compose ps --format json outputs one JSON per line
-      const lines = ps.stdout.trim().split("\n").filter(Boolean);
-      let allRunning = lines.length > 0;
-      for (const line of lines) {
-        try {
-          const svc = JSON.parse(line);
-          if (svc.State !== "running") {
-            allRunning = false;
-            break;
-          }
-        } catch {
-          allRunning = false;
-          break;
-        }
-      }
-
-      if (!allRunning) {
-        return {
-          done: false,
-          retryLog: `Not all compose services running yet (attempt ${i + 1}/${maxAttempts})`,
-          finalResult: { healthy: false, error: "Not all compose services are running" },
-        };
-      }
-
-      // Check HTTP response on the web service's published port. `bindHost`
-      // is the address the container's `-p` flag publishes on — usually the
-      // server's private IPv4 for tenant apps, or 127.0.0.1 for the panel.
-      return httpProbeStep(
-        ip, bindHost, port, i, maxAttempts,
-        "Compose health check passed", "Compose health check returned", hostKey,
-      );
-    },
-  );
-}
-
 export async function healthCheck(
   ip: string,
   containerName: string,

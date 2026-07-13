@@ -1,26 +1,25 @@
 // Per-container health checks run in parallel by the reconciler each tick.
-// Replicas and compose/service instances have separate check paths (the replica
-// path has a recreate fallback + auto-restart bookkeeping; the service path
-// branches on compose vs single-container). No orchestration lives here — the
-// reconciler decides which containers to check and applies status propagation.
+// Replicas and service instances have separate check paths (the replica path
+// has a recreate fallback + auto-restart bookkeeping). No orchestration lives
+// here — the reconciler decides which containers to check and applies status
+// propagation.
 
 import * as db from "../shared/db.ts";
 import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } from "../shared/db.ts";
 import {
-  sshExec, probeAppHealth, composeHealthCheck, restartCompose, restartContainer,
+  sshExec, probeAppHealth, restartContainer,
   serviceHealthCheck, startAppReplica,
 } from "../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../shared/env-crypto.ts";
 import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { replicaBindHost, appReplicaRunOpts } from "./scale/types.ts";
+import { currentHolder } from "./scheduler.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
 }
 
 const UNHEALTHY_RESTART_THRESHOLD = 2;
-/** Compose-kind services live here (apps use /home/deploy/apps). */
-const SERVICE_COMPOSE_DIR = "/home/deploy/services";
 
 /**
  * Last-resort recovery when `docker restart` can't bring a replica back — the
@@ -77,6 +76,12 @@ export async function checkReplicaHealth(
 
     const current = db.getReplica(replica.id);
     if (!current || HEALTH_EXEMPT_STATUSES.has(current.status)) return;
+    // Never fight an in-flight engine op holding this app's lock. A deploy /
+    // rolling / migrate / scale-down op puts replicas through transient states
+    // (draining, deploying, a container it's about to remove) that a health
+    // check would misread as unhealthy and "recover" — restarting or recreating
+    // the very container the op is tearing down. The op owns the app; defer.
+    if (currentHolder(`app:${app.id}`)) return;
 
     if (check.healthy) {
       db.updateReplicaStatus(replica.id, "running");
@@ -136,19 +141,17 @@ export async function checkServiceInstanceHealth(
   const hostKey = server.ssh_host_key || undefined;
   const catalog = getCatalogEntry(service.service_type);
   if (!catalog) return;
-  const isCompose = service.deploy_kind === "compose";
 
   try {
-    const check = isCompose
-      ? await composeHealthCheck(
-          server.ipv4, instance.container_name, replicaBindHost(server), instance.host_port, 1, hostKey, SERVICE_COMPOSE_DIR,
-        )
-      : await serviceHealthCheck(
-          server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey,
-        );
+    const check = await serviceHealthCheck(
+      server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey,
+    );
 
     const current = db.getServiceInstance(instance.id);
     if (!current || HEALTH_EXEMPT_STATUSES.has(current.status)) return;
+    // Defer to any in-flight engine op holding this service's lock (see the
+    // replica path above for the reasoning).
+    if (currentHolder(`service:${service.id}`)) return;
 
     if (check.healthy) {
       db.updateServiceInstanceStatus(instance.id, "running");
@@ -166,11 +169,7 @@ export async function checkServiceInstanceHealth(
         }
         log("health", `auto-restarting service ${instance.container_name}`);
         try {
-          if (isCompose) {
-            await restartCompose(server.ipv4, instance.container_name, hostKey, SERVICE_COMPOSE_DIR);
-          } else {
-            await restartContainer(server.ipv4, instance.container_name, hostKey);
-          }
+          await restartContainer(server.ipv4, instance.container_name, hostKey);
           db.resetServiceInstanceUnhealthyTicks(instance.id);
         } catch (err) {
           log("health", `restart failed: ${err}`);

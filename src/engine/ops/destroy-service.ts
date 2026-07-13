@@ -1,8 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, serializeEnvVars } from "../../shared/env-crypto.ts";
-import { sshExec, removeCompose } from "../../shared/remote/index.ts";
-
-const SERVICES_BASE_DIR = "/home/deploy/services";
+import { sshExec } from "../../shared/remote/index.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
 import { registerOp } from "./registry.ts";
@@ -44,15 +42,11 @@ const stopAndRemoveContainers: Step<DestroyServiceInput, { affectedServerIds: nu
       if (!server) continue;
       const hostKey = server.ssh_host_key || undefined;
       const r = await softStep(ctx, `rm ${inst.container_name}`, async () => {
-        if (service?.deploy_kind === "compose") {
-          await removeCompose(server.ipv4, inst.container_name, true, hostKey, SERVICES_BASE_DIR);
-        } else {
-          await sshExec(
-            server.ipv4,
-            `su - deploy -c "docker rm -f ${inst.container_name} 2>/dev/null || true"`,
-            hostKey,
-          );
-        }
+        await sshExec(
+          server.ipv4,
+          `su - deploy -c "docker rm -f ${inst.container_name} 2>/dev/null || true"`,
+          hostKey,
+        );
       });
       if (!r.ok) failed = true;
       if (service) {

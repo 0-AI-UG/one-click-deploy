@@ -400,19 +400,6 @@ export function assertSafeHostPath(hostPath: string, appName: string): void {
     );
 }
 
-export function validateComposeWebService(name: string): ValidationResult<string> {
-  const trimmed = name.trim();
-  if (!trimmed) return { valid: false, error: "Web service name is required" };
-  if (trimmed.length > 63)
-    return { valid: false, error: "Service name must be 63 characters or fewer" };
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(trimmed))
-    return {
-      valid: false,
-      error: "Service name must start with a letter or digit and contain only letters, digits, hyphens, or underscores",
-    };
-  return { valid: true, value: trimmed };
-}
-
 export function validateDeployManifest(
   raw: unknown,
 ): { ok: true; manifest: import("./rpc.ts").DeployManifest } | { ok: false; error: string } {

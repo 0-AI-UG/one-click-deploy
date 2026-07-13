@@ -197,7 +197,7 @@ export async function handleDeleteResource(request: Request, type: string, id: s
       if (using.length > 0) {
         return Response.json({ ok: false, error: `Volume is in use by: ${using.map((a) => a.name).join(", ")}` }, { headers: corsHeaders });
       }
-      await compute.volumes!.delete(id);
+      await compute.volumes.delete(id);
       return Response.json({ ok: true }, { headers: corsHeaders });
     }
 
@@ -219,7 +219,7 @@ async function resolveVolumeMount(volumeId: string): Promise<
   const compute = hetzner;
   let volume;
   try {
-    volume = await compute.volumes!.get(volumeId);
+    volume = await compute.volumes.get(volumeId);
   } catch {
     return { ok: false, error: "Volume not found", status: 404 };
   }
@@ -255,7 +255,7 @@ export async function handleGetVolumeDetail(request: Request, volumeId: string):
     const compute = hetzner;
     let volume;
     try {
-      volume = await compute.volumes!.get(volumeId);
+      volume = await compute.volumes.get(volumeId);
     } catch {
       return Response.json({ error: "Volume not found" }, { status: 404, headers: corsHeaders });
     }

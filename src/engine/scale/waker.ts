@@ -39,6 +39,7 @@ import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { wakeApp } from "./wake.ts";
 import { buildUpstreams } from "./traefik-render.ts";
+import { tryAcquire, release, NON_OP_HOLDER } from "../scheduler.ts";
 import {
   wakerTcpPort,
   wakerUdpPort,
@@ -59,11 +60,32 @@ export type WakerDeps = {
   buildUpstreams: (appId: number) => string[];
 };
 
+// Connection-driven wake, serialized against the engine. The waker fires on
+// inbound traffic at any instant, so without the app lock it can `docker run` a
+// new replica and flip the app back to 'running' while a destroy/pause/redeploy
+// op holds the app — resurrecting a half-torn-down app. Take the same app lock
+// the engine uses; if an op owns it, refuse the wake (the caller retries, and an
+// app mid-operation shouldn't be woken anyway). The lock lives here, not inside
+// wakeApp, because engine ops (ops/wake.ts, ops/redeploy.ts) call wakeApp while
+// already holding the app lock and would otherwise deadlock against themselves.
+async function wakeWithLock(appId: number): Promise<{ ok: boolean; error?: string }> {
+  const lock = tryAcquire([`app:${appId}`], NON_OP_HOLDER, "wake");
+  if (!lock.ok) {
+    log("wake", `app ${appId}: held by ${lock.heldBy.kind}#${lock.heldBy.opId} — deferring wake`);
+    return { ok: false, error: `App is busy with another operation (${lock.heldBy.kind})` };
+  }
+  try {
+    return await wakeApp(appId);
+  } finally {
+    release([`app:${appId}`]);
+  }
+}
+
 const realDeps: WakerDeps = {
   getApp: (id) => db.getApp(id),
   getAppByName: (name) => db.getAppByName(name),
   getAppByDomain: (domain) => db.getAppByDomain(domain),
-  wake: (appId) => wakeApp(appId),
+  wake: (appId) => wakeWithLock(appId),
   buildUpstreams: (appId) => buildUpstreams(appId),
 };
 

@@ -1429,6 +1429,22 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN autoscale_req_threshold INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 72,
+    description: "Drop services.deploy_kind column (compose deploy path removed — every service is single-container)",
+    up: (db) => {
+      // Docker Compose catalog services (Authentik, Zitadel) and the whole
+      // compose deploy path were removed — every service now runs as a single
+      // `docker run` container, so deploy_kind no longer varies. DROP COLUMN
+      // leaves the table in place, so the ON DELETE CASCADE children of
+      // `services` are untouched. Guarded so re-runs and older fixtures without
+      // the column don't error.
+      const cols = db.query("PRAGMA table_info(services)").all() as Array<{ name: string }>;
+      if (cols.some((c) => c.name === "deploy_kind")) {
+        db.run("ALTER TABLE services DROP COLUMN deploy_kind");
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

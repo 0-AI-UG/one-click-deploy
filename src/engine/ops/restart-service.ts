@@ -1,8 +1,6 @@
 import * as db from "../../shared/db.ts";
-import { restartContainer, restartCompose } from "../../shared/remote/index.ts";
+import { restartContainer } from "../../shared/remote/index.ts";
 import { forEachServiceInstance } from "./service-instances.ts";
-
-const SERVICES_BASE_DIR = "/home/deploy/services";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -32,9 +30,7 @@ const restartAllInstances: Step<RestartServiceInput, { allHealthy: boolean; skip
     const { allHealthy } = await forEachServiceInstance(ctx.input.serviceId, {
       withHealth: true,
       requireInstances: true,
-      baseDir: SERVICES_BASE_DIR,
       plain: (server, inst, hostKey) => restartContainer(server.ipv4, inst.container_name, hostKey),
-      compose: (server, inst, hostKey, baseDir) => restartCompose(server.ipv4, inst.container_name, hostKey, baseDir),
     });
     return { allHealthy };
   },

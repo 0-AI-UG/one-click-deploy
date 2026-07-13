@@ -1,8 +1,6 @@
 import * as db from "../../shared/db.ts";
-import { pauseContainer, pauseCompose } from "../../shared/remote/index.ts";
+import { pauseContainer } from "../../shared/remote/index.ts";
 import { forEachServiceInstance } from "./service-instances.ts";
-
-const SERVICES_BASE_DIR = "/home/deploy/services";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -32,9 +30,7 @@ const pauseAllInstances: Step<PauseServiceInput, { ok: true; skipped?: boolean }
     // Docker pause is idempotent enough: it handles "already paused".
     await forEachServiceInstance(ctx.input.serviceId, {
       withHealth: false,
-      baseDir: SERVICES_BASE_DIR,
       plain: (server, inst, hostKey) => pauseContainer(server.ipv4, inst.container_name, hostKey),
-      compose: (server, inst, hostKey, baseDir) => pauseCompose(server.ipv4, inst.container_name, hostKey, baseDir),
     });
     return { ok: true };
   },

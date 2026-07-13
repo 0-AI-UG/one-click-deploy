@@ -1,8 +1,6 @@
 import * as db from "../../shared/db.ts";
-import { unpauseContainer, unpauseCompose } from "../../shared/remote/index.ts";
+import { unpauseContainer } from "../../shared/remote/index.ts";
 import { forEachServiceInstance } from "./service-instances.ts";
-
-const SERVICES_BASE_DIR = "/home/deploy/services";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
@@ -31,9 +29,7 @@ const unpauseAllInstances: Step<UnpauseServiceInput, { allHealthy: boolean; skip
     if (pre?.alreadyInTarget) return { allHealthy: true, skipped: true };
     const { allHealthy } = await forEachServiceInstance(ctx.input.serviceId, {
       withHealth: true,
-      baseDir: SERVICES_BASE_DIR,
       plain: (server, inst, hostKey) => unpauseContainer(server.ipv4, inst.container_name, hostKey),
-      compose: (server, inst, hostKey, baseDir) => unpauseCompose(server.ipv4, inst.container_name, hostKey, baseDir),
     });
     return { allHealthy };
   },
