@@ -156,19 +156,20 @@ export function ConfirmDialog() {
 }
 
 // --- Portal anchor rect ---
-// getBoundingClientRect returns real viewport pixels, but position:fixed portals
-// live inside the `html { zoom }` coordinate space (index.html), so the zoom
-// must be divided back out or the portal lands offset by the zoom factor.
+// A position:fixed portal appended to <body> inherits the `html { zoom }` factor
+// (index.html), so setting `top: T` renders it at `T * zoom`. getBoundingClientRect
+// already returns coordinates in that same pre-zoom space, so we pass them straight
+// through — dividing the zoom back out double-counts it and lands the portal ~1.2×
+// too high (above its trigger).
 export function portalAnchorRect(el: Element) {
-  const zoom = Number(getComputedStyle(document.documentElement).zoom) || 1;
   const r = el.getBoundingClientRect();
   return {
-    top: r.top / zoom,
-    bottom: r.bottom / zoom,
-    left: r.left / zoom,
-    right: r.right / zoom,
-    width: r.width / zoom,
-    height: r.height / zoom,
+    top: r.top,
+    bottom: r.bottom,
+    left: r.left,
+    right: r.right,
+    width: r.width,
+    height: r.height,
   };
 }
 
