@@ -1389,6 +1389,25 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 69,
+    description:
+      "Add absolute CPU/memory columns to replicas + service_instances so the UI can show used-of-allowed instead of a bare percentage",
+    up: (db) => {
+      // cpu_percent/memory_percent stay (the autoscaler compares against them).
+      // These add the absolute context the percentage alone can't convey:
+      // memory used/limit in MiB (from docker stats MemUsage) and the CPU core
+      // ceiling (from docker inspect NanoCpus). Cores used is derived in the UI
+      // as cpu_percent/100, so it needs no column. Guarded for re-runs.
+      for (const table of ["replicas", "service_instances"]) {
+        const cols = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+        const has = (c: string) => cols.some((col) => col.name === c);
+        if (!has("cpu_limit_cores")) db.run(`ALTER TABLE ${table} ADD COLUMN cpu_limit_cores REAL NOT NULL DEFAULT 0`);
+        if (!has("memory_used_mb")) db.run(`ALTER TABLE ${table} ADD COLUMN memory_used_mb REAL NOT NULL DEFAULT 0`);
+        if (!has("memory_limit_mb")) db.run(`ALTER TABLE ${table} ADD COLUMN memory_limit_mb REAL NOT NULL DEFAULT 0`);
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

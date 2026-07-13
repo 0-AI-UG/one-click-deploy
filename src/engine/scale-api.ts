@@ -1,1 +1,1 @@
-export { scaleApp, evaluateAutoScale, wakeApp, rollingRedeploy } from "./scale/index.ts";
+export { evaluateAutoScale, convergeAppReplicas, wakeApp, rollingRedeploy } from "./scale/index.ts";

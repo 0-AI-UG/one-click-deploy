@@ -182,6 +182,7 @@ export function ResourcesPage() {
                   onChange={setCreateLocation}
                   placeholder="Location..."
                   compact
+                  disabled={!createType}
                 />
                 <input
                   type="text"

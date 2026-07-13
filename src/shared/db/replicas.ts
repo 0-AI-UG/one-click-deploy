@@ -9,6 +9,9 @@ export type ReplicaRow = {
   status: string;
   cpu_percent: number;
   memory_percent: number;
+  cpu_limit_cores: number;
+  memory_used_mb: number;
+  memory_limit_mb: number;
   unhealthy_ticks: number;
   last_health_at: string | null;
   stopped_at: string | null;
@@ -86,10 +89,32 @@ export function markReplicaRunning(id: number): void {
   ).run(id);
 }
 
-export function updateReplicaMetrics(id: number, cpuPercent: number, memoryPercent: number): void {
+/** Absolute resource figures collected alongside the percentages. Optional so
+ *  older callers/tests that only care about the percentages stay valid. */
+export type ResourceUsage = {
+  cpuLimitCores: number;
+  memoryUsedMb: number;
+  memoryLimitMb: number;
+};
+
+export function updateReplicaMetrics(
+  id: number,
+  cpuPercent: number,
+  memoryPercent: number,
+  usage?: ResourceUsage,
+): void {
   db.query(
-    "UPDATE replicas SET cpu_percent = ?, memory_percent = ?, last_health_at = datetime('now') WHERE id = ?"
-  ).run(cpuPercent, memoryPercent, id);
+    `UPDATE replicas SET cpu_percent = ?, memory_percent = ?,
+       cpu_limit_cores = ?, memory_used_mb = ?, memory_limit_mb = ?,
+       last_health_at = datetime('now') WHERE id = ?`
+  ).run(
+    cpuPercent,
+    memoryPercent,
+    usage?.cpuLimitCores ?? 0,
+    usage?.memoryUsedMb ?? 0,
+    usage?.memoryLimitMb ?? 0,
+    id,
+  );
 }
 
 export function deleteReplica(id: number): void {

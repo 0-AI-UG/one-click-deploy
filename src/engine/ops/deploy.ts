@@ -22,12 +22,6 @@ import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { provisionServer } from "../provision-server.ts";
 import { resolve4 } from "node:dns/promises";
 import { registerOp } from "./registry.ts";
-import {
-  enqueueOperation,
-  listChildOperations,
-  requestCancel,
-  type OperationStatus,
-} from "../../shared/db/operations.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 
 type DeployInput = DeployRequest;
@@ -950,84 +944,25 @@ const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webho
   },
 };
 
-const TERMINAL: ReadonlySet<OperationStatus> = new Set([
-  "done",
-  "failed",
-  "cancelled",
-  "compensated",
-]);
-
-const enqueueScaleChild: Step<DeployInput, { childOpId: number | null }> = {
-  name: "enqueue_scale_child",
-  label: "Enqueue scale",
+const finalizeDeploy: Step<DeployInput, { ok: true }> = {
+  name: "finalize_deploy",
+  label: "Finalize",
   async run(ctx, prior) {
     const req = ctx.input;
     const appOut = prior["insert_app_row"] as InsertAppOut;
-    // Scaling only needs a route the panel can fan out over the private
-    // network — which every deployed app has: private apps route via their
-    // internal entrypoint, public apps via the panel (custom domain OR the
-    // auto <app>.<panel-ip>.nip.io, which points at the panel and
-    // load-balances across all replicas). nip.io is no longer a barrier —
-    // post-Traefik the panel is the sole public ingress. The only genuine
-    // blocker is a public app that somehow resolved to no domain at all.
-    if (!req.replicas || req.replicas <= 1 || (req.public !== false && !appOut.domain)) {
-      return { childOpId: null };
-    }
-    db.updateAppScaling(appOut.appId, {
-      desired_replicas: req.replicas,
-      min_replicas: 1,
-      max_replicas: req.replicas,
-    });
-
-    const key = `deploy:${ctx.opId}:scale`;
-    const existing = listChildOperations(ctx.opId).find((c) => c.idempotency_key === key);
-    if (existing) return { childOpId: existing.id };
-
-    const row = enqueueOperation({
-      kind: "scale_up",
-      resourceKeys: [`app:${appOut.appId}`],
-      input: { appId: appOut.appId, targetReplicas: req.replicas },
-      trigger: "deploy",
-      triggeredBy: ctx.triggeredBy,
-      parentId: ctx.opId,
-      idempotencyKey: key,
-    });
-    return { childOpId: row.id };
-  },
-};
-
-const waitForScale: Step<DeployInput, { ok: true }> = {
-  name: "wait_for_scale",
-  label: "Wait for scale",
-  async run(ctx, prior) {
-    const enq = prior["enqueue_scale_child"] as { childOpId: number | null };
-    const appOut = prior["insert_app_row"] as InsertAppOut;
-
-    if (enq.childOpId != null) {
-      ctx.park();
-      try {
-        while (true) {
-          const children = listChildOperations(ctx.opId);
-          const child = children.find((c) => c.id === enq.childOpId);
-          if (ctx.isCancelRequested()) {
-            if (child && !TERMINAL.has(child.status)) {
-              try { requestCancel(child.id); } catch { /* best-effort */ }
-            }
-            throw new Error("deploy cancelled");
-          }
-          if (child && TERMINAL.has(child.status)) {
-            if (child.status !== "done") {
-              // Treat scaling as best-effort: surface the warning but don't
-              // fail the parent deploy (mirrors the previous inline behavior).
-              db.appendDeployLog(appOut.appId, `[scale] Warning: scaling did not complete (status=${child.status})`);
-            }
-            break;
-          }
-          await new Promise((r) => setTimeout(r, 1000));
-        }
-      } finally {
-        ctx.unpark();
-      }
+    // Multi-replica deploys just declare the desired count; the reconciler's
+    // convergence loop brings the extra replicas up within a tick. Scaling
+    // only needs a route the panel can fan out over the private network —
+    // which every deployed app has (private apps via their internal
+    // entrypoint, public apps via the panel), so the sole blocker is a public
+    // app that somehow resolved to no domain at all.
+    if (req.replicas && req.replicas > 1 && !(req.public !== false && !appOut.domain)) {
+      db.updateAppScaling(appOut.appId, {
+        desired_replicas: req.replicas,
+        min_replicas: 1,
+        max_replicas: req.replicas,
+      });
+      db.appendDeployLog(appOut.appId, `[scale] Target ${req.replicas} replicas — reconciler will converge`);
     }
 
     db.appendDeployLog(appOut.appId, `[done] App deployed successfully`);
@@ -1057,8 +992,7 @@ const deployOp: OpKindDefinition<DeployInput> = {
     healthCheckStep,
     recordDeploymentHistory,
     setupGithubWebhook,
-    enqueueScaleChild,
-    waitForScale,
+    finalizeDeploy,
   ],
 };
 

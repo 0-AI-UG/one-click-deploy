@@ -5,29 +5,14 @@ import { mkdtempSync } from "fs";
 import path from "path";
 process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-scale-volume-test-"));
 
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect } from "bun:test";
 
-// Mock providers so any stray call errors cleanly instead of hitting the
-// network. We should never reach these in the volume-rejection tests.
-const fakeProvider = {
-  id: "hetzner",
-  name: "Hetzner",
-  deleteServer: mock(async () => { throw new Error("unexpected deleteServer"); }),
-};
-const fakeDnsProvider = {
-  id: "hetzner-dns",
-  name: "Hetzner DNS",
-  listZones: async () => [],
-  createRecord: async () => ({ id: "1", name: "", type: "", value: "" }),
-  deleteRecord: async () => {},
-};
-mock.module("./providers/index.ts", () => ({
-  hetzner: fakeProvider,
-  hetznerDns: fakeDnsProvider,
-}));
-
+// The volume cap short-circuits inside convergence (desired is clamped to the
+// current count of 1) before any provider or SSH call, so no network mocks are
+// needed — and mock.module is process-global in Bun, so adding them here would
+// leak into sibling test files.
 import * as db from "../shared/db.ts";
-import { scaleApp } from "./scale-api.ts";
+import { convergeAppReplicas } from "./scale-api.ts";
 
 function freshServer(suffix: string) {
   return db.insertServer({
@@ -52,10 +37,13 @@ function freshApp(name: string): db.AppRow {
   });
 }
 
-describe("scaleApp volume guard", () => {
-  test("rejects target > 1 when the app has a volume attached", async () => {
-    const server = freshServer("vol-reject");
-    const app = freshApp(`app-vol-reject-${Date.now()}`);
+// A cloud volume attaches to exactly one server, so a volume app is hard capped
+// at one replica. Convergence enforces this by clamping desired_replicas to 1 —
+// so even a desired count of 2 is a no-op that never touches SSH.
+describe("convergence volume cap", () => {
+  test("desired > 1 on a volume app never adds a second replica", async () => {
+    const server = freshServer("vol-cap");
+    const app = freshApp(`app-vol-cap-${Date.now()}`);
     db.insertReplica({
       app_id: app.id,
       server_id: server.id,
@@ -63,20 +51,19 @@ describe("scaleApp volume guard", () => {
       container_name: app.name,
       status: "running",
     });
-    // Simulate a volume attach.
     db.updateAppVolume(app.id, "vol-123", "/mnt/data:/data");
+    // A stale/over-eager desired count that the cap must defuse.
+    db.updateAppScaling(app.id, { desired_replicas: 2 });
 
-    const result = await scaleApp(app.id, 2);
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("persistent storage");
+    await convergeAppReplicas(app.id);
 
-    // Replica count unchanged.
+    // Capped at 1 — no scale-up, no SSH (the remote mocks would have thrown).
     expect(db.getReplicas(app.id).length).toBe(1);
   });
 
-  test("allows target = 1 (no-op same count) for volume apps", async () => {
-    const server = freshServer("vol-same");
-    const app = freshApp(`app-vol-same-${Date.now()}`);
+  test("desired = 1 on a volume app is a no-op", async () => {
+    const server = freshServer("vol-noop");
+    const app = freshApp(`app-vol-noop-${Date.now()}`);
     db.insertReplica({
       app_id: app.id,
       server_id: server.id,
@@ -85,19 +72,10 @@ describe("scaleApp volume guard", () => {
       status: "running",
     });
     db.updateAppVolume(app.id, "vol-456", "/mnt/data:/data");
+    db.updateAppScaling(app.id, { desired_replicas: 1 });
 
-    const result = await scaleApp(app.id, 1);
-    expect(result.ok).toBe(true);
-  });
+    await convergeAppReplicas(app.id);
 
-  test("allows target = 0 (sleep) for volume apps — volume stays attached to the single server", async () => {
-    const app = freshApp(`app-vol-sleep-${Date.now()}`);
-    db.updateAppVolume(app.id, "vol-789", "/mnt/data:/data");
-    // Simulating scale-to-zero path requires SSH — we just assert the guard
-    // does not fire for targetReplicas=0 by reading what the guard checks.
-    // The guard is `app.volume_id && targetReplicas > 1`, so 0 is allowed.
-    // We inspect this by going from 0 to 0 (no-op short-circuit path).
-    const result = await scaleApp(app.id, 0);
-    expect(result.ok).toBe(true);
+    expect(db.getReplicas(app.id).length).toBe(1);
   });
 });

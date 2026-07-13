@@ -4,7 +4,7 @@ import { get, post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, showToast, Table, CopyButton, portalAnchorRect } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft } from "lucide-react";
-import { Sparkline, InfoTip } from "./shared.tsx";
+import { Sparkline, InfoTip, CpuUsage, MemUsage } from "./shared.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, MetricSample, ServerData } from "../../types.ts";
 
@@ -112,8 +112,8 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
                   </td>
                   <td className="py-2 px-3 text-fg-dim">{r.host_port}</td>
                   <td className="py-2 px-3"><StatusBadge status={r.status} /></td>
-                  <td className="py-2 px-3 text-fg-dim">{r.cpu_percent?.toFixed(1)}%</td>
-                  <td className="py-2 px-3 text-fg-dim">{r.memory_percent?.toFixed(1)}%</td>
+                  <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={r.cpu_percent} limitCores={r.cpu_limit_cores} /></td>
+                  <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={r.memory_percent} usedMb={r.memory_used_mb} limitMb={r.memory_limit_mb} /></td>
                   <td className="py-2 px-3"><Sparkline values={series} /></td>
                   <td className="py-2 px-3">
                     <div className="flex items-center gap-1">

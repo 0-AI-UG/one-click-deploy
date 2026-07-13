@@ -40,7 +40,6 @@ mock.module("../scale/traefik-manager.ts", () => ({
   reconcileTraefik: mock(async () => {}),
 }));
 mock.module("../scale-api.ts", () => ({
-  scaleApp: mock(async () => ({ ok: true })),
   rollingRedeploy: mock(async () => ({ ok: true })),
 }));
 mock.module("../../shared/github.ts", () => ({
@@ -50,7 +49,6 @@ mock.module("../../shared/github.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import { enqueueOperation, getOperation } from "../../shared/db/operations.ts";
 import deployOp, { resolveAppDomain } from "./deploy.ts";
 import redeployOp from "./redeploy.ts";
 
@@ -683,7 +681,7 @@ describe("deploy: private apps", () => {
     expect(app.internal_port).toBeGreaterThanOrEqual(db.INTERNAL_PORT_BASE);
   });
 
-  test("enqueue_scale_child enqueues for private apps with replicas > 1", async () => {
+  test("finalize_deploy sets desired_replicas for private apps with replicas > 1", async () => {
     const name = `priv-${randomSuffix()}`;
     const app = db.insertApp({
       name,
@@ -694,26 +692,28 @@ describe("deploy: private apps", () => {
       env_vars: "{}",
       public: false,
     });
-    const parent = enqueueOperation({
-      kind: "deploy",
-      resourceKeys: [`app:create:${name}`],
-      input: {},
-      trigger: "ui",
-    });
-    const step = stepByName("enqueue_scale_child");
+    const step = stepByName("finalize_deploy");
     const { ctx } = makeCtx({ app_name: name, git_repo: "https://github.com/x/y", container_port: 3000, public: false, replicas: 2 });
-    (ctx as any).opId = parent.id;
-    const out = (await step.run(ctx, { insert_app_row: { appId: app.id } })) as { childOpId: number | null };
-    expect(out.childOpId).not.toBeNull();
-    expect(getOperation(out.childOpId!)?.kind).toBe("scale_up");
+    await step.run(ctx, { insert_app_row: { appId: app.id } });
+    // No child op is enqueued — the reconciler converges to desired_replicas.
     expect(db.getApp(app.id)!.desired_replicas).toBe(2);
   });
 
-  test("enqueue_scale_child still skips public apps without a domain", async () => {
-    const step = stepByName("enqueue_scale_child");
-    const { ctx } = makeCtx({ app_name: "x", git_repo: "https://github.com/x/y", container_port: 3000, replicas: 2 });
-    const out = (await step.run(ctx, { insert_app_row: { appId: 999999 } })) as { childOpId: number | null };
-    expect(out.childOpId).toBeNull();
+  test("finalize_deploy leaves desired_replicas at 1 for public apps without a domain", async () => {
+    const name = `pub-${randomSuffix()}`;
+    const app = db.insertApp({
+      name,
+      domain: "",
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      public: true,
+    });
+    const step = stepByName("finalize_deploy");
+    const { ctx } = makeCtx({ app_name: name, git_repo: "https://github.com/x/y", container_port: 3000, replicas: 2 });
+    await step.run(ctx, { insert_app_row: { appId: app.id, domain: "" } });
+    expect(db.getApp(app.id)!.desired_replicas).toBe(1);
   });
 });
 
@@ -801,8 +801,7 @@ describe("deploy op: structure", () => {
       "health_check",
       "record_deployment_history",
       "setup_github_webhook",
-      "enqueue_scale_child",
-      "wait_for_scale",
+      "finalize_deploy",
     ]);
   });
 

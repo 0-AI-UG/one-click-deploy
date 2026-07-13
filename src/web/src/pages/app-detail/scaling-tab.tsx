@@ -54,25 +54,40 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
   const runScale = async (target: number): Promise<void> => {
     const body: { replicas: number; server_id?: number } = { replicas: target };
     if (selectedServer) body.server_id = parseInt(selectedServer, 10);
-    const res = (await post(`/api/apps/${appId}/scale`, body)) as { op_id: number | null; noop?: boolean };
-    if (!res.op_id) {
+    const res = (await post(`/api/apps/${appId}/scale`, body)) as { op_id: number | null };
+
+    // Waking a sleeping app still runs as a tracked operation.
+    if (res.op_id) {
+      ops.track(res.op_id);
+      const terminal = await trackOperationInToast(res.op_id, "Waking app");
+      if (terminal && terminal !== "done" && terminal !== "cancelled") {
+        throw new Error(ops.latest?.error?.message || "Wake failed");
+      }
       await loadReplicas();
       await load();
       return;
     }
-    ops.track(res.op_id);
-    const terminal = await trackOperationInToast(
-      res.op_id,
-      target === 0 ? "Sleeping app" : target > replicas.length ? "Scaling up" : "Scaling down",
-    );
-    if (terminal && terminal !== "done" && terminal !== "cancelled") {
-      throw new Error(ops.latest?.error?.message || "Scaling failed");
+
+    // Level-triggered scaling: the API only records desired_replicas; the
+    // reconciler converges the live replica set within a tick (≤30s). There is
+    // no op to track, so poll the replica list until it reflects the target.
+    await load(); // surface the new desired_replicas immediately
+    const deadline = Date.now() + 45_000;
+    while (Date.now() < deadline) {
+      const reps = (await get(`/api/apps/${appId}/replicas`)) as ReplicaData[];
+      // A scale-to-zero leaves one stopped "sleep anchor" row, so count only
+      // live replicas when checking convergence.
+      const running = reps.filter((r) => r.status !== "stopped").length;
+      if (target === 0 ? running === 0 : running === target) break;
+      await new Promise((r) => setTimeout(r, 2000));
     }
     await loadReplicas();
     await load();
   };
 
-  const SCALING_KINDS = ["scale_up", "scale_down", "wake", "sleep"];
+  // Wake is the only remaining scaling operation; up/down/sleep are now
+  // level-triggered (reconciler-driven) and have no op to track.
+  const SCALING_KINDS = ["wake"];
   const scalingOp = ops.active.find((o) => SCALING_KINDS.includes(o.kind)) || null;
   const progressMessage = scalingOp ? humanizeStep(scalingOp.last_step) || "Starting..." : "";
   const showProgress = !!progressMessage;
@@ -121,7 +136,11 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                     { value: "", label: "Auto" },
                     ...servers.map((s) => ({
                       value: String(s.id),
-                      label: `${s.name.replace(/^ocd-/, "")} ${s.cpu_percent != null ? `${s.cpu_percent}%` : ""}`,
+                      label: `${s.name.replace(/^ocd-/, "")}${
+                        s.cpu_percent != null && s.cpu_cores
+                          ? ` ${((s.cpu_percent / 100) * s.cpu_cores).toFixed(1)}/${s.cpu_cores} vCPU`
+                          : s.cpu_percent != null ? ` ${s.cpu_percent}%` : ""
+                      }`,
                     })),
                   ]}
                   compact

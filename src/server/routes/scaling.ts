@@ -47,25 +47,22 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
       return Response.json({ ok: true, op_id: null, noop: true }, { headers: corsHeaders });
     }
 
-    if (replicas > current) {
-      const { opId } = enqueue({
-        kind: "scale_up",
-        resourceKeys: [`app:${appId}`],
-        input: { appId, targetReplicas: replicas, targetServerId: body.server_id },
-        trigger: "ui",
-        triggeredBy: payload.userId,
-      });
-      return Response.json({ op_id: opId }, { headers: corsHeaders });
-    }
-
-    const { opId } = enqueue({
-      kind: "scale_down",
-      resourceKeys: [`app:${appId}`],
-      input: { appId, targetReplicas: replicas },
-      trigger: "ui",
-      triggeredBy: payload.userId,
+    // Level-triggered: write the desired count and let the reconciler's
+    // convergence loop add/remove replicas (or sleep the app when replicas=0).
+    // No op is enqueued — there is nothing to poll; the panel reflects the new
+    // replica set within one reconciler tick.
+    db.updateAppScaling(appId, {
+      desired_replicas: replicas,
+      last_scale_at: new Date().toISOString(),
     });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
+    db.insertScalingEvent({
+      app_id: appId,
+      event_type: replicas > current ? "scale_up" : "scale_down",
+      from_count: current,
+      to_count: replicas,
+      reason: "manual",
+    });
+    return Response.json({ ok: true, op_id: null, desired: replicas }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

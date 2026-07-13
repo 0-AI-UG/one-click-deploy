@@ -4,12 +4,13 @@ import { portalAnchorRect } from "./ui.tsx";
 
 export type SelectOption = { value: string; label: string };
 
-export function NeoSelect({ value, options, onChange, placeholder, compact }: {
+export function NeoSelect({ value, options, onChange, placeholder, compact, disabled }: {
   value: string;
   options: SelectOption[];
   onChange: (value: string) => void;
   placeholder?: string;
   compact?: boolean;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -50,9 +51,11 @@ export function NeoSelect({ value, options, onChange, placeholder, compact }: {
       <button
         ref={triggerRef}
         type="button"
+        disabled={disabled}
         onClick={() => setOpen(!open)}
-        className={`w-full text-left bg-bg-raised border-2 border-fg font-mono cursor-pointer flex items-center transition-all ${
-          compact ? "px-1.5 py-[3px] text-[9px]" : "px-2.5 py-[7px] text-[10px]"
+        className={`w-full text-left bg-bg-raised border-2 border-fg font-mono flex items-center transition-all ${
+          disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer"
+        } ${compact ? "px-1.5 py-[3px] text-[9px]" : "px-2.5 py-[7px] text-[10px]"
         } ${open ? "shadow-neo-sm -translate-x-px -translate-y-px" : ""}`}
       >
         <span className={`flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${(!value && placeholder) ? "text-muted" : "text-fg"}`}>
@@ -72,6 +75,11 @@ export function NeoSelect({ value, options, onChange, placeholder, compact }: {
           style={{ position: "fixed", top: pos.top, left: pos.left, minWidth: pos.width }}
           className="z-50 bg-bg-raised border-2 border-fg shadow-neo max-h-40 overflow-auto"
         >
+          {options.length === 0 && (
+            <div className={`font-mono text-muted ${compact ? "px-1.5 py-1 text-[9px]" : "px-2.5 py-1.5 text-[10px]"}`}>
+              No options
+            </div>
+          )}
           {options.map(opt => (
             <button
               key={opt.value}

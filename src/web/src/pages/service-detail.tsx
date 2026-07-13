@@ -10,6 +10,7 @@ import {
   Link2, Unlink, ScrollText, ArrowLeft, RefreshCw, Terminal,
 } from "lucide-react";
 import type { ServiceData, ServiceInstance, LinkedEnvironment } from "../types.ts";
+import { CpuUsage, MemUsage } from "./app-detail/shared.tsx";
 
 type EnvironmentRef = { id: number; name: string };
 
@@ -326,8 +327,8 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                     </td>
                     <td className="py-2 px-3 text-fg-dim">{inst.host_port}</td>
                     <td className="py-2 px-3"><StatusBadge status={inst.status} /></td>
-                    <td className="py-2 px-3 text-fg-dim">{inst.cpu_percent?.toFixed(1)}%</td>
-                    <td className="py-2 px-3 text-fg-dim">{inst.memory_percent?.toFixed(1)}%</td>
+                    <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={inst.cpu_percent} limitCores={inst.cpu_limit_cores} /></td>
+                    <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={inst.memory_percent} usedMb={inst.memory_used_mb} limitMb={inst.memory_limit_mb} /></td>
                     <td className="py-2 px-3">
                       <PermissionGate permission="terminal.access">
                         <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/service-instance/${inst.id}`; }}>

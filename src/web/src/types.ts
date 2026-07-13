@@ -66,6 +66,9 @@ export type ReplicaData = {
   status: string;
   cpu_percent?: number;
   memory_percent?: number;
+  cpu_limit_cores?: number;
+  memory_used_mb?: number;
+  memory_limit_mb?: number;
 };
 
 export type MetricSample = {
@@ -115,6 +118,9 @@ export type ServiceInstance = {
   host_port: number;
   cpu_percent?: number;
   memory_percent?: number;
+  cpu_limit_cores?: number;
+  memory_used_mb?: number;
+  memory_limit_mb?: number;
 };
 
 export type LinkedEnvironment = {
@@ -157,6 +163,7 @@ export type ResourceServer = {
   location: string;
   cpu_percent: number | null;
   memory_percent: number | null;
+  cpu_cores: number | null;
   disk_used_gb: number | null;
   disk_total_gb: number | null;
   disk_free_gb: number | null;

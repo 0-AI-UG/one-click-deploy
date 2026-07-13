@@ -31,6 +31,17 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
     const priceForServer = (type: string, location: string): number | null =>
       serverPriceMap.get(`${type}|${location}`) ?? null;
+
+    // vCPU count per server type, so the UI can render server load as
+    // "cores used / total" instead of a bare percentage.
+    const coresByType = new Map<string, number>();
+    try {
+      const types = await compute.listServerTypes?.();
+      for (const t of types ?? []) coresByType.set(t.name, t.cores);
+    } catch (e) {
+      console.error("resources: failed to fetch server types:", e);
+    }
+
     let dbServers = db.getServers();
     try {
       const remoteServers = await compute.listServers();
@@ -76,6 +87,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
         status: s.status,
         cpu_percent: usage?.cpu_percent ?? null,
         memory_percent: usage?.memory_percent ?? null,
+        cpu_cores: coresByType.get(s.type) ?? null,
         disk_used_gb: usage?.disk_used_gb && usage.disk_used_gb > 0 ? usage.disk_used_gb : null,
         disk_total_gb: usage?.disk_total_gb && usage.disk_total_gb > 0 ? usage.disk_total_gb : null,
         disk_free_gb: usage?.disk_total_gb && usage.disk_total_gb > 0
@@ -413,7 +425,11 @@ async function probeServerHost(server: { ipv4: string; ssh_host_key: string }): 
     `echo '${PROBE_SEP}'`,
     // ss -H suppresses header; -tlnp gives TCP listeners with process info.
     // Fallback to plain `ss -tln` if `-p` requires root and fails.
-    `(ss -Htlnp 2>/dev/null || ss -Htln) | head -200`,
+    // Cap high enough to never truncate: Traefik binds ~200 internal ingress
+    // entrypoints (20000-20199) plus a waker mirror block, on top of system
+    // ports. A low cap would drop real listeners and skew the collapsed counts
+    // the server view shows for those ranges.
+    `(ss -Htlnp 2>/dev/null || ss -Htln) | head -600`,
     `echo '${PROBE_SEP}'`,
     // Pick first non-lo interface and print rx/tx bytes.
     `awk -F'[: ]+' 'NR>2 && $2 != "lo" {print $2, $3, $11; exit}' /proc/net/dev`,
@@ -540,6 +556,9 @@ export async function handleGetServerDetail(request: Request, serverId: number):
         status: r.status,
         cpu_percent: r.cpu_percent,
         memory_percent: r.memory_percent,
+        cpu_limit_cores: r.cpu_limit_cores,
+        memory_used_mb: r.memory_used_mb,
+        memory_limit_mb: r.memory_limit_mb,
         created_at: r.created_at,
       };
     });
@@ -560,6 +579,9 @@ export async function handleGetServerDetail(request: Request, serverId: number):
           status: i.status,
           cpu_percent: i.cpu_percent,
           memory_percent: i.memory_percent,
+          cpu_limit_cores: i.cpu_limit_cores,
+          memory_used_mb: i.memory_used_mb,
+          memory_limit_mb: i.memory_limit_mb,
         })),
       };
     });

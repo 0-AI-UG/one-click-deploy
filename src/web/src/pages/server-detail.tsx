@@ -3,7 +3,7 @@ import { get } from "../api/client.ts";
 import { Card, Btn, Spinner, EmptyState, Table, StatusBadge } from "../components/ui.tsx";
 import { Server, ArrowLeft, RefreshCw, Terminal, Database, FileWarning, Network } from "lucide-react";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { Sparkline } from "./app-detail/shared.tsx";
+import { Sparkline, CpuUsage, MemUsage } from "./app-detail/shared.tsx";
 import type { ServerMetricSample } from "../types.ts";
 
 type ServerReplica = {
@@ -15,6 +15,9 @@ type ServerReplica = {
   status: string;
   cpu_percent: number;
   memory_percent: number;
+  cpu_limit_cores: number;
+  memory_used_mb: number;
+  memory_limit_mb: number;
   created_at: string;
 };
 
@@ -26,6 +29,9 @@ type ServerServiceInstance = {
   status: string;
   cpu_percent: number;
   memory_percent: number;
+  cpu_limit_cores: number;
+  memory_used_mb: number;
+  memory_limit_mb: number;
 };
 
 type ServerService = {
@@ -131,6 +137,21 @@ function portDot(port: number, address: string): string {
   return "bg-accent-amber";
 }
 
+// Traefik's migration binds large fixed port blocks — one internal ingress
+// entrypoint per app slot (20000-20199, see INTERNAL_PORT_BASE/COUNT in
+// src/shared/db/apps.ts) plus a waker mirror block (21000-21399). These are held
+// for the fleet's lifetime whether or not a slot is in use, so we collapse each
+// block into a single summary chip instead of flooding the view with ~200 chips.
+const PORT_GROUPS = [
+  { key: "traefik ingress", lo: 20000, hi: 20199 },
+  { key: "waker", lo: 21000, hi: 21399 },
+] as const;
+
+function portGroupKey(port: number): string | null {
+  for (const g of PORT_GROUPS) if (port >= g.lo && port <= g.hi) return g.key;
+  return null;
+}
+
 export function ServerDetailPage({ serverId }: { serverId: number }) {
   const [detail, setDetail] = useState<ServerDetail | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
@@ -171,6 +192,11 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
   const cpuSeries = history.filter((m) => m.server_id === serverId).map((m) => m.cpu_percent);
   const memSeries = history.filter((m) => m.server_id === serverId).map((m) => m.memory_percent);
 
+  const singlePorts = detail.host.ports.filter((p) => portGroupKey(p.port) == null);
+  const portBlocks = PORT_GROUPS
+    .map((g) => ({ ...g, count: detail.host.ports.filter((p) => p.port >= g.lo && p.port <= g.hi).length }))
+    .filter((g) => g.count > 0);
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
       <div className="flex items-center gap-2">
@@ -210,7 +236,9 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-2">CPU (1h)</h3>
           <div className="flex items-center justify-between">
             <span className="font-mono text-lg font-bold text-fg">
-              {detail.cpu_percent != null ? `${detail.cpu_percent}%` : "—"}
+              {detail.cpu_percent != null && detail.host.cpu_cores
+                ? `${((detail.cpu_percent / 100) * detail.host.cpu_cores).toFixed(1)} / ${detail.host.cpu_cores} vCPU`
+                : detail.cpu_percent != null ? `${detail.cpu_percent}%` : "—"}
             </span>
             <Sparkline values={cpuSeries} />
           </div>
@@ -225,13 +253,15 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-2">Memory (1h)</h3>
           <div className="flex items-center justify-between">
             <span className="font-mono text-lg font-bold text-fg">
-              {detail.memory_percent != null ? `${detail.memory_percent}%` : "—"}
+              {detail.host.mem_total_mb != null
+                ? `${fmtMb(detail.host.mem_used_mb)} / ${fmtMb(detail.host.mem_total_mb)}`
+                : detail.memory_percent != null ? `${detail.memory_percent}%` : "—"}
             </span>
             <Sparkline values={memSeries} color="#f59e0b" />
           </div>
           {detail.host.mem_total_mb != null && (
             <div className="font-mono text-[9px] text-muted mt-1">
-              {fmtMb(detail.host.mem_used_mb)} / {fmtMb(detail.host.mem_total_mb)}
+              {detail.memory_percent != null ? `${detail.memory_percent}% used` : ""}
               {detail.host.swap_total_mb ? ` · swap ${fmtMb(detail.host.swap_used_mb)}` : ""}
             </div>
           )}
@@ -271,7 +301,7 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
           <EmptyState message="No listening ports" />
         ) : (
           <div className="flex flex-wrap gap-1.5">
-            {detail.host.ports.map((p, i) => (
+            {singlePorts.map((p, i) => (
               <span
                 key={i}
                 title={`${p.address}:${p.port}${p.process ? ` (${p.process})` : ""}`}
@@ -279,6 +309,16 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${portDot(p.port, p.address)}`} />
                 {p.port}
+              </span>
+            ))}
+            {portBlocks.map((g) => (
+              <span
+                key={g.key}
+                title={`${g.count} Traefik ${g.key} entrypoints listening in ${g.lo}-${g.hi} (one per app slot, held for the fleet's lifetime)`}
+                className="inline-flex items-center gap-1.5 border border-accent-blue/40 bg-alt px-2 py-0.5 font-mono text-[10px] font-bold text-fg"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-accent-blue" />
+                {g.key} {g.lo}-{g.hi} · {g.count}
               </span>
             ))}
           </div>
@@ -308,8 +348,8 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
                   </td>
                   <td className="py-2 px-3 text-fg-dim">{r.host_port}</td>
                   <td className="py-2 px-3"><StatusBadge status={r.status} /></td>
-                  <td className="py-2 px-3 text-fg-dim">{r.cpu_percent?.toFixed(1)}%</td>
-                  <td className="py-2 px-3 text-fg-dim">{r.memory_percent?.toFixed(1)}%</td>
+                  <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={r.cpu_percent} limitCores={r.cpu_limit_cores} /></td>
+                  <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={r.memory_percent} usedMb={r.memory_used_mb} limitMb={r.memory_limit_mb} /></td>
                   <td className="py-2 px-3"><Sparkline values={series} /></td>
                   <td className="py-2 px-3">
                     <PermissionGate permission="terminal.access">
@@ -344,8 +384,8 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
                       <td className="py-2 px-3 text-fg-dim">{i.container_name}</td>
                       <td className="py-2 px-3 text-fg-dim">{i.host_port}</td>
                       <td className="py-2 px-3"><StatusBadge status={i.status} /></td>
-                      <td className="py-2 px-3 text-fg-dim">{i.cpu_percent?.toFixed(1)}%</td>
-                      <td className="py-2 px-3 text-fg-dim">{i.memory_percent?.toFixed(1)}%</td>
+                      <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={i.cpu_percent} limitCores={i.cpu_limit_cores} /></td>
+                      <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={i.memory_percent} usedMb={i.memory_used_mb} limitMb={i.memory_limit_mb} /></td>
                     </tr>
                   ))
                 : []

@@ -1,4 +1,5 @@
 import db from "./connection.ts";
+import type { ResourceUsage } from "./replicas.ts";
 
 export type ServiceRow = {
   id: number;
@@ -27,6 +28,9 @@ export type ServiceInstanceRow = {
   status: string;
   cpu_percent: number;
   memory_percent: number;
+  cpu_limit_cores: number;
+  memory_used_mb: number;
+  memory_limit_mb: number;
   unhealthy_ticks: number;
   last_health_at: string | null;
   created_at: string;
@@ -139,10 +143,24 @@ export function updateServiceInstanceStatus(id: number, status: string): void {
   db.query("UPDATE service_instances SET status = ? WHERE id = ?").run(status, id);
 }
 
-export function updateServiceInstanceMetrics(id: number, cpuPercent: number, memoryPercent: number): void {
+export function updateServiceInstanceMetrics(
+  id: number,
+  cpuPercent: number,
+  memoryPercent: number,
+  usage?: ResourceUsage,
+): void {
   db.query(
-    "UPDATE service_instances SET cpu_percent = ?, memory_percent = ?, last_health_at = datetime('now') WHERE id = ?"
-  ).run(cpuPercent, memoryPercent, id);
+    `UPDATE service_instances SET cpu_percent = ?, memory_percent = ?,
+       cpu_limit_cores = ?, memory_used_mb = ?, memory_limit_mb = ?,
+       last_health_at = datetime('now') WHERE id = ?`
+  ).run(
+    cpuPercent,
+    memoryPercent,
+    usage?.cpuLimitCores ?? 0,
+    usage?.memoryUsedMb ?? 0,
+    usage?.memoryLimitMb ?? 0,
+    id,
+  );
 }
 
 export function touchServiceInstanceHealth(id: number): void {

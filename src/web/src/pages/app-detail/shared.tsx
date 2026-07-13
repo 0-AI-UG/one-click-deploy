@@ -11,6 +11,37 @@ export function InfoTip({ text }: { text: string }) {
   );
 }
 
+/** Format a memory figure (MiB) as MB or GB with sensible precision. */
+function fmtMem(mb: number): string {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(mb >= 10240 ? 0 : 1)} GB`;
+  return `${Math.round(mb)} MB`;
+}
+
+/**
+ * Render a container's CPU as "cores used / allowed vCPU" rather than a bare
+ * percentage, which is ambiguous (docker's CPUPerc is percent of one core, so
+ * 100% = one full core — not the whole server). Falls back to the percentage
+ * when the core ceiling hasn't been collected yet.
+ */
+export function CpuUsage({ cpuPercent, limitCores }: { cpuPercent?: number; limitCores?: number }) {
+  if (cpuPercent == null) return <>—</>;
+  const used = cpuPercent / 100;
+  if (!limitCores) return <>{cpuPercent.toFixed(1)}%</>;
+  return <>{used.toFixed(2)} / {limitCores} vCPU</>;
+}
+
+/**
+ * Render a container's memory as "used / limit", where the limit is the
+ * container's own `--memory` ceiling (docker's MemPerc is a fraction of that
+ * ceiling, not of server RAM). Falls back to the percentage when absolute
+ * figures haven't been collected yet.
+ */
+export function MemUsage({ memoryPercent, usedMb, limitMb }: { memoryPercent?: number; usedMb?: number; limitMb?: number }) {
+  if (usedMb != null && limitMb) return <>{fmtMem(usedMb)} / {fmtMem(limitMb)}</>;
+  if (memoryPercent == null) return <>—</>;
+  return <>{memoryPercent.toFixed(1)}%</>;
+}
+
 export function Sparkline({ values, color = "#3b82f6" }: { values: number[]; color?: string }) {
   if (values.length < 2) return <span className="text-[9px] text-muted font-mono">no data</span>;
   const w = 120, h = 24;

@@ -1,23 +1,32 @@
 import * as db from "../../shared/db.ts";
 import { log } from "./types.ts";
-import { enqueue } from "../../server/ipc/enqueue.ts";
 import { requestMetricsFresh } from "./request-metrics.ts";
 
-function enqueueAutoscale(appId: number, decision: "up" | "down" | "sleep", targetReplicas: number) {
-  const bucket = Math.floor(Date.now() / 60000);
-  const kind = decision === "up" ? "scale_up" : decision === "sleep" ? "sleep" : "scale_down";
-  enqueue({
-    kind,
-    resourceKeys: [`app:${appId}`],
-    input: decision === "sleep" ? { appId } : { appId, targetReplicas },
-    trigger: "autoscaler",
-    triggeredBy: "idle-monitor",
-    idempotencyKey: `idle-monitor:${appId}:${decision}:${bucket}`,
+// HPA-style tolerance band: ignore load within ±10% of the target so the
+// autoscaler doesn't flap desired_replicas around the threshold.
+const TOLERANCE = 0.1;
+
+type ScaleEvent = "autoscale_up" | "autoscale_down" | "autoscale_sleep";
+
+// Write a new desired_replicas and record the intent. The reconciler's
+// convergence loop performs the physical scale on a later tick — this function
+// only decides. Returns true when desired actually changed.
+function setDesired(appId: number, from: number, to: number, eventType: ScaleEvent): boolean {
+  const app = db.getApp(appId);
+  if (!app || app.desired_replicas === to) return false;
+  db.updateAppScaling(appId, { desired_replicas: to, last_scale_at: new Date().toISOString() });
+  db.insertScalingEvent({
+    app_id: appId,
+    event_type: eventType,
+    from_count: from,
+    to_count: to,
+    reason: "autoscaler",
   });
+  return true;
 }
 
 // In-memory tracker: when each app first entered sustained idle state.
-// Cleared when metrics rise above idle thresholds or app scales.
+// Cleared when metrics rise above idle thresholds or the app scales.
 export const idleSince = new Map<number, number>();
 
 export async function evaluateAutoScale(appId: number): Promise<void> {
@@ -38,7 +47,7 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
   const replicas = db.getReplicas(appId).filter((r) => r.status !== "stopped");
   if (replicas.length === 0) return;
 
-  // Check cooldown
+  // Check cooldown — no desired_replicas change while cooling down.
   if (app.last_scale_at) {
     const elapsed = (Date.now() - new Date(app.last_scale_at).getTime()) / 1000;
     if (elapsed < app.autoscale_cooldown) {
@@ -47,35 +56,48 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
     }
   }
 
-  const avgCpu = replicas.reduce((sum, r) => sum + r.cpu_percent, 0) / replicas.length;
-  const avgMem = replicas.reduce((sum, r) => sum + r.memory_percent, 0) / replicas.length;
+  const count = replicas.length;
+  const avgCpu = replicas.reduce((sum, r) => sum + r.cpu_percent, 0) / count;
+  const avgMem = replicas.reduce((sum, r) => sum + r.memory_percent, 0) / count;
 
   // Volume apps can never scale beyond 1 replica (cloud volumes attach 1:1).
-  // Treat them as capped at 1 even if their stored max_replicas is higher
-  // (e.g. a volume attached after the fact without the cap being re-applied).
+  // Treat them as capped at 1 even if their stored max_replicas is higher.
   const effectiveMax = app.volume_id ? Math.min(1, app.max_replicas) : app.max_replicas;
 
-  log("autoscale", `App ${appId}: avgCPU=${avgCpu.toFixed(1)}% avgMem=${avgMem.toFixed(1)}% replicas=${replicas.length} min=${app.min_replicas} max=${effectiveMax}${app.volume_id ? " (volume-capped)" : ""}`);
+  // Utilization ratio vs. the configured thresholds. >1 means over target.
+  const ratio = Math.max(
+    avgCpu / app.autoscale_cpu_threshold,
+    avgMem / app.autoscale_mem_threshold,
+  );
 
-  // Scale up
-  if (
-    (avgCpu > app.autoscale_cpu_threshold || avgMem > app.autoscale_mem_threshold) &&
-    replicas.length < effectiveMax
-  ) {
-    log("autoscale", `Enqueue scale_up app ${appId}: CPU=${avgCpu.toFixed(1)}% > ${app.autoscale_cpu_threshold}% or MEM=${avgMem.toFixed(1)}% > ${app.autoscale_mem_threshold}%`);
-    enqueueAutoscale(appId, "up", replicas.length + 1);
+  log("autoscale", `App ${appId}: avgCPU=${avgCpu.toFixed(1)}% avgMem=${avgMem.toFixed(1)}% ratio=${ratio.toFixed(2)} replicas=${count} min=${app.min_replicas} max=${effectiveMax}${app.volume_id ? " (volume-capped)" : ""}`);
+
+  // --- Scale up (proportional, HPA formula) ---
+  if (ratio > 1 + TOLERANCE && count < effectiveMax) {
+    const target = Math.min(effectiveMax, Math.max(count + 1, Math.ceil(count * ratio)));
+    idleSince.delete(appId);
+    if (setDesired(appId, count, target, "autoscale_up")) {
+      log("autoscale", `App ${appId}: desired ${count} -> ${target} (ratio ${ratio.toFixed(2)})`);
+    }
     return;
   }
 
-  const canScaleToZero = replicas.length === 1 && app.min_replicas === 0;
+  // Within the tolerance band — hold steady and clear any idle tracking.
+  const isIdle = ratio < 1 - TOLERANCE;
+  if (!isIdle) {
+    idleSince.delete(appId);
+    return;
+  }
+
+  const canScaleToZero = count === 1 && app.min_replicas === 0;
   // HTTP-routed apps (same predicate as the ingress renderer) have Traefik
   // request counters; raw-TCP apps (internal_protocol='tcp', no auth) don't, so
   // they keep the legacy CPU sustained-idle heuristic below.
   const httpRouted = app.internal_protocol === "http" || !!app.auth_password_hash;
 
-  // Scale-to-zero, request-driven: sleep once the app has had zero requests
-  // (public + internal — an app called by another app never sleeps) for its
-  // scale_to_zero_after window.
+  // --- Scale-to-zero, request-driven ---
+  // Sleep once the app has had zero requests (public + internal — an app called
+  // by another app never sleeps) for its scale_to_zero_after window.
   if (canScaleToZero && httpRouted) {
     idleSince.delete(appId); // CPU idle tracker is only for the legacy path
     const idleTimeout = app.scale_to_zero_after ?? 300;
@@ -87,8 +109,8 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
       return;
     }
     if (!app.last_request_at) {
-      // Never observed a request (row predates tracking, or genuinely no
-      // traffic yet) — start the idle window now instead of sleeping blind.
+      // Never observed a request — start the idle window now instead of
+      // sleeping blind.
       db.touchAppLastRequest(appId);
       log("autoscale", `App ${appId}: no request history, sleep after ${idleTimeout}s without requests`);
       return;
@@ -98,22 +120,14 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
       log("autoscale", `App ${appId}: last request ${Math.round(idleFor)}s ago / ${idleTimeout}s before sleep`);
       return;
     }
-    log("autoscale", `Enqueue sleep app ${appId}: no requests for ${Math.round(idleFor)}s (threshold: ${idleTimeout}s)`);
-    enqueueAutoscale(appId, "sleep", 0);
+    if (setDesired(appId, count, 0, "autoscale_sleep")) {
+      log("autoscale", `App ${appId}: desired -> 0 (no requests for ${Math.round(idleFor)}s)`);
+    }
     return;
   }
 
-  // Scale down
-  const isIdle = avgCpu < app.autoscale_cpu_threshold * 0.5 &&
-    avgMem < app.autoscale_mem_threshold * 0.5;
-
-  if (!isIdle) {
-    // Metrics are not idle — clear any tracked idle start
-    idleSince.delete(appId);
-    return;
-  }
-
-  if (replicas.length > app.min_replicas) {
+  // --- Scale down (proportional) ---
+  if (count > app.min_replicas) {
     // Legacy CPU-based scale-to-zero for TCP-routed apps: requires sustained
     // idle for scale_to_zero_after seconds.
     if (canScaleToZero) {
@@ -129,14 +143,20 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
         log("autoscale", `App ${appId}: idle for ${Math.round(idleDuration)}s / ${idleTimeout}s before sleep`);
         return;
       }
-      // Sustained idle confirmed — enqueue sleep
       idleSince.delete(appId);
-      log("autoscale", `Enqueue sleep app ${appId}: idle for ${Math.round(idleDuration)}s (threshold: ${idleTimeout}s)`);
-      enqueueAutoscale(appId, "sleep", 0);
+      if (setDesired(appId, count, 0, "autoscale_sleep")) {
+        log("autoscale", `App ${appId}: desired -> 0 (idle for ${Math.round(idleDuration)}s)`);
+      }
     } else {
-      // Normal scale-down (N → N-1, where N-1 >= 1)
-      log("autoscale", `Enqueue scale_down app ${appId}: CPU=${avgCpu.toFixed(1)}% < ${app.autoscale_cpu_threshold * 0.5}% and MEM=${avgMem.toFixed(1)}% < ${app.autoscale_mem_threshold * 0.5}%`);
-      enqueueAutoscale(appId, "down", replicas.length - 1);
+      // Proportional scale-down, floored at min_replicas (and never to 0 here —
+      // that's the scale-to-zero path above).
+      const target = Math.max(app.min_replicas, 1, Math.ceil(count * ratio));
+      if (target < count) {
+        idleSince.delete(appId);
+        if (setDesired(appId, count, target, "autoscale_down")) {
+          log("autoscale", `App ${appId}: desired ${count} -> ${target} (ratio ${ratio.toFixed(2)})`);
+        }
+      }
     }
   }
 }

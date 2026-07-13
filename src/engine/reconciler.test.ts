@@ -59,7 +59,7 @@ import {
 import { insertApp } from "../shared/db/apps.ts";
 import { insertServer } from "../shared/db/servers.ts";
 import { evaluateAutoScale } from "./scale-api.ts";
-import { checkReplicaHealth } from "./reconciler.ts";
+import { checkReplicaHealth, parseDockerStats, parseContainerLimits, parseDockerSizeToMb } from "./reconciler.ts";
 
 function makeServer() {
   return insertServer({
@@ -314,35 +314,33 @@ describe("reconciler: autoscale thresholds (evaluateAutoScale)", () => {
     return app;
   }
 
-  test("CPU above threshold enqueues scale_up", async () => {
+  test("CPU above threshold raises desired_replicas", async () => {
     const app = await setupAutoscaleApp(90, 30);
 
     await evaluateAutoScale(app.id);
 
-    expect(enqueueMock).toHaveBeenCalledTimes(1);
-    const call = enqueueMock.mock.calls[0][0] as { kind: string };
-    expect(call.kind).toBe("scale_up");
+    // ratio = 90/70 ≈ 1.29 → desired 1 → 2.
+    expect(db.getApp(app.id)!.desired_replicas).toBe(2);
   });
 
-  test("mem above threshold enqueues scale_up", async () => {
+  test("mem above threshold raises desired_replicas", async () => {
     const app = await setupAutoscaleApp(20, 95);
 
     await evaluateAutoScale(app.id);
 
-    expect(enqueueMock).toHaveBeenCalledTimes(1);
-    const call = enqueueMock.mock.calls[0][0] as { kind: string };
-    expect(call.kind).toBe("scale_up");
+    // ratio = 95/80 ≈ 1.19 → desired 1 → 2.
+    expect(db.getApp(app.id)!.desired_replicas).toBe(2);
   });
 
-  test("below threshold with multiple replicas enqueues scale_down", async () => {
-    enqueueMock.mockClear();
+  test("below threshold with multiple replicas lowers desired_replicas", async () => {
     const server = makeServer();
     const { default: conn } = require("../shared/db/connection.ts");
     const app = makeApp();
     conn.run(
       `UPDATE apps SET autoscale_enabled = 1,
         autoscale_cpu_threshold = 70, autoscale_mem_threshold = 80,
-        min_replicas = 1, max_replicas = 4, autoscale_cooldown = 0, status = 'running'
+        min_replicas = 1, max_replicas = 4, autoscale_cooldown = 0, status = 'running',
+        desired_replicas = 2
        WHERE id = ?`,
       [app.id],
     );
@@ -359,9 +357,8 @@ describe("reconciler: autoscale thresholds (evaluateAutoScale)", () => {
 
     await evaluateAutoScale(app.id);
 
-    expect(enqueueMock).toHaveBeenCalledTimes(1);
-    const call = enqueueMock.mock.calls[0][0] as { kind: string };
-    expect(call.kind).toBe("scale_down");
+    // Idle at 2 replicas, floor is min_replicas=1 → desired 2 → 1.
+    expect(db.getApp(app.id)!.desired_replicas).toBe(1);
   });
 
   test("autoscale cooldown prevents scaling when recently scaled", async () => {
@@ -371,7 +368,7 @@ describe("reconciler: autoscale thresholds (evaluateAutoScale)", () => {
 
     await evaluateAutoScale(app.id);
 
-    expect(enqueueMock).not.toHaveBeenCalled();
+    expect(db.getApp(app.id)!.desired_replicas).toBe(1);
   });
 
   test("no autoscale action when app.autoscale_enabled is false", async () => {
@@ -417,5 +414,45 @@ describe("reconciler: autoscale thresholds (evaluateAutoScale)", () => {
     await evaluateAutoScale(app.id);
 
     expect(enqueueMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("docker metrics parsing", () => {
+  test("parseDockerSizeToMb converts binary units to MiB", () => {
+    expect(parseDockerSizeToMb("512MiB")).toBeCloseTo(512, 3);
+    expect(parseDockerSizeToMb("1.5GiB")).toBeCloseTo(1536, 3);
+    expect(parseDockerSizeToMb("410.5MiB")).toBeCloseTo(410.5, 3);
+    expect(parseDockerSizeToMb("1048576B")).toBeCloseTo(1, 3);
+    expect(parseDockerSizeToMb("garbage")).toBe(0);
+  });
+
+  test("parseDockerStats extracts percentages and MemUsage used/limit", () => {
+    const stdout = [
+      '{"Name":"app-1","CPUPerc":"42.50%","MemPerc":"80.10%","MemUsage":"410MiB / 512MiB"}',
+      '{"Name":"app-2","CPUPerc":"0.00%","MemPerc":"5.00%","MemUsage":"25.6MiB / 512MiB"}',
+      "not json — skipped",
+    ].join("\n");
+    const stats = parseDockerStats(stdout);
+    expect(stats.size).toBe(2);
+    const a = stats.get("app-1")!;
+    expect(a.cpu).toBeCloseTo(42.5, 2);
+    expect(a.mem).toBeCloseTo(80.1, 2);
+    expect(a.memUsedMb).toBeCloseTo(410, 1);
+    expect(a.memLimitMb).toBeCloseTo(512, 1);
+    expect(a.cpuLimitCores).toBe(0); // filled in later from inspect
+  });
+
+  test("parseContainerLimits maps stripped names to CPU cores", () => {
+    const stdout = [
+      "/app-1 1000000000",
+      "/app-2 500000000",
+      "/app-3 0", // unlimited -> 0
+      "malformed",
+    ].join("\n");
+    const limits = parseContainerLimits(stdout);
+    expect(limits.get("app-1")).toBe(1);
+    expect(limits.get("app-2")).toBe(0.5);
+    expect(limits.get("app-3")).toBe(0);
+    expect(limits.has("malformed")).toBe(false);
   });
 });
