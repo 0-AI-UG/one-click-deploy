@@ -1,7 +1,7 @@
 import { useTempDataDir, makeFakeComputeProvider, randomSuffix } from "../../shared/test-helpers.ts";
 useTempDataDir();
 
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 
 const compute = makeFakeComputeProvider();
 mock.module("../../shared/providers/index.ts", () => ({ hetzner: compute }));
@@ -11,7 +11,6 @@ mock.module("../deploy/index.ts", () => ({ recreateAppContainer }));
 
 const ensureVolumeBindMount = mock(async () => {});
 const removeVolumeBindMount = mock(async () => {});
-mock.module("../hetzner/host-mounts.ts", () => ({ ensureVolumeBindMount, removeVolumeBindMount }));
 
 // Neutralise the Hetzner automount wait in the bind path. Safe because bun runs
 // test files sequentially in one process — restored in afterAll below.
@@ -20,6 +19,7 @@ const realSleep = Bun.sleep;
 
 import * as db from "../../shared/db.ts";
 import reattachVolumeOp from "./reattach-volume.ts";
+import { __setBindImplForTest, __resetBindImplForTest } from "./_volumes.ts";
 import { afterAll } from "bun:test";
 
 afterAll(() => { (Bun as any).sleep = realSleep; });
@@ -74,7 +74,10 @@ beforeEach(() => {
   compute._mocks.volumeDetach.mockClear();
   recreateAppContainer.mockClear();
   recreateAppContainer.mockImplementation(async () => ({ ok: true }));
+  __setBindImplForTest({ ensureVolumeBindMount, removeVolumeBindMount });
 });
+
+afterEach(() => __resetBindImplForTest());
 
 describe("reattach_volume: validate", () => {
   const step = stepByName("validate");

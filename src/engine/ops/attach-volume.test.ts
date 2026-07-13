@@ -1,7 +1,7 @@
 import { useTempDataDir, makeFakeComputeProvider, randomSuffix } from "../../shared/test-helpers.ts";
 useTempDataDir();
 
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 
 // Mock the provider, container-recreate and host-mount deps before importing the
 // op (static imports). The fake provider id is left as "hetzner" but the bind
@@ -14,7 +14,6 @@ mock.module("../deploy/index.ts", () => ({ recreateAppContainer }));
 
 const ensureVolumeBindMount = mock(async () => {});
 const removeVolumeBindMount = mock(async () => {});
-mock.module("../hetzner/host-mounts.ts", () => ({ ensureVolumeBindMount, removeVolumeBindMount }));
 
 mock.module("../../shared/remote/index.ts", () => ({
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
@@ -22,6 +21,7 @@ mock.module("../../shared/remote/index.ts", () => ({
 
 import * as db from "../../shared/db.ts";
 import attachVolumeOp from "./attach-volume.ts";
+import { __setBindImplForTest, __resetBindImplForTest } from "./_volumes.ts";
 
 function makeCtx(input: any, opId = 42) {
   const logLines: string[] = [];
@@ -78,7 +78,10 @@ beforeEach(() => {
   compute._mocks.volumeDetach.mockClear();
   recreateAppContainer.mockClear();
   recreateAppContainer.mockImplementation(async () => ({ ok: true }));
+  __setBindImplForTest({ ensureVolumeBindMount, removeVolumeBindMount });
 });
+
+afterEach(() => __resetBindImplForTest());
 
 describe("attach_volume: validate", () => {
   const step = stepByName("validate");

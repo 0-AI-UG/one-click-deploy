@@ -1,8 +1,17 @@
 import * as db from "../../shared/db.ts";
 import {
-  ensureVolumeBindMount,
-  removeVolumeBindMount,
+  ensureVolumeBindMount as realEnsure,
+  removeVolumeBindMount as realRemove,
 } from "../hetzner/host-mounts.ts";
+
+let _ensureVolumeBindMount = realEnsure;
+let _removeVolumeBindMount = realRemove;
+/** Test-only seam. */
+export function __setBindImplForTest(impl: { ensureVolumeBindMount?: typeof realEnsure; removeVolumeBindMount?: typeof realRemove }) {
+  if (impl.ensureVolumeBindMount) _ensureVolumeBindMount = impl.ensureVolumeBindMount;
+  if (impl.removeVolumeBindMount) _removeVolumeBindMount = impl.removeVolumeBindMount;
+}
+export function __resetBindImplForTest() { _ensureVolumeBindMount = realEnsure; _removeVolumeBindMount = realRemove; }
 
 // Shared helpers for the volume-management ops (attach / attach-existing /
 // detach / reattach). These mirror the exact host-mount + precondition
@@ -64,7 +73,7 @@ export async function ensureBindMount(opts: {
   appId: number;
 }): Promise<void> {
   await Bun.sleep(3000);
-  await ensureVolumeBindMount({
+  await _ensureVolumeBindMount({
     serverIp: opts.serverIp,
     hostKey: opts.hostKey || undefined,
     hetznerVolumeId: opts.volumeId,
@@ -81,7 +90,7 @@ export async function removeBindMountBestEffort(opts: {
   appId: number;
 }): Promise<void> {
   try {
-    await removeVolumeBindMount({
+    await _removeVolumeBindMount({
       serverIp: opts.serverIp,
       hostKey: opts.hostKey || undefined,
       hostMountPath: opts.hostMountPath,

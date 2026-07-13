@@ -10,11 +10,6 @@ mock.module("../../shared/providers/index.ts", () => ({ hetzner: compute }));
 const recreateAppContainer = mock(async () => ({ ok: true } as { ok: boolean; error?: string }));
 mock.module("../deploy/index.ts", () => ({ recreateAppContainer }));
 
-const removeVolumeBindMount = mock(async () => {});
-mock.module("../hetzner/host-mounts.ts", () => ({
-  ensureVolumeBindMount: mock(async () => {}),
-  removeVolumeBindMount,
-}));
 mock.module("../../shared/remote/index.ts", () => ({
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
 }));

@@ -25,10 +25,6 @@ mock.module("../../shared/remote/index.ts", () => ({
   getContainerLogs: mock(async () => ""),
 }));
 
-mock.module("../../shared/services/catalog.ts", () => ({
-  getCatalogEntry: () => null,
-}));
-
 import * as db from "../../shared/db.ts";
 import { destroyServiceCore as destroyService } from "./service-lifecycle.ts";
 

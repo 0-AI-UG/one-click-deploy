@@ -13,7 +13,12 @@
 //   - user apps:  `app-${app.id}`
 //   - services:   `svc-${service.id}`
 
-import { sshExec } from "./ssh.ts";
+import { sshExec as realSshExec } from "./ssh.ts";
+type SshExecFn = typeof realSshExec;
+let _sshExec: SshExecFn = realSshExec;
+/** Test-only seam: override the ssh executor. Reset with __resetSshExecForTest. */
+export function __setSshExecForTest(fn: SshExecFn) { _sshExec = fn; }
+export function __resetSshExecForTest() { _sshExec = realSshExec; }
 
 function log(...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:host-mounts]`, ...args);
@@ -47,7 +52,7 @@ export function buildFstabBlock(opts: {
 }
 
 async function exec(serverIp: string, hostKey: string | undefined, cmd: string) {
-  return sshExec(serverIp, cmd, hostKey);
+  return _sshExec(serverIp, cmd, hostKey);
 }
 
 export type EnsureOpts = {

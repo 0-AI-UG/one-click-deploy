@@ -1,11 +1,13 @@
 // Unit tests for host-mounts.ts — bind-mount + fstab management for Hetzner
-// volumes. We mock sshExec so the tests inspect the exact commands that would
-// run on the server, plus a tiny in-memory "remote shell" model that lets us
-// assert fstab idempotency.
+// volumes. We inject a simulated ssh executor via the module's resettable seam
+// (__setSshExecForTest) so the tests inspect the exact commands that would run
+// on the server, plus a tiny in-memory "remote shell" model that lets us assert
+// fstab idempotency. Using the seam (not mock.module) keeps this file from
+// leaking a process-global ssh mock into other test files.
 import { useTempDataDir } from "../../shared/test-helpers.ts";
 useTempDataDir();
 
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 
 // Simulated remote-server state.
 type RemoteState = {
@@ -107,23 +109,21 @@ async function defaultSshExec(_ip: string, command: string, _hostKey?: string) {
   return { stdout: "", stderr: "", exitCode: 0 };
 }
 
-const sshExec = mock(defaultSshExec);
-
-mock.module("./ssh.ts", () => ({ sshExec }));
-
-// Import AFTER mocking.
 import {
   ensureVolumeBindMount,
   removeVolumeBindMount,
   bindMountStatus,
   buildFstabBlock,
+  __setSshExecForTest,
+  __resetSshExecForTest,
 } from "./host-mounts.ts";
 
 beforeEach(() => {
   state = freshState();
-  sshExec.mockClear();
-  sshExec.mockImplementation(defaultSshExec);
+  __setSshExecForTest(defaultSshExec);
 });
+
+afterEach(() => __resetSshExecForTest());
 
 describe("buildFstabBlock", () => {
   test("formats the documented block exactly", () => {
@@ -159,7 +159,7 @@ describe("ensureVolumeBindMount", () => {
     // Volume not mounted on the first probe, then appears — the poll loop
     // should recover instead of failing on the race like it used to.
     let probes = 0;
-    sshExec.mockImplementation(async (ip: string, command: string, key?: string) => {
+    __setSshExecForTest(async (ip: string, command: string, key?: string) => {
       const m = command.match(/^findmnt -no SOURCE (\/mnt\/HC_Volume_\S+)/);
       if (m) {
         probes++;
