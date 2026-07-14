@@ -95,7 +95,7 @@ const labelAt = (pts: Pt[]): Pt => {
 type EdgeKind = "ing" | "env" | "wake" | "tie";
 type Edge = {
   id: string; kind: EdgeKind; pts: Pt[];
-  label?: string; always?: boolean;
+  label?: string; always?: boolean; revMarker?: boolean;
   appIds: number[]; infra: string[];
 };
 type InfraKind = "net" | "pub" | "waker";
@@ -479,28 +479,38 @@ function computeLayout(data: TopologyData, availW: number): Layout | null {
     const a = primaryFrag(e.from), b = primaryFrag(e.to);
     if (!a || !b) continue;
     const r = envRoute.get(e.pair);
+    // The geometry is always routed top→bottom (the lane sits below the upper
+    // card), but the semantic arrow is consumer→dependency (from→to). Track
+    // whether `to` sits at the path's end; if not, draw the arrowhead at the
+    // start instead so it always points at the referenced app.
+    const toKey = primaryKeyByApp.get(e.to);
     let pts: Pt[];
+    let toAtEnd: boolean;
     if (r?.kind === "same") {
       const yy = laneY(r.band, r.slot);
       pts = [B(a.rect), [a.rect.cx, yy], [b.rect.cx, yy], B(b.rect)];
+      toAtEnd = true; // ends at b === to
     } else if (r?.kind === "adj") {
       const up = fragByKey.get(r.upKey)!.rect, lo = fragByKey.get(r.loKey)!.rect;
       const yy = laneY(r.band, r.slot);
       pts = [B(up), [up.cx, yy], [lo.cx, yy], T(lo)];
+      toAtEnd = r.loKey === toKey;
     } else if (r?.kind === "dist") {
       const up = fragByKey.get(r.upKey)!.rect, lo = fragByKey.get(r.loKey)!.rect;
       const yu = laneY(r.bandU, r.slotU), yl = laneY(r.bandL, r.slotL);
       const channelX = Math.min(up.left, lo.left) - CARD_GAP / 2;
       pts = [B(up), [up.cx, yu], [channelX, yu], [channelX, yl], [lo.cx, yl], T(lo)];
+      toAtEnd = r.loKey === toKey;
     } else {
       // Cross-region: a simple detour through the empty gap between regions.
       const hi = a.rect.cy <= b.rect.cy ? a.rect : b.rect;
       const lo = a.rect.cy <= b.rect.cy ? b.rect : a.rect;
       const my = (hi.top + hi.h + lo.top) / 2;
       pts = [B(hi), [hi.cx, my], [lo.cx, my], T(lo)];
+      toAtEnd = a.rect.cy <= b.rect.cy; // ends at lo; lo === b when b is lower
     }
     edges.push({
-      id: `env-${e.pair}`, kind: "env", pts,
+      id: `env-${e.pair}`, kind: "env", pts, revMarker: !toAtEnd,
       label: e.key, appIds: [e.from, e.to], infra: [],
     });
   }
@@ -717,7 +727,9 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
                   <path
                     key={e.id} d={roundedPath(e.pts)} fill="none"
                     stroke={st.c} strokeWidth={width} strokeDasharray={st.d}
-                    markerEnd={st.m} style={{ opacity, transition: "opacity .12s, stroke-width .12s" }}
+                    markerStart={e.revMarker ? st.m : undefined}
+                    markerEnd={e.revMarker ? undefined : st.m}
+                    style={{ opacity, transition: "opacity .12s, stroke-width .12s" }}
                   />
                 );
               })}
