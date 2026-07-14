@@ -11,6 +11,7 @@
     { "key": "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT", "label": "Access Management", "default": "1" }
   ],
   "volumePath": "/var/lib/clickhouse",
+  "extraCaps": ["CHOWN", "SETUID", "SETGID"],
   "healthCmd": "clickhouse-client --password $CLICKHOUSE_PASSWORD --query 'SELECT 1'",
   "defaultVolumeSize": 50,
   "connectionUrlTemplate": "http://{CLICKHOUSE_USER}:{CLICKHOUSE_PASSWORD}@{host}:{port}/?database={CLICKHOUSE_DB}",

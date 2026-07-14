@@ -1,7 +1,7 @@
 import { sshExec } from "./ssh.ts";
 import { asUser, log, buildDockerRunArgs } from "./container-common.ts";
 import { dockerLoginGhcr, type GhcrAuth } from "./registry.ts";
-import { writeEnvDeployFile } from "./docker-run.ts";
+import { writeEnvDeployFile, ensureVolumeOwnership } from "./docker-run.ts";
 import { ensureOcdNetwork } from "./lifecycle.ts";
 
 // --- Infrastructure Service Containers ---
@@ -53,6 +53,15 @@ export async function pullAndRunService(
 
   // Remove existing container if any
   await sshExec(ip, asUser(`docker rm -f ${opts.name} 2>/dev/null || true`), hostKey);
+
+  // A fresh block volume is root-owned. Fixed non-root images (USER baked in)
+  // need the mount root chowned to their uid before they can write; root ->
+  // gosu-drop images (postgres/mysql/...) instead get CHOWN/SETUID/SETGID back
+  // via extraCaps and do the chown themselves (this call no-ops for them, since
+  // their Config.User is root). See ensureVolumeOwnership for the full rationale.
+  if (opts.volumeMount) {
+    await ensureVolumeOwnership(ip, opts.image, opts.volumeMount.split(":")[0], hostKey);
+  }
 
   // Build run command
   const cmdStr = opts.cmd ? opts.cmd.map((c) => `'${c.replace(/'/g, "'\\''")}'`).join(" ") : undefined;

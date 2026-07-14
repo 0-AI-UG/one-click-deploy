@@ -10,6 +10,7 @@
     { "key": "POSTGRES_DB", "label": "Database", "default": "app" }
   ],
   "volumePath": "/var/lib/postgresql/data",
+  "extraCaps": ["CHOWN", "SETUID", "SETGID"],
   "healthCmd": "pg_isready",
   "defaultVolumeSize": 10,
   "connectionUrlTemplate": "postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{host}:{port}/{POSTGRES_DB}",

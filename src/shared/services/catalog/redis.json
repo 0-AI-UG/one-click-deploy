@@ -8,6 +8,7 @@
     { "key": "REDIS_PASSWORD", "label": "Password", "generate": "password" }
   ],
   "volumePath": "/data",
+  "extraCaps": ["CHOWN", "SETUID", "SETGID"],
   "healthCmd": "redis-cli ping",
   "defaultVolumeSize": 5,
   "connectionUrlTemplate": "redis://:{REDIS_PASSWORD}@{host}:{port}",

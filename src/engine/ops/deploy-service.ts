@@ -407,6 +407,7 @@ const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
         volumeMount: volume.skipped ? undefined : volume.volumeMount,
         bindAddress: svc.bindAddress,
         cmd: catalog.cmd,
+        extraCaps: catalog.extraCaps,
       },
       server.serverHostKey || undefined,
     );

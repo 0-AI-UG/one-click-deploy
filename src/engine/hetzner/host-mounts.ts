@@ -103,12 +103,17 @@ export async function ensureVolumeBindMount(opts: EnsureOpts): Promise<void> {
     await new Promise((r) => setTimeout(r, POLL_MS));
   }
 
-  // 2. Make the bind target directory and own it to deploy.
-  await exec(
-    serverIp,
-    hostKey,
-    `mkdir -p ${hostMountPath} && chown deploy:deploy ${hostMountPath}`,
-  );
+  // 2. Make the bind target directory. We deliberately do NOT chown it here.
+  //    Volume-root ownership is set at container-start by ensureVolumeOwnership
+  //    (docker-run.ts), which chowns to the image's *actual* runtime uid. The
+  //    old `chown deploy:deploy` was a trap: on a first deploy it lands on the
+  //    empty mount point *before* the bind is layered on (so it's shadowed and
+  //    does nothing), and on any later call it lands on the already-mounted
+  //    volume root and pins it to uid 1000 (deploy) — which silently "worked"
+  //    only for images that happen to run as uid 1000 and broke every other
+  //    non-root image (e.g. postgres at uid 70). Owning the mount point is not
+  //    this function's job.
+  await exec(serverIp, hostKey, `mkdir -p ${hostMountPath}`);
 
   // 3. If something is already bound there from the same Hetzner volume,
   // we're done with the runtime mount.

@@ -11,6 +11,7 @@
     { "key": "MARIADB_PASSWORD", "label": "Password", "generate": "password" }
   ],
   "volumePath": "/var/lib/mysql",
+  "extraCaps": ["CHOWN", "SETUID", "SETGID"],
   "healthCmd": "healthcheck.sh --connect --innodb_initialized",
   "defaultVolumeSize": 10,
   "connectionUrlTemplate": "mysql://{MARIADB_USER}:{MARIADB_PASSWORD}@{host}:{port}/{MARIADB_DATABASE}",

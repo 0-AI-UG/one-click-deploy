@@ -9,6 +9,7 @@
     { "key": "MONGO_INITDB_ROOT_PASSWORD", "label": "Root Password", "generate": "password" }
   ],
   "volumePath": "/data/db",
+  "extraCaps": ["CHOWN", "SETUID", "SETGID"],
   "healthCmd": "mongosh --quiet --eval \"db.runCommand('ping').ok\"",
   "defaultVolumeSize": 10,
   "connectionUrlTemplate": "mongodb://{MONGO_INITDB_ROOT_USERNAME}:{MONGO_INITDB_ROOT_PASSWORD}@{host}:{port}/?authSource=admin",

@@ -28,6 +28,73 @@ export async function writeEnvDeployFile(
   return envFilePath;
 }
 
+/**
+ * Make a freshly-provisioned volume writable by the container's runtime user.
+ *
+ * Fresh Hetzner block volumes are root:root, and OCD runs every container with
+ * `--cap-drop=ALL --security-opt=no-new-privileges`, so a non-root image (e.g.
+ * postgres shipping `USER postgres`) can't chown its own data dir at runtime
+ * (CAP_CHOWN is gone) and therefore can't cold-start on a fresh volume — initdb
+ * fails with "Permission denied" and the container exits. We fix it host-side,
+ * as root, *before* the container starts: chown the volume's mount root to the
+ * uid[:gid] the image actually runs as.
+ *
+ * Best-effort and idempotent:
+ *  - root-owned images (`Config.User` unset / "0" / "root") need nothing → skip.
+ *  - only the mount root is chowned (non-recursive), so adopting a volume that
+ *    already holds user-owned data is a harmless no-op and nested ownership is
+ *    never clobbered.
+ *  - if the runtime uid can't be resolved (e.g. no `id` in a distroless image),
+ *    we log and leave the mount as-is — no worse than before this fix.
+ *
+ * A genuine chown failure (non-zero exit) is surfaced: that's an unexpected
+ * host error, and letting it through only to fail later as an opaque
+ * "did not become healthy" would hide the real cause.
+ */
+export async function ensureVolumeOwnership(
+  ip: string,
+  image: string,
+  hostMountPath: string,
+  hostKey?: string,
+): Promise<void> {
+  // Which user will the container run as? Empty / 0 / root → nothing to do.
+  const inspect = await sshExec(ip, asUser(`docker inspect --format '{{.Config.User}}' ${image}`), hostKey);
+  const userSpec = inspect.stdout.trim();
+  if (!userSpec || userSpec === "0" || userSpec === "root" || userSpec === "0:0") return;
+
+  // Resolve to a numeric uid[:gid]. `id` run under the image's default USER
+  // reports the real runtime ids whether Config.User is a name ("postgres") or
+  // a number ("70") — override the entrypoint so we run `id`, not the app.
+  let uid = "";
+  let gid = "";
+  const idProbe = await sshExec(ip, asUser(`docker run --rm --entrypoint '' ${image} id 2>/dev/null`), hostKey);
+  const m = idProbe.stdout.match(/uid=(\d+)\D.*?gid=(\d+)/);
+  if (m) {
+    uid = m[1];
+    gid = m[2];
+  } else {
+    // Fall back to a numeric Config.User ("70" or "70:70"); a named user we
+    // couldn't resolve is left alone rather than guessed at.
+    const [u, g] = userSpec.split(":");
+    if (/^\d+$/.test(u)) {
+      uid = u;
+      gid = /^\d+$/.test(g ?? "") ? g : u;
+    }
+  }
+  if (!uid) {
+    log("run", `could not resolve runtime uid for ${image}; leaving ${hostMountPath} ownership unchanged`);
+    return;
+  }
+
+  const chown = await sshExec(ip, `chown ${uid}:${gid} ${hostMountPath}`, hostKey);
+  if (chown.exitCode !== 0) {
+    throw new Error(
+      `chown ${uid}:${gid} ${hostMountPath} failed (exit ${chown.exitCode}): ${chown.stderr.trim() || chown.stdout.trim()}`,
+    );
+  }
+  log("run", `volume root ${hostMountPath} chowned to ${uid}:${gid} for ${image}`);
+}
+
 export type StartAppReplicaOpts = {
   /** Container name (--name). */
   containerName: string;
@@ -76,6 +143,13 @@ export async function startAppReplica(
 
   if (opts.removeExisting !== false) {
     await sshExec(ip, asUser(`docker rm -f ${opts.containerName} 2>/dev/null || true`), hostKey);
+  }
+
+  // A fresh block volume is root-owned; make its root writable by the image's
+  // runtime user before we start the hardened (cap-dropped) container, which
+  // otherwise can't chown it itself. No-op for root images / already-correct mounts.
+  if (opts.volumeMount) {
+    await ensureVolumeOwnership(ip, opts.image, opts.volumeMount.split(":")[0], hostKey);
   }
 
   const cmd = buildDockerRunArgs({
