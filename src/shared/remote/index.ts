@@ -32,6 +32,7 @@ export {
   stopContainer,
   startContainer,
   containerExists,
+  containerRunning,
   transferImage,
   ensureOcdNetwork,
   buildDockerRunArgs,

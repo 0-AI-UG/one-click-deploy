@@ -131,6 +131,22 @@ export async function containerExists(
   return result.stdout.trim() === "yes";
 }
 
+/** Returns true iff a container with this name exists AND is currently running
+ * (`State.Running == true`). A stopped/exited/created container returns false —
+ * callers that adopt a container on resume must not adopt a dead one. */
+export async function containerRunning(
+  ip: string,
+  containerName: string,
+  hostKey?: string
+): Promise<boolean> {
+  const result = await sshExec(
+    ip,
+    `su - deploy -c "docker inspect --format='{{.State.Running}}' ${containerName} 2>/dev/null"`,
+    hostKey
+  );
+  return result.stdout.trim() === "true";
+}
+
 // --- Docker Network for Services ---
 
 export async function ensureOcdNetwork(ip: string, hostKey?: string): Promise<void> {

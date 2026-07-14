@@ -40,6 +40,7 @@ export {
   stopContainer,
   startContainer,
   containerExists,
+  containerRunning,
   ensureOcdNetwork,
 } from "./lifecycle.ts";
 

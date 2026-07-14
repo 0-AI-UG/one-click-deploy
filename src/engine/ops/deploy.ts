@@ -10,6 +10,7 @@ import {
   healthCheck,
   containerRunningCheck,
   containerExists,
+  containerRunning,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress, syncAllTraefik } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -670,8 +671,14 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     if (!server) return null;
     const hostKey = server.serverHostKey || undefined;
-    if (await containerExists(server.serverIp, req.app_name, hostKey)) {
-      ctx.log(`adopting existing container ${req.app_name}`);
+    // Adopt ONLY a container that is actually running. A container left behind
+    // by an interrupted `docker run` (created/exited/stopped) must NOT be
+    // adopted — adopting it would skip straight to health_check, which then
+    // fails with "Container is not running" and rolls the whole deploy back.
+    // Returning null here lets run() force-remove the dead container and start
+    // a fresh one, so the container is guaranteed running after this step.
+    if (await containerRunning(server.serverIp, req.app_name, hostKey)) {
+      ctx.log(`adopting existing running container ${req.app_name}`);
       return {
         imageTag: `${req.app_name}:latest`,
       };

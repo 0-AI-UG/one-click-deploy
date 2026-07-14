@@ -24,12 +24,17 @@ mock.module("../provision-server.ts", () => ({ provisionServer }));
 // imports cleanly even though we're only exercising selected steps.
 const healthCheckMock = mock(async () => ({ healthy: true, statusCode: 200 }));
 const containerRunningCheckMock = mock(async () => ({ healthy: true }));
+const cloneAndBuildMock = mock(async () => ({ imageTag: "app:latest" }));
+const containerRunningMock = mock(async () => false);
+const containerExistsMock = mock(async () => false);
 mock.module("../../shared/remote/index.ts", () => ({
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
-  cloneAndBuild: mock(async () => {}),
+  cloneAndBuild: cloneAndBuildMock,
   removeContainer: mock(async () => {}),
   healthCheck: healthCheckMock,
   containerRunningCheck: containerRunningCheckMock,
+  containerRunning: containerRunningMock,
+  containerExists: containerExistsMock,
 }));
 mock.module("../scale/traefik-manager.ts", () => ({
   syncAppIngress: mock(async () => {}),
@@ -85,6 +90,11 @@ beforeEach(() => {
   compute._mocks.volumeDelete.mockClear();
   healthCheckMock.mockClear();
   containerRunningCheckMock.mockClear();
+  cloneAndBuildMock.mockClear();
+  containerRunningMock.mockClear();
+  containerRunningMock.mockImplementation(async () => false);
+  containerExistsMock.mockClear();
+  containerExistsMock.mockImplementation(async () => false);
 });
 
 const baseReq = (name: string) => ({
@@ -805,6 +815,38 @@ describe("deploy: auto-domains", () => {
       db.saveSetting("dns_zone_id", "");
       db.saveSetting("dns_zone_name", "");
     }
+  });
+});
+
+describe("deploy step: build_and_run_container probe (resume robustness)", () => {
+  const step = stepByName("build_and_run_container");
+
+  test("does NOT adopt a container that exists but is not running — run() rebuilds it", async () => {
+    const { prior, name } = setupDeployedApp(true);
+    // Resume after an interrupted `docker run`: the container name is present
+    // but stopped/exited/created, so State.Running == false.
+    containerRunningMock.mockImplementation(async () => false);
+    const { ctx } = makeCtx(baseReq(name));
+
+    const adopted = await step.probe!(ctx, prior);
+    expect(adopted).toBeNull();
+
+    // Probe declined → run() executes and (re)builds, leaving the container running.
+    const out = (await step.run(ctx, prior)) as { imageTag: string };
+    expect(cloneAndBuildMock).toHaveBeenCalledTimes(1);
+    expect(out.imageTag).toBeTruthy();
+  });
+
+  test("DOES adopt a container that is actually running — run() is skipped", async () => {
+    const { prior, name } = setupDeployedApp(true);
+    containerRunningMock.mockImplementation(async () => true);
+    const { ctx } = makeCtx(baseReq(name));
+
+    const adopted = (await step.probe!(ctx, prior)) as { imageTag: string } | null;
+    expect(adopted).not.toBeNull();
+    expect(adopted!.imageTag).toBe(`${name}:latest`);
+    // Adoption means run() (and thus cloneAndBuild) is never invoked.
+    expect(cloneAndBuildMock).not.toHaveBeenCalled();
   });
 });
 
