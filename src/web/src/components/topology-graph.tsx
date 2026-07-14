@@ -92,10 +92,21 @@ const labelAt = (pts: Pt[]): Pt => {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 };
 
+// Total polyline length (px) — used to keep every flow-dot's speed uniform.
+const pathLen = (pts: Pt[]): number => {
+  let L = 0;
+  for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  return L;
+};
+
+// Distinct hues cycled across env links so overlapping lanes stay tellable
+// apart — line, flow-dots, and label border all share their link's colour.
+const ENV_COLORS = ["#E5484D", "#4263EB", "#2F9E44", "#E8590C", "#9C36B5", "#1098AD"];
+
 type EdgeKind = "ing" | "env" | "wake" | "tie";
 type Edge = {
   id: string; kind: EdgeKind; pts: Pt[];
-  label?: string; always?: boolean; revMarker?: boolean;
+  label?: string; always?: boolean; revMarker?: boolean; color?: string;
   appIds: number[]; infra: string[];
 };
 type InfraKind = "net" | "pub" | "waker";
@@ -475,6 +486,7 @@ function computeLayout(data: TopologyData, availW: number): Layout | null {
   // label ever overlaps another or crosses a card body.
   const laneY = (band: string, slot: number) =>
     (rowBottomAbs.get(band) ?? 0) + ENV_LANE_TOP + slot * ENV_LANE_STEP;
+  let envIdx = 0;
   for (const e of envList) {
     const a = primaryFrag(e.from), b = primaryFrag(e.to);
     if (!a || !b) continue;
@@ -511,6 +523,7 @@ function computeLayout(data: TopologyData, availW: number): Layout | null {
     }
     edges.push({
       id: `env-${e.pair}`, kind: "env", pts, revMarker: !toAtEnd,
+      color: ENV_COLORS[envIdx++ % ENV_COLORS.length],
       label: e.key, appIds: [e.from, e.to], infra: [],
     });
   }
@@ -581,7 +594,7 @@ function computeFocus(
 // ---------------------------------------------------------------------------
 const EDGE_STYLE: Record<EdgeKind, { c: string; w: number; d?: string; o: number; m?: string }> = {
   ing: { c: "#5B8DEF", w: 2, o: 0.85, m: "url(#ocd-ar-blue)" },
-  env: { c: "#1A1A1A", w: 2, d: "6 4", o: 0.55, m: "url(#ocd-ar-dark)" },
+  env: { c: "#1A1A1A", w: 2, d: "6 4", o: 0.8, m: "url(#ocd-ar-env)" },
   wake: { c: "#FFB800", w: 2.4, d: "2 5", o: 0.9, m: "url(#ocd-ar-amber)" },
   tie: { c: "#8A8A8A", w: 1.6, d: "1 4", o: 0.8 },
 };
@@ -716,6 +729,7 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
                 <marker id="ocd-ar-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5B8DEF" /></marker>
                 <marker id="ocd-ar-dark" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1A1A1A" /></marker>
                 <marker id="ocd-ar-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FFB800" /></marker>
+                <marker id="ocd-ar-env" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke" /></marker>
               </defs>
               {layout.edges.map((e) => {
                 if (!layerOn(e.kind)) return null;
@@ -723,14 +737,35 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
                 const hi = focusSets?.edges.has(e.id) ?? false;
                 const opacity = focusing ? (hi ? 1 : 0.12) : st.o;
                 const width = focusing && hi ? st.w + 1.4 : st.w;
+                const stroke = e.color ?? st.c;
+                const d = roundedPath(e.pts);
+                // Env links flow coloured dots along the line in the from→to
+                // direction, so a single link stays followable through a merge.
+                let dots: React.ReactNode = null;
+                if (e.kind === "env") {
+                  const len = pathLen(e.pts);
+                  const dur = Math.max(1.4, len / 70);
+                  const n = Math.min(4, Math.max(1, Math.round(len / 130)));
+                  dots = Array.from({ length: n }, (_, i) => (
+                    <circle key={i} r={3.2} fill={stroke} stroke="#1A1A1A" strokeWidth={0.6}>
+                      <animateMotion
+                        dur={`${dur}s`} repeatCount="indefinite" path={d}
+                        keyPoints={e.revMarker ? "1;0" : "0;1"} keyTimes="0;1" calcMode="linear"
+                        begin={`-${((dur * i) / n).toFixed(2)}s`}
+                      />
+                    </circle>
+                  ));
+                }
                 return (
-                  <path
-                    key={e.id} d={roundedPath(e.pts)} fill="none"
-                    stroke={st.c} strokeWidth={width} strokeDasharray={st.d}
-                    markerStart={e.revMarker ? st.m : undefined}
-                    markerEnd={e.revMarker ? undefined : st.m}
-                    style={{ opacity, transition: "opacity .12s, stroke-width .12s" }}
-                  />
+                  <g key={e.id} style={{ opacity, transition: "opacity .12s" }}>
+                    <path
+                      d={d} fill="none"
+                      stroke={stroke} strokeWidth={width} strokeDasharray={st.d}
+                      markerStart={e.revMarker ? st.m : undefined}
+                      markerEnd={e.revMarker ? undefined : st.m}
+                    />
+                    {dots}
+                  </g>
                 );
               })}
             </svg>
@@ -854,7 +889,7 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
                 <div
                   key={`lab-${e.id}`}
                   className={`absolute -translate-x-1/2 -translate-y-1/2 font-mono text-[8px] font-bold uppercase tracking-wide border-[1.5px] px-1.5 py-px whitespace-nowrap pointer-events-none ${labelClass[e.kind]}`}
-                  style={{ left: lx, top: ly, zIndex: 5 }}
+                  style={{ left: lx, top: ly, zIndex: 5, borderColor: e.color }}
                 >
                   {e.label}
                 </div>
