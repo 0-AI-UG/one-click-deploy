@@ -1467,6 +1467,21 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE services ADD COLUMN stack_id INTEGER");
     },
   },
+  {
+    version: 74,
+    description:
+      "Add volume_attached flag to apps + service_instances (distinguish a created volume from an attached-existing one for safe destroy)",
+    up: (db) => {
+      // 0 = managed/created by us (safe to DELETE on destroy).
+      // 1 = an EXISTING volume ATTACHED via attach_existing_volume (predates us,
+      //     may hold data owned by something else — DETACH only, never delete).
+      // Default 0 backfills every existing row to today's semantics (delete on
+      // destroy), so no already-deployed app changes meaning. Only volumes
+      // attached going forward via attach_existing_volume are marked 1.
+      db.run("ALTER TABLE apps ADD COLUMN volume_attached INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE service_instances ADD COLUMN volume_attached INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

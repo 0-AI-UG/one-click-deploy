@@ -21,6 +21,7 @@ mock.module("../../shared/remote/index.ts", () => ({
 
 import * as db from "../../shared/db.ts";
 import attachVolumeOp from "./attach-volume.ts";
+import attachExistingVolumeOp from "./attach-existing-volume.ts";
 import { __setBindImplForTest, __resetBindImplForTest } from "./_volumes.ts";
 
 function makeCtx(input: any, opId = 42) {
@@ -151,6 +152,8 @@ describe("attach_volume: attach_to_app", () => {
     expect(fresh.volume_id).toBe("v-new");
     expect(fresh.min_replicas).toBe(1);
     expect(fresh.max_replicas).toBe(1);
+    // Created by us → managed, so destroy will DELETE it.
+    expect(fresh.volume_attached).toBeFalsy();
   });
 
   test("compensate clears the volume, restores scaling, and recreates volume-less", async () => {
@@ -206,6 +209,20 @@ describe("attach_volume: full rollback on a failed recreate", () => {
     expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete.mock.calls[0][0]).toBe((createOut as any).volumeId);
     expect(server.location).toBe("fsn1"); // sanity: target server used
+  });
+});
+
+describe("attach_existing_volume: marks the volume as attached (detach-not-delete on destroy)", () => {
+  const step = attachExistingVolumeOp.steps.find((s) => s.name === "attach_to_app")!;
+
+  test("attach_to_app records the volume with volume_attached=1", async () => {
+    const { app } = makeApp();
+    const { ctx } = makeCtx({ appId: app.id, volumeId: "vol-preexisting", mountPath: "/data" });
+    await step.run(ctx, {});
+    const fresh = db.getApp(app.id)!;
+    expect(fresh.volume_id).toBe("vol-preexisting");
+    // Pre-existing volume → attached, so destroy will DETACH (never delete) it.
+    expect(fresh.volume_attached).toBe(1);
   });
 });
 

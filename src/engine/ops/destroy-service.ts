@@ -67,10 +67,16 @@ const deleteVolumes: Step<DestroyServiceInput, { failed: boolean }> = {
     let failed = false;
     for (const inst of instances) {
       if (!inst.volume_id) continue;
-      const server = inst.server_id ? db.getServer(inst.server_id) : null;
       const r = await softStep(ctx, `delete_volume ${inst.volume_id}`, async () => {
         const compute = hetzner;
-        await compute.volumes?.delete(inst.volume_id);
+        if (inst.volume_attached) {
+          // Pre-existing attached volume — detach, never delete (parity with
+          // apps; service deploys only ever create volumes today, so this is
+          // the safe branch for any future attach path).
+          await compute.volumes?.detach(inst.volume_id);
+        } else {
+          await compute.volumes?.delete(inst.volume_id);
+        }
       });
       if (!r.ok) failed = true;
     }

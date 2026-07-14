@@ -31,6 +31,7 @@ type ValidateOut = {
   fromHostKey: string;
   fromHostMountPath: string;
   fromVolumeMount: string;
+  fromVolumeAttached: boolean;
   fromExtraVolumes: string;
   toProviderServerId: string;
   toServerIp: string;
@@ -68,6 +69,9 @@ const validate: Step<ReattachVolumeInput, ValidateOut> = {
       fromHostKey: fromServer.ssh_host_key || "",
       fromHostMountPath,
       fromVolumeMount: fromApp.volume_mount || `${fromHostMountPath}:${containerPath}`,
+      // Carry the source volume's provenance so a created/attached-existing
+      // volume keeps the same destroy semantics after the move.
+      fromVolumeAttached: !!fromApp.volume_attached,
       fromExtraVolumes: fromApp.extra_volumes,
       toProviderServerId: toServer.provider_id,
       toServerIp: toServer.ipv4,
@@ -126,7 +130,7 @@ const detachFromSource: Step<ReattachVolumeInput, { ok: true }> = {
       hostMountPath: v.fromHostMountPath,
       appId: ctx.input.fromAppId,
     });
-    db.updateAppVolume(ctx.input.fromAppId, ctx.input.volumeId, v.fromVolumeMount);
+    db.updateAppVolume(ctx.input.fromAppId, ctx.input.volumeId, v.fromVolumeMount, v.fromVolumeAttached);
     const result = await recreateAppContainer(ctx.input.fromAppId, v.fromVolumeMount, db.parseExtraVolumes(v.fromExtraVolumes));
     if (!result.ok) throw new Error(result.error || "Failed to recreate source container during reattach rollback");
     ctx.log(`Re-attached volume ${ctx.input.volumeId} to source app ${ctx.input.fromAppId}`);
@@ -178,7 +182,7 @@ const attachToTarget: Step<ReattachVolumeInput, { ok: true }> = {
         appId: ctx.input.toAppId,
       });
       bound = true;
-      db.updateAppVolume(ctx.input.toAppId, ctx.input.volumeId, v.toVolumeMount);
+      db.updateAppVolume(ctx.input.toAppId, ctx.input.volumeId, v.toVolumeMount, v.fromVolumeAttached);
       dbSet = true;
       const result = await recreateAppContainer(
         ctx.input.toAppId,

@@ -102,11 +102,15 @@ const deleteVolume: Step<DestroyInput, { ok: boolean; error?: string }> = {
   async run(ctx) {
     const app = db.getApp(ctx.input.appId);
     if (!app || !app.volume_id) return { ok: true };
-    const replicas = db.getReplicas(ctx.input.appId);
-    const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
     const r = await softStep(ctx, "delete_volume", async () => {
       const compute = hetzner;
-      await compute.volumes?.delete(app.volume_id);
+      if (app.volume_attached) {
+        // Pre-existing volume attached via attach_existing_volume — it predates
+        // us and may hold data we don't own. DETACH only; never delete.
+        await compute.volumes?.detach(app.volume_id);
+      } else {
+        await compute.volumes?.delete(app.volume_id);
+      }
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };
   },

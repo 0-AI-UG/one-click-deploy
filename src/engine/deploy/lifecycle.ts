@@ -97,15 +97,20 @@ export async function destroyAppCore(appId: number): Promise<{ ok: boolean; erro
       }
     }
 
-    // Delete volume if attached
+    // Delete volume if attached. A volume ATTACHED via attach_existing_volume
+    // predates us (may hold data we don't own), so it is detached-not-deleted.
     if (app.volume_id) {
       try {
-        const firstServer = replicas.length > 0 ? db.getServer(replicas[0].server_id) : null;
         const compute = hetzner;
-        await compute.volumes?.delete(app.volume_id);
-        log("destroyApp", `Deleted volume ${app.volume_id}`);
+        if (app.volume_attached) {
+          await compute.volumes?.detach(app.volume_id);
+          log("destroyApp", `Detached pre-existing volume ${app.volume_id}`);
+        } else {
+          await compute.volumes?.delete(app.volume_id);
+          log("destroyApp", `Deleted volume ${app.volume_id}`);
+        }
       } catch (err) {
-        log("destroyApp", `Failed to delete volume ${app.volume_id}:`, err instanceof Error ? err.message : err);
+        log("destroyApp", `Failed to release volume ${app.volume_id}:`, err instanceof Error ? err.message : err);
         cleanupFailed = true;
       }
     }

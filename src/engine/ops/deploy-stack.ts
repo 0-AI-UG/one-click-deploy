@@ -315,6 +315,14 @@ const plan: Step<DeployStackInput, PlanOut> = {
     // safe); let a genuine failure PROPAGATE rather than orphan the stack/env
     // rows behind a clean `compensated`. A reused environment is left in place —
     // we didn't create it, so we don't destroy it.
+    //
+    // First untag any surviving members this run tagged with the stack but did
+    // NOT create (reused services, and reused apps if any). The teardown above
+    // already deleted every member we created, so whatever still references this
+    // stack is a survivor — clearing its stack_id keeps it from dangling at the
+    // stack row we're about to delete.
+    for (const svc of db.getServicesByStackId(out.stackId)) db.setServiceStack(svc.id, null);
+    for (const appRow of db.getAppsByStackId(out.stackId)) db.setAppStack(appRow.id, null);
     db.deleteStack(out.stackId);
     if (out.createdEnv) db.deleteEnvironment(out.environmentId);
   },

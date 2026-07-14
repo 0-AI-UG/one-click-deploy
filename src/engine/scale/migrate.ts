@@ -318,7 +318,7 @@ async function migrateWithVolume(
   const containerPath = (app.volume_mount?.split(":")[1]) || "/data";
   const newVolumeMount = `${hostMountPath}:${containerPath}`;
   if (newVolumeMount !== app.volume_mount) {
-    db.updateAppVolume(app.id, volumeId, newVolumeMount);
+    db.updateAppVolume(app.id, volumeId, newVolumeMount, !!app.volume_attached);
     app.volume_mount = newVolumeMount;
     if (rollbackCtx) rollbackCtx.volumeMountChanged = true;
   }
@@ -384,7 +384,7 @@ export async function rollbackMigrateWithVolume(
   // 1. Restore volume_mount in DB if we mutated it.
   if (rb.volumeMountChanged && rb.originalVolumeMount !== undefined) {
     try {
-      db.updateAppVolume(app.id, app.volume_id, rb.originalVolumeMount);
+      db.updateAppVolume(app.id, app.volume_id, rb.originalVolumeMount, !!app.volume_attached);
       logLine(`Restored app.volume_mount to '${rb.originalVolumeMount}'`);
     } catch (err) {
       logLine(`MANUAL RECOVERY NEEDED: could not restore volume_mount: ${err}`);

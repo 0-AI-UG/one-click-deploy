@@ -18,6 +18,9 @@ export type AppRow = {
   created_at: string;
   volume_id: string;
   volume_mount: string;
+  /** 0 = volume was CREATED by us (deleted on destroy); 1 = an EXISTING volume
+   *  ATTACHED via attach_existing_volume (detached-not-deleted on destroy). */
+  volume_attached: number;
   webhook_enabled: number;
   webhook_secret: string;
   webhook_branch: string;
@@ -461,8 +464,13 @@ export function updateAppDomain(id: number, domain: string): void {
   db.query("UPDATE apps SET domain = ? WHERE id = ?").run(domain, id);
 }
 
-export function updateAppVolume(id: number, volumeId: string, volumeMount: string): void {
-  db.query("UPDATE apps SET volume_id = ?, volume_mount = ? WHERE id = ?").run(volumeId, volumeMount, id);
+/** Persist an app's volume pointer. `attached` records provenance: false (the
+ *  default) = a volume we CREATED (deleted on destroy); true = an EXISTING volume
+ *  ATTACHED via attach_existing_volume (detached-not-deleted on destroy). Callers
+ *  that CLEAR the volume (empty ids) leave attached at its harmless default. */
+export function updateAppVolume(id: number, volumeId: string, volumeMount: string, attached = false): void {
+  db.query("UPDATE apps SET volume_id = ?, volume_mount = ?, volume_attached = ? WHERE id = ?")
+    .run(volumeId, volumeMount, attached ? 1 : 0, id);
 }
 
 export function updateAppExtraVolumes(id: number, extraVolumes: string[]): void {

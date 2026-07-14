@@ -25,6 +25,10 @@ export type ServiceInstanceRow = {
   host_port: number;
   volume_id: string;
   volume_mount: string;
+  /** 0 = volume CREATED by us (deleted on destroy); 1 = an EXISTING volume
+   *  ATTACHED (detached-not-deleted on destroy). Service deploys only ever
+   *  create volumes, so this is 0 today — wired for parity with apps. */
+  volume_attached: number;
   status: string;
   cpu_percent: number;
   memory_percent: number;

@@ -115,6 +115,7 @@ beforeEach(() => {
   deleteGithubWebhook.mockClear();
   getGitHubPat.mockClear();
   compute._mocks.volumeDelete.mockClear();
+  compute._mocks.volumeDetach.mockClear();
   compute._mocks.deleteServer.mockClear();
   dns._mocks.deleteRecord.mockClear();
 
@@ -123,6 +124,7 @@ beforeEach(() => {
   syncAllTraefik.mockImplementation(async () => {});
   dns._mocks.deleteRecord.mockImplementation(async () => {});
   compute._mocks.volumeDelete.mockImplementation(async () => {});
+  compute._mocks.volumeDetach.mockImplementation(async () => {});
   sshExec.mockImplementation(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
 });
 
@@ -184,7 +186,7 @@ describe("destroyApp: happy path", () => {
 });
 
 describe("destroyApp: volume cleanup", () => {
-  test("deletes the associated volume when volume_id is set", async () => {
+  test("deletes the associated volume when volume_id is set (managed/created)", async () => {
     const server = freshServer();
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
@@ -194,6 +196,24 @@ describe("destroyApp: volume cleanup", () => {
 
     expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete.mock.calls[0][0]).toBe("vol-abc");
+    expect(compute._mocks.volumeDetach).not.toHaveBeenCalled();
+  });
+
+  test("detaches (never deletes) an attached-existing volume on destroy", async () => {
+    const server = freshServer();
+    const app = freshApp();
+    attachReplica(app.id, server.id, app.name);
+    // attached=true marks a pre-existing volume attached via attach_existing_volume.
+    db.updateAppVolume(app.id, "vol-preexisting", "/data", true);
+
+    await destroyApp(app.id);
+
+    // Detached, not deleted — deleting would destroy data we don't own.
+    expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
+    expect(compute._mocks.volumeDetach.mock.calls[0][0]).toBe("vol-preexisting");
+    expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
+    // App teardown still completes.
+    expect(db.getApp(app.id)).toBeNull();
   });
 
   test("does not call volume delete when no volume attached", async () => {

@@ -406,7 +406,60 @@ describe("deploy_stack compensation preserves reused resources", () => {
 
     // ... while the REUSED env + REUSED service survive the rollback.
     expect(db.getEnvironment(existingEnv.id)).not.toBeNull();
-    expect(db.getServiceByName(`${name}-cache`)).not.toBeNull();
+    const survivingCache = db.getServiceByName(`${name}-cache`);
+    expect(survivingCache).not.toBeNull();
+    // ... and the surviving reused service is UNTAGGED (its stack_id no longer
+    // dangles at the now-deleted stack row).
+    expect(survivingCache!.stack_id).toBeNull();
+    // Stack row (created this run) is gone.
+    expect(db.getStackByName(name)).toBeNull();
+  });
+
+  test("first-up rollback untags a reused service but destroys a newly-created one", async () => {
+    const name = `s-${randomSuffix()}`;
+    // A managed service that ALREADY exists (reused on this first up).
+    const reusedSvc = db.insertService({
+      name: `${name}-cache`, service_type: "redis", version: "7", port: 6379,
+      env_vars: "{}", credentials: "{}",
+    });
+    const input = req(name, [app("web")], [
+      { key: "cache", type: "redis" }, // reused
+      { key: "queue", type: "redis" }, // newly created this run
+    ]);
+    const parent = enqueueOperation({
+      kind: "deploy_stack", resourceKeys: [`stack:${name}`], input, trigger: "test",
+    });
+    const ctx = makeCtx(input);
+    ctx.opId = parent.id;
+    const opId = parent.id;
+
+    const planOut = (await planStep.run(ctx, {})) as {
+      stackId: number; createdStack: boolean; reusedServiceKeys: string[];
+    };
+    expect(planOut.createdStack).toBe(true);            // first up
+    expect(planOut.reusedServiceKeys).toEqual(["cache"]);
+
+    // reconcile_services tagged BOTH the reused and the newly-created service.
+    db.setServiceStack(reusedSvc.id, planOut.stackId);
+    const newSvc = db.insertService({
+      name: `${name}-queue`, service_type: "redis", version: "7", port: 6379,
+      env_vars: "{}", credentials: "{}",
+    });
+    db.setServiceStack(newSvc.id, planOut.stackId);
+    enqueueOperation({
+      kind: "deploy_service", resourceKeys: [`service:create:${name}-queue`],
+      input: { name: `${name}-queue` }, trigger: "stack", parentId: opId,
+      idempotencyKey: `stack:${opId}:svc:queue`,
+    });
+
+    await driveWithSimulatedDestroys(opId, () => planStep.compensate!(ctx, planOut, {}));
+
+    // Newly-created service is destroyed.
+    expect(db.getServiceByName(`${name}-queue`)).toBeNull();
+    // Reused service survives AND is untagged (stack_id cleared to null).
+    const cache = db.getServiceByName(`${name}-cache`);
+    expect(cache).not.toBeNull();
+    expect(cache!.stack_id).toBeNull();
     // Stack row (created this run) is gone.
     expect(db.getStackByName(name)).toBeNull();
   });
