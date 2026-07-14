@@ -518,7 +518,7 @@ export function DashboardPage() {
   const showAppsCard = standaloneApps.length > 0 || stacks.length > 0;
 
   return (
-    <div className={`${view === "graph" ? "max-w-6xl" : "max-w-4xl"} mx-auto px-4 py-6 space-y-6 animate-fade-in`}>
+    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Dashboard</h1>

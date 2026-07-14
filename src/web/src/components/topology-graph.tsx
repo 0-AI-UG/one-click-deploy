@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { StatusBadge } from "../components/ui.tsx";
 
@@ -39,11 +39,14 @@ const REP_ROW_H = 22;
 const REPS_VPAD = 12;
 const CHIPS_PER_ROW = 3;
 const CARD_GAP = 22;
-const STACK_EXTRA = 16; // extra gap at a stack boundary
 const STACK_PAD = 14; // stack box padding around member fragments
 const REGION_HEADER_H = 30;
 const REGION_VPAD = 24;
 const REGION_GAP = 60;
+const ROW_GAP = 26; // vertical gap between wrapped card rows within a region
+const ENV_LANE_TOP = 16; // gap from a row's bottom to its first env-link lane
+const ENV_LANE_STEP = 20; // vertical distance between stacked env-link lanes
+const ENV_LANE_BOT = 8; // gap after the last env-link lane before the next row
 const LEFT_MARGIN = 100; // left inner margin of a region (trunk lanes live here)
 const RIGHT_MARGIN = 80; // right inner margin (wake lane lives here)
 const BOARD_PAD = 28;
@@ -65,26 +68,6 @@ const cardHeight = (chips: number) => {
   const rows = Math.max(1, Math.ceil(chips / CHIPS_PER_ROW));
   return HEADER_H + REPS_VPAD + rows * REP_ROW_H;
 };
-
-// Orthogonal (right-angle) path between two card rects, picking a vertical or
-// horizontal trunk depending on their relative position.
-function ortho(a: Rect, b: Rect): Pt[] {
-  if (b.cy > a.cy + a.h / 2 + 10) {
-    const my = (a.top + a.h + (b.top)) / 2;
-    return [B(a), [a.cx, my], [b.cx, my], T(b)];
-  }
-  if (a.cy > b.cy + b.h / 2 + 10) {
-    const my = (b.top + b.h + a.top) / 2;
-    return [T(a), [a.cx, my], [b.cx, my], B(b)];
-  }
-  // same row → horizontal
-  if (b.cx >= a.cx) {
-    const mx = (a.left + a.w + b.left) / 2;
-    return [R(a), [mx, a.cy], [mx, b.cy], L(b)];
-  }
-  const mx = (b.left + b.w + a.left) / 2;
-  return [L(a), [mx, a.cy], [mx, b.cy], R(b)];
-}
 
 // Rounded orthogonal SVG path (quadratic corner fillets) — from the artifact.
 function roundedPath(raw: Pt[], rad = 8): string {
@@ -136,7 +119,7 @@ type Layout = {
   panelIp: string | null;
 };
 
-function computeLayout(data: TopologyData): Layout | null {
+function computeLayout(data: TopologyData, availW: number): Layout | null {
   const { servers, apps, replicas, links } = data;
   if (servers.length === 0) return null;
 
@@ -191,21 +174,28 @@ function computeLayout(data: TopologyData): Layout | null {
     seedsByServer.set(s.serverId, arr);
   }
 
-  // --- Lay out each server region: a single horizontal row of card fragments,
-  //     stack members grouped contiguously so a stack box wraps them cleanly. ---
+  // --- Lay out each server region as a wrapping grid of card fragments sized to
+  //     the available board width, so the board never scrolls horizontally.
+  //     Stack members are grouped contiguously and given their own rows so a
+  //     stack box bounds them cleanly without ever enclosing a foreign card. ---
   const frags: FragRender[] = [];
   const fragByKey = new Map<string, FragRender>();
   const regions: RegionRender[] = [];
   const stacks: StackRender[] = [];
 
-  // First pass: per-server ordered frags + local x + intrinsic width + row height.
-  type RegionPlan = {
-    server: TopologyServer;
-    items: Array<{ seed: FragSeed; localX: number; h: number }>;
-    intrinsicW: number; rowH: number; replicaCount: number;
-  };
-  const plans: RegionPlan[] = [];
-  let maxIntrinsicW = 0;
+  // Fit the logical content width to the measured board space. boardW below is
+  // regionLeft + contentW + BOARD_PAD, and the board lives inside the padded
+  // (p-3.5 = 14px each side) scroller, so contentW ≤ availW - 84.
+  const regionLeft = BOARD_PAD;
+  const contentW = Math.max(356, (availW > 0 ? availW - 84 : 780));
+  const usableW = contentW - LEFT_MARGIN - RIGHT_MARGIN;
+  const cols = Math.max(1, Math.floor((usableW + CARD_GAP) / (CARD_W + CARD_GAP)));
+
+  // Pass 1 — flow each server's frags into a grid of `cols` columns and record
+  // which (server, row) each frag landed in (needed to route env links cleanly).
+  type RowPlan = { cards: Array<{ seed: FragSeed; h: number }>; rowH: number };
+  const rowPlans: Array<{ server: TopologyServer; rows: RowPlan[]; replicaCount: number }> = [];
+  const place = new Map<string, { reg: number; row: number }>();
   for (const server of orderedServers) {
     const list = seedsByServer.get(server.id) ?? [];
     // order: stack members (by stack_id, then name) first, then standalone by name
@@ -218,29 +208,118 @@ function computeLayout(data: TopologyData): Layout | null {
       }
       return a.app.name.localeCompare(b.app.name);
     });
-    let x = LEFT_MARGIN;
-    let rowH = cardHeight(1);
-    let prevStack: number | null | undefined = undefined;
-    const items: RegionPlan["items"] = [];
-    list.forEach((seed, i) => {
-      if (i > 0) {
-        const boundary = seed.app.stack_id !== prevStack;
-        x += CARD_GAP + (boundary ? STACK_EXTRA : 0);
-      }
+
+    // Flow into rows: break to a new row at every stack boundary (so each stack
+    // owns whole rows) and whenever the current row is full.
+    const rows: RowPlan[] = [];
+    let cur: Array<{ seed: FragSeed; h: number }> = [];
+    let curStack: number | null | undefined = undefined;
+    const flush = () => { if (cur.length) { rows.push({ cards: cur, rowH: Math.max(...cur.map((c) => c.h)) }); cur = []; } };
+    for (const seed of list) {
       const h = cardHeight(seed.anchorOnly ? 1 : Math.max(1, seed.reps.length));
-      rowH = Math.max(rowH, h);
-      items.push({ seed, localX: x, h });
-      x += CARD_W;
-      prevStack = seed.app.stack_id;
-    });
-    const intrinsicW = x + RIGHT_MARGIN;
-    maxIntrinsicW = Math.max(maxIntrinsicW, intrinsicW);
-    const replicaCount = replicas.filter((r) => r.server_id === server.id).length;
-    plans.push({ server, items, intrinsicW, rowH, replicaCount });
+      if (seed.app.stack_id !== curStack) flush();
+      if (cur.length >= cols) flush();
+      cur.push({ seed, h });
+      curStack = seed.app.stack_id;
+    }
+    flush();
+    rows.forEach((row, ri) => row.cards.forEach((c) => place.set(c.seed.key, { reg: server.id, row: ri })));
+    rowPlans.push({ server, rows, replicaCount: replicas.filter((r) => r.server_id === server.id).length });
   }
 
-  const contentW = Math.max(maxIntrinsicW, 560);
-  const regionLeft = BOARD_PAD;
+  // Primary fragment key per app (most replicas) — the env-link endpoint.
+  const primaryKeyByApp = new Map<number, string>();
+  {
+    const byApp = new Map<number, FragSeed[]>();
+    for (const s of seeds) { const a = byApp.get(s.app.id) ?? []; a.push(s); byApp.set(s.app.id, a); }
+    for (const [aid, arr] of byApp) {
+      primaryKeyByApp.set(aid, arr.reduce((b, s) => (s.reps.length > b.reps.length ? s : b), arr[0]).key);
+    }
+  }
+
+  // Dedupe env links (A↔B once), then reserve a horizontal lane below the row
+  // for every link whose endpoints share a row — each gets its own slot so the
+  // arrows and labels never stack on top of each other.
+  const envList: Array<{ from: number; to: number; key: string; pair: string }> = [];
+  {
+    const seen = new Set<string>();
+    for (const link of links) {
+      const pair = link.from < link.to ? `${link.from}:${link.to}` : `${link.to}:${link.from}`;
+      if (seen.has(pair)) continue;
+      seen.add(pair);
+      envList.push({ from: link.from, to: link.to, key: link.key, pair });
+    }
+  }
+  // Horizontal env segments live only in "bands" — the gap directly below a row
+  // (band `${reg}:${r}` sits between row r and row r+1). Every edge that crosses
+  // a band takes the next free slot in it, so no two segments ever share a Y.
+  const bandDemand = new Map<string, number>();
+  const takeSlot = (band: string) => {
+    const s = bandDemand.get(band) ?? 0;
+    bandDemand.set(band, s + 1);
+    return s;
+  };
+  type EnvRoute =
+    | { kind: "same"; band: string; slot: number }
+    | { kind: "adj"; band: string; slot: number; upKey: string; loKey: string }
+    | { kind: "dist"; bandU: string; slotU: number; bandL: string; slotL: number; upKey: string; loKey: string }
+    | { kind: "cross" };
+  const envRoute = new Map<string, EnvRoute>();
+  for (const e of envList) {
+    const ka = primaryKeyByApp.get(e.from), kb = primaryKeyByApp.get(e.to);
+    const pa = ka ? place.get(ka) : undefined, pb = kb ? place.get(kb) : undefined;
+    if (!ka || !kb || !pa || !pb) continue;
+    if (pa.reg !== pb.reg) { envRoute.set(e.pair, { kind: "cross" }); continue; }
+    if (pa.row === pb.row) {
+      const band = `${pa.reg}:${pa.row}`;
+      envRoute.set(e.pair, { kind: "same", band, slot: takeSlot(band) });
+      continue;
+    }
+    const up = pa.row < pb.row ? { p: pa, k: ka } : { p: pb, k: kb };
+    const lo = pa.row < pb.row ? { p: pb, k: kb } : { p: pa, k: ka };
+    if (lo.p.row - up.p.row === 1) {
+      const band = `${up.p.reg}:${up.p.row}`;
+      envRoute.set(e.pair, { kind: "adj", band, slot: takeSlot(band), upKey: up.k, loKey: lo.k });
+    } else {
+      const bandU = `${up.p.reg}:${up.p.row}`, bandL = `${lo.p.reg}:${lo.p.row - 1}`;
+      envRoute.set(e.pair, {
+        kind: "dist", bandU, slotU: takeSlot(bandU), bandL, slotL: takeSlot(bandL), upKey: up.k, loKey: lo.k,
+      });
+    }
+  }
+  const laneBand = (rowKey: string) => {
+    const n = bandDemand.get(rowKey) ?? 0;
+    return n > 0 ? ENV_LANE_TOP + n * ENV_LANE_STEP + ENV_LANE_BOT : 0;
+  };
+
+  // Pass 2 — assign local coordinates, growing the gap below any row that hosts
+  // env lanes so they fit between rows (and inside the region for the last row).
+  type RegionPlan = {
+    server: TopologyServer;
+    items: Array<{ seed: FragSeed; localX: number; localY: number; h: number }>;
+    rowsH: number; replicaCount: number;
+    rowBottomLocal: Array<number>;
+  };
+  const plans: RegionPlan[] = [];
+  for (const rp of rowPlans) {
+    const items: RegionPlan["items"] = [];
+    const rowBottomLocal: number[] = [];
+    let localTop = 0;
+    rp.rows.forEach((row, ri) => {
+      let x = LEFT_MARGIN;
+      for (let i = 0; i < row.cards.length; i++) {
+        const c = row.cards[i];
+        if (i > 0) x += CARD_GAP;
+        items.push({ seed: c.seed, localX: x, localY: localTop + (row.rowH - c.h) / 2, h: c.h });
+        x += CARD_W;
+      }
+      rowBottomLocal[ri] = localTop + row.rowH;
+      const band = laneBand(`${rp.server.id}:${ri}`);
+      const gap = ri === rp.rows.length - 1 ? band : Math.max(ROW_GAP, band);
+      localTop += row.rowH + gap;
+    });
+    plans.push({ server: rp.server, items, rowsH: localTop, replicaCount: rp.replicaCount, rowBottomLocal });
+  }
 
   // --- Vertical ingress strip above the regions. ---
   const netCy = BOARD_PAD + 24;
@@ -268,10 +347,11 @@ function computeLayout(data: TopologyData): Layout | null {
   const TRUNK_X2 = regionLeft + 58;
   const WAKE_X = regionLeft + contentW - 34;
 
-  // --- Second pass: assign region Y positions and absolute card rects. ---
+  // --- Third pass: assign region Y positions and absolute card rects. ---
+  const rowBottomAbs = new Map<string, number>(); // `${reg}:${row}` -> absolute y
   let y = BUS_Y + 34;
   for (const plan of plans) {
-    const regionH = REGION_HEADER_H + REGION_VPAD * 2 + plan.rowH;
+    const regionH = REGION_HEADER_H + REGION_VPAD * 2 + plan.rowsH;
     const rowTop = y + REGION_HEADER_H + REGION_VPAD;
     const s = plan.server;
     const meta = [s.ipv4, s.type, s.id === ingressServerId ? "◆ ingress" : null]
@@ -281,8 +361,7 @@ function computeLayout(data: TopologyData): Layout | null {
       x: regionLeft, y, w: contentW, h: regionH, ingress: s.id === ingressServerId,
     });
     for (const it of plan.items) {
-      const top = rowTop + (plan.rowH - it.h) / 2;
-      const rect = rectFrom(regionLeft + it.localX, top, CARD_W, it.h);
+      const rect = rectFrom(regionLeft + it.localX, rowTop + it.localY, CARD_W, it.h);
       const fr: FragRender = {
         key: it.seed.key, app: it.seed.app, serverId: it.seed.serverId,
         reps: it.seed.reps, anchorOnly: it.seed.anchorOnly,
@@ -291,6 +370,7 @@ function computeLayout(data: TopologyData): Layout | null {
       frags.push(fr);
       fragByKey.set(fr.key, fr);
     }
+    plan.rowBottomLocal.forEach((bottom, ri) => rowBottomAbs.set(`${s.id}:${ri}`, rowTop + bottom));
     y += regionH + REGION_GAP;
   }
   const boardH = y - REGION_GAP + BOARD_PAD;
@@ -309,7 +389,15 @@ function computeLayout(data: TopologyData): Layout | null {
     const minx = Math.min(...group.map((f) => f.rect.left));
     const maxx = Math.max(...group.map((f) => f.rect.left + f.rect.w));
     const miny = Math.min(...group.map((f) => f.rect.top));
-    const maxy = Math.max(...group.map((f) => f.rect.top + f.rect.h));
+    // Extend the box past the bottom row's env-lane band so intra-stack env
+    // links (which drop into the lane below their row) stay inside the box.
+    const bottomRow = Math.max(...group.map((f) => place.get(f.key)?.row ?? 0));
+    const rk = `${group[0].serverId}:${bottomRow}`;
+    const band = laneBand(rk);
+    const maxy = Math.max(
+      Math.max(...group.map((f) => f.rect.top + f.rect.h)),
+      band > 0 ? (rowBottomAbs.get(rk) ?? 0) + band - ENV_LANE_BOT : 0,
+    );
     stacks.push({
       key: k, label: `◆ Stack · ${group[0].app.stack_name ?? group[0].app.stack_id}`,
       x: minx - STACK_PAD, y: miny - STACK_PAD,
@@ -317,18 +405,15 @@ function computeLayout(data: TopologyData): Layout | null {
     });
   }
 
-  // Primary fragment of an app (most replicas) — used as an env-link endpoint.
+  // All fragments per app (for target-group ties); primary is the env endpoint.
   const fragsByApp = new Map<number, FragRender[]>();
   for (const f of frags) {
     const arr = fragsByApp.get(f.app.id) ?? [];
     arr.push(f);
     fragsByApp.set(f.app.id, arr);
   }
-  const primaryFrag = (appId: number): FragRender | undefined => {
-    const arr = fragsByApp.get(appId);
-    if (!arr || arr.length === 0) return undefined;
-    return arr.reduce((best, f) => (f.reps.length > best.reps.length ? f : best), arr[0]);
-  };
+  const primaryFrag = (appId: number): FragRender | undefined =>
+    fragByKey.get(primaryKeyByApp.get(appId) ?? "");
 
   // ---------------------------------------------------------------------------
   // Edges
@@ -386,17 +471,37 @@ function computeLayout(data: TopologyData): Layout | null {
     }
   }
 
-  // Env links (dedupe A↔B into a single undirected edge).
-  const seenPair = new Set<string>();
-  for (const link of links) {
-    const key = link.from < link.to ? `${link.from}:${link.to}` : `${link.to}:${link.from}`;
-    if (seenPair.has(key)) continue;
-    seenPair.add(key);
-    const a = primaryFrag(link.from), b = primaryFrag(link.to);
+  // Env links: each routed through its reserved band slot(s) so no arrow or
+  // label ever overlaps another or crosses a card body.
+  const laneY = (band: string, slot: number) =>
+    (rowBottomAbs.get(band) ?? 0) + ENV_LANE_TOP + slot * ENV_LANE_STEP;
+  for (const e of envList) {
+    const a = primaryFrag(e.from), b = primaryFrag(e.to);
     if (!a || !b) continue;
+    const r = envRoute.get(e.pair);
+    let pts: Pt[];
+    if (r?.kind === "same") {
+      const yy = laneY(r.band, r.slot);
+      pts = [B(a.rect), [a.rect.cx, yy], [b.rect.cx, yy], B(b.rect)];
+    } else if (r?.kind === "adj") {
+      const up = fragByKey.get(r.upKey)!.rect, lo = fragByKey.get(r.loKey)!.rect;
+      const yy = laneY(r.band, r.slot);
+      pts = [B(up), [up.cx, yy], [lo.cx, yy], T(lo)];
+    } else if (r?.kind === "dist") {
+      const up = fragByKey.get(r.upKey)!.rect, lo = fragByKey.get(r.loKey)!.rect;
+      const yu = laneY(r.bandU, r.slotU), yl = laneY(r.bandL, r.slotL);
+      const channelX = Math.min(up.left, lo.left) - CARD_GAP / 2;
+      pts = [B(up), [up.cx, yu], [channelX, yu], [channelX, yl], [lo.cx, yl], T(lo)];
+    } else {
+      // Cross-region: a simple detour through the empty gap between regions.
+      const hi = a.rect.cy <= b.rect.cy ? a.rect : b.rect;
+      const lo = a.rect.cy <= b.rect.cy ? b.rect : a.rect;
+      const my = (hi.top + hi.h + lo.top) / 2;
+      pts = [B(hi), [hi.cx, my], [lo.cx, my], T(lo)];
+    }
     edges.push({
-      id: `env-${key}`, kind: "env", pts: ortho(a.rect, b.rect),
-      label: link.key, appIds: [link.from, link.to], infra: [],
+      id: `env-${e.pair}`, kind: "env", pts,
+      label: e.key, appIds: [e.from, e.to], infra: [],
     });
   }
 
@@ -486,9 +591,22 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
   const [hover, setHover] = useState<FocusRef | null>(null);
   const [selected, setSelected] = useState<FocusRef | null>(null);
 
+  // Measure the scroller so the layout can wrap cards to fit (no h-scroll).
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [availW, setAvailW] = useState(0);
+  useLayoutEffect(() => {
+    const el = boardRef.current;
+    if (!el) return;
+    const measure = () => setAvailW(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const appById = useMemo(() => new Map(data.apps.map((a) => [a.id, a])), [data.apps]);
   const serverById = useMemo(() => new Map(data.servers.map((s) => [s.id, s])), [data.servers]);
-  const layout = useMemo(() => computeLayout(data), [data]);
+  const layout = useMemo(() => computeLayout(data, availW), [data, availW]);
 
   const focus = selected ?? hover;
   const focusSets = useMemo(
@@ -557,7 +675,7 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
       </div>
 
       {/* Board */}
-      <div className="border-2 border-fg bg-bg-raised shadow-neo overflow-x-auto">
+      <div ref={boardRef} className="border-2 border-fg bg-bg-raised shadow-neo overflow-x-auto">
         <div className="flex items-center gap-2 px-3.5 py-2.5 border-b-2 border-fg bg-fg">
           <span className="font-mono text-[10px] font-bold uppercase tracking-[0.15em] text-accent">Fleet Graph</span>
           <span className="font-mono text-[9px] text-white/50 tracking-wide">
@@ -734,13 +852,6 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
         </div>
       </div>
 
-      <p className="font-mono text-[10px] text-muted mt-3 leading-relaxed">
-        Hover any node to trace its path · click for detail.{" "}
-        <b className="text-fg">Blue</b> = public request flow, load-balanced by the panel Traefik across replicas (crossing servers over the private net).{" "}
-        <b className="text-fg">Dashed black</b> = internal <b className="text-fg">*.ocd.internal</b> env links.{" "}
-        <b className="text-fg">Amber</b> = sleeping apps held by the <b className="text-fg">waker</b> until first request.
-      </p>
-
       {/* Drawer */}
       <Drawer
         focus={selected} data={data} appById={appById} serverById={serverById}
@@ -807,15 +918,20 @@ function AppDetail({
   const spans = serverIds.length > 1;
   const outs = data.links.filter((l) => l.from === app.id);
   const ins = data.links.filter((l) => l.to === app.id);
-  const internalHost = app.internal_port != null
-    ? `${app.internal_protocol}://${app.name}.ocd.internal:${app.internal_port}`
-    : "—";
 
-  const note = app.public && app.status === "running"
-    ? `Public: ${app.domain ?? app.name} → DNS points at the panel. Panel Traefik load-balances round-robin${app.sticky ? " (sticky ocd_sticky cookie)" : ""} over the ${runningReps.length} backend${runningReps.length === 1 ? "" : "s"} at private-ip:host-port${spans ? ", spanning servers over the private net" : ""}.`
-    : app.status === "sleeping"
-      ? `Scaled to zero. Traefik routers point at the waker (${app.public ? "ocd-waker-http :8896" : "per-app :21000+"}). First request → waker holds until wakeApp() starts the anchor → forwards. Never a 503.`
-      : `Private. Reached in-cluster at ${app.name}.ocd.internal:${app.internal_port ?? "—"}, served by each server's local Traefik${runningReps.length > 1 ? `, round-robin over ${runningReps.length} replicas` : ""}.`;
+  // Request path as a compact chip flow + qualifier tags (instead of prose).
+  const flow = app.status === "sleeping"
+    ? ["router", app.public ? "waker :8896" : "waker :21000+", "wakes on 1st req"]
+    : app.public
+      ? ["Internet :443", "ocd-traefik", `${runningReps.length} live`]
+      : [`${app.name}.ocd.internal`, "local traefik", `${runningReps.length || "—"} live`];
+  const tags = app.status === "sleeping"
+    ? ["scaled to zero", "never 503"]
+    : [
+        ...(runningReps.length > 1 ? ["round-robin"] : []),
+        ...(app.public && app.sticky ? ["sticky cookie"] : []),
+        ...(spans ? ["cross-server"] : []),
+      ];
 
   return (
     <>
@@ -874,7 +990,23 @@ function AppDetail({
         </tbody>
       </table>
 
-      <div className="font-mono text-[9px] text-fg-dim bg-alt border-2 border-fg px-2.5 py-2 mb-2 leading-relaxed">{note}</div>
+      <div className="border-2 border-fg bg-alt px-2.5 py-2 mb-2">
+        <div className="flex items-center flex-wrap gap-1">
+          {flow.map((n, i) => (
+            <Fragment key={i}>
+              {i > 0 && <span className="font-mono text-muted text-[11px] leading-none">→</span>}
+              <span className="font-mono text-[9px] font-bold border-[1.5px] border-fg bg-bg-raised px-1.5 py-0.5">{n}</span>
+            </Fragment>
+          ))}
+        </div>
+        {tags.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {tags.map((t) => (
+              <span key={t} className="font-mono text-[8px] font-bold uppercase tracking-wider border border-fg bg-accent px-1 py-px">{t}</span>
+            ))}
+          </div>
+        )}
+      </div>
 
       <p className={sectionCls}>Connects to <span className="text-muted">{outs.length}</span></p>
       {outs.length === 0 ? (
