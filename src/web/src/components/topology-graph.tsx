@@ -728,7 +728,7 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
               <div
                 key={r.id}
                 className="absolute border-2 border-fg shadow-neo-sm"
-                style={{ left: r.x, top: r.y, width: r.w, height: r.h, background: r.ingress ? "#faf7ec" : "#F0EBE1", zIndex: 1 }}
+                style={{ left: r.x, top: r.y, width: r.w, height: r.h, background: r.ingress ? "#faf7ec" : "#F0EBE1", zIndex: 0 }}
               >
                 <div className="absolute top-0 left-0 right-0 h-[30px] bg-fg flex items-center gap-2.5 px-3" style={{ zIndex: 2 }}>
                   <span className="font-mono text-[11px] font-bold uppercase tracking-wide text-accent">{r.name}</span>
@@ -743,7 +743,7 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
               <div
                 key={s.key}
                 className="absolute border-2 border-dashed border-fg"
-                style={{ left: s.x, top: s.y, width: s.w, height: s.h, background: "rgba(186,255,57,.12)", zIndex: 1 }}
+                style={{ left: s.x, top: s.y, width: s.w, height: s.h, background: "rgba(186,255,57,.12)", zIndex: 0 }}
               >
                 <span className="absolute left-3.5 font-mono text-[9px] font-bold uppercase tracking-wider text-fg bg-accent px-2 border-2 border-fg" style={{ top: -11 }}>
                   {s.label}
