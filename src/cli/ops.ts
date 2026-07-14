@@ -17,13 +17,64 @@ export interface OperationEventPoll {
 export const TERMINAL = new Set(["done", "failed", "cancelled", "compensated"]);
 
 // The op runs server-side regardless of our connection, so a transient gateway
-// blip (panel restart/redeploy mid-op) shouldn't abort following it. Retry the
-// long-poll a bounded number of times, backing off, before giving up.
-const MAX_TRANSIENT_RETRIES = 10;
-const RETRY_BACKOFF_MS = 2000;
+// blip (panel restart/redeploy mid-op, which can 502 for minutes) shouldn't
+// abort following it. Instead of a small fixed retry count, ride out a
+// *continuous* outage up to a generous time budget, backing off between polls.
+const FOLLOW_OUTAGE_BUDGET_MS = 30 * 60 * 1000; // ~30 min of continuous unreachability
+const RETRY_BACKOFF_START_MS = 3000;
+const RETRY_BACKOFF_MAX_MS = 15000;
+const RETRY_BACKOFF_FACTOR = 1.5;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Mutable state tracking a run of continuous unreachability while following an
+ *  op. `outageStartedAt === 0` means "not currently in an outage". */
+export interface FollowRetryState {
+  outageStartedAt: number;
+  backoffMs: number;
+}
+
+export function newFollowRetryState(): FollowRetryState {
+  return { outageStartedAt: 0, backoffMs: RETRY_BACKOFF_START_MS };
+}
+
+/**
+ * Handle a transient poll failure while following an op. Since the op keeps
+ * running server-side, we keep retrying until ~30 min of *continuous*
+ * unreachability elapses. Returns false when that budget is exhausted (caller
+ * should give up); otherwise emits an informative reconnecting line via `log`,
+ * sleeps with capped exponential backoff, and returns true to retry.
+ *
+ * `state` must be reset (via newFollowRetryState / resetFollowRetryState) after
+ * any successful poll so the budget measures continuous — not cumulative —
+ * outage time.
+ */
+export async function handleTransientFollowError(
+  state: FollowRetryState,
+  log: (line: string) => void,
+): Promise<boolean> {
+  const now = Date.now();
+  if (state.outageStartedAt === 0) state.outageStartedAt = now;
+  const elapsedMs = now - state.outageStartedAt;
+  if (elapsedMs >= FOLLOW_OUTAGE_BUDGET_MS) return false;
+
+  const elapsedSec = Math.round(elapsedMs / 1000);
+  const budgetMin = Math.round(FOLLOW_OUTAGE_BUDGET_MS / 60_000);
+  log(
+    `${YELLOW}reconnecting${RESET} ${DIM}(panel unreachable ${elapsedSec}s; will keep trying up to ~${budgetMin} min)${RESET}`,
+  );
+
+  await sleep(state.backoffMs);
+  state.backoffMs = Math.min(Math.round(state.backoffMs * RETRY_BACKOFF_FACTOR), RETRY_BACKOFF_MAX_MS);
+  return true;
+}
+
+/** Reset outage tracking + backoff after a successful poll. */
+export function resetFollowRetryState(state: FollowRetryState): void {
+  state.outageStartedAt = 0;
+  state.backoffMs = RETRY_BACKOFF_START_MS;
 }
 
 /**
@@ -36,22 +87,17 @@ function sleep(ms: number): Promise<void> {
  */
 export async function followOp(opId: number): Promise<{ ok: boolean; error?: string }> {
   let lastSeq = 0;
-  let transientRetries = 0;
+  const retry = newFollowRetryState();
   while (true) {
     let poll: OperationEventPoll;
     try {
       poll = await get<OperationEventPoll>(
         `/api/operations/${opId}/events?since=${lastSeq}&wait=15000`,
       );
-      transientRetries = 0;
+      resetFollowRetryState(retry);
     } catch (err) {
-      if (err instanceof ApiError && err.isTransient && transientRetries < MAX_TRANSIENT_RETRIES) {
-        transientRetries++;
-        console.log(
-          `  ${YELLOW}reconnecting${RESET} ${DIM}(panel unreachable, attempt ${transientRetries}/${MAX_TRANSIENT_RETRIES})${RESET}`,
-        );
-        await sleep(RETRY_BACKOFF_MS);
-        continue;
+      if (err instanceof ApiError && err.isTransient) {
+        if (await handleTransientFollowError(retry, (line) => console.log(`  ${line}`))) continue;
       }
       // Give up following, but the op may still be running server-side.
       const detail = err instanceof Error ? err.message : String(err);

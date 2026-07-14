@@ -1,4 +1,5 @@
 import { get, ApiError } from "../api.ts";
+import { newFollowRetryState, resetFollowRetryState, handleTransientFollowError } from "../ops.ts";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW, colorStatus, table } from "../format.ts";
 
 interface Op {
@@ -53,13 +54,6 @@ interface OpLog {
 }
 
 const TERMINAL = new Set(["done", "failed", "cancelled", "compensated", "compensation_failed"]);
-
-const MAX_TRANSIENT_RETRIES = 10;
-const RETRY_BACKOFF_MS = 2000;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 function fmtTime(ts: string | null | undefined): string {
   return ts ? ts.replace("T", " ").slice(0, 16) : "-";
@@ -234,22 +228,17 @@ async function opsLogs(args: string[]): Promise<void> {
   }
 
   let cursor = since;
-  let transientRetries = 0;
+  const retry = newFollowRetryState();
   while (true) {
     let data: { status: string; logs: OpLog[] };
     try {
       data = await get<{ status: string; logs: OpLog[] }>(
         `/api/operations/${id}/logs?since=${cursor}&wait=15000`,
       );
-      transientRetries = 0;
+      resetFollowRetryState(retry);
     } catch (err) {
-      if (err instanceof ApiError && err.isTransient && transientRetries < MAX_TRANSIENT_RETRIES) {
-        transientRetries++;
-        console.log(
-          `${YELLOW}reconnecting${RESET} ${DIM}(panel unreachable, attempt ${transientRetries}/${MAX_TRANSIENT_RETRIES})${RESET}`,
-        );
-        await sleep(RETRY_BACKOFF_MS);
-        continue;
+      if (err instanceof ApiError && err.isTransient) {
+        if (await handleTransientFollowError(retry, (line) => console.log(line))) continue;
       }
       const detail = err instanceof Error ? err.message : String(err);
       console.error(`${RED}Lost contact with panel while following op #${id} (${detail})${RESET}`);

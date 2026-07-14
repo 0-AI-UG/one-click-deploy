@@ -7,6 +7,7 @@ import { promptLine } from "../prompt.ts";
 import { getGitRepo, readManifest, promptRequired } from "../manifest.ts";
 import { mergeEnv, type AppEnvDefs } from "../../shared/env-merge.ts";
 import { buildStackAppSpec, resolveRepoPath, repoDirOf } from "../../shared/stack-spec.ts";
+import { validateStackManifest } from "../../shared/manifest-validate.ts";
 import type { StackManifest, StackDeployRequest } from "../../shared/rpc.ts";
 
 type AppElement = StackDeployRequest["apps"][number];
@@ -31,9 +32,10 @@ interface StackDetail {
 }
 
 function readStackManifest(path: string): StackManifest {
+  let manifest: StackManifest;
   try {
     const raw = readFileSync(path, "utf-8");
-    return JSON.parse(raw) as StackManifest;
+    manifest = JSON.parse(raw) as StackManifest;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       console.error(`${RED}Stack manifest not found: ${path}${RESET}`);
@@ -42,6 +44,13 @@ function readStackManifest(path: string): StackManifest {
     }
     process.exit(1);
   }
+  try {
+    validateStackManifest(manifest, path);
+  } catch (err) {
+    console.error(`${RED}${err instanceof Error ? err.message : err}${RESET}`);
+    process.exit(1);
+  }
+  return manifest;
 }
 
 /**
@@ -277,7 +286,12 @@ async function stackUp(args: string[]): Promise<void> {
     );
   }
 
-  const { op_id } = await post<{ op_id: number }>("/api/stacks", body);
+  const { op_id, attached } = await post<{ op_id: number; attached?: boolean }>("/api/stacks", body);
+  if (attached) {
+    console.log(
+      `\n${DIM}A deploy of ${manifest.name} is already in progress — attaching to op #${op_id}…${RESET}`,
+    );
+  }
   const result = await followOp(op_id);
   if (result.ok) {
     console.log(`\n${GREEN}Stack deploy complete!${RESET}`);

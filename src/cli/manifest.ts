@@ -4,6 +4,7 @@ import { BOLD, DIM, RED, RESET } from "./format.ts";
 import { promptLine, promptHidden } from "./prompt.ts";
 import type { DeployManifest } from "../shared/rpc.ts";
 import type { RequiredMissing } from "../shared/env-merge.ts";
+import { validateDeployManifest } from "../shared/manifest-validate.ts";
 
 /**
  * Prompt (grouped) for required env vars that the merge could not fill from a
@@ -49,9 +50,10 @@ export function getGitRepo(): string {
 
 /** Read + JSON.parse a `.ocd-deploy.json` manifest, exiting on error. */
 export function readManifest(path: string): DeployManifest {
+  let manifest: DeployManifest;
   try {
     const raw = readFileSync(path, "utf-8");
-    return JSON.parse(raw) as DeployManifest;
+    manifest = JSON.parse(raw) as DeployManifest;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       console.error(`${RED}Manifest not found: ${path}${RESET}`);
@@ -60,6 +62,17 @@ export function readManifest(path: string): DeployManifest {
     }
     process.exit(1);
   }
+  // Schema-validate right after parse so a malformed manifest fails fast with a
+  // clear, field-level error before it ever reaches the deploy engine. Covers
+  // both single-app `ocd deploy` and every stack child manifest (`ocd stack up`
+  // calls readManifest per app entry).
+  try {
+    validateDeployManifest(manifest, path);
+  } catch (err) {
+    console.error(`${RED}${err instanceof Error ? err.message : err}${RESET}`);
+    process.exit(1);
+  }
+  return manifest;
 }
 
 /**

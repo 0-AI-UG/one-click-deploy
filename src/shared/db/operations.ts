@@ -84,6 +84,33 @@ export function getOperation(id: number): OperationRow | null {
   return db.query("SELECT * FROM operations WHERE id = ?").get(id) as OperationRow | null;
 }
 
+/**
+ * Find the newest non-terminal (pending/running/compensating) operation of a
+ * given kind whose resource_keys contains `resourceKey` (case-insensitive).
+ * Used for single-flight: attaching a second request to an in-progress op
+ * instead of enqueuing a duplicate. Returns null when none is in flight.
+ */
+export function findActiveOperationByResourceKey(kind: string, resourceKey: string): OperationRow | null {
+  const rows = db
+    .query(
+      `SELECT * FROM operations
+        WHERE kind = ? AND status IN ('pending','running','compensating')
+        ORDER BY id DESC`,
+    )
+    .all(kind) as OperationRow[];
+  const needle = resourceKey.toLowerCase();
+  for (const row of rows) {
+    let keys: unknown;
+    try {
+      keys = JSON.parse(row.resource_keys);
+    } catch {
+      continue;
+    }
+    if (Array.isArray(keys) && keys.some((k) => String(k).toLowerCase() === needle)) return row;
+  }
+  return null;
+}
+
 export function listPendingOperations(limit = 50): OperationRow[] {
   return db
     .query(

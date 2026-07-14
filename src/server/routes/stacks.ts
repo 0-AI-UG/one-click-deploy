@@ -5,6 +5,7 @@ import * as db from "../../shared/db.ts";
 import type { StackDeployRequest } from "../../shared/rpc.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
+import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
 
 // --- Deploy ---
 
@@ -14,6 +15,14 @@ export async function handleDeployStack(request: Request): Promise<Response> {
     const req: StackDeployRequest = await request.json();
     if (!req?.name || typeof req.name !== "string") {
       return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });
+    }
+    // Single-flight: only one deploy_stack per stack may run at a time. If one is
+    // already in flight (pending/running/compensating), attach to it — follow the
+    // existing run — instead of enqueuing a duplicate.
+    const resourceKey = `stack:${req.name}`;
+    const existing = findActiveOperationByResourceKey("deploy_stack", resourceKey);
+    if (existing) {
+      return Response.json({ op_id: existing.id, attached: true }, { headers: corsHeaders });
     }
     const { opId } = enqueue({
       kind: "deploy_stack",
