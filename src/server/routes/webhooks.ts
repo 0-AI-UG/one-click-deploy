@@ -299,12 +299,15 @@ export async function handlePanelGithubWebhook(request: Request): Promise<Respon
       return new Response("Branch mismatch", { status: 204 });
     }
 
-    const sha = (payload.after && String(payload.after).slice(0, 7)) || "unknown";
+    const fullSha = (payload.after && String(payload.after)) || "";
+    const sha = fullSha ? fullSha.slice(0, 7) : "unknown";
 
     // Detached: redeployPanel writes its DB state synchronously then dispatches
     // the rebuild via systemd-run, which will kill *this* container shortly
     // after. We must not await it — return 202 immediately.
-    redeployPanel(() => {}, { source: "webhook", gitCommit: sha }).catch((err) => {
+    // Pass the FULL sha so redeployPanel can pull the immutable per-commit
+    // GHCR tag (`sha-<fullSha>`) built from exactly this commit.
+    redeployPanel(() => {}, { source: "webhook", gitCommit: sha, gitSha: fullSha }).catch((err) => {
       console.error(`[panel-webhook] redeploy failed:`, err);
     });
 

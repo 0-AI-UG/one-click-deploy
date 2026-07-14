@@ -25,6 +25,8 @@ import { deployTraefikPanelSite } from "../scale/traefik-manager.ts";
 import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
+import { dockerLoginGhcr } from "../hetzner/registry.ts";
+import { resolveGitHubToken } from "../../shared/github-token.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
 
@@ -443,6 +445,109 @@ export async function bootstrapPanel(
 }
 
 /**
+ * Derive the GHCR image reference for the panel from its git repo URL.
+ *
+ * The CD workflow pushes the panel image to `ghcr.io/<owner>/<repo>` (see
+ * .github/workflows/cd.yml). GHCR requires the path to be lowercase, so we
+ * lowercase the owner/repo we extract from the (mixed-case) git URL.
+ * Accepts https, ssh (`git@github.com:owner/repo.git`), and trailing `.git`.
+ */
+export function ghcrImageForRepo(gitRepo: string, tag: string): string {
+  const path = gitRepo
+    .trim()
+    .replace(/^git@github\.com:/i, "")
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "");
+  const ownerRepo = path.split("/").filter(Boolean).slice(-2).join("/");
+  return `ghcr.io/${ownerRepo.toLowerCase()}:${tag}`;
+}
+
+/**
+ * Build the detached rebuild script for a panel self-redeploy.
+ *
+ * KEY CHANGE vs the old behaviour: this NO LONGER runs `docker build` on the
+ * panel's own host. Building cross-compiled the CLI + re-ran bun install and
+ * pegged both cores for minutes, starving the live panel (Traefik 502/503).
+ * Instead we `docker pull` the image the CD workflow already built and pushed
+ * to GHCR, then swap. Pulling is I/O-bound and the OLD container keeps serving
+ * for the whole pull, so there is no CPU starvation — only a seconds-long swap.
+ *
+ * The pull is retried because the webhook that triggers a redeploy fires on
+ * *push*, ~15 min BEFORE CI finishes publishing the image. We pull an
+ * immutable per-commit tag (`sha-<gitsha>`); that tag only exists once CI has
+ * built and pushed it, so retrying the pull inherently waits for "image ready"
+ * without polling GitHub. If the image never appears (e.g. CI failed) we give
+ * up and leave the currently-running container untouched (fail-safe).
+ */
+export function buildPanelRebuildScript(opts: {
+  containerName: string;
+  /** Full GHCR ref including tag, e.g. ghcr.io/owner/repo:sha-<...>. */
+  image: string;
+  hostPort: number;
+  containerPort: number;
+  envFilePath: string;
+  /** "-v src:dst" or "". */
+  volumeFlag: string;
+  /** "DOCKER_CONFIG=<dir> " (trailing space) or "" for anonymous pulls. */
+  ghcrEnvPrefix: string;
+  /** Ephemeral DOCKER_CONFIG dir to remove when done, or "". */
+  ghcrConfigDir: string;
+  pullRetries: number;
+  pullSleepSeconds: number;
+}): string {
+  const {
+    containerName, image, hostPort, containerPort, envFilePath, volumeFlag,
+    ghcrEnvPrefix, ghcrConfigDir, pullRetries, pullSleepSeconds,
+  } = opts;
+  const cleanup = ghcrConfigDir
+    ? `su - deploy -c "rm -rf ${ghcrConfigDir}" 2>/dev/null || true`
+    : `true`;
+  // NB: no `set -e` — a failed pull attempt must not abort the retry loop.
+  return [
+    `#!/usr/bin/env bash`,
+    `set -uo pipefail`,
+    `pull_ok=0`,
+    `for i in $(seq 1 ${pullRetries}); do`,
+    `  if su - deploy -c "${ghcrEnvPrefix}docker pull ${image}"; then pull_ok=1; break; fi`,
+    `  echo "[panel-redeploy] ${image} not ready (attempt $i/${pullRetries}); retrying in ${pullSleepSeconds}s"`,
+    `  sleep ${pullSleepSeconds}`,
+    `done`,
+    `if [ "$pull_ok" != "1" ]; then`,
+    `  echo "[panel-redeploy] giving up: ${image} never became available; leaving current container running"`,
+    `  ${cleanup}`,
+    `  exit 1`,
+    `fi`,
+    // Swap on the SAME loopback port that Traefik's panel.yml already targets.
+    `docker rm -f ${containerName} 2>/dev/null || true`,
+    `su - deploy -c "docker run -d --name ${containerName} --restart unless-stopped -p 127.0.0.1:${hostPort}:${containerPort} --env-file ${envFilePath} ${volumeFlag} ${image}"`,
+    `${cleanup}`,
+  ].join("\n");
+}
+
+/**
+ * Best-effort GitHub token for pulling the (possibly private) panel image from
+ * GHCR. The self-redeploy runs with no user context (it's fired by a webhook),
+ * so there is no `deployed_by` to key on. Fall back to any linked account,
+ * preferring admins. Returns "" when nobody has linked GitHub — in which case
+ * we pull anonymously, which succeeds for a public GHCR package.
+ */
+async function resolvePanelGitHubToken(): Promise<string> {
+  try {
+    const users = [...db.getUsers()].sort(
+      (a, b) => (b.is_admin ? 1 : 0) - (a.is_admin ? 1 : 0),
+    );
+    for (const u of users) {
+      const tok = await resolveGitHubToken(u.id);
+      if (tok) return tok;
+    }
+  } catch (err) {
+    log("redeploy", `GitHub token resolution failed (continuing anonymous): ${err}`);
+  }
+  return "";
+}
+
+/**
  * Redeploy the hosted panel. This is called by the panel on itself, so
  * doing the rebuild inline would `docker rm -f` our own container mid-build
  * and the new container would never start. Instead we dispatch the rebuild
@@ -458,7 +563,7 @@ export async function bootstrapPanel(
  */
 export async function redeployPanel(
   onProgress: ProgressFn,
-  opts: { source?: string; gitCommit?: string } = {},
+  opts: { source?: string; gitCommit?: string; gitSha?: string } = {},
 ): Promise<{ ok: boolean; error?: string }> {
   const source = opts.source ?? "manual";
   log("redeploy", `Redeploy requested (source=${source})`);
@@ -474,13 +579,23 @@ export async function redeployPanel(
   const hostKey = server.ssh_host_key || undefined;
 
   try {
+    // Pick the image to pull. A webhook redeploy carries the pushed commit's
+    // full SHA, so we pull the immutable per-commit tag (`sha-<gitsha>`) the CD
+    // workflow emits — this pins us to the SAME commit and, because that tag
+    // only exists once CI has published it, the pull-retry loop inherently
+    // waits for the image to be ready. A manual redeploy has no SHA, so it
+    // pulls `:latest` (the last successful default-branch build).
+    const gitSha = opts.gitSha && /^[0-9a-f]{7,40}$/i.test(opts.gitSha) ? opts.gitSha : "";
+    const tag = gitSha ? `sha-${gitSha}` : "latest";
+    const image = ghcrImageForRepo(panel.git_repo, tag);
+
     // === All persistent state updates FIRST, before the dispatch SSH call ===
     onProgress("build", "Recording redeploy in DB...");
     db.appendPanelDeployLog(
-      `[redeploy ${new Date().toISOString()}] ${source} redeploy dispatched`,
+      `[redeploy ${new Date().toISOString()}] ${source} redeploy dispatched (pull ${image})`,
     );
     db.insertPanelDeployment({
-      image_tag: `${panel.name}:latest`,
+      image_tag: image,
       git_commit: opts.gitCommit || source,
       status: "deployed",
       source,
@@ -490,19 +605,43 @@ export async function redeployPanel(
     // "running" now while we still have a live DB handle.
     db.updatePanelStatus("running");
 
+    // === GHCR auth: reuse the same ephemeral DOCKER_CONFIG login the app
+    // deploy path uses. Best-effort — a public GHCR package pulls anonymously.
+    // The login dir must OUTLIVE this call (the detached pull may retry for
+    // minutes), so we do NOT clean it up here; the rebuild script removes it.
+    let ghcrEnvPrefix = "";
+    let ghcrConfigDir = "";
+    const token = await resolvePanelGitHubToken();
+    if (token && image.startsWith("ghcr.io/")) {
+      try {
+        const auth = await dockerLoginGhcr(server.ipv4, token, hostKey);
+        ghcrEnvPrefix = auth.envPrefix;
+        ghcrConfigDir = auth.dockerConfig;
+      } catch (err) {
+        log("redeploy", `ghcr login failed (falling back to anonymous pull): ${err}`);
+      }
+    }
+
     // === Build the rebuild script ===
     const appDir = `/home/deploy/apps/${panel.name}`;
     const envFilePath = `${appDir}/.env.deploy`;
     const volumeFlag = panel.volume_mount ? `-v ${panel.volume_mount}` : "";
-    const rebuildScript = [
-      `#!/usr/bin/env bash`,
-      `set -euo pipefail`,
-      `cd ${appDir}`,
-      `su - deploy -c "cd ${appDir} && git pull"`,
-      `su - deploy -c "cd ${appDir} && docker build -t ${panel.name}:latest ."`,
-      `docker rm -f ${panel.name} 2>/dev/null || true`,
-      `su - deploy -c "docker run -d --name ${panel.name} --restart unless-stopped -p 127.0.0.1:${panel.host_port}:${panel.container_port} --env-file ${envFilePath} ${volumeFlag} ${panel.name}:latest"`,
-    ].join("\n");
+    // A webhook redeploy waits for CI (~15 min): retry ~30 min. A manual
+    // redeploy pulls an already-built tag: retry briefly for registry blips.
+    const pullRetries = gitSha ? 90 : 12;
+    const pullSleepSeconds = gitSha ? 20 : 10;
+    const rebuildScript = buildPanelRebuildScript({
+      containerName: panel.name,
+      image,
+      hostPort: panel.host_port,
+      containerPort: panel.container_port,
+      envFilePath,
+      volumeFlag,
+      ghcrEnvPrefix,
+      ghcrConfigDir,
+      pullRetries,
+      pullSleepSeconds,
+    });
 
     // === Dispatch via systemd-run (true detach) ===
     // systemd-run --no-block starts a transient unit and returns immediately;
