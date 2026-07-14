@@ -15,7 +15,7 @@ import type { AppRow } from "../../shared/db/apps.ts";
 import type { StackDeployRequest } from "../../shared/rpc.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
-import type { OpKindDefinition, Step } from "../types.ts";
+import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 
 type DeployStackInput = StackDeployRequest;
 
@@ -28,6 +28,13 @@ type PlanOut = {
   // environment must survive rollback, so compensation keys off this, not
   // createdStack.
   createdEnv: boolean;
+  // Service keys whose managed service ALREADY existed when this op began (a
+  // re-up reconciling in place, or a manually pre-created member). These are
+  // reused, not created by this run, so rollback must leave them alone. Computed
+  // once in `plan` (before any member is touched) and durable across resume —
+  // the live "does it exist now?" check can't be trusted mid-op because our own
+  // just-created services would then look pre-existing.
+  reusedServiceKeys: string[];
 };
 
 type EnqueueChildrenOut = { childIds: number[] };
@@ -99,6 +106,86 @@ function childByKey(opId: number): Map<string, OperationRow> {
   return new Map(listChildOperations(opId).map((c) => [c.idempotency_key ?? "", c]));
 }
 
+/**
+ * Roll back every app this op deployed as NEW (child kind `deploy`) that is
+ * still present, and wait for the teardowns. A member's own failure aborts the
+ * `deploy_apps` step *mid-flight*, so members from earlier levels (or earlier in
+ * the same level) have already succeeded and are left RUNNING — this reaps them
+ * so a partial stack deploy is all-or-nothing.
+ *
+ * Probe-then-destroy so it is idempotent and resume-safe: an app already gone
+ * (its child self-compensated, or a prior compensate attempt already destroyed
+ * it) has `getAppByName === null` and is skipped; a prior destroy child is
+ * re-adopted by idempotency key rather than duplicated. `redeploy` children
+ * (pre-existing members reconciled in place) are intentionally left alone.
+ */
+async function teardownNewApps(ctx: OpContext<DeployStackInput>): Promise<void> {
+  const children = listChildOperations(ctx.opId);
+  const byKey = new Map(children.map((c) => [c.idempotency_key ?? "", c]));
+  const childIds: number[] = [];
+  const appPrefix = `stack:${ctx.opId}:app:`;
+  for (const c of children) {
+    if (c.kind !== "deploy") continue;
+    if (!(c.idempotency_key ?? "").startsWith(appPrefix)) continue;
+    let appName: string;
+    try { appName = JSON.parse(c.input_json).app_name; } catch { continue; }
+    const app = db.getAppByName(appName);
+    if (!app) continue;
+    const idk = `stack:${ctx.opId}:app-destroy:${app.id}`;
+    const prev = byKey.get(idk);
+    if (prev) { childIds.push(prev.id); continue; }
+    const op = enqueueOperation({
+      kind: "destroy_app",
+      resourceKeys: [`app:${app.id}`],
+      input: { appId: app.id },
+      trigger: "stack",
+      triggeredBy: ctx.triggeredBy,
+      parentId: ctx.opId,
+      idempotencyKey: idk,
+    });
+    childIds.push(op.id);
+  }
+  if (childIds.length > 0) await awaitChildren(ctx, { childIds });
+}
+
+/**
+ * Roll back every managed service this op CREATED (i.e. one not in
+ * `reusedServiceKeys`) that is still present, and wait for the teardowns. Like
+ * `teardownNewApps`, a service's own failure can abort `reconcile_services`
+ * mid-flight while sibling services already succeeded — this reaps those. A
+ * reused/pre-existing service (present before this op began) is left untouched,
+ * so its container + data survive a failed re-up. Idempotent and resume-safe:
+ * a service already gone is skipped; a prior destroy child is re-adopted by key.
+ */
+async function teardownNewServices(
+  ctx: OpContext<DeployStackInput>,
+  reusedServiceKeys: string[],
+): Promise<void> {
+  const req = ctx.input;
+  const reused = new Set(reusedServiceKeys);
+  const byKey = childByKey(ctx.opId);
+  const childIds: number[] = [];
+  for (const svc of req.services) {
+    if (reused.has(svc.key)) continue; // reused/pre-existing → must survive
+    const row = db.getServiceByName(memberName(req.name, svc.key));
+    if (!row) continue;
+    const idk = `stack:${ctx.opId}:svc-destroy:${svc.key}`;
+    const prev = byKey.get(idk);
+    if (prev) { childIds.push(prev.id); continue; }
+    const op = enqueueOperation({
+      kind: "destroy_service",
+      resourceKeys: [`service:${row.id}`],
+      input: { serviceId: row.id },
+      trigger: "stack",
+      triggeredBy: ctx.triggeredBy,
+      parentId: ctx.opId,
+      idempotencyKey: idk,
+    });
+    childIds.push(op.id);
+  }
+  if (childIds.length > 0) await awaitChildren(ctx, { childIds });
+}
+
 // --- Steps -----------------------------------------------------------------
 
 const plan: Step<DeployStackInput, PlanOut> = {
@@ -124,6 +211,12 @@ const plan: Step<DeployStackInput, PlanOut> = {
 
     // Topo-sort (also detects cycles) before touching any state.
     const levels = topoLevels(req.apps);
+
+    // Snapshot which managed services already exist BEFORE we create anything —
+    // these are reused and must survive a rollback (see PlanOut.reusedServiceKeys).
+    const reusedServiceKeys = req.services
+      .filter((s) => db.getServiceByName(memberName(req.name, s.key)))
+      .map((s) => s.key);
 
     // Capacity pre-check: only apps not already present as `<stack>-<key>`
     // consume a new internal port.
@@ -192,10 +285,23 @@ const plan: Step<DeployStackInput, PlanOut> = {
     }
 
     db.appendStackLog(stackId, `[plan] ${req.services.length} service(s), ${req.apps.length} app(s), ${levels.length} level(s)`);
-    return { stackId, environmentId: envId, levels, createdStack, createdEnv };
+    return { stackId, environmentId: envId, levels, createdStack, createdEnv, reusedServiceKeys };
   },
   async compensate(ctx, out) {
     if (!out) return;
+    // `plan` is the first step, so its compensator ALWAYS runs on rollback —
+    // whereas a step's OWN compensator is SKIPPED when the failure happens
+    // *inside* that step (a failed forward step isn't replayed as compensable by
+    // the step-runner). So the authoritative teardown of every member this run
+    // created lives here, guaranteeing no orphaned apps/services (and their
+    // containers/volumes/DNS) survive a partial stack deploy. Only NEWLY-created
+    // members are reaped: reused apps (`redeploy` children) and reused services
+    // (`reusedServiceKeys`) are left running so a failed re-up preserves them.
+    // Awaits the destroys; a failure throws, keeping the op in 'compensating' for
+    // retry rather than deleting the stack row over orphans.
+    await teardownNewApps(ctx);
+    await teardownNewServices(ctx, out.reusedServiceKeys);
+
     if (!out.createdStack) {
       // Reconcile of a pre-existing stack failed: we didn't create the stack
       // (or its env) this run, so we leave both in place — but mark the stack
@@ -257,28 +363,13 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
     }
     return { childIds };
   },
-  async compensate(ctx) {
-    const req = ctx.input;
-    const byKey = childByKey(ctx.opId);
-    const childIds: number[] = [];
-    for (const svc of req.services) {
-      const row = db.getServiceByName(memberName(req.name, svc.key));
-      if (!row) continue;
-      const idk = `stack:${ctx.opId}:svc-destroy:${svc.key}`;
-      const prev = byKey.get(idk);
-      if (prev) { childIds.push(prev.id); continue; }
-      const op = enqueueOperation({
-        kind: "destroy_service",
-        resourceKeys: [`service:${row.id}`],
-        input: { serviceId: row.id },
-        trigger: "stack",
-        triggeredBy: ctx.triggeredBy,
-        parentId: ctx.opId,
-        idempotencyKey: idk,
-      });
-      childIds.push(op.id);
-    }
-    if (childIds.length > 0) await awaitChildren(ctx, { childIds });
+  // Only runs when `reconcile_services` COMPLETED and a later step failed; when
+  // the failure is inside `reconcile_services` itself this compensator is skipped
+  // and `plan`'s compensator does the teardown instead (both share
+  // `teardownNewServices`, which is idempotent). Reused services are excluded.
+  async compensate(ctx, _out, prior) {
+    const reused = (prior["plan"] as PlanOut | undefined)?.reusedServiceKeys ?? [];
+    await teardownNewServices(ctx, reused);
   },
 };
 
@@ -345,36 +436,12 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
     }
     return { ok: true };
   },
+  // Only runs when `deploy_apps` COMPLETED and a later step failed; when the
+  // failure is inside `deploy_apps` itself this compensator is skipped and
+  // `plan`'s compensator does the teardown instead (both share `teardownNewApps`,
+  // which is idempotent, so a double invocation is a no-op).
   async compensate(ctx) {
-    const req = ctx.input;
-    const children = listChildOperations(ctx.opId);
-    const byKey = new Map(children.map((c) => [c.idempotency_key ?? "", c]));
-    const childIds: number[] = [];
-    const appPrefix = `stack:${ctx.opId}:app:`;
-    for (const c of children) {
-      // Only apps deployed as NEW this run (kind 'deploy') are rolled back;
-      // redeploys reused a pre-existing app and are left in place.
-      if (c.kind !== "deploy") continue;
-      if (!(c.idempotency_key ?? "").startsWith(appPrefix)) continue;
-      let appName: string;
-      try { appName = JSON.parse(c.input_json).app_name; } catch { continue; }
-      const app = db.getAppByName(appName);
-      if (!app) continue;
-      const idk = `stack:${ctx.opId}:app-destroy:${app.id}`;
-      const prev = byKey.get(idk);
-      if (prev) { childIds.push(prev.id); continue; }
-      const op = enqueueOperation({
-        kind: "destroy_app",
-        resourceKeys: [`app:${app.id}`],
-        input: { appId: app.id },
-        trigger: "stack",
-        triggeredBy: ctx.triggeredBy,
-        parentId: ctx.opId,
-        idempotencyKey: idk,
-      });
-      childIds.push(op.id);
-    }
-    if (childIds.length > 0) await awaitChildren(ctx, { childIds });
+    await teardownNewApps(ctx);
   },
 };
 
