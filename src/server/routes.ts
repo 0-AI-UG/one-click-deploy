@@ -97,6 +97,7 @@ import {
   handleGetStack,
   handleGetStackLog,
   handleDestroyStack,
+  handleRedeployStack,
 } from "./routes/stacks.ts";
 import { VERSION } from "../shared/version.ts";
 
@@ -377,6 +378,9 @@ export const apiRoutes = {
   "/api/stacks/:id": {
     GET: (req: Request) => handleGetStack(req, stackIdFrom(req)),
     DELETE: (req: Request) => handleDestroyStack(req, stackIdFrom(req)),
+  },
+  "/api/stacks/:id/redeploy": {
+    POST: (req: Request) => handleRedeployStack(req, stackIdFrom(req)),
   },
   "/api/stacks/:id/log": {
     GET: (req: Request) => handleGetStackLog(req, stackIdFrom(req)),

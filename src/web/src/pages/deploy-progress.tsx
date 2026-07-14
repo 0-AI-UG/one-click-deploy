@@ -54,13 +54,14 @@ export function DeployProgressPage({ opId }: { opId: number | null }) {
   const domain = (op as any)?.input?.domain ?? "";
   const stackName = (op as any)?.input?.name ?? "";
 
-  // Redirect on success: stacks go to the Stacks page; single apps go to their
-  // app detail (appId pulled from the insert_app_row step output).
+  // Redirect on success: stacks go to the dashboard (where stacks are now shown
+  // as grouped rows); single apps go to their app detail (appId pulled from the
+  // insert_app_row step output).
   useEffect(() => {
     if (!succeeded) return;
     let target = "#/";
     if (isStack) {
-      target = "#/stacks";
+      target = "#/";
     } else {
       const insertStep = steps.find((s) => s.step === "insert_app_row" && s.status === "ok");
       const appId = insertStep?.output && typeof insertStep.output === "object"

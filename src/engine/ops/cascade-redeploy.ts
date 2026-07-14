@@ -13,10 +13,19 @@ type ResolveOut = { appIds: number[] };
 type EnqueueOut = { childOpIds: number[] };
 type WaitOut = ChildSummary;
 
-function isActiveApp(status: string): boolean {
-  // Cascade only targets apps that are actually running. Stopped / destroying /
-  // sleeping apps are skipped — they'll pick up the new env vars on next wake.
-  return status === "running" || status === "unhealthy" || status === "deploying";
+function shouldRedeploy(status: string): boolean {
+  // Redeploy the actively-serving apps plus paused and sleeping (scale-to-zero)
+  // ones — a redeploy rebuilds and starts them, so a cascade (env-var change or
+  // a stack redeploy) brings dormant members back up on the new config instead
+  // of deferring to the next manual wake. Error / failed / destroying apps are
+  // left alone.
+  return (
+    status === "running" ||
+    status === "unhealthy" ||
+    status === "deploying" ||
+    status === "paused" ||
+    status === "sleeping"
+  );
 }
 
 const resolveApps: Step<CascadeRedeployInput, ResolveOut> = {
@@ -26,8 +35,8 @@ const resolveApps: Step<CascadeRedeployInput, ResolveOut> = {
     const env = db.getEnvironment(ctx.input.environmentId);
     if (!env) throw new Error(`Environment ${ctx.input.environmentId} not found`);
     const apps = db.getAppsByEnvironmentId(ctx.input.environmentId);
-    const appIds = apps.filter((a) => isActiveApp(a.status)).map((a) => a.id);
-    ctx.log(`resolved ${appIds.length} running app(s) attached to env ${env.name}`);
+    const appIds = apps.filter((a) => shouldRedeploy(a.status)).map((a) => a.id);
+    ctx.log(`resolved ${appIds.length} app(s) to redeploy attached to env ${env.name}`);
     return { appIds };
   },
 };

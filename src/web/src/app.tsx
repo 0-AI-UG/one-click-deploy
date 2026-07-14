@@ -24,7 +24,6 @@ import { DeployServicePage } from "./pages/deploy-service.tsx";
 import { ServiceDeployProgressPage } from "./pages/service-deploy-progress.tsx";
 import { ServiceDetailPage } from "./pages/service-detail.tsx";
 import { EnvironmentsPage } from "./pages/environments.tsx";
-import { StacksPage } from "./pages/stacks.tsx";
 import { DeviceAuthPage } from "./pages/device-auth.tsx";
 import { EnginePage } from "./pages/engine.tsx";
 import { EngineOpDetailPage } from "./pages/engine-op-detail.tsx";
@@ -169,8 +168,6 @@ export function App() {
     }
   } else if (hash === "#/environments") {
     content = <EnvironmentsPage />;
-  } else if (hash === "#/stacks") {
-    content = <StacksPage />;
   } else if (hash.startsWith("#/resources/volumes/")) {
     const volumeId = decodeURIComponent(hash.split("/")[3] || "");
     content = volumeId ? <VolumeDetailPage volumeId={volumeId} /> : <ResourcesPage />;

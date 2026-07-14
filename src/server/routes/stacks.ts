@@ -89,3 +89,34 @@ export async function handleGetStackLog(request: Request, stackId: number): Prom
 export function handleDestroyStack(request: Request, stackId: number): Promise<Response> {
   return enqueueOp(request, { permission: "stacks.destroy", kind: "destroy_stack", resourceKeys: [`stack:${stackId}`], input: { stackId } });
 }
+
+// Redeploy every app in the stack. A stack owns a shared environment, so this
+// reuses the existing cascade_redeploy op (fan-out of per-app redeploys keyed
+// on the environment) rather than introducing a stack-specific redeploy kind —
+// exactly the op handleUpdateEnvironment enqueues when env vars change.
+export async function handleRedeployStack(request: Request, stackId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "stacks.deploy");
+    const stack = db.getStack(stackId);
+    if (!stack) {
+      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
+    }
+    if (!stack.environment_id) {
+      return Response.json({ ok: false, error: "Stack has no environment to redeploy" }, { status: 400, headers: corsHeaders });
+    }
+    const apps = db.getAppsByStackId(stackId);
+    if (apps.length === 0) {
+      return Response.json({ ok: false, error: "Stack has no apps to redeploy" }, { status: 400, headers: corsHeaders });
+    }
+    const { opId } = enqueue({
+      kind: "cascade_redeploy",
+      resourceKeys: [`env:${stack.environment_id}`],
+      input: { environmentId: stack.environment_id },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
