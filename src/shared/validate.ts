@@ -1,4 +1,30 @@
 import { publicPortRange, type PublicProtocol, type InternalProtocol } from "./db/apps.ts";
+import {
+  DeployManifestSchema,
+  got as gotManifestValue,
+  MIN_MEMORY_MB,
+  MAX_MEMORY_MB,
+  MIN_CPU_LIMIT,
+  MAX_CPU_LIMIT,
+  isValidMemoryMb,
+  isValidCpuLimit,
+  isValidRateLimitRps,
+} from "./manifest-schema.ts";
+import type { DeployManifest } from "./rpc.ts";
+
+// The manifest shape/bounds now live once in ./manifest-schema.ts (the Zod
+// source of truth). Re-export the numeric bounds/predicates here so existing
+// importers of them from ./validate.ts (e.g. server/routes/apps.ts) keep
+// working unchanged.
+export {
+  MIN_MEMORY_MB,
+  MAX_MEMORY_MB,
+  MIN_CPU_LIMIT,
+  MAX_CPU_LIMIT,
+  isValidMemoryMb,
+  isValidCpuLimit,
+  isValidRateLimitRps,
+};
 
 export type ValidationResult<T> =
   | { valid: true; value: T }
@@ -331,15 +357,6 @@ export function validateIngressFields(
   return { valid: true, value: out };
 }
 
-/** Public-router rate limit in requests/second; 0 = unlimited. */
-export function isValidRateLimitRps(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= 0 &&
-    value <= 1_000_000
-  );
-}
 
 export function validateHetznerToken(token: string): ValidationResult<string> {
   const trimmed = token.trim();
@@ -401,127 +418,54 @@ export function assertSafeHostPath(hostPath: string, appName: string): void {
     );
 }
 
+/**
+ * Server-side (web-deploy) manifest validator: a result-style adapter over the
+ * canonical `DeployManifestSchema`. The schema is the single source of truth
+ * for the manifest SHAPE and numeric BOUNDS — this function no longer restates
+ * them. It then layers the web-path-only semantic checks the schema doesn't
+ * encode: the `build.dockerfile` path-traversal guard, and the shared ingress
+ * rules (IP-allowlist format, health-check-path shape, public-port pool range,
+ * and the HTTP-routing cross-field constraints). Unknown keys are tolerated
+ * (forward-compat), matching the old behavior.
+ */
 export function validateDeployManifest(
   raw: unknown,
-): { ok: true; manifest: import("./rpc.ts").DeployManifest } | { ok: false; error: string } {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw))
-    return { ok: false, error: "Manifest must be a JSON object" };
+): { ok: true; manifest: DeployManifest } | { ok: false; error: string } {
+  const parsed = DeployManifestSchema.safeParse(raw);
+  if (!parsed.success) {
+    // Unknown keys are non-fatal here (forward-compat); surface the first real
+    // shape/bounds issue as a single human-readable string.
+    const hard = parsed.error.issues.filter((i) => i.code !== "unrecognized_keys");
+    const first = hard[0];
+    if (first) {
+      const field = first.path.map((p) => (typeof p === "number" ? `[${p}]` : p)).join(".");
+      const gotValue = fieldValueAt(raw, first.path);
+      const suffix = first.code === "custom" ? "" : `, got ${gotManifestValue(gotValue)}`;
+      return { ok: false, error: field ? `${field}: ${first.message}${suffix}` : `${first.message}${suffix}` };
+    }
+    // else: only unknown keys — fall through and treat as shape-valid.
+  }
 
   const obj = raw as Record<string, unknown>;
 
-  if ("$schema" in obj && obj.$schema !== 1)
-    return { ok: false, error: "Unsupported $schema version (expected 1)" };
-
-  if ("$llm" in obj && typeof obj.$llm !== "string")
-    return { ok: false, error: '"$llm" must be a string' };
-
-  if (typeof obj.name !== "string" || !obj.name.trim())
-    return { ok: false, error: '"name" is required and must be a non-empty string' };
-
-  if ("description" in obj && typeof obj.description !== "string")
-    return { ok: false, error: '"description" must be a string' };
-
-  if ("icon" in obj && typeof obj.icon !== "string")
-    return { ok: false, error: '"icon" must be a string' };
-
-  // build
-  if ("build" in obj && obj.build != null) {
-    if (typeof obj.build !== "object" || Array.isArray(obj.build))
-      return { ok: false, error: '"build" must be an object' };
-    const b = obj.build as Record<string, unknown>;
-    if ("dockerfile" in b && typeof b.dockerfile !== "string")
-      return { ok: false, error: '"build.dockerfile" must be a string' };
-    if ("context" in b && typeof b.context !== "string")
-      return { ok: false, error: '"build.context" must be a string' };
-    if ("container_port" in b) {
-      if (typeof b.container_port !== "number" || !Number.isInteger(b.container_port) || b.container_port < 1 || b.container_port > 65535)
-        return { ok: false, error: '"build.container_port" must be an integer 1–65535' };
-    }
-    // Reject .. in paths
-    for (const key of ["dockerfile"] as const) {
-      if (typeof b[key] === "string" && (b[key] as string).includes(".."))
-        return { ok: false, error: `"build.${key}" must not contain ".."` };
-    }
+  // Path-traversal guard on the Dockerfile path is a web-path-only security
+  // check the shape schema doesn't encode.
+  if (obj.build && typeof obj.build === "object" && !Array.isArray(obj.build)) {
+    const dockerfile = (obj.build as Record<string, unknown>).dockerfile;
+    if (typeof dockerfile === "string" && dockerfile.includes(".."))
+      return { ok: false, error: '"build.dockerfile" must not contain ".."' };
   }
-
-  // env
-  if ("env" in obj && obj.env != null) {
-    if (!Array.isArray(obj.env))
-      return { ok: false, error: '"env" must be an array' };
-    for (let i = 0; i < obj.env.length; i++) {
-      const e = obj.env[i];
-      if (!e || typeof e !== "object")
-        return { ok: false, error: `env[${i}] must be an object` };
-      if (typeof e.key !== "string" || !ENV_KEY_PATTERN.test(e.key))
-        return { ok: false, error: `env[${i}].key "${e.key ?? ""}" is invalid` };
-      if ("description" in e && typeof e.description !== "string")
-        return { ok: false, error: `env[${i}].description must be a string` };
-      if ("default" in e && typeof e.default !== "string")
-        return { ok: false, error: `env[${i}].default must be a string` };
-    }
-  }
-
-  // volume
-  if ("volume" in obj && obj.volume != null) {
-    if (typeof obj.volume !== "object" || Array.isArray(obj.volume))
-      return { ok: false, error: '"volume" must be an object' };
-    const v = obj.volume as Record<string, unknown>;
-    if ("size" in v && (typeof v.size !== "number" || v.size < 1))
-      return { ok: false, error: '"volume.size" must be a positive number' };
-    if ("path" in v && (typeof v.path !== "string" || !v.path.startsWith("/")))
-      return { ok: false, error: '"volume.path" must start with "/"' };
-  }
-
-  // webhook
-  if ("webhook" in obj && obj.webhook != null) {
-    if (typeof obj.webhook !== "object" || Array.isArray(obj.webhook))
-      return { ok: false, error: '"webhook" must be an object' };
-  }
-
-  if ("suggested_app_name" in obj && typeof obj.suggested_app_name !== "string")
-    return { ok: false, error: '"suggested_app_name" must be a string' };
-
-  if ("replicas" in obj && (typeof obj.replicas !== "number" || obj.replicas < 1))
-    return { ok: false, error: '"replicas" must be a positive number' };
-
-  if ("memory_mb" in obj && !isValidMemoryMb(obj.memory_mb))
-    return { ok: false, error: `"memory_mb" must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB}` };
-
-  if ("cpu_limit" in obj && !isValidCpuLimit(obj.cpu_limit))
-    return { ok: false, error: `"cpu_limit" must be 0 (default) or a number ${MIN_CPU_LIMIT}–${MAX_CPU_LIMIT} cores` };
-
-  // health_check is one nested object { enabled?, path? } so the toggle and its
-  // path read as a single feature (mirrors the deploy UI). enabled drives the
-  // HTTP-vs-running probe; path feeds both the post-deploy probe and Traefik's
-  // rotation check and is validated below via the shared ingress rules.
-  let healthPath: string | undefined;
-  if ("health_check" in obj && obj.health_check != null) {
-    const hc = obj.health_check;
-    if (typeof hc !== "object" || Array.isArray(hc))
-      return { ok: false, error: '"health_check" must be an object with optional "enabled" and "path"' };
-    const h = hc as Record<string, unknown>;
-    if ("enabled" in h && typeof h.enabled !== "boolean")
-      return { ok: false, error: '"health_check.enabled" must be a boolean' };
-    if ("path" in h && typeof h.path !== "string")
-      return { ok: false, error: '"health_check.path" must be a string' };
-    healthPath = h.path as string | undefined;
-  }
-
-  if ("internal_protocol" in obj && !isInternalProtocol(obj.internal_protocol))
-    return { ok: false, error: '"internal_protocol" must be "http" or "tcp"' };
-
-  if ("sticky" in obj && typeof obj.sticky !== "boolean")
-    return { ok: false, error: '"sticky" must be a boolean' };
-
-  if ("compress" in obj && typeof obj.compress !== "boolean")
-    return { ok: false, error: '"compress" must be a boolean' };
 
   // Rate limit / allowlist / health-check path / public port+protocol share the
   // deploy request's rules — one validator, one set of error strings. The
   // health-check-path HTTP-routing rule keys off the manifest's resolved
   // internal protocol (explicit internal_protocol, else the "http" default).
-  const httpRouted =
-    resolveInternalProtocol(obj.internal_protocol) === "http";
+  const healthCheck = obj.health_check;
+  const healthPath =
+    healthCheck && typeof healthCheck === "object" && !Array.isArray(healthCheck)
+      ? ((healthCheck as Record<string, unknown>).path as string | undefined)
+      : undefined;
+  const httpRouted = resolveInternalProtocol(obj.internal_protocol) === "http";
   const ingressInput: IngressFieldsInput = {};
   if ("rate_limit_rps" in obj) ingressInput.rate_limit_rps = obj.rate_limit_rps as number;
   if ("ip_allowlist" in obj) ingressInput.ip_allowlist = obj.ip_allowlist as string;
@@ -531,34 +475,19 @@ export function validateDeployManifest(
   const ingressResult = validateIngressFields(ingressInput, { httpRouted });
   if (!ingressResult.valid) return { ok: false, error: ingressResult.error };
 
-  return { ok: true, manifest: raw as import("./rpc.ts").DeployManifest };
+  return { ok: true, manifest: raw as DeployManifest };
 }
 
-/** Per-app container memory ceiling bounds (MB). 0 means "platform default". */
-export const MIN_MEMORY_MB = 128;
-export const MAX_MEMORY_MB = 32768;
-
-export function isValidMemoryMb(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    (value === 0 || (value >= MIN_MEMORY_MB && value <= MAX_MEMORY_MB))
-  );
+/** Walk an object along a Zod issue path to recover the received value. */
+function fieldValueAt(root: unknown, path: readonly PropertyKey[]): unknown {
+  let cur: unknown = root;
+  for (const seg of path) {
+    if (cur === null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<PropertyKey, unknown>)[seg];
+  }
+  return cur;
 }
 
-/** Per-app container CPU ceiling bounds (cores). 0 means "platform default".
- *  Fractional values are allowed (docker's --cpus flag), so we don't require an
- *  integer — only a finite value in range with sane precision. */
-export const MIN_CPU_LIMIT = 0.1;
-export const MAX_CPU_LIMIT = 32;
-
-export function isValidCpuLimit(value: unknown): value is number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return false;
-  if (value === 0) return true;
-  // Reject nonsense precision (e.g. 0.333333) that docker would round oddly.
-  if (Math.round(value * 100) !== value * 100) return false;
-  return value >= MIN_CPU_LIMIT && value <= MAX_CPU_LIMIT;
-}
 
 export function validateDeployRequest(req: {
   app_name: string;

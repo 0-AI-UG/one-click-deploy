@@ -171,65 +171,13 @@ export type PanelDeployment = {
   created_at: string;
 };
 
-export type DeployManifest = {
-  $schema?: number;
-  $llm?: string;
-  name: string;
-  description?: string;
-  icon?: string;
-  build?: {
-    dockerfile?: string;
-    context?: string;
-    container_port?: number;
-  };
-  env?: Array<{
-    key: string;
-    description?: string;
-    default?: string;
-    required?: boolean;
-    secret?: boolean;
-  }>;
-  volume?: { size?: number; path?: string };
-  webhook?: { enabled?: boolean; branch?: string; path?: string; wait_for_ci?: boolean };
-  suggested_app_name?: string;
-  replicas?: number;
-  public?: boolean;
-  extra_volumes?: Array<{ host_path: string; container_path: string }>;
-  memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
-  cpu_limit?: number; // Per-container CPU ceiling in cores (fractional allowed). Omit / 0 → platform default
-  // HTTP health check. enabled:false skips the HTTP probe and only verifies the
-  // container runs (default true). path is the endpoint both the post-deploy
-  // probe and Traefik's rotation check request (default /; setting one also
-  // turns on Traefik's continuous check). A path requires internal_protocol 'http'.
-  health_check?: { enabled?: boolean; path?: string };
-  internal_protocol?: "http" | "tcp"; // Internal routing protocol (independent of health_check.enabled); omit → "http". Raw-TCP apps (e.g. databases) must set "tcp".
-  // Ingress / routing (same rules as the deploy request). Sticky sessions
-  // require internal_protocol 'http'.
-  sticky?: boolean; // Sticky sessions (cookie-based) on the app's ingress service
-  rate_limit_rps?: number; // Public-router rate limit in req/s; omit / 0 = unlimited
-  ip_allowlist?: string; // Comma-separated IPs/CIDRs gating the public router; omit / "" = open
-  compress?: boolean; // Response compression on the public router
-  public_port?: number | "auto" | null; // Public raw TCP/UDP exposure: "auto" = lowest free pool port, number = specific pool port, omit = none
-  public_protocol?: "tcp" | "udp"; // Pool for public_port (default "tcp")
-};
-
-export type StackManifest = {
-  $schema?: number;
-  name: string;                       // stack name; members become <name>-<key>
-  description?: string;
-  services?: Record<string, {         // key → managed service
-    type: string;                     // catalog type (postgres, redis, ...)
-    version?: string;
-    volume_size?: number;
-    env_overrides?: Record<string, string>;
-  }>;
-  apps: Record<string, {              // key → app
-    manifest: string;                 // path to a .ocd-deploy.json, relative to ocd-stack.json
-    needs?: string[];                 // keys of services/apps this app depends on
-    domain?: string;                  // override
-    public?: boolean;                 // override
-  }>;
-};
+// The manifest shapes are DERIVED (via `z.infer`) from the canonical Zod
+// schemas in `./manifest-schema.ts` — re-exported here so existing importers of
+// these types from `./rpc.ts` keep working. See that file for the per-field
+// documentation. This keeps the manifest type and its validator from drifting
+// (the drift that once let `"health_check": false` slip past the types).
+import type { DeployManifest, StackManifest } from "./manifest-validate.ts";
+export type { DeployManifest, StackManifest };
 
 export type StackDeployRequest = {
   name: string;

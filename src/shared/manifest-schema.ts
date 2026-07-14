@@ -1,0 +1,311 @@
+/**
+ * Canonical, single-source-of-truth Zod schemas for deploy (`.ocd-deploy.json`)
+ * and stack (`ocd-stack.json`) manifests. The TypeScript manifest *types* are
+ * DERIVED from these schemas via `z.infer` (see the `DeployManifest` /
+ * `StackManifest` re-exports in `./rpc.ts`) so the shape and the validator can
+ * never drift — the drift that once let `"health_check": false` (a boolean)
+ * slip past the types and break a deploy.
+ *
+ * Dependency-light (zod only) so it's safe to import from the compiled CLI
+ * bundle. It imports nothing from `./rpc.ts` (that would be a cycle) or
+ * `./validate.ts`; instead the numeric bounds/predicates that used to live in
+ * `./validate.ts` now live HERE and `./validate.ts` re-exports them.
+ *
+ * The user-facing validators (`validateDeployManifest` / `validateStackManifest`
+ * in `./manifest-validate.ts`) run these schemas with `safeParse` and map the
+ * Zod issues onto field-level "expected … got …" messages.
+ */
+import { z } from "zod";
+
+// --- numeric bounds + predicates (formerly in ./validate.ts) ----------------
+
+/** Per-app container memory ceiling bounds (MB). 0 means "platform default". */
+export const MIN_MEMORY_MB = 128;
+export const MAX_MEMORY_MB = 32768;
+
+export function isValidMemoryMb(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    (value === 0 || (value >= MIN_MEMORY_MB && value <= MAX_MEMORY_MB))
+  );
+}
+
+/** Per-app container CPU ceiling bounds (cores). 0 means "platform default".
+ *  Fractional values are allowed (docker's --cpus flag), so we don't require an
+ *  integer — only a finite value in range with sane precision. */
+export const MIN_CPU_LIMIT = 0.1;
+export const MAX_CPU_LIMIT = 32;
+
+export function isValidCpuLimit(value: unknown): value is number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  if (value === 0) return true;
+  // Reject nonsense precision (e.g. 0.333333) that docker would round oddly.
+  if (Math.round(value * 100) !== value * 100) return false;
+  return value >= MIN_CPU_LIMIT && value <= MAX_CPU_LIMIT;
+}
+
+/** Public-router rate limit in requests/second; 0 = unlimited. */
+export function isValidRateLimitRps(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 1_000_000
+  );
+}
+
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// --- "got"/"jsonType" renderers (shared with manifest-validate.ts) ----------
+
+/** JSON-ish type name, distinguishing arrays and null from "object". */
+export function jsonType(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  return typeof v; // "object" | "string" | "number" | "boolean" | "undefined"
+}
+
+/** Human-readable "got" descriptor, e.g. `boolean (false)`, `"tpc"`, `number (3.5)`. */
+export function got(v: unknown): string {
+  const t = jsonType(v);
+  if (t === "boolean" || t === "number") return `${t} (${String(v)})`;
+  if (t === "string") return `"${String(v)}"`;
+  return t;
+}
+
+// --- schema building blocks -------------------------------------------------
+
+/**
+ * A number field that fails with ONE unified "expected …" phrase whether the
+ * value is the wrong type (Zod's built-in `invalid_type`, whose message the
+ * validator suffixes with `, got …`) or the right type but out of range (our
+ * refine, which renders the full `…, got …` message itself). Both routes yield
+ * the same final wording, matching the old hand-written validator.
+ */
+function guardedNumber(phrase: string, ok: (v: number) => boolean) {
+  return z
+    .number({ error: phrase })
+    .refine(ok, { error: (iss) => `${phrase}, got ${got(iss.input)}` });
+}
+
+/** A non-empty (after trim) string field with a unified "expected …" phrase. */
+function nonEmptyString(phrase: string) {
+  return z
+    .string({ error: phrase })
+    .refine((v) => v.trim().length > 0, {
+      error: (iss) => `${phrase}, got ${got(iss.input)}`,
+    });
+}
+
+// --- deploy manifest --------------------------------------------------------
+
+/** Build config. Nested unknown keys are silently stripped (only TOP-LEVEL
+ *  unknown keys warn), matching the old validator. */
+const buildSchema = z.object(
+  {
+    dockerfile: z.string({ error: "expected string" }).optional(),
+    context: z.string({ error: "expected string" }).optional(),
+    container_port: guardedNumber(
+      "expected integer 1-65535",
+      (v) => Number.isInteger(v) && v >= 1 && v <= 65535,
+    ).optional(),
+  },
+  { error: "expected object { dockerfile?, context?, container_port? }" },
+);
+
+/** One declared env var. `key` must be a valid env-var name. */
+const envEntrySchema = z.object(
+  {
+    key: z
+      .string({ error: "expected env-var-name string" })
+      .refine((v) => ENV_KEY_PATTERN.test(v), {
+        error: (iss) => `expected env-var-name string, got ${got(iss.input)}`,
+      }),
+    description: z.string({ error: "expected string" }).optional(),
+    default: z.string({ error: "expected string" }).optional(),
+    required: z.boolean({ error: "expected boolean" }).optional(),
+    secret: z.boolean({ error: "expected boolean" }).optional(),
+  },
+  { error: 'expected object with a "key"' },
+);
+
+/** App data volume: size in GB and mount path. */
+const volumeSchema = z.object(
+  {
+    size: guardedNumber("expected positive number", (v) => v >= 1).optional(),
+    path: z
+      .string({ error: 'expected string starting with "/"' })
+      .refine((v) => v.startsWith("/"), {
+        error: (iss) => `expected string starting with "/", got ${got(iss.input)}`,
+      })
+      .optional(),
+  },
+  { error: "expected object { size, path? }" },
+);
+
+/** Auto-deploy webhook config. */
+const webhookSchema = z.object(
+  {
+    enabled: z.boolean({ error: "expected boolean" }).optional(),
+    branch: z.string({ error: "expected string" }).optional(),
+    path: z.string({ error: "expected string" }).optional(),
+    wait_for_ci: z.boolean({ error: "expected boolean" }).optional(),
+  },
+  { error: "expected object { enabled?, branch?, path?, wait_for_ci? }" },
+);
+
+/** Extra host→container bind mount. */
+const extraVolumeSchema = z.object(
+  {
+    host_path: z.string({ error: "expected string" }),
+    container_path: z.string({ error: "expected string" }),
+  },
+  { error: "expected object { host_path, container_path }" },
+);
+
+/**
+ * HTTP health check. `enabled:false` skips the HTTP probe and only verifies the
+ * container runs (default true). `path` is the endpoint both the post-deploy
+ * probe and Traefik's rotation check request (default /; setting one also turns
+ * on Traefik's continuous check). A path requires internal_protocol 'http'.
+ *
+ * NOTE: the object form `{ enabled?, path? }` is the ONLY form honored by the
+ * mapping — a bare boolean (the original incident) is a hard error here.
+ */
+const healthCheckSchema = z.object(
+  {
+    enabled: z.boolean({ error: "expected boolean" }).optional(),
+    path: z.string({ error: "expected string" }).optional(),
+  },
+  { error: "expected object { enabled?: boolean, path?: string }" },
+);
+
+export const DeployManifestSchema = z
+  .object({
+    $schema: z.literal(1, { error: "expected 1" }).optional(),
+    $llm: z.string({ error: "expected string" }).optional().describe("Free-form note to LLMs authoring the manifest"),
+    name: nonEmptyString("expected a non-empty string"),
+    description: z.string({ error: "expected string" }).optional(),
+    icon: z.string({ error: "expected string" }).optional(),
+    build: buildSchema.optional(),
+    env: z
+      .array(envEntrySchema, {
+        error: "expected array of { key, description?, default?, required?, secret? }",
+      })
+      .optional(),
+    volume: volumeSchema.optional(),
+    webhook: webhookSchema.optional(),
+    suggested_app_name: z.string({ error: "expected string" }).optional(),
+    replicas: guardedNumber(
+      "expected positive integer",
+      (v) => Number.isInteger(v) && v >= 1,
+    ).optional(),
+    public: z.boolean({ error: "expected boolean" }).optional(),
+    extra_volumes: z
+      .array(extraVolumeSchema, {
+        error: "expected array of { host_path, container_path }",
+      })
+      .optional(),
+    /** Per-container memory ceiling in MB. Omit / 0 → platform default. */
+    memory_mb: guardedNumber(
+      `expected integer 0 (default) or ${MIN_MEMORY_MB}-${MAX_MEMORY_MB}`,
+      isValidMemoryMb,
+    ).optional(),
+    /** Per-container CPU ceiling in cores (fractional allowed). Omit / 0 → platform default. */
+    cpu_limit: guardedNumber(
+      `expected 0 (default) or a number ${MIN_CPU_LIMIT}-${MAX_CPU_LIMIT}`,
+      isValidCpuLimit,
+    ).optional(),
+    health_check: healthCheckSchema.optional(),
+    /** Internal routing protocol (independent of health_check.enabled); omit → "http".
+     *  Raw-TCP apps (e.g. databases) must set "tcp". */
+    internal_protocol: z.enum(["http", "tcp"], { error: 'expected "http" | "tcp"' }).optional(),
+    /** Sticky sessions (cookie-based) on the app's ingress service. */
+    sticky: z.boolean({ error: "expected boolean" }).optional(),
+    /** Public-router rate limit in req/s; omit / 0 = unlimited. */
+    rate_limit_rps: guardedNumber(
+      "expected integer 0 (unlimited) to 1000000",
+      isValidRateLimitRps,
+    ).optional(),
+    /** Comma-separated IPs/CIDRs gating the public router; omit / "" = open. */
+    ip_allowlist: z.string({ error: "expected string" }).optional(),
+    /** Response compression on the public router. */
+    compress: z.boolean({ error: "expected boolean" }).optional(),
+    /** Public raw TCP/UDP exposure: "auto" = lowest free pool port, number = specific pool port, omit = none. */
+    public_port: z
+      .union([z.number().int(), z.literal("auto"), z.null()], {
+        error: 'expected integer, "auto", or null',
+      })
+      .optional(),
+    /** Pool for public_port (default "tcp"). */
+    public_protocol: z.enum(["tcp", "udp"], { error: 'expected "tcp" | "udp"' }).optional(),
+  })
+  .strict();
+
+export type DeployManifest = z.infer<typeof DeployManifestSchema>;
+
+// --- stack manifest ---------------------------------------------------------
+
+/** One managed service member (catalog type + options). */
+const stackServiceSchema = z
+  .object({
+    type: nonEmptyString("expected a non-empty string"),
+    version: z.string({ error: "expected string" }).optional(),
+    volume_size: guardedNumber("expected positive number", (v) => v >= 1).optional(),
+    env_overrides: z
+      .record(z.string(), z.string(), { error: "expected object map of string -> string" })
+      .optional(),
+  }, { error: "expected object { type, version?, volume_size?, env_overrides? }" })
+  .strict();
+
+/** One app member: a path to a child `.ocd-deploy.json` + stack-level overrides. */
+const stackAppSchema = z
+  .object({
+    manifest: nonEmptyString("expected a manifest path string"),
+    needs: z
+      .array(z.string({ error: "expected a key string" }), {
+        error: "expected array of app/service keys",
+      })
+      .optional(),
+    domain: z.string({ error: "expected string" }).optional(),
+    public: z.boolean({ error: "expected boolean" }).optional(),
+  }, { error: "expected object { manifest, needs?, domain?, public? }" })
+  .strict();
+
+export const StackManifestSchema = z
+  .object({
+    $schema: z.literal(1, { error: "expected 1" }).optional(),
+    $llm: z.string({ error: "expected string" }).optional(),
+    name: nonEmptyString("expected a non-empty string"),
+    description: z.string({ error: "expected string" }).optional(),
+    services: z
+      .record(z.string(), stackServiceSchema, { error: "expected object map of key -> service" })
+      .optional(),
+    apps: z.record(z.string(), stackAppSchema, { error: "expected object map of key -> app" }),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    // apps must be non-empty.
+    const appKeys = Object.keys(val.apps ?? {});
+    if (appKeys.length === 0) {
+      ctx.addIssue({ code: "custom", message: "expected at least one app", path: ["apps"] });
+    }
+    // Cross-field: every `needs` entry must name a declared app or service key.
+    const known = new Set([...appKeys, ...Object.keys(val.services ?? {})]);
+    for (const [key, app] of Object.entries(val.apps ?? {})) {
+      const needs = app.needs ?? [];
+      for (let i = 0; i < needs.length; i++) {
+        const n = needs[i];
+        if (!known.has(n)) {
+          ctx.addIssue({
+            code: "custom",
+            message: `references "${n}", which is not a declared app or service key`,
+            path: ["apps", key, "needs", i],
+          });
+        }
+      }
+    }
+  });
+
+export type StackManifest = z.infer<typeof StackManifestSchema>;
