@@ -10,6 +10,7 @@ import { pause, unpause } from "./commands/pause.ts";
 import { envs } from "./commands/envs.ts";
 import { services } from "./commands/services.ts";
 import { stack } from "./commands/stack.ts";
+import { ops } from "./commands/ops.ts";
 import { servers } from "./commands/servers.ts";
 import { ssh } from "./commands/ssh.ts";
 import { BOLD, DIM, RESET } from "./format.ts";
@@ -29,6 +30,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   envs,
   services,
   stack,
+  ops,
   servers,
   ssh,
 };
@@ -52,6 +54,8 @@ ${BOLD}Commands:${RESET}
   unpause <app>          Unpause an app
   services               List services
   stack <up|down|ls|status|logs>   Manage multi-app stacks
+  ops [--app X]          List deploy engine operations
+  ops <id> | logs <id>   Inspect an operation or stream its logs
   servers                List servers
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session

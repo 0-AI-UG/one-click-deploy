@@ -63,7 +63,9 @@ function buildAppElement(
   return el;
 }
 
-async function resolveStack(name: string): Promise<StackListItem> {
+/** Non-exiting lookup — returns undefined instead of exiting when no stack row
+ *  matches, so callers (e.g. stack logs) can fall back to op history. */
+async function lookupStack(name: string): Promise<StackListItem | undefined> {
   const list = await get<StackListItem[]>("/api/stacks");
 
   const id = parseInt(name, 10);
@@ -73,9 +75,14 @@ async function resolveStack(name: string): Promise<StackListItem> {
   }
 
   const lower = name.toLowerCase();
-  const found = list.find((s) => s.name.toLowerCase() === lower);
+  return list.find((s) => s.name.toLowerCase() === lower);
+}
+
+async function resolveStack(name: string): Promise<StackListItem> {
+  const found = await lookupStack(name);
   if (found) return found;
 
+  const list = await get<StackListItem[]>("/api/stacks");
   console.error(`Stack not found: ${name}`);
   console.error(`Available: ${list.map((s) => s.name).join(", ") || "(none)"}`);
   process.exit(1);
@@ -326,15 +333,59 @@ async function stackStatus(args: string[]): Promise<void> {
   );
 }
 
+interface OpRow {
+  id: number;
+  kind: string;
+  resource_keys: string[];
+  enqueued_at: string | null;
+}
+
+/** A failed stack deploy compensates and deletes its stacks row — exactly when
+ *  the logs matter most. When no stack row exists, find the most recent
+ *  deploy_stack op targeting `stack:<name>` so its logs are still reachable. */
+async function findStackDeployOp(name: string): Promise<OpRow | undefined> {
+  const data = await get<{ running: OpRow[]; pending: OpRow[]; recent: OpRow[] }>("/api/operations");
+  const key = `stack:${name.toLowerCase()}`;
+  const all = [...(data.running || []), ...(data.pending || []), ...(data.recent || [])];
+  return all.find(
+    (op) => op.kind === "deploy_stack" && (op.resource_keys || []).some((k) => k.toLowerCase() === key),
+  );
+}
+
 async function stackLogs(args: string[]): Promise<void> {
   const name = args[0];
   if (!name) {
     console.error(`Usage: ocd stack logs <name>`);
     process.exit(1);
   }
-  const stackRef = await resolveStack(name);
-  const { log } = await get<{ log: string }>(`/api/stacks/${stackRef.id}/log`);
-  process.stdout.write(log || `${DIM}(no log)${RESET}\n`);
+
+  const stackRef = await lookupStack(name);
+  if (stackRef) {
+    const { log } = await get<{ log: string }>(`/api/stacks/${stackRef.id}/log`);
+    process.stdout.write(log || `${DIM}(no log)${RESET}\n`);
+    return;
+  }
+
+  // Stack row is gone (likely a failed deploy that rolled back) — surface the
+  // deploy operation's logs instead.
+  const op = await findStackDeployOp(name);
+  if (!op) {
+    console.error(`Stack not found: ${name}`);
+    const list = await get<StackListItem[]>("/api/stacks");
+    console.error(`Available: ${list.map((s) => s.name).join(", ") || "(none)"}`);
+    process.exit(1);
+  }
+
+  console.error(
+    `${DIM}Stack "${name}" no longer exists (deploy failed and rolled back). Showing operation #${op.id} logs:${RESET}`,
+  );
+  const { logs } = await get<{ logs: Array<{ ts: string; level: string; message: string }> }>(
+    `/api/operations/${op.id}/logs?since=0`,
+  );
+  for (const l of logs) {
+    const ts = (l.ts || "").replace("T", " ").slice(0, 19);
+    console.log(`${DIM}${ts}${RESET} ${l.level} ${l.message}`);
+  }
 }
 
 async function stackDown(args: string[]): Promise<void> {
