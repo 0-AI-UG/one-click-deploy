@@ -3,6 +3,7 @@ import { apps } from "./commands/apps.ts";
 import { status } from "./commands/status.ts";
 import { logs } from "./commands/logs.ts";
 import { deploy } from "./commands/deploy.ts";
+import { deleteCmd } from "./commands/delete.ts";
 import { redeploy } from "./commands/redeploy.ts";
 import { restart } from "./commands/restart.ts";
 import { rollback } from "./commands/rollback.ts";
@@ -13,6 +14,7 @@ import { stack } from "./commands/stack.ts";
 import { ops } from "./commands/ops.ts";
 import { servers } from "./commands/servers.ts";
 import { ssh } from "./commands/ssh.ts";
+import { skill } from "./commands/skill.ts";
 import { BOLD, DIM, RESET } from "./format.ts";
 import { VERSION } from "./version.ts";
 
@@ -22,6 +24,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   status,
   logs,
   deploy,
+  delete: deleteCmd,
   redeploy,
   restart,
   rollback,
@@ -33,6 +36,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   ops,
   servers,
   ssh,
+  skill,
 };
 
 function printUsage(): void {
@@ -45,7 +49,10 @@ ${BOLD}Commands:${RESET}
   status                 Dashboard overview
   apps                   List all apps
   logs <app> [--tail=N]  View app logs
-  deploy [manifest]       Deploy current repo using .ocd-deploy.json
+  deploy [manifest]      Deploy current repo using .ocd-deploy.json
+  deploy stack [manifest]  Deploy a multi-app stack
+  delete <app>           Destroy an app
+  delete stack <name>    Destroy a stack and all its members
   redeploy <app>         Redeploy an existing app
   envs                   Manage environments and variables
   restart <app>          Restart an app
@@ -53,13 +60,14 @@ ${BOLD}Commands:${RESET}
   pause <app>            Pause an app
   unpause <app>          Unpause an app
   services               List services
-  stack <up|down|ls|status|logs>   Manage multi-app stacks
+  stack <ls|status|logs>   Inspect multi-app stacks
   ops [--app X]          List deploy engine operations
   ops <id> | logs <id>   Inspect an operation or stream its logs
   servers                List servers
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session
   ssh <server> --server  Interactive shell on a server
+  skill install --agent X  Install the OCD skill for an AI coding agent
 
 ${DIM}App/server arguments accept name or numeric ID.${RESET}`);
 }

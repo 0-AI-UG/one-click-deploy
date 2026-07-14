@@ -4,6 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../shared/env-crypto.ts";
 import { enqueue } from "../ipc/enqueue.ts";
+import { enforceConfirmation } from "../lib/action-confirm.ts";
 
 export async function handleGetEnvironments(request: Request): Promise<Response> {
   try {
@@ -84,7 +85,8 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
 
 export async function handleDeleteEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "environments.manage");
+    const payload = await requirePermission(request, "environments.manage");
+    await enforceConfirmation(request, payload, "delete_environment", "environment", String(id));
     const env = db.getEnvironment(id);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });

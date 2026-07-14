@@ -3,7 +3,8 @@ import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
-import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box, Boxes, ChevronDown, ChevronRight } from "lucide-react";
+import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box, Boxes, ChevronDown, ChevronRight, Table2, Share2 } from "lucide-react";
+import { TopologyGraph, type TopologyData } from "../components/topology-graph.tsx";
 
 type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
@@ -70,6 +71,20 @@ export function DashboardPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const confirmTimeoutRef = useRef<number | null>(null);
+  const [view, setView] = useState<"table" | "graph">("table");
+  const [topo, setTopo] = useState<TopologyData | null>(null);
+  const [topoLoading, setTopoLoading] = useState(false);
+
+  const loadTopo = async () => {
+    setTopoLoading(true);
+    try {
+      setTopo(await get("/api/topology") as TopologyData);
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setTopoLoading(false);
+    }
+  };
 
   const ops = useActiveOperations(
     (op) => APP_OP_KINDS.has(op.kind) || SVC_OP_KINDS.has(op.kind) || STACK_OP_KINDS.has(op.kind),
@@ -122,7 +137,13 @@ export function DashboardPage() {
   const activeSig = ops.active.map((o) => `${o.id}:${o.status}`).join(",");
   useEffect(() => {
     if (!loading) load();
+    if (!loading && view === "graph") loadTopo();
   }, [activeSig]);
+
+  // Fetch the topology lazily the first time the graph view is opened.
+  useEffect(() => {
+    if (view === "graph" && !topo) loadTopo();
+  }, [view]);
 
   const appAction = async (action: string, appId: number, body?: Record<string, unknown>) => {
     const key = `${action}-${appId}`;
@@ -497,8 +518,8 @@ export function DashboardPage() {
   const showAppsCard = standaloneApps.length > 0 || stacks.length > 0;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
+    <div className={`${view === "graph" ? "max-w-6xl" : "max-w-4xl"} mx-auto px-4 py-6 space-y-6 animate-fade-in`}>
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Dashboard</h1>
           <p className="text-[10px] text-muted font-mono mt-0.5">
@@ -507,14 +528,35 @@ export function DashboardPage() {
             {stacks.length > 0 && `, ${stacks.length} stack${stacks.length !== 1 ? "s" : ""}`}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Btn onClick={load} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>
+        <div className="flex gap-2 items-center">
+          {/* View switch: table list vs. topology graph */}
+          <div className="flex border-2 border-fg shadow-neo-sm">
+            <button
+              onClick={() => setView("table")}
+              title="List view"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-colors ${view === "table" ? "bg-fg text-accent" : "bg-bg-raised text-fg-dim hover:bg-alt"}`}
+            ><Table2 size={12} /> List</button>
+            <button
+              onClick={() => setView("graph")}
+              title="Topology graph"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider border-l-2 border-fg transition-colors ${view === "graph" ? "bg-fg text-accent" : "bg-bg-raised text-fg-dim hover:bg-alt"}`}
+            ><Share2 size={12} /> Graph</button>
+          </div>
+          <Btn onClick={() => { load(); if (view === "graph") loadTopo(); }} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>
           <PermissionGate permission="apps.deploy">
             <Btn onClick={() => { window.location.hash = "#/deploy"; }} variant="primary">Deploy New App</Btn>
           </PermissionGate>
         </div>
       </div>
 
+      {view === "graph" ? (
+        topoLoading && !topo
+          ? <div className="flex justify-center py-20"><Spinner /></div>
+          : topo
+            ? <TopologyGraph data={topo} />
+            : <EmptyState message="No topology data yet." icon={Share2} />
+      ) : (
+      <>
       {nothingDeployed ? (
         <EmptyState message="Nothing deployed yet. Deploy your first app or service to get started." icon={Box} />
       ) : (
@@ -549,6 +591,8 @@ export function DashboardPage() {
             </Card>
           )}
         </>
+      )}
+      </>
       )}
     </div>
   );

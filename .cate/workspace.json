@@ -61,6 +61,11 @@
       "type": "terminal",
       "title": "Terminal 1"
     },
+    "6bce1c62-f0de-4b68-8da0-5655a8a75282": {
+      "type": "browser",
+      "title": "http://localhost:4599/topo-preview.html",
+      "url": "http://localhost:4599/topo-preview"
+    },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
       "title": "Canvas"
@@ -81,7 +86,7 @@
             "width": 640,
             "height": 400
           },
-          "zOrder": 529,
+          "zOrder": 574,
           "creationIndex": 1,
           "animationState": "idle",
           "dockLayout": {
@@ -104,7 +109,7 @@
             "width": 640,
             "height": 640
           },
-          "zOrder": 540,
+          "zOrder": 575,
           "creationIndex": 3,
           "animationState": "idle",
           "dockLayout": {
@@ -127,7 +132,7 @@
             "width": 640,
             "height": 640
           },
-          "zOrder": 541,
+          "zOrder": 576,
           "creationIndex": 4,
           "animationState": "idle",
           "dockLayout": {
@@ -161,12 +166,35 @@
             ],
             "activeIndex": 0
           }
+        },
+        "55938329-041c-48ff-b2c9-d61a6f2d50e3": {
+          "id": "55938329-041c-48ff-b2c9-d61a6f2d50e3",
+          "panelId": "6bce1c62-f0de-4b68-8da0-5655a8a75282",
+          "origin": {
+            "x": 660,
+            "y": 1280
+          },
+          "size": {
+            "width": 800,
+            "height": 600
+          },
+          "zOrder": 573,
+          "creationIndex": 6,
+          "animationState": "idle",
+          "dockLayout": {
+            "type": "tabs",
+            "id": "edc158bb-0345-4b30-b781-2d3852231f93",
+            "panelIds": [
+              "6bce1c62-f0de-4b68-8da0-5655a8a75282"
+            ],
+            "activeIndex": 0
+          }
         }
       },
-      "zoomLevel": 0.9221850293922108,
+      "zoomLevel": 0.7624996862736427,
       "viewportOffset": {
-        "x": -441.3480610151155,
-        "y": -610.3449105387607
+        "x": -793.7496925481698,
+        "y": -359.99971137175135
       }
     }
   }

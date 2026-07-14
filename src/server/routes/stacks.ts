@@ -4,7 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { StackDeployRequest } from "../../shared/rpc.ts";
 import { enqueue } from "../ipc/enqueue.ts";
-import { enqueueOp } from "./_ops.ts";
+import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
 
 // --- Deploy ---
@@ -86,8 +86,15 @@ export async function handleGetStackLog(request: Request, stackId: number): Prom
 
 // --- Lifecycle ---
 
-export function handleDestroyStack(request: Request, stackId: number): Promise<Response> {
-  return enqueueOp(request, { permission: "stacks.destroy", kind: "destroy_stack", resourceKeys: [`stack:${stackId}`], input: { stackId } });
+export async function handleDestroyStack(request: Request, stackId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "stacks.destroy");
+    await enforceConfirmation(request, payload, "delete_stack", "stack", String(stackId));
+    const { opId } = enqueue({ kind: "destroy_stack", resourceKeys: [`stack:${stackId}`], input: { stackId }, trigger: "ui", triggeredBy: payload.userId });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
 }
 
 // Redeploy every app in the stack. A stack owns a shared environment, so this

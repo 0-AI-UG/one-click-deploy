@@ -25,6 +25,7 @@ import { ServiceDeployProgressPage } from "./pages/service-deploy-progress.tsx";
 import { ServiceDetailPage } from "./pages/service-detail.tsx";
 import { EnvironmentsPage } from "./pages/environments.tsx";
 import { DeviceAuthPage } from "./pages/device-auth.tsx";
+import { CliConfirmPage } from "./pages/cli-confirm.tsx";
 import { EnginePage } from "./pages/engine.tsx";
 import { EngineOpDetailPage } from "./pages/engine-op-detail.tsx";
 import { EngineOpLogsPage } from "./pages/engine-op-logs.tsx";
@@ -156,6 +157,9 @@ export function App() {
     content = serviceId ? <ServiceDetailPage serviceId={serviceId} /> : <DashboardPage />;
   } else if (hash === "#/cli/auth") {
     content = <DeviceAuthPage />;
+  } else if (hash.startsWith("#/cli/confirm/")) {
+    const code = decodeURIComponent(hash.split("/")[3] || "");
+    content = code ? <CliConfirmPage userCode={code} /> : <DashboardPage />;
   } else if (hash === "#/engine") {
     content = <EnginePage />;
   } else if (hash.startsWith("#/engine/op/")) {

@@ -7,6 +7,7 @@ export interface TokenPayload {
   userId: string;
   username: string;
   v?: number; // token_version for session revocation (optional for backward compat)
+  client?: "cli"; // tags CLI-minted tokens so server-enforced confirmations only apply to them
 }
 
 const rawSecret = new TextEncoder().encode(getJwtSecret());

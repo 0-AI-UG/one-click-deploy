@@ -12,6 +12,9 @@ export function handleError(error: unknown): Response {
     if (name === "PermissionError") {
       return Response.json({ error: error.message }, { status: 403, headers: corsHeaders });
     }
+    if (name === "ConfirmationError") {
+      return Response.json({ error: error.message }, { status: 403, headers: corsHeaders });
+    }
   }
   console.error("[server] unhandled error:", error);
   return Response.json({ error: "Internal server error" }, { status: 500, headers: corsHeaders });

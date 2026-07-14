@@ -34,6 +34,7 @@ import {
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail } from "./routes/resources.ts";
+import { handleGetTopology } from "./routes/topology.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
 import {
@@ -57,8 +58,8 @@ import {
   handleGitHubUnlink,
   handleGitHubStatus,
 } from "./routes/github-oauth.ts";
-import { handleLlmTxt } from "./routes/llm-txt.ts";
 import { handleDeviceCode, handleDeviceToken, handleDeviceConfirm } from "./routes/device-auth.ts";
+import { handleCreateConfirmation, handlePollConfirmation, handleLookupConfirmation, handleConfirmConfirmation, handleDenyConfirmation } from "./routes/confirmations.ts";
 import { handleCliInstallSh, handleCliDownload } from "./routes/cli.ts";
 import { handleGetDeploySession, handleSaveDeploySession, handleDeleteDeploySession } from "./routes/deploy-sessions.ts";
 import {
@@ -153,6 +154,12 @@ function stackIdFrom(req: Request): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
+function confirmationCodeFrom(req: Request): string {
+  const url = new URL(req.url);
+  const m = url.pathname.match(/\/api\/confirmations\/item\/([^/]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
 
 export const apiRoutes = {
   // --- Health probe (public, used by Docker HEALTHCHECK and reverse proxies) ---
@@ -163,9 +170,6 @@ export const apiRoutes = {
         headers: { "Content-Type": "application/json" },
       }),
   },
-
-  // --- LLM-readable manifest docs (public) ---
-  "/llm.txt": { GET: (req: Request) => handleLlmTxt(req) },
 
   // --- CLI distribution (public) ---
   "/cli/install.sh": { GET: (req: Request) => handleCliInstallSh(req) },
@@ -181,6 +185,13 @@ export const apiRoutes = {
   "/api/auth/device-code": { POST: () => handleDeviceCode() },
   "/api/auth/device-token": { POST: (req: Request) => handleDeviceToken(req) },
   "/api/auth/device-confirm": { POST: (req: Request) => handleDeviceConfirm(req) },
+
+  // --- Web action confirmations (browser-gated destructive CLI actions) ---
+  "/api/confirmations": { POST: (req: Request) => handleCreateConfirmation(req) },
+  "/api/confirmations/poll": { POST: (req: Request) => handlePollConfirmation(req) },
+  "/api/confirmations/item/:userCode": { GET: (req: Request) => handleLookupConfirmation(req, confirmationCodeFrom(req)) },
+  "/api/confirmations/item/:userCode/confirm": { POST: (req: Request) => handleConfirmConfirmation(req, confirmationCodeFrom(req)) },
+  "/api/confirmations/item/:userCode/deny": { POST: (req: Request) => handleDenyConfirmation(req, confirmationCodeFrom(req)) },
   "/api/auth/password-reset/webauthn-options": { POST: (req: Request) => handlePasswordResetWebAuthnOptions(req) },
   "/api/auth/password-reset/webauthn-verify": { POST: (req: Request) => handlePasswordResetWebAuthnVerify(req) },
   "/api/me": {
@@ -297,6 +308,7 @@ export const apiRoutes = {
 
   // --- Resources ---
   "/api/resources": { GET: (req: Request) => handleGetResources(req) },
+  "/api/topology": { GET: (req: Request) => handleGetTopology(req) },
   "/api/resources/servers": { POST: (req: Request) => handleCreateServer(req) },
   "/api/resources/metrics/history": { GET: (req: Request) => handleGetServerMetricsHistory(req) },
   "/api/resources/servers/:id": {

@@ -15,3 +15,9 @@ export class PermissionError extends Error {
     super(message);
   }
 }
+
+export class ConfirmationError extends Error {
+  constructor(message = "Browser confirmation required") {
+    super(message);
+  }
+}

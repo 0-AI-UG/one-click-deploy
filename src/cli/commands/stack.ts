@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { get, post, del } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, colorStatus, table } from "../format.ts";
-import { promptLine } from "../prompt.ts";
+import { webConfirm } from "../confirm.ts";
 import { getGitRepo, readManifest, promptRequired } from "../manifest.ts";
 import { mergeEnv, type AppEnvDefs } from "../../shared/env-merge.ts";
 import { buildStackAppSpec, resolveRepoPath, repoDirOf } from "../../shared/stack-spec.ts";
@@ -149,7 +149,7 @@ async function findEnvironmentById(id: number): Promise<ResolvedEnv | undefined>
   return list.find((e) => e.id === id);
 }
 
-async function stackUp(args: string[]): Promise<void> {
+export async function stackUp(args: string[]): Promise<void> {
   let manifestPath = "";
   let envRef = "";
   const rawSets: string[] = [];
@@ -402,32 +402,28 @@ async function stackLogs(args: string[]): Promise<void> {
   }
 }
 
-async function stackDown(args: string[]): Promise<void> {
+export async function stackDown(args: string[]): Promise<void> {
   let name = "";
-  let yes = false;
   for (const arg of args) {
-    if (arg === "--yes" || arg === "-y") yes = true;
-    else if (!arg.startsWith("-") && !name) name = arg;
+    if (!arg.startsWith("-") && !name) name = arg;
   }
   if (!name) {
-    console.error(`Usage: ocd stack down <name> [--yes]`);
+    console.error(`Usage: ocd delete stack <name>`);
     process.exit(1);
   }
 
   const stackRef = await resolveStack(name);
 
-  if (!yes) {
-    const answer = await promptLine(
-      `${RED}Destroy stack "${stackRef.name}" and all ${stackRef.app_count} app(s) + ${stackRef.service_count} service(s)?${RESET} [y/N]: `,
-    );
-    if (answer.toLowerCase() !== "y" && answer.toLowerCase() !== "yes") {
-      console.log("Aborted.");
-      return;
-    }
+  const confirm = await webConfirm("delete_stack", "stack", stackRef.id);
+  if (!confirm) {
+    console.log("Aborted.");
+    return;
   }
 
   console.log(`Destroying stack ${BOLD}${stackRef.name}${RESET}...`);
-  const { op_id } = await del<{ op_id: number }>(`/api/stacks/${stackRef.id}`);
+  const { op_id } = await del<{ op_id: number }>(`/api/stacks/${stackRef.id}`, undefined, {
+    "X-OCD-Confirmation": confirm,
+  });
   const result = await followOp(op_id);
   if (result.ok) {
     console.log(`\n${GREEN}Stack destroyed.${RESET}`);
@@ -438,14 +434,14 @@ async function stackDown(args: string[]): Promise<void> {
 }
 
 function usage(): void {
-  console.error(`${BOLD}Usage:${RESET} ocd stack <up|down|ls|status|logs> [args]
+  console.error(`${BOLD}Usage:${RESET} ocd stack <ls|status|logs> [args]
 
 ${BOLD}Subcommands:${RESET}
-  up [manifest]        Deploy a stack (default manifest: ocd-stack.json)
   ls                   List all stacks
   status <name>        Show a stack's apps and services
   logs <name>          Print a stack's deploy log
-  down <name> [--yes]  Destroy a stack and all its members`);
+
+${DIM}Deploy a stack with \`ocd deploy stack\`; destroy one with \`ocd delete stack\`.${RESET}`);
 }
 
 export async function stack(args: string[]): Promise<void> {
@@ -454,8 +450,8 @@ export async function stack(args: string[]): Promise<void> {
 
   switch (sub) {
     case "up":
-      await stackUp(rest);
-      break;
+      console.error("`ocd stack up` has moved to `ocd deploy stack`.");
+      process.exit(1);
     case "ls":
       await stackLs();
       break;
@@ -466,8 +462,8 @@ export async function stack(args: string[]): Promise<void> {
       await stackLogs(rest);
       break;
     case "down":
-      await stackDown(rest);
-      break;
+      console.error("`ocd stack down` has moved to `ocd delete stack`.");
+      process.exit(1);
     case undefined:
     case "help":
     case "--help":

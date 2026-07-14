@@ -1,0 +1,14 @@
+{
+  "$schema": 1,
+  "name": "Queue Worker",
+  "description": "Background job worker that speaks no HTTP",
+  "build": { "dockerfile": "Dockerfile", "container_port": 3000 },
+  "env": [
+    { "key": "REDIS_URL", "description": "Redis connection string", "required": true, "secret": true },
+    { "key": "CONCURRENCY", "default": "4" }
+  ],
+  "public": false,
+  "health_check": { "enabled": false },
+  "webhook": { "enabled": true, "branch": "main" },
+  "suggested_app_name": "myapp-worker"
+}

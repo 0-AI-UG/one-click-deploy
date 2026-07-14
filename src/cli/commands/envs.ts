@@ -1,5 +1,6 @@
-import { get, post, put } from "../api.ts";
+import { get, post, put, del } from "../api.ts";
 import { BOLD, DIM, GREEN, RED, RESET, YELLOW, table } from "../format.ts";
+import { webConfirm } from "../confirm.ts";
 
 interface Environment {
   id: number;
@@ -198,6 +199,22 @@ export async function envs(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "remove" || sub === "delete") {
+    if (!args[1]) {
+      console.error("Usage: ocd envs remove <name|id>");
+      process.exit(1);
+    }
+    const env = await resolveEnv(args[1]);
+    const confirm = await webConfirm("delete_environment", "environment", env.id);
+    if (!confirm) {
+      console.log("Aborted.");
+      return;
+    }
+    await del(`/api/environments/${env.id}`, undefined, { "X-OCD-Confirmation": confirm });
+    console.log(`${GREEN}Deleted environment ${BOLD}${env.name}${RESET}`);
+    return;
+  }
+
   console.error(`${BOLD}Usage:${RESET} ocd envs <command>
 
 ${BOLD}Commands:${RESET}
@@ -206,6 +223,7 @@ ${BOLD}Commands:${RESET}
   create <name> [vars...]    Create a new environment
   set <name|id> [vars...]    Merge variables into env (redeploys linked apps)
   unset <name|id> KEY...     Remove variables from env (redeploys linked apps)
+  remove <name|id>           Delete an environment (must have no linked apps)
 
 ${BOLD}Variable format:${RESET}
   KEY=VALUE                  Plain variable

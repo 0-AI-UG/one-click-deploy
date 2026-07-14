@@ -30,8 +30,8 @@ export async function put<T>(path: string, body?: unknown): Promise<T> {
   return apiRequest<T>("PUT", path, body);
 }
 
-export async function del<T>(path: string, body?: unknown): Promise<T> {
-  return apiRequest<T>("DELETE", path, body);
+export async function del<T>(path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {
+  return apiRequest<T>("DELETE", path, body, headers);
 }
 
 /**
@@ -56,7 +56,12 @@ export class ApiError extends Error {
   }
 }
 
-async function apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function apiRequest<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<T> {
   const config = requireConfig();
   const url = `${config.panel_url}${path}`;
 
@@ -67,6 +72,7 @@ async function apiRequest<T>(method: string, path: string, body?: unknown): Prom
       headers: {
         "Authorization": `Bearer ${config.token}`,
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(headers || {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });

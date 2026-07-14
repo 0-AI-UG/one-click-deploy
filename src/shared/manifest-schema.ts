@@ -184,7 +184,6 @@ const healthCheckSchema = z.object(
 export const DeployManifestSchema = z
   .object({
     $schema: z.literal(1, { error: "expected 1" }).optional(),
-    $llm: z.string({ error: "expected string" }).optional().describe("Free-form note to LLMs authoring the manifest"),
     name: nonEmptyString("expected a non-empty string"),
     description: z.string({ error: "expected string" }).optional(),
     icon: z.string({ error: "expected string" }).optional(),
@@ -276,7 +275,6 @@ const stackAppSchema = z
 export const StackManifestSchema = z
   .object({
     $schema: z.literal(1, { error: "expected 1" }).optional(),
-    $llm: z.string({ error: "expected string" }).optional(),
     name: nonEmptyString("expected a non-empty string"),
     description: z.string({ error: "expected string" }).optional(),
     services: z

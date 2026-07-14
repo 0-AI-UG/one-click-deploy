@@ -1482,6 +1482,46 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE service_instances ADD COLUMN volume_attached INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 75,
+    description:
+      "Add action_confirmations table (browser-gated confirmation of destructive CLI actions, mirrors device_auth_codes)",
+    up: (db) => {
+      // A pending confirmation is created by an already-authenticated CLI, then
+      // approved or denied by the user in the web UI, and polled for the result
+      // by the CLI. confirm_code is the CLI's private handle (UUID); user_code is
+      // the short human-typable code shown in the browser. Rows are short-lived
+      // (10 min TTL) and deleted once resolved and polled.
+      db.run(`CREATE TABLE IF NOT EXISTS action_confirmations (
+        confirm_code TEXT PRIMARY KEY,
+        user_code    TEXT NOT NULL UNIQUE,
+        user_id      TEXT NOT NULL,
+        action       TEXT NOT NULL,
+        summary      TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        expires_at   INTEGER NOT NULL,
+        created_at   INTEGER NOT NULL
+      )`);
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_action_confirmations_user_code ON action_confirmations(user_code)",
+      );
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_action_confirmations_expires ON action_confirmations(expires_at)",
+      );
+    },
+  },
+  {
+    version: 76,
+    description:
+      "Bind action_confirmations to a specific resource (resource_type + resource_id) so a browser-approved confirmation can only be consumed to destroy the exact resource it was created for",
+    up: (db) => {
+      // Migration 75 already ran in dev, so ALTER the existing table rather than
+      // recreating it. Defaults let any (none should exist) in-flight pending
+      // rows keep a valid, non-null shape.
+      db.run("ALTER TABLE action_confirmations ADD COLUMN resource_type TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE action_confirmations ADD COLUMN resource_id TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

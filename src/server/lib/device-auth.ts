@@ -55,7 +55,7 @@ export async function confirmDeviceCode(
   const ok = confirmDeviceCodeRow(canonical, user.userId);
   if (!ok) return { ok: false, error: "Invalid or expired code" };
 
-  const token = await createToken(user);
+  const token = await createToken({ userId: user.userId, username: user.username, v: user.v, client: "cli" });
   confirmedTokens.set(canonical, token);
   return { ok: true };
 }

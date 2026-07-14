@@ -10,6 +10,7 @@ import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-
 import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
+import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
@@ -125,8 +126,15 @@ export async function handleDeploy(request: Request): Promise<Response> {
   }
 }
 
-export function handleDestroyApp(request: Request, appId: number): Promise<Response> {
-  return enqueueOp(request, { permission: "apps.destroy", kind: "destroy_app", resourceKeys: [`app:${appId}`], input: { appId } });
+export async function handleDestroyApp(request: Request, appId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "apps.destroy");
+    await enforceConfirmation(request, payload, "delete_app", "app", String(appId));
+    const { opId } = enqueue({ kind: "destroy_app", resourceKeys: [`app:${appId}`], input: { appId }, trigger: "ui", triggeredBy: payload.userId });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
 }
 
 export function handleRestartApp(request: Request, appId: number): Promise<Response> {

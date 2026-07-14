@@ -69,6 +69,12 @@ function parseFlags(args: string[]): {
 }
 
 export async function deploy(args: string[]): Promise<void> {
+  if (args[0] === "stack") {
+    const { stackUp } = await import("./stack.ts");
+    await stackUp(args.slice(1));
+    return;
+  }
+
   const { manifestPath, domain, envName, sets, help } = parseFlags(args);
 
   if (help) {
@@ -84,6 +90,9 @@ With --env, the linked environment supplies all variables instead.
 
 ${BOLD}Arguments:${RESET}
   [manifest]                 Path to manifest (default: .ocd-deploy.json)
+
+${BOLD}Subcommands:${RESET}
+  stack [manifest]           Deploy a multi-app stack (default: ocd-stack.json)
 
 ${BOLD}Options:${RESET}
   --domain=<domain>          Custom domain

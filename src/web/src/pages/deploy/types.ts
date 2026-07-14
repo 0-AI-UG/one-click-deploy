@@ -25,7 +25,6 @@ export type ManifestEnvDef = {
 
 export type DeployManifest = {
   $schema?: number;
-  $llm?: string;
   name: string;
   description?: string;
   icon?: string;
