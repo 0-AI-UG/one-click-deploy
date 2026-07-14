@@ -85,6 +85,18 @@ export function collapseForwardSteps(steps: OperationStep[]): OperationStep[] {
   );
 }
 
+// Upsert steps into `accumulated` by seq, mutating in place. New seqs append
+// in order; a re-delivered seq (e.g. the terminal `/events` response re-sends
+// the full list from seq 0, or a `started → ok` transition on the same seq)
+// replaces the existing row rather than duplicating it.
+function mergeSteps(accumulated: OperationStep[], newSteps: OperationStep[]): void {
+  for (const s of newSteps) {
+    const idx = accumulated.findIndex((a) => a.seq === s.seq);
+    if (idx >= 0) accumulated[idx] = s;
+    else accumulated.push(s);
+  }
+}
+
 // Ops that already have a sticky toast attached. Guards against double-toasts
 // when multiple hooks (or remounts) discover the same running op.
 const rehydratedToastIds = new Set<number>();
@@ -164,7 +176,7 @@ export function useOperation(opId: number | null): OperationView | null {
       await pollOperation(
         opId,
         (ev) => {
-          accumulated.push(...ev.newSteps);
+          mergeSteps(accumulated, ev.newSteps);
           setView((prev) =>
             prev
               ? { ...prev, status: ev.status, last_step: ev.last_step, error: ev.error, steps: [...accumulated] }
@@ -274,7 +286,8 @@ function useOperationTracker(
         opId,
         (ev) => {
           if (!mounted.current) return;
-          accum.current.get(opId)?.push(...ev.newSteps);
+          const acc = accum.current.get(opId);
+          if (acc) mergeSteps(acc, ev.newSteps);
           setViews((prev) => {
             const cur = prev[opId];
             if (!cur) return prev;
