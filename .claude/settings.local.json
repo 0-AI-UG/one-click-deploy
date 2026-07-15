@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "Bash(bun run:*)",
+      "Bash(bun test:*)",
+      "Bash(bun tsc:*)",
+      "Bash(bun x:*)",
+      "Bash(npx tsc *)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(stripe products *)",
+      "Bash(git *)",
+      "Bash(ocd ssh *)"
+    ]
+  },
+  "enabledPlugins": {
+    "stripe@claude-plugins-official": true
+  }
+}
