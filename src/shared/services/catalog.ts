@@ -9,21 +9,39 @@ export type ServiceEnvVar = {
   default?: string;
 };
 
+export type ServiceVariant = {
+  /** Image repository override for this user-facing version. */
+  image: string;
+  /** Actual container tag; the variant key remains the version shown in the UI. */
+  tag: string;
+  /** Extra defaults associated with the image, such as extensions it bundles. */
+  defaultEnvVars?: Record<string, string>;
+};
+
 export type ServiceDefinition = {
   type: string;
   label: string;
   image: string;
   versions: string[];
+  /** Optional image/tag overrides keyed by entries in `versions`. */
+  variants?: Record<string, ServiceVariant>;
   defaultPort: number;
   requiredEnvVars: ServiceEnvVar[];
+  /** Internal image configuration not shown as editable credentials in the UI. */
+  defaultEnvVars?: Record<string, string>;
   /** Path inside the container to back with a persistent volume. Empty/omitted = stateless. */
   volumePath: string;
   healthCmd: string;
+  /** Optional idempotent command run inside the container after its first healthy probe. */
+  postStartCmd?: string;
   defaultVolumeSize: number;
   connectionUrlTemplate: string;
   icon?: string;
   color?: string;
   cmd?: string[];
+  /** Optional resource ceilings for services that need more than the platform defaults. */
+  memoryMb?: number;
+  cpus?: number;
   /**
    * Linux capabilities to add back after the platform's `--cap-drop=ALL`.
    * Needed by official images whose entrypoint runs as root then drops to a
@@ -50,8 +68,17 @@ function randomPassword(len = 24): string {
   return randomFromAlphabet("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", len);
 }
 
-export function generateEnvVars(def: ServiceDefinition): Record<string, string> {
-  const env: Record<string, string> = {};
+export function resolveServiceImage(def: ServiceDefinition, version: string): string {
+  const variant = def.variants?.[version];
+  return variant ? `${variant.image}:${variant.tag}` : `${def.image}:${version}`;
+}
+
+export function generateEnvVars(def: ServiceDefinition, version?: string): Record<string, string> {
+  const variantDefaults = version ? def.variants?.[version]?.defaultEnvVars : undefined;
+  const env: Record<string, string> = {
+    ...(def.defaultEnvVars ?? {}),
+    ...(variantDefaults ?? {}),
+  };
   for (const v of def.requiredEnvVars) {
     if (v.generate === "password") {
       env[v.key] = randomPassword();
@@ -62,6 +89,35 @@ export function generateEnvVars(def: ServiceDefinition): Record<string, string> 
     }
   }
   return env;
+}
+
+export type ServiceRuntime = {
+  host: string;
+  port: number;
+  internalHost: string;
+  internalPort: number;
+};
+
+/** Resolve catalog-only runtime placeholders after the service port is allocated. */
+export function resolveEnvVarTemplates(
+  env: Record<string, string>,
+  runtime: ServiceRuntime,
+): Record<string, string> {
+  const replacements: Record<string, string> = {
+    "{host}": runtime.host,
+    "{port}": String(runtime.port),
+    "{internal_host}": runtime.internalHost,
+    "{internal_port}": String(runtime.internalPort),
+  };
+  return Object.fromEntries(
+    Object.entries(env).map(([key, value]) => {
+      let resolved = value;
+      for (const [placeholder, replacement] of Object.entries(replacements)) {
+        resolved = resolved.replaceAll(placeholder, replacement);
+      }
+      return [key, resolved];
+    }),
+  );
 }
 
 export function buildConnectionUrl(

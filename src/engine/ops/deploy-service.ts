@@ -15,6 +15,8 @@ import {
 import {
   getCatalogEntry,
   generateEnvVars,
+  resolveServiceImage,
+  resolveEnvVarTemplates,
   buildConnectionUrl,
   type ServiceDefinition,
 } from "../../shared/services/catalog.ts";
@@ -255,10 +257,7 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
     const volume = prior["create_volume"] as VolumeOut;
     const catalog = resolveCatalog(req);
     const version = req.version || catalog.versions[0];
-    const image = `${catalog.image}:${version}`;
-
-    const generated = generateEnvVars(catalog);
-    const envVars = { ...generated, ...(req.env_overrides || {}) };
+    const image = resolveServiceImage(catalog, version);
 
     const hostPort = db.nextServiceHostPort(server.serverId);
     const containerName = req.name;
@@ -273,6 +272,15 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
     // IP — the alias survives service migrations across servers, while
     // bindAddress remains what docker run/health checks actually bind to.
     const stableHost = `${req.name}.svc.ocd.internal`;
+    const generated = resolveEnvVarTemplates(generateEnvVars(catalog, version), {
+      host: stableHost,
+      port: hostPort,
+      internalHost: containerName,
+      internalPort: catalog.defaultPort,
+    });
+    // Explicit user/manifest overrides remain literal and take precedence over
+    // catalog defaults (including defaults containing runtime placeholders).
+    const envVars = { ...generated, ...(req.env_overrides || {}) };
 
     let connectionUrl: string;
     let httpDomain: string | undefined;
@@ -407,6 +415,8 @@ const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
         volumeMount: volume.skipped ? undefined : volume.volumeMount,
         bindAddress: svc.bindAddress,
         cmd: catalog.cmd,
+        memoryMb: catalog.memoryMb,
+        cpus: catalog.cpus,
         extraCaps: catalog.extraCaps,
       },
       server.serverHostKey || undefined,
@@ -532,13 +542,30 @@ const healthCheckStep: Step<DeployServiceInput, { healthy: boolean }> = {
     const svc = prior["insert_service_and_instance"] as InsertOut;
     const catalog = resolveCatalog(req);
 
-    const health = await serviceHealthCheck(
+    let health = await serviceHealthCheck(
       server.serverIp,
       svc.containerName,
       catalog.healthCmd,
       10,
       server.serverHostKey || undefined,
     );
+    if (health.healthy && catalog.postStartCmd) {
+      const setup = await serviceHealthCheck(
+        server.serverIp,
+        svc.containerName,
+        catalog.postStartCmd,
+        1,
+        server.serverHostKey || undefined,
+      );
+      if (!setup.healthy) {
+        health = {
+          healthy: false,
+          error: `Post-start setup failed: ${setup.error || "command failed"}`,
+        };
+      } else {
+        ctx.log("Post-start setup complete");
+      }
+    }
     if (health.healthy) {
       db.updateServiceInstanceStatus(svc.instanceId, "running");
       db.updateServiceStatus(svc.serviceId, "running");

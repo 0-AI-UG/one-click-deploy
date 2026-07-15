@@ -116,7 +116,7 @@ Because injected `<KEY>_URL` values only exist after the service/app deploys, **
 
 Common mistake: the service `type` must be the **exact catalog key** —
 `postgresql` (not `postgres`), `redis`, `mysql`, `mariadb`, `mongodb`,
-`clickhouse`, `rabbitmq`, `meilisearch`, `minio`, `qdrant`, `typesense`,
+`clickhouse`, `rabbitmq`, `kafka`, `meilisearch`, `minio`, `qdrant`, `typesense`,
 `ollama`. A wrong type fails the deploy with "Unknown service type".
 
 ## Driving the `ocd` CLI

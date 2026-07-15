@@ -93,7 +93,7 @@ per-app build/env config.
 | `name` | string **(required)** | Stack name. Every member is named `<name>-<key>` and is fleet-globally unique (stack `blog` + app key `web` → app `blog-web`). |
 | `description` | string | Optional. |
 | `services` | object | Map of service key → managed service. Optional. |
-| `services.<key>.type` | string **(required)** | Catalog type — the exact catalog key, e.g. `postgresql`, `redis`, `mysql`, `mariadb`, `mongodb`, `clickhouse`, `rabbitmq`, `meilisearch`, `minio`, `qdrant`, `typesense`, `ollama`. **Use `postgresql`, not `postgres`.** |
+| `services.<key>.type` | string **(required)** | Catalog type — the exact catalog key, e.g. `postgresql`, `redis`, `mysql`, `mariadb`, `mongodb`, `clickhouse`, `rabbitmq`, `kafka`, `meilisearch`, `minio`, `qdrant`, `typesense`, `ollama`. **Use `postgresql`, not `postgres`.** |
 | `services.<key>.version` | string | Image version/tag. Optional. |
 | `services.<key>.volume_size` | number ≥ 1 | Data volume size in GB. Optional. |
 | `services.<key>.env_overrides` | object (string→string) | Override generated service env vars. Optional. |
@@ -102,6 +102,11 @@ per-app build/env config.
 | `apps.<key>.needs` | string[] | Keys of services/apps this app depends on. Every entry must name a declared key. |
 | `apps.<key>.domain` | string | Override the app's custom domain. Optional. |
 | `apps.<key>.public` | boolean | Override the app manifest's `public`. Optional. |
+
+PostgreSQL image variants are available as `17-pgvector`, `17-postgis`,
+`17-pgmq`, and `17-pgvector-postgis-pgmq`. Each variant automatically enables
+its bundled extension(s). `POSTGRES_EXTENSIONS` in `env_overrides` can select
+or add any other extension already included in the chosen image.
 
 ### Semantics
 
