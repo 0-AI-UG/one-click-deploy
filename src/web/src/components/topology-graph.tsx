@@ -44,8 +44,8 @@ const REGION_HEADER_H = 30;
 const REGION_VPAD = 24;
 const REGION_GAP = 60;
 const ROW_GAP = 26; // vertical gap between wrapped card rows within a region
-const ENV_LANE_TOP = 16; // gap from a row's bottom to its first env-link lane
-const ENV_LANE_STEP = 20; // vertical distance between stacked env-link lanes
+const ENV_LANE_TOP = 18; // gap from a row's bottom to its first env-link lane
+const ENV_LANE_STEP = 22; // vertical distance between stacked env-link lanes
 const ENV_LANE_BOT = 8; // gap after the last env-link lane before the next row
 const LEFT_MARGIN = 100; // left inner margin of a region (trunk lanes live here)
 const RIGHT_MARGIN = 80; // right inner margin (wake lane lives here)
@@ -69,6 +69,129 @@ const cardHeight = (chips: number) => {
   return HEADER_H + REPS_VPAD + rows * REP_ROW_H;
 };
 
+// Longest-path layering on the graph's strongly-connected-component DAG. This
+// is the first phase of a Sugiyama-style layout: consumers stay above the
+// dependencies they reference, while cycles remain together on one layer.
+function dependencyRanks(apps: TopologyApp[], links: TopologyLink[]): Map<number, number> {
+  const ids = new Set(apps.map((app) => app.id));
+  const adj = new Map<number, number[]>();
+  for (const id of ids) adj.set(id, []);
+  for (const link of links) {
+    if (ids.has(link.from) && ids.has(link.to) && link.from !== link.to) {
+      adj.get(link.from)!.push(link.to);
+    }
+  }
+
+  let nextIndex = 0;
+  const index = new Map<number, number>();
+  const low = new Map<number, number>();
+  const stack: number[] = [];
+  const onStack = new Set<number>();
+  const components: number[][] = [];
+
+  const visit = (id: number) => {
+    index.set(id, nextIndex);
+    low.set(id, nextIndex++);
+    stack.push(id);
+    onStack.add(id);
+    for (const to of adj.get(id) ?? []) {
+      if (!index.has(to)) {
+        visit(to);
+        low.set(id, Math.min(low.get(id)!, low.get(to)!));
+      } else if (onStack.has(to)) {
+        low.set(id, Math.min(low.get(id)!, index.get(to)!));
+      }
+    }
+    if (low.get(id) !== index.get(id)) return;
+    const component: number[] = [];
+    while (stack.length) {
+      const member = stack.pop()!;
+      onStack.delete(member);
+      component.push(member);
+      if (member === id) break;
+    }
+    components.push(component);
+  };
+  for (const id of ids) if (!index.has(id)) visit(id);
+
+  const componentOf = new Map<number, number>();
+  components.forEach((component, ci) => component.forEach((id) => componentOf.set(id, ci)));
+  const dag = components.map(() => new Set<number>());
+  const indegree = components.map(() => 0);
+  for (const [from, tos] of adj) {
+    const cf = componentOf.get(from)!;
+    for (const to of tos) {
+      const ct = componentOf.get(to)!;
+      if (cf !== ct && !dag[cf].has(ct)) {
+        dag[cf].add(ct);
+        indegree[ct]++;
+      }
+    }
+  }
+
+  const rank = components.map(() => 0);
+  const queue = indegree.flatMap((n, i) => n === 0 ? [i] : []);
+  for (let qi = 0; qi < queue.length; qi++) {
+    const from = queue[qi];
+    for (const to of dag[from]) {
+      rank[to] = Math.max(rank[to], rank[from] + 1);
+      if (--indegree[to] === 0) queue.push(to);
+    }
+  }
+
+  return new Map(apps.map((app) => [app.id, rank[componentOf.get(app.id)!]]));
+}
+
+// Barycentric sweeps are the crossing-reduction phase of the layered layout.
+// The stable name tie-break keeps the result deterministic between refreshes.
+function orderLayeredSeeds<T extends { app: TopologyApp }>(
+  seeds: T[], ranks: Map<number, number>, links: TopologyLink[],
+): T[][] {
+  const seedByApp = new Map(seeds.map((seed) => [seed.app.id, seed]));
+  const neighbours = new Map<number, Set<number>>();
+  for (const seed of seeds) neighbours.set(seed.app.id, new Set());
+  for (const link of links) {
+    if (!seedByApp.has(link.from) || !seedByApp.has(link.to)) continue;
+    neighbours.get(link.from)!.add(link.to);
+    neighbours.get(link.to)!.add(link.from);
+  }
+
+  const byRank = new Map<number, T[]>();
+  for (const seed of seeds) {
+    const r = ranks.get(seed.app.id) ?? 0;
+    const layer = byRank.get(r) ?? [];
+    layer.push(seed);
+    byRank.set(r, layer);
+  }
+  const layers = [...byRank.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, layer]) => layer.sort((a, b) => a.app.name.localeCompare(b.app.name)));
+  if (layers.length < 2) return layers;
+
+  const positions = () => {
+    const result = new Map<number, number>();
+    layers.forEach((layer) => layer.forEach((seed, i) => result.set(seed.app.id, i)));
+    return result;
+  };
+  const sweep = (indices: number[]) => {
+    const pos = positions();
+    for (const li of indices) {
+      layers[li].sort((a, b) => {
+        const score = (id: number) => {
+          const ns = [...(neighbours.get(id) ?? [])].filter((n) => pos.has(n));
+          return ns.length ? ns.reduce((sum, n) => sum + pos.get(n)!, 0) / ns.length : pos.get(id)!;
+        };
+        return score(a.app.id) - score(b.app.id) || a.app.name.localeCompare(b.app.name);
+      });
+    }
+  };
+  for (let pass = 0; pass < 4; pass++) {
+    sweep(layers.map((_, i) => i).slice(1));
+    sweep(layers.map((_, i) => i).slice(0, -1).reverse());
+  }
+  return layers;
+}
+
 // Rounded orthogonal SVG path (quadratic corner fillets) — from the artifact.
 function roundedPath(raw: Pt[], rad = 8): string {
   const pts = raw.filter((p, i) => i === 0 || p[0] !== raw[i - 1][0] || p[1] !== raw[i - 1][1]);
@@ -87,8 +210,17 @@ function roundedPath(raw: Pt[], rad = 8): string {
 }
 
 const labelAt = (pts: Pt[]): Pt => {
-  const i = Math.max(0, Math.floor((pts.length - 1) / 2));
-  const a = pts[i], b = pts[i + 1] ?? pts[i];
+  let best = 0;
+  let bestScore = -1;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const horizontal = pts[i][1] === pts[i + 1][1];
+    const length = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    // Prefer a horizontal label lane; only fall back to vertical when a path
+    // has no horizontal segment (for example a perfectly aligned direct edge).
+    const score = length + (horizontal ? 1_000_000 : 0);
+    if (score > bestScore) { best = i; bestScore = score; }
+  }
+  const a = pts[best], b = pts[best + 1] ?? pts[best];
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 };
 
@@ -130,11 +262,12 @@ type Layout = {
   panelIp: string | null;
 };
 
-function computeLayout(data: TopologyData, availW: number): Layout | null {
+export function computeLayout(data: TopologyData, availW: number): Layout | null {
   const { servers, apps, replicas, links } = data;
   if (servers.length === 0) return null;
 
   const appById = new Map(apps.map((a) => [a.id, a]));
+  const ranks = dependencyRanks(apps, links);
   const serverById = new Map(servers.map((s) => [s.id, s]));
   const ingressServerId = data.panelServerId ?? servers[0].id;
   const panelIp = serverById.get(ingressServerId)?.ipv4 ?? null;
@@ -149,6 +282,7 @@ function computeLayout(data: TopologyData, availW: number): Layout | null {
   // Servers ordered: panel first, then by id.
   const orderedServers = [...servers].sort((a, b) =>
     a.isPanel === b.isPanel ? a.id - b.id : a.isPanel ? -1 : 1);
+  const serverOrder = new Map(orderedServers.map((server, index) => [server.id, index]));
 
   // --- Build fragments: one card fragment per server an app has replicas on;
   //     a replica-less (sleeping) app gets a single anchor fragment. ---
@@ -206,35 +340,40 @@ function computeLayout(data: TopologyData, availW: number): Layout | null {
   // which (server, row) each frag landed in (needed to route env links cleanly).
   type RowPlan = { cards: Array<{ seed: FragSeed; h: number }>; rowH: number };
   const rowPlans: Array<{ server: TopologyServer; rows: RowPlan[]; replicaCount: number }> = [];
-  const place = new Map<string, { reg: number; row: number }>();
+  const place = new Map<string, { reg: number; row: number; col: number }>();
   for (const server of orderedServers) {
     const list = seedsByServer.get(server.id) ?? [];
-    // order: stack members (by stack_id, then name) first, then standalone by name
-    list.sort((a, b) => {
-      const sa = a.app.stack_id, sb = b.app.stack_id;
-      if (sa !== sb) {
-        if (sa == null) return 1;
-        if (sb == null) return -1;
-        return sa - sb;
-      }
-      return a.app.name.localeCompare(b.app.name);
+    // Keep stack boxes contiguous, then use graph ranks (consumer above
+    // dependency) and barycentric ordering inside each stack/standalone group.
+    // This is deliberately independent of insertion order from the API.
+    const groups = new Map<number | null, FragSeed[]>();
+    for (const seed of list) {
+      const group = groups.get(seed.app.stack_id) ?? [];
+      group.push(seed);
+      groups.set(seed.app.stack_id, group);
+    }
+    const groupRank = (group: FragSeed[]) => Math.min(...group.map((seed) => ranks.get(seed.app.id) ?? 0));
+    const orderedGroups = [...groups.entries()].sort(([a, ga], [b, gb]) => {
+      const rankDelta = groupRank(ga) - groupRank(gb);
+      if (rankDelta) return rankDelta;
+      if (a == null) return 1;
+      if (b == null) return -1;
+      return a - b;
     });
 
-    // Flow into rows: break to a new row at every stack boundary (so each stack
-    // owns whole rows) and whenever the current row is full.
     const rows: RowPlan[] = [];
-    let cur: Array<{ seed: FragSeed; h: number }> = [];
-    let curStack: number | null | undefined = undefined;
-    const flush = () => { if (cur.length) { rows.push({ cards: cur, rowH: Math.max(...cur.map((c) => c.h)) }); cur = []; } };
-    for (const seed of list) {
-      const h = cardHeight(seed.anchorOnly ? 1 : Math.max(1, seed.reps.length));
-      if (seed.app.stack_id !== curStack) flush();
-      if (cur.length >= cols) flush();
-      cur.push({ seed, h });
-      curStack = seed.app.stack_id;
+    for (const [, group] of orderedGroups) {
+      for (const layer of orderLayeredSeeds(group, ranks, links)) {
+        for (let start = 0; start < layer.length; start += cols) {
+          const cards = layer.slice(start, start + cols).map((seed) => ({
+            seed,
+            h: cardHeight(seed.anchorOnly ? 1 : Math.max(1, seed.reps.length)),
+          }));
+          rows.push({ cards, rowH: Math.max(...cards.map((card) => card.h)) });
+        }
+      }
     }
-    flush();
-    rows.forEach((row, ri) => row.cards.forEach((c) => place.set(c.seed.key, { reg: server.id, row: ri })));
+    rows.forEach((row, ri) => row.cards.forEach((c, ci) => place.set(c.seed.key, { reg: server.id, row: ri, col: ci })));
     rowPlans.push({ server, rows, replicaCount: replicas.filter((r) => r.server_id === server.id).length });
   }
 
@@ -271,17 +410,41 @@ function computeLayout(data: TopologyData, availW: number): Layout | null {
     return s;
   };
   type EnvRoute =
+    | { kind: "direct"; leftKey: string; rightKey: string }
     | { kind: "same"; band: string; slot: number }
     | { kind: "adj"; band: string; slot: number; upKey: string; loKey: string }
     | { kind: "dist"; bandU: string; slotU: number; bandL: string; slotL: number; upKey: string; loKey: string }
-    | { kind: "cross" };
+    | {
+        kind: "cross"; upKey: string; loKey: string;
+        bandU: string; slotU: number; bandL?: string; slotL?: number;
+      };
   const envRoute = new Map<string, EnvRoute>();
   for (const e of envList) {
     const ka = primaryKeyByApp.get(e.from), kb = primaryKeyByApp.get(e.to);
     const pa = ka ? place.get(ka) : undefined, pb = kb ? place.get(kb) : undefined;
     if (!ka || !kb || !pa || !pb) continue;
-    if (pa.reg !== pb.reg) { envRoute.set(e.pair, { kind: "cross" }); continue; }
+    if (pa.reg !== pb.reg) {
+      const aAbove = (serverOrder.get(pa.reg) ?? 0) < (serverOrder.get(pb.reg) ?? 0);
+      const up = aAbove ? { p: pa, k: ka } : { p: pb, k: kb };
+      const lo = aAbove ? { p: pb, k: kb } : { p: pa, k: ka };
+      const bandU = `${up.p.reg}:${up.p.row}`;
+      const bandL = lo.p.row > 0 ? `${lo.p.reg}:${lo.p.row - 1}` : undefined;
+      envRoute.set(e.pair, {
+        kind: "cross", upKey: up.k, loKey: lo.k,
+        bandU, slotU: takeSlot(bandU),
+        bandL, slotL: bandL ? takeSlot(bandL) : undefined,
+      });
+      continue;
+    }
     if (pa.row === pb.row) {
+      if (Math.abs(pa.col - pb.col) === 1) {
+        envRoute.set(e.pair, {
+          kind: "direct",
+          leftKey: pa.col < pb.col ? ka : kb,
+          rightKey: pa.col < pb.col ? kb : ka,
+        });
+        continue;
+      }
       const band = `${pa.reg}:${pa.row}`;
       envRoute.set(e.pair, { kind: "same", band, slot: takeSlot(band) });
       continue;
@@ -426,6 +589,51 @@ function computeLayout(data: TopologyData, availW: number): Layout | null {
   const primaryFrag = (appId: number): FragRender | undefined =>
     fragByKey.get(primaryKeyByApp.get(appId) ?? "");
 
+  // Allocate a separate boundary port for every incident env edge. Sorting the
+  // ports by the opposite endpoint is the orthogonal equivalent of barycentric
+  // port ordering and avoids the fan-in/fan-out tangles caused by one shared
+  // centre port per card.
+  type PortSide = "top" | "bottom";
+  type PortRequest = { pair: string; peerX: number };
+  const portRequests = new Map<string, PortRequest[]>();
+  const requestPort = (fragKey: string, side: PortSide, request: PortRequest) => {
+    const key = `${fragKey}:${side}`;
+    const requests = portRequests.get(key) ?? [];
+    requests.push(request);
+    portRequests.set(key, requests);
+  };
+  for (const e of envList) {
+    const a = primaryFrag(e.from), b = primaryFrag(e.to);
+    const r = envRoute.get(e.pair);
+    if (!a || !b || !r || r.kind === "direct") continue;
+    if (r.kind === "same") {
+      requestPort(a.key, "bottom", { pair: e.pair, peerX: b.rect.cx });
+      requestPort(b.key, "bottom", { pair: e.pair, peerX: a.rect.cx });
+      continue;
+    }
+    let up: FragRender;
+    let lo: FragRender;
+    if (r.kind === "adj" || r.kind === "dist" || r.kind === "cross") {
+      up = fragByKey.get(r.upKey)!;
+      lo = fragByKey.get(r.loKey)!;
+    } else {
+      [up, lo] = a.rect.cy <= b.rect.cy ? [a, b] : [b, a];
+    }
+    requestPort(up.key, "bottom", { pair: e.pair, peerX: lo.rect.cx });
+    requestPort(lo.key, "top", { pair: e.pair, peerX: up.rect.cx });
+  }
+  for (const requests of portRequests.values()) {
+    requests.sort((a, b) => a.peerX - b.peerX || a.pair.localeCompare(b.pair));
+  }
+  const envPort = (frag: FragRender, side: PortSide, pair: string): Pt => {
+    const requests = portRequests.get(`${frag.key}:${side}`) ?? [];
+    const index = Math.max(0, requests.findIndex((request) => request.pair === pair));
+    const inset = 22;
+    const span = frag.rect.w - inset * 2;
+    const x = frag.rect.left + inset + span * ((index + 1) / (requests.length + 1));
+    return [x, side === "top" ? frag.rect.top : frag.rect.top + frag.rect.h];
+  };
+
   // ---------------------------------------------------------------------------
   // Edges
   // ---------------------------------------------------------------------------
@@ -486,6 +694,19 @@ function computeLayout(data: TopologyData, availW: number): Layout | null {
   // label ever overlaps another or crosses a card body.
   const laneY = (band: string, slot: number) =>
     (rowBottomAbs.get(band) ?? 0) + ENV_LANE_TOP + slot * ENV_LANE_STEP;
+  const channelUse = new Map<string, number>();
+  const takeChannel = (key: string) => {
+    const slot = channelUse.get(key) ?? 0;
+    channelUse.set(key, slot + 1);
+    return slot;
+  };
+  const localChannelX = (serverId: number, side: "left" | "right") => {
+    const slot = takeChannel(`${serverId}:${side}`);
+    return side === "left"
+      ? regionLeft + LEFT_MARGIN - 16 - slot * 12
+      : regionLeft + contentW - RIGHT_MARGIN + 16 + slot * 12;
+  };
+  const crossChannelX = () => regionLeft + contentW - 26 - takeChannel("cross") * 12;
   let envIdx = 0;
   for (const e of envList) {
     const a = primaryFrag(e.from), b = primaryFrag(e.to);
@@ -498,28 +719,49 @@ function computeLayout(data: TopologyData, availW: number): Layout | null {
     const toKey = primaryKeyByApp.get(e.to);
     let pts: Pt[];
     let toAtEnd: boolean;
-    if (r?.kind === "same") {
+    if (r?.kind === "direct") {
+      const left = fragByKey.get(r.leftKey)!;
+      const right = fragByKey.get(r.rightKey)!;
+      pts = [R(left.rect), L(right.rect)];
+      toAtEnd = r.rightKey === toKey;
+    } else if (r?.kind === "same") {
       const yy = laneY(r.band, r.slot);
-      pts = [B(a.rect), [a.rect.cx, yy], [b.rect.cx, yy], B(b.rect)];
+      const ap = envPort(a, "bottom", e.pair);
+      const bp = envPort(b, "bottom", e.pair);
+      pts = [ap, [ap[0], yy], [bp[0], yy], bp];
       toAtEnd = true; // ends at b === to
     } else if (r?.kind === "adj") {
-      const up = fragByKey.get(r.upKey)!.rect, lo = fragByKey.get(r.loKey)!.rect;
+      const up = fragByKey.get(r.upKey)!, lo = fragByKey.get(r.loKey)!;
       const yy = laneY(r.band, r.slot);
-      pts = [B(up), [up.cx, yy], [lo.cx, yy], T(lo)];
+      const upPort = envPort(up, "bottom", e.pair);
+      const loPort = envPort(lo, "top", e.pair);
+      pts = [upPort, [upPort[0], yy], [loPort[0], yy], loPort];
       toAtEnd = r.loKey === toKey;
     } else if (r?.kind === "dist") {
-      const up = fragByKey.get(r.upKey)!.rect, lo = fragByKey.get(r.loKey)!.rect;
+      const up = fragByKey.get(r.upKey)!, lo = fragByKey.get(r.loKey)!;
       const yu = laneY(r.bandU, r.slotU), yl = laneY(r.bandL, r.slotL);
-      const channelX = Math.min(up.left, lo.left) - CARD_GAP / 2;
-      pts = [B(up), [up.cx, yu], [channelX, yu], [channelX, yl], [lo.cx, yl], T(lo)];
+      const side = (up.rect.cx + lo.rect.cx) / 2 < regionLeft + contentW / 2 ? "left" : "right";
+      const channelX = localChannelX(up.serverId, side);
+      const upPort = envPort(up, "bottom", e.pair);
+      const loPort = envPort(lo, "top", e.pair);
+      pts = [upPort, [upPort[0], yu], [channelX, yu], [channelX, yl], [loPort[0], yl], loPort];
+      toAtEnd = r.loKey === toKey;
+    } else if (r?.kind === "cross") {
+      // Cross-server links leave the upper row through its reserved band, use
+      // an obstacle-free right-margin channel through intervening regions, and
+      // enter in the band above the lower row. They never cut through a server.
+      const up = fragByKey.get(r.upKey)!, lo = fragByKey.get(r.loKey)!;
+      const yu = laneY(r.bandU, r.slotU);
+      const yl = r.bandL && r.slotL != null ? laneY(r.bandL, r.slotL) : lo.rect.top - 12;
+      const channelX = crossChannelX();
+      const upPort = envPort(up, "bottom", e.pair);
+      const loPort = envPort(lo, "top", e.pair);
+      pts = [upPort, [upPort[0], yu], [channelX, yu], [channelX, yl], [loPort[0], yl], loPort];
       toAtEnd = r.loKey === toKey;
     } else {
-      // Cross-region: a simple detour through the empty gap between regions.
-      const hi = a.rect.cy <= b.rect.cy ? a.rect : b.rect;
-      const lo = a.rect.cy <= b.rect.cy ? b.rect : a.rect;
-      const my = (hi.top + hi.h + lo.top) / 2;
-      pts = [B(hi), [hi.cx, my], [lo.cx, my], T(lo)];
-      toAtEnd = a.rect.cy <= b.rect.cy; // ends at lo; lo === b when b is lower
+      // Defensive fallback for malformed topology data.
+      pts = [B(a.rect), T(b.rect)];
+      toAtEnd = true;
     }
     edges.push({
       id: `env-${e.pair}`, kind: "env", pts, revMarker: !toAtEnd,
@@ -737,12 +979,13 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
                 const hi = focusSets?.edges.has(e.id) ?? false;
                 const opacity = focusing ? (hi ? 1 : 0.12) : st.o;
                 const width = focusing && hi ? st.w + 1.4 : st.w;
-                const stroke = e.color ?? st.c;
+                const stroke = e.kind === "env" && !(focusing && hi) ? st.c : (e.color ?? st.c);
                 const d = roundedPath(e.pts);
-                // Env links flow coloured dots along the line in the from→to
-                // direction, so a single link stays followable through a merge.
+                // Motion is a focus aid, not ambient decoration: showing it on
+                // every edge at once makes dense graphs substantially harder to
+                // parse. Hover/select a card to animate only its trace.
                 let dots: React.ReactNode = null;
-                if (e.kind === "env") {
+                if (e.kind === "env" && focusing && hi) {
                   const len = pathLen(e.pts);
                   const dur = Math.max(1.4, len / 70);
                   const n = Math.min(4, Math.max(1, Math.round(len / 130)));
@@ -889,7 +1132,10 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
                 <div
                   key={`lab-${e.id}`}
                   className={`absolute -translate-x-1/2 -translate-y-1/2 font-mono text-[8px] font-bold uppercase tracking-wide border-[1.5px] px-1.5 py-px whitespace-nowrap pointer-events-none ${labelClass[e.kind]}`}
-                  style={{ left: lx, top: ly, zIndex: 5, borderColor: e.color }}
+                  style={{
+                    left: lx, top: ly, zIndex: 5,
+                    borderColor: e.kind === "env" && !(focusing && hi) ? EDGE_STYLE.env.c : e.color,
+                  }}
                 >
                   {e.label}
                 </div>
