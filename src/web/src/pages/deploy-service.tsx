@@ -183,44 +183,51 @@ export function DeployServicePage({ preselectedType }: { preselectedType?: strin
                 )}
 
                 {credentialFields.length > 0 && (
-                  <Field label="Credentials" align="start" wide hint="Edit any field before deploying. Cleared fields are auto-generated.">
-                    <div className="space-y-2">
-                      {credentialFields.map((f) => {
-                        const revealed = revealedKeys.has(f.key);
-                        const value = generatedEnv[f.key] ?? "";
-                        return (
-                          <div key={f.key} className="flex items-center gap-2">
-                            <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg shrink-0 w-24 truncate" title={f.label}>{f.label}</label>
+                  <div>
+                    <div className="py-3">
+                      <div className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg leading-tight">Credentials</div>
+                      <div className="font-mono text-[9px] text-muted mt-1 leading-snug">Edit any field before deploying. Cleared fields are auto-generated.</div>
+                    </div>
+                    {credentialFields.map((f) => {
+                      const revealed = revealedKeys.has(f.key);
+                      const value = generatedEnv[f.key] ?? "";
+                      return (
+                        <Field key={f.key} label={f.label}>
+                          <div className="flex items-center bg-bg border-2 border-fg focus-within:ring-1 focus-within:ring-accent-blue">
                             <input
                               type={f.isPassword && !revealed ? "password" : "text"}
                               value={value}
                               onChange={(e) => setGeneratedEnv((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                              className="flex-1 min-w-0 bg-bg border-2 border-fg px-3 py-2 font-mono text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent-blue"
+                              className="flex-1 min-w-0 bg-transparent px-3 py-2 font-mono text-xs text-fg focus:outline-none"
                             />
-                            {f.isPassword && (
-                              <>
-                                <button
-                                  onClick={() => toggleReveal(f.key)}
-                                  className="p-1 text-muted hover:text-fg transition-colors shrink-0"
-                                  title={revealed ? "Hide" : "Reveal"}
-                                >
-                                  {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
-                                </button>
-                                <button
-                                  onClick={() => regenerate(f.key)}
-                                  className="p-1 text-muted hover:text-fg transition-colors shrink-0"
-                                  title="Regenerate"
-                                >
-                                  <RefreshCw size={14} />
-                                </button>
-                              </>
-                            )}
-                            <CopyButton text={value} />
+                            <div className="flex items-center gap-1 pr-1.5 shrink-0">
+                              {f.isPassword && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleReveal(f.key)}
+                                    className="p-1 text-muted hover:text-fg transition-colors"
+                                    title={revealed ? "Hide" : "Reveal"}
+                                  >
+                                    {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => regenerate(f.key)}
+                                    className="p-1 text-muted hover:text-fg transition-colors"
+                                    title="Regenerate"
+                                  >
+                                    <RefreshCw size={14} />
+                                  </button>
+                                </>
+                              )}
+                              <CopyButton text={value} />
+                            </div>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </Field>
+                        </Field>
+                      );
+                    })}
+                  </div>
                 )}
 
                 <Field label={<>Add to Environment <span className="font-normal text-muted ml-1">(optional)</span> <InfoTip text="Inject connection credentials into this environment on deploy" /></>}>
