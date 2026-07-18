@@ -69,6 +69,34 @@ export function wakerUdpPort(internalPort: number): number {
   return WAKER_UDP_PORT_BASE + (internalPort - db.INTERNAL_PORT_BASE);
 }
 
+/**
+ * The `docker run -p` publish flags the PANEL container must carry so the
+ * in-process waker's HTTP listener is reachable from every server's Traefik over
+ * the private network (Traefik dials `<panel-private-ip>:${WAKER_HTTP_PORT}`).
+ * Without this the waker binds fine INSIDE the container but nothing is mapped to
+ * the host, so every sleeping-app HTTP router 502s and nothing ever wakes.
+ *
+ * Bound to the panel's private IPv4 (NOT 0.0.0.0): the waker forwards straight
+ * to internal upstreams and bypasses Traefik's auth/allowlist/rate-limit
+ * middleware, so it must never be exposed on the public interface.
+ *
+ * SCOPE: HTTP only. The single HTTP listener resolves every app by Host header,
+ * so one published port covers all HTTP apps. The per-app raw TCP/UDP waker
+ * ports (wakerTcpPort/wakerUdpPort) are deliberately NOT published here: doing so
+ * would mean a static 200+200 port range (docker port mappings are fixed at
+ * `docker run` time and can't track the waker's dynamic per-app listeners),
+ * which spawns hundreds of docker-proxy processes for a feature no app currently
+ * uses. Raw-TCP/UDP scale-to-zero therefore stays unsupported until it's added
+ * with a mechanism that matches the waker's dynamic model (e.g. host networking).
+ *
+ * Returns [] when no private IP is known (nothing to bind to); the next
+ * reconciler-driven redeploy backfills it once the network is attached.
+ */
+export function wakerPublishFlags(privateIpv4: string): string[] {
+  if (!privateIpv4) return [];
+  return [`-p ${privateIpv4}:${WAKER_HTTP_PORT}:${WAKER_HTTP_PORT}`];
+}
+
 /** Shared Traefik HTTP service name every sleeping app's HTTP router targets —
  *  a single load balancer pointing at the panel waker's HTTP listener. */
 export const WAKER_HTTP_SERVICE = "ocd-waker-http";

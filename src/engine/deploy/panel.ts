@@ -22,6 +22,7 @@ import {
   cloneAndBuild, healthCheck, getContainerLogs,
 } from "../../shared/remote/index.ts";
 import { deployTraefikPanelSite } from "../scale/traefik-manager.ts";
+import { wakerPublishFlags } from "../scale/traefik-constants.ts";
 import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
@@ -326,6 +327,10 @@ export async function bootstrapPanel(
         hostPort,
         envVars: opts.envVars,
         volumeMount,
+        // Publish the in-process waker's HTTP port so sleeping apps' Traefik
+        // routers (which dial `<panel-private-ip>:8896`) can reach it. Empty
+        // until the private network is attached; the first redeploy backfills.
+        extraPublish: wakerPublishFlags(providerServer.privateIpv4 || ""),
       },
       (line) => onProgress("build", line),
     );
@@ -486,6 +491,9 @@ export function buildPanelRebuildScript(opts: {
   image: string;
   hostPort: number;
   containerPort: number;
+  /** Panel server's private IPv4 — where the waker HTTP port is published so
+   *  Traefik can reach the in-process waker for sleeping apps. "" → skip. */
+  privateIpv4: string;
   envFilePath: string;
   /** "-v src:dst" or "". */
   volumeFlag: string;
@@ -497,9 +505,15 @@ export function buildPanelRebuildScript(opts: {
   pullSleepSeconds: number;
 }): string {
   const {
-    containerName, image, hostPort, containerPort, envFilePath, volumeFlag,
-    ghcrEnvPrefix, ghcrConfigDir, pullRetries, pullSleepSeconds,
+    containerName, image, hostPort, containerPort, privateIpv4, envFilePath,
+    volumeFlag, ghcrEnvPrefix, ghcrConfigDir, pullRetries, pullSleepSeconds,
   } = opts;
+  // Publish the waker HTTP port (bound to the private IP) alongside the panel's
+  // own loopback port, so sleeping apps' Traefik routers can reach the in-process
+  // waker. Without this every sleeping-app hit 502s and nothing wakes.
+  const wakerFlags = wakerPublishFlags(privateIpv4)
+    .map((f) => ` ${f}`)
+    .join("");
   const cleanup = ghcrConfigDir
     ? `su - deploy -c "rm -rf ${ghcrConfigDir}" 2>/dev/null || true`
     : `true`;
@@ -520,7 +534,7 @@ export function buildPanelRebuildScript(opts: {
     `fi`,
     // Swap on the SAME loopback port that Traefik's panel.yml already targets.
     `docker rm -f ${containerName} 2>/dev/null || true`,
-    `su - deploy -c "docker run -d --name ${containerName} --restart unless-stopped -p 127.0.0.1:${hostPort}:${containerPort} --env-file ${envFilePath} ${volumeFlag} ${image}"`,
+    `su - deploy -c "docker run -d --name ${containerName} --restart unless-stopped -p 127.0.0.1:${hostPort}:${containerPort}${wakerFlags} --env-file ${envFilePath} ${volumeFlag} ${image}"`,
     `${cleanup}`,
   ].join("\n");
 }
@@ -635,6 +649,7 @@ export async function redeployPanel(
       image,
       hostPort: panel.host_port,
       containerPort: panel.container_port,
+      privateIpv4: server.private_ipv4 || "",
       envFilePath,
       volumeFlag,
       ghcrEnvPrefix,

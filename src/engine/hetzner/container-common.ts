@@ -35,6 +35,9 @@ export type DockerRunOpts = {
   network?: string | null;
   /** Port publish spec. Omit for containers that don't expose ports. */
   publish?: { bindAddr: string; hostPort: number; containerPort: number };
+  /** Extra, already-formatted `-p ...` publish flags (e.g. the panel's waker
+   *  port from wakerPublishFlags). Appended verbatim after `publish`. */
+  extraPublish?: string[];
   /** Absolute path to env-file on the host (--env-file). */
   envFilePath?: string;
   /** Primary "host:container" volume mount string (validated). */
@@ -101,6 +104,7 @@ export function buildDockerRunArgs(opts: DockerRunOpts): string {
     const { bindAddr, hostPort, containerPort } = opts.publish;
     parts.push(`-p ${bindAddr}:${hostPort}:${containerPort}`);
   }
+  for (const flag of opts.extraPublish ?? []) parts.push(flag);
   if (opts.envFilePath) parts.push(`--env-file ${opts.envFilePath}`);
 
   const allVolumes: string[] = [];

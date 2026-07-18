@@ -143,6 +143,9 @@ export async function cloneAndBuild(
      *  server's `private_ipv4` when the app is reached by the ingress proxy
      *  over the shared private network. */
     bindAddr?: string;
+    /** Extra, already-formatted `-p ...` publish flags beyond the primary
+     *  hostPort (e.g. the panel's waker port from wakerPublishFlags). */
+    extraPublish?: string[];
     /** Override for the docker container name. Defaults to `opts.name`.
      *  Needed when redeploying a replica whose container is named
      *  `${app}-r${n}` (from scaleUp/migrate) rather than bare `${app}`. */
@@ -226,6 +229,7 @@ export async function cloneAndBuild(
     bindAddr,
     hostPort: opts.hostPort,
     containerPort: opts.port,
+    extraPublish: opts.extraPublish,
     volumeMount: opts.volumeMount,
     extraVolumes: opts.extraVolumes,
     memoryMb: opts.memoryMb || undefined,

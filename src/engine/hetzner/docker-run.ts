@@ -109,6 +109,9 @@ export type StartAppReplicaOpts = {
   network?: string | null;
   volumeMount?: string;
   extraVolumes?: string[];
+  /** Extra, already-formatted `-p ...` publish flags beyond the primary port
+   *  (e.g. the panel's waker port). Passed through to buildDockerRunArgs. */
+  extraPublish?: string[];
   memoryMb?: number;
   /** Per-container CPU ceiling in cores. Omit / 0 → platform default. */
   cpus?: number;
@@ -158,6 +161,7 @@ export async function startAppReplica(
     appName: opts.appName,
     network: opts.network,
     publish: { bindAddr: opts.bindAddr, hostPort: opts.hostPort, containerPort: opts.containerPort },
+    extraPublish: opts.extraPublish,
     envFilePath,
     volumeMount: opts.volumeMount,
     extraVolumes: opts.extraVolumes,

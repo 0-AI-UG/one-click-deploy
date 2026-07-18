@@ -30,6 +30,7 @@ describe("buildPanelRebuildScript", () => {
     image: "ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef",
     hostPort: 3001,
     containerPort: 3001,
+    privateIpv4: "10.0.0.2",
     envFilePath: "/home/deploy/apps/ocd-panel/.env.deploy",
     volumeFlag: "-v /mnt/data:/app/data",
     ghcrEnvPrefix: "DOCKER_CONFIG=/home/deploy/.docker-ocd-xyz ",
@@ -50,10 +51,29 @@ describe("buildPanelRebuildScript", () => {
   test("runs the new container on the same loopback port Traefik targets", () => {
     const script = buildPanelRebuildScript(base);
     expect(script).toContain(
-      "docker run -d --name ocd-panel --restart unless-stopped -p 127.0.0.1:3001:3001 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef",
+      "docker run -d --name ocd-panel --restart unless-stopped -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef",
     );
     // Old container is removed only after a successful pull (pull-then-swap).
     expect(script).toContain("docker rm -f ocd-panel");
+  });
+
+  test("publishes the HTTP waker port on the private IP so sleeping apps can wake", () => {
+    const script = buildPanelRebuildScript(base);
+    // Bound to the private IP (not 0.0.0.0): the waker bypasses Traefik's auth /
+    // allowlist middleware, so it must never be exposed on the public interface.
+    expect(script).toContain("-p 10.0.0.2:8896:8896");
+    expect(script).not.toContain("-p 0.0.0.0:8896");
+    // HTTP-only scope: the per-app raw TCP/UDP waker ranges are deliberately not
+    // published (would be a static 200+200 port block of docker-proxy processes).
+    expect(script).not.toContain("21000-21199");
+    expect(script).not.toContain("21200-21399");
+  });
+
+  test("omits the waker port when the private IP is unknown", () => {
+    const script = buildPanelRebuildScript({ ...base, privateIpv4: "" });
+    expect(script).not.toContain(":8896:8896");
+    // Still runs the panel on its loopback port.
+    expect(script).toContain("-p 127.0.0.1:3001:3001");
   });
 
   test("retries the pull the requested number of times and gives up cleanly", () => {
