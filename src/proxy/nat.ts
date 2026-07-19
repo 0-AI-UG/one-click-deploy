@@ -10,6 +10,9 @@
 // prerouting for traffic arriving from other hosts/containers, output for
 // host-originated connections. All local to the host; nothing here is routed.
 
+import os from "os";
+import path from "path";
+import { rmSync } from "fs";
 import { PROXY_LISTEN_PORT, type ProxyApp } from "./config.ts";
 
 const TABLE = "ip ocd-proxy";
@@ -46,11 +49,17 @@ export function renderNatRuleset(apps: ProxyApp[]): string {
   ].join("\n");
 }
 
-/** Feed the ruleset to `nft -f -`. Throws with nft's stderr on failure. */
+/** Apply the ruleset via `nft -f <tmpfile>`. nft mmaps its input, so it
+ *  refuses pipes ("Not a regular file") — a regular temp file is required.
+ *  Throws with nft's stderr on failure. */
 export async function applyNatRuleset(ruleset: string): Promise<void> {
-  const proc = Bun.spawn(["nft", "-f", "-"], { stdin: "pipe", stdout: "ignore", stderr: "pipe" });
-  proc.stdin.write(ruleset);
-  await proc.stdin.end();
-  const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
-  if (code !== 0) throw new Error(`nft -f - exited ${code}: ${stderr.trim()}`);
+  const tmpfile = path.join(os.tmpdir(), `ocd-proxy-nat.${crypto.randomUUID().slice(0, 8)}.nft`);
+  await Bun.write(tmpfile, ruleset);
+  try {
+    const proc = Bun.spawn(["nft", "-f", tmpfile], { stdout: "ignore", stderr: "pipe" });
+    const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+    if (code !== 0) throw new Error(`nft -f exited ${code}: ${stderr.trim()}`);
+  } finally {
+    rmSync(tmpfile, { force: true });
+  }
 }
