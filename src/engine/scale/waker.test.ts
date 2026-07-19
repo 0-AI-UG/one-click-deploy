@@ -1,16 +1,14 @@
 // Unit tests for the hold-and-forward waker: app resolution, wake coalescing,
-// the hold loop, and the HTTP + raw-TCP forward paths. The forward paths run
-// against in-memory echo servers with injected deps (no DB, no containers) so
-// the buffer-replay behavior is exercised end to end.
+// the hold loop, and the HTTP forward path. The forward path runs against an
+// in-memory echo server with injected deps (no DB, no containers) so the
+// wake-hold-replay behavior is exercised end to end.
 import { describe, test, expect } from "bun:test";
 import type { AppRow } from "../../shared/db/apps.ts";
-import type { Socket } from "bun";
 import {
   resolveAppByHost,
   sharedWake,
   holdUntilReady,
   handleWakerHttp,
-  tcpClientHandlers,
   type WakerDeps,
 } from "./waker.ts";
 
@@ -147,60 +145,4 @@ describe("handleWakerHttp", () => {
   });
   // (The "never wakes → 503" timeout path is covered by the holdUntilReady
   // unit test above without waiting the full 120s hold.)
-});
-
-describe("raw TCP hold-and-forward", () => {
-  test("buffers the client's opening bytes, dials the upstream, and pipes both ways", async () => {
-    // Upstream echo server.
-    const echo = Bun.listen<undefined>({
-      hostname: "127.0.0.1",
-      port: 0,
-      socket: {
-        data(sock, chunk) {
-          sock.write(chunk);
-        },
-      },
-    });
-    const app = fakeApp({ id: 9, status: "running" });
-    const deps = depsFor(app, { upstreams: [`127.0.0.1:${echo.port}`] });
-    const { __setWakerDeps } = await import("./waker.ts");
-    __setWakerDeps(deps);
-
-    // The waker's per-app TCP listener (as reconcileWakerPorts would open it).
-    const waker = Bun.listen<never>({
-      hostname: "127.0.0.1",
-      port: 0,
-      socket: tcpClientHandlers(() => app.id) as never,
-    });
-
-    try {
-      const received: Buffer[] = [];
-      let resolveDone: () => void;
-      const done = new Promise<void>((r) => (resolveDone = r));
-
-      const client = await Bun.connect<undefined>({
-        hostname: "127.0.0.1",
-        port: waker.port,
-        socket: {
-          data(_s, chunk) {
-            received.push(Buffer.from(chunk));
-            if (Buffer.concat(received).toString() === "hello world") resolveDone();
-          },
-        },
-      });
-      // Send opening bytes immediately — they must be buffered until the waker
-      // has woken the app and dialed the (echo) upstream, then replayed.
-      client.write("hello ");
-      await Bun.sleep(30);
-      client.write("world");
-
-      await Promise.race([done, Bun.sleep(2000)]);
-      expect(Buffer.concat(received).toString()).toBe("hello world");
-      client.end();
-    } finally {
-      waker.stop();
-      echo.stop();
-      __setWakerDeps(null);
-    }
-  });
 });

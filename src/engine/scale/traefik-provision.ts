@@ -10,19 +10,15 @@
 //   web / websecure   — :80/:443 public ingress. Only the panel server ever
 //                       gets routers on these (public app domains, managed
 //                       services, ACME); on workers they sit idle.
-//   int20000-int20199 — one entrypoint per app `internal_port`. Apps with
-//                       internal_protocol='http' (or any auth-protected app)
-//                       get an HTTP router; internal_protocol='tcp' apps a raw
-//                       TCP router, so one address
-//                       `<app>.ocd.internal:<internal_port>` works for both
-//                       protocols. The routing protocol is an explicit app
-//                       field, independent of the health_check probe flag.
 //   pub30000-pub30049 / pubu30050-pubu30099 — public raw TCP/UDP pool
 //                       (apps.public_port). Routed on the panel only:
 //                       `<panel-ip>:<port>` forwards raw to the app's
 //                       replicas over the private network.
 //
-// The 200-port block is fixed forever (it doubles as the fleet app cap).
+// Internal app-to-app traffic no longer touches Traefik at all — the per-host
+// VIP proxy (src/proxy/) owns it (port-less HTTP, natural ports, legacy
+// internal_port URLs, TCP, and scale-to-zero wake).
+//
 // Static config rarely changes; when it does, the reconciler converges every
 // server (rewrite + service restart) within one tick — steady-state ticks
 // never restart.
@@ -33,7 +29,6 @@ import * as db from "../../shared/db.ts";
 import {
   TRAEFIK_VERSION,
   TRAEFIK_METRICS_PORT,
-  entrypointName,
   publicPortEntrypoint,
   TRAEFIK_STATIC_CONFIG_PATH,
   TRAEFIK_ACCESS_LOG_PATH,
@@ -73,16 +68,9 @@ export function traefikStaticConfig(): string {
     websecure: { address: ":443" },
     // Prometheus metrics for the reconciler's per-tick scrape. Bound like the
     // other entrypoints, but the Hetzner cloud firewall only opens 22/80/443
-    // publicly — same not-internet-reachable stance as the 20000-20199 block.
+    // publicly — same not-internet-reachable stance as the public pool blocks.
     metrics: { address: `:${TRAEFIK_METRICS_PORT}` },
   };
-  for (
-    let port = db.INTERNAL_PORT_BASE;
-    port < db.INTERNAL_PORT_BASE + db.INTERNAL_PORT_COUNT;
-    port++
-  ) {
-    entryPoints[entrypointName(port)] = { address: `:${port}` };
-  }
   // Public raw TCP/UDP pool (apps.public_port). Reserved fleet-wide up front
   // because entrypoints are static-config-only — exposing an app must never
   // need a Traefik restart. Only the panel ever routes these; the base

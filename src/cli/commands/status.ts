@@ -7,7 +7,7 @@ interface DashboardApp {
   status: string;
   domain: string;
   public?: boolean | number;
-  internal_port?: number;
+  container_port?: number;
   internal_protocol?: string;
 }
 

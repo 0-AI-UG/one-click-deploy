@@ -30,6 +30,10 @@ export function frontPorts(app: {
   containerPort: number;
   internalProtocol: "http" | "tcp";
 }): number[] {
+  // internalPort is legacy-compat only: containers deployed before the
+  // Traefik internal-ingress teardown still have `:200xx` URLs baked into
+  // their process env. Removable once the fleet's containers have all been
+  // recreated with fresh baked env.
   const ports = new Set<number>([app.internalPort, app.containerPort]);
   if (app.internalProtocol === "http") ports.add(80);
   return [...ports].sort((a, b) => a - b);

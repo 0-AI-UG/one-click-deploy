@@ -113,23 +113,26 @@ export interface App {
   servers: number[];
   created_at: string;
   public?: boolean | number;
-  internal_port?: number;
+  container_port?: number;
   internal_protocol?: string;
 }
 
-/** Where the app answers: its public domain, or the internal address for
- *  private apps (which have no public ingress at all). The scheme follows the
- *  internal routing protocol (http L7 vs raw tcp). */
+/** Where the app answers: its public domain, or the canonical internal
+ *  address for private apps (which have no public ingress at all). HTTP apps
+ *  are port-less behind the per-app VIP proxy; TCP apps use their own
+ *  container port. */
 export function appAddress(app: {
   name: string;
   domain: string;
   public?: boolean | number;
-  internal_port?: number;
+  container_port?: number;
   internal_protocol?: string;
 }): string {
   if (app.public === false || app.public === 0) {
-    const scheme = app.internal_protocol === "tcp" ? "tcp" : "http";
-    return `${scheme}://${app.name}.ocd.internal:${app.internal_port} (private)`;
+    if (app.internal_protocol === "tcp") {
+      return `tcp://${app.name}.ocd.internal:${app.container_port} (private)`;
+    }
+    return `http://${app.name}.ocd.internal (private)`;
   }
   return app.domain || "-";
 }

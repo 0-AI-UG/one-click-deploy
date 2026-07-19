@@ -1590,6 +1590,65 @@ export const migrations: Migration[] = [
       });
     },
   },
+  {
+    version: 79,
+    description:
+      "Rewrite stored plaintext env-var URLs pointing at the removed Traefik internal entrypoints (`http|tcp://<app>.ocd.internal:<internal_port>`) to the canonical VIP-proxy forms: `http://<app>.ocd.internal` for HTTP apps, `tcp://<app>.ocd.internal:<container_port>` for TCP apps",
+    up: (db) => {
+      // Stack `needs` injection wrote these values in plaintext into
+      // environments.env_vars, and they only refresh on a stack redeploy —
+      // rewrite them in place. Only exact plaintext matches are touched;
+      // encrypted (secret) entries are left alone.
+      const apps = db
+        .query("SELECT name, internal_port, internal_protocol, container_port FROM apps")
+        .all() as Array<{
+        name: string;
+        internal_port: number;
+        internal_protocol: string;
+        container_port: number;
+      }>;
+      const canonical = new Map<string, string>();
+      for (const a of apps) {
+        const host = `${a.name}.ocd.internal`;
+        const target =
+          a.internal_protocol === "tcp"
+            ? `tcp://${host}:${a.container_port}`
+            : `http://${host}`;
+        canonical.set(`http://${host}:${a.internal_port}`, target);
+        canonical.set(`tcp://${host}:${a.internal_port}`, target);
+      }
+      if (canonical.size === 0) return;
+
+      const envs = db.query("SELECT id, env_vars FROM environments").all() as Array<{
+        id: number;
+        env_vars: string;
+      }>;
+      for (const env of envs) {
+        let parsed: { version?: number; entries?: Array<Record<string, unknown>> };
+        try {
+          parsed = JSON.parse(env.env_vars);
+        } catch {
+          continue;
+        }
+        if (parsed?.version !== 2 || !Array.isArray(parsed.entries)) continue;
+        let changed = false;
+        for (const entry of parsed.entries) {
+          if (entry.secret) continue;
+          const next = canonical.get(String(entry.value));
+          if (next !== undefined && next !== entry.value) {
+            entry.value = next;
+            changed = true;
+          }
+        }
+        if (changed) {
+          db.run("UPDATE environments SET env_vars = ? WHERE id = ?", [
+            JSON.stringify(parsed),
+            env.id,
+          ]);
+        }
+      }
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

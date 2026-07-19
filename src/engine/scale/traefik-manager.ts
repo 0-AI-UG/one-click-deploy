@@ -32,7 +32,7 @@ import {
   TRAEFIK_VERSION,
 } from "./traefik-constants.ts";
 
-export { internalAppUrl, TRAEFIK_VERSION } from "./traefik-constants.ts";
+export { TRAEFIK_VERSION } from "./traefik-constants.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [traefik-mgr:${context}]`, ...args);

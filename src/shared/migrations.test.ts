@@ -257,4 +257,84 @@ describe("runMigrations", () => {
     // waker needs none, so the column is dropped.
     expect(cols).not.toContain("wake_token");
   });
+
+  // Minimal pre-79 schema slice: migration 79 reads apps(name, internal_port,
+  // internal_protocol, container_port) and rewrites environments.env_vars.
+  function pre79Db(): Database {
+    const db = new Database(":memory:");
+    db.run(
+      "CREATE TABLE apps (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, internal_port INTEGER NOT NULL DEFAULT 0, internal_protocol TEXT NOT NULL DEFAULT 'http', container_port INTEGER NOT NULL DEFAULT 3000)",
+    );
+    db.run(
+      `CREATE TABLE environments (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, env_vars TEXT NOT NULL DEFAULT '{"version":2,"entries":[]}')`,
+    );
+    return db;
+  }
+
+  test("migration 79 rewrites stored legacy internal URLs to the canonical port-less / container-port forms", () => {
+    const db = pre79Db();
+    db.run("INSERT INTO apps (name, internal_port, internal_protocol, container_port) VALUES ('web', 20010, 'http', 3000)");
+    db.run("INSERT INTO apps (name, internal_port, internal_protocol, container_port) VALUES ('pg', 20009, 'tcp', 5432)");
+    const envVars = JSON.stringify({
+      version: 2,
+      entries: [
+        { key: "WEB_URL", value: "http://web.ocd.internal:20010", secret: false, updated_at: "2026-01-01" },
+        { key: "PG_URL", value: "tcp://pg.ocd.internal:20009", secret: false, updated_at: "2026-01-01" },
+        // A tcp-schemed URL for an http app (or vice versa) still maps to the
+        // target app's canonical form.
+        { key: "WEB_TCP", value: "tcp://web.ocd.internal:20010", secret: false, updated_at: "2026-01-01" },
+        // Not an exact match — value embeds the URL, left alone.
+        { key: "COMPOSITE", value: "http://web.ocd.internal:20010/api", secret: false, updated_at: "2026-01-01" },
+        { key: "OTHER", value: "hello", secret: false, updated_at: "2026-01-01" },
+      ],
+    });
+    db.run("INSERT INTO environments (name, env_vars) VALUES ('stack-env', ?)", [envVars]);
+
+    migrations.find((m) => m.version === 79)!.up(db);
+
+    const row = db.query("SELECT env_vars FROM environments WHERE name = 'stack-env'").get() as any;
+    const entries = JSON.parse(row.env_vars).entries;
+    const byKey = Object.fromEntries(entries.map((e: any) => [e.key, e.value]));
+    expect(byKey.WEB_URL).toBe("http://web.ocd.internal");
+    expect(byKey.PG_URL).toBe("tcp://pg.ocd.internal:5432");
+    expect(byKey.WEB_TCP).toBe("http://web.ocd.internal");
+    expect(byKey.COMPOSITE).toBe("http://web.ocd.internal:20010/api");
+    expect(byKey.OTHER).toBe("hello");
+  });
+
+  test("migration 79 leaves encrypted (secret) values untouched", () => {
+    const db = pre79Db();
+    db.run("INSERT INTO apps (name, internal_port, internal_protocol, container_port) VALUES ('web', 20010, 'http', 3000)");
+    const secretEntry = {
+      key: "SECRET_URL",
+      // Pathological: a secret whose plaintext field carries the legacy URL —
+      // secrets must never be rewritten regardless.
+      value: "http://web.ocd.internal:20010",
+      encrypted_value: "deadbeef",
+      iv: "cafe",
+      secret: true,
+      updated_at: "2026-01-01",
+    };
+    const envVars = JSON.stringify({ version: 2, entries: [secretEntry] });
+    db.run("INSERT INTO environments (name, env_vars) VALUES ('sec-env', ?)", [envVars]);
+
+    migrations.find((m) => m.version === 79)!.up(db);
+
+    const row = db.query("SELECT env_vars FROM environments WHERE name = 'sec-env'").get() as any;
+    // Byte-identical: nothing in the row changed.
+    expect(row.env_vars).toBe(envVars);
+    expect(JSON.parse(row.env_vars).entries[0]).toEqual(secretEntry);
+  });
+
+  test("migration 79 is a no-op on malformed or non-v2 env_vars", () => {
+    const db = pre79Db();
+    db.run("INSERT INTO apps (name, internal_port, internal_protocol, container_port) VALUES ('web', 20010, 'http', 3000)");
+    db.run("INSERT INTO environments (name, env_vars) VALUES ('bad', 'not json')");
+    db.run(`INSERT INTO environments (name, env_vars) VALUES ('old', '{"KEY":"http://web.ocd.internal:20010"}')`);
+    migrations.find((m) => m.version === 79)!.up(db);
+    expect((db.query("SELECT env_vars FROM environments WHERE name = 'bad'").get() as any).env_vars).toBe("not json");
+    expect((db.query("SELECT env_vars FROM environments WHERE name = 'old'").get() as any).env_vars).toBe(
+      '{"KEY":"http://web.ocd.internal:20010"}',
+    );
+  });
 });

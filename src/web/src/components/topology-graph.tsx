@@ -13,7 +13,7 @@ export type TopologyServer = {
 };
 export type TopologyApp = {
   id: number; name: string; status: string; public: 0 | 1; domain: string | null;
-  internal_port: number | null; internal_protocol: string; sticky: boolean;
+  container_port: number; internal_protocol: string; sticky: boolean;
   stack_id: number | null; stack_name: string | null; desired_replicas: number;
 };
 export type TopologyReplica = {
@@ -1089,7 +1089,7 @@ export function TopologyGraph({ data }: { data: TopologyData }) {
                   <div className="flex items-center gap-1.5 px-2 py-1 border-b-2 border-fg">
                     <span className={`w-2 h-2 border-[1.5px] border-fg flex-shrink-0 ${running ? "bg-accent" : "bg-accent-amber"}`} />
                     <span className={`font-mono text-[11px] font-bold uppercase tracking-tight truncate ${sleeping ? "text-fg-dim" : "text-accent-blue"}`}>{a.name}</span>
-                    {a.internal_port != null && <span className="font-mono text-[9px] text-muted flex-shrink-0">:{a.internal_port}</span>}
+                    {a.internal_protocol === "tcp" && <span className="font-mono text-[9px] text-muted flex-shrink-0">:{a.container_port}</span>}
                     <span className="flex-1" />
                     {f.split && (
                       <span className="font-mono text-[8px] font-bold border-[1.5px] border-fg px-1 leading-[13px] text-accent-blue flex-shrink-0" style={{ background: "#eef4ff" }}>
@@ -1214,10 +1214,10 @@ function AppDetail({
 
   // Request path as a compact chip flow + qualifier tags (instead of prose).
   const flow = app.status === "sleeping"
-    ? ["router", app.public ? "waker :8896" : "waker :21000+", "wakes on 1st req"]
+    ? ["router", "waker :8896", "wakes on 1st req"]
     : app.public
       ? ["Internet :443", "ocd-traefik", `${runningReps.length} live`]
-      : [`${app.name}.ocd.internal`, "local traefik", `${runningReps.length || "—"} live`];
+      : [`${app.name}.ocd.internal`, "ocd-proxy vip", `${runningReps.length || "—"} live`];
   const tags = app.status === "sleeping"
     ? ["scaled to zero", "never 503"]
     : [
@@ -1245,9 +1245,11 @@ function AppDetail({
         )}
         <dt className="font-mono text-[9px] font-bold uppercase tracking-wider text-muted pt-0.5">Internal</dt>
         <dd className="m-0 font-mono text-[11px] text-fg break-all">
-          {app.internal_port != null ? (
-            <>{app.internal_protocol}://{app.name}.ocd.internal:<span className="font-bold bg-accent px-1">{app.internal_port}</span></>
-          ) : "—"}
+          {app.internal_protocol === "tcp" ? (
+            <>tcp://{app.name}.ocd.internal:<span className="font-bold bg-accent px-1">{app.container_port}</span></>
+          ) : (
+            <>http://{app.name}.ocd.internal</>
+          )}
         </dd>
       </dl>
 

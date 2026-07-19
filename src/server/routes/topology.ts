@@ -4,8 +4,9 @@ import { handleError } from "../lib/utils.ts";
 import { parseEnvVars } from "../../shared/env-crypto.ts";
 import * as db from "../../shared/db.ts";
 
-// Matches an internal service address like `http://bc-worker.ocd.internal:20011`
-// or `tcp://bc-postgres.ocd.internal:20009` and captures the app name.
+// Matches an internal service address like `http://bc-worker.ocd.internal`
+// or `tcp://bc-postgres.ocd.internal:5432` (including legacy `:200xx` forms)
+// and captures the app name.
 const INTERNAL_HOST_RE = /(?:https?|tcp):\/\/([a-z0-9-]+)\.ocd\.internal/gi;
 
 export type TopologyServer = {
@@ -14,7 +15,7 @@ export type TopologyServer = {
 };
 export type TopologyApp = {
   id: number; name: string; status: string; public: 0 | 1; domain: string | null;
-  internal_port: number | null; internal_protocol: string; sticky: boolean;
+  container_port: number; internal_protocol: string; sticky: boolean;
   stack_id: number | null; stack_name: string | null; desired_replicas: number;
 };
 export type TopologyReplica = {
@@ -51,7 +52,7 @@ export async function handleGetTopology(request: Request): Promise<Response> {
     const apps: TopologyApp[] = allApps.map((a) => ({
       id: a.id, name: a.name, status: a.status,
       public: a.public ? 1 : 0, domain: a.domain || null,
-      internal_port: a.internal_port ?? null,
+      container_port: a.container_port,
       internal_protocol: a.internal_protocol === "tcp" ? "tcp" : "http",
       sticky: !!(a as { sticky?: number | boolean }).sticky,
       stack_id: a.stack_id ?? null,

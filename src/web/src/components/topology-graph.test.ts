@@ -7,11 +7,11 @@ import {
 } from "./topology-graph.tsx";
 
 const apps: TopologyApp[] = [
-  { id: 1, name: "admin", status: "running", public: 1, domain: null, internal_port: 20012, internal_protocol: "http", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
-  { id: 2, name: "detect", status: "running", public: 0, domain: null, internal_port: 20013, internal_protocol: "http", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
-  { id: 3, name: "postgres", status: "running", public: 0, domain: null, internal_port: 20009, internal_protocol: "tcp", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
-  { id: 4, name: "web", status: "running", public: 1, domain: null, internal_port: 20010, internal_protocol: "http", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
-  { id: 5, name: "worker", status: "running", public: 0, domain: null, internal_port: 20011, internal_protocol: "http", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
+  { id: 1, name: "admin", status: "running", public: 1, domain: null, container_port: 3000, internal_protocol: "http", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
+  { id: 2, name: "detect", status: "running", public: 0, domain: null, container_port: 3000, internal_protocol: "http", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
+  { id: 3, name: "postgres", status: "running", public: 0, domain: null, container_port: 5432, internal_protocol: "tcp", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
+  { id: 4, name: "web", status: "running", public: 1, domain: null, container_port: 3000, internal_protocol: "http", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
+  { id: 5, name: "worker", status: "running", public: 0, domain: null, container_port: 3000, internal_protocol: "http", sticky: false, stack_id: 1, stack_name: "demo", desired_replicas: 1 },
 ];
 
 const links: TopologyLink[] = [

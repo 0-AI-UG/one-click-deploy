@@ -19,7 +19,9 @@ interface OverviewTabProps {
 }
 
 export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, setReplicas, ops }: OverviewTabProps) {
-  const internalUrl = `${app.internal_protocol === "tcp" ? "tcp" : "http"}://${app.name}.ocd.internal:${app.internal_port}`;
+  const internalUrl = app.internal_protocol === "tcp"
+    ? `tcp://${app.name}.ocd.internal:${app.container_port}`
+    : `http://${app.name}.ocd.internal`;
   const [migratingId, setMigratingId] = useState<number | null>(null);
 
   const handleMigrate = async (replicaId: number, targetId: string) => {
