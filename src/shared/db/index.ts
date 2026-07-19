@@ -9,6 +9,8 @@ export {
   updateServer,
   deleteServer,
   updateServerHostKey,
+  updateServerPool,
+  getServersByPool,
   insertServerMetricSample,
   getRecentServerMetrics,
   pruneOldServerMetrics,
@@ -52,6 +54,10 @@ export {
   updateAppWebhook,
   updateAppWebhookWaitForCi,
   updateAppScaling,
+  updateAppDurability,
+  updateAppPlacementPool,
+  setAppSibling,
+  getAppSiblings,
   updateAppIngressSettings,
   updateAppEnvironment,
   getAppsByEnvironmentId,
@@ -125,7 +131,7 @@ export {
   setUserPermissions,
   incrementTokenVersion,
 } from "./users.ts";
-export { getSettings, saveSetting } from "./settings.ts";
+export { getSettings, saveSetting, ensureProxyWakeSecret } from "./settings.ts";
 export { getDeploySession, saveDeploySession, deleteDeploySession } from "./deploy-sessions.ts";
 export type { PanelRow, PanelDeploymentRow } from "./panel.ts";
 export {
@@ -196,3 +202,10 @@ export {
   setAppStack,
   setServiceStack,
 } from "./stacks.ts";
+export type { AvailabilitySampleRow } from "./availability.ts";
+export {
+  computeMeetsTarget,
+  insertAvailabilitySample,
+  getAvailabilityStats,
+  pruneOldAvailabilitySamples,
+} from "./availability.ts";

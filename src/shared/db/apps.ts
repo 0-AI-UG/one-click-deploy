@@ -60,6 +60,7 @@ export type AppRow = {
    *  Auth-protected apps are always effectively HTTP-routed regardless. */
   internal_protocol: string; // 'http' | 'tcp'
   internal_port: number; // fleet-unique internal ingress port (20000-20199), owned for the app's lifetime
+  virtual_ip: string; // fleet-unique per-app VIP in 10.96.0.0/16, owned for the app's lifetime
   /** ISO timestamp of the last request observed in Traefik's per-service
    *  counters (public + internal traffic alike). NULL until the engine has
    *  seen the app once — the idle monitor seeds it on first evaluation so
@@ -73,6 +74,12 @@ export type AppRow = {
   compress: number; // 1 = gzip/brotli compression on the public router
   public_port: number | null; // fleet-unique public raw TCP/UDP port on the panel IP; NULL = not exposed
   public_protocol: string; // 'tcp' | 'udp' — which pool public_port came from
+  durability_class: string; // intent label: 'none' | 'standard' | 'high'; 'none' = no availability target
+  max_per_host: number; // hard cap of this app's replicas per host; 0 = unlimited (soft affinity)
+  min_locations: number; // minimum distinct provider locations replicas must span; 1 = no spread requirement
+  placement_pool: string; // which servers.pool this app's replicas may be placed on; 'general' = default pool
+  env_label: string; // cosmetic env tag: '' | 'production' | 'staging' | 'dev'
+  sibling_of: number | null; // app id this is a staging/dev sibling of; NULL = standalone
 };
 
 /** Internal ingress port block: every app owns one port in
@@ -80,6 +87,19 @@ export type AppRow = {
  *  The block size doubles as the hard fleet app cap. */
 export const INTERNAL_PORT_BASE = 20000;
 export const INTERNAL_PORT_COUNT = 200;
+
+/** Per-app virtual IP block: every app owns one address in this range.
+ *  Disjoint from ocd-net (10.0.0.0/16) and the Docker bridge (172.17.0.0/16). */
+export const VIP_RANGE = "10.96.0.0/16";
+
+/** Dotted quad for the nth address in VIP_RANGE. Valid indexes are 1-65534:
+ *  0 is the network address, 65535 the broadcast address. */
+export function vipFromIndex(index: number): string {
+  if (!Number.isInteger(index) || index < 1 || index > 65534) {
+    throw new Error(`VIP index ${index} out of range (1-65534)`);
+  }
+  return `10.96.${Math.floor(index / 256)}.${index % 256}`;
+}
 
 /** Public raw TCP/UDP exposure pool: Traefik entrypoints are static-config-
  *  only, so the two 50-port blocks are pre-reserved fleet-wide (see
@@ -126,6 +146,24 @@ export function allocateInternalPort(): number {
   throw new Error(
     `Fleet limit of ${INTERNAL_PORT_COUNT} apps reached (internal port block ${INTERNAL_PORT_BASE}-${INTERNAL_PORT_BASE + INTERNAL_PORT_COUNT - 1} is full). Destroy an app before deploying a new one.`,
   );
+}
+
+/** Lowest free address in the VIP block. Mirrors allocateInternalPort: the
+ *  partial unique index on apps.virtual_ip is the concurrency backstop;
+ *  deleting an app row frees its VIP automatically. VIPs are never
+ *  reallocated on redeploy/move/scale because they live on the app row. */
+export function allocateVirtualIp(): string {
+  const used = new Set(
+    (db.query("SELECT virtual_ip FROM apps WHERE virtual_ip != ''").all() as Array<{ virtual_ip: string }>)
+      .map((r) => {
+        const [, , c, d] = r.virtual_ip.split(".").map(Number);
+        return c * 256 + d;
+      }),
+  );
+  for (let index = 1; index <= 65534; index++) {
+    if (!used.has(index)) return vipFromIndex(index);
+  }
+  throw new Error(`Virtual IP range ${VIP_RANGE} is exhausted. Destroy an app before deploying a new one.`);
 }
 
 /** Lowest free port in the protocol's public block. Mirrors
@@ -231,6 +269,12 @@ type InsertAppFields = {
    *  specific port, omit/null = not exposed. */
   public_port?: number | "auto" | null;
   public_protocol?: PublicProtocol;
+  durability_class?: string;
+  max_per_host?: number;
+  min_locations?: number;
+  placement_pool?: string;
+  env_label?: string;
+  sibling_of?: number | null;
 } & AppIngressSettings;
 
 /** Resolve a deploy request's public exposure to a concrete port. Runs
@@ -261,7 +305,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, public, health_check, internal_protocol, internal_port, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, public, health_check, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, env_label, sibling_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -278,6 +322,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
       healthCheck ? 1 : 0,
       internalProtocol,
       allocateInternalPort(),
+      allocateVirtualIp(),
       app.sticky ? 1 : 0,
       app.rate_limit_rps ?? 0,
       app.ip_allowlist ?? "",
@@ -285,6 +330,12 @@ function insertAppRow(app: InsertAppFields): AppRow {
       app.compress ? 1 : 0,
       resolvePublicPort(app),
       app.public_protocol ?? "tcp",
+      app.durability_class ?? "none",
+      app.max_per_host ?? 0,
+      app.min_locations ?? 1,
+      app.placement_pool ?? "general",
+      app.env_label ?? "",
+      app.sibling_of ?? null,
     ) as AppRow;
 }
 
@@ -570,6 +621,44 @@ export function updateAppScaling(id: number, fields: {
   if (sets.length === 0) return;
   values.push(id);
   db.query(`UPDATE apps SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+/** Partial update of the app's durability/placement-spread intent. Mirrors
+ *  updateAppScaling: only the provided fields are written. durability_class is
+ *  the intent label ('none' | 'standard' | 'high'); max_per_host is the hard
+ *  per-host replica cap (0 = unlimited); min_locations is the minimum distinct
+ *  provider locations replicas must span. */
+export function updateAppDurability(id: number, fields: {
+  durability_class?: string;
+  max_per_host?: number;
+  min_locations?: number;
+}): void {
+  const sets: string[] = [];
+  const values: (string | number)[] = [];
+  if (fields.durability_class !== undefined) { sets.push("durability_class = ?"); values.push(fields.durability_class); }
+  if (fields.max_per_host !== undefined) { sets.push("max_per_host = ?"); values.push(fields.max_per_host); }
+  if (fields.min_locations !== undefined) { sets.push("min_locations = ?"); values.push(fields.min_locations); }
+  if (sets.length === 0) return;
+  values.push(id);
+  db.query(`UPDATE apps SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+/** Set which servers.pool this app's replicas may be placed on. */
+export function updateAppPlacementPool(id: number, pool: string): void {
+  db.query("UPDATE apps SET placement_pool = ? WHERE id = ?").run(pool, id);
+}
+
+/** Mark an app as a staging/dev sibling of another app (or clear it with
+ *  siblingOf = null) and set its cosmetic env label in the same write. */
+export function setAppSibling(id: number, siblingOf: number | null, envLabel: string): void {
+  db.query("UPDATE apps SET sibling_of = ?, env_label = ? WHERE id = ?").run(siblingOf, envLabel, id);
+}
+
+/** The staging/dev children of a prod app — apps whose sibling_of points at it. */
+export function getAppSiblings(appId: number): AppRow[] {
+  return db
+    .query("SELECT * FROM apps WHERE sibling_of = ? ORDER BY created_at DESC")
+    .all(appId) as AppRow[];
 }
 
 /** Partial update of the per-app ingress settings (sticky sessions, rate

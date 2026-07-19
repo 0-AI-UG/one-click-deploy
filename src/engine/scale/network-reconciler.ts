@@ -3,6 +3,8 @@ import { hetzner } from "../../shared/providers/index.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../scheduler.ts";
+import { isProxyReady } from "./proxy-manager.ts";
+import { appHostsLine } from "./proxy-render.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [net-recon:${context}]`, ...args);
@@ -92,9 +94,16 @@ export async function reconcileNetwork(): Promise<void> {
  * Service entries stay as private-IP pointers to the service host because
  * services are single-instance and don't need the local proxy indirection.
  *
+ * VIP ingress: once a server's ocd-proxy is confirmed live (isProxyReady),
+ * its app entries flip from the server's private IP to each app's fleet-wide
+ * virtual IP — the local proxy terminates the whole VIP range on loopback.
+ * The gate is per-server, so a server with a failed/missing proxy keeps the
+ * safe local-Traefik lines until a converge proves the proxy up.
+ *
  * Idempotent — the block is delimited by BEGIN/END markers so repeated
  * runs just overwrite the same region.
  */
+
 export async function syncInternalHosts(): Promise<void> {
   const panel = db.getPanel();
   if (!panel) return;
@@ -113,8 +122,9 @@ export async function syncInternalHosts(): Promise<void> {
   for (const server of servers) {
     const lines: string[] = [];
     if (server.private_ipv4) {
+      const ready = isProxyReady(server.ipv4);
       for (const app of apps) {
-        lines.push(`${server.private_ipv4} ${app.name}.ocd.internal`);
+        lines.push(appHostsLine(app, server.private_ipv4, ready));
       }
     }
     lines.push(...serviceLines);

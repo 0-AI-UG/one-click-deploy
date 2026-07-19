@@ -164,6 +164,29 @@ describe("runMigrations", () => {
     db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a4', 'a4.com', 'https://x.git', 0)");
   });
 
+  test("migration 78 backfills unique sequential virtual IPs", () => {
+    const db = freshDb();
+    db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h1')");
+    db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a1', 'a1.com', 'https://x.git')");
+    db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a2', 'a2.com', 'https://x.git')");
+    db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a3', 'a3.com', 'https://x.git')");
+    runMigrations(db);
+    const rows = db.query("SELECT virtual_ip FROM apps ORDER BY id ASC").all() as any[];
+    expect(rows.map((r) => r.virtual_ip)).toEqual(["10.96.0.1", "10.96.0.2", "10.96.0.3"]);
+  });
+
+  test("migration 78 unique index rejects duplicate virtual IPs but allows ''", () => {
+    const db = freshDb();
+    runMigrations(db);
+    db.run("INSERT INTO apps (name, domain, git_repo, internal_port, virtual_ip) VALUES ('a1', 'a1.com', 'https://x.git', 20005, '10.96.0.5')");
+    expect(() =>
+      db.run("INSERT INTO apps (name, domain, git_repo, internal_port, virtual_ip) VALUES ('a2', 'a2.com', 'https://x.git', 20006, '10.96.0.5')"),
+    ).toThrow();
+    // The index is partial (virtual_ip != '') — unallocated rows don't collide.
+    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a3', 'a3.com', 'https://x.git', 20007)");
+    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a4', 'a4.com', 'https://x.git', 20008)");
+  });
+
   test("migration 61 blanks domains of private apps only", () => {
     const db = freshDb();
     runMigrations(db);

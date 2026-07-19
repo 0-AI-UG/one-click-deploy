@@ -7,6 +7,7 @@ import { deleteCmd } from "./commands/delete.ts";
 import { redeploy } from "./commands/redeploy.ts";
 import { restart } from "./commands/restart.ts";
 import { rollback } from "./commands/rollback.ts";
+import { promote } from "./commands/promote.ts";
 import { pause, unpause } from "./commands/pause.ts";
 import { envs } from "./commands/envs.ts";
 import { services } from "./commands/services.ts";
@@ -28,6 +29,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   redeploy,
   restart,
   rollback,
+  promote,
   pause,
   unpause,
   envs,
@@ -57,6 +59,7 @@ ${BOLD}Commands:${RESET}
   envs                   Manage environments and variables
   restart <app>          Restart an app
   rollback <app>         Roll back to previous deployment
+  promote <target>       Promote a staging version to production
   pause <app>            Pause an app
   unpause <app>          Unpause an app
   services               List services

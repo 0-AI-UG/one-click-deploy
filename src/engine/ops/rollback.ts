@@ -64,7 +64,13 @@ const loadTargetDeployment: Step<RollbackInput, TargetOut> = {
 
 const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
-const checkoutTarget: Step<RollbackInput, CheckoutOut> = {
+// Reused by the promote op. These steps mutate the DEST/target app purely from
+// its `load_target_deployment` prior output (a TargetOut carrying the app id,
+// first replica/server, the git commit to check out, and the pre-op status), so
+// they only need `{ appId }` on the input — the promote op supplies its own
+// first step producing the same `load_target_deployment` shape. Runtime
+// behaviour is identical to before; only the input type param was widened.
+const checkoutTarget: Step<{ appId: number }, CheckoutOut> = {
   name: "checkout_target",
   label: "Checkout target commit",
   async run(ctx, prior) {
@@ -84,7 +90,7 @@ const checkoutTarget: Step<RollbackInput, CheckoutOut> = {
   },
 };
 
-const rebuildImage: Step<RollbackInput, RebuildOut> = {
+const rebuildImage: Step<{ appId: number }, RebuildOut> = {
   name: "rebuild_image",
   label: "Rebuild image",
   async run(ctx, prior) {
@@ -113,7 +119,7 @@ const rebuildImage: Step<RollbackInput, RebuildOut> = {
   },
 };
 
-const swapContainer: Step<RollbackInput, SwapOut> = {
+const swapContainer: Step<{ appId: number }, SwapOut> = {
   name: "swap_container",
   label: "Swap container",
   async run(ctx, prior) {
@@ -217,7 +223,7 @@ const swapContainer: Step<RollbackInput, SwapOut> = {
   },
 };
 
-const syncIngressStep: Step<RollbackInput, { ok: true }> = {
+const syncIngressStep: Step<{ appId: number }, { ok: true }> = {
   name: "sync_ingress",
   label: "Configure ingress",
   async run(ctx) {
@@ -231,7 +237,7 @@ const syncIngressStep: Step<RollbackInput, { ok: true }> = {
   },
 };
 
-const healthCheckStep: Step<RollbackInput, { healthy: boolean }> = {
+const healthCheckStep: Step<{ appId: number }, { healthy: boolean }> = {
   name: "health_check",
   label: "Health check",
   async run(ctx, prior) {
@@ -295,4 +301,8 @@ const rollbackOp: OpKindDefinition<RollbackInput> = {
 registerOp(rollbackOp as OpKindDefinition<any>);
 
 export default rollbackOp;
-export type { RollbackInput };
+export type { RollbackInput, TargetOut };
+// Shared with ops/promote.ts, which supplies its own `load_target_deployment`
+// step (producing a TargetOut for the DEST app pinned to the source commit) and
+// reuses these to check out / rebuild / swap / sync / health-check it.
+export { checkoutTarget, rebuildImage, swapContainer, syncIngressStep, healthCheckStep };

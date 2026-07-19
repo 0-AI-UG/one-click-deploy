@@ -28,6 +28,7 @@ export {
   DeployManifestSchema,
   StackManifestSchema,
   type DeployManifest,
+  type DeployEnvironmentTarget,
   type StackManifest,
 } from "./manifest-schema.ts";
 

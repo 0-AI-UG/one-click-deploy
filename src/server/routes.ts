@@ -29,6 +29,7 @@ import {
   handleGetDeployLog,
   handleGetDeployments,
   handleRollbackApp,
+  handlePromoteApp,
   handleIntrospectRepo,
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
@@ -37,6 +38,7 @@ import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource
 import { handleGetTopology } from "./routes/topology.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
+import { handleGetAvailability } from "./routes/availability.ts";
 import {
   handleEnableWebhook,
   handleUpdateWebhookSettings,
@@ -79,6 +81,7 @@ import {
   handleCancelOperation,
 } from "./routes/operations.ts";
 import { handleTerminalExec } from "./routes/terminal-exec.ts";
+import { handleInternalWake } from "./routes/internal.ts";
 import {
   handleGetCatalog,
   handleGetServices,
@@ -239,6 +242,7 @@ export const apiRoutes = {
   // --- Apps ---
   "/api/apps": { GET: (req: Request) => handleGetApps(req) },
   "/api/apps/deploy": { POST: (req: Request) => handleDeploy(req) },
+  "/api/apps/promote": { POST: (req: Request) => handlePromoteApp(req) },
   "/api/repos/introspect": { GET: (req: Request) => handleIntrospectRepo(req) },
   "/api/deploy-session": {
     GET: (req: Request) => handleGetDeploySession(req),
@@ -267,6 +271,7 @@ export const apiRoutes = {
   "/api/apps/:appId/scaling-events": { GET: (req: Request) => handleGetScalingEvents(req, appIdFrom(req)) },
   "/api/apps/:appId/metrics": { GET: (req: Request) => handleGetAppMetrics(req, appIdFrom(req)) },
   "/api/apps/:appId/metrics/history": { GET: (req: Request) => handleGetAppMetricsHistory(req, appIdFrom(req)) },
+  "/api/apps/:appId/availability": { GET: (req: Request) => handleGetAvailability(req, appIdFrom(req)) },
 
   // Webhooks
   "/api/apps/:appId/webhook/enable": { POST: (req: Request) => handleEnableWebhook(req, appIdFrom(req)) },
@@ -285,6 +290,9 @@ export const apiRoutes = {
       return handleGithubWebhook(req, m ? parseInt(m[1], 10) : 0);
     },
   },
+
+  // Fleet-internal: ocd-proxy wake endpoint (shared-secret auth, no user token)
+  "/api/internal/wake": { POST: (req: Request) => handleInternalWake(req) },
 
   // (Wake is now transparent: sleeping apps' Traefik routers point at the
   // in-process hold-and-forward waker — see src/engine/scale/waker.ts. There is

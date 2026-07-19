@@ -29,7 +29,11 @@ export async function scaleUp(
     const replicaNum = i + 1;
     emit("scale", `Provisioning replica ${replicaNum}/${targetCount}...`);
 
-    // Pick target server: user-specified, least-loaded existing, or newly provisioned
+    // Pick target server: user-specified, least-loaded existing, or newly
+    // provisioned. No in-pass placement map is threaded here: each replica is
+    // persisted via insertReplica (below) before the next iteration's pick, so
+    // the picker's DB read already reflects prior placements decided this pass
+    // (anti-affinity / min_locations spread stay correct without double-counting).
     let targetServer = await pickTargetServer(app, settings, emit, targetServerId);
     const targetHostKey = targetServer.ssh_host_key || undefined;
 

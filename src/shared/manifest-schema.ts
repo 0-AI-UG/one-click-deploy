@@ -181,6 +181,31 @@ const healthCheckSchema = z.object(
   { error: "expected object { enabled?: boolean, path?: string }" },
 );
 
+/**
+ * One declared deploy target (e.g. "production", "staging", "dev"). Declaring
+ * targets in-repo lets `ocd deploy --env=<target>` derive a sibling app
+ * (`<name>-<target>`) wired to its own isolated env group. `isolated` defaults
+ * to true for non-production targets (own placement pool, no prod DB link).
+ */
+const environmentTargetSchema = z.object(
+  {
+    branch: z.string({ error: "expected string" }).optional(),
+    replicas: guardedNumber(
+      "expected positive integer",
+      (v) => Number.isInteger(v) && v >= 1,
+    ).optional(),
+    domain: z.string({ error: "expected string" }).optional(),
+    scale_to_zero_after: guardedNumber(
+      "expected integer >= 0",
+      (v) => Number.isInteger(v) && v >= 0,
+    ).optional(),
+    isolated: z.boolean({ error: "expected boolean" }).optional(),
+  },
+  { error: "expected object { branch?, replicas?, domain?, scale_to_zero_after?, isolated? }" },
+).strict();
+
+export type DeployEnvironmentTarget = z.infer<typeof environmentTargetSchema>;
+
 export const DeployManifestSchema = z
   .object({
     $schema: z.literal(1, { error: "expected 1" }).optional(),
@@ -239,6 +264,18 @@ export const DeployManifestSchema = z
       .optional(),
     /** Pool for public_port (default "tcp"). */
     public_protocol: z.enum(["tcp", "udp"], { error: 'expected "tcp" | "udp"' }).optional(),
+    /** Declared deploy targets (prod/staging/dev), keyed by target name. Each
+     *  non-production target deploys as an isolated sibling `<name>-<target>`. */
+    environments: z
+      .record(z.string(), environmentTargetSchema, {
+        error: "expected object map of target -> { branch?, replicas?, domain?, scale_to_zero_after?, isolated? }",
+      })
+      .optional(),
+    /** Availability/durability policy: 'none' (default), 'standard', or 'high'.
+     *  Maps to concrete placement-spread + min-replica floors at deploy time. */
+    durability_class: z
+      .enum(["none", "standard", "high"], { error: 'expected "none" | "standard" | "high"' })
+      .optional(),
   })
   .strict();
 

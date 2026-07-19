@@ -1522,6 +1522,74 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE action_confirmations ADD COLUMN resource_id TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 77,
+    description:
+      "Add placement/durability foundation: servers.pool + apps.{durability_class,max_per_host,min_locations,placement_pool,env_label,sibling_of} + availability_samples table. Every default backfills already-deployed rows to today's exact behaviour: servers land in the 'general' pool, apps declare durability_class 'none' (no availability target), max_per_host 0 (unlimited replicas per host = today's soft affinity), min_locations 1 (no spread requirement), placement_pool 'general' (schedulable on the default pool), env_label '' (no cosmetic env), and sibling_of NULL (not a staging/dev sibling). So no existing app or server changes meaning.",
+    up: (db) => {
+      // servers.pool: named capacity pool a server belongs to. Default 'general'
+      // so every existing server stays in the single implicit pool apps schedule
+      // onto today — placement is unchanged until an app opts into another pool.
+      db.run("ALTER TABLE servers ADD COLUMN pool TEXT NOT NULL DEFAULT 'general'");
+
+      // apps.durability_class: intent label 'none' | 'standard' | 'high'. 'none'
+      // preserves current behaviour (no availability target enforced/sampled).
+      db.run("ALTER TABLE apps ADD COLUMN durability_class TEXT NOT NULL DEFAULT 'none'");
+      // apps.max_per_host: hard cap of this app's replicas per host. 0 = unlimited
+      // (today's soft-affinity spread); >0 = hard cap enforced by placement.
+      db.run("ALTER TABLE apps ADD COLUMN max_per_host INTEGER NOT NULL DEFAULT 0");
+      // apps.min_locations: minimum distinct provider locations replicas must span.
+      // 1 = no spread requirement (today's behaviour).
+      db.run("ALTER TABLE apps ADD COLUMN min_locations INTEGER NOT NULL DEFAULT 1");
+      // apps.placement_pool: which servers.pool this app's replicas may land on.
+      // 'general' matches the default server pool, so scheduling is unchanged.
+      db.run("ALTER TABLE apps ADD COLUMN placement_pool TEXT NOT NULL DEFAULT 'general'");
+      // apps.env_label: cosmetic env tag '' | 'production' | 'staging' | 'dev'.
+      // '' = untagged (today's behaviour); purely a display concern.
+      db.run("ALTER TABLE apps ADD COLUMN env_label TEXT NOT NULL DEFAULT ''");
+      // apps.sibling_of: nullable id of the prod app this is a staging/dev sibling
+      // of. NULL = standalone app (today's behaviour); no self-reference for
+      // existing rows.
+      db.run("ALTER TABLE apps ADD COLUMN sibling_of INTEGER");
+
+      // availability_samples: periodic snapshots of whether an app met its
+      // durability/availability target, used to compute uptime% and MTTR. Cascades
+      // on app delete. sampled_at defaults to now so inserts need not pass it.
+      db.run(`CREATE TABLE IF NOT EXISTS availability_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        meets_target INTEGER NOT NULL,
+        desired_count INTEGER NOT NULL,
+        running_count INTEGER NOT NULL,
+        distinct_hosts INTEGER NOT NULL,
+        distinct_locations INTEGER NOT NULL,
+        sampled_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run(
+        "CREATE INDEX IF NOT EXISTS idx_availability_samples_app ON availability_samples(app_id, sampled_at)",
+      );
+    },
+  },
+  {
+    version: 78,
+    description: "Add apps.virtual_ip (fleet-unique per-app VIP in 10.96.0.0/16) and backfill",
+    up: (db) => {
+      // Every app permanently owns one address in the VIP block (10.96.0.1 -
+      // 10.96.255.254; .0.0 and .255.255 are the network/broadcast addresses).
+      // The partial unique index is the concurrency backstop for allocation; a
+      // deleted app row frees its VIP automatically.
+      db.run("ALTER TABLE apps ADD COLUMN virtual_ip TEXT NOT NULL DEFAULT ''");
+      db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_apps_virtual_ip ON apps(virtual_ip) WHERE virtual_ip != ''");
+      const apps = db.query("SELECT id FROM apps ORDER BY id ASC").all() as Array<{ id: number }>;
+      apps.forEach((a, i) => {
+        const index = i + 1;
+        db.run("UPDATE apps SET virtual_ip = ? WHERE id = ?", [
+          `10.96.${Math.floor(index / 256)}.${index % 256}`,
+          a.id,
+        ]);
+      });
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

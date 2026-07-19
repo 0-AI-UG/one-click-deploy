@@ -10,6 +10,7 @@ import {
   PUBLIC_TCP_PORT_COUNT,
   PUBLIC_UDP_PORT_BASE,
   PUBLIC_UDP_PORT_COUNT,
+  vipFromIndex,
   type PublicProtocol,
 } from "./apps.ts";
 
@@ -109,6 +110,47 @@ describe("internal port allocation", () => {
       // Free the block again — later test files share this db.
       for (const id of fillers) db.deleteApp(id);
     }
+  });
+});
+
+describe("virtual IP allocation", () => {
+  function lowestFreeVip(): string {
+    const used = new Set(db.getApps().map((a) => a.virtual_ip));
+    for (let i = 1; ; i++) if (!used.has(vipFromIndex(i))) return vipFromIndex(i);
+  }
+
+  test("insertApp allocates the lowest free VIP, starting at 10.96.0.1", () => {
+    expect(vipFromIndex(1)).toBe("10.96.0.1");
+    const expected = lowestFreeVip();
+    const a = makeApp();
+    expect(a.virtual_ip).toBe(expected);
+    expect(a.virtual_ip).toMatch(/^10\.96\.\d+\.\d+$/);
+    db.deleteApp(a.id);
+  });
+
+  test("allocation fills the lowest gap left by a deleted app", () => {
+    const a = makeApp();
+    const b = makeApp();
+    expect(b.virtual_ip).not.toBe(a.virtual_ip);
+    db.deleteApp(a.id);
+    const c = makeApp();
+    expect(c.virtual_ip).toBe(a.virtual_ip);
+    db.deleteApp(b.id);
+    db.deleteApp(c.id);
+  });
+
+  test("vipFromIndex rolls over the third octet at index 256", () => {
+    expect(vipFromIndex(255)).toBe("10.96.0.255");
+    expect(vipFromIndex(256)).toBe("10.96.1.0");
+    expect(vipFromIndex(257)).toBe("10.96.1.1");
+    expect(vipFromIndex(65534)).toBe("10.96.255.254");
+  });
+
+  test("vipFromIndex throws on out-of-range indexes", () => {
+    expect(() => vipFromIndex(0)).toThrow(/out of range/);
+    expect(() => vipFromIndex(65535)).toThrow(/out of range/);
+    expect(() => vipFromIndex(-1)).toThrow(/out of range/);
+    expect(() => vipFromIndex(1.5)).toThrow(/out of range/);
   });
 });
 

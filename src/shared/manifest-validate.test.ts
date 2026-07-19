@@ -88,6 +88,45 @@ describe("validateDeployManifest", () => {
     expect(warn).toHaveBeenCalledWith('Manifest a/.ocd-deploy.json: unknown key "futureField" (ignored)');
     warn.mockRestore();
   });
+
+  test("environments block + durability_class validates", () => {
+    expect(() =>
+      validateDeployManifest(
+        {
+          name: "web",
+          durability_class: "high",
+          environments: {
+            production: { branch: "main" },
+            staging: { branch: "develop", replicas: 1, isolated: true, scale_to_zero_after: 300 },
+          },
+        },
+        "a/.ocd-deploy.json",
+      ),
+    ).not.toThrow();
+  });
+
+  test("bad durability_class enum fails", () => {
+    let msg = "";
+    try {
+      validateDeployManifest({ name: "web", durability_class: "gold" }, "a/.ocd-deploy.json");
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain("durability_class");
+  });
+
+  test("wrong-typed replicas in an environment target fails", () => {
+    expect(() =>
+      validateDeployManifest(
+        { name: "web", environments: { staging: { replicas: "two" } } },
+        "a/.ocd-deploy.json",
+      ),
+    ).toThrow(/replicas/);
+  });
+
+  test("neither environments nor durability_class still validates (backward compat)", () => {
+    expect(() => validateDeployManifest({ name: "web" }, "a/.ocd-deploy.json")).not.toThrow();
+  });
 });
 
 describe("validateStackManifest", () => {

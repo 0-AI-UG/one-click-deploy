@@ -2,6 +2,7 @@ import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import dbInstance, * as db from "../../shared/db.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import { isNotFoundError } from "../../shared/providers/errors.ts";
+import { resolveDurability } from "../../shared/durability.ts";
 import {
   sshExec,
   cloneRepo,
@@ -455,6 +456,38 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     let environmentId: number | null = req.environment_id ?? null;
     const flatEnvVars: Record<string, string> = {};
 
+    // Isolated env group for a non-production sibling target (design "A"):
+    // staging/dev gets its OWN environment named "<app_name>", seeded by copying
+    // the parent production app's env vars — but deliberately NOT its
+    // service_links. service_links are keyed on environment_id, so a fresh group
+    // simply has none: the production DB link is absent, and staging can never
+    // touch production data. If no DB is linked, we tell the user to link one.
+    const envLabel = req.env_label ?? "";
+    const isolatedTarget = envLabel !== "" && envLabel !== "production";
+    let createdIsolatedGroup = false;
+    if (isolatedTarget && !environmentId) {
+      const groupName = req.app_name;
+      let group = db.getEnvironments().find((e) => e.name === groupName);
+      if (!group) {
+        let seed = serializeEnvVars([]);
+        if (req.sibling_of) {
+          const parent = db.getApp(req.sibling_of);
+          if (parent) {
+            if (parent.environment_id) {
+              const parentEnv = db.getEnvironment(parent.environment_id);
+              if (parentEnv) seed = parentEnv.env_vars;
+            } else if (parent.env_vars) {
+              seed = parent.env_vars;
+            }
+          }
+        }
+        group = db.insertEnvironment(groupName, seed);
+        createdIsolatedGroup = true;
+        ctx.log(`created isolated env group "${groupName}" for ${envLabel} (seeded from production, no DB link)`);
+      }
+      environmentId = group.id;
+    }
+
     const incoming =
       req.env_vars &&
       (Array.isArray(req.env_vars) ? req.env_vars.length > 0 : Object.keys(req.env_vars).length > 0)
@@ -488,6 +521,16 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const extraVolumes = (req.extra_volumes || []).map(
       (v) => `${v.host_path}:${v.container_path}`,
     );
+
+    // Durability policy -> concrete placement-spread + replica floors, applied
+    // AT INSERT so the SLO/placement layer enforces them from the first tick.
+    const {
+      durabilityClass: durability,
+      maxPerHost,
+      minLocations,
+      minReplicas: durFloor,
+      desiredReplicas,
+    } = resolveDurability(req.durability_class, req.replicas);
     // Single atomic commit: app row + first replica + DNS record + volume
     // metadata. Without the transaction a mid-step crash could leave the DB
     // with an app but no DNS / volume / extra-volume rows.
@@ -514,10 +557,28 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           compress: req.compress,
           public_port: req.public_port,
           public_protocol: req.public_protocol,
+          durability_class: durability,
+          max_per_host: maxPerHost,
+          min_locations: minLocations,
+          placement_pool: req.placement_pool,
+          env_label: req.env_label,
+          sibling_of: req.sibling_of,
         },
         server.serverId,
       );
       if (ctx.triggeredBy) db.updateAppDeployedBy(result.app.id, ctx.triggeredBy);
+      // Durability floors the replica count; do it here (not just at finalize)
+      // so the floor holds even when the deploy asks for a single replica.
+      if (durability !== "none") {
+        db.updateAppScaling(result.app.id, {
+          desired_replicas: desiredReplicas,
+          min_replicas: durFloor,
+          max_replicas: Math.max(desiredReplicas, durFloor),
+        });
+      }
+      if (typeof req.scale_to_zero_after === "number") {
+        db.updateAppScaling(result.app.id, { scale_to_zero_after: req.scale_to_zero_after });
+      }
       if (dns) {
         db.insertDnsRecord({
           app_id: result.app.id,
@@ -542,6 +603,14 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       }
       return result;
     })();
+
+    if (createdIsolatedGroup) {
+      db.appendDeployLog(
+        app.id,
+        `[env] Isolated ${envLabel} environment "${req.app_name}" created (seeded from production env vars, no database linked). ` +
+          `Link a database to the "${req.app_name}" environment (e.g. via \`ocd services\`) so ${envLabel} never touches production data.`,
+      );
+    }
 
     return {
       appId: app.id,
@@ -979,13 +1048,17 @@ const finalizeDeploy: Step<DeployInput, { ok: true }> = {
     // which every deployed app has (private apps via their internal
     // entrypoint, public apps via the panel), so the sole blocker is a public
     // app that somehow resolved to no domain at all.
+    const { minReplicas: durFloor, desiredReplicas: desired } = resolveDurability(
+      req.durability_class,
+      req.replicas,
+    );
     if (req.replicas && req.replicas > 1 && !(req.public !== false && !appOut.domain)) {
       db.updateAppScaling(appOut.appId, {
-        desired_replicas: req.replicas,
-        min_replicas: 1,
-        max_replicas: req.replicas,
+        desired_replicas: desired,
+        min_replicas: durFloor,
+        max_replicas: desired,
       });
-      db.appendDeployLog(appOut.appId, `[scale] Target ${req.replicas} replicas — reconciler will converge`);
+      db.appendDeployLog(appOut.appId, `[scale] Target ${desired} replicas — reconciler will converge`);
     }
 
     db.appendDeployLog(appOut.appId, `[done] App deployed successfully`);

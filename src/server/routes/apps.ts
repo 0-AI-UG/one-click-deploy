@@ -442,6 +442,52 @@ export async function handleGetDeployments(request: Request, appId: number): Pro
   }
 }
 
+/**
+ * POST /api/apps/promote — promote the exact version running in a SOURCE app
+ * (e.g. `<name>-staging`) up to a DEST app (production). Validates both apps
+ * exist, that they differ, and that the source has a successful deployment to
+ * promote; then enqueues the promote op (which rebuilds `<dest>:latest` from the
+ * source's git commit and swaps the DEST container(s)).
+ */
+export async function handlePromoteApp(request: Request): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "apps.deploy");
+    const body = (await request.json().catch(() => ({}))) as { source_app?: string; dest_app?: string };
+    if (!body.source_app || !body.dest_app) {
+      return Response.json({ error: "source_app and dest_app are required" }, { status: 400, headers: corsHeaders });
+    }
+
+    const source = db.getAppByName(body.source_app);
+    if (!source) return Response.json({ error: `Source app not found: ${body.source_app}` }, { status: 404, headers: corsHeaders });
+    const dest = db.getAppByName(body.dest_app);
+    if (!dest) return Response.json({ error: `Destination app not found: ${body.dest_app}` }, { status: 404, headers: corsHeaders });
+
+    if (source.id === dest.id) {
+      return Response.json({ error: "Source and destination must be different apps" }, { status: 400, headers: corsHeaders });
+    }
+
+    const commit = db.getDeployments(source.id).find((d) => d.status === "deployed")?.git_commit;
+    if (!commit) {
+      return Response.json({ error: `Source app "${source.name}" has no successful deployment to promote` }, { status: 400, headers: corsHeaders });
+    }
+
+    // Different repos is unusual (promotions normally share a repo) but allowed;
+    // surface it in the response so the caller can notice.
+    const repo_mismatch = source.git_repo !== dest.git_repo;
+
+    const { opId } = enqueue({
+      kind: "promote",
+      resourceKeys: [`app:${dest.id}`],
+      input: { appId: dest.id, sourceAppId: source.id, userId: payload.userId },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId, commit, repo_mismatch }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleRollbackApp(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.rollback");

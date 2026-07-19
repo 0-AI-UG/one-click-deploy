@@ -3,6 +3,7 @@ import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } fr
 import { pruneServer } from "../shared/remote/index.ts";
 import { evaluateAutoScale, convergeAppReplicas } from "./scale/index.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
+import { reconcileProxy } from "./scale/proxy-manager.ts";
 import { reconcileTraefik } from "./scale/traefik-manager.ts";
 import { reconcileWakerPorts } from "./scale/waker.ts";
 import { ingestServerRequestMetrics } from "./scale/request-metrics.ts";
@@ -16,6 +17,7 @@ function log(context: string, ...args: unknown[]) {
 
 const TICK_MS = 30_000;
 const METRICS_RETENTION_SEC = 24 * 60 * 60;
+const AVAILABILITY_RETENTION_SEC = 7 * 24 * 60 * 60;
 
 let running = false;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -226,6 +228,51 @@ async function tick(): Promise<void> {
       }
     }
 
+    // --- Availability SLO sampling (one sample per live app per tick) ---
+    // Record whether each app currently meets its replica-count / host-spread /
+    // location-spread target, feeding uptime% + MTTR. Apps that are
+    // intentionally down (scaled to zero, or sleeping/paused/stopped/waking)
+    // are skipped so scale-to-zero never registers as an outage. Fully guarded
+    // so a sampling error can never break the reconcile tick.
+    try {
+      const serverLocation = new Map(allServers.map((s) => [s.id, s.location]));
+      for (const app of db.getApps()) {
+        if (app.desired_replicas === 0) continue;
+        if (
+          app.status === "sleeping" ||
+          app.status === "paused" ||
+          app.status === "stopped" ||
+          app.status === "waking"
+        ) {
+          continue;
+        }
+        const running = db.getReplicas(app.id).filter((r) => r.status === "running");
+        const running_count = running.length;
+        const distinct_hosts = new Set(running.map((r) => r.server_id)).size;
+        const distinct_locations = new Set(
+          running.map((r) => serverLocation.get(r.server_id)).filter(Boolean),
+        ).size;
+        const meets_target = db.computeMeetsTarget({
+          running_count,
+          distinct_hosts,
+          distinct_locations,
+          min_replicas: app.min_replicas,
+          min_locations: app.min_locations,
+          max_per_host: app.max_per_host,
+        });
+        db.insertAvailabilitySample({
+          app_id: app.id,
+          meets_target,
+          desired_count: app.desired_replicas,
+          running_count,
+          distinct_hosts,
+          distinct_locations,
+        });
+      }
+    } catch (err) {
+      log("availability", `sampling failed: ${err}`);
+    }
+
     for (const service of services) {
       if (service.status === "paused" || service.status === "deploying") continue;
       if (service.status === "running" || service.status === "unhealthy") {
@@ -240,6 +287,16 @@ async function tick(): Promise<void> {
           db.updateServiceStatus(service.id, newStatus);
         }
       }
+    }
+
+    // --- VIP proxy convergence: install/upgrade ocd-proxy on every ready
+    // server and ship the rendered config. Runs before reconcileNetwork so
+    // /etc/hosts flips an app to its VIP at earliest one tick after that
+    // server's proxy is confirmed live ---
+    try {
+      await reconcileProxy();
+    } catch (err) {
+      log("proxy", `reconcile failed: ${err}`);
     }
 
     // --- Network reconciliation ---
@@ -284,6 +341,7 @@ async function tick(): Promise<void> {
     // --- Cleanup ---
     db.pruneOldMetrics(METRICS_RETENTION_SEC);
     db.pruneOldServerMetrics(METRICS_RETENTION_SEC);
+    db.pruneOldAvailabilitySamples(AVAILABILITY_RETENTION_SEC);
 
     // --- Periodic Docker prune (stopped containers, old images, build cache) ---
     tickCount++;

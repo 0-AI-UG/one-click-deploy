@@ -35,36 +35,20 @@
           "activeIndex": 0
         }
       }
-    },
-    "locations": {
-      "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
-        "type": "dock",
-        "zone": "center",
-        "stackId": "111e19c6-6309-4f2f-91b3-d694aa6caa87"
-      }
     }
   },
   "panels": {
-    "b8847212-bc2b-4f69-b890-3ea25c6504e8": {
+    "faa851d8-58f2-4401-9eaa-7856411052b1": {
+      "type": "terminal",
+      "title": "Codex"
+    },
+    "e852ae0e-7bdf-4d8a-856a-280f49664097": {
+      "type": "terminal",
+      "title": "Claude Code"
+    },
+    "e25a79d2-77db-4d38-8524-9c876cfbb5cf": {
       "type": "terminal",
       "title": "Claude Code 2"
-    },
-    "bc4bbf2c-03fb-4591-9eb0-79810bc4538a": {
-      "type": "terminal",
-      "title": "Claude Code 4"
-    },
-    "28c381f4-bc50-467e-800d-1c73de0e1416": {
-      "type": "terminal",
-      "title": "Claude Code 3"
-    },
-    "847abdea-0824-4e86-bee0-e0a4d659f080": {
-      "type": "terminal",
-      "title": "Terminal 1"
-    },
-    "6bce1c62-f0de-4b68-8da0-5655a8a75282": {
-      "type": "browser",
-      "title": "http://localhost:4599/topo-preview.html",
-      "url": "http://localhost:4599/topo-preview"
     },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
@@ -75,126 +59,77 @@
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "id": "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea",
       "canvasNodes": {
-        "c7526e7e-c431-416b-9da1-ab886fb34d38": {
-          "id": "c7526e7e-c431-416b-9da1-ab886fb34d38",
-          "panelId": "b8847212-bc2b-4f69-b890-3ea25c6504e8",
+        "1ac09204-6c23-4a33-9062-4a5e5ea6e410": {
+          "id": "1ac09204-6c23-4a33-9062-4a5e5ea6e410",
           "origin": {
-            "x": 660,
-            "y": 160
+            "x": 1000,
+            "y": 337.59000226531373
           },
           "size": {
-            "width": 640,
+            "width": 640.5834779396491,
             "height": 400
           },
-          "zOrder": 574,
-          "creationIndex": 1,
+          "zOrder": 623,
+          "creationIndex": 11,
           "animationState": "idle",
           "dockLayout": {
             "type": "tabs",
-            "id": "1d48a092-3fa4-4ae2-b865-243fdf470d96",
+            "id": "cab9b8a9-65b4-4637-ba64-026a63b770e0",
             "panelIds": [
-              "b8847212-bc2b-4f69-b890-3ea25c6504e8"
+              "faa851d8-58f2-4401-9eaa-7856411052b1"
             ],
             "activeIndex": 0
           }
         },
-        "39928835-5815-4937-99b5-f8ea5c2b8cf5": {
-          "id": "39928835-5815-4937-99b5-f8ea5c2b8cf5",
-          "panelId": "bc4bbf2c-03fb-4591-9eb0-79810bc4538a",
+        "8346a709-9139-4ef1-83e2-73c032a2c675": {
+          "id": "8346a709-9139-4ef1-83e2-73c032a2c675",
           "origin": {
-            "x": 660,
-            "y": 600
+            "x": 1000,
+            "y": 780
           },
           "size": {
-            "width": 640,
-            "height": 640
+            "width": 640.5834779396491,
+            "height": 560
           },
-          "zOrder": 575,
-          "creationIndex": 3,
+          "zOrder": 639,
+          "creationIndex": 12,
           "animationState": "idle",
           "dockLayout": {
             "type": "tabs",
-            "id": "24442dc3-5dba-4d63-9e77-e7ab91ccf0d8",
+            "id": "9d6c0e19-971b-4637-a1f4-d9317c878374",
             "panelIds": [
-              "bc4bbf2c-03fb-4591-9eb0-79810bc4538a"
+              "e852ae0e-7bdf-4d8a-856a-280f49664097"
             ],
             "activeIndex": 0
           }
         },
-        "f0bdb9a0-0451-46ea-846a-aa2c710ece02": {
-          "id": "f0bdb9a0-0451-46ea-846a-aa2c710ece02",
-          "panelId": "28c381f4-bc50-467e-800d-1c73de0e1416",
+        "ae6363aa-0547-4ef2-8fdf-f914788bc6d3": {
+          "id": "ae6363aa-0547-4ef2-8fdf-f914788bc6d3",
           "origin": {
-            "x": 1340,
-            "y": 600
+            "x": 1700,
+            "y": 780
           },
           "size": {
-            "width": 640,
-            "height": 640
+            "width": 640.5834779396491,
+            "height": 560
           },
-          "zOrder": 576,
-          "creationIndex": 4,
+          "zOrder": 640,
+          "creationIndex": 13,
           "animationState": "idle",
           "dockLayout": {
             "type": "tabs",
-            "id": "54cc4209-4a0d-46d0-a66c-51a0bc25bf2b",
+            "id": "322b8e93-981e-42ab-ae95-f758e6da5f8c",
             "panelIds": [
-              "28c381f4-bc50-467e-800d-1c73de0e1416"
-            ],
-            "activeIndex": 0
-          }
-        },
-        "920b344f-7dfb-4ded-a3ba-ae3993d1a712": {
-          "id": "920b344f-7dfb-4ded-a3ba-ae3993d1a712",
-          "panelId": "847abdea-0824-4e86-bee0-e0a4d659f080",
-          "origin": {
-            "x": 1340,
-            "y": -80
-          },
-          "size": {
-            "width": 640,
-            "height": 640
-          },
-          "zOrder": 531,
-          "creationIndex": 5,
-          "animationState": "idle",
-          "dockLayout": {
-            "type": "tabs",
-            "id": "0379fce5-69f5-4f9b-b8d6-8c19a43c34ba",
-            "panelIds": [
-              "847abdea-0824-4e86-bee0-e0a4d659f080"
-            ],
-            "activeIndex": 0
-          }
-        },
-        "55938329-041c-48ff-b2c9-d61a6f2d50e3": {
-          "id": "55938329-041c-48ff-b2c9-d61a6f2d50e3",
-          "panelId": "6bce1c62-f0de-4b68-8da0-5655a8a75282",
-          "origin": {
-            "x": 660,
-            "y": 1280
-          },
-          "size": {
-            "width": 800,
-            "height": 600
-          },
-          "zOrder": 573,
-          "creationIndex": 6,
-          "animationState": "idle",
-          "dockLayout": {
-            "type": "tabs",
-            "id": "edc158bb-0345-4b30-b781-2d3852231f93",
-            "panelIds": [
-              "6bce1c62-f0de-4b68-8da0-5655a8a75282"
+              "e25a79d2-77db-4d38-8524-9c876cfbb5cf"
             ],
             "activeIndex": 0
           }
         }
       },
-      "zoomLevel": 0.7624996862736427,
+      "zoomLevel": 0.9143918598643789,
       "viewportOffset": {
-        "x": -793.7496925481698,
-        "y": -359.99971137175135
+        "x": -1489.8383206652582,
+        "y": -659.7553714562416
       }
     }
   }
