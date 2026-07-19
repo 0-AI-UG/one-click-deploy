@@ -151,20 +151,27 @@ export async function processIncomingEnvVars(
 }
 
 /** Platform-injected env vars every app container receives: its own stable
- *  internal address behind the local Traefik. HTTP-routed apps
- *  (internal_protocol='http') get an `http://` URL; TCP-routed apps
- *  (internal_protocol='tcp') get `tcp://` — the scheme mirrors how Traefik
- *  actually speaks on the internal entrypoint. User-defined vars with the same
- *  key always win over these (users may have hand-set them). */
+ *  port-less internal address behind the per-app VIP proxy. HTTP-routed apps
+ *  (internal_protocol='http') get `http://<name>.ocd.internal` (the VIP
+ *  listens on :80); TCP-routed apps get `tcp://<name>.ocd.internal:<container_port>`
+ *  (the VIP mirrors the app's own port). The proxy also listens on the legacy
+ *  internal_port so already-deployed apps' baked env keeps working.
+ *  User-defined vars with the same key always win over these. */
 export function platformEnvVars(
-  app: Pick<AppRow, "name" | "internal_port" | "internal_protocol">,
+  app: Pick<AppRow, "name" | "internal_protocol" | "container_port">,
 ): Record<string, string> {
   const host = `${app.name}.ocd.internal`;
-  const scheme = app.internal_protocol === "tcp" ? "tcp" : "http";
+  if (app.internal_protocol === "tcp") {
+    return {
+      OCD_INTERNAL_URL: `tcp://${host}:${app.container_port}`,
+      OCD_INTERNAL_HOST: host,
+      OCD_INTERNAL_PORT: String(app.container_port),
+    };
+  }
   return {
-    OCD_INTERNAL_URL: `${scheme}://${host}:${app.internal_port}`,
+    OCD_INTERNAL_URL: `http://${host}`,
     OCD_INTERNAL_HOST: host,
-    OCD_INTERNAL_PORT: String(app.internal_port),
+    OCD_INTERNAL_PORT: "80",
   };
 }
 

@@ -96,7 +96,9 @@ ${BOLD}Subcommands:${RESET}
 
 ${BOLD}Options:${RESET}
   --domain=<domain>          Custom domain
-  --env=<name|id>            Link to an existing environment
+  --env=<name|id>            Deploy a declared target (from the manifest's
+                             "environments" block, e.g. staging → myapp-staging),
+                             or link an existing environment by name/id
   --set=KEY=VALUE            Set an env var (repeatable)`);
     process.exit(0);
   }
@@ -152,21 +154,64 @@ ${BOLD}Options:${RESET}
 
   if (manifest.extra_volumes?.length) body.extra_volumes = manifest.extra_volumes;
 
+  // Durability policy applies to every path (default/production/target).
+  if (manifest.durability_class) body.durability_class = manifest.durability_class;
+
   // Unified env resolution: manifest defaults + --set, layered on top of a
   // linked environment when one is given. Existing env values win; --set
   // overrides everything.
   let existingKeys = new Set<string>();
-  if (envName) {
+
+  // Target-aware --env: when the manifest declares an `environments` block and
+  // --env names a declared target, deploy that target as its own app rather
+  // than linking an existing environment group. A "production" target (and the
+  // no-flag default) keeps the bare name; other targets become a `<name>-<t>`
+  // sibling wired to an isolated env group server-side.
+  const envTargets = manifest.environments || {};
+  const declaredTarget = envName && envTargets[envName] ? envName : undefined;
+
+  if (declaredTarget) {
+    const t = envTargets[declaredTarget]!;
+    const isProduction = declaredTarget === "production";
+    body.app_name = isProduction ? name : `${name}-${declaredTarget}`;
+    body.env_label = isProduction ? "production" : declaredTarget;
+
+    // Branch: the target's branch wins, else the manifest webhook branch, else main.
+    const branch = t.branch || manifest.webhook?.branch || "main";
+    body.git_branch = branch;
+    if (body.webhook_enabled) body.webhook_branch = branch;
+
+    // Per-target overrides.
+    if (t.replicas !== undefined) body.replicas = t.replicas;
+    if (t.domain) body.domain = t.domain;
+    if (t.scale_to_zero_after !== undefined) body.scale_to_zero_after = t.scale_to_zero_after;
+
+    if (isProduction) {
+      body.placement_pool = "general";
+    } else {
+      // Non-production targets are isolated by default: their own placement
+      // pool, and (server-side) their own env group without the prod DB link.
+      if (t.isolated !== false) body.placement_pool = "staging";
+      // Link to the parent/production app so this is a sibling of it.
+      const apps = await get<Array<{ id: number; name: string }>>("/api/apps");
+      const parent = apps.find((a) => a.name === name);
+      if (parent) body.sibling_of = parent.id;
+      console.log(
+        `${DIM}Env:${RESET}      deploying the ${BOLD}${declaredTarget}${RESET} environment of ${BOLD}${name}${RESET} as ${BOLD}${body.app_name}${RESET}`,
+      );
+    }
+  } else if (envName) {
     const env = await resolveEnvironment(envName);
     body.environment_id = env.id;
     existingKeys = new Set((env.env_vars || []).map((v) => v.key));
     console.log(`${DIM}Env:${RESET}      ${env.name}`);
   }
-  const merged = mergeEnv([{ app: name, defs: manifest.env || [] }], sets, existingKeys);
+
+  const merged = mergeEnv([{ app: body.app_name, defs: manifest.env || [] }], sets, existingKeys);
   const entries = [...merged.entries, ...(await promptRequired(merged.requiredMissing))];
   if (entries.length > 0) body.env_vars = entries;
 
-  console.log(`\nDeploying ${BOLD}${name}${RESET}...`);
+  console.log(`\nDeploying ${BOLD}${body.app_name}${RESET}...`);
 
   const { op_id } = await post<{ op_id: number }>("/api/apps/deploy", body);
 

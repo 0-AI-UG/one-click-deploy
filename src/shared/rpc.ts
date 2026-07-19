@@ -143,6 +143,16 @@ export type DeployRequest = {
   compress?: boolean; // Response compression on the public router
   public_port?: number | "auto" | null; // Public raw TCP/UDP exposure: "auto" = lowest free pool port, number = specific pool port, omit = none
   public_protocol?: "tcp" | "udp"; // Pool for public_port (default "tcp"): 30000-30049 tcp, 30050-30099 udp
+  placement_pool?: string; // servers.pool this app's replicas may be placed on; omit / "general" = default pool
+  env_label?: string; // cosmetic env tag: "" | "production" | "staging" | "dev"
+  sibling_of?: number; // app id this is a staging/dev sibling of; omit = standalone
+  durability_class?: "none" | "standard" | "high"; // availability policy, mapped to placement-spread + min-replica floors at insert
+  scale_to_zero_after?: number; // idle seconds before scaling to zero (deploy-target override); omit = leave default
+};
+
+export type PromoteRequest = {
+  source_app: string; // app name to promote FROM (e.g. "myapp-staging")
+  dest_app: string; // app name to promote TO (e.g. "myapp")
 };
 
 export type PanelInfo = {

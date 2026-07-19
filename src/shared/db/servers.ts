@@ -14,6 +14,10 @@ export type ServerRow = {
    *  the reconciler attaches the server. Used by ingress upstreams + internal
    *  DNS so traffic stays off the public NIC. */
   private_ipv4: string;
+  /** Named capacity pool this server belongs to. 'general' is the default pool
+   *  every server lands in; apps schedule onto servers whose pool matches their
+   *  placement_pool. */
+  pool: string;
   created_at: string;
 };
 
@@ -42,10 +46,11 @@ export function insertServer(server: {
   location: string;
   status: string;
   private_ipv4?: string;
+  pool?: string;
 }): ServerRow {
   return db
     .query(
-      "INSERT INTO servers (name, provider_id, ipv4, ipv6, type, location, status, private_ipv4) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO servers (name, provider_id, ipv4, ipv6, type, location, status, private_ipv4, pool) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       server.name,
@@ -56,6 +61,7 @@ export function insertServer(server: {
       server.location,
       server.status,
       server.private_ipv4 ?? "",
+      server.pool ?? "general",
     ) as ServerRow;
 }
 
@@ -88,6 +94,18 @@ export function deleteServer(id: number): void {
 
 export function updateServerHostKey(id: number, hostKey: string): void {
   db.query("UPDATE servers SET ssh_host_key = ? WHERE id = ?").run(hostKey, id);
+}
+
+/** Move a server into a named capacity pool. Apps schedule onto servers whose
+ *  pool matches their placement_pool. */
+export function updateServerPool(id: number, pool: string): void {
+  db.query("UPDATE servers SET pool = ? WHERE id = ?").run(pool, id);
+}
+
+export function getServersByPool(pool: string): ServerRow[] {
+  return db
+    .query("SELECT * FROM servers WHERE pool = ? ORDER BY created_at DESC")
+    .all(pool) as ServerRow[];
 }
 
 // --- Server-level metrics ---

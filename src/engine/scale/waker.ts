@@ -182,6 +182,29 @@ export async function wakeAndResolveUpstreams(app: AppRow, deps: WakerDeps = wak
   return holdUntilReady(app.id, deps);
 }
 
+/**
+ * Wake path for the fleet proxy's POST /api/internal/wake: the same
+ * check-wake-hold composition as wakeAndResolveUpstreams, but surfaces an
+ * immediate wake refusal (app busy, missing sleeping state, wake error) as its
+ * error string instead of holding the full 120s.
+ */
+export async function wakeUpstreamsForProxy(
+  appId: number,
+  deps: WakerDeps = wakerDeps,
+): Promise<{ ok: true; upstreams: string[] } | { ok: false; error: string }> {
+  const app = deps.getApp(appId);
+  if (!app) return { ok: false, error: "App not found" };
+  if (app.status === "running") {
+    const ups = deps.buildUpstreams(appId);
+    if (ups.length > 0) return { ok: true, upstreams: ups };
+  }
+  const woke = await sharedWake(appId, deps);
+  if (!woke.ok) return { ok: false, error: woke.error ?? "Wake failed" };
+  const ups = await holdUntilReady(appId, deps);
+  if (!ups || ups.length === 0) return { ok: false, error: "App did not wake in time" };
+  return { ok: true, upstreams: ups };
+}
+
 // --- HTTP path ----------------------------------------------------------------
 
 function http503(message: string): Response {

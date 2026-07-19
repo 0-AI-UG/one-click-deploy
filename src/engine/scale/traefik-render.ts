@@ -35,10 +35,19 @@ function sortKeys<T>(obj: Record<string, T>): Record<string, T> {
 // --- Desired state -----------------------------------------------------------
 
 export type DesiredApp = {
+  /** apps.id — carried for the VIP proxy's wake contract (Traefik rendering
+   *  keys everything on name and ignores this). */
+  appId: number;
   name: string;
   /** Public domain; "" for private apps. */
   domain: string;
   internalPort: number;
+  /** Fleet-unique per-app VIP (apps.virtual_ip); "" when unallocated. Consumed
+   *  by the ocd-proxy renderer only — Traefik rendering ignores it. */
+  virtualIp: string;
+  /** The container's own listening port — a VIP listener alias so URLs baked
+   *  against the container port keep working. Ignored by Traefik rendering. */
+  containerPort: number;
   /** Explicit internal routing protocol: 'http' → HTTP router, 'tcp' → raw TCP
    *  router. Auth-protected apps are forced HTTP regardless (see httpRouted). */
   internalProtocol: "http" | "tcp";
@@ -135,9 +144,12 @@ export function collectDesiredState(): DesiredState {
   const apps: DesiredApp[] = db
     .getApps()
     .map((app) => ({
+      appId: app.id,
       name: app.name,
       domain: app.domain,
       internalPort: app.internal_port,
+      virtualIp: app.virtual_ip || "",
+      containerPort: app.container_port,
       internalProtocol: app.internal_protocol === "tcp" ? "tcp" as const : "http" as const,
       httpProbe: !!app.health_check,
       isPublic: !!app.public,

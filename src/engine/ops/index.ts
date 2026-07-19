@@ -3,6 +3,7 @@
 import "./deploy.ts";
 import "./redeploy.ts";
 import "./rollback.ts";
+import "./promote.ts";
 import "./destroy-app.ts";
 import "./migrate.ts";
 import "./wake.ts";

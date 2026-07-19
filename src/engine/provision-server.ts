@@ -19,6 +19,9 @@ export async function provisionServer(opts: {
   serverType: string;
   location: string;
   name?: string;
+  // Capacity pool the new server joins. Defaults to 'general'; a staging-pool
+  // app's scale-up passes its placement_pool so the server lands in that pool.
+  pool?: string;
   emit: ProgressFn;
 }): Promise<Server> {
   const { serverType, location, emit } = opts;
@@ -46,6 +49,7 @@ export async function provisionServer(opts: {
     type: serverType,
     location,
     status: "creating",
+    pool: opts.pool ?? "general",
   });
 
   log("server", `Creating ${compute.name} server: name=${serverName} type=${serverType} location=${location}`);
