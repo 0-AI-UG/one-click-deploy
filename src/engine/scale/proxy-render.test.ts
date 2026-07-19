@@ -230,10 +230,19 @@ describe("proxy provisioning", () => {
     expect(unit).toContain("After=network-online.target");
   });
 
-  test("install script: installs the shipped binary, writes the unit, restarts, verifies active", () => {
-    const script = proxyInstallScript("/tmp/.ocd-proxy.abc");
+  test("install script: verifies sha + version, installs, writes the unit, restarts, verifies active", () => {
+    const script = proxyInstallScript("/tmp/.ocd-proxy.abc", {
+      sha256: "f00d".repeat(16),
+      version: "abcdef123456",
+    });
+    expect(script).toContain(`echo "${"f00d".repeat(16)}  /tmp/.ocd-proxy.abc" | sha256sum -c -`);
+    expect(script).toContain('V=$(/tmp/.ocd-proxy.abc --version)');
+    expect(script).toContain('[ "$V" = "abcdef123456" ]');
     expect(script).toContain(`install -m 755 /tmp/.ocd-proxy.abc ${PROXY_BIN_PATH}`);
     expect(script).toContain("mkdir -p /etc/ocd-proxy");
+    // Settle past one Restart=always cycle so is-active can't catch the
+    // transient "active" of a binary that dies on boot.
+    expect(script).toContain("sleep 3\nsystemctl is-active ocd-proxy");
     expect(script).toContain(proxySystemdUnit());
     expect(script).toContain("systemctl daemon-reload");
     expect(script).toContain("systemctl enable ocd-proxy");

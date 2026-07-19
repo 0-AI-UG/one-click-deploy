@@ -38,14 +38,23 @@ WantedBy=multi-user.target
 /**
  * Install/upgrade script run over SSH after the compiled binary has been
  * scp-ed to `tmpBinPath`. Unlike Traefik there is no download step — the
- * panel cross-compiles and ships the binary itself. Ends with an
- * unconditional restart (binary changes only take effect on restart; config
- * changes never come through here — they hot-reload) and an is-active check
- * so a binary that dies on boot fails the converge instead of reporting
- * success.
+ * panel cross-compiles and ships the binary itself. Verification is layered:
+ * the shipped bytes must match the panel-side sha (scp corruption), the
+ * installed binary must run and report the expected version (garbage binary —
+ * caught BEFORE the restart, so a bad ship can't take down a working proxy),
+ * and after the restart a settle delay outlives one Restart=always cycle
+ * (RestartSec=2) so `is-active` can't report the few-ms "active" window of a
+ * binary that dies on boot.
  */
-export function proxyInstallScript(tmpBinPath: string): string {
+export function proxyInstallScript(
+  tmpBinPath: string,
+  expected: { sha256: string; version: string },
+): string {
   return `set -e
+echo "${expected.sha256}  ${tmpBinPath}" | sha256sum -c - >/dev/null
+chmod 755 ${tmpBinPath}
+V=$(${tmpBinPath} --version)
+[ "$V" = "${expected.version}" ] || { echo "shipped binary reports version $V, want ${expected.version}" >&2; exit 1; }
 install -m 755 ${tmpBinPath} ${PROXY_BIN_PATH}
 rm -f ${tmpBinPath}
 mkdir -p ${PROXY_CONFIG_DIR}
@@ -55,6 +64,7 @@ OCD_PROXY_UNIT
 systemctl daemon-reload
 systemctl enable ocd-proxy
 systemctl restart ocd-proxy
+sleep 3
 systemctl is-active ocd-proxy
 `;
 }

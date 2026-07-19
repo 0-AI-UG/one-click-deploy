@@ -16,7 +16,8 @@
 // active with current binary + config (see network-reconciler).
 
 import path from "path";
-import { mkdirSync, readdirSync, renameSync } from "fs";
+import os from "os";
+import { mkdirSync, readdirSync, renameSync, rmSync } from "fs";
 import * as db from "../../shared/db.ts";
 import { DATA_DIR } from "../../shared/paths.ts";
 import { sshExec, getSshKeyPath } from "../../shared/remote/index.ts";
@@ -93,35 +94,79 @@ export async function buildProxyBinary(arch: "x64" | "arm64"): Promise<string> {
   return build;
 }
 
+/** True when the file exists and starts with the ELF magic. Guards against
+ *  bun's silent zero-fill (below) both for fresh builds and for cache hits —
+ *  a poisoned cache entry must rebuild, not reship. */
+async function isValidElf(file: string): Promise<boolean> {
+  const f = Bun.file(file);
+  if (!(await f.exists()) || f.size < 4) return false;
+  const magic = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+  return magic[0] === 0x7f && magic[1] === 0x45 && magic[2] === 0x4c && magic[3] === 0x46;
+}
+
+function hostArch(): "x64" | "arm64" {
+  return process.arch === "arm64" ? "arm64" : "x64";
+}
+
+async function fileSha256(file: string): Promise<string> {
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(await Bun.file(file).arrayBuffer());
+  return hasher.digest("hex");
+}
+
 async function compileProxy(version: string, arch: "x64" | "arm64"): Promise<string> {
   const outfile = path.join(BUILD_CACHE_DIR, `ocd-proxy-${version}-linux-${arch}`);
-  if (await Bun.file(outfile).exists()) return outfile;
+  if (await isValidElf(outfile)) return outfile;
+  rmSync(outfile, { force: true });
   mkdirSync(BUILD_CACHE_DIR, { recursive: true });
-  // Compile to a tmp name + rename so a killed build never leaves a partial
-  // binary under the cacheable name.
-  const tmpfile = `${outfile}.${crypto.randomUUID().slice(0, 8)}.tmp`;
+  // bun 1.3.x `--compile` silently writes an all-zero file when --outfile
+  // crosses a filesystem boundary (observed: container overlayfs → the
+  // bind-mounted data volume). Build on bun's own filesystem (tmpdir), verify
+  // the ELF, then byte-copy into the cache and verify the copy.
+  const tmpfile = path.join(os.tmpdir(), `ocd-proxy-build.${crypto.randomUUID().slice(0, 8)}`);
   log("build", `compiling ocd-proxy ${version} for linux-${arch}`);
-  const proc = Bun.spawn(
-    [
-      "bun",
-      "build",
-      path.join(PROXY_SRC_DIR, "main.ts"),
-      "--compile",
-      `--target=bun-linux-${arch}`,
-      "--define",
-      `OCD_PROXY_VERSION=${JSON.stringify(version)}`,
-      "--outfile",
-      tmpfile,
-    ],
-    { stdout: "pipe", stderr: "pipe" },
-  );
-  const exit = await proc.exited;
-  if (exit !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`ocd-proxy build failed for linux-${arch} (exit ${exit}): ${stderr.trim().slice(0, 400)}`);
+  try {
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "build",
+        path.join(PROXY_SRC_DIR, "main.ts"),
+        "--compile",
+        `--target=bun-linux-${arch}`,
+        "--define",
+        `OCD_PROXY_VERSION=${JSON.stringify(version)}`,
+        "--outfile",
+        tmpfile,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const exit = await proc.exited;
+    if (exit !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      throw new Error(`ocd-proxy build failed for linux-${arch} (exit ${exit}): ${stderr.trim().slice(0, 400)}`);
+    }
+    if (!(await isValidElf(tmpfile))) {
+      throw new Error(`ocd-proxy build for linux-${arch} produced a non-ELF file (bun --compile zero-fill?)`);
+    }
+    if (arch === hostArch() && process.platform === "linux") {
+      const check = Bun.spawn([tmpfile, "--version"], { stdout: "pipe", stderr: "pipe" });
+      await check.exited;
+      const reported = (await new Response(check.stdout).text()).trim();
+      if (reported !== version) {
+        throw new Error(`ocd-proxy build self-check failed: --version reported "${reported}", want "${version}"`);
+      }
+    }
+    const partial = `${outfile}.${crypto.randomUUID().slice(0, 8)}.tmp`;
+    await Bun.write(partial, await Bun.file(tmpfile).arrayBuffer());
+    if ((await fileSha256(partial)) !== (await fileSha256(tmpfile))) {
+      rmSync(partial, { force: true });
+      throw new Error(`ocd-proxy build copy into cache did not match the source (filesystem copy bug?)`);
+    }
+    renameSync(partial, outfile);
+    return outfile;
+  } finally {
+    rmSync(tmpfile, { force: true });
   }
-  renameSync(tmpfile, outfile);
-  return outfile;
 }
 
 // --- Remote write plumbing (per-server lock + atomic tmp+mv, as in
@@ -235,10 +280,15 @@ function archFromUname(uname: string): "x64" | "arm64" {
  *  unit, and restart — the only restart path. Throws on any failure. */
 async function installProxy(server: ServerAccess, arch: "x64" | "arm64"): Promise<void> {
   const binPath = await buildProxyBinary(arch);
+  const [sha, version] = await Promise.all([fileSha256(binPath), desiredProxyVersion()]);
   const tmpPath = `/tmp/.ocd-proxy.${crypto.randomUUID().slice(0, 8)}`;
   log("install", `installing ocd-proxy on ${server.name} (${server.ipv4}, linux-${arch})`);
   await scpTo(server, binPath, tmpPath);
-  const result = await sshExec(server.ipv4, proxyInstallScript(tmpPath), server.hostKey);
+  const result = await sshExec(
+    server.ipv4,
+    proxyInstallScript(tmpPath, { sha256: sha, version }),
+    server.hostKey,
+  );
   if (result.exitCode !== 0) {
     throw new Error(`ocd-proxy install failed on ${server.name}: ${result.stderr || result.stdout}`);
   }
