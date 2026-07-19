@@ -35,6 +35,7 @@
 // This replaced the browser-only 503 "wake page", which woke nothing for
 // internal callers, raw TCP/UDP ports, or any non-browser HTTP client.
 
+import { timingSafeEqual } from "node:crypto";
 import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { wakeApp } from "./wake.ts";
@@ -205,6 +206,40 @@ export async function wakeUpstreamsForProxy(
   return { ok: true, upstreams: ups };
 }
 
+/**
+ * Full request handler for the fleet proxy's wake calls (frozen client
+ * contract in src/proxy/wake.ts). Lives here — not in server/routes — because
+ * it must be served on the waker's :8896 listener: that is the only panel
+ * port published on the private IP (the API port binds 127.0.0.1 only), so
+ * it's the only address other servers' proxies can reach. The /api/internal/
+ * wake API route delegates to this same function.
+ */
+export async function handleProxyWakeRequest(request: Request): Promise<Response> {
+  const presented = request.headers.get("x-ocd-wake-secret") ?? "";
+  const expected = db.ensureProxyWakeSecret();
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+
+  let appId: unknown;
+  try {
+    appId = ((await request.json()) as { appId?: unknown })?.appId;
+  } catch {
+    return Response.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
+  }
+  if (typeof appId !== "number" || !Number.isInteger(appId)) {
+    return Response.json({ ok: false, error: "appId must be a number" }, { status: 400 });
+  }
+  if (!db.getApp(appId)) {
+    return Response.json({ ok: false, error: "App not found" }, { status: 404 });
+  }
+
+  const result = await wakeUpstreamsForProxy(appId);
+  return Response.json(result, { status: result.ok ? 200 : 503 });
+}
+
 // --- HTTP path ----------------------------------------------------------------
 
 function http503(message: string): Response {
@@ -238,6 +273,10 @@ const HOP_BY_HOP = new Set([
  * `retry` middleware stays as a backstop.
  */
 export async function handleWakerHttp(request: Request, deps: WakerDeps = wakerDeps): Promise<Response> {
+  // Fleet-proxy wake calls share this listener (see handleProxyWakeRequest).
+  if (request.method === "POST" && new URL(request.url).pathname === "/api/internal/wake") {
+    return handleProxyWakeRequest(request);
+  }
   // Traefik forwards the original Host header; fall back to the URL authority
   // (Bun derives request.url from the Host, so they agree) for robustness.
   const host = request.headers.get("host") || new URL(request.url).host;

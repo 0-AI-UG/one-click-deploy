@@ -10,6 +10,7 @@
 import * as db from "../../shared/db.ts";
 import type { ProxyApp, ProxyConfig } from "../../proxy/config.ts";
 import type { DesiredState } from "./traefik-render.ts";
+import { WAKER_HTTP_PORT } from "./traefik-constants.ts";
 
 /**
  * VIP front-port policy (the user-visible ports the proxy DNATs to its single
@@ -58,14 +59,14 @@ export function renderProxyConfig(state: DesiredState): ProxyConfig {
 
   return {
     version: 1,
-    // The panel runs in a container: from other servers it is reachable only
-    // at its *published* host port on the private IP (panelHostPort), not the
-    // in-container listen port. Until both are known there is nowhere to wake
-    // from — the proxy then fails wake attempts loudly instead of hanging.
-    wakeUrl:
-      state.panelPrivateIpv4 && state.panelHostPort
-        ? `http://${state.panelPrivateIpv4}:${state.panelHostPort}/api/internal/wake`
-        : null,
+    // Wake calls go to the waker's :8896 listener — the only panel port
+    // published on the private IP (the API port binds 127.0.0.1 only), and
+    // the same port every server's Traefik already dials for sleeping apps.
+    // Until the panel is on the private network there is nowhere to wake from
+    // — the proxy then fails wake attempts loudly instead of hanging.
+    wakeUrl: state.panelPrivateIpv4
+      ? `http://${state.panelPrivateIpv4}:${WAKER_HTTP_PORT}/api/internal/wake`
+      : null,
     wakeSecret: db.ensureProxyWakeSecret(),
     apps,
   };

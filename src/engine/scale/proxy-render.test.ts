@@ -148,27 +148,18 @@ describe("renderProxyConfig", () => {
     expect(cfg.apps).toEqual([]);
   });
 
-  test("wakeUrl targets the panel's published host port on its private IP; null without either", () => {
+  test("wakeUrl targets the waker port on the panel's private IP; null without one", () => {
     const server = makeServer("10.0.7.14");
     const app = makeApp({ server, hostPort: 10205 });
     const state = stateFor(app.name);
 
-    const withPanel = renderProxyConfig({
-      ...state,
-      panelPrivateIpv4: "10.0.7.99",
-      panelHostPort: 10001,
-    });
-    expect(withPanel.wakeUrl).toBe("http://10.0.7.99:10001/api/internal/wake");
+    // :8896 (the waker listener) is the only panel port published on the
+    // private IP — the API port binds 127.0.0.1 only.
+    const withPanel = renderProxyConfig({ ...state, panelPrivateIpv4: "10.0.7.99" });
+    expect(withPanel.wakeUrl).toBe("http://10.0.7.99:8896/api/internal/wake");
 
     const noPanel = renderProxyConfig({ ...state, panelPrivateIpv4: null });
     expect(noPanel.wakeUrl).toBeNull();
-
-    const noPort = renderProxyConfig({
-      ...state,
-      panelPrivateIpv4: "10.0.7.99",
-      panelHostPort: null,
-    });
-    expect(noPort.wakeUrl).toBeNull();
   });
 
   test("wakeSecret: created once (32 bytes hex), persisted, stable across renders", () => {
