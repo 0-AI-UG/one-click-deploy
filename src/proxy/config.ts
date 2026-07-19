@@ -4,13 +4,22 @@
 // (and the whole of src/proxy/) free of imports from the rest of the repo so
 // the compiled binary stays small.
 
+/**
+ * The one TCP port the proxy actually binds per VIP. Traefik holds wildcard
+ * 0.0.0.0 listeners on :80 and :20000-20199, and on Linux a specific-IP listen
+ * can never coexist with a wildcard listen on the same port — so the
+ * user-facing front ports are DNATed to this wildcard-free port (see nat.ts).
+ */
+export const PROXY_LISTEN_PORT = 18790;
+
 export type ProxyListener = { port: number; protocol: "tcp" | "udp" };
 
 export type ProxyApp = {
   appId: number;
   name: string;
   vip: string;
-  listeners: ProxyListener[];
+  /** User-visible ports on the VIP (80/container_port/internal_port…) — DNATed to the listen port, never bound. */
+  frontPorts: number[];
   backends: string[];
   sleeping: boolean;
 };
@@ -19,6 +28,8 @@ export type ProxyConfig = {
   version: 1;
   wakeUrl: string | null;
   wakeSecret: string;
+  /** Test seam: per-VIP listen port override (default PROXY_LISTEN_PORT). The renderer never sets it. */
+  listenPort?: number;
   apps: ProxyApp[];
 };
 
@@ -30,23 +41,20 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function validateListener(raw: unknown, where: string): ProxyListener {
-  if (!isRecord(raw)) fail(`${where}: listener must be an object`);
-  const { port, protocol } = raw;
-  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535)
-    fail(`${where}: listener port must be an integer in 1-65535`);
-  if (protocol !== "tcp" && protocol !== "udp") fail(`${where}: listener protocol must be "tcp" or "udp"`);
-  return { port, protocol };
+function validatePort(v: unknown, where: string): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 65535)
+    fail(`${where} must be an integer in 1-65535`);
+  return v;
 }
 
 function validateApp(raw: unknown, index: number): ProxyApp {
   const where = `apps[${index}]`;
   if (!isRecord(raw)) fail(`${where}: must be an object`);
-  const { appId, name, vip, listeners, backends, sleeping } = raw;
+  const { appId, name, vip, frontPorts, backends, sleeping } = raw;
   if (typeof appId !== "number" || !Number.isInteger(appId)) fail(`${where}: appId must be an integer`);
   if (typeof name !== "string" || name.length === 0) fail(`${where}: name must be a non-empty string`);
   if (typeof vip !== "string" || vip.length === 0) fail(`${where}: vip must be a non-empty string`);
-  if (!Array.isArray(listeners)) fail(`${where}: listeners must be an array`);
+  if (!Array.isArray(frontPorts) || frontPorts.length === 0) fail(`${where}: frontPorts must be a non-empty array`);
   if (!Array.isArray(backends)) fail(`${where}: backends must be an array`);
   for (const b of backends) {
     if (typeof b !== "string" || !/^.+:\d+$/.test(b)) fail(`${where}: backend ${JSON.stringify(b)} must be "host:port"`);
@@ -56,7 +64,7 @@ function validateApp(raw: unknown, index: number): ProxyApp {
     appId,
     name,
     vip,
-    listeners: listeners.map((l, i) => validateListener(l, `${where}.listeners[${i}]`)),
+    frontPorts: frontPorts.map((p, i) => validatePort(p, `${where}.frontPorts[${i}]`)),
     backends: backends as string[],
     sleeping,
   };
@@ -73,11 +81,13 @@ export function parseConfig(text: string): ProxyConfig {
   if (raw.version !== 1) fail(`unknown version ${JSON.stringify(raw.version)} (expected 1)`);
   if (raw.wakeUrl !== null && typeof raw.wakeUrl !== "string") fail("wakeUrl must be a string or null");
   if (typeof raw.wakeSecret !== "string") fail("wakeSecret must be a string");
+  if (raw.listenPort !== undefined) validatePort(raw.listenPort, "listenPort");
   if (!Array.isArray(raw.apps)) fail("apps must be an array");
   return {
     version: 1,
     wakeUrl: raw.wakeUrl,
     wakeSecret: raw.wakeSecret,
+    ...(raw.listenPort !== undefined ? { listenPort: raw.listenPort as number } : {}),
     apps: raw.apps.map(validateApp),
   };
 }

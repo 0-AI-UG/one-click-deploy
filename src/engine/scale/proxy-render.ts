@@ -12,7 +12,8 @@ import type { ProxyApp, ProxyConfig } from "../../proxy/config.ts";
 import type { DesiredState } from "./traefik-render.ts";
 
 /**
- * VIP listener policy, all TCP:
+ * VIP front-port policy (the user-visible ports the proxy DNATs to its single
+ * per-VIP listener — see src/proxy/nat.ts), all TCP:
  *
  *   - `internal_port` — backcompat for URLs baked against the old
  *     `<app>.ocd.internal:20005`-style Traefik entrypoints.
@@ -23,7 +24,7 @@ import type { DesiredState } from "./traefik-render.ts";
  * Deduplicated (container_port may be 80 or equal internal_port) and sorted
  * so the rendered config is deterministic.
  */
-export function listenerPorts(app: {
+export function frontPorts(app: {
   internalPort: number;
   containerPort: number;
   internalProtocol: "http" | "tcp";
@@ -37,7 +38,7 @@ export function listenerPorts(app: {
  * Render the fleet-wide ProxyConfig from a desired-state snapshot. Identical
  * on every server (the proxy is VIP-addressed, not server-addressed). Apps
  * without an allocated VIP are skipped — nothing to bind. Deterministic
- * output (sorted apps, sorted listener ports, upstreams pre-sorted by
+ * output (sorted apps, sorted front ports, upstreams pre-sorted by
  * buildUpstreams) so content-hash convergence can skip no-op writes.
  */
 export function renderProxyConfig(state: DesiredState): ProxyConfig {
@@ -47,7 +48,7 @@ export function renderProxyConfig(state: DesiredState): ProxyConfig {
       appId: app.appId,
       name: app.name,
       vip: app.virtualIp,
-      listeners: listenerPorts(app).map((port) => ({ port, protocol: "tcp" as const })),
+      frontPorts: frontPorts(app),
       backends: app.upstreams,
       sleeping: app.asleep,
     }))

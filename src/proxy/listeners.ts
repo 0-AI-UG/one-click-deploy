@@ -1,15 +1,16 @@
-// Reconcile the running listener set against a ProxyConfig: diff by
-// (vip, port, protocol) — close removed listeners, open added ones, and swap
-// each surviving listener's app snapshot in place (backends/sleeping changes
-// apply to new connections only). Bind failures are logged, never fatal; the
-// key stays absent so the next reconcile retries it.
+// Reconcile the running listener set against a ProxyConfig: exactly one TCP
+// listener per app at vip:listenPort (the user-facing front ports are DNATed
+// to it by nat.ts, never bound). Diff by vip — close removed apps' listeners,
+// open added ones, and swap each surviving listener's app snapshot in place
+// (backends/sleeping changes apply to new connections only). Bind failures are
+// logged, never fatal; the key stays absent so the next reconcile retries it.
+//
+// UDP is intentionally unwired here: no internal UDP apps exist yet. udp.ts
+// stays the building block for a future frontPorts-for-udp variant.
 
-import type { ProxyApp, ProxyConfig, ProxyListener } from "./config.ts";
+import { PROXY_LISTEN_PORT, type ProxyApp, type ProxyConfig } from "./config.ts";
 import { openTcpListener, type TcpListenerHandle } from "./tcp.ts";
-import { openUdpListener, type UdpListenerHandle } from "./udp.ts";
 import type { WakeFn } from "./wake.ts";
-
-type Handle = TcpListenerHandle | UdpListenerHandle;
 
 export type ListenerSet = {
   reconcile(config: ProxyConfig): Promise<void>;
@@ -17,42 +18,34 @@ export type ListenerSet = {
   size(): number;
 };
 
-function keyOf(vip: string, l: ProxyListener): string {
-  return `${l.protocol}:${vip}:${l.port}`;
-}
-
 export function createListenerSet(wake: WakeFn): ListenerSet {
-  const handles = new Map<string, Handle>();
+  const handles = new Map<string, TcpListenerHandle>();
 
   return {
     async reconcile(config) {
-      const desired = new Map<string, { app: ProxyApp; listener: ProxyListener }>();
-      for (const app of config.apps) {
-        for (const listener of app.listeners) desired.set(keyOf(app.vip, listener), { app, listener });
-      }
+      const port = config.listenPort ?? PROXY_LISTEN_PORT;
+      const desired = new Map<string, ProxyApp>();
+      for (const app of config.apps) desired.set(app.vip, app);
 
-      for (const [key, handle] of [...handles]) {
-        if (desired.has(key)) continue;
+      for (const [vip, handle] of [...handles]) {
+        if (desired.has(vip)) continue;
         handle.stop();
-        handles.delete(key);
-        console.log(`[proxy] closed ${key}`);
+        handles.delete(vip);
+        console.log(`[proxy] closed ${vip}:${handle.port}`);
       }
 
-      for (const [key, { app, listener }] of desired) {
-        const existing = handles.get(key);
+      for (const [vip, app] of desired) {
+        const existing = handles.get(vip);
         if (existing) {
           existing.update(app);
           continue;
         }
         try {
-          const handle =
-            listener.protocol === "udp"
-              ? await openUdpListener(app, listener, wake)
-              : openTcpListener(app, listener, wake);
-          handles.set(key, handle);
-          console.log(`[proxy] opened ${key} → app ${app.appId} (${app.name})`);
+          const handle = openTcpListener(app, { port, protocol: "tcp" }, wake);
+          handles.set(vip, handle);
+          console.log(`[proxy] opened ${vip}:${handle.port} → app ${app.appId} (${app.name})`);
         } catch (err) {
-          console.error(`[proxy] bind ${key} failed: ${err} — will retry on next reconcile`);
+          console.error(`[proxy] bind ${vip}:${port} failed: ${err} — will retry on next reconcile`);
         }
       }
     },

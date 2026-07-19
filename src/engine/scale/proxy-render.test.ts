@@ -7,7 +7,7 @@ import { VIP_RANGE } from "../../shared/db/apps.ts";
 import { collectDesiredState, type DesiredState } from "./traefik-render.ts";
 import {
   appHostsLine,
-  listenerPorts,
+  frontPorts,
   renderProxyConfig,
   renderProxyConfigJson,
 } from "./proxy-render.ts";
@@ -77,37 +77,37 @@ function stateFor(...appNames: string[]): DesiredState {
   };
 }
 
-describe("listenerPorts", () => {
+describe("frontPorts", () => {
   test("http app: internal_port + container_port + 80, sorted", () => {
     expect(
-      listenerPorts({ internalPort: 20005, containerPort: 3000, internalProtocol: "http" }),
+      frontPorts({ internalPort: 20005, containerPort: 3000, internalProtocol: "http" }),
     ).toEqual([80, 3000, 20005]);
   });
 
-  test("tcp app: no :80 listener", () => {
+  test("tcp app: no :80 front port", () => {
     expect(
-      listenerPorts({ internalPort: 20005, containerPort: 5432, internalProtocol: "tcp" }),
+      frontPorts({ internalPort: 20005, containerPort: 5432, internalProtocol: "tcp" }),
     ).toEqual([5432, 20005]);
   });
 
-  test("dedupe: container_port 80 on an http app collapses into the :80 listener", () => {
+  test("dedupe: container_port 80 on an http app collapses into the :80 front port", () => {
     expect(
-      listenerPorts({ internalPort: 20005, containerPort: 80, internalProtocol: "http" }),
+      frontPorts({ internalPort: 20005, containerPort: 80, internalProtocol: "http" }),
     ).toEqual([80, 20005]);
   });
 
   test("dedupe: container_port equal to internal_port renders once", () => {
     expect(
-      listenerPorts({ internalPort: 20005, containerPort: 20005, internalProtocol: "tcp" }),
+      frontPorts({ internalPort: 20005, containerPort: 20005, internalProtocol: "tcp" }),
     ).toEqual([20005]);
     expect(
-      listenerPorts({ internalPort: 20005, containerPort: 20005, internalProtocol: "http" }),
+      frontPorts({ internalPort: 20005, containerPort: 20005, internalProtocol: "http" }),
     ).toEqual([80, 20005]);
   });
 });
 
 describe("renderProxyConfig", () => {
-  test("app entry: vip from the allocator, all-tcp listeners, backends = upstream pool", () => {
+  test("app entry: vip from the allocator, front ports, backends = upstream pool", () => {
     const server = makeServer("10.0.7.10");
     const app = makeApp({ server, containerPort: 3000, hostPort: 10201 });
     expect(app.virtual_ip).toMatch(/^10\.96\.\d+\.\d+$/);
@@ -121,21 +121,14 @@ describe("renderProxyConfig", () => {
     expect(entry.vip).toBe(app.virtual_ip);
     expect(entry.sleeping).toBe(false);
     expect(entry.backends).toEqual(["10.0.7.10:10201"]);
-    expect(entry.listeners).toEqual([
-      { port: 80, protocol: "tcp" },
-      { port: 3000, protocol: "tcp" },
-      { port: app.internal_port, protocol: "tcp" },
-    ]);
+    expect(entry.frontPorts).toEqual([80, 3000, app.internal_port]);
   });
 
-  test("tcp-routed app gets no :80 listener", () => {
+  test("tcp-routed app gets no :80 front port", () => {
     const server = makeServer("10.0.7.11");
     const app = makeApp({ server, internalProtocol: "tcp", containerPort: 5432, hostPort: 10202 });
     const cfg = renderProxyConfig(stateFor(app.name));
-    expect(cfg.apps[0]!.listeners).toEqual([
-      { port: 5432, protocol: "tcp" },
-      { port: app.internal_port, protocol: "tcp" },
-    ]);
+    expect(cfg.apps[0]!.frontPorts).toEqual([5432, app.internal_port]);
   });
 
   test("sleeping app: sleeping=true with empty backends (stopped anchor is not servable)", () => {

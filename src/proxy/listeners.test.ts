@@ -1,5 +1,7 @@
-// Listener-set reconciliation: config reloads close removed listeners, open
-// added ones, and keep serving on surviving ones.
+// Listener-set reconciliation: one TCP listener per app at vip:listenPort.
+// Config reloads close removed apps' listeners, open added ones, and keep
+// serving on surviving ones. Tests bind 127.0.0.1 with an ephemeral
+// listenPort override (PROXY_LISTEN_PORT itself is never bound here).
 import { describe, test, expect } from "bun:test";
 import { createListenerSet } from "./listeners.ts";
 import type { ProxyApp, ProxyConfig } from "./config.ts";
@@ -29,8 +31,8 @@ function echoServer(): { port: number; stop(): void } {
   return { port: listener.port, stop: () => listener.stop(true) };
 }
 
-function configFor(apps: ProxyApp[]): ProxyConfig {
-  return { version: 1, wakeUrl: null, wakeSecret: "", apps };
+function configFor(apps: ProxyApp[], listenPort: number): ProxyConfig {
+  return { version: 1, wakeUrl: null, wakeSecret: "", listenPort, apps };
 }
 
 function roundtrip(port: number, payload: string): Promise<string> {
@@ -85,30 +87,32 @@ async function canConnect(port: number): Promise<boolean> {
 }
 
 describe("listener reconciliation", () => {
-  test("removed listener closes its port, added listener starts serving", async () => {
+  test("removed app closes its listener, re-added app starts serving again", async () => {
     const echo = echoServer();
-    const backend = [`127.0.0.1:${echo.port}`];
-    const portA = freePort();
-    const portB = freePort();
+    const port = freePort();
     const set = createListenerSet(noWake);
     try {
       const appA: ProxyApp = {
         appId: 1,
         name: "a",
         vip: "127.0.0.1",
-        listeners: [{ port: portA, protocol: "tcp" }],
-        backends: backend,
+        frontPorts: [80],
+        backends: [`127.0.0.1:${echo.port}`],
         sleeping: false,
       };
-      await set.reconcile(configFor([appA]));
+      await set.reconcile(configFor([appA], port));
       expect(set.size()).toBe(1);
-      expect(await roundtrip(portA, "via portA")).toBe("via portA");
+      expect(await roundtrip(port, "via vip")).toBe("via vip");
 
-      // Reload: portA listener removed, portB listener added.
-      await set.reconcile(configFor([{ ...appA, listeners: [{ port: portB, protocol: "tcp" }] }]));
+      // Reload: app removed → listener closed.
+      await set.reconcile(configFor([], port));
+      expect(set.size()).toBe(0);
+      expect(await canConnect(port)).toBe(false);
+
+      // Reload: app back → listener reopened.
+      await set.reconcile(configFor([appA], port));
       expect(set.size()).toBe(1);
-      expect(await canConnect(portA)).toBe(false);
-      expect(await roundtrip(portB, "via portB")).toBe("via portB");
+      expect(await roundtrip(port, "back again")).toBe("back again");
     } finally {
       set.stopAll();
       echo.stop();
@@ -124,16 +128,16 @@ describe("listener reconciliation", () => {
       appId: 2,
       name: "b",
       vip: "127.0.0.1",
-      listeners: [{ port, protocol: "tcp" }],
+      frontPorts: [80],
       backends: [`127.0.0.1:${echoOld.port}`],
       sleeping: false,
     };
     try {
-      await set.reconcile(configFor([base]));
+      await set.reconcile(configFor([base], port));
       expect(await roundtrip(port, "old pool")).toBe("old pool");
 
       echoOld.stop();
-      await set.reconcile(configFor([{ ...base, backends: [`127.0.0.1:${echoNew.port}`] }]));
+      await set.reconcile(configFor([{ ...base, backends: [`127.0.0.1:${echoNew.port}`] }], port));
       expect(set.size()).toBe(1);
       expect(await roundtrip(port, "new pool")).toBe("new pool");
     } finally {
@@ -152,16 +156,16 @@ describe("listener reconciliation", () => {
       appId: 3,
       name: "c",
       vip: "127.0.0.1",
-      listeners: [{ port, protocol: "tcp" }],
+      frontPorts: [80],
       backends: [`127.0.0.1:${echo.port}`],
       sleeping: false,
     };
     try {
-      await set.reconcile(configFor([appC]));
+      await set.reconcile(configFor([appC], port));
       expect(set.size()).toBe(0); // bind failed, process alive
 
       blocker.stop(true);
-      await set.reconcile(configFor([appC]));
+      await set.reconcile(configFor([appC], port));
       expect(set.size()).toBe(1);
       expect(await roundtrip(port, "retried")).toBe("retried");
     } finally {

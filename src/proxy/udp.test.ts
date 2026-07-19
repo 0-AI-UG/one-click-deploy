@@ -10,7 +10,7 @@ function app(over: Partial<ProxyApp> = {}): ProxyApp {
     appId: 200,
     name: "dns",
     vip: "127.0.0.1",
-    listeners: [],
+    frontPorts: [53],
     backends: [],
     sleeping: false,
     ...over,

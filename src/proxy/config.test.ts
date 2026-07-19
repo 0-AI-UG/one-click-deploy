@@ -24,10 +24,7 @@ function validConfig(): ProxyConfig {
         appId: 5,
         name: "web",
         vip: "10.96.0.5",
-        listeners: [
-          { port: 80, protocol: "tcp" },
-          { port: 20005, protocol: "tcp" },
-        ],
+        frontPorts: [80, 20005],
         backends: ["10.0.0.3:10004"],
         sleeping: false,
       },
@@ -41,7 +38,15 @@ describe("loadConfig", () => {
     expect(cfg.version).toBe(1);
     expect(cfg.apps).toHaveLength(1);
     expect(cfg.apps[0].vip).toBe("10.96.0.5");
-    expect(cfg.apps[0].listeners[1]).toEqual({ port: 20005, protocol: "tcp" });
+    expect(cfg.apps[0].frontPorts).toEqual([80, 20005]);
+    expect(cfg.listenPort).toBeUndefined();
+  });
+
+  test("accepts a listenPort override, rejects out-of-range values", async () => {
+    const withPort = await loadConfig(writeConfig(JSON.stringify({ ...validConfig(), listenPort: 12345 })));
+    expect(withPort.listenPort).toBe(12345);
+    const badPort = writeConfig(JSON.stringify({ ...validConfig(), listenPort: 0 }));
+    expect(loadConfig(badPort)).rejects.toThrow(/listenPort/);
   });
 
   test("rejects an unknown version", async () => {
@@ -62,9 +67,13 @@ describe("loadConfig", () => {
     badBackend.apps[0].backends = ["no-port"];
     expect(loadConfig(writeConfig(JSON.stringify(badBackend)))).rejects.toThrow(/backend/);
 
-    const badProtocol = validConfig();
-    (badProtocol.apps[0].listeners[0] as Record<string, unknown>).protocol = "sctp";
-    expect(loadConfig(writeConfig(JSON.stringify(badProtocol)))).rejects.toThrow(/protocol/);
+    const emptyPorts = validConfig();
+    emptyPorts.apps[0].frontPorts = [];
+    expect(loadConfig(writeConfig(JSON.stringify(emptyPorts)))).rejects.toThrow(/frontPorts/);
+
+    const badPort = validConfig();
+    badPort.apps[0].frontPorts = [80, 70000];
+    expect(loadConfig(writeConfig(JSON.stringify(badPort)))).rejects.toThrow(/frontPorts/);
 
     const badSecret = validConfig();
     (badSecret as Record<string, unknown>).wakeSecret = null;
