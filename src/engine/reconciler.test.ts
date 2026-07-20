@@ -12,11 +12,22 @@ process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-reconciler-test-
 
 import { describe, test, expect, mock } from "bun:test";
 
+// mock.module factories must cover the COMPLETE export surface of the mocked
+// module: Bun module namespaces are sealed, so a later re-mock (or a later
+// test file importing an export this factory omits, e.g.
+// scale/network-reconciler.test.ts importing syncInternalHosts) cannot add
+// slots the first factory left out. Spread the real namespace and override
+// only what must be stubbed.
+import * as realRemote from "../shared/remote/index.ts";
+import * as realTraefikManager from "./scale/traefik-manager.ts";
+import * as realNetworkReconciler from "./scale/network-reconciler.ts";
+
 // Stub remote SSH calls so reconciler internals don't try to connect.
 // Named refs so individual tests can override behavior per call.
 const healthCheckMock = mock(async (): Promise<{ healthy: boolean; error?: string }> => ({ healthy: true }));
 const restartContainerMock = mock(async () => {});
 mock.module("../shared/remote/index.ts", () => ({
+  ...realRemote,
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
   healthCheck: healthCheckMock,
   restartContainer: restartContainerMock,
@@ -26,6 +37,7 @@ mock.module("../shared/remote/index.ts", () => ({
 
 // Stub ingress sync and network reconciler so they don't fire SSH.
 mock.module("./scale/traefik-manager.ts", () => ({
+  ...realTraefikManager,
   syncAppIngress: mock(async () => {}),
   syncAllTraefik: mock(async () => {}),
   reconcileTraefik: mock(async () => {}),
@@ -33,6 +45,7 @@ mock.module("./scale/traefik-manager.ts", () => ({
 }));
 
 mock.module("./scale/network-reconciler.ts", () => ({
+  ...realNetworkReconciler,
   reconcileNetwork: mock(async () => {}),
 }));
 

@@ -1649,6 +1649,17 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 80,
+    description:
+      "Rename apps.env_label -> apps.target and apps.sibling_of -> apps.target_of. The 'stage' axis (production/staging/dev) is now called a deploy 'target' throughout, freeing the word 'environment' to mean only the env-var bag (the environments table). Pure column rename: values and semantics are unchanged.",
+    up: (db) => {
+      // SQLite (>=3.25, bun:sqlite) supports RENAME COLUMN in place — no table
+      // rebuild, indexes/data preserved. Both columns were added in migration 77.
+      db.run("ALTER TABLE apps RENAME COLUMN env_label TO target");
+      db.run("ALTER TABLE apps RENAME COLUMN sibling_of TO target_of");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

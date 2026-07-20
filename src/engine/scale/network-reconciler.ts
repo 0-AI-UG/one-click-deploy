@@ -3,7 +3,7 @@ import { hetzner } from "../../shared/providers/index.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../scheduler.ts";
-import { isProxyReady } from "./proxy-manager.ts";
+import { wasProxyEverReady } from "./proxy-manager.ts";
 import { appHostsLine } from "./proxy-render.ts";
 
 function log(context: string, ...args: unknown[]) {
@@ -79,26 +79,20 @@ export async function reconcileNetwork(): Promise<void> {
  * Build /etc/hosts lines and push into /etc/hosts on every materialized
  * server:
  *
- *   - `<app>.ocd.internal`      → this server's own private_ipv4 (local Traefik)
+ *   - `<app>.ocd.internal`      → the app's fleet-wide virtual IP (ocd-proxy)
  *   - `<svc>.svc.ocd.internal`  → service host's private_ipv4 (direct)
  *
- * Each server runs its own Traefik with the per-app internal entrypoints,
- * so callers reach the local Traefik and it
- * reverse-proxies to the replica pool over the private network. App entries
- * point at the *server's own* private IP rather than 127.0.0.1 because
- * Docker containers inherit DNS from the host — a 127.0.0.1 entry would
- * loop back to the container itself instead of hitting the host's Traefik.
- * The server's private IP is reachable from both the host and its local
- * containers.
+ * App entries point at per-app VIPs, terminated on loopback by each server's
+ * local ocd-proxy. The gate is per-server and sticky (wasProxyEverReady): a
+ * server only gets app lines once a converge has proven its proxy live, and
+ * a later converge failure keeps the last-known-good VIP lines — the proxy
+ * almost certainly still runs with its previous config. There is NO
+ * private-IP fallback line anymore: the port-based Traefik internal ingress
+ * it pointed at was torn down, so such a line would route to a closed port
+ * (see appHostsLine).
  *
  * Service entries stay as private-IP pointers to the service host because
  * services are single-instance and don't need the local proxy indirection.
- *
- * VIP ingress: once a server's ocd-proxy is confirmed live (isProxyReady),
- * its app entries flip from the server's private IP to each app's fleet-wide
- * virtual IP — the local proxy terminates the whole VIP range on loopback.
- * The gate is per-server, so a server with a failed/missing proxy keeps the
- * safe local-Traefik lines until a converge proves the proxy up.
  *
  * Idempotent — the block is delimited by BEGIN/END markers so repeated
  * runs just overwrite the same region.
@@ -122,9 +116,10 @@ export async function syncInternalHosts(): Promise<void> {
   for (const server of servers) {
     const lines: string[] = [];
     if (server.private_ipv4) {
-      const ready = isProxyReady(server.ipv4);
+      const everReady = wasProxyEverReady(server.ipv4);
       for (const app of apps) {
-        lines.push(appHostsLine(app, server.private_ipv4, ready));
+        const line = appHostsLine(app, server.private_ipv4, everReady);
+        if (line) lines.push(line);
       }
     }
     lines.push(...serviceLines);

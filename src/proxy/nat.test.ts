@@ -67,6 +67,16 @@ describe("renderNatRuleset", () => {
     expect(out.indexOf("10.96.0.10")).toBeLessThan(out.indexOf("10.96.0.2"));
   });
 
+  test("render depends only on vip and frontPorts — backend/sleeping/name churn keeps the skip-compare stable", () => {
+    // main.ts skips `nft -f` when the render is string-identical; backend pool
+    // churn and sleeping flips must not defeat that skip.
+    const before = renderNatRuleset([app({ backends: [], sleeping: true, name: "web" })]);
+    const after = renderNatRuleset([
+      app({ backends: ["10.0.0.9:12345", "10.0.0.10:12345"], sleeping: false, name: "renamed" }),
+    ]);
+    expect(after).toBe(before);
+  });
+
   test("empty apps: still a valid table with empty chains (clears stale rules)", () => {
     expect(renderNatRuleset([])).toBe(
       [

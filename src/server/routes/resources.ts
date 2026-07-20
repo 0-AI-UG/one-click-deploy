@@ -596,6 +596,7 @@ export async function handleGetServerDetail(request: Request, serverId: number):
       type: server.type,
       location: server.location,
       status: server.status,
+      pool: server.pool,
       created_at: server.created_at,
       monthly_eur,
       currency,

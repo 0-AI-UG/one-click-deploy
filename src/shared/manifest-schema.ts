@@ -183,11 +183,11 @@ const healthCheckSchema = z.object(
 
 /**
  * One declared deploy target (e.g. "production", "staging", "dev"). Declaring
- * targets in-repo lets `ocd deploy --env=<target>` derive a sibling app
- * (`<name>-<target>`) wired to its own isolated env group. `isolated` defaults
+ * targets in-repo lets `ocd deploy --target=<name>` derive a sibling app
+ * (`<name>-<target>`) wired to its own isolated environment. `isolated` defaults
  * to true for non-production targets (own placement pool, no prod DB link).
  */
-const environmentTargetSchema = z.object(
+const deployTargetSchema = z.object(
   {
     branch: z.string({ error: "expected string" }).optional(),
     replicas: guardedNumber(
@@ -204,7 +204,7 @@ const environmentTargetSchema = z.object(
   { error: "expected object { branch?, replicas?, domain?, scale_to_zero_after?, isolated? }" },
 ).strict();
 
-export type DeployEnvironmentTarget = z.infer<typeof environmentTargetSchema>;
+export type DeployTarget = z.infer<typeof deployTargetSchema>;
 
 export const DeployManifestSchema = z
   .object({
@@ -266,8 +266,8 @@ export const DeployManifestSchema = z
     public_protocol: z.enum(["tcp", "udp"], { error: 'expected "tcp" | "udp"' }).optional(),
     /** Declared deploy targets (prod/staging/dev), keyed by target name. Each
      *  non-production target deploys as an isolated sibling `<name>-<target>`. */
-    environments: z
-      .record(z.string(), environmentTargetSchema, {
+    targets: z
+      .record(z.string(), deployTargetSchema, {
         error: "expected object map of target -> { branch?, replicas?, domain?, scale_to_zero_after?, isolated? }",
       })
       .optional(),

@@ -30,9 +30,10 @@ import {
   handleGetDeployments,
   handleRollbackApp,
   handlePromoteApp,
+  handleGetAppTargets,
   handleIntrospectRepo,
 } from "./routes/apps.ts";
-import { handleDeleteServer, handleRefreshServers } from "./routes/servers.ts";
+import { handleDeleteServer, handleRefreshServers, handleSetServerPool } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail } from "./routes/resources.ts";
 import { handleGetTopology } from "./routes/topology.ts";
@@ -126,6 +127,12 @@ function userIdFrom(req: Request): string {
 function serverIdFrom(req: Request): number {
   const url = new URL(req.url);
   return parseInt(url.pathname.split("/").pop()!, 10);
+}
+
+function serverPathIdFrom(req: Request): number {
+  const url = new URL(req.url);
+  const match = url.pathname.match(/\/api\/servers\/(\d+)/);
+  return match ? parseInt(match[1], 10) : 0;
 }
 
 function resourcePartsFrom(req: Request): { type: string; id: string } {
@@ -238,6 +245,7 @@ export const apiRoutes = {
   "/api/servers": { GET: (req: Request) => handleGetServers(req) },
   "/api/servers/refresh": { POST: (req: Request) => handleRefreshServers(req) },
   "/api/servers/:id": { DELETE: (req: Request) => handleDeleteServer(req, serverIdFrom(req)) },
+  "/api/servers/:id/pool": { PATCH: (req: Request) => handleSetServerPool(req, serverPathIdFrom(req)) },
 
   // --- Apps ---
   "/api/apps": { GET: (req: Request) => handleGetApps(req) },
@@ -262,6 +270,7 @@ export const apiRoutes = {
   "/api/apps/:appId/deploy-log": { GET: (req: Request) => handleGetDeployLog(req, appIdFrom(req)) },
   "/api/apps/:appId/deployments": { GET: (req: Request) => handleGetDeployments(req, appIdFrom(req)) },
   "/api/apps/:appId/rollback": { POST: (req: Request) => handleRollbackApp(req, appIdFrom(req)) },
+  "/api/apps/:appId/targets": { GET: (req: Request) => handleGetAppTargets(req, appIdFrom(req)) },
 
   // Scaling
   "/api/apps/:appId/scale": { POST: (req: Request) => handleScaleApp(req, appIdFrom(req)) },

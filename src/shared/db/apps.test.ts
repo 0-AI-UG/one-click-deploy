@@ -267,3 +267,59 @@ describe("parseExtraVolumes", () => {
       .toEqual(["/a:/a", "/b:/b"]);
   });
 });
+
+describe("deploy targets: setAppTarget / getAppTargets", () => {
+  test("insertApp stores target/target_of; defaults are ''/null", () => {
+    const parent = makeApp();
+    expect(parent.target).toBe("");
+    expect(parent.target_of).toBeNull();
+
+    const name = `t-${randomSuffix()}`;
+    const child = db.insertApp({
+      name,
+      domain: "",
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      target: "staging",
+      target_of: parent.id,
+    });
+    expect(child.target).toBe("staging");
+    expect(child.target_of).toBe(parent.id);
+  });
+
+  test("setAppTarget round-trips through getAppTargets and clears with null", () => {
+    const parent = makeApp();
+    const child = makeApp();
+    expect(db.getAppTargets(parent.id)).toEqual([]);
+
+    db.setAppTarget(child.id, parent.id, "staging");
+    const targets = db.getAppTargets(parent.id);
+    expect(targets.map((t) => t.id)).toEqual([child.id]);
+    expect(targets[0].target).toBe("staging");
+    expect(targets[0].target_of).toBe(parent.id);
+    // The row itself reflects the write.
+    const row = db.getApp(child.id)!;
+    expect(row.target).toBe("staging");
+    expect(row.target_of).toBe(parent.id);
+
+    // Clearing detaches the child.
+    db.setAppTarget(child.id, null, "");
+    expect(db.getAppTargets(parent.id)).toEqual([]);
+    expect(db.getApp(child.id)!.target).toBe("");
+    expect(db.getApp(child.id)!.target_of).toBeNull();
+  });
+
+  test("getAppTargets only returns children of the requested parent", () => {
+    const parentA = makeApp();
+    const parentB = makeApp();
+    const childA = makeApp();
+    const childB = makeApp();
+    db.setAppTarget(childA.id, parentA.id, "staging");
+    db.setAppTarget(childB.id, parentB.id, "dev");
+
+    expect(db.getAppTargets(parentA.id).map((t) => t.id)).toEqual([childA.id]);
+    expect(db.getAppTargets(parentB.id).map((t) => t.id)).toEqual([childB.id]);
+  });
+});

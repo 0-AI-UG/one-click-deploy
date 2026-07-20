@@ -173,4 +173,130 @@ describe("tcp proxy", () => {
       handle.stop();
     }
   });
+
+  test("retries past several refused backends to reach the live one", async () => {
+    // Deterministic regardless of the random pick order: two dead, one live.
+    const echo = echoServer();
+    const dead1 = freePort();
+    const dead2 = freePort();
+    const handle = openTcpListener(
+      app({ backends: [`127.0.0.1:${dead1}`, `127.0.0.1:${dead2}`, `127.0.0.1:${echo.port}`] }),
+      { port: 0, protocol: "tcp" },
+      noWake,
+    );
+    try {
+      expect(await roundtrip(handle.port, "past the dead")).toBe("past the dead");
+    } finally {
+      handle.stop();
+      echo.stop();
+    }
+  }, 10_000);
+
+  test("empty backends triggers the wake path even when sleeping is false", async () => {
+    // Wake is keyed on an empty pool, not on the sleeping flag: a wake-capable
+    // app with no backends always goes through the wake path.
+    const echo = echoServer();
+    let wakes = 0;
+    const wake: WakeFn = async () => {
+      wakes++;
+      return [`127.0.0.1:${echo.port}`];
+    };
+    const handle = openTcpListener(app({ backends: [], sleeping: false }), { port: 0, protocol: "tcp" }, wake);
+    try {
+      expect(await roundtrip(handle.port, "empty pool")).toBe("empty pool");
+      expect(wakes).toBe(1);
+    } finally {
+      handle.stop();
+      echo.stop();
+    }
+  }, 10_000);
+});
+
+/** Like roundtrip, but resolves with everything received on close OR error —
+ *  contract tests expect the proxy to destroy the connection, which can
+ *  surface client-side as ECONNRESET rather than a clean FIN. */
+function probeUntilClose(port: number, payload: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let received = "";
+    let done = false;
+    const finish = () => {
+      if (!done) {
+        done = true;
+        resolve(received);
+      }
+    };
+    Bun.connect({
+      hostname: "127.0.0.1",
+      port,
+      socket: {
+        open(socket) {
+          socket.write(payload);
+        },
+        data(socket, chunk) {
+          received += chunk.toString();
+          socket.end();
+          finish();
+        },
+        close: finish,
+        error: finish,
+        connectError(_socket, err) {
+          if (!done) {
+            done = true;
+            reject(err);
+          }
+        },
+      },
+    }).catch((err) => {
+      if (!done) {
+        done = true;
+        reject(err);
+      }
+    });
+  });
+}
+
+describe("contract: authProtected connections are refused at the TCP layer (P1b)", () => {
+  // REGRESSION: currently failing by design
+  test("destroys an accepted connection for an authProtected app without dialing the backend", async () => {
+    const echo = echoServer();
+    // Contract seam: ProxyApp gains `authProtected?: boolean`.
+    const protectedApp = { ...app({ backends: [`127.0.0.1:${echo.port}`] }), authProtected: true } as ProxyApp;
+    const handle = openTcpListener(protectedApp, { port: 0, protocol: "tcp" }, noWake);
+    try {
+      const got = await probeUntilClose(handle.port, "must not pass");
+      expect(got).toBe(""); // no echo — the proxy destroyed us before proxying
+      expect(Buffer.concat(echo.received).length).toBe(0); // and never dialed the backend
+    } finally {
+      handle.stop();
+      echo.stop();
+    }
+  }, 10_000);
+});
+
+describe("contract: wake fallback when all backends refuse (P3b)", () => {
+  // REGRESSION: currently failing by design
+  test("all-refused dial falls back to the wake path and connects to the refreshed pool", async () => {
+    const echo = echoServer();
+    const dead = freePort();
+    let wakes = 0;
+    const wake: WakeFn = async () => {
+      wakes++;
+      return [`127.0.0.1:${echo.port}`];
+    };
+    // Backends configured but stale (all refuse): instead of tearing down, the
+    // proxy must buffer + wake and then use the refreshed pool.
+    const handle = openTcpListener(
+      app({ backends: [`127.0.0.1:${dead}`], sleeping: false }),
+      { port: 0, protocol: "tcp" },
+      wake,
+    );
+    try {
+      expect(await roundtrip(handle.port, "revive me")).toBe("revive me");
+      expect(wakes).toBe(1);
+      expect(Buffer.concat(echo.received).toString()).toBe("revive me");
+    } finally {
+      handle.stop();
+      echo.stop();
+    }
+  }, 10_000);
 });

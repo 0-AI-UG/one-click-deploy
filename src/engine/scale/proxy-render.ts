@@ -56,6 +56,11 @@ export function renderProxyConfig(state: DesiredState): ProxyConfig {
       frontPorts: frontPorts(app),
       backends: app.upstreams,
       sleeping: app.asleep,
+      // Password-protected apps: an L4 proxy cannot check HTTP basic-auth
+      // credentials, so the proxy fail-closes these connections (destroys
+      // them on accept) — otherwise the VIP would be an unauthenticated
+      // bypass of the basicAuth Traefik enforces on the public router.
+      ...(app.authHash ? { authProtected: true } : {}),
     }))
     // collectDesiredState already sorts by name; re-sort so hand-built
     // snapshots (tests, callers) render deterministically too.
@@ -82,17 +87,27 @@ export function renderProxyConfigJson(state: DesiredState): string {
 }
 
 /**
- * One app's `/etc/hosts` line on one server (consumed by syncInternalHosts).
- * The app resolves to its VIP only when it has one AND the server's ocd-proxy
- * has been confirmed live (`proxyReady`, see isProxyReady) — otherwise it
- * keeps the safe local-Traefik private-IP line, so DNS never points at a VIP
- * no proxy is terminating.
+ * One app's `/etc/hosts` line on one server (consumed by syncInternalHosts),
+ * or null to emit nothing for this app. The app resolves to its VIP once the
+ * server's ocd-proxy has been confirmed live at least once
+ * (`wasProxyEverReady`) — a later converge failure keeps these last-known-good
+ * lines, since the proxy almost certainly still runs with its previous
+ * config. A never-proven proxy, or an app without a VIP, emits NOTHING: the
+ * legacy `<server-private-ip>` fallback pointed at the server's Traefik
+ * internal entrypoints, which the port-based ingress teardown removed — such
+ * a line would route internal calls to a closed port.
+ *
+ * Auth-protected apps get no hosts line at all: the L4 proxy cannot verify
+ * basic-auth credentials (it fail-closes those VIPs), so internal callers
+ * must resolve the app's public DNS and go through Traefik, which enforces
+ * the basicAuth middleware.
  */
 export function appHostsLine(
-  app: { name: string; virtual_ip: string },
-  serverPrivateIpv4: string,
-  proxyReady: boolean,
-): string {
-  const ip = proxyReady && app.virtual_ip ? app.virtual_ip : serverPrivateIpv4;
-  return `${ip} ${app.name}.ocd.internal`;
+  app: { name: string; virtual_ip: string; auth_password_hash?: string | null },
+  _serverPrivateIpv4: string,
+  proxyEverReady: boolean,
+): string | null {
+  if (app.auth_password_hash) return null;
+  if (!proxyEverReady || !app.virtual_ip) return null;
+  return `${app.virtual_ip} ${app.name}.ocd.internal`;
 }

@@ -78,8 +78,8 @@ export type AppRow = {
   max_per_host: number; // hard cap of this app's replicas per host; 0 = unlimited (soft affinity)
   min_locations: number; // minimum distinct provider locations replicas must span; 1 = no spread requirement
   placement_pool: string; // which servers.pool this app's replicas may be placed on; 'general' = default pool
-  env_label: string; // cosmetic env tag: '' | 'production' | 'staging' | 'dev'
-  sibling_of: number | null; // app id this is a staging/dev sibling of; NULL = standalone
+  target: string; // deploy target tag: '' | 'production' | 'staging' | 'dev'
+  target_of: number | null; // app id this is a staging/dev target of; NULL = standalone
 };
 
 /** Internal ingress port block: every app owns one port in
@@ -273,8 +273,8 @@ type InsertAppFields = {
   max_per_host?: number;
   min_locations?: number;
   placement_pool?: string;
-  env_label?: string;
-  sibling_of?: number | null;
+  target?: string;
+  target_of?: number | null;
 } & AppIngressSettings;
 
 /** Resolve a deploy request's public exposure to a concrete port. Runs
@@ -305,7 +305,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, public, health_check, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, env_label, sibling_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, public, health_check, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -334,8 +334,8 @@ function insertAppRow(app: InsertAppFields): AppRow {
       app.max_per_host ?? 0,
       app.min_locations ?? 1,
       app.placement_pool ?? "general",
-      app.env_label ?? "",
-      app.sibling_of ?? null,
+      app.target ?? "",
+      app.target_of ?? null,
     ) as AppRow;
 }
 
@@ -648,16 +648,16 @@ export function updateAppPlacementPool(id: number, pool: string): void {
   db.query("UPDATE apps SET placement_pool = ? WHERE id = ?").run(pool, id);
 }
 
-/** Mark an app as a staging/dev sibling of another app (or clear it with
- *  siblingOf = null) and set its cosmetic env label in the same write. */
-export function setAppSibling(id: number, siblingOf: number | null, envLabel: string): void {
-  db.query("UPDATE apps SET sibling_of = ?, env_label = ? WHERE id = ?").run(siblingOf, envLabel, id);
+/** Mark an app as a staging/dev target of another app (or clear it with
+ *  targetOf = null) and set its deploy-target tag in the same write. */
+export function setAppTarget(id: number, targetOf: number | null, target: string): void {
+  db.query("UPDATE apps SET target_of = ?, target = ? WHERE id = ?").run(targetOf, target, id);
 }
 
-/** The staging/dev children of a prod app — apps whose sibling_of points at it. */
-export function getAppSiblings(appId: number): AppRow[] {
+/** The staging/dev children of a prod app — apps whose target_of points at it. */
+export function getAppTargets(appId: number): AppRow[] {
   return db
-    .query("SELECT * FROM apps WHERE sibling_of = ? ORDER BY created_at DESC")
+    .query("SELECT * FROM apps WHERE target_of = ? ORDER BY created_at DESC")
     .all(appId) as AppRow[];
 }
 

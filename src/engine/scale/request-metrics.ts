@@ -85,6 +85,36 @@ export function ingestServerRequestMetrics(
   }
 }
 
+/**
+ * Merge one server's ocd-proxy /status activity report (appId-string → epoch
+ * ms of the last accepted front connection) into apps.last_request_at.
+ * VIP-proxied internal traffic never crosses Traefik, so without this merge
+ * the idle monitor would sleep callee apps that are busy serving app-to-app
+ * calls. `payload` is null when the status fetch failed — a silent no-op
+ * (fail safe, like a failed Traefik scrape). Unknown app ids are ignored, and
+ * last_request_at only ever advances, never regresses. The per-server fetch
+ * lives in proxy-manager's converge pass (piggybacked on the probe's sshExec
+ * round trip, so it is injectable through the same seam).
+ */
+export function ingestProxyActivity(
+  serverId: number,
+  payload: { lastActivity: Record<string, number> } | null,
+  now: number = Date.now(),
+): void {
+  if (!payload?.lastActivity) return;
+  for (const [idStr, reportedMs] of Object.entries(payload.lastActivity)) {
+    const appId = Number(idStr);
+    if (!Number.isInteger(appId) || !Number.isFinite(reportedMs)) continue;
+    const app = db.getApp(appId);
+    if (!app) continue;
+    // Clamp to `now` — a proxy clock running ahead must not stamp activity
+    // into the future and pin the app awake past its real idle window.
+    const atMs = Math.min(reportedMs, now);
+    const storedMs = app.last_request_at ? Date.parse(app.last_request_at) : 0;
+    if (atMs > storedMs) db.touchAppLastRequest(appId, atMs);
+  }
+}
+
 function recordDelta(appId: number, delta: number, now: number): void {
   const samples = recentDeltas.get(appId) ?? [];
   samples.push({ at: now, n: delta });

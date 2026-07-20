@@ -1,6 +1,6 @@
 ---
 name: ocd-deploy
-description: Deploy and operate apps on One-Click Deploy (OCD), a self-hosted Hetzner PaaS (like Heroku/Railway/Render). Use when authoring an `.ocd-deploy.json` app manifest or an `ocd-stack.json` multi-app stack, or when running the `ocd` CLI to deploy, redeploy, roll back, scale, view logs, manage environments/managed services (Postgres, Redis, MySQL, ...), or wire several apps and databases together. Trigger on: "deploy this to OCD", ".ocd-deploy.json", "ocd-stack.json", "ocd deploy", "ocd stack", "one-click deploy", "deploy to my panel/Hetzner PaaS".
+description: Deploy and operate apps on One-Click Deploy (OCD), a self-hosted Hetzner PaaS (like Heroku/Railway/Render). Use when authoring an `.ocd-deploy.json` app manifest or an `ocd-stack.json` multi-app stack, or when running the `ocd` CLI to deploy, redeploy, roll back, scale, view logs, deploy to staging/production targets, promote staging to production, manage environments/managed services (Postgres, Redis, MySQL, ...), or wire several apps and databases together. Trigger on: "deploy this to OCD", ".ocd-deploy.json", "ocd-stack.json", "ocd deploy", "ocd deploy --target", "ocd promote", "ocd stack", "one-click deploy", "deploy to my panel/Hetzner PaaS".
 ---
 
 # One-Click Deploy (OCD)
@@ -147,6 +147,58 @@ ocd envs set <env> KEY=VALUE   # set a var (redeploys linked apps)
 values with repeatable `--set=KEY=VALUE`; link an existing environment with
 `--env=<name|id>`. `ocd stack up` does the same across the whole stack, merging
 every app's `env[]` into the one shared environment.
+
+### Deploy targets (staging / production)
+
+A **target** is a deploy stage (production / staging / dev) — distinct from an
+**environment** (a named env-var bag managed by `ocd envs` and linked with
+`--env`). Declare targets in the manifest's `targets` block:
+
+```json
+{
+  "$schema": 1,
+  "name": "My App",
+  "build": { "container_port": 3000 },
+  "targets": {
+    "production": { "branch": "main" },
+    "staging": {
+      "branch": "develop",
+      "replicas": 1,
+      "domain": "staging.example.com",
+      "scale_to_zero_after": 300,
+      "isolated": true
+    }
+  }
+}
+```
+
+All per-target fields are optional: `branch`, `replicas`, `domain`,
+`scale_to_zero_after`, `isolated` (defaults to `true` for every non-production
+target). Deploy a declared target with `--target`:
+
+```bash
+ocd deploy                     # = --target=production when declared → bare app <name>, "general" pool
+ocd deploy --target=staging    # separate sibling app <name>-staging, "staging" pool
+ocd promote staging --yes      # rebuild production at the exact commit staging runs
+```
+
+- `--target=production` (or no `--target`, when the manifest declares a
+  `production` target) deploys the bare app `<name>`. Without a `targets` block,
+  plain `ocd deploy` applies no target semantics at all.
+- `--target=staging` deploys a **separate sibling app** `<name>-staging` with its
+  **own isolated environment** (seeded by copying production's env vars but **not**
+  its service links) and its own "staging" server pool. Because service links are
+  not copied, staging never touches the production database — link a DB to the
+  staging environment explicitly if it needs one.
+- `--target` and `--env` are **mutually exclusive**: a target manages its own
+  environment, whereas `--env` links an existing bag. An unknown target name
+  errors and lists the declared targets.
+- `ocd promote <target>` promotes the exact git commit currently running in the
+  staging sibling up to production, rebuilding the production app pinned to that
+  commit (reusing the rollback machinery). `ocd promote staging` derives
+  source=`<name>-staging`, dest=`<name>` from the manifest; or be explicit with
+  `ocd promote --from=<app> --to=<app>`. Pass `--yes` to skip confirmation
+  (required in non-interactive contexts).
 
 ## Common recipes
 

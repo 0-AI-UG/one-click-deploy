@@ -488,6 +488,40 @@ export async function handlePromoteApp(request: Request): Promise<Response> {
   }
 }
 
+/**
+ * GET /api/apps/:id/targets — list the staging/dev sibling apps of a prod app
+ * (rows whose `target_of` points at this app), plus a `self` descriptor for the
+ * requested app. Used by the UI to surface an app's deploy targets.
+ */
+export async function handleGetAppTargets(request: Request, appId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "servers.view");
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+
+    const targets = db.getAppTargets(appId).map((t) => ({
+      id: t.id,
+      name: t.name,
+      target: t.target,
+      status: t.status,
+      domain: t.domain,
+    }));
+
+    // Resolve the production parent from target_of (null when standalone or
+    // when the parent row is gone) so target siblings know their promote
+    // destination without name-suffix guessing.
+    const parentRow = app.target_of ? db.getApp(app.target_of) : null;
+    const parent = parentRow ? { id: parentRow.id, name: parentRow.name } : null;
+
+    return Response.json(
+      { self: { id: app.id, name: app.name, target: app.target, parent }, targets },
+      { headers: corsHeaders },
+    );
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleRollbackApp(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.rollback");

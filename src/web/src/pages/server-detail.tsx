@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { get } from "../api/client.ts";
-import { Card, Btn, Spinner, EmptyState, Table, StatusBadge } from "../components/ui.tsx";
-import { Server, ArrowLeft, RefreshCw, Terminal, Database, FileWarning, Network } from "lucide-react";
+import { get, patch } from "../api/client.ts";
+import { Card, Btn, Spinner, EmptyState, Table, StatusBadge, showToast } from "../components/ui.tsx";
+import { Server, ArrowLeft, RefreshCw, Terminal, Database, FileWarning, Network, Layers } from "lucide-react";
 import { PermissionGate } from "../components/permission-gate.tsx";
+import { NeoSelect } from "../components/neo-select.tsx";
 import { Sparkline, CpuUsage, MemUsage } from "./app-detail/shared.tsx";
 import type { ServerMetricSample } from "../types.ts";
 
@@ -80,6 +81,9 @@ type ServerDetail = {
   type: string;
   location: string;
   status: string;
+  // Capacity pool governing FUTURE replica placement. May be absent from the
+  // detail response until the backend includes it — treated as "general".
+  pool?: "general" | "staging" | string;
   created_at: string;
   monthly_eur: number | null;
   currency: string;
@@ -137,15 +141,17 @@ function portDot(port: number, address: string): string {
   return "bg-accent-amber";
 }
 
-// Traefik reserves several large fixed port blocks as static entrypoints and
-// binds them for the fleet's lifetime, whether or not a slot is in use — so a
-// raw socket scan sees dozens/hundreds of near-identical listeners. We collapse
-// each block into a single summary chip instead of flooding the view. Ranges
-// mirror the constants in src/shared/db/apps.ts (INTERNAL_PORT_*, PUBLIC_*).
+// Fleet infrastructure ports show up as many near-identical listeners in a raw
+// socket scan; collapse each known block into a single summary chip instead of
+// flooding the view. Internal ingress is per-app VIPs: every app VIP shares the
+// proxy's single :18790 listener (PROXY_LISTEN_PORT in src/proxy/config.ts) and
+// wake calls hit the waker's :8896 (WAKER_HTTP_PORT in
+// src/engine/scale/traefik-constants.ts). The public pool range mirrors
+// src/shared/db/apps.ts (PUBLIC_*).
 // tone "blue" = private-net only, "amber" = publicly exposed via the firewall.
 const PORT_GROUPS = [
-  { key: "traefik ingress", lo: 20000, hi: 20199, tone: "blue", note: "internal per-app ingress, one entrypoint per app slot" },
-  { key: "waker", lo: 21000, hi: 21399, tone: "blue", note: "scale-to-zero waker mirror ports" },
+  { key: "proxy vip", lo: 18790, hi: 18790, tone: "blue", note: "per-app VIP ingress — all app VIPs share this L4 proxy listener" },
+  { key: "waker", lo: 8896, hi: 8896, tone: "blue", note: "scale-to-zero wake endpoint" },
   { key: "public tcp/udp", lo: 30000, hi: 30099, tone: "amber", note: "public raw TCP/UDP app pool" },
 ] as const;
 
@@ -159,6 +165,8 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [history, setHistory] = useState<ServerMetricSample[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pool, setPool] = useState<string>("general");
+  const [poolSaving, setPoolSaving] = useState(false);
 
   const load = async () => {
     try {
@@ -167,11 +175,29 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
         get("/api/resources/metrics/history?since=3600"),
       ]);
       setDetail(d);
+      setPool(d.pool ?? "general");
       setHistory(h);
     } catch (err: any) {
       setDetailErr(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const changePool = async (next: string) => {
+    const prev = pool;
+    if (next === prev) return;
+    setPool(next);
+    setPoolSaving(true);
+    try {
+      await patch(`/api/servers/${serverId}/pool`, { pool: next });
+      setDetail((d) => (d ? { ...d, pool: next } : d));
+      showToast(`Server moved to the "${next}" pool`, "success");
+    } catch (err: any) {
+      setPool(prev);
+      showToast(err?.message || "Failed to change pool", "error");
+    } finally {
+      setPoolSaving(false);
     }
   };
 
@@ -230,6 +256,39 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
           <Info label="Uptime" value={fmtUptime(detail.host.uptime_seconds)} />
           <Info label="Processes" value={detail.host.processes != null ? String(detail.host.processes) : "—"} />
           <Info label="Created" value={new Date(detail.created_at).toLocaleDateString()} />
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Layers size={14} className="text-fg" />
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Pool</h3>
+          <span className="font-mono text-[9px] uppercase tracking-wider text-fg-dim">· {pool}</span>
+        </div>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <PermissionGate
+            permission="servers.delete"
+            fallback={
+              <span className="font-mono text-[11px] font-bold text-fg border-2 border-fg/40 bg-alt px-3 py-1.5">
+                {pool}
+              </span>
+            }
+          >
+            <div className="w-40">
+              <NeoSelect
+                value={pool}
+                disabled={poolSaving}
+                onChange={changePool}
+                options={[
+                  { value: "general", label: "general" },
+                  { value: "staging", label: "staging" },
+                ]}
+              />
+            </div>
+          </PermissionGate>
+          <p className="font-mono text-[9px] text-muted leading-relaxed">
+            New replicas schedule onto servers in this pool. 'staging' isolates staging-target apps from production.
+          </p>
         </div>
       </Card>
 

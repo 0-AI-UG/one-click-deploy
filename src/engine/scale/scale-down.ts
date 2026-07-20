@@ -3,6 +3,7 @@ import {
   sshExec,
   stopContainer,
 } from "../../shared/remote/index.ts";
+import { pushProxyForApp } from "./proxy-manager.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { type ProgressFn, log, type App, type Replica } from "./types.ts";
 
@@ -103,6 +104,11 @@ export async function scaleDown(
     } catch (err) {
       log("scale", `Ingress sync after sleep failed: ${err}`);
     }
+    // Push the re-rendered fleet-proxy config to the app's servers NOW (not
+    // at the next 30s reconciler tick): the proxy must mark the VIP sleeping
+    // — wake-on-connect — instead of routing to the stopped anchor.
+    // Best-effort; pushProxyForApp never throws.
+    await pushProxyForApp(app.id);
     emit("scale", "App scaled to zero — sleeping");
   } else {
     // Re-render ingress so the upstream pool matches what's left after the

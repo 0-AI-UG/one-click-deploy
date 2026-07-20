@@ -57,4 +57,5 @@ export function api(method: string, path: string, body?: unknown): Promise<any> 
 export const get = (path: string) => api("GET", path);
 export const post = (path: string, body?: unknown) => api("POST", path, body);
 export const put = (path: string, body?: unknown) => api("PUT", path, body);
+export const patch = (path: string, body?: unknown) => api("PATCH", path, body);
 export const del = (path: string) => api("DELETE", path);

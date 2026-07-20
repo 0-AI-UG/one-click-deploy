@@ -4,6 +4,7 @@ import {
   probeAppHealth, startAppReplica,
   startContainer, containerExists,
 } from "../../shared/remote/index.ts";
+import { pushProxyForApp } from "./proxy-manager.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 
@@ -105,6 +106,10 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     } catch (err) {
       log("wake", `syncAppIngress after wake failed: ${err}`);
     }
+    // Same immediacy for the fleet ocd-proxy: internal VIP traffic must reach
+    // the woken replica now, not after the next 30s reconciler tick.
+    // Best-effort; pushProxyForApp never throws.
+    await pushProxyForApp(appId);
 
     log("wake", `App ${appId} woken successfully`);
     return { ok: true };

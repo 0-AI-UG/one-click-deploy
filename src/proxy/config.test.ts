@@ -104,4 +104,62 @@ describe("watchConfig", () => {
       stop();
     }
   });
+
+  test("rewriting identical content (touch) does not fire onChange", async () => {
+    const content = JSON.stringify(validConfig());
+    const path = writeConfig(content);
+    const seen: ProxyConfig[] = [];
+    const stop = watchConfig(path, (cfg) => seen.push(cfg), 50);
+    try {
+      await Bun.sleep(150); // baseline seeded
+      writeFileSync(path, content); // mtime changes, content identical
+      await Bun.sleep(200);
+      expect(seen).toHaveLength(0);
+    } finally {
+      stop();
+    }
+  });
+});
+
+describe("contract: authProtected app flag (P1b)", () => {
+  // REGRESSION: currently failing by design
+  test("loadConfig preserves authProtected on the app entry", async () => {
+    const cfg = validConfig();
+    (cfg.apps[0] as Record<string, unknown>).authProtected = true;
+    const parsed = await loadConfig(writeConfig(JSON.stringify(cfg)));
+    expect((parsed.apps[0] as { authProtected?: boolean }).authProtected).toBe(true);
+  });
+});
+
+describe("contract: watch baseline seeded from the initially loaded text (P6)", () => {
+  // REGRESSION: currently failing by design
+  test("a config write landing between initial load and the first poll fires onChange", async () => {
+    const initialText = JSON.stringify(validConfig());
+    const path = writeConfig(initialText);
+    await loadConfig(path); // startup load — the watch baseline must be THIS text
+    // The write lands after the initial load but before the watch starts —
+    // exactly the window where a baseline seeded by re-reading the file
+    // absorbs the change and silently never fires onChange.
+    const next = validConfig();
+    next.apps[0].sleeping = true;
+    writeFileSync(path, JSON.stringify(next));
+    const seen: ProxyConfig[] = [];
+    // Contract seam: optional 4th arg `initialText` seeds the change-detection
+    // baseline synchronously from the text loadConfig read, instead of
+    // re-reading the file (which can absorb a racing write into the baseline).
+    const watch = watchConfig as unknown as (
+      path: string,
+      onChange: (cfg: ProxyConfig) => void,
+      intervalMs?: number,
+      initialText?: string,
+    ) => () => void;
+    const stop = watch(path, (cfg) => seen.push(cfg), 50, initialText);
+    try {
+      await Bun.sleep(400);
+      expect(seen.length).toBeGreaterThanOrEqual(1);
+      expect(seen[0].apps[0].sleeping).toBe(true);
+    } finally {
+      stop();
+    }
+  });
 });

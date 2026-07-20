@@ -22,6 +22,8 @@ export type ProxyApp = {
   frontPorts: number[];
   backends: string[];
   sleeping: boolean;
+  /** App requires credentials the L4 proxy cannot check — fail closed (destroy accepted connections). */
+  authProtected?: boolean;
 };
 
 export type ProxyConfig = {
@@ -50,7 +52,7 @@ function validatePort(v: unknown, where: string): number {
 function validateApp(raw: unknown, index: number): ProxyApp {
   const where = `apps[${index}]`;
   if (!isRecord(raw)) fail(`${where}: must be an object`);
-  const { appId, name, vip, frontPorts, backends, sleeping } = raw;
+  const { appId, name, vip, frontPorts, backends, sleeping, authProtected } = raw;
   if (typeof appId !== "number" || !Number.isInteger(appId)) fail(`${where}: appId must be an integer`);
   if (typeof name !== "string" || name.length === 0) fail(`${where}: name must be a non-empty string`);
   if (typeof vip !== "string" || vip.length === 0) fail(`${where}: vip must be a non-empty string`);
@@ -60,6 +62,8 @@ function validateApp(raw: unknown, index: number): ProxyApp {
     if (typeof b !== "string" || !/^.+:\d+$/.test(b)) fail(`${where}: backend ${JSON.stringify(b)} must be "host:port"`);
   }
   if (typeof sleeping !== "boolean") fail(`${where}: sleeping must be a boolean`);
+  if (authProtected !== undefined && typeof authProtected !== "boolean")
+    fail(`${where}: authProtected must be a boolean`);
   return {
     appId,
     name,
@@ -67,6 +71,7 @@ function validateApp(raw: unknown, index: number): ProxyApp {
     frontPorts: frontPorts.map((p, i) => validatePort(p, `${where}.frontPorts[${i}]`)),
     backends: backends as string[],
     sleeping,
+    ...(authProtected !== undefined ? { authProtected } : {}),
   };
 }
 
@@ -103,22 +108,30 @@ const WATCH_INTERVAL_MS = 2000;
  * the file content actually changed (compared by hash). Transient read/parse
  * errors are logged and the previous config stays in effect. Returns a stop
  * function.
+ *
+ * Pass `initialText` (the text the startup load already read) to seed the
+ * change-detection baseline synchronously — an async re-read can absorb a
+ * write that lands between the startup load and the first poll, silently
+ * losing that change.
  */
 export function watchConfig(
   path: string,
   onChange: (config: ProxyConfig) => void,
   intervalMs: number = WATCH_INTERVAL_MS,
+  initialText?: string,
 ): () => void {
-  let lastHash: bigint | null = null;
+  let lastHash: bigint | null = initialText !== undefined ? (Bun.hash(initialText) as bigint) : null;
 
-  // Seed the baseline so the config just loaded at startup doesn't fire a
-  // spurious "reload" on the first poll.
-  void Bun.file(path)
-    .text()
-    .then((text) => {
-      if (lastHash === null) lastHash = Bun.hash(text) as bigint;
-    })
-    .catch(() => {});
+  // No initial text: seed the baseline by re-reading, so the config loaded at
+  // startup doesn't fire a spurious "reload" on the first poll.
+  if (initialText === undefined) {
+    void Bun.file(path)
+      .text()
+      .then((text) => {
+        if (lastHash === null) lastHash = Bun.hash(text) as bigint;
+      })
+      .catch(() => {});
+  }
 
   const timer = setInterval(async () => {
     let text: string;

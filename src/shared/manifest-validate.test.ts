@@ -89,13 +89,13 @@ describe("validateDeployManifest", () => {
     warn.mockRestore();
   });
 
-  test("environments block + durability_class validates", () => {
+  test("targets block + durability_class validates", () => {
     expect(() =>
       validateDeployManifest(
         {
           name: "web",
           durability_class: "high",
-          environments: {
+          targets: {
             production: { branch: "main" },
             staging: { branch: "develop", replicas: 1, isolated: true, scale_to_zero_after: 300 },
           },
@@ -115,17 +115,79 @@ describe("validateDeployManifest", () => {
     expect(msg).toContain("durability_class");
   });
 
-  test("wrong-typed replicas in an environment target fails", () => {
+  test("wrong-typed replicas in a deploy target fails", () => {
     expect(() =>
       validateDeployManifest(
-        { name: "web", environments: { staging: { replicas: "two" } } },
+        { name: "web", targets: { staging: { replicas: "two" } } },
         "a/.ocd-deploy.json",
       ),
     ).toThrow(/replicas/);
   });
 
-  test("neither environments nor durability_class still validates (backward compat)", () => {
+  test("neither targets nor durability_class still validates (backward compat)", () => {
     expect(() => validateDeployManifest({ name: "web" }, "a/.ocd-deploy.json")).not.toThrow();
+  });
+
+  test("a full targets block parses (isolated, overrides, multiple targets)", () => {
+    expect(() =>
+      validateDeployManifest(
+        {
+          name: "web",
+          webhook: { enabled: true, branch: "main" },
+          targets: {
+            production: { branch: "main", replicas: 2, domain: "www.example.com" },
+            staging: { branch: "develop", isolated: true, scale_to_zero_after: 600 },
+            dev: { isolated: false },
+          },
+        },
+        "a/.ocd-deploy.json",
+      ),
+    ).not.toThrow();
+  });
+
+  test("unknown key inside a target is non-fatal (warns, still passes)", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    expect(() =>
+      validateDeployManifest(
+        { name: "web", targets: { staging: { future_knob: 1 } } },
+        "a/.ocd-deploy.json",
+      ),
+    ).not.toThrow();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  test("legacy top-level `environments` key warns but does not throw", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    expect(() =>
+      validateDeployManifest(
+        { name: "web", environments: { staging: { branch: "develop" } } },
+        "a/.ocd-deploy.json",
+      ),
+    ).not.toThrow();
+    // Some warning naming the stray key is emitted (exact wording unpinned —
+    // the contract upgrades it to a rename hint).
+    const messages = warn.mock.calls.map((c) => String(c[0]));
+    expect(messages.some((m) => m.includes("environments"))).toBe(true);
+    warn.mockRestore();
+  });
+});
+
+describe("contract: environments → targets rename warning (T3b)", () => {
+  // REGRESSION: currently failing by design — pinned desired behavior
+  test("top-level `environments` key warns with an explicit rename hint mentioning targets", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    expect(() =>
+      validateDeployManifest(
+        { name: "web", environments: { staging: { branch: "develop" } } },
+        "a/.ocd-deploy.json",
+      ),
+    ).not.toThrow();
+    const messages = warn.mock.calls.map((c) => String(c[0]));
+    // The warning must mention BOTH the legacy key and the `targets` rename so
+    // users know how to migrate (still non-fatal).
+    expect(messages.some((m) => m.includes("environments") && m.includes("targets"))).toBe(true);
+    warn.mockRestore();
   });
 });
 

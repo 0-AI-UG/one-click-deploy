@@ -16,16 +16,20 @@ export type ListenerSet = {
   reconcile(config: ProxyConfig): Promise<void>;
   stopAll(): void;
   size(): number;
+  /** Listeners the last reconciled config asked for (bound or not) — status uses size()/desiredSize() as bound/total. */
+  desiredSize(): number;
 };
 
 export function createListenerSet(wake: WakeFn): ListenerSet {
   const handles = new Map<string, TcpListenerHandle>();
+  let desiredCount = 0;
 
   return {
     async reconcile(config) {
       const port = config.listenPort ?? PROXY_LISTEN_PORT;
       const desired = new Map<string, ProxyApp>();
       for (const app of config.apps) desired.set(app.vip, app);
+      desiredCount = desired.size;
 
       for (const [vip, handle] of [...handles]) {
         if (desired.has(vip)) continue;
@@ -55,6 +59,9 @@ export function createListenerSet(wake: WakeFn): ListenerSet {
     },
     size() {
       return handles.size;
+    },
+    desiredSize() {
+      return desiredCount;
     },
   };
 }

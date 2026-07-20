@@ -33,6 +33,13 @@ mock.module("../../shared/remote/index.ts", () => ({
   removeContainer: mock(async () => {}),
   healthCheck: healthCheckMock,
   containerRunningCheck: containerRunningCheckMock,
+  // probeAppHealth dispatches to healthCheck/containerRunningCheck by app.health_check.
+  // Provide it explicitly so these mocks are observed even if another test file
+  // (run earlier in the same process) already evaluated health.ts under its own
+  // remote mock — a cross-file mock.module binding that our re-mock can't re-propagate.
+  probeAppHealth: mock(async (app: { health_check: number }) =>
+    app.health_check ? healthCheckMock() : containerRunningCheckMock(),
+  ),
   containerRunning: containerRunningMock,
   containerExists: containerExistsMock,
 }));
@@ -872,6 +879,241 @@ describe("deploy op: structure", () => {
   test("kind + resource key format", () => {
     expect(deployOp.kind).toBe("deploy");
     expect(deployOp.resourceKeys({ app_name: "foo" } as any)).toEqual(["app:create:foo"]);
+  });
+});
+
+// --- Deploy targets: isolated environments -----------------------------------
+
+describe("deploy step: insert_app_row deploy targets", () => {
+  function makeReadyServer() {
+    return db.insertServer({
+      name: `srv-${randomSuffix()}`,
+      provider_id: `h-${randomSuffix()}`,
+      ipv4: "3.3.3.5",
+      ipv6: "",
+      type: "cx22",
+      location: "fsn1",
+      status: "ready",
+      private_ipv4: "10.0.0.5",
+    });
+  }
+
+  const serverPrior = (server: { id: number; ipv4: string }) => ({
+    pick_or_provision_server: {
+      serverId: server.id,
+      serverIp: server.ipv4,
+      serverHostKey: "",
+      provisioned: false,
+      ingressIp: server.ipv4,
+    },
+    create_dns_record: null,
+    create_volume: null,
+  });
+
+  /** Parent production app with a linked environment (one env var) and a
+   *  service linked to that environment — the things staging must/must not
+   *  inherit. */
+  async function makeParentWithEnvAndServiceLink() {
+    const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
+    const parentName = `prod-${randomSuffix()}`;
+    const parentEnv = db.insertEnvironment(
+      parentName,
+      serializeEnvVars([{ key: "DATABASE_URL", value: "postgres://prod-db", secret: false, updated_at: "t" }]),
+    );
+    const parent = db.insertApp({
+      name: parentName,
+      domain: `${parentName}.example.com`,
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      environment_id: parentEnv.id,
+      target: "production",
+    });
+    const svc = db.insertService({
+      name: `svc-${randomSuffix()}`,
+      service_type: "postgres",
+      version: "16",
+      port: 5432,
+      env_vars: "{}",
+      credentials: "{}",
+    });
+    db.insertServiceLink(svc.id, parentEnv.id, "DATABASE");
+    return { parent, parentEnv, svc, parentName };
+  }
+
+  test("non-production target gets its own environment seeded from the parent, without service links", async () => {
+    const server = makeReadyServer();
+    const { parent, parentEnv, svc, parentName } = await makeParentWithEnvAndServiceLink();
+    const stagingName = `${parentName}-staging`;
+
+    const step = stepByName("insert_app_row");
+    const { ctx, logLines } = makeCtx({
+      app_name: stagingName,
+      git_repo: "https://github.com/x/y",
+      container_port: 3000,
+      target: "staging",
+      target_of: parent.id,
+      placement_pool: "staging",
+    });
+    const out = (await step.run(ctx, serverPrior(server))) as {
+      appId: number;
+      environmentId: number | null;
+      flatEnvVars: Record<string, string>;
+    };
+
+    // App row carries the target tag, parent link, and pool.
+    const app = db.getApp(out.appId)!;
+    expect(app.target).toBe("staging");
+    expect(app.target_of).toBe(parent.id);
+    expect(app.placement_pool).toBe("staging");
+
+    // Own environment named after the app, seeded from the parent's env vars.
+    const env = db.getEnvironments().find((e) => e.name === stagingName);
+    expect(env).toBeTruthy();
+    expect(out.environmentId).toBe(env!.id);
+    expect(env!.id).not.toBe(parentEnv.id);
+    expect(out.flatEnvVars).toEqual({ DATABASE_URL: "postgres://prod-db" });
+    expect(logLines.some((l) => /created isolated environment/i.test(l))).toBe(true);
+
+    // NO service links copied: the prod DB link stays on the parent env only.
+    const links = db.getServiceLinks(svc.id);
+    expect(links.some((l) => l.environment_id === parentEnv.id)).toBe(true);
+    expect(links.some((l) => l.environment_id === env!.id)).toBe(false);
+  });
+
+  test("an explicit environment_id wins over isolated-environment creation", async () => {
+    const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
+    const server = makeReadyServer();
+    const { parent, parentName } = await makeParentWithEnvAndServiceLink();
+    const linked = db.insertEnvironment(`explicit-${randomSuffix()}`, serializeEnvVars([]));
+    const devName = `${parentName}-dev`;
+
+    const step = stepByName("insert_app_row");
+    const { ctx } = makeCtx({
+      app_name: devName,
+      git_repo: "https://github.com/x/y",
+      container_port: 3000,
+      target: "dev",
+      target_of: parent.id,
+      environment_id: linked.id,
+    });
+    const out = (await step.run(ctx, serverPrior(server))) as { environmentId: number | null };
+    expect(out.environmentId).toBe(linked.id);
+    // No "<app_name>" environment was created.
+    expect(db.getEnvironments().some((e) => e.name === devName)).toBe(false);
+  });
+
+  test("production target creates no isolated environment", async () => {
+    const server = makeReadyServer();
+    const name = `prod-only-${randomSuffix()}`;
+    const step = stepByName("insert_app_row");
+    const { ctx } = makeCtx({
+      app_name: name,
+      git_repo: "https://github.com/x/y",
+      container_port: 3000,
+      target: "production",
+      placement_pool: "general",
+    });
+    const out = (await step.run(ctx, serverPrior(server))) as { appId: number; environmentId: number | null };
+    const app = db.getApp(out.appId)!;
+    expect(app.target).toBe("production");
+    expect(app.target_of).toBeNull();
+    expect(out.environmentId).toBeNull();
+    expect(db.getEnvironments().some((e) => e.name === name)).toBe(false);
+  });
+
+  test("non-production target seeded from a parent WITHOUT an environment gets an empty isolated env", async () => {
+    const { parseEnvVars } = await import("../../shared/env-crypto.ts");
+    const server = makeReadyServer();
+    const parentName = `bare-${randomSuffix()}`;
+    const parent = db.insertApp({
+      name: parentName,
+      domain: `${parentName}.example.com`,
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+    });
+    const stagingName = `${parentName}-staging`;
+    const step = stepByName("insert_app_row");
+    const { ctx } = makeCtx({
+      app_name: stagingName,
+      git_repo: "https://github.com/x/y",
+      container_port: 3000,
+      target: "staging",
+      target_of: parent.id,
+    });
+    const out = (await step.run(ctx, serverPrior(server))) as { environmentId: number | null; flatEnvVars: Record<string, string> };
+    const env = db.getEnvironments().find((e) => e.name === stagingName);
+    expect(env).toBeTruthy();
+    expect(out.environmentId).toBe(env!.id);
+    expect(out.flatEnvVars).toEqual({});
+    expect(parseEnvVars(env!.env_vars).entries).toEqual([]);
+  });
+});
+
+describe("contract: engine deploy back-compat shim for legacy env_label/sibling_of (T3a)", () => {
+  // REGRESSION: currently failing by design — pinned desired behavior
+  test("a DeployRequest carrying env_label/sibling_of behaves exactly like target/target_of", async () => {
+    const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
+    const server = db.insertServer({
+      name: `srv-${randomSuffix()}`,
+      provider_id: `h-${randomSuffix()}`,
+      ipv4: "3.3.3.6",
+      ipv6: "",
+      type: "cx22",
+      location: "fsn1",
+      status: "ready",
+      private_ipv4: "10.0.0.6",
+    });
+    const parentName = `legacy-${randomSuffix()}`;
+    const parentEnv = db.insertEnvironment(
+      parentName,
+      serializeEnvVars([{ key: "SEED", value: "from-prod", secret: false, updated_at: "t" }]),
+    );
+    const parent = db.insertApp({
+      name: parentName,
+      domain: `${parentName}.example.com`,
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      environment_id: parentEnv.id,
+    });
+    const stagingName = `${parentName}-staging`;
+
+    const step = deployOp.steps.find((s) => s.name === "insert_app_row")!;
+    // Legacy wire field names only — NOT target/target_of.
+    const { ctx } = makeCtx({
+      app_name: stagingName,
+      git_repo: "https://github.com/x/y",
+      container_port: 3000,
+      env_label: "staging",
+      sibling_of: parent.id,
+    });
+    const out = (await step.run(ctx, {
+      pick_or_provision_server: {
+        serverId: server.id,
+        serverIp: server.ipv4,
+        serverHostKey: "",
+        provisioned: false,
+        ingressIp: server.ipv4,
+      },
+      create_dns_record: null,
+      create_volume: null,
+    })) as { appId: number; environmentId: number | null; flatEnvVars: Record<string, string> };
+
+    // Target tag stored + target_of link set from the legacy names.
+    const app = db.getApp(out.appId)!;
+    expect(app.target).toBe("staging");
+    expect(app.target_of).toBe(parent.id);
+
+    // Isolated environment created and seeded exactly as with the new names.
+    const env = db.getEnvironments().find((e) => e.name === stagingName);
+    expect(env).toBeTruthy();
+    expect(out.environmentId).toBe(env!.id);
+    expect(out.flatEnvVars).toEqual({ SEED: "from-prod" });
   });
 });
 

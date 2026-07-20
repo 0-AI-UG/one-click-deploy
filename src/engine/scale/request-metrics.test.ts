@@ -169,6 +169,22 @@ describe("ingestServerRequestMetrics", () => {
     expect(requestMetricsFresh([server.id])).toBe(false);
   });
 
+  test("only app-* Traefik service counters feed last_request_at (svc-* ignored)", () => {
+    const server = makeServer();
+    const app = makeApp();
+    const t0 = Date.now();
+    // Same counter name/values but under the svc- prefix (a catalog service,
+    // not an app router) — must never count as app activity.
+    const svcLine = (n: number) =>
+      `traefik_service_requests_total{code="200",method="GET",protocol="http",service="svc-${app.name}@file"} ${n}\n`;
+    ingestServerRequestMetrics(server.id, svcLine(10), t0);
+    ingestServerRequestMetrics(server.id, svcLine(50), t0 + 30_000);
+
+    const after = db.getApp(app.id)!;
+    expect(after.last_request_at).toBeNull();
+    expect(after.requests_per_min).toBe(0);
+  });
+
   test("unknown service names are ignored", () => {
     const server = makeServer();
     ingestServerRequestMetrics(server.id, metricsFor("no-such-app", [{ code: "200", n: 1 }]));

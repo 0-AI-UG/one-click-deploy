@@ -326,6 +326,58 @@ describe("runMigrations", () => {
     expect(JSON.parse(row.env_vars).entries[0]).toEqual(secretEntry);
   });
 
+  test("migration 80 renames env_label/sibling_of to target/target_of on the full schema", () => {
+    const db = freshDb();
+    runMigrations(db);
+    const cols = (db.query("PRAGMA table_info(apps)").all() as any[]).map((c) => c.name);
+    expect(cols).toContain("target");
+    expect(cols).toContain("target_of");
+    expect(cols).not.toContain("env_label");
+    expect(cols).not.toContain("sibling_of");
+    // Insert/read round-trip through the renamed columns.
+    db.run(
+      "INSERT INTO apps (name, domain, git_repo, internal_port, virtual_ip, target) VALUES ('prod80', 'p.example.com', 'https://x.git', 20080, '10.96.0.80', 'production')",
+    );
+    const parent = db.query("SELECT id FROM apps WHERE name = 'prod80'").get() as any;
+    db.run(
+      "INSERT INTO apps (name, domain, git_repo, internal_port, virtual_ip, target, target_of) VALUES ('prod80-staging', '', 'https://x.git', 20081, '10.96.0.81', 'staging', ?)",
+      [parent.id],
+    );
+    const child = db.query("SELECT target, target_of FROM apps WHERE name = 'prod80-staging'").get() as any;
+    expect(child.target).toBe("staging");
+    expect(child.target_of).toBe(parent.id);
+    // Defaults are preserved by the rename: '' and NULL.
+    const std = db.query("SELECT target, target_of FROM apps WHERE name = 'prod80'").get() as any;
+    expect(std.target).toBe("production");
+    expect(std.target_of).toBeNull();
+  });
+
+  test("migration 80 preserves pre-80 env_label/sibling_of values under the new names", () => {
+    // Minimal pre-80 apps table slice: migration 80 only renames the two
+    // columns added by migration 77 (same pattern as the migration-62/67 tests).
+    const db = new Database(":memory:");
+    db.run(
+      "CREATE TABLE apps (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, env_label TEXT NOT NULL DEFAULT '', sibling_of INTEGER)",
+    );
+    db.run("INSERT INTO apps (name, env_label) VALUES ('prod', 'production')");
+    db.run("INSERT INTO apps (name, env_label, sibling_of) VALUES ('prod-staging', 'staging', 1)");
+    db.run("INSERT INTO apps (name) VALUES ('standalone')");
+
+    migrations.find((m) => m.version === 80)!.up(db);
+
+    const cols = (db.query("PRAGMA table_info(apps)").all() as any[]).map((c) => c.name);
+    expect(cols).toEqual(expect.arrayContaining(["target", "target_of"]));
+    expect(cols).not.toContain("env_label");
+    expect(cols).not.toContain("sibling_of");
+
+    const rows = db.query("SELECT name, target, target_of FROM apps ORDER BY id").all() as any[];
+    expect(rows).toEqual([
+      { name: "prod", target: "production", target_of: null },
+      { name: "prod-staging", target: "staging", target_of: 1 },
+      { name: "standalone", target: "", target_of: null },
+    ]);
+  });
+
   test("migration 79 is a no-op on malformed or non-v2 env_vars", () => {
     const db = pre79Db();
     db.run("INSERT INTO apps (name, internal_port, internal_protocol, container_port) VALUES ('web', 20010, 'http', 3000)");

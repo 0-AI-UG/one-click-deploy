@@ -456,22 +456,27 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     let environmentId: number | null = req.environment_id ?? null;
     const flatEnvVars: Record<string, string> = {};
 
-    // Isolated env group for a non-production sibling target (design "A"):
+    // Isolated environment for a non-production deploy target (design "A"):
     // staging/dev gets its OWN environment named "<app_name>", seeded by copying
     // the parent production app's env vars — but deliberately NOT its
-    // service_links. service_links are keyed on environment_id, so a fresh group
+    // service_links. service_links are keyed on environment_id, so a fresh env
     // simply has none: the production DB link is absent, and staging can never
     // touch production data. If no DB is linked, we tell the user to link one.
-    const envLabel = req.env_label ?? "";
-    const isolatedTarget = envLabel !== "" && envLabel !== "production";
+    // Back-compat: legacy clients sent env_label/sibling_of for what are now
+    // target/target_of — honor them (identical semantics) when the new fields
+    // are absent.
+    const targetTag = req.target ?? req.env_label;
+    const targetOf = req.target_of ?? req.sibling_of;
+    const target = targetTag ?? "";
+    const isolatedTarget = target !== "" && target !== "production";
     let createdIsolatedGroup = false;
     if (isolatedTarget && !environmentId) {
       const groupName = req.app_name;
       let group = db.getEnvironments().find((e) => e.name === groupName);
       if (!group) {
         let seed = serializeEnvVars([]);
-        if (req.sibling_of) {
-          const parent = db.getApp(req.sibling_of);
+        if (targetOf) {
+          const parent = db.getApp(targetOf);
           if (parent) {
             if (parent.environment_id) {
               const parentEnv = db.getEnvironment(parent.environment_id);
@@ -483,7 +488,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
         }
         group = db.insertEnvironment(groupName, seed);
         createdIsolatedGroup = true;
-        ctx.log(`created isolated env group "${groupName}" for ${envLabel} (seeded from production, no DB link)`);
+        ctx.log(`created isolated environment "${groupName}" for ${target} (seeded from production, no DB link)`);
       }
       environmentId = group.id;
     }
@@ -561,8 +566,8 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           max_per_host: maxPerHost,
           min_locations: minLocations,
           placement_pool: req.placement_pool,
-          env_label: req.env_label,
-          sibling_of: req.sibling_of,
+          target: targetTag,
+          target_of: targetOf,
         },
         server.serverId,
       );
@@ -607,8 +612,8 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     if (createdIsolatedGroup) {
       db.appendDeployLog(
         app.id,
-        `[env] Isolated ${envLabel} environment "${req.app_name}" created (seeded from production env vars, no database linked). ` +
-          `Link a database to the "${req.app_name}" environment (e.g. via \`ocd services\`) so ${envLabel} never touches production data.`,
+        `[env] Isolated ${target} environment "${req.app_name}" created (seeded from production env vars, no database linked). ` +
+          `Link a database to the "${req.app_name}" environment (e.g. via \`ocd services\`) so ${target} never touches production data.`,
       );
     }
 

@@ -144,8 +144,12 @@ export type DeployRequest = {
   public_port?: number | "auto" | null; // Public raw TCP/UDP exposure: "auto" = lowest free pool port, number = specific pool port, omit = none
   public_protocol?: "tcp" | "udp"; // Pool for public_port (default "tcp"): 30000-30049 tcp, 30050-30099 udp
   placement_pool?: string; // servers.pool this app's replicas may be placed on; omit / "general" = default pool
-  env_label?: string; // cosmetic env tag: "" | "production" | "staging" | "dev"
-  sibling_of?: number; // app id this is a staging/dev sibling of; omit = standalone
+  target?: string; // deploy target tag: "" | "production" | "staging" | "dev"
+  target_of?: number; // app id this is a staging/dev target of; omit = standalone
+  /** @deprecated Legacy wire name for `target` (pre-rename clients). Honored only when `target` is absent. */
+  env_label?: string;
+  /** @deprecated Legacy wire name for `target_of` (pre-rename clients). Honored only when `target_of` is absent. */
+  sibling_of?: number;
   durability_class?: "none" | "standard" | "high"; // availability policy, mapped to placement-spread + min-replica floors at insert
   scale_to_zero_after?: number; // idle seconds before scaling to zero (deploy-target override); omit = leave default
 };
@@ -153,6 +157,17 @@ export type DeployRequest = {
 export type PromoteRequest = {
   source_app: string; // app name to promote FROM (e.g. "myapp-staging")
   dest_app: string; // app name to promote TO (e.g. "myapp")
+};
+
+export type AppTargetsResponse = {
+  self: {
+    id: number;
+    name: string;
+    target: string;
+    /** Production parent resolved from target_of; null for standalone/production apps or when the parent row is gone. */
+    parent: { id: number; name: string } | null;
+  };
+  targets: Array<{ id: number; name: string; target: string; status: string; domain: string }>;
 };
 
 export type PanelInfo = {

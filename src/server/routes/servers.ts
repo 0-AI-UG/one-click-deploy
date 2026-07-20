@@ -45,6 +45,29 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
   }
 }
 
+/** PATCH /api/servers/:id/pool — move a server into a named capacity pool.
+ *  Governs FUTURE placement only (next deploy/scale/converge); replicas already
+ *  running on the server stay put — no active migration here. */
+export async function handleSetServerPool(request: Request, serverId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "servers.delete");
+    const body = (await request.json().catch(() => ({}))) as { pool?: unknown };
+    const pool = body.pool;
+
+    const server = db.getServer(serverId);
+    if (!server) return Response.json({ ok: false, error: "Server not found" }, { status: 404, headers: corsHeaders });
+
+    if (typeof pool !== "string" || (pool !== "general" && pool !== "staging")) {
+      return Response.json({ ok: false, error: 'pool must be "general" or "staging"' }, { status: 400, headers: corsHeaders });
+    }
+
+    db.updateServerPool(serverId, pool);
+    return Response.json({ ok: true, pool }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleRefreshServers(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.view");

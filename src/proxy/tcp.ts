@@ -6,6 +6,7 @@
 
 import type { Socket, SocketHandler } from "bun";
 import type { ProxyApp, ProxyListener } from "./config.ts";
+import { recordActivity } from "./status.ts";
 import { sharedWake, type WakeFn } from "./wake.ts";
 
 // While an app is waking there is nowhere to write: buffer at most this much
@@ -166,21 +167,12 @@ function dial(backend: string, conn: Conn): Promise<Socket<Conn>> {
   });
 }
 
-async function connectUpstream(conn: Conn, ref: { app: ProxyApp }, wake: WakeFn): Promise<void> {
-  const app = ref.app;
-  let backends = app.backends;
-  if (backends.length === 0) {
-    try {
-      backends = await sharedWake(app, wake);
-    } catch (err) {
-      console.error(`[proxy] wake failed for app ${app.appId} (${app.name}): ${err}`);
-      teardown(conn);
-      return;
-    }
-    if (conn.closed) return;
-  }
+/** Dial `backends` in random order until one accepts, then wire it up and
+ *  flush the buffered opening bytes. Returns false only when every backend
+ *  refused (a closed conn has nothing left to try — that reads as done). */
+async function tryBackends(backends: string[], conn: Conn, app: ProxyApp): Promise<boolean> {
   for (const backend of shuffled(backends)) {
-    if (conn.closed) return;
+    if (conn.closed) return true;
     let upstream: Socket<Conn>;
     try {
       upstream = await dial(backend, conn);
@@ -194,11 +186,44 @@ async function connectUpstream(conn: Conn, ref: { app: ProxyApp }, wake: WakeFn)
       } catch {
         /* gone */
       }
-      return;
+      return true;
     }
     conn.upstream = upstream;
     flushToUpstream(conn); // opening bytes buffered while connecting/waking
-    return;
+    return true;
+  }
+  return false;
+}
+
+async function connectUpstream(conn: Conn, ref: { app: ProxyApp }, wake: WakeFn): Promise<void> {
+  const app = ref.app;
+  // Empty pool: the app is asleep — wake it and connect to the returned pool.
+  const woke = app.backends.length === 0;
+  let backends = app.backends;
+  if (woke) {
+    try {
+      backends = await sharedWake(app, wake);
+    } catch (err) {
+      console.error(`[proxy] wake failed for app ${app.appId} (${app.name}): ${err}`);
+      teardown(conn);
+      return;
+    }
+    if (conn.closed) return;
+  }
+  if (await tryBackends(backends, conn, app)) return;
+  // Every configured backend refused: the pool is stale (the app slept or
+  // moved since the last config render). Fall back to the wake path once —
+  // never after a wake already produced this pool, or a dead app would loop.
+  if (!woke) {
+    try {
+      backends = await sharedWake(app, wake);
+    } catch (err) {
+      console.error(`[proxy] wake after all-refused pool failed for app ${app.appId} (${app.name}): ${err}`);
+      teardown(conn);
+      return;
+    }
+    if (conn.closed) return;
+    if (await tryBackends(backends, conn, app)) return;
   }
   console.error(`[proxy] no reachable backend for app ${app.appId} (${app.name})`);
   teardown(conn);
@@ -223,6 +248,13 @@ export function openTcpListener(app: ProxyApp, listener: ProxyListener, wake: Wa
           closed: false,
         };
         socket.data = conn;
+        recordActivity(ref.app.appId);
+        // L4 cannot check credentials — fail closed for password-protected
+        // apps: no backend dial, no wake, just destroy the connection.
+        if (ref.app.authProtected) {
+          teardown(conn);
+          return;
+        }
         // Snapshot at connect time: config reloads affect new connections only.
         void connectUpstream(conn, ref, wake);
       },

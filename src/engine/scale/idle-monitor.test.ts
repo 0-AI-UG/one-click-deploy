@@ -15,6 +15,12 @@ process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-idle-test-"));
 
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
+// mock.module factories must cover the COMPLETE export surface of the mocked
+// module (Bun module namespaces are sealed — a later re-mock in another test
+// file cannot add slots this factory omits). Spread the real namespace and
+// override only what these tests stub.
+import * as realRemote from "../../shared/remote/index.ts";
+
 // Scriptable SSH mock: queue of results (or errors) keyed by call order.
 type SshResult = { exitCode: number; stdout: string; stderr: string };
 let sshQueue: (SshResult | Error)[] = [];
@@ -25,6 +31,7 @@ const sshExec = mock(async (_host: string, _cmd: string, _hostKey?: string) => {
   return next;
 });
 mock.module("../../shared/remote/index.ts", () => ({
+  ...realRemote,
   sshExec,
   healthCheck: mock(async () => ({ healthy: true })),
 }));
@@ -375,6 +382,26 @@ describe("evaluateAutoScale", () => {
     expect(getApp(app.id)!.last_request_at).not.toBeNull();
   });
 
+  test("min_replicas=1 app is never slept, even with fresh metrics and a stale last_request_at", async () => {
+    const server = makeServer();
+    const app = makeApp();
+    setAutoscale(app.id, { min_replicas: 1, scale_to_zero_after: 300 });
+    setLastRequestAt(app.id, new Date(Date.now() - 600_000));
+    const r = insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 21105,
+      container_name: `c-minone-${Date.now()}`,
+      status: "running",
+    });
+    updateReplicaMetrics(r.id, 1, 1);
+    markMetricsFresh(server.id);
+
+    await evaluateAutoScale(app.id);
+
+    expect(desiredOf(app.id)).toBe(1);
+  });
+
   test("auth-protected health_check=0 app is HTTP-routed and uses the request path", async () => {
     const { server, app } = setupHttpSleepApp({
       lastRequestAt: new Date(Date.now() - 600_000),
@@ -576,5 +603,81 @@ describe("evaluateAutoScale", () => {
     await evaluateAutoScale(app.id);
     // Already at the volume cap of 1 — no scale-up despite 99% load.
     expect(desiredOf(app.id)).toBe(1);
+  });
+});
+
+describe("contract: P2 proxy-reported activity feeds idle detection", () => {
+  // REGRESSION: currently failing by design — request metrics only count
+  // Traefik public-router counters, so VIP-proxied internal traffic no longer
+  // keeps callee apps awake. Contract: a merge step in
+  // src/engine/scale/request-metrics.ts consumes each server's ocd-proxy
+  // /status payload:
+  //   ingestProxyActivity(
+  //     serverId: number,
+  //     payload: { lastActivity: Record<string, number> } | null, // appId → epochMs
+  //     now?: number,
+  //   ): void
+  // Semantics: null payload (failed fetch) is a no-op; unknown app ids are
+  // ignored; an app's last_request_at is advanced to the reported epochMs
+  // when that is NEWER than the stored value (never regressed). The per-server
+  // /status fetch itself must be injectable/mockable by the poller that calls
+  // this (tested here only via the merge function).
+
+  function sleepableApp() {
+    const server = makeServer();
+    const app = makeApp();
+    setAutoscale(app.id, { min_replicas: 0, scale_to_zero_after: 300 });
+    const r = insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 21200 + Math.floor(Math.random() * 100),
+      container_name: `c-p2-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      status: "running",
+    });
+    updateReplicaMetrics(r.id, 1, 1);
+    return { server, app };
+  }
+
+  test("recent proxy activity touches last_request_at and prevents sleep", async () => {
+    const rm: any = await import("./request-metrics.ts");
+    expect(typeof rm.ingestProxyActivity).toBe("function");
+
+    const { server, app } = sleepableApp();
+    setLastRequestAt(app.id, new Date(Date.now() - 600_000)); // stale — would sleep
+    markMetricsFresh(server.id);
+
+    const recent = Date.now() - 5_000;
+    rm.ingestProxyActivity(server.id, { lastActivity: { [String(app.id)]: recent } });
+
+    expect(getApp(app.id)!.last_request_at).toBe(new Date(recent).toISOString());
+
+    await evaluateAutoScale(app.id);
+    expect(desiredOf(app.id)).toBe(1); // internal traffic kept it awake
+  });
+
+  test("proxy activity older than the stored last_request_at does not regress it", async () => {
+    const rm: any = await import("./request-metrics.ts");
+    expect(typeof rm.ingestProxyActivity).toBe("function");
+
+    const { server, app } = sleepableApp();
+    const stored = new Date(Date.now() - 10_000);
+    setLastRequestAt(app.id, stored);
+
+    rm.ingestProxyActivity(server.id, { lastActivity: { [String(app.id)]: Date.now() - 600_000 } });
+
+    expect(getApp(app.id)!.last_request_at).toBe(stored.toISOString());
+  });
+
+  test("null payload (failed status fetch) and unknown app ids are no-ops", async () => {
+    const rm: any = await import("./request-metrics.ts");
+    expect(typeof rm.ingestProxyActivity).toBe("function");
+
+    const { server, app } = sleepableApp();
+    setLastRequestAt(app.id, null);
+
+    rm.ingestProxyActivity(server.id, null);
+    rm.ingestProxyActivity(server.id, { lastActivity: { "999999999": Date.now() } });
+
+    expect(getApp(app.id)!.last_request_at).toBeNull();
   });
 });

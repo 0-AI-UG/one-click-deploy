@@ -21,8 +21,10 @@ import { mkdirSync, readdirSync, renameSync, rmSync } from "fs";
 import * as db from "../../shared/db.ts";
 import { DATA_DIR } from "../../shared/paths.ts";
 import { sshExec, getSshKeyPath } from "../../shared/remote/index.ts";
+import { STATUS_PORT as PROXY_STATUS_PORT } from "../../proxy/status.ts";
 import { collectDesiredState, type DesiredState } from "./traefik-render.ts";
 import { renderProxyConfigJson } from "./proxy-render.ts";
+import { ingestProxyActivity } from "./request-metrics.ts";
 import {
   PROXY_BIN_PATH,
   PROXY_CONFIG_PATH,
@@ -39,6 +41,9 @@ export type ServerAccess = {
   name: string;
   ipv4: string;
   hostKey: string | undefined;
+  /** servers.id — lets the converge pass feed the proxy's activity report
+   *  into request-metrics. Optional: probe-only callers don't need it. */
+  id?: number;
 };
 
 // Same addressing rule as traefik-manager: only `ready` servers — SSHing a
@@ -52,6 +57,7 @@ function getAllServerAccess(): ServerAccess[] {
       name: s.name,
       ipv4: s.ipv4,
       hostKey: s.ssh_host_key || undefined,
+      id: s.id,
     }));
 }
 
@@ -243,32 +249,81 @@ async function scpTo(server: ServerAccess, localPath: string, remotePath: string
 
 // --- Probe / converge --------------------------------------------------------
 
+/** JSON served by the proxy's loopback /status endpoint (src/proxy/status.ts).
+ *  `ok` = NAT ruleset applied && every desired VIP listener bound;
+ *  `lastActivity` (appId-string → epoch ms) feeds idle detection. */
+export type ProxyStatus = {
+  ok: boolean;
+  natApplied?: boolean;
+  listenersBound?: number;
+  listenersTotal?: number;
+  lastActivity?: Record<string, number>;
+};
+
+const PROXY_STATUS_URL = `http://127.0.0.1:${PROXY_STATUS_PORT}/status`;
+
+/** Parse a /status body. Returns null for empty/unreadable output — status
+ *  "unknown" (trust the classic probe), distinct from an explicit ok:false. */
+function parseProxyStatus(raw: string): ProxyStatus | null {
+  if (!raw.trim()) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && typeof (parsed as { ok?: unknown }).ok === "boolean") {
+      return parsed as ProxyStatus;
+    }
+  } catch {
+    // fall through — an unreadable status is "unknown", not "down"
+  }
+  return null;
+}
+
 type ProxyProbe = {
   arch: string;
   version: string;
   active: string;
   unitSha: string;
   configSha: string;
+  /** Live /status snapshot piggybacked on the probe round trip; null when the
+   *  proxy isn't serving its status endpoint (down, or an older binary). */
+  status: ProxyStatus | null;
 };
 
 /** One SSH round trip reporting everything convergence needs: machine arch
- *  (which binary to build), installed binary version, unit state, and the
- *  on-disk hash of the unit + config. Mirrors probeServerTraefik. */
+ *  (which binary to build), installed binary version, unit state, the
+ *  on-disk hash of the unit + config, and the proxy's own /status readiness
+ *  report. Mirrors probeServerTraefik. */
 export async function probeServerProxy(server: ServerAccess): Promise<ProxyProbe> {
   const cmd = [
     `M=$(uname -m)`,
     `V=$(${PROXY_BIN_PATH} --version 2>/dev/null || true)`,
     `A=$(systemctl is-active ocd-proxy 2>/dev/null || true)`,
+    `S=$(curl -sf --max-time 5 ${PROXY_STATUS_URL} 2>/dev/null || true)`,
     `sha() { sha256sum "$1" 2>/dev/null | cut -d" " -f1; }`,
-    `echo "$M|$V|$A|$(sha ${PROXY_UNIT_PATH})|$(sha ${PROXY_CONFIG_PATH})"`,
+    `echo "$M|$V|$A|$(sha ${PROXY_UNIT_PATH})|$(sha ${PROXY_CONFIG_PATH})|$S"`,
   ].join("\n");
   const result = await sshExec(server.ipv4, cmd, server.hostKey);
   if (result.exitCode !== 0) {
     throw new Error(`proxy probe failed on ${server.name}: ${result.stderr || result.stdout}`);
   }
   const line = result.stdout.trim().split("\n").pop() ?? "";
-  const [arch = "", version = "", active = "", unitSha = "", configSha = ""] = line.split("|");
-  return { arch, version, active, unitSha, configSha };
+  const parts = line.split("|");
+  const [arch = "", version = "", active = "", unitSha = "", configSha = ""] = parts;
+  // The status JSON is the last field; it contains no "|" itself, but rejoin
+  // defensively so a future payload change can't silently truncate it.
+  const status = parseProxyStatus(parts.slice(5).join("|"));
+  return { arch, version, active, unitSha, configSha, status };
+}
+
+/** Fetch /status in its own round trip — used after an install/restart, when
+ *  the probe's piggybacked snapshot predates the new proxy process. */
+async function fetchProxyStatus(server: ServerAccess): Promise<ProxyStatus | null> {
+  const result = await sshExec(
+    server.ipv4,
+    `curl -sf --max-time 5 ${PROXY_STATUS_URL} 2>/dev/null || true`,
+    server.hostKey,
+  );
+  if (result.exitCode !== 0) return null;
+  return parseProxyStatus(result.stdout.trim());
 }
 
 function archFromUname(uname: string): "x64" | "arm64" {
@@ -304,11 +359,15 @@ async function installProxy(server: ServerAccess, arch: "x64" | "arm64"): Promis
  * hot-reloads the file within ~2s, no restart. Binary version drift or an
  * inactive unit reinstalls + restarts; unit-only drift rewrites the unit and
  * restarts.
+ *
+ * Returns the proxy's final /status snapshot (re-fetched after a restart so it
+ * reflects the new process) — the readiness gate treats an explicit ok:false
+ * as not-serving even when the unit converged cleanly.
  */
 export async function convergeServerProxy(
   server: ServerAccess,
   opts: { state?: DesiredState; renderedConfig?: string } = {},
-): Promise<void> {
+): Promise<{ status: ProxyStatus | null }> {
   const rendered = opts.renderedConfig ?? renderProxyConfigJson(opts.state ?? collectDesiredState());
   const desiredVersion = await desiredProxyVersion();
   const probe = await probeServerProxy(server);
@@ -319,12 +378,14 @@ export async function convergeServerProxy(
     log("sync", `wrote config.json on ${server.name}`);
   }
 
+  let restarted = false;
   if (probe.version !== desiredVersion || probe.active !== "active") {
     log(
       "reconcile",
       `${server.name}: ocd-proxy=${probe.version || "missing"} (want ${desiredVersion}) unit=${probe.active || "unknown"} → install`,
     );
     await installProxy(server, archFromUname(probe.arch));
+    restarted = true;
   } else if (probe.unitSha !== remoteFileSha(proxySystemdUnit())) {
     log("reconcile", `${server.name}: unit drift → rewrite + restart`);
     await writeRemoteFileAtomic(server, PROXY_UNIT_PATH, proxySystemdUnit());
@@ -336,7 +397,10 @@ export async function convergeServerProxy(
     if (restart.exitCode !== 0) {
       throw new Error(`ocd-proxy restart failed on ${server.name}: ${restart.stderr || restart.stdout}`);
     }
+    restarted = true;
   }
+
+  return { status: restarted ? await fetchProxyStatus(server) : probe.status };
 }
 
 // --- Readiness gate ----------------------------------------------------------
@@ -347,31 +411,88 @@ export async function convergeServerProxy(
 // the first reconcile re-proves every server.
 const proxyReady = new Map<string, boolean>();
 
+// Servers whose proxy was confirmed live at least once this process. Drives
+// the /etc/hosts last-known-good policy (syncInternalHosts): a later converge
+// failure keeps the previously-rendered VIP lines — the proxy is almost
+// certainly still running with its last config — instead of rewriting them to
+// lines that route nowhere.
+const proxyEverReady = new Set<string>();
+
 /** True only after a converge/probe confirmed this server's ocd-proxy active
- *  and current. Gates the /etc/hosts VIP flip in syncInternalHosts — a server
- *  whose proxy isn't verifiably live keeps resolving apps via local Traefik. */
+ *  and current (unit + binary + config, and /status not reporting ok:false). */
 export function isProxyReady(ipv4: string): boolean {
   return proxyReady.get(ipv4) === true;
 }
 
+/** True once a converge has EVER confirmed this server's proxy live in this
+ *  process. Gates the /etc/hosts app lines: never-proven servers get none. */
+export function wasProxyEverReady(ipv4: string): boolean {
+  return proxyEverReady.has(ipv4);
+}
+
+/** Converge one server and record the outcome in the readiness gate; also
+ *  feeds the proxy's lastActivity report into idle detection. Never throws —
+ *  a failure is logged, marks the server not-ready, and retries next tick. */
+async function convergeAndTrack(server: ServerAccess, rendered: string): Promise<void> {
+  try {
+    const { status } = await convergeServerProxy(server, { renderedConfig: rendered });
+    // An explicit ok:false means the unit is up but not actually serving (NAT
+    // not applied / listeners unbound) → not ready. A missing/unreadable
+    // status (transient curl failure) trusts the classic probe outcome.
+    const ready = status ? status.ok : true;
+    proxyReady.set(server.ipv4, ready);
+    if (ready) proxyEverReady.add(server.ipv4);
+    if (server.id !== undefined && status?.lastActivity) {
+      ingestProxyActivity(server.id, { lastActivity: status.lastActivity });
+    }
+  } catch (err) {
+    proxyReady.set(server.ipv4, false);
+    log("reconcile", `convergence failed on ${server.name}: ${err}`);
+  }
+}
+
 /**
  * Reconciler entrypoint: render once, converge every ready server in
- * parallel. Per-server failures are logged, mark the server not-ready (its
- * hosts entries fall back to local Traefik next network sync), and retry
- * next tick.
+ * parallel. Per-server failures are logged, mark the server not-ready, and
+ * retry next tick.
  */
 export async function reconcileProxy(): Promise<void> {
   const state = collectDesiredState();
   const rendered = renderProxyConfigJson(state);
-  await Promise.all(
-    getAllServerAccess().map(async (server) => {
-      try {
-        await convergeServerProxy(server, { renderedConfig: rendered });
-        proxyReady.set(server.ipv4, true);
-      } catch (err) {
-        proxyReady.set(server.ipv4, false);
-        log("reconcile", `convergence failed on ${server.name}: ${err}`);
-      }
-    }),
-  );
+  await Promise.all(getAllServerAccess().map((server) => convergeAndTrack(server, rendered)));
+}
+
+// --- Immediate topology push -------------------------------------------------
+
+// Test seam mirroring __setWakerDeps: override (or, with null, restore) the
+// implementation pushProxyForApp delegates to.
+let proxyPush: ((appId: number) => Promise<void>) | null = null;
+
+export function __setProxyPush(fn: ((appId: number) => Promise<void>) | null): void {
+  proxyPush = fn;
+}
+
+/**
+ * Immediately converge the ocd-proxy config on the servers hosting `appId`'s
+ * replicas (including the sleeping anchor's server) after a topology change.
+ * Sleep (scale-down) and wake call this so the fleet proxy stops routing the
+ * app's VIP at dead backends / starts routing to the woken replica without
+ * waiting for the 30s reconciler tick; servers not touching the app pick up
+ * the identical fleet-wide config next tick. Best-effort: failures are logged
+ * and retried by the reconciler, never thrown into the calling op.
+ */
+export async function pushProxyForApp(appId: number): Promise<void> {
+  if (proxyPush) return proxyPush(appId);
+  try {
+    const app = db.getApp(appId);
+    if (!app) return;
+    const serverIds = new Set<number>(db.getReplicas(appId).map((r) => r.server_id));
+    if (app.sleeping_server_id) serverIds.add(app.sleeping_server_id);
+    const servers = getAllServerAccess().filter((s) => s.id !== undefined && serverIds.has(s.id));
+    if (servers.length === 0) return;
+    const rendered = renderProxyConfigJson(collectDesiredState());
+    await Promise.all(servers.map((server) => convergeAndTrack(server, rendered)));
+  } catch (err) {
+    log("push", `proxy push for app ${appId} failed: ${err}`);
+  }
 }

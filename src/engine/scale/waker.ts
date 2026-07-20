@@ -33,7 +33,7 @@ import type { AppRow } from "../../shared/db/apps.ts";
 import { wakeApp } from "./wake.ts";
 import { buildUpstreams } from "./traefik-render.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../scheduler.ts";
-import { WAKER_HTTP_PORT } from "./traefik-constants.ts";
+import { BASIC_AUTH_USER, WAKER_HTTP_PORT } from "./traefik-constants.ts";
 
 function log(...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [waker]`, ...args);
@@ -53,20 +53,42 @@ export type WakerDeps = {
 // inbound traffic at any instant, so without the app lock it can `docker run` a
 // new replica and flip the app back to 'running' while a destroy/pause/redeploy
 // op holds the app — resurrecting a half-torn-down app. Take the same app lock
-// the engine uses; if an op owns it, refuse the wake (the caller retries, and an
-// app mid-operation shouldn't be woken anyway). The lock lives here, not inside
-// wakeApp, because engine ops (ops/wake.ts, ops/redeploy.ts) call wakeApp while
-// already holding the app lock and would otherwise deadlock against themselves.
-async function wakeWithLock(appId: number): Promise<{ ok: boolean; error?: string }> {
-  const lock = tryAcquire([`app:${appId}`], NON_OP_HOLDER, "wake");
-  if (!lock.ok) {
-    log("wake", `app ${appId}: held by ${lock.heldBy.kind}#${lock.heldBy.opId} — deferring wake`);
-    return { ok: false, error: `App is busy with another operation (${lock.heldBy.kind})` };
-  }
-  try {
-    return await wakeApp(appId);
-  } finally {
-    release([`app:${appId}`]);
+// the engine uses; if an op owns it, RETRY with backoff until the op finishes
+// (ops are typically seconds long, and the client is being held anyway) before
+// giving up with a busy error. The lock lives here, not inside wakeApp, because
+// engine ops (ops/wake.ts, ops/redeploy.ts) call wakeApp while already holding
+// the app lock and would otherwise deadlock against themselves.
+const WAKE_LOCK_TIMEOUT_MS = 30_000;
+const WAKE_LOCK_RETRY_MS = 250;
+
+export async function wakeWithLock(
+  appId: number,
+  opts: {
+    timeoutMs?: number;
+    delayMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  } = {},
+): Promise<{ ok: boolean; error?: string }> {
+  const timeoutMs = opts.timeoutMs ?? WAKE_LOCK_TIMEOUT_MS;
+  const delayMs = opts.delayMs ?? WAKE_LOCK_RETRY_MS;
+  const sleep = opts.sleep ?? ((ms: number) => Bun.sleep(ms));
+  const now = opts.now ?? Date.now;
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    const lock = tryAcquire([`app:${appId}`], NON_OP_HOLDER, "wake");
+    if (lock.ok) {
+      try {
+        return await wakeApp(appId);
+      } finally {
+        release([`app:${appId}`]);
+      }
+    }
+    if (now() >= deadline) {
+      log("wake", `app ${appId}: still held by ${lock.heldBy.kind}#${lock.heldBy.opId} after ${timeoutMs}ms — giving up`);
+      return { ok: false, error: `App is busy with another operation (${lock.heldBy.kind})` };
+    }
+    await sleep(delayMs);
   }
 }
 
@@ -239,6 +261,82 @@ function http503(message: string): Response {
   });
 }
 
+function http401(): Response {
+  return new Response(JSON.stringify({ error: "unauthorized" }), {
+    status: 401,
+    headers: {
+      "content-type": "application/json",
+      "www-authenticate": 'Basic realm="ocd"',
+      "cache-control": "no-store",
+    },
+  });
+}
+
+/** Cap for the buffered forward body — the waker replays requests from memory,
+ *  so an unbounded upload could balloon the panel process. Cold-start requests
+ *  are typically small; anything larger gets a 413 before any wake. */
+const MAX_FORWARD_BODY_BYTES = 10 * 1024 * 1024;
+
+function http413(): Response {
+  return new Response(
+    JSON.stringify({
+      error: "payload_too_large",
+      message: `Request body exceeds ${MAX_FORWARD_BODY_BYTES} bytes`,
+    }),
+    { status: 413, headers: { "content-type": "application/json", "cache-control": "no-store" } },
+  );
+}
+
+/**
+ * Verify the request's `Authorization: Basic` credentials against the app's
+ * stored bcrypt hash — the same user (BASIC_AUTH_USER) + hash pair Traefik's
+ * basicAuth middleware enforces on the public router (hashAuthPassword,
+ * Bun.password bcrypt).
+ */
+async function checkBasicAuth(request: Request, hash: string): Promise<boolean> {
+  const header = request.headers.get("authorization") ?? "";
+  if (!/^basic /i.test(header)) return false;
+  let decoded: string;
+  try {
+    decoded = atob(header.slice(6).trim());
+  } catch {
+    return false;
+  }
+  const sep = decoded.indexOf(":");
+  if (sep < 0) return false;
+  if (decoded.slice(0, sep) !== BASIC_AUTH_USER) return false;
+  return Bun.password.verify(decoded.slice(sep + 1), hash).catch(() => false);
+}
+
+/** Buffer the request body, enforcing the size cap both on the declared
+ *  Content-Length and while streaming (so an oversized chunked upload is
+ *  rejected without ever holding >10 MiB). Returns null when over the cap. */
+async function bufferBodyCapped(request: Request, max: number): Promise<Uint8Array<ArrayBuffer> | null> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > max) return null;
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
 // Hop-by-hop headers must not be forwarded to the upstream (RFC 7230 §6.1).
 const HOP_BY_HOP = new Set([
   "connection",
@@ -260,7 +358,14 @@ const HOP_BY_HOP = new Set([
  */
 export async function handleWakerHttp(request: Request, deps: WakerDeps = wakerDeps): Promise<Response> {
   // Fleet-proxy wake calls share this listener (see handleProxyWakeRequest).
-  if (request.method === "POST" && new URL(request.url).pathname === "/api/internal/wake") {
+  // The internal route is claimed ONLY when the wake-secret header is present
+  // — an app that itself serves /api/internal/wake stays reachable through
+  // Host-based routing, and real proxy callers always send the header.
+  if (
+    request.method === "POST" &&
+    request.headers.has("x-ocd-wake-secret") &&
+    new URL(request.url).pathname === "/api/internal/wake"
+  ) {
     return handleProxyWakeRequest(request);
   }
   // Traefik forwards the original Host header; fall back to the URL authority
@@ -269,6 +374,26 @@ export async function handleWakerHttp(request: Request, deps: WakerDeps = wakerD
   const app = resolveAppByHost(host, deps);
   if (!app) return http503("Unknown host — no matching app");
 
+  // Per-app basic auth, verified BEFORE any wake or forward. The Host
+  // catch-all resolves ANY app, so without this gate a request to a
+  // password-protected sleeping app would wake it and reach it with no
+  // credentials — bypassing the basicAuth Traefik enforces when it's awake.
+  if (app.auth_password_hash && !(await checkBasicAuth(request, app.auth_password_hash))) {
+    return http401();
+  }
+
+  // Buffer the body (capped) and replay it (preserving method/headers) rather
+  // than streaming — dodges duplex-stream pitfalls and matches the "replay the
+  // initial bytes" model. Buffered before the wake so an oversized body 413s
+  // without waking anything.
+  const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  let body: Uint8Array<ArrayBuffer> | undefined;
+  if (hasBody) {
+    const buffered = await bufferBodyCapped(request, MAX_FORWARD_BODY_BYTES);
+    if (buffered === null) return http413();
+    body = buffered;
+  }
+
   const upstreams = await wakeAndResolveUpstreams(app, deps);
   if (!upstreams || upstreams.length === 0) return http503("App did not wake in time");
 
@@ -276,12 +401,6 @@ export async function handleWakerHttp(request: Request, deps: WakerDeps = wakerD
   const target = `http://${upstreams[0]}${url.pathname}${url.search}`;
   const headers = new Headers(request.headers);
   for (const h of HOP_BY_HOP) headers.delete(h);
-
-  // Buffer the body and replay it (preserving method/headers) rather than
-  // streaming — dodges duplex-stream pitfalls and matches the "replay the
-  // initial bytes" model. Cold-start requests are typically small.
-  const hasBody = request.method !== "GET" && request.method !== "HEAD";
-  const body = hasBody ? await request.arrayBuffer() : undefined;
 
   try {
     return await fetch(target, { method: request.method, headers, body, redirect: "manual" });

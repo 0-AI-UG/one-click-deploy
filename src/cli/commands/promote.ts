@@ -39,9 +39,9 @@ Promotes the exact version running in a source (e.g. staging) app up to a
 destination (production) app by rebuilding it from the source's git commit.
 
 ${BOLD}Arguments:${RESET}
-  <target>          Environment target from .ocd-deploy.json (e.g. staging).
-                    Source = <name>-<target>, destination = <name>, where
-                    <name> comes from the manifest (run inside the repo).
+  <target>          Deploy target from the manifest's "targets" block (e.g.
+                    staging). Source = <name>-<target>, destination = <name>,
+                    where <name> comes from the manifest (run inside the repo).
 
 ${BOLD}Options:${RESET}
   --from=<app>      Explicit source app (name or id)

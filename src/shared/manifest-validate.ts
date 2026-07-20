@@ -28,7 +28,7 @@ export {
   DeployManifestSchema,
   StackManifestSchema,
   type DeployManifest,
-  type DeployEnvironmentTarget,
+  type DeployTarget,
   type StackManifest,
 } from "./manifest-schema.ts";
 
@@ -101,6 +101,15 @@ function runValidation(
   for (const issue of result.error.issues) {
     if (issue.code === "unrecognized_keys") {
       for (const key of issue.keys) {
+        if (key === "environments" && issue.path.length === 0) {
+          // Pre-rename manifests used a top-level `environments` block for what
+          // is now `targets` — point users at the migration, still non-fatal.
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Manifest ${sourcePath}: unknown key "environments" — renamed to "targets" in this schema; the block was ignored`,
+          );
+          continue;
+        }
         // eslint-disable-next-line no-console
         console.warn(`Manifest ${sourcePath}: unknown key "${key}" (ignored)`);
       }

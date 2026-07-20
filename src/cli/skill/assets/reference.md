@@ -177,6 +177,7 @@ ocd delete <app>             Delete an app
 ocd logs <app> [--tail=N]    Show app logs (default: last 100 lines)
 ocd restart <app>            Restart an app's containers
 ocd rollback <app>           Roll back to the previous successful deployment
+ocd promote <target>         Promote a staging target's running commit to production
 ocd pause <app>              Stop an app without deleting it
 ocd unpause <app>            Start a paused app again
 ocd envs <subcommand>        Manage environments and their variables
@@ -195,13 +196,22 @@ App and server arguments accept a name or numeric ID.
 ### `ocd deploy`
 
 ```
-ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>] [--set=KEY=VALUE ...]
+ocd deploy [manifest] [--target=<name>] [--domain=<domain>] [--env=<name|id>] [--set=KEY=VALUE ...]
 ```
 
 Run from inside a git repo with an `origin` remote. Reads the manifest
 (default `./.ocd-deploy.json`) for name, build settings, port, env, webhook,
 volume, and scaling, then streams deploy progress until it completes or fails.
 `--domain` sets a custom domain.
+
+`--target=<name>` deploys a **target** (deploy stage) declared in the manifest's
+`targets` block. `--target=production` (or no `--target`) deploys the bare app
+`<name>` in the "general" pool; `--target=staging` deploys a separate sibling app
+`<name>-staging` with its own isolated environment (production's env vars copied,
+but not its service links) in the "staging" pool. An unknown target name errors
+and lists the declared targets. `--target` and `--env` are **mutually
+exclusive** — a target manages its own environment, whereas `--env` links an
+existing one.
 
 Env vars from the manifest's `env[]` are included automatically: entries with a
 `default` are sent as-is, `--set=KEY=VALUE` (repeatable) overrides or adds
@@ -212,6 +222,25 @@ required vars fail the deploy with a message listing them; provide them via
 vars are then layered on top of it — a value already present in the environment
 wins (manifest default skipped), keys the environment lacks are added, and
 `--set` overrides everything.
+
+### `ocd promote`
+
+```
+ocd promote <target> [--yes]
+ocd promote --from=<app> --to=<app> [--yes]
+```
+
+Promotes the exact git commit currently running in a source (staging) app up to
+a destination (production) app by rebuilding the destination pinned to that
+commit (reusing the rollback machinery).
+
+- `<target>` — a deploy stage from the manifest's `targets` block (e.g.
+  `staging`). Source = `<name>-<target>`, destination = `<name>`, where `<name>`
+  comes from the manifest — run from inside the repo.
+- `--from=<app>` / `--to=<app>` — explicit source and destination apps (name or
+  id); both are required together and override the manifest-derived names.
+- `--yes`, `-y` — skip the confirmation prompt (required in non-interactive
+  shells; otherwise the command refuses to promote).
 
 ### `ocd stack`
 
