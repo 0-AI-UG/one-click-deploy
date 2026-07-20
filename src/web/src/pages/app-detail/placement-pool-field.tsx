@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { get, patch } from "../../api/client.ts";
-import { Card, Btn, Field, showToast } from "../../components/ui.tsx";
+import { Btn, Field, showToast } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
+import { InfoTip } from "./shared.tsx";
 import { Layers, Check, X } from "lucide-react";
 
 const errMessage = (err: unknown): string =>
@@ -14,15 +15,16 @@ const errMessage = (err: unknown): string =>
 const POOL_SLUG = /^[a-z][a-z0-9-]*$/;
 const NEW_POOL = " new-pool";
 
-interface PlacementPoolCardProps {
+interface PlacementPoolFieldProps {
   appId: number;
   // servers.pool this app's replicas schedule onto ("general" = default).
   placementPool?: string;
 }
 
 // Retrospective placement-pool control — pick a known pool or type a new one.
-// Saves instantly on change via its own PATCH; gated on apps.deploy.
-export function PlacementPoolCard({ appId, placementPool }: PlacementPoolCardProps) {
+// A settings Field (lives inline in the app-basics card); saves instantly on
+// change via its own PATCH, gated on apps.deploy.
+export function PlacementPoolField({ appId, placementPool }: PlacementPoolFieldProps) {
   // Kept in local state so the UI reflects a change without a parent refetch.
   const [currentPool, setCurrentPool] = useState<string>(placementPool ?? "general");
   const [poolOptions, setPoolOptions] = useState<string[]>(["general", "staging"]);
@@ -79,16 +81,11 @@ export function PlacementPoolCard({ appId, placementPool }: PlacementPoolCardPro
   };
 
   return (
-    <Card className="p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <Layers size={14} className="text-fg" />
-        <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Placement Pool</h3>
-      </div>
-      <Field
-        align="start"
-        label={<span className="flex items-center gap-2"><Layers size={14} className="text-fg" /> Pool</span>}
-        hint={<>Replicas schedule onto servers in the <span className="font-mono font-bold text-fg">{currentPool}</span> pool. Changing it reschedules replicas on the next reconcile.</>}
-      >
+    <Field
+      align="start"
+      label={<span className="flex items-center gap-2"><Layers size={14} className="text-fg" /> Placement Pool <InfoTip text="Replicas schedule onto servers in this pool. Changing it reschedules replicas on the next reconcile." /></span>}
+      hint={<>Replicas schedule onto the <span className="font-mono font-bold text-fg">{currentPool}</span> pool. Saved immediately; applied on the next reconcile.</>}
+    >
         <PermissionGate
           permission="apps.deploy"
           fallback={
@@ -134,7 +131,6 @@ export function PlacementPoolCard({ appId, placementPool }: PlacementPoolCardPro
             />
           )}
         </PermissionGate>
-      </Field>
-    </Card>
+    </Field>
   );
 }
