@@ -5,10 +5,10 @@
 // the compiled binary stays small.
 
 /**
- * The one TCP port the proxy actually binds per VIP. Traefik holds wildcard
- * 0.0.0.0 listeners on :80 and :20000-20199, and on Linux a specific-IP listen
- * can never coexist with a wildcard listen on the same port — so the
- * user-facing front ports are DNATed to this wildcard-free port (see nat.ts).
+ * The one TCP port the proxy actually binds per VIP. Traefik holds a wildcard
+ * 0.0.0.0 listener on :80, and on Linux a specific-IP listen can never coexist
+ * with a wildcard listen on the same port — so the user-facing front ports are
+ * DNATed to this wildcard-free port (see nat.ts).
  */
 export const PROXY_LISTEN_PORT = 18790;
 

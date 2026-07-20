@@ -1,12 +1,12 @@
 // nftables front-port redirect layer, owned and applied by the proxy itself
 // (it runs as root on every host).
 //
-// Why NAT instead of binding the front ports directly: Traefik holds wildcard
-// 0.0.0.0 listeners on :80 (public web entrypoint — permanent) and
-// :20000-20199 (legacy), and on Linux a specific-IP listen can NEVER coexist
-// with a wildcard listen on the same port (SO_REUSEADDR does not apply to
-// LISTEN sockets). So the proxy binds one wildcard-free port per VIP
-// (PROXY_LISTEN_PORT) and DNATs each app's user-facing front ports to it —
+// Why NAT instead of binding the front ports directly: Traefik holds a wildcard
+// 0.0.0.0 listener on :80 (public web entrypoint — permanent), and on Linux a
+// specific-IP listen can NEVER coexist with a wildcard listen on the same port
+// (SO_REUSEADDR does not apply to LISTEN sockets). So the proxy binds one
+// wildcard-free port per VIP (PROXY_LISTEN_PORT) and DNATs each app's
+// user-facing front ports to it —
 // prerouting for traffic arriving from other hosts/containers, output for
 // host-originated connections. All local to the host; nothing here is routed.
 
