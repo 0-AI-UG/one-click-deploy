@@ -122,17 +122,23 @@ export function parseServerMetrics(stdout: string): { cpu: number; mem: number; 
 
 /**
  * Single SSH call per server: collect docker stats for all containers, server
- * CPU/RAM, and Traefik's Prometheus request counters in one shot.
+ * CPU/RAM, and — on the panel only — Traefik's Prometheus request counters in
+ * one shot. Traefik runs on the panel alone, so `scrapeTraefik` is set only for
+ * the panel; on workers the curl is omitted (it would just fail every tick) and
+ * `traefikMetrics` comes back null.
  */
 export async function collectServerMetrics(
   server: ServerRow,
+  opts: { scrapeTraefik?: boolean } = {},
 ): Promise<{
   containerStats: Map<string, ContainerStat>;
   serverMetrics: { cpu: number; mem: number; diskUsedGb: number; diskTotalGb: number } | null;
-  /** Raw Prometheus text from the local Traefik; null when the scrape failed. */
+  /** Raw Prometheus text from the panel's Traefik; null when the scrape failed
+   *  or the server is not the panel (workers run no Traefik). */
   traefikMetrics: string | null;
 }> {
   const hostKey = server.ssh_host_key || undefined;
+  const scrapeTraefik = opts.scrapeTraefik ?? false;
   const cmd = [
     `su - deploy -c "docker stats --no-stream --format '{{json .}}' 2>/dev/null"`,
     `echo '---LIMITS---'`,
@@ -145,9 +151,12 @@ export async function collectServerMetrics(
     `grep -E '^(MemTotal|MemAvailable):' /proc/meminfo`,
     `df -Pk / | awk 'NR==2 {print "DISK", $3, $2}'`,
     `echo '---TRAEFIK-METRICS---'`,
-    // Subshell so a down/mid-upgrade Traefik doesn't fail the whole batch; an
-    // empty metrics section is a failed scrape (never treated as zero traffic).
-    `(curl -sf --max-time 5 http://127.0.0.1:${TRAEFIK_METRICS_PORT}/metrics || true)`,
+    // Panel-only Traefik scrape. Subshell so a down/mid-upgrade Traefik doesn't
+    // fail the whole batch; an empty metrics section is a failed scrape (never
+    // treated as zero traffic). On workers we emit nothing (no Traefik there).
+    scrapeTraefik
+      ? `(curl -sf --max-time 5 http://127.0.0.1:${TRAEFIK_METRICS_PORT}/metrics || true)`
+      : `true`,
   ].join(" && ");
 
   try {
@@ -164,7 +173,8 @@ export async function collectServerMetrics(
       if (stat) stat.cpuLimitCores = cores;
     }
     const serverMetrics = parseServerMetrics(metricsPart || "");
-    return { containerStats, serverMetrics, traefikMetrics: traefikPart?.trim() ? traefikPart : null };
+    const traefikMetrics = scrapeTraefik && traefikPart?.trim() ? traefikPart : null;
+    return { containerStats, serverMetrics, traefikMetrics };
   } catch (err) {
     log("metrics", `server ${server.ipv4}: ${err}`);
     return { containerStats: new Map(), serverMetrics: null, traefikMetrics: null };

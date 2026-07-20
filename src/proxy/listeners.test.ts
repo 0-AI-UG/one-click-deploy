@@ -31,8 +31,8 @@ function echoServer(): { port: number; stop(): void } {
   return { port: listener.port, stop: () => listener.stop(true) };
 }
 
-function configFor(apps: ProxyApp[], listenPort: number): ProxyConfig {
-  return { version: 1, wakeUrl: null, wakeSecret: "", listenPort, apps };
+function configFor(apps: ProxyApp[], listenPort: number, publicListenPort?: number): ProxyConfig {
+  return { version: 1, wakeUrl: null, wakeSecret: "", listenPort, publicListenPort, apps };
 }
 
 function roundtrip(port: number, payload: string): Promise<string> {
@@ -69,6 +69,36 @@ function roundtrip(port: number, payload: string): Promise<string> {
     }).catch((err) => {
       if (!done) reject(err);
     });
+  });
+}
+
+function udpEchoServer() {
+  return Bun.udpSocket({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: {
+      data(socket, buf, port, addr) {
+        socket.send(buf, port, addr);
+      },
+    },
+  });
+}
+
+/** Send one datagram to the proxy's public UDP listener, resolve with the echo. */
+function udpRoundtrip(port: number, payload: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => reject(new Error("udp roundtrip timed out")), 3000);
+    void Bun.udpSocket({
+      hostname: "127.0.0.1",
+      port: 0,
+      socket: {
+        data(socket, buf) {
+          clearTimeout(deadline);
+          socket.close();
+          resolve(buf.toString());
+        },
+      },
+    }).then((client) => client.send(payload, port, "127.0.0.1"));
   });
 }
 
@@ -143,6 +173,81 @@ describe("listener reconciliation", () => {
     } finally {
       set.stopAll();
       echoNew.stop();
+    }
+  });
+
+  test("public-TCP app opens a SECOND listener that serves the app raw (enforceAuth:false), while the internal one fail-closes", async () => {
+    const echo = echoServer();
+    const internalPort = freePort();
+    const publicPort = freePort();
+    const set = createListenerSet(noWake);
+    const app: ProxyApp = {
+      appId: 10,
+      name: "raw-tcp",
+      vip: "127.0.0.1",
+      frontPorts: [80],
+      backends: [`127.0.0.1:${echo.port}`],
+      sleeping: false,
+      authProtected: true, // has a password AND a public raw port — the combo the split listen ports exist for
+      publicPort: 30040,
+      publicProtocol: "tcp",
+    };
+    try {
+      await set.reconcile(configFor([app], internalPort, publicPort));
+      expect(set.size()).toBe(2); // internal-tcp + public-tcp
+      // Public listener: auth-free raw pass-through.
+      expect(await roundtrip(publicPort, "raw and open")).toBe("raw and open");
+      // Internal listener: fail-closes the same app (no echo).
+      expect(await roundtrip(internalPort, "blocked")).toBe("");
+    } finally {
+      set.stopAll();
+      echo.stop();
+    }
+  });
+
+  test("public-UDP app opens a UDP listener alongside the internal TCP one", async () => {
+    const echo = await udpEchoServer();
+    const internalPort = freePort();
+    const publicPort = freePort();
+    const set = createListenerSet(noWake);
+    const app: ProxyApp = {
+      appId: 11,
+      name: "raw-udp",
+      vip: "127.0.0.1",
+      frontPorts: [53],
+      backends: [`127.0.0.1:${echo.port}`],
+      sleeping: false,
+      publicPort: 30090,
+      publicProtocol: "udp",
+    };
+    try {
+      await set.reconcile(configFor([app], internalPort, publicPort));
+      expect(set.size()).toBe(2); // internal-tcp + public-udp
+      expect(await udpRoundtrip(publicPort, "datagram")).toBe("datagram");
+    } finally {
+      set.stopAll();
+      echo.close();
+    }
+  });
+
+  test("internal-only app opens exactly one listener (no public port)", async () => {
+    const echo = echoServer();
+    const set = createListenerSet(noWake);
+    const port = freePort();
+    const app: ProxyApp = {
+      appId: 12,
+      name: "internal",
+      vip: "127.0.0.1",
+      frontPorts: [80],
+      backends: [`127.0.0.1:${echo.port}`],
+      sleeping: false,
+    };
+    try {
+      await set.reconcile(configFor([app], port));
+      expect(set.size()).toBe(1);
+    } finally {
+      set.stopAll();
+      echo.stop();
     }
   });
 

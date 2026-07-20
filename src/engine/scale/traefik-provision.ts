@@ -1,26 +1,26 @@
 // Traefik provisioning — the bash/static-config half of the ingress stack.
-// Generates the identical-on-every-server static config, the systemd unit, the
-// idempotent install script (shared by cloud-init and the reconciler's SSH
-// backfill), and the panel-only env file. traefik-manager.ts owns delivery
-// (SSH writes, install, caching); traefik-render.ts owns the dynamic config.
+// Generates the static config, the systemd unit, the idempotent install script
+// (run on the panel by the panel bootstrap, and by the reconciler's backfill),
+// and the panel-only env file. traefik-manager.ts owns delivery (SSH writes,
+// install, caching); traefik-render.ts owns the dynamic config.
 //
-// One Traefik instance runs on *every* server (systemd unit `ocd-traefik`)
-// with an identical static config:
+// Traefik runs on the PANEL server ONLY (systemd unit `ocd-traefik`). Workers
+// run no Traefik — cloud-init no longer installs it there, and the reconciler
+// stops+disables any stray instance. The static config:
 //
-//   web / websecure   — :80/:443 public ingress. Only the panel server ever
-//                       gets routers on these (public app domains, managed
-//                       services, ACME); on workers they sit idle.
-//   pub30000-pub30049 / pubu30050-pubu30099 — public raw TCP/UDP pool
-//                       (apps.public_port). Routed on the panel only:
-//                       `<panel-ip>:<port>` forwards raw to the app's
-//                       replicas over the private network.
+//   web / websecure   — :80/:443 public ingress (public app domains, managed
+//                       services, ACME). The panel is the only server with
+//                       routers on these.
 //
-// Internal app-to-app traffic no longer touches Traefik at all — the per-host
-// VIP proxy (src/proxy/) owns it (port-less HTTP, natural ports, legacy
-// internal_port URLs, TCP, and scale-to-zero wake).
+// Neither internal app-to-app traffic NOR the public raw TCP/UDP pool
+// (30000-30099) touches Traefik anymore — the per-host VIP proxy (src/proxy/)
+// owns both (port-less HTTP, natural ports, legacy internal_port URLs, raw
+// TCP/UDP, and scale-to-zero wake). The public pool used to be a block of
+// static entrypoints reserved fleet-wide; the proxy replaces them with
+// nftables DNAT off the panel's public IP.
 //
-// Static config rarely changes; when it does, the reconciler converges every
-// server (rewrite + service restart) within one tick — steady-state ticks
+// Static config rarely changes; when it does, the reconciler converges the
+// panel (rewrite + service restart) within one tick — steady-state ticks
 // never restart.
 //
 // All emitted "YAML" is JSON (JSON is valid YAML) — no serializer dependency.
@@ -29,7 +29,6 @@ import * as db from "../../shared/db.ts";
 import {
   TRAEFIK_VERSION,
   TRAEFIK_METRICS_PORT,
-  publicPortEntrypoint,
   TRAEFIK_STATIC_CONFIG_PATH,
   TRAEFIK_ACCESS_LOG_PATH,
   TRAEFIK_LOGROTATE_PATH,
@@ -56,11 +55,10 @@ export function acmeEmail(): string {
 }
 
 /**
- * The static config installed at /etc/traefik/traefik.yml — identical on
- * every server in the fleet. Written at install time and kept converged by
- * the reconciler (reconcileTraefik compares content hashes and rewrites +
- * restarts on drift), so changes here roll out fleet-wide within one tick.
- * The ACME resolver is inert on workers: no router references it there.
+ * The static config installed at /etc/traefik/traefik.yml on the PANEL server
+ * (the only server running Traefik). Written at install time and kept
+ * converged by the reconciler (reconcileTraefik compares content hashes and
+ * rewrites + restarts on drift), so changes here roll out within one tick.
  */
 export function traefikStaticConfig(): string {
   const entryPoints: Record<string, { address: string }> = {
@@ -71,24 +69,11 @@ export function traefikStaticConfig(): string {
     // publicly — same not-internet-reachable stance as the public pool blocks.
     metrics: { address: `:${TRAEFIK_METRICS_PORT}` },
   };
-  // Public raw TCP/UDP pool (apps.public_port). Reserved fleet-wide up front
-  // because entrypoints are static-config-only — exposing an app must never
-  // need a Traefik restart. Only the panel ever routes these; the base
-  // firewall opens the block everywhere but on workers nothing listens.
-  for (
-    let port = db.PUBLIC_TCP_PORT_BASE;
-    port < db.PUBLIC_TCP_PORT_BASE + db.PUBLIC_TCP_PORT_COUNT;
-    port++
-  ) {
-    entryPoints[publicPortEntrypoint(port, "tcp")] = { address: `:${port}` };
-  }
-  for (
-    let port = db.PUBLIC_UDP_PORT_BASE;
-    port < db.PUBLIC_UDP_PORT_BASE + db.PUBLIC_UDP_PORT_COUNT;
-    port++
-  ) {
-    entryPoints[publicPortEntrypoint(port, "udp")] = { address: `:${port}/udp` };
-  }
+  // The public raw TCP/UDP pool (30000-30099) is no longer a set of Traefik
+  // entrypoints — the per-host VIP proxy now owns that ingress via nftables
+  // DNAT off the panel's public IP (see src/proxy/ and proxy-render.ts). The
+  // cloud firewall keeps the block open (BASE_FIREWALL_RULES); the proxy's
+  // DNAT catches the traffic before Traefik's sockets ever see it.
   const email = acmeEmail();
   // Wildcard resolver only when a DNS zone is managed — `*.<zone>` needs
   // DNS-01, and without a zone there is nothing to issue for. The resolver
@@ -156,8 +141,8 @@ WantedBy=multi-user.target
 
 /**
  * Idempotent bash script that installs the pinned Traefik release and brings
- * the `ocd-traefik` service up. Shared verbatim by cloud-init (fresh
- * provisioning) and the reconciler's install backfill over SSH:
+ * the `ocd-traefik` service up. Run on the PANEL only — by the panel bootstrap
+ * (installTraefikOn) and by the reconciler's install backfill over SSH:
  * download the static binary (arch-detected, re-downloaded when the installed
  * version differs from the pin), write the static config, create the dynamic
  * dir, lock down acme.json, install the systemd unit. Ends with an

@@ -61,6 +61,10 @@ export function renderProxyConfig(state: DesiredState): ProxyConfig {
       // them on accept) — otherwise the VIP would be an unauthenticated
       // bypass of the basicAuth Traefik enforces on the public router.
       ...(app.authHash ? { authProtected: true } : {}),
+      // Public raw TCP/UDP exposure (30000-30099 pool): the proxy opens a
+      // dedicated auth-free public listener and the panel DNATs the public
+      // port to it. Traefik no longer carries this path.
+      ...(app.publicPort != null ? { publicPort: app.publicPort, publicProtocol: app.publicProtocol } : {}),
     }))
     // collectDesiredState already sorts by name; re-sort so hand-built
     // snapshots (tests, callers) render deterministically too.
@@ -77,6 +81,12 @@ export function renderProxyConfig(state: DesiredState): ProxyConfig {
       ? `http://${state.panelPrivateIpv4}:${WAKER_HTTP_PORT}/api/internal/wake`
       : null,
     wakeSecret: db.ensureProxyWakeSecret(),
+    // The panel's public IPv4: DNAT `daddr` for the public raw path. The proxy
+    // config is byte-identical fleet-wide, so keying the public rules on this
+    // single value makes them fire only on the panel — preserving today's
+    // panel-only public ingress with zero per-host config. Null until a panel
+    // server exists; the public DNAT rules are then omitted.
+    publicIngressIp: state.panelPublicIpv4,
     apps,
   };
 }

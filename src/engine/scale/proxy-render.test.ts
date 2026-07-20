@@ -43,6 +43,8 @@ function makeApp(opts: {
   hostPort?: number;
   status?: string;
   authPassword?: string;
+  publicPort?: number;
+  publicProtocol?: "tcp" | "udp";
 }) {
   const name = `app-${randomSuffix()}`;
   const app = db.insertApp({
@@ -56,6 +58,8 @@ function makeApp(opts: {
     health_check: true,
     internal_protocol: opts.internalProtocol,
     auth_password: opts.authPassword,
+    public_port: opts.publicPort,
+    public_protocol: opts.publicProtocol,
   });
   if (opts.replicaStatus !== null) {
     db.insertReplica({
@@ -183,6 +187,30 @@ describe("renderProxyConfig", () => {
     // The L4 proxy can't check basic-auth credentials — it fail-closes these.
     expect(byName.get(authed.name)!.authProtected).toBe(true);
     expect(byName.get(open.name)!.authProtected).toBeUndefined();
+  });
+
+  test("public raw exposure: publicPort/publicProtocol carried onto the ProxyApp", () => {
+    const server = makeServer("10.0.7.20");
+    const tcp = makeApp({ server, hostPort: 10220, publicPort: 30040, publicProtocol: "tcp" });
+    const udp = makeApp({ server, hostPort: 10221, publicPort: 30090, publicProtocol: "udp" });
+    const plain = makeApp({ server, hostPort: 10222 });
+    const cfg = renderProxyConfig(stateFor(tcp.name, udp.name, plain.name));
+    const byName = new Map(cfg.apps.map((a) => [a.name, a]));
+    expect(byName.get(tcp.name)!.publicPort).toBe(30040);
+    expect(byName.get(tcp.name)!.publicProtocol).toBe("tcp");
+    expect(byName.get(udp.name)!.publicPort).toBe(30090);
+    expect(byName.get(udp.name)!.publicProtocol).toBe("udp");
+    // Not raw-exposed → fields absent.
+    expect(byName.get(plain.name)!.publicPort).toBeUndefined();
+    expect(byName.get(plain.name)!.publicProtocol).toBeUndefined();
+  });
+
+  test("publicIngressIp: set from the panel's public IPv4, null without a panel", () => {
+    const server = makeServer("10.0.7.21");
+    const app = makeApp({ server, hostPort: 10223 });
+    const state = stateFor(app.name);
+    expect(renderProxyConfig({ ...state, panelPublicIpv4: "203.0.113.10" }).publicIngressIp).toBe("203.0.113.10");
+    expect(renderProxyConfig({ ...state, panelPublicIpv4: null }).publicIngressIp).toBeNull();
   });
 
   test("deterministic output: byte-identical renders, apps sorted by name", () => {

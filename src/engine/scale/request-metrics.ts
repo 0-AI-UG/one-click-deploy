@@ -1,14 +1,16 @@
-// Request-activity tracking from Traefik's Prometheus metrics. The reconciler
-// scrapes every server's :8899 metrics endpoint once per tick (piggybacked on
-// the batched stats SSH call) and feeds the raw text here. This module turns
-// the per-server cumulative counters into per-app request deltas, persists
-// apps.last_request_at / apps.requests_per_min, and answers the idle
-// monitor's "is this data fresh enough to sleep on?" question.
+// Request-activity tracking from Traefik's Prometheus metrics. All public HTTP
+// ingress lands on the PANEL's Traefik, so only the panel's :8899 endpoint
+// produces traefik_service_requests_total — the reconciler scrapes it once per
+// tick (piggybacked on the panel's batched stats SSH call) and feeds the raw
+// text here. This module turns the cumulative counters into per-app request
+// deltas, persists apps.last_request_at / apps.requests_per_min, and answers
+// the idle monitor's "is this data fresh enough to sleep on?" question.
 //
 // traefik_service_requests_total exists per (service, code, method, protocol)
-// label set and only for HTTP services — the internal router (int-*) targets
-// the same `app-<name>` service as the public router, so app-to-app traffic
-// counts as activity and keeps callees awake.
+// label set and only for HTTP services. Internal app-to-app traffic no longer
+// crosses Traefik at all — it flows through the per-host VIP proxy, whose
+// activity is merged separately via ingestProxyActivity (see below), so callees
+// busy serving internal calls still count as active and stay awake.
 
 import * as db from "../../shared/db.ts";
 
@@ -126,13 +128,16 @@ function recordDelta(appId: number, delta: number, now: number): void {
   db.updateAppRequestRate(appId, perMin);
 }
 
-/** True iff every listed server delivered a successful scrape within the
- *  freshness window — the precondition for a request-based sleep decision. */
-export function requestMetricsFresh(serverIds: number[], now: number = Date.now()): boolean {
-  return serverIds.every((id) => {
-    const at = lastScrapeOkAt.get(id);
-    return at !== undefined && now - at < METRICS_FRESH_MS;
-  });
+/** True iff the panel delivered a successful Traefik scrape within the
+ *  freshness window — the precondition for a request-based sleep decision.
+ *  The panel is the only server that runs Traefik and produces request
+ *  counters, so its scrape (not the app's replica servers) is what "fresh"
+ *  means. False when there is no panel. */
+export function requestMetricsFresh(now: number = Date.now()): boolean {
+  const panelServerId = db.getPanel()?.server_id;
+  if (panelServerId === undefined) return false;
+  const at = lastScrapeOkAt.get(panelServerId);
+  return at !== undefined && now - at < METRICS_FRESH_MS;
 }
 
 /** Test hook: clear all in-memory scrape state. */

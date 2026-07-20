@@ -3,13 +3,15 @@
 // systemd / install generators) and traefik-render.ts (desired-state + dynamic
 // YAML render). Kept dependency-light so neither half has to import the other.
 
-/** Pinned Traefik release installed on every server. v3.5+ is required for
- *  TCP server health checks (`tcp.services.*.loadBalancer.healthCheck`),
- *  which replace Caddy's passive checks for health_check=0 apps. */
+/** Pinned Traefik release installed on the panel server (the only server that
+ *  runs Traefik). v3.5+ is required for TCP server health checks
+ *  (`tcp.services.*.loadBalancer.healthCheck`), which replace Caddy's passive
+ *  checks for health_check=0 apps. */
 export const TRAEFIK_VERSION = "3.7.7";
 
-/** Prometheus metrics entrypoint. The reconciler scrapes it per tick over SSH
- *  (curl from localhost) to drive request-rate-based scale-to-zero. */
+/** Prometheus metrics entrypoint. The reconciler scrapes it on the panel per
+ *  tick over SSH (curl from localhost) to drive request-rate-based
+ *  scale-to-zero. */
 export const TRAEFIK_METRICS_PORT = 8899;
 
 /** Fixed username for password-protected apps. The old auth-proxy sidecar was
@@ -89,9 +91,3 @@ export const TRAEFIK_ACME_DNS_PATH = "/etc/traefik/acme-dns.json";
  *  the panel server ONLY (see traefik-manager.ts); the unit references it
  *  with a `-` prefix so workers without the file still boot. */
 export const TRAEFIK_ENV_PATH = "/etc/traefik/traefik.env";
-
-/** Entrypoint carrying an app's public raw TCP/UDP port (`pub30001`,
- *  `pubu30050`, …). One per port in the two public pool blocks. */
-export function publicPortEntrypoint(port: number, protocol: "tcp" | "udp"): string {
-  return protocol === "udp" ? `pubu${port}` : `pub${port}`;
-}

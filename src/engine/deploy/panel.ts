@@ -21,7 +21,7 @@ import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
   cloneAndBuild, healthCheck, getContainerLogs,
 } from "../../shared/remote/index.ts";
-import { deployTraefikPanelSite } from "../scale/traefik-manager.ts";
+import { deployTraefikPanelSite, installTraefikOn } from "../scale/traefik-manager.ts";
 import { wakerPublishFlags } from "../scale/traefik-constants.ts";
 import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
@@ -344,6 +344,12 @@ export async function bootstrapPanel(
     // wildcard issuance may lag the health check by ~30s.
     onProgress("ingress", `Configuring reverse proxy for ${domain}...`);
     const useInternalTls = domain.endsWith(".nip.io");
+    // Traefik runs on the panel ONLY and cloud-init no longer installs it, so
+    // install it here (idempotent) before writing the panel vhost. Docker
+    // readiness was already confirmed above (the docker --version SSH check),
+    // which also proves cloud-init finished and SSH is reachable.
+    onProgress("ingress", "Installing Traefik on the panel server...");
+    await installTraefikOn(serverIp, hostKey || undefined);
     await deployTraefikPanelSite(
       serverIp,
       domain,

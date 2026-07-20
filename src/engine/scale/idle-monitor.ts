@@ -72,7 +72,6 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
     return sum + r.cpu_percent / limitCores;
   }, 0) / count;
   const avgMem = replicas.reduce((sum, r) => sum + r.memory_percent, 0) / count;
-  const serverIds = [...new Set(replicas.map((r) => r.server_id))];
 
   // HTTP-routed apps (same predicate as the ingress renderer) have Traefik
   // request counters; raw-TCP apps (internal_protocol='tcp', no auth) don't, so
@@ -87,12 +86,13 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
   // CPU and memory are the universal saturation signals (every app has them).
   // Request rate is an additional HPA-style "Pods" metric: each metric proposes
   // a desired replica count and the highest (max) wins. It only participates
-  // for HTTP apps with a configured target and fresh Traefik metrics —
+  // for HTTP apps with a configured target and a fresh Traefik scrape from the
+  // panel (the only server that renders routers / produces request counters) —
   // otherwise it drops out and CPU/RAM alone drive the decision (a stale scrape
   // must never zero the signal, or it would look like idle traffic).
   const cpuRatio = avgCpu / app.autoscale_cpu_threshold;
   const memRatio = avgMem / app.autoscale_mem_threshold;
-  const reqScalingOn = httpRouted && app.autoscale_req_threshold > 0 && requestMetricsFresh(serverIds);
+  const reqScalingOn = httpRouted && app.autoscale_req_threshold > 0 && requestMetricsFresh();
   // requests_per_min is the app-wide total; compare the per-replica average to
   // the target so ceil(count * ratio) converges to the right replica count.
   const reqRatio = reqScalingOn
@@ -128,8 +128,8 @@ export async function evaluateAutoScale(appId: number): Promise<void> {
     idleSince.delete(appId); // CPU idle tracker is only for the legacy path
     const idleTimeout = app.scale_to_zero_after ?? 300;
     // Fail safe: a failed scrape is "unknown", not "zero traffic" — no sleep
-    // decision until this tick's metrics arrived from every replica's server.
-    if (!requestMetricsFresh(serverIds)) {
+    // decision until this tick's Traefik metrics arrived from the panel.
+    if (!requestMetricsFresh()) {
       log("autoscale", `App ${appId}: request metrics stale/missing — skipping sleep decision`);
       return;
     }

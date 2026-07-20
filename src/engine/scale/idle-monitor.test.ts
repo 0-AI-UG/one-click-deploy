@@ -37,6 +37,7 @@ mock.module("../../shared/remote/index.ts", () => ({
 }));
 
 import { insertServer } from "../../shared/db/servers.ts";
+import { insertPanel, deletePanel } from "../../shared/db/panel.ts";
 import { insertApp, getApp } from "../../shared/db/apps.ts";
 import {
   insertReplica,
@@ -77,8 +78,19 @@ function makeApp(opts: { healthCheck?: boolean; authPassword?: string; internalP
   });
 }
 
-/** Mark a server's request metrics as freshly scraped this tick. */
+/** Mark request metrics as freshly scraped this tick. Freshness now tracks the
+ *  PANEL's Traefik scrape, so make `serverId` the panel and record a scrape for
+ *  it. (Traefik runs on the panel only; the given server stands in as panel.) */
 function markMetricsFresh(serverId: number) {
+  deletePanel();
+  insertPanel({
+    server_id: serverId,
+    name: "ocd-panel",
+    domain: "panel.example.com",
+    git_repo: "https://x.git",
+    container_port: 3001,
+    host_port: 3001,
+  });
   ingestServerRequestMetrics(serverId, "# scrape ok\n");
 }
 
@@ -92,6 +104,7 @@ beforeEach(() => {
   sshExec.mockClear();
   idleSince.clear();
   resetRequestMetricsState();
+  deletePanel(); // freshness reads the panel row — keep tests independent
 });
 
 function setAutoscale(appId: number, fields: {
@@ -363,12 +376,12 @@ describe("evaluateAutoScale", () => {
   test("request-based sleep fail-safe: stale/missing scrape skips the sleep decision", async () => {
     const lastRequestAt = new Date(Date.now() - 600_000);
     const { app } = setupHttpSleepApp({ lastRequestAt });
-    // No markMetricsFresh — the replica's server was never scraped.
+    // No markMetricsFresh — the panel's Traefik was never scraped this tick.
 
     await evaluateAutoScale(app.id);
 
     expect(desiredOf(app.id)).toBe(1);
-    // last_request_at is untouched: a stale server means "unknown", not "idle".
+    // last_request_at is untouched: a stale scrape means "unknown", not "idle".
     expect(getApp(app.id)!.last_request_at).toBe(lastRequestAt.toISOString());
   });
 

@@ -18,7 +18,6 @@ import {
   BASIC_AUTH_USER,
   WAKER_HTTP_PORT,
   WAKER_HTTP_SERVICE,
-  publicPortEntrypoint,
 } from "./traefik-constants.ts";
 
 /** Return an object with keys inserted in sorted order — JSON.stringify then
@@ -98,6 +97,11 @@ export type DesiredState = {
    *  reconciler has attached the panel; sleeping apps then render no waker
    *  route (they fall back to rendering nothing, as before). */
   panelPrivateIpv4: string | null;
+  /** The panel server's PUBLIC IPv4 — the DNAT `daddr` the VIP proxy keys the
+   *  public raw path on, so the fleet-wide-identical proxy config only
+   *  intercepts 30000-30099 on the panel. Null until a panel server exists.
+   *  Consumed by the ocd-proxy renderer only; Traefik rendering ignores it. */
+  panelPublicIpv4: string | null;
   /** Managed DNS zone name (settings `dns_zone_name`); "" when none. Drives
    *  the wildcard-cert TLS selection in publicTls — threaded through the
    *  snapshot so the renderer stays pure. */
@@ -193,6 +197,7 @@ export function collectDesiredState(): DesiredState {
     services,
     panelHostPort: panel?.host_port ?? null,
     panelPrivateIpv4: panelServer?.private_ipv4 || null,
+    panelPublicIpv4: panelServer?.ipv4 || null,
     zoneName: db.getSettings()["dns_zone_name"] ?? "",
   };
 }
@@ -236,8 +241,7 @@ export function publicTls(domain: string, zoneName: string): TlsConfig {
  *     level; each app has exactly ONE HTTP service (its public router's).
  *   - active HTTP health check — failing replicas leave rotation between
  *     reconciler ticks instead of relying on retry-based failover. Gated on
- *     the health_check probe flag; raw-exposed apps keep the TCP connect
- *     check on their pubtcp service instead.
+ *     the health_check probe flag.
  */
 function httpLoadBalancer(app: DesiredApp): Record<string, unknown> {
   const lb: Record<string, unknown> = {
@@ -257,17 +261,17 @@ function httpLoadBalancer(app: DesiredApp): Record<string, unknown> {
 /**
  * Render /etc/traefik/dynamic/ocd.yml from a desired-state snapshot.
  *
- * Traefik now carries public ingress only — internal app-to-app traffic is
- * owned by the per-host VIP proxy (src/proxy/). Only the panel (`isPanel`)
- * renders routers: app domains, public raw TCP/UDP ports, managed-service
- * domains, and the global web→websecure redirect. Workers get an empty config.
+ * Traefik now carries public HTTP ingress only — internal app-to-app traffic
+ * AND the public raw TCP/UDP pool (30000-30099) are both owned by the per-host
+ * VIP proxy (src/proxy/). Only the panel (`isPanel`) renders routers: public
+ * app domains, managed-service domains, and the global web→websecure redirect.
+ * Workers get an empty config.
  *
  * A SLEEPING public app does not disappear — its domain router is pointed at
  * the panel WAKER instead of a replica pool, so any HTTP connection
  * transparently wakes the app and is held-and-forwarded (see waker.ts). The
- * reconciler re-renders back to real replicas once it wakes. A sleeping app
- * renders no public raw TCP/UDP route (raw scale-to-zero is unsupported), and
- * nothing at all before the panel has a private IP (nowhere to route).
+ * reconciler re-renders back to real replicas once it wakes; before the panel
+ * has a private IP there is nowhere to route, so it renders nothing.
  *
  * Output key order is deterministic so the manager's content-hash cache can
  * skip no-op writes.
@@ -279,10 +283,6 @@ export function renderDynamicConfig(
   const httpRouters: Record<string, unknown> = {};
   const httpMiddlewares: Record<string, unknown> = {};
   const httpServices: Record<string, unknown> = {};
-  const tcpRouters: Record<string, unknown> = {};
-  const tcpServices: Record<string, unknown> = {};
-  const udpRouters: Record<string, unknown> = {};
-  const udpServices: Record<string, unknown> = {};
 
   let needRetry = false;
   let needSecHeaders = false;
@@ -300,39 +300,11 @@ export function renderDynamicConfig(
     // one there is nowhere to route, so it renders nothing.
     const routeToWaker = app.asleep && wakerIp != null;
 
-    // Public raw TCP/UDP exposure (apps.public_port): panel only — the panel
-    // owns the public ingress IP. Deliberately independent of isPublic/domain
-    // (an HTTP-private app can still be TCP-exposed, e.g. a database) and of
-    // basicAuth (raw sockets have no HTTP auth; the user opted into raw
-    // exposure explicitly). Raw pass-through, no TLS termination. A sleeping
-    // app renders no raw route — raw scale-to-zero is unsupported.
-    if (opts.isPanel && app.publicPort != null && hasUpstreams && !app.asleep) {
-      if (app.publicProtocol === "udp") {
-        // UDP has no routing rule concept and UDP loadBalancers support no
-        // health checks — the emitted shape is just entrypoint → dial pool.
-        udpRouters[`pubudp-${app.name}`] = {
-          entryPoints: [publicPortEntrypoint(app.publicPort, "udp")],
-          service: `pubudp-${app.name}`,
-        };
-        udpServices[`pubudp-${app.name}`] = {
-          loadBalancer: {
-            servers: app.upstreams.map((u) => ({ address: u })),
-          },
-        };
-      } else {
-        tcpRouters[`pubtcp-${app.name}`] = {
-          entryPoints: [publicPortEntrypoint(app.publicPort, "tcp")],
-          rule: "HostSNI(`*`)",
-          service: `pubtcp-${app.name}`,
-        };
-        tcpServices[`pubtcp-${app.name}`] = {
-          loadBalancer: {
-            servers: app.upstreams.map((u) => ({ address: u })),
-            healthCheck: { interval: "10s", timeout: "3s" },
-          },
-        };
-      }
-    }
+    // NOTE: public raw TCP/UDP exposure (apps.public_port, the 30000-30099
+    // pool) no longer routes through Traefik — the per-host VIP proxy owns it
+    // now (a dedicated auth-free public listener plus panel-scoped nftables
+    // DNAT; see src/proxy/ and proxy-render.ts). That path also gains working
+    // wake-on-connect, which Traefik's L4-passthrough entrypoints never had.
 
     // Public route: panel only, public apps with a domain, awake with a
     // servable pool or asleep with a reachable waker.
@@ -463,14 +435,6 @@ export function renderDynamicConfig(
   if (Object.keys(httpMiddlewares).length) http.middlewares = sortKeys(httpMiddlewares);
   if (Object.keys(httpServices).length) http.services = sortKeys(httpServices);
   if (Object.keys(http).length) config.http = http;
-  const tcp: Record<string, unknown> = {};
-  if (Object.keys(tcpRouters).length) tcp.routers = sortKeys(tcpRouters);
-  if (Object.keys(tcpServices).length) tcp.services = sortKeys(tcpServices);
-  if (Object.keys(tcp).length) config.tcp = tcp;
-  const udp: Record<string, unknown> = {};
-  if (Object.keys(udpRouters).length) udp.routers = sortKeys(udpRouters);
-  if (Object.keys(udpServices).length) udp.services = sortKeys(udpServices);
-  if (Object.keys(udp).length) config.udp = udp;
   return JSON.stringify(config, null, 2);
 }
 

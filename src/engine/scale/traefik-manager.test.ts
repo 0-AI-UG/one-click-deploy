@@ -22,6 +22,7 @@ import { saveSetting } from "../../shared/db/settings.ts";
 import {
   convergeServerTraefik,
   reconcilePanelSite,
+  reconcileWorkerTeardown,
   type ServerAccess,
 } from "./traefik-manager.ts";
 import {
@@ -104,6 +105,38 @@ describe("reconcilePanelSite", () => {
     expect(sshExec).toHaveBeenCalledTimes(2);
     const [, cmd] = sshExec.mock.calls[1] as unknown as [string, string];
     expect(cmd).toContain("new.example.com");
+  });
+});
+
+describe("reconcileTraefik worker teardown", () => {
+  function disableCalls(): Array<[string, string]> {
+    return (sshExec.mock.calls as unknown as Array<[string, string]>).filter(
+      ([, cmd]) => cmd.includes("disable --now ocd-traefik"),
+    );
+  }
+
+  test("stops+disables ocd-traefik on non-panel servers, never on the panel", async () => {
+    const panelSrv = makePanelServer("192.0.2.40");
+    makePanelServer("192.0.2.41"); // a ready worker
+    insertPanel({
+      server_id: panelSrv.id,
+      name: "ocd-panel",
+      domain: "panel.example.com",
+      git_repo: "https://x.git",
+      container_port: 3001,
+      host_port: 3001,
+    });
+
+    await reconcileWorkerTeardown();
+
+    const disables = disableCalls();
+    // The worker got a teardown; the panel never does.
+    expect(disables.some(([host]) => host === "192.0.2.41")).toBe(true);
+    expect(disables.some(([host]) => host === "192.0.2.40")).toBe(false);
+    // Every teardown call is stop+disable only — never deletes binary/config.
+    for (const [, cmd] of disables) {
+      expect(cmd).toContain("systemctl disable --now ocd-traefik");
+    }
   });
 });
 

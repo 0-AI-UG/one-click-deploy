@@ -56,7 +56,7 @@ export async function runProxy(
   let appliedRuleset: string | null = null;
   let natApplied = false;
   const syncNat = async (cfg: ProxyConfig): Promise<void> => {
-    const ruleset = renderNatRuleset(cfg.apps);
+    const ruleset = renderNatRuleset(cfg.apps, cfg.publicIngressIp ?? null);
     if (ruleset === appliedRuleset) return;
     try {
       await applyNatRuleset(ruleset);

@@ -38,6 +38,18 @@ function makeApp() {
   });
 }
 
+/** Make `serverId` the panel — freshness now tracks the panel's scrape. */
+function makePanel(serverId: number) {
+  return db.insertPanel({
+    server_id: serverId,
+    name: "ocd-panel",
+    domain: "panel.example.com",
+    git_repo: "https://x.git",
+    container_port: 3001,
+    host_port: 3001,
+  });
+}
+
 function metricsFor(appName: string, entries: Array<{ code: string; n: number }>): string {
   const lines = [
     "# HELP traefik_service_requests_total How many HTTP requests processed on a service.",
@@ -53,6 +65,7 @@ function metricsFor(appName: string, entries: Array<{ code: string; n: number }>
 
 beforeEach(() => {
   resetRequestMetricsState();
+  db.deletePanel(); // freshness reads db.getPanel() — keep tests independent
 });
 
 describe("parseServiceRequestTotals", () => {
@@ -91,13 +104,14 @@ describe("parseServiceRequestTotals", () => {
 });
 
 describe("ingestServerRequestMetrics", () => {
-  test("first scrape is baseline only: no last_request_at, but server becomes fresh", () => {
+  test("first scrape is baseline only: no last_request_at, but panel becomes fresh", () => {
     const server = makeServer();
+    makePanel(server.id);
     const app = makeApp();
     ingestServerRequestMetrics(server.id, metricsFor(app.name, [{ code: "200", n: 1000 }]));
 
     expect(db.getApp(app.id)!.last_request_at).toBeNull();
-    expect(requestMetricsFresh([server.id])).toBe(true);
+    expect(requestMetricsFresh()).toBe(true);
   });
 
   test("counter increase sets last_request_at and requests_per_min", () => {
@@ -161,12 +175,13 @@ describe("ingestServerRequestMetrics", () => {
     expect(db.getApp(app.id)!.requests_per_min).toBe(12);
   });
 
-  test("failed scrape (null/empty) does not mark the server fresh", () => {
+  test("failed scrape (null/empty) does not mark the panel fresh", () => {
     const server = makeServer();
+    makePanel(server.id);
     ingestServerRequestMetrics(server.id, null);
-    expect(requestMetricsFresh([server.id])).toBe(false);
+    expect(requestMetricsFresh()).toBe(false);
     ingestServerRequestMetrics(server.id, "   \n");
-    expect(requestMetricsFresh([server.id])).toBe(false);
+    expect(requestMetricsFresh()).toBe(false);
   });
 
   test("only app-* Traefik service counters feed last_request_at (svc-* ignored)", () => {
@@ -187,29 +202,43 @@ describe("ingestServerRequestMetrics", () => {
 
   test("unknown service names are ignored", () => {
     const server = makeServer();
+    makePanel(server.id);
     ingestServerRequestMetrics(server.id, metricsFor("no-such-app", [{ code: "200", n: 1 }]));
     ingestServerRequestMetrics(server.id, metricsFor("no-such-app", [{ code: "200", n: 5 }]));
-    // No throw, server still fresh.
-    expect(requestMetricsFresh([server.id])).toBe(true);
+    // No throw, panel still fresh.
+    expect(requestMetricsFresh()).toBe(true);
   });
 });
 
-describe("requestMetricsFresh", () => {
-  test("false for never-scraped servers, true within the window, false beyond it", () => {
+describe("requestMetricsFresh (panel-based)", () => {
+  test("false when there is no panel, even after a successful scrape", () => {
     const server = makeServer();
-    expect(requestMetricsFresh([server.id])).toBe(false);
+    ingestServerRequestMetrics(server.id, "# ok\n");
+    expect(requestMetricsFresh()).toBe(false);
+  });
+
+  test("false before scrape, true within the window, false beyond it", () => {
+    const server = makeServer();
+    makePanel(server.id);
+    expect(requestMetricsFresh()).toBe(false);
 
     const t0 = Date.now();
     ingestServerRequestMetrics(server.id, "# ok\n", t0);
-    expect(requestMetricsFresh([server.id], t0 + 1000)).toBe(true);
-    expect(requestMetricsFresh([server.id], t0 + METRICS_FRESH_MS + 1)).toBe(false);
+    expect(requestMetricsFresh(t0 + 1000)).toBe(true);
+    expect(requestMetricsFresh(t0 + METRICS_FRESH_MS + 1)).toBe(false);
   });
 
-  test("requires every listed server to be fresh", () => {
-    const s1 = makeServer();
-    const s2 = makeServer();
-    ingestServerRequestMetrics(s1.id, "# ok\n");
-    expect(requestMetricsFresh([s1.id])).toBe(true);
-    expect(requestMetricsFresh([s1.id, s2.id])).toBe(false);
+  test("tracks the panel's scrape, not a non-panel server's", () => {
+    const panelSrv = makeServer();
+    const worker = makeServer();
+    makePanel(panelSrv.id);
+
+    // Only a worker was scraped → panel is still stale.
+    ingestServerRequestMetrics(worker.id, "# ok\n");
+    expect(requestMetricsFresh()).toBe(false);
+
+    // The panel's own scrape is what flips it fresh.
+    ingestServerRequestMetrics(panelSrv.id, "# ok\n");
+    expect(requestMetricsFresh()).toBe(true);
   });
 });

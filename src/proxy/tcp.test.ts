@@ -273,6 +273,35 @@ describe("contract: authProtected connections are refused at the TCP layer (P1b)
   }, 10_000);
 });
 
+describe("public listener: enforceAuth=false serves auth-protected apps raw", () => {
+  test("an authProtected app still echoes through a public (enforceAuth:false) listener", async () => {
+    const echo = echoServer();
+    const protectedApp = { ...app({ backends: [`127.0.0.1:${echo.port}`] }), authProtected: true } as ProxyApp;
+    const handle = openTcpListener(protectedApp, { port: 0, protocol: "tcp" }, noWake, { enforceAuth: false });
+    try {
+      // Public raw exposure is deliberately auth-free — the fail-close is skipped.
+      expect(await roundtrip(handle.port, "raw and open")).toBe("raw and open");
+      expect(Buffer.concat(echo.received).toString()).toBe("raw and open");
+    } finally {
+      handle.stop();
+      echo.stop();
+    }
+  });
+
+  test("the internal listener (default enforceAuth) still fail-closes the same app", async () => {
+    const echo = echoServer();
+    const protectedApp = { ...app({ backends: [`127.0.0.1:${echo.port}`] }), authProtected: true } as ProxyApp;
+    const handle = openTcpListener(protectedApp, { port: 0, protocol: "tcp" }, noWake);
+    try {
+      expect(await probeUntilClose(handle.port, "must not pass")).toBe("");
+      expect(Buffer.concat(echo.received).length).toBe(0);
+    } finally {
+      handle.stop();
+      echo.stop();
+    }
+  }, 10_000);
+});
+
 describe("contract: wake fallback when all backends refuse (P3b)", () => {
   // REGRESSION: currently failing by design
   test("all-refused dial falls back to the wake path and connects to the refreshed pool", async () => {

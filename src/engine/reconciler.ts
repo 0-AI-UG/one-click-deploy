@@ -43,11 +43,17 @@ async function processServer(work: ServerWorkItem): Promise<void> {
   const { server } = work;
 
   // --- Phase 1: One SSH call for all docker stats + server metrics ---
-  const { containerStats, serverMetrics, traefikMetrics } = await collectServerMetrics(server);
+  // Traefik runs on the panel only, so only the panel is scraped for request
+  // counters; workers skip the curl entirely.
+  const isPanel = server.id === db.getPanel()?.server_id;
+  const { containerStats, serverMetrics, traefikMetrics } = await collectServerMetrics(server, {
+    scrapeTraefik: isPanel,
+  });
 
-  // Request activity from Traefik's per-service counters. On a failed scrape
-  // (null) the server is left stale so sleep decisions skip its apps.
-  ingestServerRequestMetrics(server.id, traefikMetrics);
+  // Request activity from the panel's Traefik per-service counters. On a failed
+  // scrape (null) the panel is left stale so sleep decisions skip. Workers never
+  // produce these metrics, so we only ingest for the panel.
+  if (isPanel) ingestServerRequestMetrics(server.id, traefikMetrics);
 
   // Apply container metrics to replicas
   for (const { replica } of work.replicas) {

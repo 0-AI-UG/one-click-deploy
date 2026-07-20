@@ -117,18 +117,15 @@ describe("traefikStaticConfig", () => {
     ).toBe(false);
   });
 
-  test("public raw TCP/UDP pool: pub30000-pub30049 (tcp) + pubu30050-pubu30099 (udp, /udp suffix)", () => {
+  test("public raw TCP/UDP pool is NOT a set of Traefik entrypoints (owned by the VIP proxy now)", () => {
+    // The 30000-30099 pool moved off Traefik onto the per-host VIP proxy
+    // (nftables DNAT off the panel's public IP). Traefik must no longer reserve
+    // those 100 static entrypoints fleet-wide.
     const cfg = parse(traefikStaticConfig());
-    expect(cfg.entryPoints.pub30000.address).toBe(":30000");
-    expect(cfg.entryPoints.pub30049.address).toBe(":30049");
-    expect(cfg.entryPoints.pub30050).toBeUndefined();
-    expect(cfg.entryPoints.pubu30050.address).toBe(":30050/udp");
-    expect(cfg.entryPoints.pubu30099.address).toBe(":30099/udp");
-    expect(cfg.entryPoints.pubu30100).toBeUndefined();
-    const tcpCount = Object.keys(cfg.entryPoints).filter((k) => /^pub\d/.test(k)).length;
-    const udpCount = Object.keys(cfg.entryPoints).filter((k) => k.startsWith("pubu")).length;
-    expect(tcpCount).toBe(db.PUBLIC_TCP_PORT_COUNT);
-    expect(udpCount).toBe(db.PUBLIC_UDP_PORT_COUNT);
+    expect(cfg.entryPoints.pub30000).toBeUndefined();
+    expect(cfg.entryPoints.pubu30050).toBeUndefined();
+    const poolCount = Object.keys(cfg.entryPoints).filter((k) => /^pubu?\d/.test(k)).length;
+    expect(poolCount).toBe(0);
   });
 
   test("prometheus metrics on the dedicated :8899 entrypoint (not internet-reachable — cloud firewall only opens 22/80/443)", () => {
@@ -409,20 +406,13 @@ describe("renderDynamicConfig", () => {
     expect(cfg.http.routers[`pub-${sticky.name}`].service).toBe(`app-${sticky.name}`);
   });
 
-  test("active HTTP health check: path on the HTTP loadBalancer; raw-exposed apps keep the plain TCP check", () => {
+  test("active HTTP health check: path renders on the HTTP loadBalancer", () => {
     const server = makeServer("10.0.2.3");
     const httpApp = makeApp({ server, healthCheckPath: "/healthz", hostPort: 10110 });
-    const tcpApp = makeApp({ server, internalProtocol: "tcp", healthCheck: false, isPublic: false, domain: "", publicPort: 30043, hostPort: 10111 });
-    // Simulate a stale row: a path set on a TCP-routed app must not render.
-    db.updateAppIngressSettings(tcpApp.id, { health_check_path: "/healthz" });
 
-    const cfg = parse(renderDynamicConfig(stateFor(httpApp.name, tcpApp.name), { isPanel: true }));
+    const cfg = parse(renderDynamicConfig(stateFor(httpApp.name), { isPanel: true }));
     expect(cfg.http.services[`app-${httpApp.name}`].loadBalancer.healthCheck).toEqual({
       path: "/healthz",
-      interval: "10s",
-      timeout: "3s",
-    });
-    expect(cfg.tcp.services[`pubtcp-${tcpApp.name}`].loadBalancer.healthCheck).toEqual({
       interval: "10s",
       timeout: "3s",
     });
@@ -496,81 +486,26 @@ describe("renderDynamicConfig", () => {
     expect(lb.healthCheck.path).toBe("/up");
   });
 
-  test("public TCP port: pubtcp router/service on the panel only, coexisting with the HTTP pub- router", () => {
+  test("public raw TCP/UDP exposure renders NO Traefik tcp/udp config (owned by the VIP proxy now)", () => {
+    // A TCP-exposed app with a public HTTP domain and a UDP-exposed private
+    // app: Traefik renders the HTTP path as before, but emits nothing for the
+    // raw ports — no tcp/udp sections at all. The raw path lives on the proxy
+    // (see proxy-render.test.ts / nat.test.ts).
     const server = makeServer("10.0.3.2");
-    const app = makeApp({ server, domain: "game.example.com", publicPort: 30040, hostPort: 10160 });
-    const panel = parse(renderDynamicConfig(stateFor(app.name), { isPanel: true }));
+    const tcpApp = makeApp({ server, domain: "game.example.com", publicPort: 30040, hostPort: 10160 });
+    const udpApp = makeApp({ server, isPublic: false, domain: "", publicPort: 30090, publicProtocol: "udp", hostPort: 10170 });
+    const panel = parse(renderDynamicConfig(stateFor(tcpApp.name, udpApp.name), { isPanel: true }));
 
-    const router = panel.tcp.routers[`pubtcp-${app.name}`];
-    expect(router).toEqual({
-      entryPoints: ["pub30040"],
-      rule: "HostSNI(`*`)",
-      service: `pubtcp-${app.name}`,
-    });
-    expect(panel.tcp.services[`pubtcp-${app.name}`].loadBalancer).toEqual({
-      servers: [{ address: "10.0.3.2:10160" }],
-      healthCheck: { interval: "10s", timeout: "3s" },
-    });
-    // Orthogonal to HTTP ingress: the pub- domain router still renders.
-    expect(panel.http.routers[`pub-${app.name}`]).toBeDefined();
-
-    // Workers never route the public pool.
-    const worker = renderDynamicConfig(stateFor(app.name), { isPanel: false });
-    expect(worker).not.toContain(`pubtcp-${app.name}`);
-  });
-
-  test("public UDP port: minimal udp router/service shape (no rule, no health check), panel only", () => {
-    const server = makeServer("10.0.3.3");
-    const app = makeApp({ server, publicPort: 30090, publicProtocol: "udp", hostPort: 10170 });
-    const panel = parse(renderDynamicConfig(stateFor(app.name), { isPanel: true }));
-
-    expect(panel.udp.routers[`pubudp-${app.name}`]).toEqual({
-      entryPoints: ["pubu30090"],
-      service: `pubudp-${app.name}`,
-    });
-    // UDP loadBalancers support no health checks — shape is just the pool.
-    expect(panel.udp.services[`pubudp-${app.name}`].loadBalancer).toEqual({
-      servers: [{ address: "10.0.3.3:10170" }],
-    });
-
-    const worker = parse(renderDynamicConfig(stateFor(app.name), { isPanel: false }));
-    expect(worker.udp).toBeUndefined();
-  });
-
-  test("HTTP-private app (public=0, no domain) can still be raw TCP-exposed", () => {
-    const server = makeServer("10.0.3.4");
-    const app = makeApp({ server, isPublic: false, domain: "", publicPort: 30041, hostPort: 10180 });
-    const panel = parse(renderDynamicConfig(stateFor(app.name), { isPanel: true }));
-
-    expect(panel.tcp.routers[`pubtcp-${app.name}`].entryPoints).toEqual(["pub30041"]);
-    expect(panel.http?.routers?.[`pub-${app.name}`]).toBeUndefined();
-  });
-
-  test("sleeping app renders no public raw TCP/UDP route (raw scale-to-zero unsupported)", () => {
-    const panelServer = makeServer("10.0.3.5");
-    db.deletePanel();
-    db.insertPanel({
-      server_id: panelServer.id, name: `panel-${randomSuffix()}`,
-      domain: "panel.example.com", git_repo: "https://github.com/x/panel",
-      container_port: 3001, host_port: 3001,
-    });
-    const tcpApp = makeApp({
-      server: panelServer,
-      isPublic: false,
-      domain: "",
-      publicPort: 30042,
-      replicaStatus: "stopped",
-      status: "sleeping",
-    });
-    const udpApp = makeApp({
-      server: panelServer, isPublic: false, domain: "",
-      publicPort: 30091, publicProtocol: "udp",
-      replicaStatus: "stopped", status: "sleeping",
-    });
-    const panel = renderDynamicConfig(stateFor(tcpApp.name, udpApp.name), { isPanel: true });
-    expect(panel).not.toContain(tcpApp.name);
-    expect(panel).not.toContain(udpApp.name);
-    db.deletePanel();
+    // The HTTP domain of the TCP-exposed app is untouched.
+    expect(panel.http.routers[`pub-${tcpApp.name}`]).toBeDefined();
+    // But no raw ingress objects, and no tcp/udp roots.
+    expect(panel.tcp).toBeUndefined();
+    expect(panel.udp).toBeUndefined();
+    const raw = renderDynamicConfig(stateFor(tcpApp.name, udpApp.name), { isPanel: true });
+    expect(raw).not.toContain("pubtcp-");
+    expect(raw).not.toContain("pubudp-");
+    // A UDP-only private app has no HTTP presence either — renders nothing.
+    expect(panel.http?.routers?.[`pub-${udpApp.name}`]).toBeUndefined();
   });
 
   test("password-protected sleeping app keeps basicAuth in front of the waker", () => {

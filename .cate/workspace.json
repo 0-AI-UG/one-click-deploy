@@ -38,10 +38,6 @@
     }
   },
   "panels": {
-    "faa851d8-58f2-4401-9eaa-7856411052b1": {
-      "type": "terminal",
-      "title": "Codex"
-    },
     "e852ae0e-7bdf-4d8a-856a-280f49664097": {
       "type": "terminal",
       "title": "Claude Code"
@@ -59,28 +55,6 @@
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "id": "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea",
       "canvasNodes": {
-        "1ac09204-6c23-4a33-9062-4a5e5ea6e410": {
-          "id": "1ac09204-6c23-4a33-9062-4a5e5ea6e410",
-          "origin": {
-            "x": 1000,
-            "y": 337.59000226531373
-          },
-          "size": {
-            "width": 640.5834779396491,
-            "height": 400
-          },
-          "zOrder": 623,
-          "creationIndex": 11,
-          "animationState": "idle",
-          "dockLayout": {
-            "type": "tabs",
-            "id": "cab9b8a9-65b4-4637-ba64-026a63b770e0",
-            "panelIds": [
-              "faa851d8-58f2-4401-9eaa-7856411052b1"
-            ],
-            "activeIndex": 0
-          }
-        },
         "8346a709-9139-4ef1-83e2-73c032a2c675": {
           "id": "8346a709-9139-4ef1-83e2-73c032a2c675",
           "origin": {
@@ -91,7 +65,7 @@
             "width": 640.5834779396491,
             "height": 560
           },
-          "zOrder": 683,
+          "zOrder": 736,
           "creationIndex": 12,
           "animationState": "idle",
           "dockLayout": {
@@ -113,7 +87,7 @@
             "width": 640.5834779396491,
             "height": 560
           },
-          "zOrder": 684,
+          "zOrder": 737,
           "creationIndex": 13,
           "animationState": "idle",
           "dockLayout": {
@@ -128,8 +102,8 @@
       },
       "zoomLevel": 0.9143918598643789,
       "viewportOffset": {
-        "x": -1241.3383206652582,
-        "y": -494.7553714562416
+        "x": -810.8383206652582,
+        "y": -674.7553714562416
       }
     }
   }

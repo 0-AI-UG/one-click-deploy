@@ -81,6 +81,50 @@ describe("loadConfig", () => {
   });
 });
 
+describe("public raw ingress fields", () => {
+  test("preserves publicPort/publicProtocol on an app and publicIngressIp on the root", async () => {
+    const cfg = validConfig();
+    (cfg as Record<string, unknown>).publicIngressIp = "203.0.113.10";
+    (cfg.apps[0] as Record<string, unknown>).publicPort = 30040;
+    (cfg.apps[0] as Record<string, unknown>).publicProtocol = "udp";
+    const parsed = await loadConfig(writeConfig(JSON.stringify(cfg)));
+    expect(parsed.publicIngressIp).toBe("203.0.113.10");
+    expect(parsed.apps[0].publicPort).toBe(30040);
+    expect(parsed.apps[0].publicProtocol).toBe("udp");
+  });
+
+  test("publicIngressIp may be null; omitted fields stay absent", async () => {
+    const cfg = validConfig();
+    (cfg as Record<string, unknown>).publicIngressIp = null;
+    const parsed = await loadConfig(writeConfig(JSON.stringify(cfg)));
+    expect(parsed.publicIngressIp).toBeNull();
+    expect(parsed.apps[0].publicPort).toBeUndefined();
+    expect(parsed.apps[0].publicProtocol).toBeUndefined();
+  });
+
+  test("rejects an out-of-range publicPort and a bad publicProtocol", async () => {
+    const badPort = validConfig();
+    (badPort.apps[0] as Record<string, unknown>).publicPort = 70000;
+    expect(loadConfig(writeConfig(JSON.stringify(badPort)))).rejects.toThrow(/publicPort/);
+
+    const badProto = validConfig();
+    (badProto.apps[0] as Record<string, unknown>).publicProtocol = "sctp";
+    expect(loadConfig(writeConfig(JSON.stringify(badProto)))).rejects.toThrow(/publicProtocol/);
+
+    const badIp = validConfig();
+    (badIp as Record<string, unknown>).publicIngressIp = 42;
+    expect(loadConfig(writeConfig(JSON.stringify(badIp)))).rejects.toThrow(/publicIngressIp/);
+  });
+
+  test("accepts a publicListenPort override, rejects out-of-range values", async () => {
+    const ok = await loadConfig(writeConfig(JSON.stringify({ ...validConfig(), publicListenPort: 12345 })));
+    expect(ok.publicListenPort).toBe(12345);
+    expect(loadConfig(writeConfig(JSON.stringify({ ...validConfig(), publicListenPort: 0 })))).rejects.toThrow(
+      /publicListenPort/,
+    );
+  });
+});
+
 describe("watchConfig", () => {
   test("invokes onChange when the file content changes, survives a broken write", async () => {
     const path = writeConfig(JSON.stringify(validConfig()));

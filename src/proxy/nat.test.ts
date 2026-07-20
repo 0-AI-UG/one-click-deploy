@@ -77,6 +77,49 @@ describe("renderNatRuleset", () => {
     expect(after).toBe(before);
   });
 
+  test("public TCP app: adds a daddr=publicIngressIp rule → the public listen port, alongside the internal rule", () => {
+    const out = renderNatRuleset(
+      [app({ vip: "10.96.0.14", frontPorts: [80, 3000], publicPort: 30040, publicProtocol: "tcp" })],
+      "203.0.113.10",
+    );
+    // Internal rule keys on the vip; public rule keys on the panel public IP.
+    expect(out).toContain("ip daddr 10.96.0.14 tcp dport { 80, 3000 } dnat to 10.96.0.14:18790");
+    expect(out).toContain("ip daddr 203.0.113.10 tcp dport 30040 dnat to 10.96.0.14:18789");
+  });
+
+  test("public UDP app: emits a udp DNAT rule to the public listen port", () => {
+    const out = renderNatRuleset(
+      [app({ vip: "10.96.0.20", frontPorts: [5432], publicPort: 30090, publicProtocol: "udp" })],
+      "203.0.113.10",
+    );
+    expect(out).toContain("ip daddr 203.0.113.10 udp dport 30090 dnat to 10.96.0.20:18789");
+    // Still one internal TCP rule.
+    expect(out).toContain("ip daddr 10.96.0.20 tcp dport { 5432 } dnat to 10.96.0.20:18790");
+  });
+
+  test("publicProtocol defaults to tcp when omitted", () => {
+    const out = renderNatRuleset([app({ vip: "10.96.0.14", frontPorts: [80], publicPort: 30041 })], "203.0.113.10");
+    expect(out).toContain("ip daddr 203.0.113.10 tcp dport 30041 dnat to 10.96.0.14:18789");
+  });
+
+  test("no publicIngressIp: public apps emit NO public rule (only the panel has the IP)", () => {
+    const withPort = app({ vip: "10.96.0.14", frontPorts: [80], publicPort: 30040, publicProtocol: "tcp" });
+    const out = renderNatRuleset([withPort]); // publicIngressIp defaults to null
+    expect(out).not.toContain("18789");
+    expect(out).not.toContain("30040");
+    // The internal rule is unchanged — byte-identical to an app without a public port.
+    expect(out).toBe(renderNatRuleset([app({ vip: "10.96.0.14", frontPorts: [80] })]));
+  });
+
+  test("internal rules are unchanged by the public-path additions", () => {
+    const withPublic = renderNatRuleset(
+      [app({ vip: "10.96.0.14", frontPorts: [80, 3000], publicPort: 30040 })],
+      null, // no ingress IP → no public rule
+    );
+    const withoutPublic = renderNatRuleset([app({ vip: "10.96.0.14", frontPorts: [80, 3000] })], null);
+    expect(withPublic).toBe(withoutPublic);
+  });
+
   test("empty apps: still a valid table with empty chains (clears stale rules)", () => {
     expect(renderNatRuleset([])).toBe(
       [

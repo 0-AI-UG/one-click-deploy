@@ -1,13 +1,15 @@
-// Traefik ingress manager — owns every server's /etc/traefik/dynamic/ocd.yml.
-// Renders the fleet's desired routing state from the DB (traefik-render.ts)
-// and ships it to each server over SSH with an atomic tmp+mv write; Traefik's
-// file provider hot-reloads it with zero restarts and without dropping
-// established connections on unchanged routers.
+// Traefik ingress manager — owns the PANEL's /etc/traefik/dynamic/ocd.yml.
+// Traefik runs on the panel only (all public HTTP ingress lands there); workers
+// run no Traefik, and the reconciler tears down any stray instance on them.
+// Renders the desired routing state from the DB (traefik-render.ts) and ships
+// it to the panel over SSH with an atomic tmp+mv write; Traefik's file provider
+// hot-reloads it with zero restarts and without dropping established
+// connections on unchanged routers.
 //
 // The whole file is a desired-state render, so the public API is intentionally
-// coarse: syncAllTraefik re-renders and ships every server; syncAppIngress
-// wraps it with per-app error semantics. There are no per-route add/remove
-// calls — dropping an app is just a re-sync once its rows are gone.
+// coarse: syncAllTraefik re-renders and ships the panel; syncAppIngress wraps
+// it with per-app error semantics. There are no per-route add/remove calls —
+// dropping an app is just a re-sync once its rows are gone.
 
 import * as db from "../../shared/db.ts";
 import { sshExec } from "../../shared/remote/index.ts";
@@ -57,12 +59,10 @@ function getPanelAccess(): ServerAccess | null {
 }
 
 /**
- * Every server that runs an ocd-traefik instance. A server without a private
- * IP can't be an upstream target, but its local Traefik still serves the
- * internal entrypoints for callers on that host. Only `ready` servers are
- * addressed — SSHing a `creating`/`provisioning` box is a guaranteed failure
- * (cloud-init installs Traefik and the first post-ready sync covers it), and
- * a destroying one is gone.
+ * Every `ready` server with an IPv4. Traefik itself now runs on the panel only,
+ * so this is used to enumerate the fleet for the reconciler's worker-teardown
+ * pass (stop+disable stray ocd-traefik). A `creating`/`provisioning` box would
+ * be a guaranteed SSH failure and a destroying one is gone, so both are skipped.
  */
 function getAllServerAccess(): ServerAccess[] {
   return db
@@ -73,6 +73,13 @@ function getAllServerAccess(): ServerAccess[] {
       ipv4: s.ipv4,
       hostKey: s.ssh_host_key || undefined,
     }));
+}
+
+/** Ready servers other than the panel — the targets of the Traefik teardown
+ *  pass. The panel is identified by IPv4 (its ServerAccess). */
+function getReadyNonPanelServers(): ServerAccess[] {
+  const panelIpv4 = getPanelAccess()?.ipv4;
+  return getAllServerAccess().filter((s) => s.ipv4 !== panelIpv4);
 }
 
 // Per-server write serialization. The reconciler tick and op-driven syncs run
@@ -172,53 +179,42 @@ export async function syncServerTraefik(
 }
 
 /**
- * Desired-state sync of every server's dynamic config. Partial failures are
- * tolerated — the reconciler retries lagging servers on the next tick — but
- * reported back so callers with a stake in a specific server can fail loudly.
+ * Desired-state sync of the panel's dynamic config. Only the panel renders
+ * routers now (workers render an empty config and run no Traefik), so the sync
+ * targets the panel alone. A no-op before a panel row exists (bootstrap writes
+ * the first config via deployTraefikPanelSite). A failed write is reported back
+ * — the reconciler retries next tick — so callers can fail loudly.
  */
 export async function syncAllTraefik(force = false): Promise<{ failed: string[] }> {
+  const panel = getPanelAccess();
+  if (!panel) return { failed: [] };
   const state = collectDesiredState();
-  const servers = getAllServerAccess();
-  const failed: string[] = [];
-  await Promise.all(
-    servers.map(async (srv) => {
-      try {
-        await syncServerTraefik(srv, { state, force });
-      } catch (err) {
-        failed.push(srv.name);
-        log("sync", `dynamic config sync failed on ${srv.name}: ${err}`);
-      }
-    }),
-  );
-  return { failed };
+  try {
+    await syncServerTraefik(panel, { state, force });
+    return { failed: [] };
+  } catch (err) {
+    log("sync", `dynamic config sync failed on ${panel.name}: ${err}`);
+    return { failed: [panel.name] };
+  }
 }
 
 /**
  * Re-render ingress after an app lifecycle event. The appId argument is
- * advisory for the render (which always covers the whole fleet) but decides
- * error semantics: a failed write on a server that carries this app's routes
- * (the panel, or a server hosting one of its replicas) throws so the calling
- * op fails honestly instead of logging success over stale routes. Failures on
- * unrelated servers stay tolerated — the reconciler heals them next tick.
+ * advisory for the render (which always covers every app) but decides error
+ * semantics: since only the panel serves ingress, the panel is the sole
+ * critical server for the write — a failed panel write throws so the calling
+ * op fails honestly instead of logging success over stale routes.
  */
 export async function syncAppIngress(appId: number, force = false): Promise<void> {
   const app = db.getApp(appId);
   if (app) log("sync", `app ${appId} (${app.name}) domain=${app.domain}`);
   const { failed } = await syncAllTraefik(force);
   if (failed.length === 0 || !app) return;
-  const critical = new Set<string>();
-  const panel = getPanelAccess();
-  if (panel) critical.add(panel.name);
-  for (const replica of db.getReplicas(app.id)) {
-    const server = db.getServer(replica.server_id);
-    if (server) critical.add(server.name);
-  }
-  const blocking = failed.filter((name) => critical.has(name));
-  if (blocking.length > 0) {
-    throw new Error(
-      `Ingress config write failed on ${blocking.join(", ")} — ${app.name}'s routes may be stale (the reconciler retries within 30s)`,
-    );
-  }
+  // `failed` can only contain the panel (the sole sync target), and the panel
+  // is the only server carrying this app's routes — so any failure is blocking.
+  throw new Error(
+    `Ingress config write failed on ${failed.join(", ")} — ${app.name}'s routes may be stale (the reconciler retries within 30s)`,
+  );
 }
 
 export function getPanelIngressIpv4(): string | null {
@@ -296,6 +292,17 @@ async function installTraefik(server: ServerAccess): Promise<void> {
     );
   }
   log("install", `Traefik installed and running on ${server.name}`);
+}
+
+/**
+ * Install Traefik on the panel server by IP. Panel bootstrap calls this before
+ * writing the panel vhost — cloud-init no longer installs Traefik anywhere
+ * (workers stay Traefik-free), so the panel needs an explicit, idempotent
+ * install before deployTraefikPanelSite. Thin wrapper over installTraefik that
+ * builds the ServerAccess bootstrap can't derive from a panel row yet.
+ */
+export async function installTraefikOn(ipv4: string, hostKey?: string): Promise<void> {
+  await installTraefik({ name: ipv4, ipv4, hostKey });
 }
 
 /**
@@ -412,11 +419,61 @@ export async function convergeServerTraefik(
   }
 }
 
+// Servers whose ocd-traefik we've already stopped+disabled this process
+// lifetime — the teardown SSH still runs every tick (cheap + idempotent, so a
+// server that comes back with Traefik re-enabled is caught), but we only log
+// the transition once to keep the reconciler log quiet.
+const traefikTornDown = new Set<string>();
+
 /**
- * Reconciler entrypoint: probe every ready server in parallel and converge
- * binary, static config, systemd unit, dynamic config, and the panel's own
- * vhost onto desired state. Also rolls out static config changes (e.g. a
- * bumped TRAEFIK_VERSION or new ACME email) to the whole fleet.
+ * Stop + disable a stray ocd-traefik on a non-panel server. Traefik runs on the
+ * panel only now, so any worker still running it (installed by an older
+ * cloud-init) is torn down here. Reversible and idempotent: stop+disable only,
+ * never deleting the binary or /etc/traefik, and `|| true` makes an
+ * already-absent unit a no-op success.
+ */
+async function teardownWorkerTraefik(server: ServerAccess): Promise<void> {
+  const result = await sshExec(
+    server.ipv4,
+    `systemctl disable --now ocd-traefik 2>/dev/null || true`,
+    server.hostKey,
+  );
+  if (result.exitCode !== 0) {
+    traefikTornDown.delete(server.ipv4);
+    throw new Error(
+      `ocd-traefik teardown failed on ${server.name}: ${result.stderr || result.stdout}`,
+    );
+  }
+  if (!traefikTornDown.has(server.ipv4)) {
+    traefikTornDown.add(server.ipv4);
+    log("teardown", `stopped + disabled ocd-traefik on ${server.name} (Traefik is panel-only)`);
+  }
+}
+
+/**
+ * Stop + disable ocd-traefik on every ready non-panel server. Traefik runs on
+ * the panel only, so this removes stray worker instances (installed by an older
+ * cloud-init) within one reconciler tick. Partial failure is tolerated — one
+ * unreachable server never aborts the rest.
+ */
+export async function reconcileWorkerTeardown(): Promise<void> {
+  await Promise.all(
+    getReadyNonPanelServers().map(async (server) => {
+      try {
+        await teardownWorkerTraefik(server);
+      } catch (err) {
+        log("reconcile", `traefik teardown failed on ${server.name}: ${err}`);
+      }
+    }),
+  );
+}
+
+/**
+ * Reconciler entrypoint. Traefik runs on the panel only, so this converges the
+ * PANEL's binary, static config, systemd unit, dynamic config, and its own
+ * vhost onto desired state (rolling out static-config changes like a bumped
+ * TRAEFIK_VERSION), then tears down any stray ocd-traefik on the workers.
+ * Partial failure is tolerated — one unreachable server never aborts the rest.
  */
 export async function reconcileTraefik(): Promise<void> {
   const state = collectDesiredState();
@@ -425,15 +482,13 @@ export async function reconcileTraefik(): Promise<void> {
     // stale file on a former panel is harmless and never restart-looped.
     panelEnv: await expectedPanelEnv(state.zoneName),
   };
-  await Promise.all(
-    getAllServerAccess().map(async (server) => {
-      try {
-        await convergeServerTraefik(server, state, expected);
-      } catch (err) {
-        log("reconcile", `convergence failed on ${server.name}: ${err}`);
-      }
-    }),
-  );
+  const panel = getPanelAccess();
+  const converge = panel
+    ? convergeServerTraefik(panel, state, expected).catch((err) =>
+        log("reconcile", `convergence failed on ${panel.name}: ${err}`),
+      )
+    : Promise.resolve();
+  await Promise.all([converge, reconcileWorkerTeardown()]);
 }
 
 /**

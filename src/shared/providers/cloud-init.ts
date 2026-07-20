@@ -1,9 +1,9 @@
-import { traefikInstallScript } from "../../engine/scale/traefik-provision.ts";
-
 /**
  * Generate a cloud-init user-data script for provisioning servers.
- * The base script installs Docker and Traefik, and hardens SSH.
- * Provider-specific packages/commands can be injected.
+ * The base script installs Docker, hardens SSH, and enables unattended
+ * upgrades. Traefik is NOT installed here — it runs on the panel server only
+ * (the panel bootstrap installs it explicitly over SSH), so workers stay
+ * Traefik-free. Provider-specific packages/commands can be injected.
  */
 export function cloudInitScript(opts?: {
   extraPackages?: string[];
@@ -73,15 +73,6 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 AUTOUPGRADE
 systemctl enable unattended-upgrades
-
-# Install Traefik (pinned release, arch-detected) + ocd-traefik systemd unit.
-# Same script the reconciler uses to backfill servers over SSH — run it in a
-# subshell so its 'set -e' can't abort the rest of cloud-init.
-cat > /tmp/ocd-traefik-install.sh <<'TRAEFIK_INSTALL'
-${traefikInstallScript()}
-TRAEFIK_INSTALL
-bash /tmp/ocd-traefik-install.sh
-rm -f /tmp/ocd-traefik-install.sh
 
 # Signal ready
 touch /root/.provisioned
