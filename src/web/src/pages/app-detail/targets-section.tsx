@@ -1,25 +1,16 @@
 import { useState, useEffect } from "react";
-import { get, post, patch } from "../../api/client.ts";
+import { get, post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, Table, Spinner, EmptyState, confirm, showToast } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { NeoSelect } from "../../components/neo-select.tsx";
 import type { ResourceOpsResult } from "../../hooks/useOperation.ts";
-import { GitBranch, ArrowUpCircle, Plus, Rocket, X, Layers, Check } from "lucide-react";
+import { GitBranch, ArrowUpCircle, Plus, Rocket, X } from "lucide-react";
 import type { AppTargetsResponse } from "../../../../shared/rpc.ts";
 
 const errMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
-// A pool name is a lowercase slug, ≤32 chars — mirrors the backend validation on
-// PATCH /api/apps/:id/pool. Sentinel select value that reveals the "new pool"
-// text input instead of switching pools.
-const POOL_SLUG = /^[a-z][a-z0-9-]*$/;
-const NEW_POOL = " new-pool";
-
-interface TargetsTabProps {
-  // The full AppData object is passed from AppDetailPage; placement_pool is the
-  // pool this app's replicas schedule onto ("general" = default).
-  app: { id: number; name: string; placement_pool?: string };
+interface TargetsSectionProps {
+  app: { id: number; name: string };
   // Shared op-runner from AppDetailPage: tracks op_id in a toast + ops store
   // (identical to how rollback is surfaced from the Deployments tab).
   action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
@@ -28,22 +19,17 @@ interface TargetsTabProps {
 
 const badgeClass = "font-mono text-[9px] font-bold uppercase tracking-wider border-2 border-fg px-1.5 py-0.5 bg-alt text-fg";
 
-export function TargetsTab({ app, action, ops }: TargetsTabProps) {
+// Deploy-targets settings section: lives among the app's Settings cards. Lists a
+// base app's staging/dev siblings (each promotable to production), or — when this
+// app IS a sibling — offers promotion up to its parent.
+export function TargetsSection({ app, action, ops }: TargetsSectionProps) {
   const [data, setData] = useState<AppTargetsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   // Retrospective target setup: inline form to spin up a `<name>-<target>`
-  // isolated sibling straight from this tab (reuses the parent's build config).
+  // isolated sibling straight from this section (reuses the parent's build config).
   const [adding, setAdding] = useState(false);
   const [targetName, setTargetName] = useState("staging");
   const [creating, setCreating] = useState(false);
-  // Retrospective re-pool: current placement pool sourced from the app prop,
-  // kept in local state so the UI reflects a change without a parent refetch.
-  const [currentPool, setCurrentPool] = useState<string>(app.placement_pool ?? "general");
-  const [poolOptions, setPoolOptions] = useState<string[]>(["general", "staging"]);
-  const [poolSaving, setPoolSaving] = useState(false);
-  const [newPoolMode, setNewPoolMode] = useState(false);
-  const [newPoolValue, setNewPoolValue] = useState("");
-  const [newPoolErr, setNewPoolErr] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -54,53 +40,9 @@ export function TargetsTab({ app, action, ops }: TargetsTabProps) {
     } finally {
       setLoading(false);
     }
-    // Non-fatal: keep the two hardcoded fallbacks if the pool list can't load.
-    try {
-      const res = await get("/api/pools");
-      if (Array.isArray(res?.pools) && res.pools.length) setPoolOptions(res.pools);
-    } catch {
-      /* keep fallback */
-    }
   };
 
   useEffect(() => { load(); }, [app.id]);
-  useEffect(() => { setCurrentPool(app.placement_pool ?? "general"); }, [app.id, app.placement_pool]);
-
-  const changePool = async (next: string) => {
-    if (next === currentPool) return;
-    const prev = currentPool;
-    setCurrentPool(next);
-    setPoolSaving(true);
-    try {
-      await patch(`/api/apps/${app.id}/pool`, { pool: next });
-      showToast(`Placement pool set to "${next}"`, "success");
-    } catch (err) {
-      setCurrentPool(prev);
-      showToast(errMessage(err), "error");
-    } finally {
-      setPoolSaving(false);
-    }
-  };
-
-  const onPoolSelect = (v: string) => {
-    if (v === NEW_POOL) {
-      setNewPoolValue("");
-      setNewPoolErr(null);
-      setNewPoolMode(true);
-      return;
-    }
-    changePool(v);
-  };
-
-  const confirmNewPool = () => {
-    const slug = newPoolValue.trim().toLowerCase();
-    if (!POOL_SLUG.test(slug) || slug.length > 32) {
-      setNewPoolErr("Pool must be a lowercase slug, ≤32 chars");
-      return;
-    }
-    setNewPoolMode(false);
-    changePool(slug);
-  };
 
   const promote = async (sourceName: string, destName: string) => {
     if (await confirm(
@@ -132,74 +74,19 @@ export function TargetsTab({ app, action, ops }: TargetsTabProps) {
   };
 
   if (loading || !data) {
-    return <div className="flex justify-center py-16"><Spinner /></div>;
+    return (
+      <Card className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <GitBranch size={14} className="text-fg" />
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Deploy Targets</h3>
+        </div>
+        <div className="flex justify-center py-6"><Spinner /></div>
+      </Card>
+    );
   }
 
   const { self, targets } = data;
   const isSibling = self.target !== "" && self.target !== "production";
-
-  // Retrospective placement-pool control — pick a known pool or type a new one.
-  // Gated on apps.deploy to match this tab's other mutations.
-  const poolCard = (
-    <Card className="p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <Layers size={14} className="text-fg" />
-        <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Placement Pool</h3>
-      </div>
-      <p className="text-[11px] text-fg-dim mb-3 leading-snug">
-        Replicas of this app schedule onto servers in the{" "}
-        <span className="font-mono font-bold text-fg">{currentPool}</span> pool. Changing it
-        reschedules replicas on the next reconcile.
-      </p>
-      <PermissionGate
-        permission="apps.deploy"
-        fallback={
-          <span className="font-mono text-[9px] font-bold uppercase tracking-wider border-2 border-fg px-1.5 py-0.5 bg-alt text-fg inline-flex items-center gap-1">
-            <Layers size={10} /> {currentPool}
-          </span>
-        }
-      >
-        {newPoolMode ? (
-          <div className="relative flex items-center gap-2 max-w-xs">
-            <input
-              value={newPoolValue}
-              onChange={(e) => { setNewPoolValue(e.target.value); setNewPoolErr(null); }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") confirmNewPool();
-                if (e.key === "Escape") setNewPoolMode(false);
-              }}
-              placeholder="pool-name"
-              autoFocus
-              className="flex-1 bg-bg border-2 border-fg px-2 py-1.5 font-mono text-[11px] text-fg placeholder:text-muted focus:outline-none focus:border-accent"
-            />
-            <Btn variant="primary" disabled={poolSaving} onClick={confirmNewPool}>
-              <Check size={13} /> Set
-            </Btn>
-            <Btn variant="ghost" onClick={() => setNewPoolMode(false)}>
-              <X size={13} />
-            </Btn>
-            {newPoolErr && (
-              <span className="absolute top-full left-0 mt-1 font-mono text-[9px] font-bold uppercase text-accent-red">
-                {newPoolErr}
-              </span>
-            )}
-          </div>
-        ) : (
-          <div className="w-48">
-            <NeoSelect
-              value={currentPool}
-              disabled={poolSaving}
-              onChange={onPoolSelect}
-              options={[
-                ...Array.from(new Set([...poolOptions, currentPool])).sort().map((p) => ({ value: p, label: p })),
-                { value: NEW_POOL, label: "+ New pool…" },
-              ]}
-            />
-          </div>
-        )}
-      </PermissionGate>
-    </Card>
-  );
 
   // This app IS a target sibling (e.g. "<base>-staging"): offer promotion of
   // itself up to its production parent. The parent resolved from target_of is
@@ -210,7 +97,6 @@ export function TargetsTab({ app, action, ops }: TargetsTabProps) {
     const stripped = self.name.endsWith(suffix) ? self.name.slice(0, -suffix.length) : self.name;
     const destName = self.parent?.name ?? (stripped !== self.name ? stripped : null);
     return (
-      <div className="space-y-4">
       <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">
           <GitBranch size={14} className="text-fg" />
@@ -237,8 +123,6 @@ export function TargetsTab({ app, action, ops }: TargetsTabProps) {
           </PermissionGate>
         )}
       </Card>
-      {poolCard}
-      </div>
     );
   }
 
@@ -283,7 +167,6 @@ export function TargetsTab({ app, action, ops }: TargetsTabProps) {
   // This app is a base/production app: list its staging/dev siblings, each
   // promotable back up to this app.
   return (
-    <div className="space-y-4">
     <Card className="p-4">
       <div className="flex items-center gap-2 mb-3">
         <GitBranch size={14} className="text-fg" />
@@ -340,7 +223,5 @@ export function TargetsTab({ app, action, ops }: TargetsTabProps) {
         </Table>
       )}
     </Card>
-    {poolCard}
-    </div>
   );
 }

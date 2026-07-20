@@ -58,6 +58,8 @@ export type AppData = {
   public_protocol?: string;
   /** `<panel-ip>:<public_port>` when raw TCP/UDP exposed (server-derived). */
   public_address?: string | null;
+  /** servers.pool this app's replicas schedule onto ("general" = default). */
+  placement_pool?: string;
 };
 
 export type ReplicaData = {

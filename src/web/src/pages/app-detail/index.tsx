@@ -11,7 +11,6 @@ import { LogsTab } from "./logs-tab.tsx";
 import { DeploymentsTab } from "./deployments-tab.tsx";
 import { ScalingTab } from "./scaling-tab.tsx";
 import { WebhooksTab } from "./webhooks-tab.tsx";
-import { TargetsTab } from "./targets-tab.tsx";
 import { SettingsTab, type IngressForm } from "./settings-tab.tsx";
 import type { AppData, ServerData, ReplicaData, MetricSample, ScalingEvent, DeploymentRecord } from "../../types.ts";
 
@@ -21,7 +20,7 @@ const errMessage = (err: unknown): string =>
 export function AppDetailPage({ appId }: { appId: number }) {
   const [app, setApp] = useState<AppData | null>(null);
   const [server, setServer] = useState<ServerData | null>(null);
-  const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "targets" | "settings">("overview");
+  const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
   const [nameEdit, setNameEdit] = useState("");
   const [isPublic, setIsPublic] = useState(true);
   const [portEdit, setPortEdit] = useState<number>(0);
@@ -193,7 +192,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
     { key: "deployments", label: "Deployments" },
     { key: "scaling", label: "Scaling" },
     { key: "webhooks", label: "Webhooks" },
-    { key: "targets", label: "Targets" },
     { key: "settings", label: "Settings" },
   ] as const;
 
@@ -319,14 +317,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
           setWebhookForm={setWebhookForm}
           actionLoading={actionLoading}
           action={action}
-        />
-      )}
-
-      {tab === "targets" && (
-        <TargetsTab
-          app={app}
-          action={action}
-          ops={ops}
         />
       )}
 

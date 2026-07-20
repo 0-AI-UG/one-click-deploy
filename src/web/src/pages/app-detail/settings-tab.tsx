@@ -5,6 +5,8 @@ import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe, Cpu, Network } from "lucide-react";
 import { HealthCheckField, InfoTip } from "./shared.tsx";
+import { PlacementPoolCard } from "./placement-pool-card.tsx";
+import { TargetsSection } from "./targets-section.tsx";
 import type { AppData } from "../../types.ts";
 
 export type IngressForm = {
@@ -132,30 +134,30 @@ export function SettingsTab({
             placeholder="1 (platform default)"
           />
         </Field>
-      </Card>
 
-      <PermissionGate permission="apps.redeploy">
-        <div className="flex justify-end">
-          <Btn
-            size="sm"
-            variant="primary"
-            loading={actionLoading === "save-settings" || ops.isBusyWith("redeploy")}
-            disabled={!portEdit || ops.isBusy}
-            onClick={() => action("save-settings", async () => {
-              const res = (await post(`/api/apps/${appId}/redeploy`, {
-                container_port: portEdit,
-                public: isPublic,
-                memory_mb: memEdit,
-                cpu_limit: cpuEdit,
-              })) as { op_id?: number };
-              if (res?.op_id) {
-                trackOperationInToast(res.op_id, "Saving & redeploying");
-                ops.track(res.op_id);
-              }
-            })}
-          >Save & Redeploy</Btn>
-        </div>
-      </PermissionGate>
+        <PermissionGate permission="apps.redeploy">
+          <div className="flex justify-end mt-3">
+            <Btn
+              size="sm"
+              variant="primary"
+              loading={actionLoading === "save-settings" || ops.isBusyWith("redeploy")}
+              disabled={!portEdit || ops.isBusy}
+              onClick={() => action("save-settings", async () => {
+                const res = (await post(`/api/apps/${appId}/redeploy`, {
+                  container_port: portEdit,
+                  public: isPublic,
+                  memory_mb: memEdit,
+                  cpu_limit: cpuEdit,
+                })) as { op_id?: number };
+                if (res?.op_id) {
+                  trackOperationInToast(res.op_id, "Saving & redeploying");
+                  ops.track(res.op_id);
+                }
+              })}
+            >Save & Redeploy</Btn>
+          </div>
+        </PermissionGate>
+      </Card>
 
       <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">
@@ -431,6 +433,10 @@ export function SettingsTab({
           </>
         )}
       </Card>
+
+      <TargetsSection app={app} action={action} ops={ops} />
+
+      <PlacementPoolCard appId={appId} placementPool={app.placement_pool} />
     </div>
   );
 }
