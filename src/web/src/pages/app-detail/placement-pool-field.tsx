@@ -83,8 +83,7 @@ export function PlacementPoolField({ appId, placementPool }: PlacementPoolFieldP
   return (
     <Field
       align="start"
-      label={<span className="flex items-center gap-2"><Layers size={14} className="text-fg" /> Placement Pool <InfoTip text="Replicas schedule onto servers in this pool. Changing it reschedules replicas on the next reconcile." /></span>}
-      hint={<>Replicas schedule onto the <span className="font-mono font-bold text-fg">{currentPool}</span> pool. Saved immediately; applied on the next reconcile.</>}
+      label={<span className="flex items-center gap-2"><Layers size={14} className="text-fg" /> Placement Pool <InfoTip text="Replicas schedule onto servers in this pool. Saved immediately; changing it reschedules replicas on the next reconcile." /></span>}
     >
         <PermissionGate
           permission="apps.deploy"
