@@ -16,8 +16,9 @@ mock.module("../../engine/scale/traefik-manager.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import { handleGetAppTargets, handlePromoteApp } from "./apps.ts";
+import { handleGetAppTargets, handlePromoteApp, handleCreateAppTarget, handleSetAppPool } from "./apps.ts";
 import { handleSetServerPool } from "./servers.ts";
+import { handleGetPools } from "./pools.ts";
 
 function makeApp(overrides: Partial<Parameters<typeof db.insertApp>[0]> = {}) {
   return db.insertApp({
@@ -54,6 +55,20 @@ const poolReq = (serverId: number, body: unknown) =>
 
 const promoteReq = (body: unknown) =>
   handlePromoteApp(new Request("http://x/api/apps/promote", { method: "POST", body: JSON.stringify(body) }));
+
+const createTargetReq = (appId: number, body: unknown) =>
+  handleCreateAppTarget(
+    new Request(`http://x/api/apps/${appId}/targets`, { method: "POST", body: JSON.stringify(body) }),
+    appId,
+  );
+
+const appPoolReq = (appId: number, body: unknown) =>
+  handleSetAppPool(
+    new Request(`http://x/api/apps/${appId}/pool`, { method: "PATCH", body: JSON.stringify(body) }),
+    appId,
+  );
+
+const poolsReq = () => handleGetPools(new Request("http://x/api/pools"));
 
 describe("handleGetAppTargets", () => {
   test("returns {self, targets} with the parent's staging/dev children", async () => {
@@ -125,6 +140,56 @@ describe("contract: handleGetAppTargets self.parent (T4)", () => {
   });
 });
 
+describe("handleCreateAppTarget", () => {
+  test("enqueues a deploy for an isolated <name>-<target> sibling", async () => {
+    const app = makeApp({ name: `base-${randomSuffix()}`, target: "production" });
+    const res = await createTargetReq(app.id, { target: "Staging" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { op_id: number; app_name: string };
+    // Target name is slugged; the sibling is `<name>-<target>`.
+    expect(body.app_name).toBe(`${app.name}-staging`);
+    expect(typeof body.op_id).toBe("number");
+    // The deploy op (not this handler) creates the sibling app; nothing yet.
+    expect(db.getAppByName(`${app.name}-staging`)).toBeNull();
+  });
+
+  test("404 for an unknown app", async () => {
+    const res = await createTargetReq(9_999_999, { target: "staging" });
+    expect(res.status).toBe(404);
+  });
+
+  test("400 when target is missing or not a slug", async () => {
+    const app = makeApp({ target: "production" });
+    for (const target of [undefined, "", "Bad Name", "-lead", "1up"]) {
+      const res = await createTargetReq(app.id, { target });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test('400 when target is "production" (that is the app itself)', async () => {
+    const app = makeApp({ target: "production" });
+    const res = await createTargetReq(app.id, { target: "production" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/app itself/i);
+  });
+
+  test("400 when the app is itself a target sibling", async () => {
+    const parent = makeApp({ target: "production" });
+    const child = makeApp({ name: `${parent.name}-staging`, target: "staging", target_of: parent.id });
+    const res = await createTargetReq(child.id, { target: "dev" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/production parent/i);
+  });
+
+  test("409 when the target sibling already exists", async () => {
+    const app = makeApp({ target: "production" });
+    makeApp({ name: `${app.name}-staging`, target: "staging", target_of: app.id });
+    const res = await createTargetReq(app.id, { target: "staging" });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toMatch(/already exists/i);
+  });
+});
+
 describe("handleSetServerPool", () => {
   test("accepts 'general' and 'staging' and persists the pool", async () => {
     const server = makeServer();
@@ -139,14 +204,21 @@ describe("handleSetServerPool", () => {
     expect((db.getServer(server.id) as any).pool).toBe("general");
   });
 
-  test("rejects invalid pools with 400 and leaves the pool unchanged", async () => {
+  test("accepts an arbitrary custom pool slug and persists it", async () => {
     const server = makeServer();
-    for (const pool of ["gold", "", 42, null, undefined]) {
+    const res = await poolReq(server.id, { pool: "gold-tier" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, pool: "gold-tier" });
+    expect((db.getServer(server.id) as any).pool).toBe("gold-tier");
+  });
+
+  test("rejects non-slug pools with 400 and leaves the pool unchanged", async () => {
+    const server = makeServer();
+    for (const pool of ["Bad Name", "-lead", "1up", "a".repeat(33), "", 42, null, undefined]) {
       const res = await poolReq(server.id, { pool });
       expect(res.status).toBe(400);
       const body = (await res.json()) as { ok: boolean; error: string };
       expect(body.ok).toBe(false);
-      expect(body.error).toContain('"general" or "staging"');
     }
     expect((db.getServer(server.id) as any).pool).toBe("general");
   });
@@ -186,5 +258,54 @@ describe("handlePromoteApp", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toMatch(/no successful deployment/i);
+  });
+});
+
+describe("handleSetAppPool", () => {
+  test("re-pools an app into a custom slug and persists placement_pool", async () => {
+    const app = makeApp();
+    const res = await appPoolReq(app.id, { pool: "gold-tier" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, pool: "gold-tier" });
+    expect((db.getApp(app.id) as any).placement_pool).toBe("gold-tier");
+  });
+
+  test("404 for an unknown app", async () => {
+    const res = await appPoolReq(9_999_999, { pool: "staging" });
+    expect(res.status).toBe(404);
+  });
+
+  test("400 for a non-slug or over-long pool, leaving the pool unchanged", async () => {
+    const app = makeApp();
+    const before = (db.getApp(app.id) as any).placement_pool;
+    for (const pool of ["Bad Name", "-lead", "1up", "a".repeat(33), "", 42, null, undefined]) {
+      const res = await appPoolReq(app.id, { pool });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { ok: boolean }).ok).toBe(false);
+    }
+    expect((db.getApp(app.id) as any).placement_pool).toBe(before);
+  });
+});
+
+describe("handleGetPools", () => {
+  test("returns the sorted, de-duplicated union incl. the always-present defaults", async () => {
+    // Defaults are present even with no custom assignments.
+    let res = await poolsReq();
+    expect(res.status).toBe(200);
+    let body = (await res.json()) as { pools: string[] };
+    expect(body.pools).toContain("general");
+    expect(body.pools).toContain("staging");
+
+    // Assign a server and an app to distinct custom pools; both surface.
+    const server = makeServer();
+    await poolReq(server.id, { pool: "gold-tier" });
+    const app = makeApp();
+    await appPoolReq(app.id, { pool: "silver" });
+
+    res = await poolsReq();
+    body = (await res.json()) as { pools: string[] };
+    expect(body.pools).toEqual([...body.pools].sort());
+    expect(new Set(body.pools).size).toBe(body.pools.length);
+    expect(body.pools).toEqual(expect.arrayContaining(["general", "staging", "gold-tier", "silver"]));
   });
 });

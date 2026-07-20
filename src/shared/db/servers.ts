@@ -108,6 +108,12 @@ export function getServersByPool(pool: string): ServerRow[] {
     .all(pool) as ServerRow[];
 }
 
+/** Distinct, non-empty capacity pools any server is currently assigned to. */
+export function getDistinctServerPools(): string[] {
+  return (db.query("SELECT DISTINCT pool FROM servers WHERE pool <> ''").all() as { pool: string }[])
+    .map((r) => r.pool);
+}
+
 // --- Server-level metrics ---
 
 export type ServerMetricSampleRow = {

@@ -3,6 +3,7 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
+import type { DeployRequest } from "../../shared/rpc.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
 import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB, isValidCpuLimit, MIN_CPU_LIMIT, MAX_CPU_LIMIT, isPublicProtocol, isInternalProtocol, validateIngressFields } from "../../shared/validate.ts";
@@ -517,6 +518,121 @@ export async function handleGetAppTargets(request: Request, appId: number): Prom
       { self: { id: app.id, name: app.name, target: app.target, parent }, targets },
       { headers: corsHeaders },
     );
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/**
+ * POST /api/apps/:id/targets — retrospectively set up a deploy target for an
+ * existing base/production app, without re-entering everything on the Deploy
+ * page. Body: { target: "staging" | "dev" | <slug> }.
+ *
+ * A target IS a real, isolated `<name>-<target>` sibling app, so this reuses the
+ * exact same `deploy` op the Deploy page enqueues — it just sources the build /
+ * routing config from the parent app row instead of a fresh form. The deploy op
+ * then creates the isolated environment (seeded from production, no DB link) and
+ * links `target_of` back to this app. Volumes and webhooks are deliberately NOT
+ * carried over: a target starts as a clean, isolated deploy.
+ */
+export async function handleCreateAppTarget(request: Request, appId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "apps.deploy");
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+
+    const body = (await request.json().catch(() => ({}))) as { target?: string };
+    const target = typeof body.target === "string" ? body.target.trim().toLowerCase() : "";
+    if (!target) {
+      return Response.json({ error: "target is required" }, { status: 400, headers: corsHeaders });
+    }
+    if (!/^[a-z][a-z0-9-]*$/.test(target)) {
+      return Response.json(
+        { error: "target must be a lowercase slug (letters, digits, hyphens; e.g. staging or dev)" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    if (target === "production") {
+      return Response.json(
+        { error: '"production" is the app itself — a target is a non-production sibling (e.g. staging, dev)' },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    // Targets hang off a base/production app. A sibling (its own target tag set)
+    // can't own further targets — set them up on its production parent instead.
+    if (app.target !== "" && app.target !== "production") {
+      return Response.json(
+        { error: `"${app.name}" is itself a ${app.target} target; set targets up on its production parent` },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    const childName = `${app.name}-${target}`;
+    if (db.getAppByName(childName)) {
+      return Response.json({ error: `A target "${childName}" already exists` }, { status: 409, headers: corsHeaders });
+    }
+
+    // Reuse the parent's build + routing config; leave env_vars/environment_id
+    // unset so the deploy op seeds an isolated environment from production.
+    const req: DeployRequest = {
+      app_name: childName,
+      git_repo: app.git_repo,
+      git_branch: app.git_branch || undefined,
+      container_port: app.container_port,
+      dockerfile_path: app.dockerfile_path || undefined,
+      docker_context: app.docker_context || undefined,
+      public: app.public === 1,
+      health_check: app.health_check === 0 ? false : undefined,
+      internal_protocol: app.internal_protocol === "tcp" ? "tcp" : "http",
+      sticky: app.sticky === 1 || undefined,
+      rate_limit_rps: app.rate_limit_rps || undefined,
+      ip_allowlist: app.ip_allowlist || undefined,
+      health_check_path: app.health_check_path || undefined,
+      compress: app.compress === 1 || undefined,
+      memory_mb: app.memory_mb || undefined,
+      cpu_limit: app.cpu_limit || undefined,
+      durability_class: (app.durability_class as DeployRequest["durability_class"]) || undefined,
+      target,
+      target_of: app.id,
+      placement_pool: "staging",
+    };
+
+    const { opId } = enqueue({
+      kind: "deploy",
+      resourceKeys: [`app:create:${childName}`],
+      input: req,
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId, app_name: childName }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/**
+ * PATCH /api/apps/:appId/pool — re-pool an existing app into a named capacity
+ * pool. Governs FUTURE placement only (next deploy/scale/converge); replicas
+ * already running stay put — no active migration here. A pool exists implicitly
+ * the moment an app is assigned to it (there is no pools table).
+ */
+export async function handleSetAppPool(request: Request, appId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "apps.deploy");
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
+
+    const body = (await request.json().catch(() => ({}))) as { pool?: unknown };
+    const pool = body.pool;
+    if (typeof pool !== "string" || pool.length > 32 || !/^[a-z][a-z0-9-]*$/.test(pool)) {
+      return Response.json(
+        { ok: false, error: "pool must be a lowercase slug (letters, digits, hyphens; e.g. general or staging)" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    db.updateAppPlacementPool(appId, pool);
+    return Response.json({ ok: true, pool }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

@@ -648,6 +648,12 @@ export function updateAppPlacementPool(id: number, pool: string): void {
   db.query("UPDATE apps SET placement_pool = ? WHERE id = ?").run(pool, id);
 }
 
+/** Distinct, non-empty placement pools any app is currently targeting. */
+export function getDistinctPlacementPools(): string[] {
+  return (db.query("SELECT DISTINCT placement_pool FROM apps WHERE placement_pool <> ''").all() as { placement_pool: string }[])
+    .map((r) => r.placement_pool);
+}
+
 /** Mark an app as a staging/dev target of another app (or clear it with
  *  targetOf = null) and set its deploy-target tag in the same write. */
 export function setAppTarget(id: number, targetOf: number | null, target: string): void {

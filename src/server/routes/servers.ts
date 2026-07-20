@@ -57,8 +57,11 @@ export async function handleSetServerPool(request: Request, serverId: number): P
     const server = db.getServer(serverId);
     if (!server) return Response.json({ ok: false, error: "Server not found" }, { status: 404, headers: corsHeaders });
 
-    if (typeof pool !== "string" || (pool !== "general" && pool !== "staging")) {
-      return Response.json({ ok: false, error: 'pool must be "general" or "staging"' }, { status: 400, headers: corsHeaders });
+    if (typeof pool !== "string" || pool.length > 32 || !/^[a-z][a-z0-9-]*$/.test(pool)) {
+      return Response.json(
+        { ok: false, error: "pool must be a lowercase slug (letters, digits, hyphens; e.g. general or staging)" },
+        { status: 400, headers: corsHeaders },
+      );
     }
 
     db.updateServerPool(serverId, pool);
