@@ -43,13 +43,13 @@ detail.
 3. **`ocd` CLI** — deploy the current git checkout from the terminal.
 
 For several apps and services at once, use a **stack** (`ocd-stack.json`) via
-`ocd stack up` or the panel's Deploy → Stack tab.
+`ocd deploy stack` or the panel's Deploy → Stack tab.
 
 ## Decision guide
 
 **One app or a stack?**
 - One app (optionally using an existing managed service) → a single `.ocd-deploy.json`, deploy with `ocd deploy`.
-- Several apps that must deploy together, in order, sharing credentials/URLs (e.g. api + web + db) → an `ocd-stack.json` referencing each app's manifest, deploy with `ocd stack up`.
+- Several apps that must deploy together, in order, sharing credentials/URLs (e.g. api + web + db) → an `ocd-stack.json` referencing each app's manifest, deploy with `ocd deploy stack`.
 
 **Does the app speak HTTP on its port?**
 - Yes → leave `health_check` default, optionally set `health_check.path` to a real endpoint (`/healthz`) for better rollout safety.
@@ -109,10 +109,10 @@ the two app manifests it references.
 What the stack does for you:
 - **Order**: `needs` builds a dependency graph; services first, then apps in order, each waiting for its dependencies to become **healthy**. Cycles are rejected.
 - **Wiring**: one shared environment linked to every member. Each **app** is published as `<KEY>_URL` (uppercased app key), so `web` (needing `api`) automatically gets `API_URL`. Each **service** injects `<KEY>_URL`, `<KEY>_HOST`, `<KEY>_PORT`, `<KEY>_USER`, `<KEY>_PASSWORD`, `<KEY>_NAME` using its **uppercased service key** as the prefix — a service keyed `database` yields `DATABASE_URL` (etc.), one keyed `redis` yields `REDIS_URL`. Pick the service key to match the env-var name your app reads.
-- **Reconcile**: re-running `ocd stack up` redeploys listed members and destroys dropped ones.
+- **Reconcile**: re-running `ocd deploy stack` redeploys listed members and destroys dropped ones.
 - **Atomic**: any member failing rolls back the whole run.
 
-Because injected `<KEY>_URL` values only exist after the service/app deploys, **don't list them as `required` in an app's `env[]`** — that makes `ocd stack up` prompt for them up front. Leave connection/URL vars out of the manifest (the container still gets them from the shared env); declare only vars the deployer must supply, like `JWT_SECRET`.
+Because injected `<KEY>_URL` values only exist after the service/app deploys, **don't list them as `required` in an app's `env[]`** — that makes `ocd deploy stack` prompt for them up front. Leave connection/URL vars out of the manifest (the container still gets them from the shared env); declare only vars the deployer must supply, like `JWT_SECRET`.
 
 Common mistake: the service `type` must be the **exact catalog key** —
 `postgresql` (not `postgres`), `redis`, `mysql`, `mariadb`, `mongodb`,
@@ -133,7 +133,7 @@ Everyday commands (full list + flags in
 
 ```bash
 ocd deploy                 # deploy the current repo from ./.ocd-deploy.json
-ocd stack up               # deploy the whole ocd-stack.json in dependency order
+ocd deploy stack               # deploy the whole ocd-stack.json in dependency order
 ocd status                 # apps + services overview
 ocd logs <app> --tail=200  # recent logs
 ocd redeploy <app>         # rebuild + redeploy
@@ -145,7 +145,7 @@ ocd envs set <env> KEY=VALUE   # set a var (redeploys linked apps)
 `ocd deploy` reads the manifest, sends `env[]` defaults, prompts for missing
 `required` vars (hidden when `secret`), and streams progress. Override or add
 values with repeatable `--set=KEY=VALUE`; link an existing environment with
-`--env=<name|id>`. `ocd stack up` does the same across the whole stack, merging
+`--env=<name|id>`. `ocd deploy stack` does the same across the whole stack, merging
 every app's `env[]` into the one shared environment.
 
 ### Webhook staging (deploy-to-staging-first)
@@ -176,6 +176,33 @@ ocd promote --yes                       # rebuild production at staging's commit
   commit (reusing the rollback machinery). Be explicit with
   `ocd promote --from=<app> --to=<app>`. Pass `--yes` to skip confirmation
   (required in non-interactive contexts).
+
+#### In a stack
+
+Staging is **opt-in per member**: a member joins by setting
+`"webhook": { "enabled": true, "staging": true }` in its **own**
+`.ocd-deploy.json`. The stack manifest declares nothing about staging — the
+environment is chosen on the command line:
+
+```bash
+ocd deploy stack                                 # staging env auto-created
+ocd deploy stack --staging-env=blog-staging      # …or name an existing one
+ocd deploy stack --staging-env=                  # clear the staging env
+ocd promote stack blog --yes                     # promote every staging sibling
+```
+
+- A stack has **one** staging environment, shared by every opted-in member —
+  exactly like the stack's one production environment. There is no per-member
+  override.
+- `--staging-env` is **optional**. As soon as one member opts into staging, a
+  stack without a staging environment gets `<stack>-stack-staging-env`
+  auto-created as a copy of the stack's environment (secrets included), mirroring
+  how `<stack>-stack-env` is auto-created for production. Edit it afterwards with
+  `ocd envs` to give staging its own values.
+- `--staging-env=<name|id>` names an **existing** environment to use instead of
+  the auto-created one. It's remembered on the stack, so later re-ups don't need
+  the flag; `--staging-env=` (empty) clears it.
+- `ocd promote stack <name>` promotes every staging sibling in the stack.
 
 ## Common recipes
 

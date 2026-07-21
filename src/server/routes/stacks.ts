@@ -43,11 +43,23 @@ export async function handleGetStacks(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "stacks.view");
     const stacks = db.getStacks();
-    const result = stacks.map((s) => ({
-      ...s,
-      app_count: db.getAppsByStackId(s.id).length,
-      service_count: db.getServicesByStackId(s.id).length,
-    }));
+    const result = stacks.map((s) => {
+      const apps = db.getAppsByStackId(s.id);
+      return {
+        ...s,
+        app_count: apps.length,
+        service_count: db.getServicesByStackId(s.id).length,
+        // How many members `promote_stack` would actually promote. This applies
+        // the SAME three rules as planPromotions (production row + staging on +
+        // a sibling holding a deployed commit) so the dashboard button and the
+        // CLI pre-check can't offer a promote the op then rejects.
+        staging_sibling_count: apps.filter((a) => {
+          if (a.target_of != null || a.webhook_staging_environment_id == null) return false;
+          const sibling = db.getStagingSibling(a.id);
+          return sibling != null && db.getDeployedCommit(sibling.id) != null;
+        }).length,
+      };
+    });
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -91,6 +103,35 @@ export async function handleDestroyStack(request: Request, stackId: number): Pro
     const payload = await requirePermission(request, "stacks.destroy");
     await enforceConfirmation(request, payload, "delete_stack", "stack", String(stackId));
     const { opId } = enqueue({ kind: "destroy_stack", resourceKeys: [`stack:${stackId}`], input: { stackId }, trigger: "ui", triggeredBy: payload.userId });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+// Promote every stack member that has a webhook-staging sibling holding a
+// deployed commit. Fans out to the per-app `promote` op; member selection (and
+// the "nothing to promote" error) lives in the promote_stack op itself so the
+// CLI and the UI get identical behaviour.
+export async function handlePromoteStack(request: Request, stackId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "stacks.deploy");
+    const stack = db.getStack(stackId);
+    if (!stack) {
+      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
+    }
+    const { opId } = enqueue({
+      kind: "promote_stack",
+      // Both key shapes on purpose: `stack:<id>` serializes against
+      // destroy_stack, `stack:<name>` against deploy_stack (which keys on the
+      // name). Without the name key a concurrent stack deploy would enqueue a
+      // `redeploy` on the same member as our `promote`, and if the redeploy
+      // landed last production would sit on branch HEAD, not the promoted commit.
+      resourceKeys: [`stack:${stackId}`, `stack:${stack.name}`],
+      input: { stackId, userId: payload.userId },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

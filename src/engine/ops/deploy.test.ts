@@ -59,7 +59,7 @@ mock.module("../../shared/github.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import deployOp, { resolveAppDomain } from "./deploy.ts";
+import deployOp, { resolveAppDomain, resolveStagingEnvironment } from "./deploy.ts";
 import redeployOp from "./redeploy.ts";
 
 // Synthetic op context. Steps that don't call park/unpark can use this shape.
@@ -1142,5 +1142,71 @@ describe("deploy step: pick_or_provision_server fleet cap", () => {
       // Free the block again — later test files share this db.
       for (const id of fillers) db.deleteApp(id);
     }
+  });
+});
+
+describe("resolveStagingEnvironment (standalone app staging)", () => {
+  const log = { log: () => {} };
+  function seed(name: string, environmentId?: number) {
+    return db.insertApp({
+      name,
+      domain: "",
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      environment_id: environmentId,
+    });
+  }
+
+  test("returns null when staging was not asked for", () => {
+    const app = seed(`a-${randomSuffix()}`);
+    expect(resolveStagingEnvironment(log, { app_name: app.name } as any, app.id)).toBeNull();
+  });
+
+  test("an explicitly named environment wins and nothing is created", () => {
+    const chosen = db.insertEnvironment(`chosen-${randomSuffix()}`, "");
+    const app = seed(`a-${randomSuffix()}`);
+    const before = db.getEnvironments().length;
+    const got = resolveStagingEnvironment(
+      log,
+      { app_name: app.name, webhook_staging: true, webhook_staging_environment_id: chosen.id } as any,
+      app.id,
+    );
+    expect(got).toBe(chosen.id);
+    expect(db.getEnvironments().length).toBe(before);
+  });
+
+  test("manifest intent alone mints <app>-staging-env as a copy of the app's env", () => {
+    const suffix = randomSuffix();
+    const prodEnv = db.insertEnvironment(`prod-${suffix}`, "");
+    db.updateEnvironment(prodEnv.id, prodEnv.name, JSON.stringify({
+      version: 2,
+      entries: [{ key: "SHARED", value: "yes", secret: false, updated_at: "now" }],
+    }));
+    const app = seed(`a-${suffix}`, prodEnv.id);
+
+    const got = resolveStagingEnvironment(log, { app_name: app.name, webhook_staging: true } as any, app.id);
+    expect(got).not.toBeNull();
+    const created = db.getEnvironment(got!)!;
+    expect(created.name).toBe(`${app.name}-staging-env`);
+    // Seeded from the app's own environment, exactly like a stack's staging env.
+    expect(created.env_vars).toContain("SHARED");
+    expect(got).not.toBe(prodEnv.id);
+  });
+
+  test("an app with no environment gets an empty one (a non-null id IS the on-switch)", () => {
+    const app = seed(`a-${randomSuffix()}`);
+    const got = resolveStagingEnvironment(log, { app_name: app.name, webhook_staging: true } as any, app.id);
+    expect(got).not.toBeNull();
+    expect(db.getEnvironment(got!)!.name).toBe(`${app.name}-staging-env`);
+  });
+
+  test("a name collision falls back to a suffixed name rather than failing", () => {
+    const suffix = randomSuffix();
+    const app = seed(`a-${suffix}`);
+    db.insertEnvironment(`${app.name}-staging-env`, "");
+    const got = resolveStagingEnvironment(log, { app_name: app.name, webhook_staging: true } as any, app.id);
+    expect(db.getEnvironment(got!)!.name).toBe(`${app.name}-staging-env-1`);
   });
 });

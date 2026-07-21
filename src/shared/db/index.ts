@@ -60,6 +60,8 @@ export {
   updateAppPlacementPool,
   getDistinctPlacementPools,
   setAppTarget,
+  setAppStackNeeds,
+  parseStackNeeds,
   getAppTargets,
   getStagingSibling,
   updateAppIngressSettings,
@@ -108,6 +110,7 @@ export {
   appendDeploymentLog,
   updateDeploymentGitCommit,
   getDeployments,
+  getDeployedCommit,
   getDeployment,
 } from "./deployments.ts";
 export type { UserRow, WebAuthnCredential, Permission } from "./users.ts";
@@ -199,6 +202,7 @@ export {
   getStackByName,
   getStacks,
   updateStackStatus,
+  updateStackStagingEnvironment,
   appendStackLog,
   getStackLog,
   deleteStack,

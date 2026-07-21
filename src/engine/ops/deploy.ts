@@ -935,6 +935,45 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
   },
 };
 
+/**
+ * The environment this app's `<name>-staging` sibling will deploy with, or null
+ * when staging isn't wanted.
+ *
+ * An explicit `webhook_staging_environment_id` wins. Otherwise a manifest that
+ * only declares intent (`webhook.staging: true` → `webhook_staging`) gets an
+ * environment MINTED here, as a copy of the app's own — the same bargain the
+ * app's production environment already gets on the no-`--env` path above, and
+ * the same one a stack makes for its members. So `webhook.staging: true` is
+ * self-sufficient: it means the same thing standalone as it does in a stack.
+ *
+ * An app with no environment of its own has nothing to copy, so it gets an
+ * empty one — a non-null id IS the staging on-switch, so there must be a row.
+ */
+export function resolveStagingEnvironment(
+  ctx: Pick<OpContext<DeployInput>, "log">,
+  req: DeployInput,
+  appId: number,
+): number | null {
+  if (req.webhook_staging_environment_id != null) return req.webhook_staging_environment_id;
+  if (!req.webhook_staging) return null;
+
+  let envName = `${req.app_name}-staging-env`;
+  let suffix = 1;
+  while (db.getEnvironments().find((e) => e.name === envName)) {
+    envName = `${req.app_name}-staging-env-${suffix++}`;
+  }
+  const source = db.getApp(appId)?.environment_id ?? null;
+  const created = source != null
+    ? db.duplicateEnvironment(source, envName)
+    : db.insertEnvironment(envName, "");
+  ctx.log(
+    source != null
+      ? `created staging environment "${envName}" (${created.id}) as a copy of the app's environment`
+      : `created empty staging environment "${envName}" (${created.id}) — the app has no environment to copy`,
+  );
+  return created.id;
+}
+
 const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webhookId?: string }> = {
   name: "setup_github_webhook",
   label: "Configure webhook",
@@ -979,8 +1018,9 @@ const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webho
         !!req.webhook_wait_for_ci,
       );
       db.appendDeployLog(appOut.appId, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}`);
-      if (req.webhook_staging_environment_id != null) {
-        db.updateAppWebhookStagingEnvironment(appOut.appId, req.webhook_staging_environment_id);
+      const stagingEnvId = resolveStagingEnvironment(ctx, req, appOut.appId);
+      if (stagingEnvId != null) {
+        db.updateAppWebhookStagingEnvironment(appOut.appId, stagingEnvId);
         db.appendDeployLog(appOut.appId, `[webhook] Staging enabled — pushes hold in ${req.app_name}-staging for manual promotion`);
       }
       return { ok: true, webhookId: String(created.id) };

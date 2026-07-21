@@ -488,3 +488,106 @@ describe("deploy_stack compensation preserves reused resources", () => {
     expect(db.getService(reusedSvc.id)).not.toBeNull();
   });
 });
+
+
+describe("deploy_stack shared staging environment", () => {
+  /** A member that opted into webhook staging via its OWN manifest. That opt-in
+   *  is the only staging input a member has — there is no per-app override. */
+  function stagingApp(key: string) {
+    return { ...app(key), webhook_enabled: true, webhook_staging: true };
+  }
+
+  function planOf(
+    name: string,
+    apps: unknown[],
+    opts: { staging?: number | null; envVars?: Array<{ key: string; value: string }> } = {},
+  ) {
+    const input = {
+      ...req(name, apps as ReturnType<typeof app>[]),
+      ...("staging" in opts ? { staging_environment_id: opts.staging } : {}),
+      ...(opts.envVars ? { env_vars: opts.envVars } : {}),
+    } as StackDeployRequest;
+    return planStep.run(makeCtx(input), {});
+  }
+
+  type Out = {
+    stagingEnvironmentId: number | null;
+    stagingByKey: Record<string, number | null>;
+    createdStagingEnv: boolean;
+    environmentId: number;
+  };
+
+  test("auto-creates the staging env as a copy of the stack env when a member opts in", async () => {
+    const name = `s-${randomSuffix()}`;
+    const out = (await planOf(name, [stagingApp("web"), app("api")], {
+      envVars: [{ key: "SHARED", value: "yes" }],
+    })) as Out;
+
+    expect(out.createdStagingEnv).toBe(true);
+    expect(out.stagingEnvironmentId).not.toBeNull();
+    expect(db.getStackByName(name)!.staging_environment_id).toBe(out.stagingEnvironmentId);
+
+    const staging = db.getEnvironment(out.stagingEnvironmentId!)!;
+    expect(staging.name).toBe(`${name}-stack-staging-env`);
+    // Seeded from the production stack env, so members boot with real values.
+    expect(staging.env_vars).toContain("SHARED");
+    expect(out.stagingEnvironmentId).not.toBe(out.environmentId);
+  });
+
+  test("creates no staging env when no member opts in", async () => {
+    const name = `s-${randomSuffix()}`;
+    const out = (await planOf(name, [app("web"), app("api")])) as Out;
+    expect(out.createdStagingEnv).toBe(false);
+    expect(out.stagingEnvironmentId).toBeNull();
+    expect(db.getStackByName(name)!.staging_environment_id).toBeNull();
+  });
+
+  test("reuses an explicitly named staging env instead of auto-creating one", async () => {
+    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
+    const name = `s-${randomSuffix()}`;
+    const out = (await planOf(name, [stagingApp("web")], { staging: chosen.id })) as Out;
+    expect(out.createdStagingEnv).toBe(false);
+    expect(out.stagingEnvironmentId).toBe(chosen.id);
+  });
+
+  test("a re-up without the flag keeps the stored staging env (and mints no second one)", async () => {
+    const name = `s-${randomSuffix()}`;
+    const first = (await planOf(name, [stagingApp("web")])) as Out;
+    const before = db.getEnvironments().length;
+
+    const second = (await planOf(name, [stagingApp("web")])) as Out;
+    expect(second.stagingEnvironmentId).toBe(first.stagingEnvironmentId);
+    expect(second.createdStagingEnv).toBe(false);
+    expect(db.getEnvironments().length).toBe(before);
+  });
+
+  test("an explicit null clears the stored staging env", async () => {
+    const name = `s-${randomSuffix()}`;
+    await planOf(name, [stagingApp("web")]);
+    const out = (await planOf(name, [app("web")], { staging: null })) as Out;
+    expect(out.stagingEnvironmentId).toBeNull();
+    expect(db.getStackByName(name)!.staging_environment_id).toBeNull();
+  });
+
+  test("every opted-in member resolves to the SAME stack staging env", async () => {
+    const name = `s-${randomSuffix()}`;
+    const out = (await planOf(name, [stagingApp("web"), stagingApp("api"), app("worker")])) as Out;
+    expect(out.stagingByKey.web).toBe(out.stagingEnvironmentId);
+    expect(out.stagingByKey.api).toBe(out.stagingEnvironmentId);
+    // Not opted in → staging stays off for that member.
+    expect(out.stagingByKey.worker).toBeNull();
+  });
+
+  test("rejects an unknown staging environment id", async () => {
+    const name = `s-${randomSuffix()}`;
+    await expect(planOf(name, [stagingApp("web")], { staging: 999_999 })).rejects.toThrow(
+      /staging environment 999999 not found/i,
+    );
+  });
+
+  test("rejects webhook.staging without webhook.enabled", async () => {
+    const name = `s-${randomSuffix()}`;
+    const broken = { ...app("web"), webhook_staging: true };
+    await expect(planOf(name, [broken])).rejects.toThrow(/webhook\.enabled/i);
+  });
+});

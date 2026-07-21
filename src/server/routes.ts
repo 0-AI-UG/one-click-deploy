@@ -104,6 +104,7 @@ import {
   handleGetStackLog,
   handleDestroyStack,
   handleRedeployStack,
+  handlePromoteStack,
 } from "./routes/stacks.ts";
 import { VERSION } from "../shared/version.ts";
 
@@ -414,6 +415,9 @@ export const apiRoutes = {
   },
   "/api/stacks/:id/redeploy": {
     POST: (req: Request) => handleRedeployStack(req, stackIdFrom(req)),
+  },
+  "/api/stacks/:id/promote": {
+    POST: (req: Request) => handlePromoteStack(req, stackIdFrom(req)),
   },
   "/api/stacks/:id/log": {
     GET: (req: Request) => handleGetStackLog(req, stackIdFrom(req)),

@@ -26,12 +26,95 @@ function parseFlags(args: string[]): { from?: string; to?: string; yes: boolean;
   return { from, to, yes, help };
 }
 
+interface StackListItem {
+  id: number;
+  name: string;
+  app_count: number;
+  staging_sibling_count?: number;
+}
+
+/** Resolve a stack by id or (case-insensitive) name, mirroring `ocd stack`. */
+async function resolveStack(nameOrId: string): Promise<StackListItem> {
+  const list = await get<StackListItem[]>("/api/stacks");
+  // Only an ALL-digit argument is an id. `parseInt("3rd-party")` is 3, which
+  // would otherwise promote stack #3 — a production swap on the wrong stack.
+  // Stack names may start with a digit (NAME_RE allows [a-z0-9][a-z0-9-]*).
+  const id = /^\d+$/.test(nameOrId) ? parseInt(nameOrId, 10) : NaN;
+  const found =
+    (!isNaN(id) ? list.find((s) => s.id === id) : undefined) ??
+    list.find((s) => s.name.toLowerCase() === nameOrId.toLowerCase());
+  if (found) return found;
+  console.error(`${RED}Stack not found: ${nameOrId}${RESET}`);
+  console.error(`Available: ${list.map((s) => s.name).join(", ") || "(none)"}`);
+  process.exit(1);
+}
+
+/**
+ * `ocd promote stack <name>` — promote every member of a stack that has a
+ * webhook-staging sibling with a deployed commit. Member selection lives
+ * server-side in the promote_stack op; this only resolves + follows.
+ */
+async function promoteStack(args: string[]): Promise<void> {
+  const { yes, help } = parseFlags(args);
+  const name = args.find((a) => !a.startsWith("-"));
+
+  if (help || !name) {
+    console.error(`${BOLD}Usage:${RESET} ocd promote stack <name|id> [--yes]
+
+Promotes every member of the stack that has a webhook-staging sibling holding a
+successful deployment. Members without a sibling (or whose sibling has never
+deployed) are skipped and reported in the stack log.
+
+Members are promoted CONCURRENTLY: stack dependency edges (\`needs\`) are only
+used at deploy time and are not persisted, so promotion cannot be ordered.
+
+${BOLD}Options:${RESET}
+  --yes, -y         Skip the confirmation prompt`);
+    process.exit(help ? 0 : 1);
+  }
+
+  const stack = await resolveStack(name!);
+  const pending = stack.staging_sibling_count ?? 0;
+  if (pending === 0) {
+    console.error(`${RED}Stack ${stack.name} has no members with a staging sibling to promote.${RESET}`);
+    process.exit(1);
+  }
+
+  console.log(
+    `Promote staging for ${BOLD}${stack.name}${RESET} ${DIM}(${pending} member(s) with a staging sibling)${RESET}`,
+  );
+
+  if (!yes) {
+    if (!process.stdin.isTTY) {
+      console.error(`${RED}Refusing to promote without confirmation (non-interactive). Pass --yes.${RESET}`);
+      process.exit(1);
+    }
+    const answer = (await promptLine(`Continue? [y/N] `)).toLowerCase();
+    if (answer !== "y" && answer !== "yes") {
+      console.log("Aborted.");
+      return;
+    }
+  }
+
+  const { op_id } = await post<{ op_id: number }>(`/api/stacks/${stack.id}/promote`, {});
+  const result = await followOp(op_id);
+  if (result.ok) {
+    console.log(`\n${GREEN}Promoted staging for stack ${stack.name}${RESET}`);
+  } else {
+    console.error(`\n${RED}Promote failed: ${result.error || "unknown error"}${RESET}`);
+    process.exit(1);
+  }
+}
+
 export async function promote(args: string[]): Promise<void> {
+  if (args[0] === "stack") return promoteStack(args.slice(1));
+
   const { from, to, yes, help } = parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd promote [--yes]
        ocd promote --from=<app> --to=<app> [--yes]
+       ocd promote stack <name|id> [--yes]
 
 Promotes the exact version running in a source (e.g. staging) app up to a
 destination (production) app by rebuilding it from the source's git commit.
@@ -39,6 +122,9 @@ destination (production) app by rebuilding it from the source's git commit.
 Run with no arguments inside a repo to promote its webhook-staging sibling:
 source = <name>-staging, destination = <name>, where <name> comes from the
 manifest. Use --from/--to to promote between any two apps explicitly.
+
+Use \`ocd promote stack <name>\` to promote every staging sibling in a stack
+at once.
 
 ${BOLD}Options:${RESET}
   --from=<app>      Explicit source app (name or id)

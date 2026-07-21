@@ -97,6 +97,9 @@ ${BOLD}Arguments:${RESET}
 
 ${BOLD}Subcommands:${RESET}
   stack [manifest]           Deploy a multi-app stack (default: ocd-stack.json)
+                             Takes --env, --set=<app>.KEY=VALUE and
+                             --staging-env (one per stack) — see
+                             \`ocd deploy stack --help\`.
 
 ${BOLD}Options:${RESET}
   --domain=<domain>          Custom domain
@@ -135,9 +138,10 @@ ${BOLD}Options:${RESET}
     if (manifest.webhook.wait_for_ci) body.webhook_wait_for_ci = true;
   }
 
-  // Webhook staging is opt-in and explicit: the environment must be given at
-  // deploy time via --staging-env. The manifest can only declare intent
-  // (webhook.staging: true) — with no env selected that's an error.
+  // Webhook staging is opt-in via the manifest (`webhook.staging`). Naming an
+  // environment is OPTIONAL: with --staging-env we link that one, otherwise the
+  // deploy op mints `<app>-staging-env` as a copy of the app's environment —
+  // the same deal the app's production environment gets when --env is omitted.
   if (stagingEnvName) {
     if (!body.webhook_enabled) {
       console.error(`${RED}--staging-env requires webhooks — set "webhook": { "enabled": true } in the manifest.${RESET}`);
@@ -146,8 +150,13 @@ ${BOLD}Options:${RESET}
     const stagingEnv = await resolveEnvironment(stagingEnvName);
     body.webhook_staging_environment_id = stagingEnv.id;
     console.log(`${DIM}Staging:${RESET}  ${stagingEnv.name}`);
+  } else if (manifest.webhook?.staging && body.webhook_enabled) {
+    body.webhook_staging = true;
+    console.log(`${DIM}Staging:${RESET}  ${name}-staging-env ${DIM}(auto-created)${RESET}`);
   } else if (manifest.webhook?.staging) {
-    console.error(`${RED}webhook.staging is set in the manifest but no staging environment was given — pass --staging-env=<name|id>.${RESET}`);
+    // Only reachable with staging on and the webhook off. Staging holds PUSHED
+    // commits, so without the webhook nothing would ever reach it.
+    console.error(`${RED}webhook.staging requires webhooks — set "webhook": { "enabled": true } in the manifest.${RESET}`);
     process.exit(1);
   }
 

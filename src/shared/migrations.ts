@@ -1721,6 +1721,22 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 83,
+    description:
+      "Add stacks.staging_environment_id — a stack's shared staging environment. Members that opt into webhook staging (webhook.staging in their own manifest) deploy their <member>-staging sibling with this environment, unless that member carries an explicit per-app override in apps.webhook_staging_environment_id. The per-app column stays the backend source of truth; this is the stack-level default pushed down to members on every deploy.",
+    up: (db) => {
+      db.run("ALTER TABLE stacks ADD COLUMN staging_environment_id INTEGER");
+    },
+  },
+  {
+    version: 84,
+    description:
+      "Add apps.stack_needs — the member's `needs` edges from its stack manifest, JSON-encoded as an array of member keys (NULL for apps that are not stack members, or that were deployed before this column existed). Until now these edges were consumed once at deploy time to topo-sort members into levels and then thrown away, so nothing downstream could order members by dependency. Persisting them lets promote_stack (and any later stack-wide op) promote level by level instead of all at once, which is what keeps interdependent members from briefly running mismatched versions.",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN stack_needs TEXT");
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

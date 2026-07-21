@@ -20,6 +20,8 @@ interface StackListItem {
   app_count: number;
   service_count: number;
   environment_id?: number | null;
+  /** The stack's shared webhook-staging environment, remembered across re-ups. */
+  staging_environment_id?: number | null;
 }
 
 interface StackDetail {
@@ -77,8 +79,11 @@ function buildAppElement(
 async function lookupStack(name: string): Promise<StackListItem | undefined> {
   const list = await get<StackListItem[]>("/api/stacks");
 
-  const id = parseInt(name, 10);
-  if (!isNaN(id)) {
+  // All-digit only: `parseInt("3rd-party")` is 3, which would resolve a
+  // digit-leading stack name to an unrelated stack id — and `ocd delete stack`
+  // destroys whatever this returns. Names may start with a digit.
+  if (/^\d+$/.test(name)) {
+    const id = parseInt(name, 10);
     const byId = list.find((s) => s.id === id);
     if (byId) return byId;
   }
@@ -98,7 +103,7 @@ async function resolveStack(name: string): Promise<StackListItem> {
 }
 
 function upUsage(): void {
-  console.error(`${BOLD}Usage:${RESET} ocd stack up [manifest] [options]
+  console.error(`${BOLD}Usage:${RESET} ocd deploy stack [manifest] [options]
 
 Deploys a multi-app stack from an ocd-stack.json manifest. Each app entry
 references a .ocd-deploy.json (resolved relative to the stack manifest). All
@@ -117,15 +122,55 @@ ${BOLD}Options:${RESET}
   --env=<name|id>            Reuse an existing environment when first creating
                              the stack (auto-created otherwise). On re-ups the
                              stack's linked environment is remembered, so --env
-                             is not needed to resume.`);
+                             is not needed to resume.
+  --staging-env=<name|id>    The stack's webhook-staging environment — one per
+                             stack, like --env. Every member whose own manifest
+                             sets "webhook": { "enabled": true, "staging": true }
+                             deploys its <name>-staging sibling with it.
+                             Optional: when a member opts in and the stack has
+                             no staging environment yet, one is auto-created as
+                             a copy of the stack's environment. Remembered
+                             across re-ups; --staging-env= (empty) clears it.`);
+}
+
+/**
+ * Parse repeatable `--staging-env=` values into the stack's single staging
+ * environment selection. Pure (no I/O, no exits) so it can be unit-tested; the
+ * caller resolves the ref and reports `error` itself.
+ *
+ * Returns undefined when the flag is absent (the stack keeps its stored value),
+ * null when explicitly cleared (`--staging-env=`), otherwise an environment
+ * name or id to resolve.
+ */
+export function parseStagingEnvFlags(
+  values: string[],
+): { ok: true; stagingEnv: string | null | undefined } | { ok: false; error: string } {
+  const show = (v: string | null) => (v === null ? "(cleared)" : `"${v}"`);
+  let stagingEnv: string | null | undefined;
+
+  for (const raw of values) {
+    const ref = raw.trim() === "" ? null : raw.trim();
+    if (stagingEnv !== undefined && stagingEnv !== ref) {
+      return {
+        ok: false,
+        error:
+          `--staging-env was given more than once with different values (${show(stagingEnv)} and ${show(ref)}) — ` +
+          `a stack has one staging environment.`,
+      };
+    }
+    stagingEnv = ref;
+  }
+
+  return { ok: true, stagingEnv };
 }
 
 type ResolvedEnv = { id: number; name: string; env_vars?: Array<{ key: string }> };
 
 async function resolveEnvironment(nameOrId: string): Promise<ResolvedEnv> {
   const list = await get<ResolvedEnv[]>("/api/environments");
-  const id = parseInt(nameOrId, 10);
-  const byId = !isNaN(id) ? list.find((e) => e.id === id) : undefined;
+  // All-digit only: `parseInt("3rd-party")` is 3, which would resolve an
+  // environment named with a leading digit to an unrelated environment id.
+  const byId = /^\d+$/.test(nameOrId) ? list.find((e) => e.id === parseInt(nameOrId, 10)) : undefined;
   if (byId) return byId;
   const lower = nameOrId.toLowerCase();
   const byName = list.find((e) => e.name.toLowerCase() === lower);
@@ -135,13 +180,13 @@ async function resolveEnvironment(nameOrId: string): Promise<ResolvedEnv> {
   process.exit(1);
 }
 
-/** The environment an already-created stack is linked to (the server keeps this
- *  association across re-ups), or null if the stack doesn't exist yet. */
-async function linkedStackEnvId(name: string): Promise<number | null> {
+/** The already-created stack row for this manifest (the server remembers its
+ *  linked environment and staging environment across re-ups), or undefined when
+ *  the stack doesn't exist yet. */
+async function findStackByName(name: string): Promise<StackListItem | undefined> {
   const list = await get<StackListItem[]>("/api/stacks");
   const lower = name.toLowerCase();
-  const found = list.find((s) => s.name.toLowerCase() === lower);
-  return found?.environment_id ?? null;
+  return list.find((s) => s.name.toLowerCase() === lower);
 }
 
 async function findEnvironmentById(id: number): Promise<ResolvedEnv | undefined> {
@@ -153,12 +198,15 @@ export async function stackUp(args: string[]): Promise<void> {
   let manifestPath = "";
   let envRef = "";
   const rawSets: string[] = [];
+  const rawStagingEnvs: string[] = [];
   for (const arg of args) {
     if (arg === "--help" || arg === "-h") {
       upUsage();
       process.exit(0);
     } else if (arg.startsWith("--set=")) {
       rawSets.push(arg.slice(6));
+    } else if (arg.startsWith("--staging-env=")) {
+      rawStagingEnvs.push(arg.slice(14));
     } else if (arg.startsWith("--env=")) {
       envRef = arg.slice(6);
     } else if (!arg.startsWith("--") && !manifestPath) {
@@ -181,6 +229,13 @@ export async function stackUp(args: string[]): Promise<void> {
   }
 
   const appKeys = new Set(Object.keys(manifest.apps));
+
+  const stagingParsed = parseStagingEnvFlags(rawStagingEnvs);
+  if (!stagingParsed.ok) {
+    console.error(`${RED}${stagingParsed.error}${RESET}`);
+    process.exit(1);
+  }
+  const stagingEnvRef = stagingParsed.stagingEnv;
 
   // Parse --set into per-app (<app>.KEY) and global (KEY) buckets. A plain
   // KEY is a fallback applied to any app that declares it; an <app>.KEY targets
@@ -238,19 +293,36 @@ export async function stackUp(args: string[]): Promise<void> {
 
   // Resolve the target environment (reused or, if omitted, auto-created) so we
   // know which keys already exist — existing values win over manifest defaults.
+  const existingStack = await findStackByName(manifest.name);
   let reused = envRef ? await resolveEnvironment(envRef) : undefined;
   let resumed = false;
   // Resume: an already-created stack stays linked to its environment
   // server-side, so even without --env we seed existing keys from that env —
   // otherwise a re-up re-prompts for (and re-requires) vars already stored.
-  if (!reused) {
-    const linkedId = await linkedStackEnvId(manifest.name);
-    if (linkedId != null) {
-      reused = await findEnvironmentById(linkedId);
-      resumed = !!reused;
-    }
+  if (!reused && existingStack?.environment_id != null) {
+    reused = await findEnvironmentById(existingStack.environment_id);
+    resumed = !!reused;
   }
   const existingKeys = new Set((reused?.env_vars || []).map((v) => v.key));
+
+  // --- webhook staging -----------------------------------------------------
+  // Members declare the intent (webhook.staging in their own manifest, carried
+  // here as `webhook_staging`); the environment is one per stack, exactly like
+  // the production --env. --staging-env is optional: when a member opts in and
+  // the stack has no staging env yet, the deploy op auto-creates
+  // <stack>-stack-staging-env as a copy of the stack's environment.
+  //
+  // Leave undefined when the flag is absent — the deploy op then preserves the
+  // stack's stored staging env. Only an explicit `--staging-env=` sends null.
+  let stagingEnvId: number | null | undefined;
+  let stagingEnvName: string | undefined;
+  if (stagingEnvRef === null) {
+    stagingEnvId = null;
+  } else if (stagingEnvRef !== undefined) {
+    const env = await resolveEnvironment(stagingEnvRef);
+    stagingEnvId = env.id;
+    stagingEnvName = env.name;
+  }
 
   // --set overrides target the shared env; app-scoped (`app.KEY`) and global
   // (`KEY`) both resolve to one key here, app-scoped last so it wins.
@@ -272,6 +344,7 @@ export async function stackUp(args: string[]): Promise<void> {
   const body: StackDeployRequest = {
     name: manifest.name,
     environment_id: reused?.id,
+    staging_environment_id: stagingEnvId,
     env_vars: env_vars.length > 0 ? env_vars : undefined,
     services,
     apps,
@@ -285,6 +358,8 @@ export async function stackUp(args: string[]): Promise<void> {
       `${DIM}Env:${RESET}   reusing ${resumed ? "linked" : ""} environment ${reused.name}`.replace("  ", " "),
     );
   }
+  if (stagingEnvName) console.log(`${DIM}Staging:${RESET} ${stagingEnvName}`);
+  else if (stagingEnvId === null) console.log(`${DIM}Staging:${RESET} (cleared)`);
 
   const { op_id, attached } = await post<{ op_id: number; attached?: boolean }>("/api/stacks", body);
   if (attached) {

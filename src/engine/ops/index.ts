@@ -17,6 +17,7 @@ import "./destroy-server.ts";
 import "./cascade-redeploy.ts";
 import "./deploy-stack.ts";
 import "./destroy-stack.ts";
+import "./promote-stack.ts";
 import "./restart-app.ts";
 import "./pause-app.ts";
 import "./unpause-app.ts";

@@ -73,6 +73,14 @@ export function getDeployments(appId: number): DeploymentRow[] {
     .all(appId) as DeploymentRow[];
 }
 
+/** The git commit an app is currently running, i.e. its most recent successful
+ *  deployment — or null if it has never deployed successfully. This is the
+ *  definition of "has something to promote", so promote paths share it rather
+ *  than each re-deriving it. */
+export function getDeployedCommit(appId: number): string | null {
+  return getDeployments(appId).find((d) => d.status === "deployed")?.git_commit ?? null;
+}
+
 export function getDeployment(id: number): DeploymentRow | null {
   return db
     .query("SELECT * FROM deployment_history WHERE id = ?")

@@ -128,6 +128,11 @@ export type DeployRequest = {
   webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
   webhook_wait_for_ci?: boolean; // Wait for CI checks to pass before deploying
   webhook_staging_environment_id?: number | null; // Environment the webhook staging sibling deploys with. Set = enable staging (pushes hold in <name>-staging for manual promotion). Requires webhook_enabled.
+  /** The manifest's staging opt-in (`webhook.staging`) with no environment named.
+   *  The deploy op then mints `<app>-staging-env` as a copy of the app's own
+   *  environment — so the manifest field is self-sufficient, exactly as it is
+   *  for a stack member. Ignored when webhook_staging_environment_id is set. */
+  webhook_staging?: boolean;
   auth_password?: string; // If set, the ingress enforces HTTP basic auth (username "admin"). Requires internal_protocol 'http' (the default)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
   public?: boolean; // Whether the app is publicly accessible (default true)
@@ -208,10 +213,25 @@ export type { DeployManifest, StackManifest };
 export type StackDeployRequest = {
   name: string;
   environment_id?: number; // Reuse an existing environment instead of auto-creating one (only honored when the stack is first created)
+  /** The stack's SHARED staging environment (`--staging-env=<name|id>`) — the
+   *  exact same model as `environment_id` above: one per stack, used by every
+   *  member that opts into webhook staging, and NOT overridable per member.
+   *  Omit to keep what the stack already has (auto-created as a copy of the
+   *  stack env on first use); null explicitly clears it. */
+  staging_environment_id?: number | null;
   env_vars?: Array<{ key: string; value: string; secret?: boolean }>; // Already-merged member env (manifest defaults + --set), written into the shared environment
   services: Array<{ key: string; type: string; version?: string; volume_size?: number;
                     env_overrides?: Record<string, string>; needs?: string[] }>;
-  apps: Array<Omit<DeployRequest, "environment_id"> & { key: string; needs?: string[] }>;
+  /** Members. `webhook_staging` is the member manifest's opt-in intent
+   *  (webhook.staging) — the ONLY staging input a member has. The environment
+   *  is the stack's; any inherited `webhook_staging_environment_id` on an
+   *  element is ignored (deploy_stack overwrites it with the resolved value),
+   *  exactly as members cannot override `environment_id` either. */
+  apps: Array<Omit<DeployRequest, "environment_id"> & {
+    key: string;
+    needs?: string[];
+    webhook_staging?: boolean;
+  }>;
 };
 
 export type ParsedManifest = {

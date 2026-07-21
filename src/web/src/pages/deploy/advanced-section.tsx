@@ -222,12 +222,23 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv, env
                 label="Wait for CI checks to pass before deploying"
               />
             </div>
-            <Field label={<>Deploy to staging first <InfoTip text="Pick an environment to hold each push in a <name>-staging sibling (deployed with that environment) for manual promotion, instead of redeploying production directly. Off = pushes redeploy production." /></>}>
+            <Field label={<>Deploy to staging first <InfoTip text="Hold each push in a <name>-staging sibling for manual promotion, instead of redeploying production directly. Auto-create makes <app>-staging-env as a copy of this app's environment; or pick an existing environment for the sibling to deploy with. Off = pushes redeploy production." /></>}>
               <NeoSelect
-                value={form.webhook_staging_environment_id != null ? String(form.webhook_staging_environment_id) : ""}
-                onChange={(v) => setForm((f) => ({ ...f, webhook_staging_environment_id: v ? parseInt(v, 10) : null }))}
+                value={
+                  form.webhook_staging_environment_id != null
+                    ? String(form.webhook_staging_environment_id)
+                    : form.webhook_staging ? "auto" : ""
+                }
+                onChange={(v) =>
+                  setForm((f) => ({
+                    ...f,
+                    webhook_staging: v === "auto",
+                    webhook_staging_environment_id: v && v !== "auto" ? parseInt(v, 10) : null,
+                  }))
+                }
                 options={[
                   { value: "", label: "Off — deploy production directly" },
+                  { value: "auto", label: "Auto-create staging environment" },
                   ...environments.map((env) => ({ value: String(env.id), label: env.name })),
                 ]}
               />

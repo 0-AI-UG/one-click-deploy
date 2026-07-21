@@ -118,7 +118,11 @@ export type FormState = {
   webhook_branch: string;
   webhook_path: string;
   webhook_wait_for_ci: boolean;
-  webhook_staging_environment_id: number | null; // null = staging off
+  webhook_staging_environment_id: number | null; // an explicitly chosen staging env
+  /** Staging on with NO environment named — the server mints
+   *  `<app>-staging-env` as a copy of the app's own. Mutually exclusive with
+   *  webhook_staging_environment_id; both unset/false = staging off. */
+  webhook_staging: boolean;
   auth_password: string;
   replicas: string;
   public: boolean;

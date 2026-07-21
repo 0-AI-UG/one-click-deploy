@@ -6,16 +6,30 @@ export type StackRow = {
   id: number;
   name: string;
   environment_id: number | null;
+  /** The stack's shared staging environment. Members that opt into webhook
+   *  staging deploy their sibling with this env unless they carry a per-app
+   *  override in apps.webhook_staging_environment_id. NULL = none selected. */
+  staging_environment_id: number | null;
   status: string;
   deploy_log: string;
   created_at: string;
 };
 
-export function insertStack(data: { name: string; environment_id: number | null }): StackRow {
+export function insertStack(data: {
+  name: string;
+  environment_id: number | null;
+  staging_environment_id?: number | null;
+}): StackRow {
   const result = db.query(
-    "INSERT INTO stacks (name, environment_id) VALUES (?, ?) RETURNING *"
-  ).get(data.name, data.environment_id) as StackRow;
+    "INSERT INTO stacks (name, environment_id, staging_environment_id) VALUES (?, ?, ?) RETURNING *"
+  ).get(data.name, data.environment_id, data.staging_environment_id ?? null) as StackRow;
   return result;
+}
+
+/** Set (or clear, with null) the stack's shared staging environment. Members are
+ *  re-pointed at it on the next stack deploy. */
+export function updateStackStagingEnvironment(id: number, environmentId: number | null): void {
+  db.query("UPDATE stacks SET staging_environment_id = ? WHERE id = ?").run(environmentId, id);
 }
 
 export function getStack(id: number): StackRow | null {

@@ -33,11 +33,34 @@ export function useStackForm(stack: StackPayload | null, branch: string) {
   const [openApp, setOpenApp] = useState<Set<string>>(new Set());
   // null = auto-create a fresh environment; a number = reuse that environment.
   const [environmentId, setEnvironmentId] = useState<number | null>(null);
+  // The stack's one staging environment, shared by every member that opted into
+  // webhook staging — one per stack, exactly like the production environment.
+  // null = let the server auto-create `<stack>-stack-staging-env` (a copy of the
+  // stack environment) as soon as any member opts in.
+  const [stagingEnvironmentId, setStagingEnvironmentId] = useState<number | null>(null);
   const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
 
   useEffect(() => {
     get("/api/environments").then(setEnvironments).catch(() => {});
   }, []);
+
+  // Seed the staging picker from the stack row when this stack already exists.
+  // buildBody always SENDS staging_environment_id, so without this a re-deploy
+  // from the panel would transmit the initial null and silently wipe the value
+  // `ocd deploy stack --staging-env` stored — and the user would have no way to
+  // see what it currently is.
+  useEffect(() => {
+    if (!stack?.name) return;
+    let cancelled = false;
+    get("/api/stacks")
+      .then((rows: Array<{ name: string; staging_environment_id?: number | null }>) => {
+        if (cancelled) return;
+        const existing = rows.find((r) => r.name === stack.name);
+        if (existing) setStagingEnvironmentId(existing.staging_environment_id ?? null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [stack?.name]);
 
   useEffect(() => {
     if (!stack) {
@@ -133,8 +156,15 @@ export function useStackForm(stack: StackPayload | null, branch: string) {
       // sent — the stack's shared environment owns env now (see `merged`).
       const { env_vars: _drop, ...rest } = spec;
       const extra_volumes = spec.extra_volumes?.filter((v) => v.host_path && v.container_path);
+      // Staging rides on the webhook. Keep the manifest's opt-in in form state
+      // (so toggling the webhook back on restores it) but never SEND a staging
+      // flag without the webhook — the deploy_stack op rejects that pairing.
+      const staging = rest.webhook_enabled
+        ? { webhook_staging: rest.webhook_staging }
+        : { webhook_staging: undefined };
       return {
         ...rest,
+        ...staging,
         git_branch: branch || undefined,
         extra_volumes: extra_volumes && extra_volumes.length > 0 ? extra_volumes : undefined,
       };
@@ -142,6 +172,7 @@ export function useStackForm(stack: StackPayload | null, branch: string) {
     return {
       name: stack?.name ?? "",
       environment_id: environmentId ?? undefined,
+      staging_environment_id: stagingEnvironmentId,
       env_vars: merged.entries.length ? merged.entries : undefined,
       services,
       apps,
@@ -149,10 +180,11 @@ export function useStackForm(stack: StackPayload | null, branch: string) {
   };
 
   return {
-    specs, services, env, openApp, environmentId, environments,
+    specs, services, env, openApp, environmentId, stagingEnvironmentId, environments,
     envDefsByKey, manifestPathByKey, allKeys, missingRequired,
     conflicts: merged.conflicts,
-    setEnvValue, patchSpec, patchService, toggleApp, setEnvironmentId, buildBody,
+    setEnvValue, patchSpec, patchService, toggleApp, setEnvironmentId,
+    setStagingEnvironmentId, buildBody,
   };
 }
 
@@ -205,33 +237,56 @@ function ServiceRow({ svc, onChange }: { svc: StackServiceSpec; onChange: (patch
 // a compact card with its required env inline and full options behind a toggle.
 export function StackSection({ form }: { form: StackForm }) {
   const {
-    specs, services, env, openApp, environmentId, environments,
+    specs, services, env, openApp, environmentId, stagingEnvironmentId, environments,
     envDefsByKey, manifestPathByKey, allKeys,
-    setEnvValue, patchSpec, patchService, toggleApp, setEnvironmentId,
+    setEnvValue, patchSpec, patchService, toggleApp, setEnvironmentId, setStagingEnvironmentId,
   } = form;
+
+  const anyStaging = specs.some((s) => s.webhook_staging);
 
   return (
     <div className="p-5 space-y-5">
-      {/* Environment */}
+      {/* Environment + shared staging environment */}
       {environments.length > 0 && (
-        <div>
-          <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-2">Environment</div>
-          <NeoSelect
-            value={environmentId != null ? String(environmentId) : "new"}
-            onChange={(v) => setEnvironmentId(v === "new" ? null : parseInt(v))}
-            options={[
-              { value: "new", label: "Create new environment" },
-              ...environments.map((e) => ({
-                value: String(e.id),
-                label: `${e.name} (${e.env_vars.length} var${e.env_vars.length !== 1 ? "s" : ""})`,
-              })),
-            ]}
-          />
-          <p className="font-mono text-[9px] text-muted mt-1.5">
-            {environmentId != null
-              ? "Reusing this environment. The stack layers its service creds and <KEY>_URL vars on top."
-              : "A fresh environment is created and owned by this stack."}
-          </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-2">Environment</div>
+            <NeoSelect
+              value={environmentId != null ? String(environmentId) : "new"}
+              onChange={(v) => setEnvironmentId(v === "new" ? null : parseInt(v))}
+              options={[
+                { value: "new", label: "Create new environment" },
+                ...environments.map((e) => ({
+                  value: String(e.id),
+                  label: `${e.name} (${e.env_vars.length} var${e.env_vars.length !== 1 ? "s" : ""})`,
+                })),
+              ]}
+            />
+            <p className="font-mono text-[9px] text-muted mt-1.5">
+              {environmentId != null
+                ? "Reusing this environment. The stack layers its service creds and <KEY>_URL vars on top."
+                : "A fresh environment is created and owned by this stack."}
+            </p>
+          </div>
+
+          <div>
+            <div className="font-mono text-[9px] text-muted uppercase tracking-wider mb-2">Deploy to staging first</div>
+            <NeoSelect
+              value={stagingEnvironmentId != null ? String(stagingEnvironmentId) : ""}
+              onChange={(v) => setStagingEnvironmentId(v ? parseInt(v, 10) : null)}
+              options={[
+                { value: "", label: "Auto-create staging environment" },
+                ...environments.map((e) => ({ value: String(e.id), label: e.name })),
+              ]}
+            />
+            <p className="font-mono text-[9px] text-muted mt-1.5">
+              {!anyStaging
+                ? "No stack member's manifest opted into webhook staging, so this has no effect."
+                : stagingEnvironmentId != null
+                  ? "Reusing this environment for staging. Every member whose manifest opted into webhook staging builds the hidden <name>-staging sibling with it on push and holds until you click Promote."
+                  : "A fresh staging environment is created as a copy of the stack environment and owned by this stack. Every member whose manifest opted into webhook staging builds the hidden <name>-staging sibling with it on push and holds until you click Promote."}
+            </p>
+          </div>
         </div>
       )}
 

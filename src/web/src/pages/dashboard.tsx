@@ -3,7 +3,7 @@ import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
-import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box, Boxes, ChevronDown, ChevronRight, Table2, Share2 } from "lucide-react";
+import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box, Boxes, ChevronDown, ChevronRight, Table2, Share2, ArrowUpFromLine } from "lucide-react";
 import { TopologyGraph, type TopologyData } from "../components/topology-graph.tsx";
 
 type AppData = {
@@ -22,6 +22,9 @@ type ServiceData = {
 type StackData = {
   id: number; name: string; status: string; created_at: string;
   environment_id: number | null; app_count: number; service_count: number;
+  // Production members that currently have a webhook-staging sibling. 0 = the
+  // "Promote staging" bulk action has nothing to do.
+  staging_sibling_count?: number;
 };
 type DashboardData = { apps: AppData[]; services: ServiceData[] };
 
@@ -32,7 +35,7 @@ const SVC_OP_KINDS = new Set([
   "restart_service", "pause_service", "unpause_service", "destroy_service",
 ]);
 const STACK_OP_KINDS = new Set([
-  "deploy_stack", "destroy_stack", "cascade_redeploy",
+  "deploy_stack", "destroy_stack", "cascade_redeploy", "promote_stack",
 ]);
 
 const APP_OP_LABELS: Record<string, string> = {
@@ -190,6 +193,31 @@ export function DashboardPage() {
       const res = await post(`/api/stacks/${stack.id}/redeploy`) as { op_id?: number };
       if (res?.op_id) {
         trackOperationInToast(res.op_id, `Redeploying stack ${stack.name}`);
+        ops.track(res.op_id);
+      }
+      load();
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Bulk promote: every member with a webhook-staging sibling holding a deployed
+  // commit moves to production. Members are promoted concurrently — stack
+  // dependency edges are not persisted, so there is no order to respect.
+  const stackPromote = async (stack: StackData) => {
+    const n = stack.staging_sibling_count ?? 0;
+    if (!(await confirm(
+      "Promote Staging",
+      `Promote the staging sibling of ${n} member(s) of "${stack.name}" to production? Each member is rebuilt from the commit its staging app is running. Members are promoted concurrently, not in dependency order.`,
+    ))) return;
+    const key = `stack-promote-${stack.id}`;
+    setActionLoading(key);
+    try {
+      const res = await post(`/api/stacks/${stack.id}/promote`) as { op_id?: number };
+      if (res?.op_id) {
+        trackOperationInToast(res.op_id, `Promoting stack ${stack.name}`);
         ops.track(res.op_id);
       }
       load();
@@ -441,6 +469,9 @@ export function DashboardPage() {
       actionLoading === `stack-redeploy-${stack.id}` ||
       stackKind === "cascade_redeploy" ||
       memberApps.some((a) => appBusyKind(a.id) === "redeploy");
+    const promoting =
+      actionLoading === `stack-promote-${stack.id}` || stackKind === "promote_stack";
+    const stagingSiblings = stack.staging_sibling_count ?? 0;
     const destroying =
       actionLoading === `stack-delete-${stack.id}` || stackKind === "destroy_stack";
     const total = memberApps.length + memberSvcs.length;
@@ -472,6 +503,20 @@ export function DashboardPage() {
             <PermissionGate permission="stacks.deploy">
               <Btn size="xs" variant="ghost" title="Redeploy stack" loading={redeploying} disabled={busy} onClick={() => stackRedeploy(stack)}>
                 <RefreshCw size={12} />
+              </Btn>
+            </PermissionGate>
+            <PermissionGate permission="stacks.deploy">
+              <Btn
+                size="xs"
+                variant="ghost"
+                title={stagingSiblings > 0
+                  ? `Promote staging → production for ${stagingSiblings} member(s)`
+                  : "No staging siblings to promote"}
+                loading={promoting}
+                disabled={busy || stagingSiblings === 0}
+                onClick={() => stackPromote(stack)}
+              >
+                <ArrowUpFromLine size={12} />
               </Btn>
             </PermissionGate>
             <PermissionGate permission="stacks.destroy">

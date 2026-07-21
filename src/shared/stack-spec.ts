@@ -62,6 +62,11 @@ export function buildStackAppSpec(
     spec.webhook_branch = manifest.webhook.branch || "main";
     if (manifest.webhook.path) spec.webhook_path = manifest.webhook.path;
     if (manifest.webhook.wait_for_ci) spec.webhook_wait_for_ci = true;
+    // Staging is opt-in per member, declared in the member's own manifest. The
+    // ENVIRONMENT it deploys with is not known here — it comes from the stack's
+    // shared staging env (or a per-app override) and is attached by each front
+    // end / resolved in the deploy_stack op, exactly like env_vars.
+    if (manifest.webhook.staging) spec.webhook_staging = true;
   }
 
   if (manifest.replicas) spec.replicas = manifest.replicas;

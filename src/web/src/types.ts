@@ -286,6 +286,9 @@ export type StackAppSpec = {
   webhook_branch?: string;
   webhook_path?: string;
   webhook_wait_for_ci?: boolean;
+  // Opt-in from the member's own manifest (`webhook.staging`): pushes build a
+  // hidden <name>-staging sibling instead of redeploying production directly.
+  webhook_staging?: boolean;
   auth_password?: string;
   replicas?: number;
   extra_volumes?: Array<{ host_path: string; container_path: string }>;
@@ -314,6 +317,11 @@ export type StackDeployBody = {
   // Stack-level shared env (already merged across all members) written into the
   // stack's environment. Members no longer carry per-app env_vars.
   env_vars?: Array<{ key: string; value: string; secret: boolean }>;
+  // The stack's one staging environment, shared by every member that opted into
+  // webhook staging — not overridable per member. Omit/null and the server
+  // auto-creates `<stack>-stack-staging-env` (a copy of the stack environment)
+  // as soon as any member opts in.
+  staging_environment_id?: number | null;
   services: StackServiceSpec[];
   apps: StackAppSpec[];
 };
@@ -354,6 +362,9 @@ export type DeployBody = {
   webhook_path?: string;
   webhook_wait_for_ci?: boolean;
   webhook_staging_environment_id?: number | null;
+  /** Staging on with no environment named — the server mints
+   *  `<app>-staging-env` as a copy of the app's own environment. */
+  webhook_staging?: boolean;
   auth_password?: string;
   replicas?: number;
   public?: boolean;

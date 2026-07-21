@@ -57,6 +57,10 @@ export type AppRow = {
   webhook_staging_environment_id: number | null;
   environment_id: number | null;
   stack_id: number | null;
+  /** JSON array of the member keys this stack member depends on, as declared by
+   *  `needs` in the stack manifest. NULL for non-members and for members
+   *  deployed before migration 84 — treat NULL as "no known edges". */
+  stack_needs: string | null;
   public: number;
   extra_volumes: string; // JSON array of "host:container" strings
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
@@ -675,6 +679,24 @@ export function getDistinctPlacementPools(): string[] {
  *  targetOf = null) and set its deploy-target tag in the same write. */
 export function setAppTarget(id: number, targetOf: number | null, target: string): void {
   db.query("UPDATE apps SET target_of = ?, target = ? WHERE id = ?").run(targetOf, target, id);
+}
+
+/** Persist a stack member's `needs` edges (member keys from the manifest), or
+ *  clear them with `needs = null`. Written by deploy_stack alongside
+ *  setAppStack; read by stack-wide ops that must act in dependency order. */
+export function setAppStackNeeds(appId: number, needs: string[] | null): void {
+  const json = needs && needs.length > 0 ? JSON.stringify(needs) : null;
+  db.query("UPDATE apps SET stack_needs = ? WHERE id = ?").run(json, appId);
+}
+
+/** Parsed `stack_needs` for an app row — [] when unset, malformed, or the app
+ *  predates migration 84. Never throws: ordering degrades to "no edges". */
+export function parseStackNeeds(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === "string") : [];
+  } catch { return []; }
 }
 
 /** The staging/dev children of a prod app — apps whose target_of points at it. */

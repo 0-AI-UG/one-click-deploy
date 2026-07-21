@@ -36,7 +36,7 @@ compatibility (nested unknown keys are silently stripped).
 | `webhook.branch` | string | Branch to watch. Default: repo default branch. |
 | `webhook.path` | string | Only redeploy when files under this path prefix change. |
 | `webhook.wait_for_ci` | boolean | Wait for CI checks to pass before deploying. Default `false`. |
-| `webhook.staging` | boolean | Hold each pushed commit in a `<name>-staging` sibling for manual promotion. Requires `--staging-env=<name\|id>` at deploy time to pick the staging environment. Default `false`. |
+| `webhook.staging` | boolean | Hold each pushed commit in a `<name>-staging` sibling for manual promotion. Requires `webhook.enabled`. The staging environment is auto-created if absent — `<app>-staging-env` (a copy of the app's environment) standalone, or the stack's single staging environment in a stack. Override with `--staging-env=<name\|id>`. Default `false`. |
 | `suggested_app_name` | string | Suggested app name (DNS-safe: lowercase, digits, hyphens). |
 | `replicas` | integer ≥ 1 | Desired replica count. Default `1`. |
 | `public` | boolean | Whether the app gets a public HTTPS domain. Default `true`. |
@@ -115,8 +115,8 @@ or add any other extension already included in the chosen image.
 - **Wiring**: a stack owns one shared environment (auto-created, or an existing one reused via `--env` when the stack is first created). Every member's own `env[]` vars merge into it, and everything flows to every member's container because they all link that one environment:
   - Each **app** publishes its private internal URL as `<KEY>_URL` (uppercased app key). An app with `needs: ["api"]` sees `API_URL` pointing at the `api` app — no DNS or real names needed.
   - Each **service** injects `<KEY>_URL`, `<KEY>_HOST`, `<KEY>_PORT`, `<KEY>_USER`, `<KEY>_PASSWORD`, `<KEY>_NAME` — where `<KEY>` is the **uppercased service key** (`_URL` and `_PASSWORD` are stored as secrets). So a service keyed `database` yields `DATABASE_URL`, `DATABASE_HOST`, …; a service keyed `redis` yields `REDIS_URL`, … Choose the service key to get the env-var name your app expects.
-- **Don't redeclare injected vars as `required`**: because the injected `<KEY>_URL` values only land after the service/app deploys, listing them as `required` in an app's `env[]` makes `ocd stack up` prompt for them up front. Leave service-provided connection vars and sibling `<KEY>_URL` vars **out** of the app manifest — the container still receives them from the shared environment at runtime. Declare only vars the deployer must supply (e.g. `JWT_SECRET`).
-- **Reconcile**: re-running `ocd stack up` redeploys every app in the manifest and destroys members recorded under the stack but no longer listed.
+- **Don't redeclare injected vars as `required`**: because the injected `<KEY>_URL` values only land after the service/app deploys, listing them as `required` in an app's `env[]` makes `ocd deploy stack` prompt for them up front. Leave service-provided connection vars and sibling `<KEY>_URL` vars **out** of the app manifest — the container still receives them from the shared environment at runtime. Declare only vars the deployer must supply (e.g. `JWT_SECRET`).
+- **Reconcile**: re-running `ocd deploy stack` redeploys every app in the manifest and destroys members recorded under the stack but no longer listed.
 - **Atomic**: if any member fails, the whole run rolls back — members deployed in that run are destroyed.
 - **Capacity**: the fleet has a hard 200-app cap; a stack that would exceed it is rejected before anything deploys.
 
@@ -205,13 +205,18 @@ Run from inside a git repo with an `origin` remote. Reads the manifest
 volume, and scaling, then streams deploy progress until it completes or fails.
 `--domain` sets a custom domain.
 
-`--staging-env=<name|id>` enables **webhook staging**: each pushed commit deploys
-to the `<name>-staging` sibling (with the given environment) and holds for manual
-promotion instead of redeploying production. It requires `webhook.enabled` in the
-manifest; the manifest may also declare `"webhook": { "staging": true }`, but the
-environment must still be provided with `--staging-env` at deploy time. Select
-production's own environment to share it, or an `ocd envs copy` of it to isolate
-staging values.
+**Webhook staging** holds each pushed commit in the `<name>-staging` sibling for
+manual promotion instead of redeploying production. Turn it on with
+`"webhook": { "enabled": true, "staging": true }` in the manifest — staging
+always requires `webhook.enabled`, since it holds *pushed* commits.
+
+Naming the environment is optional. With no `--staging-env`, the deploy mints
+`<app>-staging-env` as a copy of the app's own environment (an app with no
+environment gets an empty one) — the same bargain the app's production
+environment gets when `--env` is omitted, and the same one a stack makes for its
+members. Pass `--staging-env=<name|id>` to point the sibling at an existing
+environment instead — production's own to share it outright, or an
+`ocd envs copy` of it you then edit.
 
 Env vars from the manifest's `env[]` are included automatically: entries with a
 `default` are sent as-is, `--set=KEY=VALUE` (repeatable) overrides or adds
@@ -228,6 +233,7 @@ wins (manifest default skipped), keys the environment lacks are added, and
 ```
 ocd promote [--yes]
 ocd promote --from=<app> --to=<app> [--yes]
+ocd promote stack <name> [--yes]
 ```
 
 Promotes the exact git commit currently running in a source (staging) app up to
@@ -239,20 +245,22 @@ commit (reusing the rollback machinery).
   inside the repo.
 - `--from=<app>` / `--to=<app>` — explicit source and destination apps (name or
   id); both are required together and override the manifest-derived names.
+- `stack <name>` — promotes **every** staging sibling in a stack: each member
+  that runs webhook staging is promoted to its production app.
 - `--yes`, `-y` — skip the confirmation prompt (required in non-interactive
   shells; otherwise the command refuses to promote).
 
 ### `ocd stack`
 
 ```
-ocd stack up [manifest] [--env=<name|id>] [--set=<app>.KEY=VALUE ...]   Deploy a stack (default: ocd-stack.json)
-ocd stack down <name> [--yes]                          Destroy a stack and every member
+ocd deploy stack [manifest] [--env=<name|id>] [--staging-env=<name|id>] [--set=<app>.KEY=VALUE ...]   Deploy a stack (default: ocd-stack.json)
+ocd delete stack <name> [--yes]                          Destroy a stack and every member
 ocd stack ls                                           List stacks
 ocd stack status <name>                                Show a stack's apps and services
 ocd stack logs <name>                                  Print a stack's combined deploy log
 ```
 
-`ocd stack up` reads `ocd-stack.json` and each referenced `.ocd-deploy.json`,
+`ocd deploy stack` reads `ocd-stack.json` and each referenced `.ocd-deploy.json`,
 then deploys the whole stack in dependency order and streams progress. Run it
 from inside the git repo whose `origin` remote holds the apps. Re-running
 reconciles: apps in the manifest are redeployed, members dropped from the
@@ -267,6 +275,33 @@ merge into that single shared environment:
 - `required` vars still missing a value after merging are prompted for once.
 
 `--env` is only honored when the stack is first created; later re-ups keep the environment the stack already owns.
+
+#### Webhook staging in a stack
+
+Staging is **opt-in per member**: a member joins staging by setting
+`"webhook": { "enabled": true, "staging": true }` in its **own**
+`.ocd-deploy.json`. The stack manifest declares nothing about staging.
+
+A stack has exactly **one** staging environment, shared by every opted-in member
+— the same shape as its one production environment. It cannot be overridden per
+member.
+
+- **Auto-created.** When at least one member opts into staging and the stack has
+  no staging environment yet, the deploy creates `<stack>-stack-staging-env` as a
+  copy of the stack's production environment (secrets included), mirroring how
+  `<stack>-stack-env` is auto-created for production. So `--staging-env` is
+  optional — nothing fails for want of it. Tweak the copy afterwards with
+  `ocd envs set` to give staging its own values.
+- `--staging-env=<name|id>` — use an **existing** environment as the stack's
+  staging environment instead of the auto-created one. Every opted-in member
+  deploys its `<name>-staging` sibling with it. It is remembered on the stack, so
+  re-ups don't need the flag again.
+- `--staging-env=` (empty value) — explicitly clear the stack's staging
+  environment. (If a member still opts into staging, the next deploy auto-creates
+  one again.)
+
+`ocd promote stack <name>` promotes every staging sibling in the stack at once
+(see `ocd promote`).
 
 ### `ocd envs`
 
