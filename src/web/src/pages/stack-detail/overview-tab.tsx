@@ -1,30 +1,24 @@
-import { useState, useEffect } from "react";
-import { get, post, del } from "../../api/client.ts";
+import { useState } from "react";
+import { del } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, Table, EmptyState, showToast, confirm } from "../../components/ui.tsx";
-import { NeoSelect } from "../../components/neo-select.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { InfoTip } from "../app-detail/shared.tsx";
-import { Boxes, Database, ExternalLink, Link2, Unlink, Plus } from "lucide-react";
+import { StackStagingRow } from "./staging-row.tsx";
+import { Boxes, Database, ExternalLink, RefreshCw, Unlink } from "lucide-react";
 import type { ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { StackDetail, StackMemberApp, EnvironmentData } from "../../types.ts";
 
 const errMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
-type Candidate = { id: number; name: string; stack_id?: number | null; target_of?: number | null };
-
 /**
- * The stack at a glance, and the only place its membership is edited.
+ * The whole stack on one page: what it is configured with, what it contains,
+ * and the two things that are actually editable here — the staging environment
+ * and membership (detach only).
  *
- * These were two tabs and read as one page twice: both listed the same apps and
- * services, differing only in whether the row ended in a Detach button. The
- * member list IS the overview of a stack, so the tables carry the actions.
- *
- * Membership itself is one nullable column (`apps.stack_id` /
- * `services.stack_id`) — attaching and detaching here is metadata only, nothing
- * is built, moved or destroyed. The authoritative way to change what a stack
- * contains is `ocd-stack.json` plus a re-sync (Settings); this is the escape
- * hatch for what the manifest leaves behind.
+ * What a stack *contains* is declarative: it comes from `ocd-stack.json` and a
+ * re-sync through the deploy page. Detach is the escape hatch for what the
+ * manifest leaves behind — one nullable column (`apps.stack_id` /
+ * `services.stack_id`), so nothing is built, moved or destroyed by it.
  */
 export function OverviewTab({
   stack,
@@ -39,25 +33,11 @@ export function OverviewTab({
   reload: () => void;
   ops: ResourceOpsResult;
 }) {
-  const [apps, setApps] = useState<Candidate[]>([]);
-  const [services, setServices] = useState<Candidate[]>([]);
-  const [addKind, setAddKind] = useState<"app" | "service">("app");
-  const [addId, setAddId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-
-  useEffect(() => {
-    get("/api/dashboard")
-      .then((d: { apps: Candidate[]; services: Candidate[] }) => {
-        setApps(d.apps || []);
-        setServices(d.services || []);
-      })
-      .catch(() => {});
-  }, [stack.id]);
 
   const envName = (id: number | null) =>
     id == null ? null : environments.find((e) => e.id === id)?.name ?? `#${id}`;
   const prodEnv = envName(stack.environment_id);
-  const stagingEnv = envName(stack.staging_environment_id);
   const staging = memberApps.filter((a) => (a.webhook_staging_environment_id ?? null) != null).length;
   // Every member is deployed from the same repo (the one holding ocd-stack.json),
   // so the first member's repo is the stack's source of truth.
@@ -71,29 +51,6 @@ export function OverviewTab({
       return Array.isArray(parsed) ? parsed.filter((n) => typeof n === "string") : [];
     } catch {
       return [];
-    }
-  };
-
-  // Only unattached, top-level resources can join: a staging sibling follows its
-  // production app, and stealing a member from another stack would silently
-  // break that stack's promote/redeploy fan-out.
-  const free = (addKind === "app" ? apps : services).filter(
-    (r) => r.stack_id == null && r.target_of == null,
-  );
-
-  const addMember = async () => {
-    const id = parseInt(addId, 10);
-    if (!id) return;
-    setBusy("add");
-    try {
-      await post(`/api/stacks/${stack.id}/members`, { kind: addKind, id });
-      showToast(`Added ${addKind} to stack`, "success");
-      setAddId("");
-      reload();
-    } catch (err) {
-      showToast(errMessage(err), "error");
-    } finally {
-      setBusy(null);
     }
   };
 
@@ -120,7 +77,23 @@ export function OverviewTab({
         <Card className="p-4 space-y-3">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Configuration</h3>
           <div className="space-y-2 text-[10px] font-mono">
-            {repo && <div className="flex justify-between gap-4"><span className="text-muted">Source Repo</span><span className="text-fg font-bold truncate">{repo}</span></div>}
+            {repo && (
+              <div className="flex justify-between gap-4 items-center">
+                <span className="text-muted">Source Repo</span>
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className="text-fg font-bold truncate">{repo}</span>
+                  {/* Members, ports and needs ordering live in ocd-stack.json —
+                      re-syncing them means re-running the deploy for this repo. */}
+                  <PermissionGate permission="stacks.deploy">
+                    <a
+                      href={`#/deploy?repo=${encodeURIComponent(repo)}`}
+                      title="Re-sync members from ocd-stack.json"
+                      className="shrink-0 text-muted hover:text-fg"
+                    ><RefreshCw size={11} /></a>
+                  </PermissionGate>
+                </span>
+              </div>
+            )}
             <div className="flex justify-between"><span className="text-muted">Created</span><span className="text-fg">{new Date(stack.created_at).toLocaleString()}</span></div>
             <div className="flex justify-between">
               <span className="text-muted">Environment</span>
@@ -128,12 +101,12 @@ export function OverviewTab({
                 ? <a href="#/environments" className="text-fg font-bold hover:underline">{prodEnv}</a>
                 : <span className="text-fg-dim">none</span>}
             </div>
-            <div className="flex justify-between">
-              <span className="text-muted">Staging Environment</span>
-              {stagingEnv
-                ? <a href="#/environments" className="text-fg font-bold hover:underline">{stagingEnv}</a>
-                : <span className="text-fg-dim">none</span>}
-            </div>
+            <StackStagingRow
+              stack={stack}
+              memberApps={memberApps}
+              environments={environments}
+              reload={reload}
+            />
           </div>
         </Card>
         <Card className="p-4 space-y-3">
@@ -234,41 +207,6 @@ export function OverviewTab({
           </Table>
         )}
       </Card>
-
-      <PermissionGate permission="stacks.deploy">
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Link2 size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">
-              Attach Existing <InfoTip text="Tags an existing app or service as a member. Metadata only — it is not rebuilt, moved to the stack environment, or given a place in the needs order. For that, add it to ocd-stack.json and re-sync from Settings." />
-            </h3>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="w-32">
-              <NeoSelect
-                value={addKind}
-                onChange={(v) => { setAddKind(v as "app" | "service"); setAddId(""); }}
-                options={[{ value: "app", label: "App" }, { value: "service", label: "Service" }]}
-                compact
-              />
-            </div>
-            <div className="flex-1 min-w-[12rem]">
-              <NeoSelect
-                value={addId}
-                onChange={setAddId}
-                options={[
-                  { value: "", label: free.length ? `Select ${addKind}…` : `No unattached ${addKind}s` },
-                  ...free.map((r) => ({ value: String(r.id), label: r.name })),
-                ]}
-                compact
-              />
-            </div>
-            <Btn size="xs" variant="primary" disabled={!addId} loading={busy === "add"} onClick={addMember}>
-              <Plus size={12} /> Attach
-            </Btn>
-          </div>
-        </Card>
-      </PermissionGate>
     </div>
   );
 }

@@ -7,7 +7,6 @@ import { trackOperationInToast, useActiveOperations } from "../../hooks/useOpera
 import { ArrowLeft, RefreshCw, ArrowUpFromLine, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
 import { StackLogsTab } from "./logs-tab.tsx";
-import { StackSettingsTab } from "./settings-tab.tsx";
 import type { StackDetail, EnvironmentData } from "../../types.ts";
 
 const errMessage = (err: unknown): string =>
@@ -16,7 +15,7 @@ const errMessage = (err: unknown): string =>
 export function StackDetailPage({ stackId }: { stackId: number }) {
   const [stack, setStack] = useState<StackDetail | null>(null);
   const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
-  const [tab, setTab] = useState<"overview" | "logs" | "settings">("overview");
+  const [tab, setTab] = useState<"overview" | "logs">("overview");
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   // Stack ops carry different keys depending on kind: `stack:<id>` (destroy,
@@ -79,10 +78,13 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
   const memberApps = stack.apps.filter((a) => a.target_of == null);
   const promotable = memberApps.filter((a) => (a.webhook_staging_environment_id ?? null) != null).length;
 
+  // A stack has no settings of its own beyond the staging environment: name and
+  // environment are fixed at deploy time, membership comes from the manifest,
+  // and redeploy/promote/destroy are in the header. So the staging control lives
+  // on Overview and there is no Settings tab.
   const tabs = [
     { key: "overview", label: "Overview" },
     { key: "logs", label: "Logs" },
-    { key: "settings", label: "Settings" },
   ] as const;
 
   return (
@@ -156,18 +158,6 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
       )}
 
       {tab === "logs" && <StackLogsTab stackId={stackId} />}
-
-      {tab === "settings" && (
-        <StackSettingsTab
-          stack={stack}
-          memberApps={memberApps}
-          environments={environments}
-          reload={load}
-          action={action}
-          actionLoading={actionLoading}
-          ops={ops}
-        />
-      )}
     </div>
   );
 }

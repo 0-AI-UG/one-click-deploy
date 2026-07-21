@@ -107,7 +107,6 @@ import {
   handleRedeployStack,
   handlePromoteStack,
   handleUpdateStack,
-  handleAddStackMember,
   handleRemoveStackMember,
 } from "./routes/stacks.ts";
 import { VERSION } from "../shared/version.ts";
@@ -417,9 +416,6 @@ export const apiRoutes = {
     GET: (req: Request) => handleGetStack(req, stackIdFrom(req)),
     PATCH: (req: Request) => handleUpdateStack(req, stackIdFrom(req)),
     DELETE: (req: Request) => handleDestroyStack(req, stackIdFrom(req)),
-  },
-  "/api/stacks/:id/members": {
-    POST: (req: Request) => handleAddStackMember(req, stackIdFrom(req)),
   },
   "/api/stacks/:id/members/:kind/:memberId": {
     DELETE: (req: Request) => handleRemoveStackMember(req, stackIdFrom(req)),

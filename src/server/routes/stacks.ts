@@ -146,54 +146,16 @@ export async function handleUpdateStack(request: Request, stackId: number): Prom
 
 // --- Membership ---
 //
-// Membership is a single nullable column (apps.stack_id / services.stack_id), so
-// attach/detach is metadata only: nothing is rebuilt, moved, or destroyed. A
-// detached app keeps its containers, env and domain and simply reappears at the
-// dashboard's top level. This is the escape hatch for the declarative path — the
-// authoritative way to change membership is still editing `ocd-stack.json` and
-// re-running the stack deploy.
+// Membership is declarative: it comes from `ocd-stack.json` and a stack deploy.
+// The only edit exposed here is detach, the escape hatch for what the manifest
+// leaves behind. It writes one nullable column (apps.stack_id /
+// services.stack_id), so nothing is rebuilt, moved or destroyed — a detached app
+// keeps its containers, env and domain and reappears at the dashboard's top
+// level.
 
 function memberPartsFrom(request: Request): { kind: string; id: number } {
   const m = new URL(request.url).pathname.match(/\/members\/(apps|services)\/(\d+)$/);
   return m ? { kind: m[1], id: parseInt(m[2], 10) } : { kind: "", id: 0 };
-}
-
-export async function handleAddStackMember(request: Request, stackId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "stacks.deploy");
-    const stack = db.getStack(stackId);
-    if (!stack) {
-      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
-    }
-    const body = await request.json() as { kind?: string; id?: number };
-    const id = Number(body?.id);
-    if (!id || (body.kind !== "app" && body.kind !== "service")) {
-      return Response.json({ ok: false, error: 'kind must be "app" or "service" and id is required' }, { status: 400, headers: corsHeaders });
-    }
-    if (body.kind === "app") {
-      const app = db.getApp(id);
-      if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
-      if (app.target_of != null) {
-        return Response.json({ ok: false, error: "Staging siblings follow their production app and cannot be added directly" }, { status: 400, headers: corsHeaders });
-      }
-      if (app.stack_id != null && app.stack_id !== stackId) {
-        return Response.json({ ok: false, error: `App already belongs to stack ${app.stack_id}` }, { status: 409, headers: corsHeaders });
-      }
-      db.setAppStack(id, stackId);
-      db.appendStackLog(stackId, `[members] added app "${app.name}" (${id})`);
-    } else {
-      const svc = db.getService(id);
-      if (!svc) return Response.json({ ok: false, error: "Service not found" }, { status: 404, headers: corsHeaders });
-      if (svc.stack_id != null && svc.stack_id !== stackId) {
-        return Response.json({ ok: false, error: `Service already belongs to stack ${svc.stack_id}` }, { status: 409, headers: corsHeaders });
-      }
-      db.setServiceStack(id, stackId);
-      db.appendStackLog(stackId, `[members] added service "${svc.name}" (${id})`);
-    }
-    return Response.json({ ok: true, added_by: payload.userId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
 }
 
 export async function handleRemoveStackMember(request: Request, stackId: number): Promise<Response> {

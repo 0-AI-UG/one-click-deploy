@@ -20,5 +20,67 @@
   },
   "enabledPlugins": {
     "stripe@claude-plugins-official": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/anton/.cate/agent-hooks/cate-hook-bridge-claude-code"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/anton/.cate/agent-hooks/cate-hook-bridge-claude-code"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/anton/.cate/agent-hooks/cate-hook-bridge-claude-code"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/anton/.cate/agent-hooks/cate-hook-bridge-claude-code"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/anton/.cate/agent-hooks/cate-hook-bridge-claude-code"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/anton/.cate/agent-hooks/cate-hook-bridge-claude-code"
+          }
+        ]
+      }
+    ]
   }
 }

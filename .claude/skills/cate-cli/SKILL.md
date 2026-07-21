@@ -1,6 +1,6 @@
 ---
 name: cate-cli
-description: Drive the Cate IDE from inside a Cate terminal with the `cate` CLI — control the built-in browser panel (open URLs, navigate, screenshot, read an accessibility snapshot, click/type/press by ref) and reach the granted cate.* host scopes (panels, editor, workspace, theme, notifications) through named verbs. Use when an agent or user working in a Cate terminal needs to see or steer a web page, capture a screenshot, or reach Cate's host API from the shell.
+description: Drive the Cate IDE from inside a Cate terminal with the `cate` CLI — control the built-in browser panel (open URLs, navigate, screenshot, read an accessibility snapshot, click/type/press by ref), read and drive terminal panels (read the rendered screen, send keystrokes), and reach the granted cate.* host scopes (panels, editor, notifications) through named verbs. Use when an agent or user working in a Cate terminal needs to see or steer a web page, capture a screenshot, read another terminal, or reach Cate's host API from the shell.
 user-invocable: true
 ---
 
@@ -8,17 +8,22 @@ user-invocable: true
 
 `cate` is a small CLI, preinstalled on PATH **inside Cate terminals and Cate
 agent shells**. It lets you control Cate — its browser panels, plus each granted
-`cate.*` host scope through a matching command group (`ui`, `editor`, `canvas`,
-`panel`). Every reachable host method has a named verb; `cate --help` is the
+`cate.*` host scope through a matching command group (`ui`, `editor`, `panel`,
+`terminal`). Every reachable host method has a named verb; `cate --help` is the
 complete surface. There are no workspace/theme verbs: your cwd IS the workspace
 root, and git knows the branch. It talks to a per-workspace loopback endpoint
 Cate injects as `CATE_API` + `CATE_TOKEN`.
 
 **It only works inside a Cate terminal, and only when command-line control is
-enabled.** It is on by default; the user can turn it off in Settings → Terminal
+enabled.** It is on by default; the user can turn it off in Settings → CLI
 ("Command-line control"). While it is off — or outside a Cate terminal — the env
 vars are unset and every command exits `3` with a message explaining how to
-enable the setting. There is nothing to install.
+enable the setting. There is nothing to install. The same Settings → CLI section
+holds a permission matrix — Browser, Terminal, Panels, Editor and Notifications,
+each split into Read (observe) and Control (act). A verb whose cell is off fails
+with a stable error naming the cell (e.g. `panel-control-disabled: enable Panels
+→ Control in Cate Settings → CLI`); Terminal → Control is the only cell off by
+default.
 
 ## Browser control
 
@@ -47,8 +52,10 @@ Home, End — case-insensitive.
 
 ### Reading a screenshot
 
-`cate browser screenshot` prints a single line: the path to a PNG on disk.
-Nothing else goes to stdout. Read that file to see the page:
+`cate browser screenshot` prints a single line: the path to a PNG in the OS
+temp dir (a `cate-screenshots/` folder — take as many as you like, nothing
+lands in the user's Desktop or workspace). Nothing else goes to stdout. Read
+that file to see the page:
 
 ```bash
 shot=$(cate browser screenshot)
@@ -65,9 +72,14 @@ value after `=`:
 url: https://example.com
 title: Example
 [@e12] link "Home"
-[@e13] button "Sign in"
-[@e14] textbox "Search" = "mechanical keyboards"
+[@e13] input:submit "Sign in"
+[@e14] input:search "Search" = "mechanical keyboards"
 ```
+
+Bare `<input>` elements expose their type (`input:search` vs `input:submit`) so
+a field and its submit button never read alike; names come from the aria-label,
+an associated `<label>`, visible text, or the placeholder — whichever exists
+first.
 
 The bracketed token (`@e12`) is the element's **ref**. Feed it back to `click`,
 `type`, or `press`:
@@ -87,6 +99,12 @@ navigation; re-snapshot after one. There is no back/forward/current: navigate
 by URL with `open`, and `wait` doubles as "where am I" since it returns the
 url instantly when the page is idle.
 
+One timing caveat: `wait` polls the page's loading flag, so calling it right
+after an action that *triggers* a navigation (`press Enter`, a `click` on a
+link) can return before loading has even started. When you expect a navigation,
+confirm it from the url `wait` prints (or re-snapshot) instead of treating a
+fast return as "already loaded".
+
 ## Host API groups
 
 Every `cate.*` scope has its own command group with named verbs, so common calls
@@ -98,8 +116,11 @@ cate editor open src/app.ts       # open a file; prints the new panel's short id
 cate editor open src/app.ts:42    # ...and jump to line 42 (or :42:7 for a column)
 cate panel list                   # ALL panels: id, type, path/url/title; * = focused
 cate panel focus 1a2b3c4d         # reveal/focus a panel (short ids from `list` ok)
-cate canvas create terminal       # open a new empty panel of the given type
-cate panel set-title My Panel     # rename the calling panel
+cate panel close 1a2b3c4d         # close a panel without revealing it first
+cate panel create terminal        # auto-place a new panel in the background
+cate panel create browser https://x.com  # browser panels can seed a url
+cate panel set-title My Panel     # rename this Cate terminal panel
+cate panel set-title My Panel --panel 1a2b3c4d  # agent shells target explicitly
 cate version                      # host API version (for feature detection)
 ```
 
@@ -108,7 +129,55 @@ one line per panel — editors show their file path, browsers their url — with
 the focused panel marked `*`. Its short ids feed `panel focus` and `--panel`.
 So "what is the user looking at?" is the `*` row, and there is no separate
 browser or editor list. To open a file (any type — a PDF becomes a document
-panel), use `cate editor open`; `canvas create` is for empty panels.
+panel), use `cate editor open`; the file must exist (`file-not-found`
+otherwise — the verb never creates files). `panel create` is for empty panels,
+except `create browser`, which accepts an optional url to open with (without
+one the panel sits on its start page until a `browser open` navigates it).
+
+Panel/file/browser creation is deliberately non-disruptive: it uses automatic
+background placement and does not open the placement picker, change focus or
+selection, switch tabs, or move the canvas camera. `panel focus` is the explicit
+opt-in command for changing the user's view. A new browser is kept mounted even
+off-screen, and `browser open` waits for its webview before returning, so the
+next `wait`/`snapshot` is safe to run immediately.
+
+## Terminal control
+
+Read another terminal panel's screen and (optionally) send keystrokes to it.
+Target terminals by id from `cate panel list`:
+
+```bash
+cate terminal read --panel 1a2b3c4d   # the rendered screen text
+cate terminal read                    # ...of the FOCUSED panel, if a terminal
+cate terminal type ls -la --panel 1a2b3c4d   # type text; does NOT execute
+cate terminal press enter --panel 1a2b3c4d   # ...press Enter to run it
+cate terminal press ctrl-c --panel 1a2b3c4d  # interrupt (any ctrl-<letter>)
+```
+
+`read` shows what the terminal shows: when a TUI holds the alternate screen you
+get that screen; otherwise the tail of the normal buffer including scrollback.
+Output is capped at 200 lines (the tail — pass `--max <n>`, `0` = all).
+`--json` returns `{panelId, alt, text}` where `alt` says which buffer you got.
+`read` without `--panel` targets the focused panel and errors
+(`no-terminal-focused`) when that isn't a terminal; `type`/`press` always
+require `--panel` — a misdirected keystroke runs in the wrong shell.
+
+`type` writes text to the terminal's input **without a trailing newline** —
+nothing executes until you follow with `press enter`. That two-step is
+deliberate: read back the input line first if you want to verify what you're
+about to run. Keys for `press` (case-insensitive): `enter`/`return`, `tab`,
+`escape`/`esc`, `backspace`, `space`, `up`/`down`/`left`/`right`,
+`pageup`/`pagedown`, `home`/`end`, and any `ctrl-<letter>` chord (`ctrl-c`,
+`ctrl-d`, ...).
+
+Input goes to **whatever runs in the terminal**: a foreground TUI receives the
+keys (arrows move its cursor, `q` is its quit), not the shell. Each half is its
+own cell in the Settings → CLI permission matrix: `read` needs Terminal → Read
+(on by default), `type`/`press` need Terminal → Control, which is **off by
+default** — while off they fail with `terminal-input-disabled` (or
+`terminal-read-disabled`) and
+how to enable it. Terminals the Cate Agent is actively driving refuse input
+(`agent-owned-terminal`).
 
 Each group maps to a host scope that a Cate terminal is granted. Two host scopes
 are **not** available from a terminal: `agent` (a terminal must not drive the
@@ -123,10 +192,11 @@ verbs above are the complete surface.
   8-char ids printed by `panel list` are accepted).
 - `--json` — print the raw unwrapped result as one JSON line (nothing else on
   stdout). Use this when you want to parse the output.
-- `--max <n>` — `snapshot` only: max ref lines to print (default 150; 0 = all).
+- `--max <n>` — `browser snapshot`: max ref lines to print (default 150;
+  0 = all). `terminal read`: max tail lines to print (default 200; 0 = all).
 - `--timeout <ms>` — request timeout (default 30000).
 - `-h`, `--help` — usage.
-- `--version` — the CLI's own version.
+- `--version` — the CLI's own version (prints `cate cli <version>`).
 
 ## Output and exit codes
 

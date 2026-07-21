@@ -12,7 +12,6 @@ mock.module("../lib/permissions.ts", () => ({
 import * as db from "../../shared/db.ts";
 import {
   handleUpdateStack,
-  handleAddStackMember,
   handleRemoveStackMember,
   handleGetStack,
 } from "./stacks.ts";
@@ -55,12 +54,6 @@ function makeService() {
 const patchReq = (stackId: number, body: unknown) =>
   handleUpdateStack(
     new Request(`http://x/api/stacks/${stackId}`, { method: "PATCH", body: JSON.stringify(body) }),
-    stackId,
-  );
-
-const addReq = (stackId: number, body: unknown) =>
-  handleAddStackMember(
-    new Request(`http://x/api/stacks/${stackId}/members`, { method: "POST", body: JSON.stringify(body) }),
     stackId,
   );
 
@@ -115,12 +108,10 @@ describe("PATCH /api/stacks/:id — staging environment", () => {
 });
 
 describe("stack membership", () => {
-  test("attaching and detaching an app only moves the stack_id", async () => {
+  test("detaching an app only clears the stack_id", async () => {
     const stack = makeStack();
     const app = makeApp();
-
-    expect((await addReq(stack.id, { kind: "app", id: app.id })).status).toBe(200);
-    expect(db.getApp(app.id)!.stack_id).toBe(stack.id);
+    db.setAppStack(app.id, stack.id);
 
     const detail = await (await handleGetStack(new Request("http://x"), stack.id)).json();
     expect(detail.apps.map((a: { id: number }) => a.id)).toContain(app.id);
@@ -131,42 +122,18 @@ describe("stack membership", () => {
     expect(db.getApp(app.id)!.stack_id).toBeNull();
   });
 
-  test("attaching a service works the same way", async () => {
+  test("detaching a service works the same way", async () => {
     const stack = makeStack();
     const svc = makeService();
-
-    expect((await addReq(stack.id, { kind: "service", id: svc.id })).status).toBe(200);
-    expect(db.getService(svc.id)!.stack_id).toBe(stack.id);
+    db.setServiceStack(svc.id, stack.id);
 
     expect((await removeReq(stack.id, "services", svc.id)).status).toBe(200);
     expect(db.getService(svc.id)!.stack_id).toBeNull();
-  });
-
-  test("refuses to steal a member from another stack", async () => {
-    const a = makeStack();
-    const b = makeStack();
-    const app = makeApp();
-    db.setAppStack(app.id, a.id);
-
-    const res = await addReq(b.id, { kind: "app", id: app.id });
-    expect(res.status).toBe(409);
-    expect(db.getApp(app.id)!.stack_id).toBe(a.id);
-  });
-
-  test("refuses to attach a staging sibling directly", async () => {
-    const stack = makeStack();
-    const prod = makeApp();
-    const sibling = makeApp({ target_of: prod.id });
-
-    const res = await addReq(stack.id, { kind: "app", id: sibling.id });
-    expect(res.status).toBe(400);
-    expect(db.getApp(sibling.id)!.stack_id).toBeNull();
   });
 
   test("detaching a non-member 404s", async () => {
     const stack = makeStack();
     const outsider = makeApp();
     expect((await removeReq(stack.id, "apps", outsider.id)).status).toBe(404);
-    expect((await addReq(stack.id, { kind: "nope", id: 1 })).status).toBe(400);
   });
 });
