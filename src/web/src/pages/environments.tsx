@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { get, post, put, del } from "../api/client.ts";
 import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx";
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Layers, Plus, Trash2, Copy, Check, ChevronDown, ChevronRight, Key, X } from "lucide-react";
+import { Layers, Plus, Trash2, Copy, ChevronDown, ChevronRight, Key, X } from "lucide-react";
 import type { EnvironmentData, AppData } from "../types.ts";
 
 type AttachedApp = { id: number; name: string; status: string; domain: string };
@@ -21,6 +21,21 @@ export function EnvironmentsPage() {
   // from the header Copy button. null = closed.
   const [copy, setCopy] = useState<{ sourceId: number | null; name: string } | null>(null);
   const [copyBusy, setCopyBusy] = useState(false);
+  const copyPopoverRef = useRef<HTMLDivElement>(null);
+
+  // Close the copy popover on an outside click — but ignore clicks in the
+  // NeoSelect menu, which is portaled to document.body (outside the ref).
+  useEffect(() => {
+    if (!copy) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (copyPopoverRef.current && !copyPopoverRef.current.contains(target) && !target.closest("[data-neoselect-menu]")) {
+        setCopy(null);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [copy]);
 
   const ops = useActiveOperations(
     (op) => op.kind === "cascade_redeploy",
@@ -187,58 +202,43 @@ export function EnvironmentsPage() {
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Environments</h1>
         <div className="flex items-center gap-2">
           {environments.length > 0 && (
-            <Btn size="sm" variant="ghost" onClick={startCopy} disabled={!!copy}>
-              <Copy size={12} /> Copy
-            </Btn>
+            <div className="relative" ref={copyPopoverRef}>
+              <Btn size="sm" variant="ghost" onClick={() => (copy ? setCopy(null) : startCopy())}>
+                <Copy size={12} /> Copy
+              </Btn>
+              {copy && (
+                <div className="absolute right-0 top-full mt-1 z-50 bg-bg-raised border-2 border-fg shadow-neo p-3 space-y-2 w-56">
+                  <NeoSelect
+                    compact
+                    value={copy.sourceId != null ? String(copy.sourceId) : ""}
+                    placeholder="Environment to copy"
+                    options={environments.map((e) => ({ value: String(e.id), label: e.name }))}
+                    onChange={(v) => pickCopySource(v ? parseInt(v) : null)}
+                  />
+                  <input
+                    type="text"
+                    value={copy.name}
+                    onChange={(e) => setCopy((c) => (c ? { ...c, name: e.target.value } : c))}
+                    onKeyDown={(e) => { if (e.key === "Enter") doCopy(); if (e.key === "Escape") setCopy(null); }}
+                    placeholder="New environment name"
+                    className="w-full !text-[10px] font-bold uppercase"
+                    autoFocus
+                  />
+                  <div className="flex gap-2 justify-end">
+                    <Btn size="xs" variant="ghost" onClick={() => setCopy(null)}>Cancel</Btn>
+                    <Btn size="xs" variant="primary" loading={copyBusy} disabled={!copy.sourceId || !copy.name.trim() || copyBusy} onClick={doCopy}>
+                      Duplicate
+                    </Btn>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           <Btn size="sm" variant="primary" onClick={startNew}>
             <Plus size={12} /> New
           </Btn>
         </div>
       </div>
-
-      {copy && (
-        <Card className="p-3">
-          <div className="flex items-stretch gap-2">
-            <div className="w-48">
-              <NeoSelect
-                compact
-                value={copy.sourceId != null ? String(copy.sourceId) : ""}
-                placeholder="Environment to copy"
-                options={environments.map((e) => ({ value: String(e.id), label: e.name }))}
-                onChange={(v) => pickCopySource(v ? parseInt(v) : null)}
-              />
-            </div>
-            <input
-              type="text"
-              value={copy.name}
-              onChange={(e) => setCopy((c) => (c ? { ...c, name: e.target.value } : c))}
-              onKeyDown={(e) => { if (e.key === "Enter") doCopy(); if (e.key === "Escape") setCopy(null); }}
-              placeholder="New environment name"
-              className="flex-1 !text-[10px] font-bold uppercase"
-              autoFocus
-            />
-            <button
-              type="button"
-              onClick={doCopy}
-              disabled={!copy.sourceId || !copy.name.trim() || copyBusy}
-              title="Duplicate environment"
-              className="border-2 border-fg bg-accent/20 px-2 flex items-center text-fg hover:bg-accent/30 disabled:opacity-40"
-            >
-              <Check size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setCopy(null)}
-              disabled={copyBusy}
-              title="Cancel"
-              className="border-2 border-fg px-2 flex items-center text-muted hover:bg-alt disabled:opacity-40"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </Card>
-      )}
 
       {environments.length > 0 || expanded === "new" ? (
         <Card className="overflow-hidden">
