@@ -124,6 +124,8 @@ export type {
 export {
   ALL_PERMISSIONS,
   SCOPABLE_PERMISSIONS,
+  PERMISSION_SCOPES,
+  scopeKindsFor,
   getUserGrants,
   getUserCount,
   getUserByUsername,

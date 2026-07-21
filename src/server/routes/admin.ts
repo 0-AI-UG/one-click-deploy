@@ -196,6 +196,10 @@ export async function handleGetUserPermissions(request: Request, userId: string)
         permissions: grants.filter((g) => g.scopeType === "global").map((g) => g.permission),
         allPermissions: db.ALL_PERMISSIONS,
         scopablePermissions: [...db.SCOPABLE_PERMISSIONS],
+        // Which scope kinds are meaningful per permission. `users.ts` is the
+        // single source of truth; the web bundle cannot import it directly
+        // (it pulls in bun:sqlite via ./connection.ts), so it is shipped here.
+        scopeKinds: db.PERMISSION_SCOPES,
       },
       { headers: corsHeaders },
     );

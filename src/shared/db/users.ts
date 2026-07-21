@@ -115,39 +115,66 @@ export const ALL_PERMISSIONS = [
 
 export type Permission = typeof ALL_PERMISSIONS[number];
 
-/** Permissions that can be granted narrowly, against a single app or a single
- *  environment, instead of fleet-wide. Everything absent from this set is
- *  global-only: it governs infrastructure that no environment owns (servers,
- *  volumes, the panel, terminal access), so a scoped grant would be meaningless.
- *  `setUserPermissions` rejects scoped grants for anything not listed here. */
-export const SCOPABLE_PERMISSIONS: ReadonlySet<string> = new Set<Permission>([
-  "apps.view",
-  "apps.deploy",
-  "apps.redeploy",
-  "apps.rollback",
-  "apps.restart",
-  "apps.pause",
-  "apps.destroy",
-  "apps.logs",
-  "apps.rename",
-  "apps.promote",
-  "apps.ingress",
-  "apps.expose",
-  "webhooks.manage",
-  "deployments.view",
-  "metrics.view",
-  "scaling.scale",
-  "scaling.policy",
-  "scaling.migrate",
-  "environments.view",
-  "environments.secrets",
-  "terminal.container",
-  "stacks.view",
-  "stacks.deploy",
-  "stacks.settings",
-  "stacks.promote",
-  "stacks.destroy",
-]);
+/** Which scope kinds are meaningful for each permission.
+ *
+ *  This is not cosmetic — it mirrors how the route actually checks. Offering a
+ *  scope the check can never match would hand out a grant that silently does
+ *  nothing:
+ *   - routes that check with `envScope()`/`stackScope()` can only ever be
+ *     satisfied by an environment grant, so those permissions are environment-only;
+ *   - routes that check with `appScope()` are satisfied by an app grant *or* by
+ *     the environment that owns the app, so both kinds apply;
+ *   - permissions whose routes are all unscoped are absent entirely and stay
+ *     global-only. `apps.deploy` is the notable one: every call site is unscoped
+ *     (there is no app yet at deploy time), so a scoped grant is unsatisfiable.
+ *
+ *  Anything not listed here governs infrastructure no environment owns (servers,
+ *  volumes, the panel, host terminal) and is global-only. `setUserPermissions`
+ *  drops scoped grants for anything absent.
+ */
+export const PERMISSION_SCOPES: Readonly<Record<string, readonly ScopeType[]>> = {
+  // --- environment-only: checked via envScope()/stackScope() ---------------
+  "environments.view": ["environment"],
+  "environments.secrets": ["environment"],
+  // A stack has no environment of its own; stackScope() resolves it from the
+  // members' shared environment, so only an environment grant can match.
+  "stacks.view": ["environment"],
+  "stacks.deploy": ["environment"],
+  "stacks.settings": ["environment"],
+  "stacks.promote": ["environment"],
+  "stacks.destroy": ["environment"],
+
+  // --- app-only: operations that only make sense against one app -----------
+  "scaling.scale": ["app"],
+  "scaling.policy": ["app"],
+  "scaling.migrate": ["app"],
+  "terminal.container": ["app"],
+
+  // --- app or environment: checked via appScope(), which inherits the app's
+  //     environment, so granting the environment covers every app inside it ---
+  "apps.view": ["app", "environment"],
+  "apps.redeploy": ["app", "environment"],
+  "apps.rollback": ["app", "environment"],
+  "apps.restart": ["app", "environment"],
+  "apps.pause": ["app", "environment"],
+  "apps.destroy": ["app", "environment"],
+  "apps.logs": ["app", "environment"],
+  "apps.rename": ["app", "environment"],
+  "apps.promote": ["app", "environment"],
+  "apps.ingress": ["app", "environment"],
+  "apps.expose": ["app", "environment"],
+  "webhooks.manage": ["app", "environment"],
+  "deployments.view": ["app", "environment"],
+  "metrics.view": ["app", "environment"],
+} as const;
+
+/** Permissions that can be granted narrowly instead of fleet-wide. */
+export const SCOPABLE_PERMISSIONS: ReadonlySet<string> = new Set(Object.keys(PERMISSION_SCOPES));
+
+/** The scope kinds valid for a permission ([] when it is global-only). */
+export function scopeKindsFor(permission: string): readonly ScopeType[] {
+  return PERMISSION_SCOPES[permission] ?? [];
+}
 
 export type ScopeType = "global" | "environment" | "app";
 
@@ -355,7 +382,9 @@ export function setUserPermissions(userId: string, permissions: Array<string | P
     const grant: PermissionGrant =
       typeof entry === "string" ? { permission: entry, scopeType: "global", scopeId: null } : entry;
     if (grant.scopeType !== "global") {
-      if (!SCOPABLE_PERMISSIONS.has(grant.permission)) continue;
+      // Drop a scope kind the permission's checks can never match — storing it
+      // would present as access granted while denying every request.
+      if (!scopeKindsFor(grant.permission).includes(grant.scopeType)) continue;
       if (grant.scopeId == null || grant.scopeId === "") continue;
     }
     stmt.run(

@@ -368,6 +368,9 @@ export type UserPermissionsResponse = {
   permissions: string[];
   allPermissions: string[];
   scopablePermissions: string[];
+  /** Per-permission scope kinds, mirroring PERMISSION_SCOPES in
+   *  shared/db/users.ts. A permission absent from this map is global-only. */
+  scopeKinds?: Record<string, Array<"environment" | "app">>;
 };
 
 export type PanelApp = {
