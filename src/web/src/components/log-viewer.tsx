@@ -49,12 +49,17 @@ const LEVEL_PATTERNS: [RegExp, string][] = [
 ];
 
 const TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[\d.Z+:-]*)\s*/;
+// A merged multi-source log (a stack's members) prefixes every line with the
+// source it came from, after the timestamp: `13:48:43.435 [bc-postgres] …`.
+// The trailing run of spaces is padding the caller added to align the messages,
+// so it is captured and re-emitted rather than collapsed.
+const TAG_RE = /^(\d{2}:\d{2}:\d{2}[.\d]*\s)?\[([^\]\s]+)\](\s+)/;
 
-function colorizeLine(line: string): Span[] {
+function colorizeLine(line: string, tagColors?: Record<string, string>): { spans: Span[]; tag?: string } {
   // First check if line has ANSI codes
   // eslint-disable-next-line no-control-regex
   if (/\x1b\[/.test(line)) {
-    return parseAnsi(line);
+    return { spans: parseAnsi(line) };
   }
 
   const spans: Span[] = [];
@@ -65,6 +70,20 @@ function colorizeLine(line: string): Span[] {
     spans.push({ text: tsMatch[1], color: "#8A8A8A" });
     line = line.slice(tsMatch[0].length);
     spans.push({ text: " " });
+  }
+
+  // Pull the source tag out and give it the source's own colour, so a wall of
+  // interleaved lines can be read by hue instead of by parsing each prefix.
+  let tag: string | undefined;
+  if (tagColors) {
+    const m = line.match(TAG_RE);
+    if (m && tagColors[m[2]]) {
+      tag = m[2];
+      if (m[1]) spans.push({ text: m[1], color: "#8A8A8A" });
+      spans.push({ text: `[${tag}]`, color: tagColors[tag], bold: true });
+      spans.push({ text: m[3] });
+      line = line.slice(m[0].length);
+    }
   }
 
   // Check for log level and color the whole remaining line accordingly
@@ -82,7 +101,7 @@ function colorizeLine(line: string): Span[] {
     spans.push({ text: line });
   }
 
-  return spans;
+  return { spans, tag };
 }
 
 function renderSpans(spans: Span[]) {
@@ -99,9 +118,11 @@ function renderSpans(spans: Span[]) {
 interface LogViewerProps {
   logs: string;
   className?: string;
+  /** Colour per `[tag]` prefix, for logs merged from several sources. */
+  tagColors?: Record<string, string>;
 }
 
-export function LogViewer({ logs, className }: LogViewerProps) {
+export function LogViewer({ logs, className, tagColors }: LogViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wasAtBottom = useRef(true);
 
@@ -123,12 +144,21 @@ export function LogViewer({ logs, className }: LogViewerProps) {
   const rendered = useMemo(() => {
     if (!logs) return null;
     const lines = logs.split("\n");
-    return lines.map((line, i) => (
-      <div key={i} className="log-line">
-        {renderSpans(colorizeLine(line))}
-      </div>
-    ));
-  }, [logs]);
+    return lines.map((line, i) => {
+      const { spans, tag } = colorizeLine(line, tagColors);
+      return (
+        // The gutter bar carries the colour down continuation lines, which have
+        // no prefix of their own — a wrapped stack trace stays visibly one source.
+        <div
+          key={i}
+          className="log-line"
+          style={tag ? { borderLeftColor: tagColors![tag] } : undefined}
+        >
+          {renderSpans(spans)}
+        </div>
+      );
+    });
+  }, [logs, tagColors]);
 
   return (
     <div
@@ -140,7 +170,7 @@ export function LogViewer({ logs, className }: LogViewerProps) {
       {rendered || <span className="text-muted inline-flex items-center gap-1.5"><Spinner className="w-3 h-3" />Loading</span>}
       <style>{`
         .log-line:hover { background: rgba(255,255,255,0.04); }
-        .log-line { padding: 0 4px; white-space: pre-wrap; word-break: break-all; }
+        .log-line { padding: 0 4px; white-space: pre-wrap; word-break: break-all; border-left: 2px solid transparent; }
       `}</style>
     </div>
   );

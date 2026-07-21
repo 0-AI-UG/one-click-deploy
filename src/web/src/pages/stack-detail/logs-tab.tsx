@@ -15,6 +15,14 @@ type MemberLog = {
 
 const keyOf = (m: MemberLog) => `${m.kind}-${m.id}`;
 
+// Distinct hues, all legible on the log viewer's near-black and dark enough to
+// take black text on the chips — the chip and the lines it controls carry the
+// same colour, so the filter row doubles as the legend.
+const MEMBER_COLORS = [
+  "#5EEAD4", "#FFB800", "#7BABFF", "#C084FC",
+  "#6EE7A0", "#FF8A5B", "#F472B6", "#FFD54F",
+];
+
 /**
  * One log stream for the whole stack.
  *
@@ -65,6 +73,14 @@ export function StackLogsTab({ stackId }: { stackId: number }) {
     if (source === "live") loadLive(); else loadDeploy();
   }, [source, stackId, tail]);
 
+  // Keyed by the name we print in the `[…]` prefix, and assigned by position in
+  // the server's member list so a member keeps its colour across refreshes.
+  const colorOf = useMemo(() => {
+    const map: Record<string, string> = {};
+    members.forEach((m, i) => { map[m.name] = MEMBER_COLORS[i % MEMBER_COLORS.length]; });
+    return map;
+  }, [members]);
+
   const merged = useMemo(() => {
     // `docker logs -t` prefixes every line with an RFC3339 timestamp, which is
     // what makes cross-member ordering meaningful. Continuation lines (stack
@@ -73,11 +89,15 @@ export function StackLogsTab({ stackId }: { stackId: number }) {
     type Line = { ts: string; seq: number; text: string };
     const lines: Line[] = [];
     let seq = 0;
-    for (const m of members) {
-      if (muted.has(keyOf(m))) continue;
+    // Pad the prefixes to a common width so the messages themselves form a
+    // column instead of stair-stepping with the length of each member's name.
+    const shown = members.filter((m) => !muted.has(keyOf(m)));
+    const width = Math.max(0, ...shown.map((m) => m.name.length));
+    const tag = (name: string) => `[${name}]`.padEnd(width + 2) + " ";
+    for (const m of shown) {
       let last = "";
       if (m.error) {
-        lines.push({ ts: "", seq: seq++, text: `[${m.name}] log unavailable: ${m.error}` });
+        lines.push({ ts: "", seq: seq++, text: `${tag(m.name)}log unavailable: ${m.error}` });
         continue;
       }
       for (const raw of m.logs.split("\n")) {
@@ -89,7 +109,7 @@ export function StackLogsTab({ stackId }: { stackId: number }) {
         lines.push({
           ts: stamped ? head : last,
           seq: seq++,
-          text: `${(stamped ? head : last).slice(11, 23)} [${m.name}] ${stamped ? raw.slice(sp + 1) : raw}`,
+          text: `${(stamped ? head : last).slice(11, 23)} ${tag(m.name)}${stamped ? raw.slice(sp + 1) : raw}`,
         });
       }
     }
@@ -147,15 +167,20 @@ export function StackLogsTab({ stackId }: { stackId: number }) {
           {members.map((m) => {
             const k = keyOf(m);
             const on = !muted.has(k);
+            const color = colorOf[m.name];
             return (
               <button
                 key={k}
                 onClick={() => toggle(k)}
                 title={m.error || `${m.kind} · ${on ? "shown" : "hidden"}`}
-                className={`font-mono text-[9px] font-bold uppercase tracking-wider border-2 border-fg px-2 py-0.5 transition-all ${
-                  on ? "bg-accent text-fg shadow-neo-sm" : "bg-bg-raised text-muted"
+                style={on ? { backgroundColor: color } : undefined}
+                className={`font-mono text-[9px] font-bold uppercase tracking-wider border-2 border-fg px-2 py-0.5 transition-all flex items-center gap-1.5 ${
+                  on ? "text-[#111] shadow-neo-sm" : "bg-bg-raised text-muted"
                 } ${m.error ? "line-through" : ""}`}
-              >{m.name}</button>
+              >
+                {!on && <span className="w-2 h-2 border border-fg/40" style={{ backgroundColor: color }} />}
+                {m.name}
+              </button>
             );
           })}
         </div>
@@ -163,7 +188,7 @@ export function StackLogsTab({ stackId }: { stackId: number }) {
 
       {loading && members.length === 0 && source === "live"
         ? <div className="flex justify-center py-10"><Spinner /></div>
-        : <LogViewer logs={source === "live" ? merged : deployLog} />}
+        : <LogViewer logs={source === "live" ? merged : deployLog} tagColors={source === "live" ? colorOf : undefined} />}
     </Card>
   );
 }
