@@ -29,3 +29,12 @@ export function updateEnvironment(id: number, name: string, envVars: string): vo
 export function deleteEnvironment(id: number): void {
   db.query("DELETE FROM environments WHERE id = ?").run(id);
 }
+
+/** Clone an environment under a new name. The stored env_vars blob (including
+ *  encrypted secret ciphertext) is copied verbatim server-side — secrets are
+ *  never round-tripped through the client to be duplicated. */
+export function duplicateEnvironment(id: number, newName: string): EnvironmentRow {
+  const src = getEnvironment(id);
+  if (!src) throw new Error("Environment not found");
+  return insertEnvironment(newName, src.env_vars);
+}

@@ -6,12 +6,13 @@ import type { DeployRequest } from "../../shared/rpc.ts";
 export const STAGING_TARGET = "staging";
 
 /** Build a DeployRequest that clones a production app's build + routing config
- *  for its `<name>-staging` sibling. env_vars/environment_id are left unset so
- *  the deploy op creates the sibling's override environment (which inherits the
- *  parent's env live — see resolveAppEnvVars). Volumes/webhooks are NOT carried
- *  over: staging is a clean, isolated deploy. */
+ *  for its `<name>-staging` sibling. The sibling links to the environment the
+ *  user selected for staging (prod.webhook_staging_environment_id) — no live
+ *  inheritance from production. Volumes/webhooks are NOT carried over: staging
+ *  is a clean, isolated deploy. */
 function stagingDeployRequest(prod: db.AppRow): DeployRequest {
   return {
+    environment_id: prod.webhook_staging_environment_id ?? undefined,
     app_name: `${prod.name}-${STAGING_TARGET}`,
     git_repo: prod.git_repo,
     // Track the branch the webhook watches (what was just pushed) so staging
@@ -61,11 +62,19 @@ export function deployToStaging(
   if (prod.target !== "" && prod.target !== "production") {
     return { ok: false, error: `"${prod.name}" is itself a ${prod.target} target` };
   }
+  if (prod.webhook_staging_environment_id == null) {
+    return { ok: false, error: `No staging environment selected for "${prod.name}"` };
+  }
 
   const existing = db.getStagingSibling(prodAppId);
   const trigger = opts.trigger ?? "webhook";
 
   if (existing) {
+    // Keep the sibling pointed at the currently-selected staging environment —
+    // the user may have changed it since the sibling was first deployed.
+    if (existing.environment_id !== prod.webhook_staging_environment_id) {
+      db.updateAppEnvironment(existing.id, prod.webhook_staging_environment_id);
+    }
     const { opId } = enqueue({
       kind: "redeploy",
       resourceKeys: [`app:${existing.id}`],

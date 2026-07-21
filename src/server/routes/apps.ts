@@ -522,7 +522,8 @@ export async function handleGetAppStaging(request: Request, appId: number): Prom
 
     return Response.json(
       {
-        staging_enabled: app.webhook_staging === 1,
+        staging_enabled: app.webhook_staging_environment_id != null,
+        staging_environment_id: app.webhook_staging_environment_id,
         prod_commit: deployedCommit(app.id),
         sibling,
       },

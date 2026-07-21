@@ -83,6 +83,28 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
   }
 }
 
+export async function handleCopyEnvironment(request: Request, id: number): Promise<Response> {
+  try {
+    await requirePermission(request, "environments.manage");
+    const src = db.getEnvironment(id);
+    if (!src) {
+      return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
+    }
+    const body = await request.json().catch(() => ({}));
+    const name = (typeof body.name === "string" && body.name.trim() ? body.name : `${src.name}-copy`).trim();
+    if (db.getEnvironments().some((e) => e.name === name)) {
+      return Response.json({ ok: false, error: "An environment with that name already exists" }, { status: 409, headers: corsHeaders });
+    }
+    const env = db.duplicateEnvironment(id, name);
+    return Response.json({
+      ...env,
+      env_vars: maskEnvVarsForResponse(parseEnvVars(env.env_vars)),
+    }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleDeleteEnvironment(request: Request, id: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "environments.manage");

@@ -32,6 +32,10 @@ function makeApp(overrides: Partial<Parameters<typeof db.insertApp>[0]> = {}) {
   });
 }
 
+function makeEnv() {
+  return db.insertEnvironment(`env-${randomSuffix()}`, "{}");
+}
+
 function makeServer() {
   return db.insertServer({
     name: `srv-${randomSuffix()}`,
@@ -137,15 +141,17 @@ describe("handleGetAppStaging", () => {
     const app = makeApp();
     const res = await stagingReq(app.id);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { staging_enabled: boolean; prod_commit: string | null; sibling: unknown };
-    expect(body).toEqual({ staging_enabled: false, prod_commit: null, sibling: null });
+    const body = (await res.json()) as { staging_enabled: boolean; staging_environment_id: number | null; prod_commit: string | null; sibling: unknown };
+    expect(body).toEqual({ staging_enabled: false, staging_environment_id: null, prod_commit: null, sibling: null });
   });
 
-  test("reflects the webhook staging toggle", async () => {
+  test("reflects the selected staging environment", async () => {
     const app = makeApp();
-    db.updateAppWebhookStaging(app.id, true);
-    const body = (await (await stagingReq(app.id)).json()) as { staging_enabled: boolean };
+    const env = makeEnv();
+    db.updateAppWebhookStagingEnvironment(app.id, env.id);
+    const body = (await (await stagingReq(app.id)).json()) as { staging_enabled: boolean; staging_environment_id: number | null };
     expect(body.staging_enabled).toBe(true);
+    expect(body.staging_environment_id).toBe(env.id);
   });
 
   test("surfaces the staging sibling and its deployed commit", async () => {
@@ -178,6 +184,7 @@ describe("handleGetAppStaging", () => {
 describe("deployToStaging", () => {
   test("no existing sibling: enqueues a create-deploy and reports created", () => {
     const prod = makeApp({ name: `base-${randomSuffix()}`, target: "production" });
+    db.updateAppWebhookStagingEnvironment(prod.id, makeEnv().id);
     const res = deployToStaging(prod.id);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -190,6 +197,7 @@ describe("deployToStaging", () => {
 
   test("existing sibling: enqueues a redeploy on it, created=false", () => {
     const prod = makeApp({ target: "production" });
+    db.updateAppWebhookStagingEnvironment(prod.id, makeEnv().id);
     const sib = makeApp({ name: `${prod.name}-staging`, target: "staging", target_of: prod.id });
     const res = deployToStaging(prod.id);
     expect(res.ok).toBe(true);
@@ -200,6 +208,12 @@ describe("deployToStaging", () => {
 
   test("unknown app: ok:false", () => {
     const res = deployToStaging(9_999_999);
+    expect(res.ok).toBe(false);
+  });
+
+  test("no staging environment selected: ok:false", () => {
+    const prod = makeApp({ target: "production" });
+    const res = deployToStaging(prod.id);
     expect(res.ok).toBe(false);
   });
 

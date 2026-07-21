@@ -26,6 +26,8 @@ export type AppData = {
   /** When set, webhook pushes deploy to the <name>-staging sibling and hold for
    *  manual promotion instead of redeploying production. */
   webhook_staging?: number | boolean;
+  /** The environment the staging sibling deploys with; null/absent = staging off. */
+  webhook_staging_environment_id?: number | null;
   /** App id this app is a staging sibling of; set = it's a hidden sibling. */
   target_of?: number | null;
   desired_replicas: number;
@@ -351,6 +353,7 @@ export type DeployBody = {
   webhook_branch?: string;
   webhook_path?: string;
   webhook_wait_for_ci?: boolean;
+  webhook_staging_environment_id?: number | null;
   auth_password?: string;
   replicas?: number;
   public?: boolean;

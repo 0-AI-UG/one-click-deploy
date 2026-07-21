@@ -942,19 +942,26 @@ describe("deploy step: insert_app_row deploy targets", () => {
     return { parent, parentEnv, svc, parentName };
   }
 
-  test("non-production target gets its own EMPTY override environment but inherits the parent's env live", async () => {
-    const { parseEnvVars } = await import("../../shared/env-crypto.ts");
+  test("non-production target deploys with its explicitly selected environment; no live inheritance", async () => {
+    const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
     const server = makeReadyServer();
     const { parent, parentEnv, svc, parentName } = await makeParentWithEnvAndServiceLink();
     const stagingName = `${parentName}-staging`;
+    // The user duplicated production's environment and tweaked it — staging is
+    // deployed with THIS explicit env, nothing inherited from the parent.
+    const stagingEnv = db.insertEnvironment(
+      stagingName,
+      serializeEnvVars([{ key: "DATABASE_URL", value: "postgres://staging-db", secret: false, updated_at: "t" }]),
+    );
 
     const step = stepByName("insert_app_row");
-    const { ctx, logLines } = makeCtx({
+    const { ctx } = makeCtx({
       app_name: stagingName,
       git_repo: "https://github.com/x/y",
       container_port: 3000,
       target: "staging",
       target_of: parent.id,
+      environment_id: stagingEnv.id,
       placement_pool: "staging",
     });
     const out = (await step.run(ctx, serverPrior(server))) as {
@@ -969,25 +976,18 @@ describe("deploy step: insert_app_row deploy targets", () => {
     expect(app.target_of).toBe(parent.id);
     expect(app.placement_pool).toBe("staging");
 
-    // Own environment named after the app, but EMPTY — it holds only overrides.
-    // The parent's env is inherited live at resolve time, not copied.
-    const env = db.getEnvironments().find((e) => e.name === stagingName);
-    expect(env).toBeTruthy();
-    expect(out.environmentId).toBe(env!.id);
-    expect(env!.id).not.toBe(parentEnv.id);
-    expect(parseEnvVars(env!.env_vars).entries).toEqual([]);
-    // Live inheritance: the first deploy's container env still carries the
-    // parent's DATABASE_URL even though the sibling env stores nothing.
-    expect(out.flatEnvVars).toEqual({ DATABASE_URL: "postgres://prod-db" });
-    expect(logLines.some((l) => /override environment .*inherits production env live/i.test(l))).toBe(true);
+    // Links to the selected env and resolves ONLY its vars — the parent's
+    // DATABASE_URL does not leak in (no inheritance).
+    expect(out.environmentId).toBe(stagingEnv.id);
+    expect(out.flatEnvVars).toEqual({ DATABASE_URL: "postgres://staging-db" });
 
     // NO service links copied: the prod DB link stays on the parent env only.
     const links = db.getServiceLinks(svc.id);
     expect(links.some((l) => l.environment_id === parentEnv.id)).toBe(true);
-    expect(links.some((l) => l.environment_id === env!.id)).toBe(false);
+    expect(links.some((l) => l.environment_id === stagingEnv.id)).toBe(false);
   });
 
-  test("an explicit environment_id wins over isolated-environment creation", async () => {
+  test("an explicit environment_id is used as-is (no isolated-environment creation)", async () => {
     const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
     const server = makeReadyServer();
     const { parent, parentName } = await makeParentWithEnvAndServiceLink();
@@ -1028,8 +1028,7 @@ describe("deploy step: insert_app_row deploy targets", () => {
     expect(db.getEnvironments().some((e) => e.name === name)).toBe(false);
   });
 
-  test("non-production target seeded from a parent WITHOUT an environment gets an empty isolated env", async () => {
-    const { parseEnvVars } = await import("../../shared/env-crypto.ts");
+  test("non-production target with no selected environment creates none and resolves an empty env", async () => {
     const server = makeReadyServer();
     const parentName = `bare-${randomSuffix()}`;
     const parent = db.insertApp({
@@ -1050,11 +1049,11 @@ describe("deploy step: insert_app_row deploy targets", () => {
       target_of: parent.id,
     });
     const out = (await step.run(ctx, serverPrior(server))) as { environmentId: number | null; flatEnvVars: Record<string, string> };
-    const env = db.getEnvironments().find((e) => e.name === stagingName);
-    expect(env).toBeTruthy();
-    expect(out.environmentId).toBe(env!.id);
+    // No env is auto-created and none is linked; the container just gets no
+    // user env vars (staging without a selected environment).
+    expect(db.getEnvironments().some((e) => e.name === stagingName)).toBe(false);
+    expect(out.environmentId).toBeNull();
     expect(out.flatEnvVars).toEqual({});
-    expect(parseEnvVars(env!.env_vars).entries).toEqual([]);
   });
 });
 
@@ -1109,16 +1108,14 @@ describe("contract: engine deploy back-compat shim for legacy env_label/sibling_
       create_volume: null,
     })) as { appId: number; environmentId: number | null; flatEnvVars: Record<string, string> };
 
-    // Target tag stored + target_of link set from the legacy names.
+    // Target tag stored + target_of link set from the legacy names — that's all
+    // the shim does. There is no isolated-env creation or inheritance anymore.
     const app = db.getApp(out.appId)!;
     expect(app.target).toBe("staging");
     expect(app.target_of).toBe(parent.id);
-
-    // Isolated environment created and seeded exactly as with the new names.
-    const env = db.getEnvironments().find((e) => e.name === stagingName);
-    expect(env).toBeTruthy();
-    expect(out.environmentId).toBe(env!.id);
-    expect(out.flatEnvVars).toEqual({ SEED: "from-prod" });
+    expect(out.environmentId).toBeNull();
+    expect(out.flatEnvVars).toEqual({});
+    expect(db.getEnvironments().some((e) => e.name === stagingName)).toBe(false);
   });
 });
 

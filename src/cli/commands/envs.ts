@@ -77,6 +77,12 @@ async function createEnv(name: string, varArgs: string[]): Promise<void> {
   console.log(`${GREEN}Created environment ${BOLD}${result.name}${RESET}${GREEN} (id: ${result.id})${RESET}`);
 }
 
+async function copyEnv(nameOrId: string, newName: string): Promise<void> {
+  const env = await resolveEnv(nameOrId);
+  const result = await post<Environment>(`/api/environments/${env.id}/copy`, { name: newName });
+  console.log(`${GREEN}Copied ${BOLD}${env.name}${RESET}${GREEN} → ${BOLD}${result.name}${RESET}${GREEN} (id: ${result.id})${RESET}`);
+}
+
 async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
   const replace = varArgs.includes("--replace");
   const filtered = varArgs.filter((a) => a !== "--replace");
@@ -181,6 +187,15 @@ export async function envs(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "copy" || sub === "duplicate") {
+    if (!args[1] || !args[2]) {
+      console.error("Usage: ocd envs copy <name|id> <new-name>");
+      process.exit(1);
+    }
+    await copyEnv(args[1], args[2]);
+    return;
+  }
+
   if (sub === "set") {
     if (!args[1]) {
       console.error("Usage: ocd envs set <name|id> KEY=VALUE [--secret KEY=VALUE] ... [--replace]");
@@ -221,6 +236,7 @@ ${BOLD}Commands:${RESET}
   list                       List all environments
   show <name|id>             Show environment details and variables
   create <name> [vars...]    Create a new environment
+  copy <name|id> <new-name>  Duplicate an environment (secrets included)
   set <name|id> [vars...]    Merge variables into env (redeploys linked apps)
   unset <name|id> KEY...     Remove variables from env (redeploys linked apps)
   remove <name|id>           Delete an environment (must have no linked apps)

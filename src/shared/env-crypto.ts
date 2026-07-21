@@ -182,24 +182,13 @@ export function platformEnvVars(
  *  merges platformEnvVars manually because it resolves env vars before the
  *  app row exists.
  *
- *  Staging siblings (app.target_of set) inherit their production parent's env
- *  LIVE: prod's user vars are resolved fresh here and layered UNDER the
- *  sibling's own env, which acts as an override set. This means new/rotated
- *  prod vars flow through automatically and secrets aren't duplicated; the
- *  sibling stores only the keys it overrides. The sibling's OWN platform vars
- *  win (its OCD_INTERNAL_* point at itself, not prod). Override precedence:
- *  sibling env > prod env > platform. */
+ *  Staging siblings are no different from any other app here: they link to an
+ *  environment the user selected explicitly (webhook_staging_environment_id on
+ *  the production app) and resolve only that env. User vars win over the
+ *  sibling's own platform vars (its OCD_INTERNAL_* point at itself). */
 export async function resolveAppEnvVars(app: AppRow): Promise<Record<string, string>> {
   const db = await import("./db.ts");
   const ownRow = app.environment_id ? db.getEnvironment(app.environment_id) : null;
   const ownVars = await resolveEnvVarsForDeploy(ownRow?.env_vars);
-
-  if (app.target_of) {
-    const parent = db.getApp(app.target_of);
-    const parentRow = parent?.environment_id ? db.getEnvironment(parent.environment_id) : null;
-    const parentVars = await resolveEnvVarsForDeploy(parentRow?.env_vars);
-    return { ...platformEnvVars(app), ...parentVars, ...ownVars };
-  }
-
   return { ...platformEnvVars(app), ...ownVars };
 }

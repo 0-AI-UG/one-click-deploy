@@ -1668,7 +1668,72 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN webhook_staging INTEGER NOT NULL DEFAULT 0");
     },
   },
+  {
+    version: 82,
+    description:
+      "Add apps.webhook_staging_environment_id. Webhook staging now deploys the sibling with an EXPLICITLY selected environment instead of live-inheriting production's env. Migrate existing staging apps: freeze each sibling's effective env (production overlaid by the sibling's override env) into the sibling's own environment row, then point the production app's webhook_staging_environment_id at it — preserving behavior without live inheritance.",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN webhook_staging_environment_id INTEGER");
+
+      // Freeze live-inherited staging envs into explicit ones. For each prod app
+      // that had staging on, merge production's env (base) under the sibling's
+      // override env (wins) and persist that into the sibling's environment row,
+      // then wire the prod app to it. Ciphertext entries merge by key, so no
+      // decryption is needed.
+      const prods = db
+        .query("SELECT id, environment_id, name FROM apps WHERE webhook_staging = 1 AND (target = '' OR target = 'production')")
+        .all() as Array<{ id: number; environment_id: number | null; name: string }>;
+      for (const prod of prods) {
+        const sibling = db
+          .query("SELECT id, environment_id FROM apps WHERE target_of = ? AND target = 'staging' ORDER BY created_at ASC LIMIT 1")
+          .get(prod.id) as { id: number; environment_id: number | null } | undefined;
+
+        if (!sibling) {
+          // No sibling deployed yet — point staging at production's own env so the
+          // next push deploys with an explicit environment (NULL if prod has none).
+          db.run("UPDATE apps SET webhook_staging_environment_id = ? WHERE id = ?", [prod.environment_id, prod.id]);
+          continue;
+        }
+
+        const baseRow = prod.environment_id
+          ? (db.query("SELECT env_vars FROM environments WHERE id = ?").get(prod.environment_id) as { env_vars: string } | undefined)
+          : undefined;
+        const overRow = sibling.environment_id
+          ? (db.query("SELECT env_vars FROM environments WHERE id = ?").get(sibling.environment_id) as { env_vars: string } | undefined)
+          : undefined;
+        const merged = serializeMergedEntries(
+          parseEntriesFromRaw(baseRow?.env_vars),
+          parseEntriesFromRaw(overRow?.env_vars),
+        );
+
+        let envId = sibling.environment_id;
+        if (envId) {
+          db.run("UPDATE environments SET env_vars = ? WHERE id = ?", [merged, envId]);
+        } else {
+          const nameRow = db.query("SELECT name FROM apps WHERE id = ?").get(sibling.id) as { name: string };
+          const created = db
+            .query("INSERT INTO environments (name, env_vars) VALUES (?, ?) RETURNING id")
+            .get(nameRow.name, merged) as { id: number };
+          envId = created.id;
+          db.run("UPDATE apps SET environment_id = ? WHERE id = ?", [envId, sibling.id]);
+        }
+        db.run("UPDATE apps SET webhook_staging_environment_id = ? WHERE id = ?", [envId, prod.id]);
+      }
+    },
+  },
 ];
+
+/** Helper for migration 82: merge two v2 entry lists (override wins by key) and
+ *  serialize to the v2 env_vars blob. Ciphertext fields ride along untouched. */
+function serializeMergedEntries(
+  base: Array<{ key: string; [k: string]: any }>,
+  over: Array<{ key: string; [k: string]: any }>,
+): string {
+  const byKey = new Map<string, { key: string; [k: string]: any }>();
+  for (const e of base) byKey.set(e.key, e);
+  for (const e of over) byKey.set(e.key, e);
+  return JSON.stringify({ version: 2, entries: Array.from(byKey.values()) });
+}
 
 /** Helper for migration 36: parse env var entries from raw JSON. */
 function parseEntriesFromRaw(raw: string | null | undefined): Array<{ key: string; [k: string]: any }> {

@@ -12,8 +12,7 @@ interface Deployment {
   git_commit: string;
 }
 
-function parseFlags(args: string[]): { target?: string; from?: string; to?: string; yes: boolean; help: boolean } {
-  let target: string | undefined;
+function parseFlags(args: string[]): { from?: string; to?: string; yes: boolean; help: boolean } {
   let from: string | undefined;
   let to: string | undefined;
   let yes = false;
@@ -23,25 +22,23 @@ function parseFlags(args: string[]): { target?: string; from?: string; to?: stri
     else if (arg.startsWith("--to=")) to = arg.slice(5);
     else if (arg === "--yes" || arg === "-y") yes = true;
     else if (arg === "--help" || arg === "-h") help = true;
-    else if (!arg.startsWith("--") && !target) target = arg;
   }
-  return { target, from, to, yes, help };
+  return { from, to, yes, help };
 }
 
 export async function promote(args: string[]): Promise<void> {
-  const { target, from, to, yes, help } = parseFlags(args);
+  const { from, to, yes, help } = parseFlags(args);
 
   if (help) {
-    console.error(`${BOLD}Usage:${RESET} ocd promote <target> [--yes]
+    console.error(`${BOLD}Usage:${RESET} ocd promote [--yes]
        ocd promote --from=<app> --to=<app> [--yes]
 
 Promotes the exact version running in a source (e.g. staging) app up to a
 destination (production) app by rebuilding it from the source's git commit.
 
-${BOLD}Arguments:${RESET}
-  <target>          Deploy target from the manifest's "targets" block (e.g.
-                    staging). Source = <name>-<target>, destination = <name>,
-                    where <name> comes from the manifest (run inside the repo).
+Run with no arguments inside a repo to promote its webhook-staging sibling:
+source = <name>-staging, destination = <name>, where <name> comes from the
+manifest. Use --from/--to to promote between any two apps explicitly.
 
 ${BOLD}Options:${RESET}
   --from=<app>      Explicit source app (name or id)
@@ -51,7 +48,7 @@ ${BOLD}Options:${RESET}
   }
 
   // Resolve source/destination names: explicit --from/--to wins; otherwise
-  // derive from the manifest the same way `ocd deploy` does.
+  // promote the webhook-staging sibling derived from the manifest.
   let sourceName: string;
   let destName: string;
   if (from || to) {
@@ -62,14 +59,10 @@ ${BOLD}Options:${RESET}
     sourceName = from;
     destName = to;
   } else {
-    if (!target) {
-      console.error(`Usage: ocd promote <target>  (or --from=<app> --to=<app>)`);
-      process.exit(1);
-    }
     const repo = getGitRepo();
     const manifest = readManifest(resolve(".ocd-deploy.json"));
     const name = manifest.suggested_app_name || repo.replace(/.*\//, "");
-    sourceName = `${name}-${target}`;
+    sourceName = `${name}-staging`;
     destName = name;
   }
 

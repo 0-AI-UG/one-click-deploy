@@ -69,6 +69,7 @@ import {
   handleGetEnvironments,
   handleCreateEnvironment,
   handleUpdateEnvironment,
+  handleCopyEnvironment,
   handleDeleteEnvironment,
   handleGetEnvironmentApps,
   handleAttachAppToEnvironment,
@@ -390,6 +391,9 @@ export const apiRoutes = {
   "/api/environments/:id": {
     PUT: (req: Request) => handleUpdateEnvironment(req, environmentIdFrom(req)),
     DELETE: (req: Request) => handleDeleteEnvironment(req, environmentIdFrom(req)),
+  },
+  "/api/environments/:id/copy": {
+    POST: (req: Request) => handleCopyEnvironment(req, environmentIdFrom(req)),
   },
   "/api/environments/:id/apps": {
     GET: (req: Request) => handleGetEnvironmentApps(req, environmentIdFrom(req)),

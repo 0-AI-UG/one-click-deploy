@@ -54,7 +54,7 @@ export {
   updateAppInternalProtocol,
   updateAppWebhook,
   updateAppWebhookWaitForCi,
-  updateAppWebhookStaging,
+  updateAppWebhookStagingEnvironment,
   updateAppScaling,
   updateAppDurability,
   updateAppPlacementPool,
@@ -190,6 +190,7 @@ export {
   insertEnvironment,
   updateEnvironment,
   deleteEnvironment,
+  duplicateEnvironment,
 } from "./environments.ts";
 export type { StackRow } from "./stacks.ts";
 export {

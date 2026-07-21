@@ -4,6 +4,7 @@ import { NeoSelect } from "../../components/neo-select.tsx";
 import { Label } from "./shared.tsx";
 import { HealthCheckField, InfoTip } from "../app-detail/shared.tsx";
 import type { FormState } from "./types.ts";
+import type { EnvironmentData } from "../../types.ts";
 
 type Props = {
   form: FormState;
@@ -11,11 +12,12 @@ type Props = {
   setForm: React.Dispatch<React.SetStateAction<FormState>>;
   extraEnv: Array<{ key: string; value: string }>;
   setExtraEnv: React.Dispatch<React.SetStateAction<Array<{ key: string; value: string }>>>;
+  environments: EnvironmentData[];
 };
 
 const PUBLIC_PORT_RANGES = { tcp: "30000–30049", udp: "30050–30099" } as const;
 
-export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: Props) {
+export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv, environments }: Props) {
   // Password, an active health-check path and cookie sticky sessions are
   // HTTP/L7 concepts; raw-TCP internal routing can't carry them, so they only
   // render when the internal protocol is HTTP (mirrors the app settings tab and
@@ -220,6 +222,16 @@ export function AdvancedSection({ form, set, setForm, extraEnv, setExtraEnv }: P
                 label="Wait for CI checks to pass before deploying"
               />
             </div>
+            <Field label={<>Deploy to staging first <InfoTip text="Pick an environment to hold each push in a <name>-staging sibling (deployed with that environment) for manual promotion, instead of redeploying production directly. Off = pushes redeploy production." /></>}>
+              <NeoSelect
+                value={form.webhook_staging_environment_id != null ? String(form.webhook_staging_environment_id) : ""}
+                onChange={(v) => setForm((f) => ({ ...f, webhook_staging_environment_id: v ? parseInt(v, 10) : null }))}
+                options={[
+                  { value: "", label: "Off — deploy production directly" },
+                  ...environments.map((env) => ({ value: String(env.id), label: env.name })),
+                ]}
+              />
+            </Field>
           </>
         )}
       </div>

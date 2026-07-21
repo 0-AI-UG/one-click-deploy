@@ -144,15 +144,19 @@ const volumeSchema = z.object(
   { error: "expected object { size, path? }" },
 );
 
-/** Auto-deploy webhook config. */
+/** Auto-deploy webhook config. `staging: true` holds each pushed commit in the
+ *  `<name>-staging` sibling for manual promotion instead of redeploying
+ *  production directly — it requires a staging environment to be selected at
+ *  deploy time (`ocd deploy --staging-env <name|id>`). */
 const webhookSchema = z.object(
   {
     enabled: z.boolean({ error: "expected boolean" }).optional(),
     branch: z.string({ error: "expected string" }).optional(),
     path: z.string({ error: "expected string" }).optional(),
     wait_for_ci: z.boolean({ error: "expected boolean" }).optional(),
+    staging: z.boolean({ error: "expected boolean" }).optional(),
   },
-  { error: "expected object { enabled?, branch?, path?, wait_for_ci? }" },
+  { error: "expected object { enabled?, branch?, path?, wait_for_ci?, staging? }" },
 );
 
 /** Extra host→container bind mount. */
@@ -180,31 +184,6 @@ const healthCheckSchema = z.object(
   },
   { error: "expected object { enabled?: boolean, path?: string }" },
 );
-
-/**
- * One declared deploy target (e.g. "production", "staging", "dev"). Declaring
- * targets in-repo lets `ocd deploy --target=<name>` derive a sibling app
- * (`<name>-<target>`) wired to its own isolated environment. `isolated` defaults
- * to true for non-production targets (own placement pool, no prod DB link).
- */
-const deployTargetSchema = z.object(
-  {
-    branch: z.string({ error: "expected string" }).optional(),
-    replicas: guardedNumber(
-      "expected positive integer",
-      (v) => Number.isInteger(v) && v >= 1,
-    ).optional(),
-    domain: z.string({ error: "expected string" }).optional(),
-    scale_to_zero_after: guardedNumber(
-      "expected integer >= 0",
-      (v) => Number.isInteger(v) && v >= 0,
-    ).optional(),
-    isolated: z.boolean({ error: "expected boolean" }).optional(),
-  },
-  { error: "expected object { branch?, replicas?, domain?, scale_to_zero_after?, isolated? }" },
-).strict();
-
-export type DeployTarget = z.infer<typeof deployTargetSchema>;
 
 export const DeployManifestSchema = z
   .object({
@@ -264,13 +243,6 @@ export const DeployManifestSchema = z
       .optional(),
     /** Pool for public_port (default "tcp"). */
     public_protocol: z.enum(["tcp", "udp"], { error: 'expected "tcp" | "udp"' }).optional(),
-    /** Declared deploy targets (prod/staging/dev), keyed by target name. Each
-     *  non-production target deploys as an isolated sibling `<name>-<target>`. */
-    targets: z
-      .record(z.string(), deployTargetSchema, {
-        error: "expected object map of target -> { branch?, replicas?, domain?, scale_to_zero_after?, isolated? }",
-      })
-      .optional(),
     /** Availability/durability policy: 'none' (default), 'standard', or 'high'.
      *  Maps to concrete placement-spread + min-replica floors at deploy time. */
     durability_class: z

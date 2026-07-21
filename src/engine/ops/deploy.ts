@@ -456,32 +456,15 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     let environmentId: number | null = req.environment_id ?? null;
     const flatEnvVars: Record<string, string> = {};
 
-    // Isolated environment for a non-production deploy target (design "A"):
-    // staging/dev gets its OWN environment named "<app_name>", seeded EMPTY. It
-    // inherits the parent production app's env LIVE at resolve time (see
-    // resolveAppEnvVars) rather than copying — so new/rotated prod vars flow
-    // through and secrets aren't duplicated. This env holds only the keys the
-    // target OVERRIDES on top of prod (e.g. a staging DATABASE_URL). Because
-    // inheritance is live, prod's own service-link vars (DATABASE_* etc.) DO
-    // flow into staging unless overridden — the override set is the safety valve.
+    // A non-production deploy target (staging/dev) links to the environment the
+    // caller selected — passed as req.environment_id, resolved like any app's
+    // env below. There is no live inheritance from production: the sibling gets
+    // exactly the environment it points at (typically a user-made copy of prod).
     // Back-compat: legacy clients sent env_label/sibling_of for what are now
     // target/target_of — honor them (identical semantics) when the new fields
     // are absent.
     const targetTag = req.target ?? req.env_label;
     const targetOf = req.target_of ?? req.sibling_of;
-    const target = targetTag ?? "";
-    const isolatedTarget = target !== "" && target !== "production";
-    let createdIsolatedGroup = false;
-    if (isolatedTarget && !environmentId) {
-      const groupName = req.app_name;
-      let group = db.getEnvironments().find((e) => e.name === groupName);
-      if (!group) {
-        group = db.insertEnvironment(groupName, serializeEnvVars([]));
-        createdIsolatedGroup = true;
-        ctx.log(`created override environment "${groupName}" for ${target} (inherits production env live)`);
-      }
-      environmentId = group.id;
-    }
 
     const incoming =
       req.env_vars &&
@@ -511,19 +494,6 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       const envRow = db.insertEnvironment(envName, serializeEnvVars(incoming.entries));
       environmentId = envRow.id;
       Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
-    }
-
-    // Isolated targets inherit their production parent's env LIVE. The app row
-    // doesn't exist yet here, so resolveAppEnvVars can't run — replicate its
-    // inheritance for the first deploy: layer the parent's resolved user vars
-    // UNDER whatever this target already resolved (its overrides win).
-    if (isolatedTarget && targetOf) {
-      const parent = db.getApp(targetOf);
-      const parentRow = parent?.environment_id ? db.getEnvironment(parent.environment_id) : null;
-      const parentVars = await resolveEnvVarsForDeploy(parentRow?.env_vars);
-      for (const [k, v] of Object.entries(parentVars)) {
-        if (!(k in flatEnvVars)) flatEnvVars[k] = v;
-      }
     }
 
     const extraVolumes = (req.extra_volumes || []).map(
@@ -611,14 +581,6 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       }
       return result;
     })();
-
-    if (createdIsolatedGroup) {
-      db.appendDeployLog(
-        app.id,
-        `[env] ${target} inherits production's environment live; override "${req.app_name}" holds only the keys you change. ` +
-          `Production service-link vars (e.g. DATABASE_*) flow through unless overridden — override stateful URLs so ${target} never writes to production data.`,
-      );
-    }
 
     return {
       appId: app.id,
@@ -1017,6 +979,10 @@ const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webho
         !!req.webhook_wait_for_ci,
       );
       db.appendDeployLog(appOut.appId, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}`);
+      if (req.webhook_staging_environment_id != null) {
+        db.updateAppWebhookStagingEnvironment(appOut.appId, req.webhook_staging_environment_id);
+        db.appendDeployLog(appOut.appId, `[webhook] Staging enabled — pushes hold in ${req.app_name}-staging for manual promotion`);
+      }
       return { ok: true, webhookId: String(created.id) };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

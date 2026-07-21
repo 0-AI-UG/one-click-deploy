@@ -59,7 +59,7 @@ ${BOLD}Commands:${RESET}
   envs                   Manage environments and variables
   restart <app>          Restart an app
   rollback <app>         Roll back to previous deployment
-  promote <target>       Promote a staging version to production
+  promote                Promote the webhook-staging sibling to production
   pause <app>            Pause an app
   unpause <app>          Unpause an app
   services               List services

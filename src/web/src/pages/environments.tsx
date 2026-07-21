@@ -4,7 +4,7 @@ import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx"
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Layers, Plus, Trash2, ChevronDown, ChevronRight, Key, X } from "lucide-react";
+import { Layers, Plus, Trash2, Copy, ChevronDown, ChevronRight, Key, X } from "lucide-react";
 import type { EnvironmentData, AppData } from "../types.ts";
 
 type AttachedApp = { id: number; name: string; status: string; domain: string };
@@ -115,6 +115,18 @@ export function EnvironmentsPage() {
     }
   };
 
+  const copyEnv = async (env: EnvironmentData) => {
+    const name = window.prompt(`Duplicate "${env.name}" as:`, `${env.name}-copy`);
+    if (!name?.trim()) return;
+    try {
+      await post(`/api/environments/${env.id}/copy`, { name: name.trim() });
+      showToast("Environment duplicated", "success");
+      load();
+    } catch (err: any) {
+      showToast(err.message || "Failed to duplicate", "error");
+    }
+  };
+
   // Apps not yet attached to this environment
   const unattachedApps = (envId: number) => {
     const attached = new Set((attachedApps[envId] || []).map((a) => a.id));
@@ -191,6 +203,14 @@ export function EnvironmentsPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <Btn
+                        size="xs"
+                        variant="ghost"
+                        title="Duplicate"
+                        onClick={() => copyEnv(env)}
+                      >
+                        <Copy size={12} className="text-muted" />
+                      </Btn>
                       <Btn
                         size="xs"
                         variant="ghost"

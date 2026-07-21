@@ -34,12 +34,14 @@ function parseFlags(args: string[]): {
   manifestPath: string;
   domain?: string;
   envName?: string;
+  stagingEnvName?: string;
   sets: Record<string, string>;
   help: boolean;
 } {
   let manifestPath = "";
   let domain: string | undefined;
   let envName: string | undefined;
+  let stagingEnvName: string | undefined;
   const sets: Record<string, string> = {};
   let help = false;
 
@@ -48,6 +50,8 @@ function parseFlags(args: string[]): {
       domain = arg.slice(9);
     } else if (arg.startsWith("--env=")) {
       envName = arg.slice(6);
+    } else if (arg.startsWith("--staging-env=")) {
+      stagingEnvName = arg.slice(14);
     } else if (arg.startsWith("--set=")) {
       const pair = arg.slice(6);
       const eq = pair.indexOf("=");
@@ -65,7 +69,7 @@ function parseFlags(args: string[]): {
 
   if (!manifestPath) manifestPath = ".ocd-deploy.json";
 
-  return { manifestPath, domain, envName, sets, help };
+  return { manifestPath, domain, envName, stagingEnvName, sets, help };
 }
 
 export async function deploy(args: string[]): Promise<void> {
@@ -75,7 +79,7 @@ export async function deploy(args: string[]): Promise<void> {
     return;
   }
 
-  const { manifestPath, domain, envName, sets, help } = parseFlags(args);
+  const { manifestPath, domain, envName, stagingEnvName, sets, help } = parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
@@ -98,6 +102,9 @@ ${BOLD}Options:${RESET}
   --domain=<domain>          Custom domain
   --env=<name|id>            Link an existing environment (env-var bag) by
                              name or id
+  --staging-env=<name|id>    Enable webhook staging: pushes deploy to the
+                             <name>-staging sibling (with this environment) and
+                             hold for manual promotion. Requires webhook.enabled.
   --set=KEY=VALUE            Set an env var (repeatable)`);
     process.exit(0);
   }
@@ -126,6 +133,22 @@ ${BOLD}Options:${RESET}
     body.webhook_branch = manifest.webhook.branch || "main";
     if (manifest.webhook.path) body.webhook_path = manifest.webhook.path;
     if (manifest.webhook.wait_for_ci) body.webhook_wait_for_ci = true;
+  }
+
+  // Webhook staging is opt-in and explicit: the environment must be given at
+  // deploy time via --staging-env. The manifest can only declare intent
+  // (webhook.staging: true) — with no env selected that's an error.
+  if (stagingEnvName) {
+    if (!body.webhook_enabled) {
+      console.error(`${RED}--staging-env requires webhooks — set "webhook": { "enabled": true } in the manifest.${RESET}`);
+      process.exit(1);
+    }
+    const stagingEnv = await resolveEnvironment(stagingEnvName);
+    body.webhook_staging_environment_id = stagingEnv.id;
+    console.log(`${DIM}Staging:${RESET}  ${stagingEnv.name}`);
+  } else if (manifest.webhook?.staging) {
+    console.error(`${RED}webhook.staging is set in the manifest but no staging environment was given — pass --staging-env=<name|id>.${RESET}`);
+    process.exit(1);
   }
 
   if (manifest.replicas) body.replicas = manifest.replicas;

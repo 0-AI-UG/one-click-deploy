@@ -48,8 +48,13 @@ export type AppRow = {
   scale_to_zero_after: number;
   webhook_wait_for_ci: number;
   /** When set, a webhook push deploys to this app's <name>-staging sibling and
-   *  holds; production is swapped only on manual Promote. 0 = deploy prod. */
+   *  holds; production is swapped only on manual Promote. 0 = deploy prod.
+   *  Mirror of webhook_staging_environment_id != null. */
   webhook_staging: number;
+  /** The environment the webhook staging sibling deploys with. NULL = staging
+   *  off. The user selects this explicitly (often a copy of production's env);
+   *  the sibling links to exactly this environment — no live inheritance. */
+  webhook_staging_environment_id: number | null;
   environment_id: number | null;
   stack_id: number | null;
   public: number;
@@ -598,10 +603,12 @@ export function updateAppWebhookWaitForCi(id: number, waitForCi: boolean): void 
   db.query("UPDATE apps SET webhook_wait_for_ci = ? WHERE id = ?").run(waitForCi ? 1 : 0, id);
 }
 
-/** Toggle whether webhook pushes deploy to the app's staging sibling (and hold
- *  for manual promotion) instead of redeploying production directly. */
-export function updateAppWebhookStaging(id: number, staging: boolean): void {
-  db.query("UPDATE apps SET webhook_staging = ? WHERE id = ?").run(staging ? 1 : 0, id);
+/** Select the environment the webhook staging sibling deploys with, or null to
+ *  turn staging off. The legacy webhook_staging flag is kept in sync so readers
+ *  that only check "is staging on" keep working. */
+export function updateAppWebhookStagingEnvironment(id: number, environmentId: number | null): void {
+  db.query("UPDATE apps SET webhook_staging_environment_id = ?, webhook_staging = ? WHERE id = ?")
+    .run(environmentId, environmentId != null ? 1 : 0, id);
 }
 
 export function updateAppScaling(id: number, fields: {

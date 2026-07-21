@@ -111,7 +111,7 @@ export async function verifyGithubSignature(
 export async function handleEnableWebhook(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "webhooks.manage");
-    const body = await request.json() as { branch?: string; path?: string; wait_for_ci?: boolean; staging?: boolean };
+    const body = await request.json() as { branch?: string; path?: string; wait_for_ci?: boolean; staging_environment_id?: number | null };
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
@@ -139,7 +139,13 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
       token: pat,
     });
 
-    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath, !!body.wait_for_ci, !!body.staging);
+    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath, !!body.wait_for_ci, false);
+    if (body.staging_environment_id != null) {
+      if (!db.getEnvironment(body.staging_environment_id)) {
+        return Response.json({ ok: false, error: "Staging environment not found" }, { status: 400, headers: corsHeaders });
+      }
+      db.updateAppWebhookStagingEnvironment(appId, body.staging_environment_id);
+    }
     db.updateAppDeployedBy(appId, payload.userId);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
@@ -158,12 +164,15 @@ export async function handleUpdateWebhookSettings(request: Request, appId: numbe
       return Response.json({ ok: false, error: "Webhook is not enabled" }, { status: 400, headers: corsHeaders });
     }
 
-    const body = await request.json() as { wait_for_ci?: boolean; staging?: boolean };
+    const body = await request.json() as { wait_for_ci?: boolean; staging_environment_id?: number | null };
     if (body.wait_for_ci !== undefined) {
       db.updateAppWebhookWaitForCi(appId, !!body.wait_for_ci);
     }
-    if (body.staging !== undefined) {
-      db.updateAppWebhookStaging(appId, !!body.staging);
+    if (body.staging_environment_id !== undefined) {
+      if (body.staging_environment_id != null && !db.getEnvironment(body.staging_environment_id)) {
+        return Response.json({ ok: false, error: "Staging environment not found" }, { status: 400, headers: corsHeaders });
+      }
+      db.updateAppWebhookStagingEnvironment(appId, body.staging_environment_id);
     }
 
     return Response.json({ ok: true }, { headers: corsHeaders });
@@ -253,7 +262,7 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
         // GitHub uses one delivery GUID per push across all webhooks on a repo.
         // Without app scoping, sibling apps sharing a repo collide on this key
         // and all but one get dropped.
-        if (app.webhook_staging) {
+        if (app.webhook_staging_environment_id != null) {
           // Staging mode: deploy the pushed commit to the <name>-staging sibling
           // and HOLD. Production keeps serving until the user clicks Promote.
           const res = deployToStaging(appId, {

@@ -127,6 +127,7 @@ export type DeployRequest = {
   webhook_branch?: string; // Branch to watch, defaults to "main"
   webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
   webhook_wait_for_ci?: boolean; // Wait for CI checks to pass before deploying
+  webhook_staging_environment_id?: number | null; // Environment the webhook staging sibling deploys with. Set = enable staging (pushes hold in <name>-staging for manual promotion). Requires webhook_enabled.
   auth_password?: string; // If set, the ingress enforces HTTP basic auth (username "admin"). Requires internal_protocol 'http' (the default)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
   public?: boolean; // Whether the app is publicly accessible (default true)
@@ -160,8 +161,10 @@ export type PromoteRequest = {
 };
 
 export type AppStagingResponse = {
-  /** Whether the app's webhook staging toggle is on. */
+  /** Whether webhook staging is on (an environment is selected). */
   staging_enabled: boolean;
+  /** The environment the staging sibling deploys with, or null when off. */
+  staging_environment_id: number | null;
   /** Git commit of production's most recent successful deployment, or null. */
   prod_commit: string | null;
   /** The auto-managed <name>-staging sibling, once it has been deployed. */

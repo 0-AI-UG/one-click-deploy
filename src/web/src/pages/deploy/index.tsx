@@ -93,6 +93,7 @@ const EMPTY_FORM: FormState = {
   webhook_branch: "main",
   webhook_path: "",
   webhook_wait_for_ci: false,
+  webhook_staging_environment_id: null,
   auth_password: "",
   replicas: "1",
   public: true,
@@ -463,6 +464,7 @@ export function DeployPage() {
       webhook_branch: form.webhook_enabled ? form.webhook_branch : undefined,
       webhook_path: form.webhook_enabled && form.webhook_path ? form.webhook_path : undefined,
       webhook_wait_for_ci: form.webhook_enabled ? form.webhook_wait_for_ci : undefined,
+      webhook_staging_environment_id: form.webhook_enabled ? (form.webhook_staging_environment_id ?? undefined) : undefined,
       auth_password: form.auth_password || undefined,
       replicas: parseInt(form.replicas, 10) || 1,
       public: form.public,
@@ -681,6 +683,7 @@ export function DeployPage() {
                     setForm={setForm}
                     extraEnv={extraEnv}
                     setExtraEnv={setExtraEnv}
+                    environments={environments}
                   />
                 </div>
               )}

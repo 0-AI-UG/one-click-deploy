@@ -35,7 +35,7 @@ export type DeployManifest = {
   };
   env?: ManifestEnvDef[];
   volume?: { size?: number; path?: string };
-  webhook?: { enabled?: boolean; branch?: string; path?: string; wait_for_ci?: boolean };
+  webhook?: { enabled?: boolean; branch?: string; path?: string; wait_for_ci?: boolean; staging?: boolean };
   suggested_app_name?: string;
   replicas?: number;
   public?: boolean;
@@ -118,6 +118,7 @@ export type FormState = {
   webhook_branch: string;
   webhook_path: string;
   webhook_wait_for_ci: boolean;
+  webhook_staging_environment_id: number | null; // null = staging off
   auth_password: string;
   replicas: string;
   public: boolean;

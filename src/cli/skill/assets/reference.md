@@ -36,6 +36,7 @@ compatibility (nested unknown keys are silently stripped).
 | `webhook.branch` | string | Branch to watch. Default: repo default branch. |
 | `webhook.path` | string | Only redeploy when files under this path prefix change. |
 | `webhook.wait_for_ci` | boolean | Wait for CI checks to pass before deploying. Default `false`. |
+| `webhook.staging` | boolean | Hold each pushed commit in a `<name>-staging` sibling for manual promotion. Requires `--staging-env=<name\|id>` at deploy time to pick the staging environment. Default `false`. |
 | `suggested_app_name` | string | Suggested app name (DNS-safe: lowercase, digits, hyphens). |
 | `replicas` | integer ≥ 1 | Desired replica count. Default `1`. |
 | `public` | boolean | Whether the app gets a public HTTPS domain. Default `true`. |
@@ -177,7 +178,7 @@ ocd delete <app>             Delete an app
 ocd logs <app> [--tail=N]    Show app logs (default: last 100 lines)
 ocd restart <app>            Restart an app's containers
 ocd rollback <app>           Roll back to the previous successful deployment
-ocd promote <target>         Promote a staging target's running commit to production
+ocd promote                  Promote the webhook-staging sibling's commit to production
 ocd pause <app>              Stop an app without deleting it
 ocd unpause <app>            Start a paused app again
 ocd envs <subcommand>        Manage environments and their variables
@@ -196,7 +197,7 @@ App and server arguments accept a name or numeric ID.
 ### `ocd deploy`
 
 ```
-ocd deploy [manifest] [--target=<name>] [--domain=<domain>] [--env=<name|id>] [--set=KEY=VALUE ...]
+ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>] [--staging-env=<name|id>] [--set=KEY=VALUE ...]
 ```
 
 Run from inside a git repo with an `origin` remote. Reads the manifest
@@ -204,14 +205,13 @@ Run from inside a git repo with an `origin` remote. Reads the manifest
 volume, and scaling, then streams deploy progress until it completes or fails.
 `--domain` sets a custom domain.
 
-`--target=<name>` deploys a **target** (deploy stage) declared in the manifest's
-`targets` block. `--target=production` (or no `--target`) deploys the bare app
-`<name>` in the "general" pool; `--target=staging` deploys a separate sibling app
-`<name>-staging` with its own isolated environment (production's env vars copied,
-but not its service links) in the "staging" pool. An unknown target name errors
-and lists the declared targets. `--target` and `--env` are **mutually
-exclusive** — a target manages its own environment, whereas `--env` links an
-existing one.
+`--staging-env=<name|id>` enables **webhook staging**: each pushed commit deploys
+to the `<name>-staging` sibling (with the given environment) and holds for manual
+promotion instead of redeploying production. It requires `webhook.enabled` in the
+manifest; the manifest may also declare `"webhook": { "staging": true }`, but the
+environment must still be provided with `--staging-env` at deploy time. Select
+production's own environment to share it, or an `ocd envs copy` of it to isolate
+staging values.
 
 Env vars from the manifest's `env[]` are included automatically: entries with a
 `default` are sent as-is, `--set=KEY=VALUE` (repeatable) overrides or adds
@@ -226,7 +226,7 @@ wins (manifest default skipped), keys the environment lacks are added, and
 ### `ocd promote`
 
 ```
-ocd promote <target> [--yes]
+ocd promote [--yes]
 ocd promote --from=<app> --to=<app> [--yes]
 ```
 
@@ -234,9 +234,9 @@ Promotes the exact git commit currently running in a source (staging) app up to
 a destination (production) app by rebuilding the destination pinned to that
 commit (reusing the rollback machinery).
 
-- `<target>` — a deploy stage from the manifest's `targets` block (e.g.
-  `staging`). Source = `<name>-<target>`, destination = `<name>`, where `<name>`
-  comes from the manifest — run from inside the repo.
+- No arguments — promotes the webhook-staging sibling: source = `<name>-staging`,
+  destination = `<name>`, where `<name>` comes from the manifest — run from
+  inside the repo.
 - `--from=<app>` / `--to=<app>` — explicit source and destination apps (name or
   id); both are required together and override the manifest-derived names.
 - `--yes`, `-y` — skip the confirmation prompt (required in non-interactive

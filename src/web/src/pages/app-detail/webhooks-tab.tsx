@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../../api/client.ts";
 import { Card, Btn, Field, StatusBadge, Spinner, confirm, showToast } from "../../components/ui.tsx";
+import { NeoSelect } from "../../components/neo-select.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { InfoTip } from "./shared.tsx";
 import { GitBranch, ArrowUpCircle, ExternalLink, Rocket } from "lucide-react";
-import type { AppData } from "../../types.ts";
+import type { AppData, EnvironmentData } from "../../types.ts";
 import type { AppStagingResponse } from "../../../../shared/rpc.ts";
 
 const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -13,18 +14,26 @@ const errMessage = (err: unknown): string => (err instanceof Error ? err.message
 interface WebhooksTabProps {
   app: AppData;
   appId: number;
-  webhookForm: { branch: string; path: string; waitForCi: boolean; staging: boolean };
-  setWebhookForm: (f: { branch: string; path: string; waitForCi: boolean; staging: boolean }) => void;
+  webhookForm: { branch: string; path: string; waitForCi: boolean; stagingEnvId: number | null };
+  setWebhookForm: (f: { branch: string; path: string; waitForCi: boolean; stagingEnvId: number | null }) => void;
   actionLoading: string | null;
   action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
   ops: ResourceOpsResult;
 }
 
-// The staging panel: shown when the webhook is enabled. Toggling "Deploy to
-// staging first" flips app.webhook_staging; when on, webhook pushes build the
-// hidden <name>-staging sibling and hold, and this panel surfaces that sibling
-// plus a Promote-to-production button (the existing promote op).
-function StagingPanel({ app, appId, actionLoading, action, ops }: Omit<WebhooksTabProps, "webhookForm" | "setWebhookForm">) {
+// Options for the "deploy to staging first" environment picker: an explicit
+// "Off" plus one entry per environment. Staging is on iff an environment is
+// selected; the sibling deploys with exactly that environment (no inheritance).
+const OFF = "";
+function envOptions(envs: EnvironmentData[]): { value: string; label: string }[] {
+  return [{ value: OFF, label: "Off — deploy production directly" }, ...envs.map((e) => ({ value: String(e.id), label: e.name }))];
+}
+
+// The staging panel: shown when the webhook is enabled. Picking an environment
+// turns staging on — webhook pushes then build the hidden <name>-staging sibling
+// (deployed with the chosen environment) and hold, and this panel surfaces that
+// sibling plus a Promote-to-production button (the existing promote op).
+function StagingPanel({ app, appId, envs, actionLoading, action, ops }: Omit<WebhooksTabProps, "webhookForm" | "setWebhookForm"> & { envs: EnvironmentData[] }) {
   const [data, setData] = useState<AppStagingResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -41,11 +50,12 @@ function StagingPanel({ app, appId, actionLoading, action, ops }: Omit<WebhooksT
 
   useEffect(() => { load(); }, [appId]);
 
-  const enabled = data?.staging_enabled ?? !!app.webhook_staging;
+  const stagingEnvId = data?.staging_environment_id ?? app.webhook_staging_environment_id ?? null;
+  const enabled = stagingEnvId != null;
 
-  const toggleStaging = (next: boolean) =>
+  const selectEnv = (next: number | null) =>
     action("toggle-staging", async () => {
-      await post(`/api/apps/${appId}/webhook/settings`, { staging: next });
+      await post(`/api/apps/${appId}/webhook/settings`, { staging_environment_id: next });
       await load();
     });
 
@@ -72,28 +82,26 @@ function StagingPanel({ app, appId, actionLoading, action, ops }: Omit<WebhooksT
     }
   };
 
+  const selectedName = envs.find((e) => e.id === stagingEnvId)?.name;
+
   return (
     <div className="mt-3 pt-3 border-t-2 border-fg/10 space-y-3">
+      <div className="flex items-center gap-2 text-[10px] font-mono">
+        <span className="text-muted">Deploy to staging first</span>
+        <InfoTip text="Pick an environment to build the hidden <name>-staging sibling on each push and hold — production is swapped only when you click Promote. The sibling deploys with the environment you choose; duplicate production's environment first if you want isolated staging values. Off: pushes redeploy production directly." />
+      </div>
       <PermissionGate
         permission="webhooks.manage"
         fallback={
-          <div className="flex justify-between text-[10px] font-mono">
-            <span className="text-muted">Deploy to staging first</span>
-            <span className={`font-bold ${enabled ? "text-fg" : "text-muted"}`}>{enabled ? "On" : "Off"}</span>
-          </div>
+          <div className="text-[10px] font-mono font-bold text-fg">{enabled ? (selectedName ?? "On") : "Off"}</div>
         }
       >
-        <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">
-          <input
-            type="checkbox"
-            checked={enabled}
-            disabled={actionLoading === "toggle-staging"}
-            onChange={(e) => toggleStaging(e.target.checked)}
-            className="accent-accent"
-          />
-          <span className="text-muted">Deploy to staging first (manual promote to production)</span>
-          <InfoTip text="On: a webhook push builds the hidden <name>-staging sibling and holds. Production is swapped only when you click Promote. Off: pushes redeploy production directly." />
-        </label>
+        <NeoSelect
+          compact
+          value={stagingEnvId != null ? String(stagingEnvId) : OFF}
+          options={envOptions(envs)}
+          onChange={(v) => selectEnv(v ? parseInt(v, 10) : null)}
+        />
       </PermissionGate>
 
       {enabled && (
@@ -113,6 +121,7 @@ function StagingPanel({ app, appId, actionLoading, action, ops }: Omit<WebhooksT
               </a>
             </div>
             <div className="space-y-1 text-[10px] font-mono">
+              <div className="flex justify-between"><span className="text-muted">Environment</span><span className="text-fg">{selectedName ?? `#${stagingEnvId}`}</span></div>
               <div className="flex justify-between"><span className="text-muted">Staging commit</span><span className="text-fg">{sibling.commit ? sibling.commit.slice(0, 7) : "—"}</span></div>
               <div className="flex justify-between"><span className="text-muted">Production commit</span><span className="text-fg">{prodCommit ? prodCommit.slice(0, 7) : "—"}</span></div>
               {sibling.domain && (
@@ -137,13 +146,13 @@ function StagingPanel({ app, appId, actionLoading, action, ops }: Omit<WebhooksT
               )}
             </PermissionGate>
             <p className="text-[10px] font-mono text-muted leading-snug">
-              Staging inherits production's environment live. Override staging-only values (e.g. a staging <span className="text-fg">DATABASE_URL</span>) on the staging app — inherited production service vars flow through until you do.
+              Staging deploys with the <span className="text-fg">{selectedName ?? "selected"}</span> environment. Edit or <a href="#/environments" className="text-accent-blue hover:underline">duplicate an environment</a> to change its values.
             </p>
           </div>
         ) : (
           <div className="border-2 border-dashed border-fg/30 bg-alt/20 p-3">
             <p className="text-[10px] font-mono text-muted leading-snug">
-              No staging deploy yet. Push to <span className="text-fg font-bold">{app.webhook_branch}</span> and the <span className="text-fg font-bold">{app.name}-staging</span> sibling is built automatically — then promote it here.
+              No staging deploy yet. Push to <span className="text-fg font-bold">{app.webhook_branch}</span> and the <span className="text-fg font-bold">{app.name}-staging</span> sibling is built with the <span className="text-fg font-bold">{selectedName ?? "selected"}</span> environment — then promote it here.
             </p>
           </div>
         )
@@ -153,6 +162,9 @@ function StagingPanel({ app, appId, actionLoading, action, ops }: Omit<WebhooksT
 }
 
 export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoading, action, ops }: WebhooksTabProps) {
+  const [envs, setEnvs] = useState<EnvironmentData[]>([]);
+  useEffect(() => { get("/api/environments").then(setEnvs).catch(() => {}); }, []);
+
   return (
     <Card className="p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -212,17 +224,17 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
               />
               <span className="text-muted">Wait for CI checks before deploying</span>
             </label>
-            <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">
-              <input
-                type="checkbox"
-                checked={webhookForm.staging}
-                onChange={(e) => setWebhookForm({ ...webhookForm, staging: e.target.checked })}
-                className="accent-accent"
+            <Field label="Deploy to staging first (optional)">
+              <NeoSelect
+                value={webhookForm.stagingEnvId != null ? String(webhookForm.stagingEnvId) : OFF}
+                options={envOptions(envs)}
+                onChange={(v) => setWebhookForm({ ...webhookForm, stagingEnvId: v ? parseInt(v, 10) : null })}
               />
-              <span className="text-muted">Deploy to staging first (manual promote to production)</span>
-              <InfoTip text="On: a webhook push builds the hidden <name>-staging sibling and holds. Production is swapped only when you click Promote. Off: pushes redeploy production directly." />
-            </label>
-            <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: webhookForm.branch || "main", path: webhookForm.path || undefined, wait_for_ci: webhookForm.waitForCi, staging: webhookForm.staging }))}>
+            </Field>
+            <p className="text-[10px] font-mono text-muted leading-snug">
+              Pick an environment to hold pushes in a <span className="text-fg">{app.name}-staging</span> sibling for manual promotion. Duplicate production's environment on the <a href="#/environments" className="text-accent-blue hover:underline">Environments</a> page for isolated staging values.
+            </p>
+            <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: webhookForm.branch || "main", path: webhookForm.path || undefined, wait_for_ci: webhookForm.waitForCi, staging_environment_id: webhookForm.stagingEnvId }))}>
               Enable Webhook
             </Btn>
           </div>
@@ -230,7 +242,7 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
       </PermissionGate>
 
       {app.webhook_enabled && (
-        <StagingPanel app={app} appId={appId} actionLoading={actionLoading} action={action} ops={ops} />
+        <StagingPanel app={app} appId={appId} envs={envs} actionLoading={actionLoading} action={action} ops={ops} />
       )}
     </Card>
   );
