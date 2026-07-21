@@ -13,6 +13,9 @@ type AppData = {
   public: number; health_check: number;
   internal_protocol?: string;
   stack_id?: number | null;
+  // Carried purely so per-app controls can be gated against an
+  // environment-scoped grant as well as an app-scoped one.
+  environment_id?: number | null;
 };
 type ServiceData = {
   id: number; name: string; service_type: string; version: string; status: string;
@@ -312,10 +315,10 @@ export function DashboardPage() {
             )}
           </div>
           <div className="flex items-center gap-1">
-            <PermissionGate permission="apps.logs">
+            <PermissionGate permission="apps.logs" appId={app.id} environmentId={app.environment_id}>
               <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/apps/${app.id}`; }}><ScrollText size={12} /></Btn>
             </PermissionGate>
-            <PermissionGate permission="apps.restart">
+            <PermissionGate permission="apps.restart" appId={app.id} environmentId={app.environment_id}>
               {(() => {
                 const k = `restart-${app.id}`;
                 const armed = confirmKey === k;
@@ -326,7 +329,7 @@ export function DashboardPage() {
                 );
               })()}
             </PermissionGate>
-            <PermissionGate permission="apps.pause">
+            <PermissionGate permission="apps.pause" appId={app.id} environmentId={app.environment_id}>
               {app.status === "paused" ? (() => {
                 const k = `unpause-${app.id}`;
                 const armed = confirmKey === k;
@@ -345,7 +348,7 @@ export function DashboardPage() {
                 );
               })()}
             </PermissionGate>
-            <PermissionGate permission="apps.redeploy">
+            <PermissionGate permission="apps.redeploy" appId={app.id} environmentId={app.environment_id}>
               {(() => {
                 const k = `redeploy-${app.id}`;
                 const armed = confirmKey === k;
@@ -356,7 +359,7 @@ export function DashboardPage() {
                 );
               })()}
             </PermissionGate>
-            <PermissionGate permission="apps.destroy">
+            <PermissionGate permission="apps.destroy" appId={app.id} environmentId={app.environment_id}>
               <Btn
                 size="xs"
                 variant="ghost"
@@ -504,7 +507,7 @@ export function DashboardPage() {
             <span className="font-mono text-[9px] text-muted hidden sm:inline">
               {new Date(stack.created_at.replace(" ", "T") + "Z").toLocaleDateString()}
             </span>
-            <PermissionGate permission="stacks.deploy">
+            <PermissionGate permission="stacks.deploy" environmentId={stack.environment_id}>
               <Btn size="xs" variant="ghost" title="Redeploy stack" loading={redeploying} disabled={busy} onClick={() => stackRedeploy(stack)}>
                 <RefreshCw size={12} />
               </Btn>
@@ -512,7 +515,7 @@ export function DashboardPage() {
             {/* Only shown when there is something to promote — a stack with no
                 staging siblings has no use for the button at all. */}
             {stagingSiblings > 0 && (
-            <PermissionGate permission="stacks.deploy">
+            <PermissionGate permission="stacks.promote" environmentId={stack.environment_id}>
               <Btn
                 size="xs"
                 variant="ghost"
@@ -525,7 +528,7 @@ export function DashboardPage() {
               </Btn>
             </PermissionGate>
             )}
-            <PermissionGate permission="stacks.destroy">
+            <PermissionGate permission="stacks.destroy" environmentId={stack.environment_id}>
               <Btn size="xs" variant="ghost" title="Destroy stack" loading={destroying} disabled={busy} onClick={() => stackDestroy(stack)}>
                 <Trash2 size={12} className="text-accent-red" />
               </Btn>

@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requirePermission, appScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 
@@ -12,7 +12,7 @@ import * as db from "../../shared/db.ts";
  */
 export async function handleGetAvailability(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "apps.view", appScope(appId));
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });

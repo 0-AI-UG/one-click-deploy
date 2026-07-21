@@ -151,7 +151,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                 />
               </div>
             )}
-        <PermissionGate permission="scaling.manage">
+        <PermissionGate permission="scaling.scale" appId={appId} environmentId={app.environment_id}>
           <div className="flex gap-1">
             {app.status === "sleeping" && (
               <Btn
@@ -302,7 +302,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
               )}
             </div>
 
-            <PermissionGate permission="scaling.manage">
+            <PermissionGate permission="scaling.policy" appId={appId} environmentId={app.environment_id}>
               <div className="flex justify-end">
                 <Btn
                   size="sm"

@@ -134,10 +134,7 @@ export function App() {
   if (hash === "#/" || hash === "") {
     content = <DashboardPage />;
   } else if (hash === "#/deploy" || hash.startsWith("#/deploy?")) {
-    // `?repo=` prefills the repo field and introspects immediately — how the
-    // stack detail page hands you back to the manifest for a re-sync.
-    const repo = new URLSearchParams(hash.split("?")[1] || "").get("repo");
-    content = <DeployPage initialRepo={repo || undefined} />;
+    content = <DeployPage />;
   } else if (hash === "#/deploy/stack") {
     // Stack deploy is unified into the single Deploy page (detection is implicit);
     // redirect old links there.

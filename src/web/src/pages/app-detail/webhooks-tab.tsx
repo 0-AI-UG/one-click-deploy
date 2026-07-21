@@ -90,6 +90,8 @@ function StagingPanel({ app, appId, envs, actionLoading, action, ops }: Omit<Web
     <>
       <PermissionGate
         permission="webhooks.manage"
+        appId={appId}
+        environmentId={app.environment_id}
         fallback={
           <div className="flex items-center gap-2 text-[10px] font-mono">
             <span className="text-muted">Deploy to staging first</span>
@@ -166,7 +168,7 @@ function StagingPanel({ app, appId, envs, actionLoading, action, ops }: Omit<Web
               </div>
             )}
           </div>
-          <PermissionGate permission="apps.deploy">
+          <PermissionGate permission="apps.promote" appId={appId} environmentId={app.environment_id}>
             <Btn
               size="xs"
               variant="primary"
@@ -206,7 +208,7 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
           </>
         )}
       </div>
-      <PermissionGate permission="webhooks.manage">
+      <PermissionGate permission="webhooks.manage" appId={appId} environmentId={app.environment_id}>
         {app.webhook_enabled ? (
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">

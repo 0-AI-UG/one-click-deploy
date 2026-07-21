@@ -14,7 +14,7 @@ function scrubServersWithApps(servers: any[]): any[] {
 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "fleet.view");
     const result = scrubServersWithApps(getServersWithApps());
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
@@ -50,7 +50,7 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
  *  running on the server stay put — no active migration here. */
 export async function handleSetServerPool(request: Request, serverId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.delete");
+    await requirePermission(request, "servers.manage");
     const body = (await request.json().catch(() => ({}))) as { pool?: unknown };
     const pool = body.pool;
 
@@ -73,7 +73,7 @@ export async function handleSetServerPool(request: Request, serverId: number): P
 
 export async function handleRefreshServers(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "fleet.view");
     const result = scrubServersWithApps(getServersWithApps());
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {

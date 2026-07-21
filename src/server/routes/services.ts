@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requirePermission, envScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, serializeEnvVars, encryptValue } from "../../shared/env-crypto.ts";
@@ -12,8 +12,9 @@ import { enqueueOp } from "./_ops.ts";
 
 // --- Catalog ---
 
-export async function handleGetCatalog(_request: Request): Promise<Response> {
+export async function handleGetCatalog(request: Request): Promise<Response> {
   try {
+    await requirePermission(request, "services.view");
     const entries = getCatalogEntries().map((e) => ({
       type: e.type,
       label: e.label,
@@ -38,7 +39,7 @@ export async function handleGetCatalog(_request: Request): Promise<Response> {
 
 export async function handleGetServices(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "services.view");
     const services = db.getServices();
     const result = services.map((s) => {
       const instances = db.getServiceInstances(s.id);
@@ -59,7 +60,7 @@ export async function handleGetServices(request: Request): Promise<Response> {
 
 export async function handleGetService(request: Request, serviceId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "services.view");
     const service = db.getService(serviceId);
     if (!service) {
       return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
@@ -142,7 +143,10 @@ export async function handleGetServiceLogs(request: Request, serviceId: number):
 
 export async function handleInjectService(request: Request, serviceId: number, environmentId: number): Promise<Response> {
   try {
+    // Injecting writes the service's credentials into the environment's env vars,
+    // so it needs the secret-write permission on that environment too.
     await requirePermission(request, "services.link");
+    await requirePermission(request, "environments.secrets", envScope(environmentId));
     const body = await request.json().catch(() => ({}));
     const envPrefix = body.env_prefix || "DATABASE";
 
@@ -196,6 +200,7 @@ export async function handleInjectService(request: Request, serviceId: number, e
 export async function handleUninjectService(request: Request, serviceId: number, environmentId: number): Promise<Response> {
   try {
     await requirePermission(request, "services.link");
+    await requirePermission(request, "environments.secrets", envScope(environmentId));
 
     const service = db.getService(serviceId);
     if (!service) {

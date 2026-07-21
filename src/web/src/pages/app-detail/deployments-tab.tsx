@@ -39,7 +39,7 @@ export function DeploymentsTab({ appId, deployments, action, ops }: DeploymentsT
                   </span>
                 )}
                 {d.status !== "failed" && (
-                  <PermissionGate permission="apps.rollback">
+                  <PermissionGate permission="apps.rollback" appId={appId}>
                     <Btn
                       size="xs" variant="ghost"
                       disabled={ops.isBusy}

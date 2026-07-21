@@ -1,12 +1,19 @@
-import { useTempDataDir, randomSuffix } from "../../shared/test-helpers.ts";
+import { useTempDataDir, randomSuffix, TEST_ADMIN_ID, seedTestAdmin } from "../../shared/test-helpers.ts";
 useTempDataDir();
+seedTestAdmin();
 
 import { describe, test, expect, mock } from "bun:test";
 
 // Bypass auth for all tests (same pattern as staging-promote.test.ts).
+// Bypass the auth half of the permission layer, but spread the real module
+// through so the scope helpers (appScope/stackScope/...) stay real — replacing
+// it wholesale would hand routes `undefined` for those.
+const realPermissions = await import("../lib/permissions.ts");
 mock.module("../lib/permissions.ts", () => ({
-  requireAdmin: async () => ({ userId: "admin", username: "admin" }),
-  requirePermission: async () => ({ userId: "admin", username: "admin" }),
+  ...realPermissions,
+  requireAdmin: async () => ({ userId: TEST_ADMIN_ID, username: "admin" }),
+  requirePermission: async () => ({ userId: TEST_ADMIN_ID, username: "admin" }),
+  requireAuthenticated: async () => ({ userId: TEST_ADMIN_ID, username: "admin" }),
 }));
 
 import * as db from "../../shared/db.ts";

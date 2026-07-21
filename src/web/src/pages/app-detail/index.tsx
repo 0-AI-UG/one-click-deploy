@@ -211,12 +211,12 @@ export function AppDetailPage({ appId }: { appId: number }) {
           )}
         </div>
         <div className="flex gap-1">
-          <PermissionGate permission="apps.restart">
+          <PermissionGate permission="apps.restart" appId={appId} environmentId={app.environment_id}>
             <Btn size="xs" loading={actionLoading === "restart" || ops.isBusyWith("restart_app")} disabled={ops.isBusy} onClick={() => action("restart", () => post(`/api/apps/${appId}/restart`))}>
               <RotateCcw size={12} /> Restart
             </Btn>
           </PermissionGate>
-          <PermissionGate permission="apps.pause">
+          <PermissionGate permission="apps.pause" appId={appId} environmentId={app.environment_id}>
             {app.status === "paused" ? (
               <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
                 <Play size={12} /> Unpause
@@ -227,12 +227,12 @@ export function AppDetailPage({ appId }: { appId: number }) {
               </Btn>
             )}
           </PermissionGate>
-          <PermissionGate permission="apps.redeploy">
+          <PermissionGate permission="apps.redeploy" appId={appId} environmentId={app.environment_id}>
             <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", () => post(`/api/apps/${appId}/redeploy`))}>
               <RefreshCw size={12} /> Redeploy
             </Btn>
           </PermissionGate>
-          <PermissionGate permission="apps.destroy">
+          <PermissionGate permission="apps.destroy" appId={appId} environmentId={app.environment_id}>
             <Btn
               size="xs" variant="danger"
               loading={actionLoading === "destroy" || ops.isBusyWith("destroy_app")}
@@ -250,7 +250,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
       {app.status === "paused" && (
         <PausedBanner message="App is paused; containers are frozen and not serving traffic">
-          <PermissionGate permission="apps.pause">
+          <PermissionGate permission="apps.pause" appId={appId} environmentId={app.environment_id}>
             <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
               <Play size={12} /> Unpause
             </Btn>

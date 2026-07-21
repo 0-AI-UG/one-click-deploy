@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requirePermission, requireAuthenticated, appScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
@@ -15,7 +15,7 @@ import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
  *  public raw TCP/UDP address, a boolean `auth_enabled` flag, and strips every
- *  secret/credential field so nothing sensitive leaks to `servers.view` users.
+ *  secret/credential field so nothing sensitive leaks to `apps.view` users.
  *  `auth_password_hash` is the source of truth for "auth on" but is itself a
  *  credential (bcrypt hash), so only the derived boolean goes out. */
 export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
@@ -57,7 +57,7 @@ export async function handleIntrospectRepo(request: Request): Promise<Response> 
 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "fleet.view");
     const result = getServersWithApps().map((s: any) => ({
       ...s,
       apps: (s.apps || []).map((a: any) => enrichAppForResponse(a)),
@@ -70,7 +70,7 @@ export async function handleGetServers(request: Request): Promise<Response> {
 
 export async function handleGetDashboard(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "fleet.view");
     // Staging siblings (target_of set) are auto-managed via the parent's webhook
     // staging toggle — hide them from the main list so they read as an internal
     // detail of the parent, not a separate app. They stay reachable via the
@@ -96,7 +96,7 @@ export async function handleGetDashboard(request: Request): Promise<Response> {
 
 export async function handleGetApps(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "apps.view");
     const apps = db.getApps();
     const result = apps.map((a) => {
       const reps = db.getReplicas(a.id);
@@ -132,7 +132,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
 
 export async function handleDestroyApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.destroy");
+    const payload = await requirePermission(request, "apps.destroy", appScope(appId));
     await enforceConfirmation(request, payload, "delete_app", "app", String(appId));
     const { opId } = enqueue({ kind: "destroy_app", resourceKeys: [`app:${appId}`], input: { appId }, trigger: "ui", triggeredBy: payload.userId });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -142,20 +142,20 @@ export async function handleDestroyApp(request: Request, appId: number): Promise
 }
 
 export function handleRestartApp(request: Request, appId: number): Promise<Response> {
-  return enqueueOp(request, { permission: "apps.restart", kind: "restart_app", resourceKeys: [`app:${appId}`], input: { appId } });
+  return enqueueOp(request, { permission: "apps.restart", scope: appScope(appId), kind: "restart_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }
 
 export function handlePauseApp(request: Request, appId: number): Promise<Response> {
-  return enqueueOp(request, { permission: "apps.pause", kind: "pause_app", resourceKeys: [`app:${appId}`], input: { appId } });
+  return enqueueOp(request, { permission: "apps.pause", scope: appScope(appId), kind: "pause_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }
 
 export function handleUnpauseApp(request: Request, appId: number): Promise<Response> {
-  return enqueueOp(request, { permission: "apps.pause", kind: "unpause_app", resourceKeys: [`app:${appId}`], input: { appId } });
+  return enqueueOp(request, { permission: "apps.pause", scope: appScope(appId), kind: "unpause_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }
 
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.redeploy");
+    const payload = await requirePermission(request, "apps.redeploy", appScope(appId));
     const body = (await request.json().catch(() => ({}))) as {
       container_port?: number;
       environment_id?: number | null;
@@ -221,7 +221,6 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
  */
 export async function handleUpdateIngressSettings(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.redeploy");
     const body = (await request.json().catch(() => ({}))) as {
       /** Write-only plaintext. Omit = leave auth unchanged; "" = disable auth;
        *  non-empty = enable/replace the password. Only the bcrypt hash is
@@ -241,6 +240,16 @@ export async function handleUpdateIngressSettings(request: Request, appId: numbe
       /** 'http' | 'tcp' — internal routing protocol. Omit = leave unchanged. */
       internal_protocol?: string;
     };
+
+    // Body first, then the checks: changing *public exposure* (publishing the
+    // app on a fleet port, or unpublishing it) is strictly more dangerous than
+    // the other ingress knobs, so it needs apps.expose on top of apps.ingress.
+    // Key presence, not truthiness — `public_port: null` means "unexpose" and
+    // must still be gated.
+    await requirePermission(request, "apps.ingress", appScope(appId));
+    if ("public_port" in body || "public_protocol" in body) {
+      await requirePermission(request, "apps.expose", appScope(appId));
+    }
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
@@ -362,7 +371,7 @@ export async function handleUpdateIngressSettings(request: Request, appId: numbe
 
 export async function handleRenameApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.deploy");
+    const payload = await requirePermission(request, "apps.rename", appScope(appId));
     const { name } = await request.json() as { name: string };
 
     const nameResult = validateAppName(name);
@@ -398,7 +407,7 @@ export async function handleRenameApp(request: Request, appId: number): Promise<
 
 export async function handleGetContainerLogs(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.logs");
+    await requirePermission(request, "apps.logs", appScope(appId));
     const url = new URL(request.url);
     const tail = parseInt(url.searchParams.get("tail") || "100", 10);
     const replicaIdParam = url.searchParams.get("replica_id");
@@ -428,7 +437,7 @@ export async function handleGetContainerLogs(request: Request, appId: number): P
 
 export async function handleGetDeployLog(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.logs");
+    await requirePermission(request, "deployments.view", appScope(appId));
     const log = db.getDeployLog(appId);
     return Response.json({ log }, { headers: corsHeaders });
   } catch (error) {
@@ -438,7 +447,7 @@ export async function handleGetDeployLog(request: Request, appId: number): Promi
 
 export async function handleGetDeployments(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "apps.logs");
+    await requirePermission(request, "deployments.view", appScope(appId));
     const deployments = db.getDeployments(appId);
     return Response.json(deployments, { headers: corsHeaders });
   } catch (error) {
@@ -455,7 +464,7 @@ export async function handleGetDeployments(request: Request, appId: number): Pro
  */
 export async function handlePromoteApp(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.deploy");
+    const payload = await requireAuthenticated(request);
     const body = (await request.json().catch(() => ({}))) as { source_app?: string; dest_app?: string };
     if (!body.source_app || !body.dest_app) {
       return Response.json({ error: "source_app and dest_app are required" }, { status: 400, headers: corsHeaders });
@@ -465,6 +474,11 @@ export async function handlePromoteApp(request: Request): Promise<Response> {
     if (!source) return Response.json({ error: `Source app not found: ${body.source_app}` }, { status: 404, headers: corsHeaders });
     const dest = db.getAppByName(body.dest_app);
     if (!dest) return Response.json({ error: `Destination app not found: ${body.dest_app}` }, { status: 404, headers: corsHeaders });
+
+    // The promote op acts on the destination app (it rebuilds and swaps DEST's
+    // containers), so that's the app the permission is scoped against. The body
+    // has to be read first to know which app that is.
+    await requirePermission(request, "apps.promote", appScope(dest.id));
 
     if (source.id === dest.id) {
       return Response.json({ error: "Source and destination must be different apps" }, { status: 400, headers: corsHeaders });
@@ -505,7 +519,7 @@ function deployedCommit(appId: number): string | null {
  */
 export async function handleGetAppStaging(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "apps.view", appScope(appId));
     const app = db.getApp(appId);
     if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
 
@@ -536,7 +550,7 @@ export async function handleGetAppStaging(request: Request, appId: number): Prom
 
 export async function handleRollbackApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.rollback");
+    const payload = await requirePermission(request, "apps.rollback", appScope(appId));
     const body = await request.json() as { deployment_id: number };
     const { opId } = enqueue({
       kind: "rollback",

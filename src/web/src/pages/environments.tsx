@@ -4,6 +4,7 @@ import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx"
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
+import { PermissionGate } from "../components/permission-gate.tsx";
 import { Layers, Plus, Trash2, Copy, ChevronDown, ChevronRight, Key, X } from "lucide-react";
 import type { EnvironmentData, AppData } from "../types.ts";
 
@@ -185,7 +186,19 @@ export function EnvironmentsPage() {
           className="!text-[10px] font-bold uppercase"
           autoFocus
         />
-        <EnvVarEditor entries={editVars} onChange={setEditVars} />
+        {/* Env var values are credentials, so they sit behind their own grant
+            rather than the environment lifecycle one. */}
+        <PermissionGate
+          permission="environments.secrets"
+          environmentId={typeof id === "number" ? id : undefined}
+          fallback={
+            <p className="font-mono text-[9px] text-muted uppercase tracking-wider">
+              Env vars hidden — requires environments.secrets
+            </p>
+          }
+        >
+          <EnvVarEditor entries={editVars} onChange={setEditVars} />
+        </PermissionGate>
         <div className="flex gap-2 justify-end">
           <Btn size="xs" variant="ghost" onClick={() => setExpanded(null)}>Cancel</Btn>
           <Btn size="xs" variant="primary" loading={loading || envBusy} disabled={!editName.trim() || envBusy} onClick={() => save(id)}>

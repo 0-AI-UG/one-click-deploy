@@ -27,6 +27,21 @@ export type WebAuthnCredential = {
 };
 
 export const ALL_PERMISSIONS = [
+  // --- Client access ---------------------------------------------------
+  /** Use the `ocd` CLI at all. Enforced on every CLI-minted token (client:"cli"),
+   *  so revoking it locks a user to the web UI without touching their other grants. */
+  "cli.access",
+
+  // --- Read ------------------------------------------------------------
+  "fleet.view",
+  "apps.view",
+  "services.view",
+  "environments.view",
+  "metrics.view",
+  "operations.view",
+  "deployments.view",
+
+  // --- Apps ------------------------------------------------------------
   "apps.deploy",
   "apps.redeploy",
   "apps.rollback",
@@ -34,30 +49,123 @@ export const ALL_PERMISSIONS = [
   "apps.pause",
   "apps.destroy",
   "apps.logs",
-  "apps.env",
+  "apps.rename",
+  "apps.promote",
+  /** Auth password, sticky sessions, rate limit, IP allowlist, health check, compression. */
+  "apps.ingress",
+  /** Publishing an app on a public fleet port — strictly more dangerous than apps.ingress. */
+  "apps.expose",
+  "webhooks.manage",
+
+  // --- Services --------------------------------------------------------
   "services.deploy",
   "services.manage",
   "services.destroy",
   "services.logs",
   "services.link",
-  "stacks.deploy",
+
+  // --- Stacks ----------------------------------------------------------
   "stacks.view",
+  "stacks.deploy",
+  "stacks.settings",
+  "stacks.promote",
   "stacks.destroy",
-  "servers.view",
-  "servers.delete",
-  "volumes.create",
-  "volumes.manage",
-  "volumes.delete",
-  "scaling.manage",
-  "webhooks.manage",
-  "resources.view",
-  "resources.create",
-  "resources.delete",
+
+  // --- Environments ----------------------------------------------------
   "environments.manage",
-  "terminal.access",
+  /** Reading/writing env var values, which are secrets. Separate from the
+   *  lifecycle grant so someone can attach apps without seeing credentials. */
+  "environments.secrets",
+
+  // --- Scaling ---------------------------------------------------------
+  "scaling.scale",
+  "scaling.policy",
+  "scaling.migrate",
+
+  // --- Servers ---------------------------------------------------------
+  "servers.create",
+  "servers.manage",
+  "servers.delete",
+
+  // --- Volumes ---------------------------------------------------------
+  "volumes.create",
+  "volumes.attach",
+  "volumes.detach",
+  "volumes.resize",
+  "volumes.delete",
+  /** Browsing and reading file contents off a volume — i.e. application data. */
+  "volumes.files.read",
+
+  // --- Other cloud resources ------------------------------------------
+  "resources.view",
+  "resources.delete",
+
+  // --- Operations ------------------------------------------------------
+  "operations.cancel",
+
+  // --- Control plane ---------------------------------------------------
+  "panel.view",
+  "panel.manage",
+
+  // --- Terminal --------------------------------------------------------
+  "terminal.container",
+  /** Shell on a fleet host. Root-equivalent; effectively an admin grant. */
+  "terminal.host",
 ] as const;
 
 export type Permission = typeof ALL_PERMISSIONS[number];
+
+/** Permissions that can be granted narrowly, against a single app or a single
+ *  environment, instead of fleet-wide. Everything absent from this set is
+ *  global-only: it governs infrastructure that no environment owns (servers,
+ *  volumes, the panel, terminal access), so a scoped grant would be meaningless.
+ *  `setUserPermissions` rejects scoped grants for anything not listed here. */
+export const SCOPABLE_PERMISSIONS: ReadonlySet<string> = new Set<Permission>([
+  "apps.view",
+  "apps.deploy",
+  "apps.redeploy",
+  "apps.rollback",
+  "apps.restart",
+  "apps.pause",
+  "apps.destroy",
+  "apps.logs",
+  "apps.rename",
+  "apps.promote",
+  "apps.ingress",
+  "apps.expose",
+  "webhooks.manage",
+  "deployments.view",
+  "metrics.view",
+  "scaling.scale",
+  "scaling.policy",
+  "scaling.migrate",
+  "environments.view",
+  "environments.secrets",
+  "terminal.container",
+  "stacks.view",
+  "stacks.deploy",
+  "stacks.settings",
+  "stacks.promote",
+  "stacks.destroy",
+]);
+
+export type ScopeType = "global" | "environment" | "app";
+
+/** One row of user_permissions. `scopeId` is null exactly when scopeType is
+ *  "global"; otherwise it is an app id or environment id (stored as TEXT). */
+export type PermissionGrant = {
+  permission: string;
+  scopeType: ScopeType;
+  scopeId: string | null;
+};
+
+/** What a permission check is being made *about*. Callers pass whichever ids
+ *  they have; an app id alone is enough, since the app's environment is looked
+ *  up here to honour environment-scoped grants. */
+export type PermissionScope = {
+  appId?: number | null;
+  environmentId?: number | null;
+};
 
 export function getUserCount(): number {
   const row = db.query("SELECT COUNT(*) as count FROM users").get() as { count: number } | null;
@@ -161,24 +269,101 @@ export function getWebAuthnCredentialCount(userId: string): number {
   return row?.count ?? 0;
 }
 
+/** Every grant a user holds, scope included. */
+export function getUserGrants(userId: string): PermissionGrant[] {
+  const rows = db
+    .query("SELECT permission, scope_type, scope_id FROM user_permissions WHERE user_id = ?")
+    .all(userId) as Array<{ permission: string; scope_type: string; scope_id: string | null }>;
+  return rows.map((r) => ({
+    permission: r.permission,
+    scopeType: (r.scope_type as ScopeType) ?? "global",
+    scopeId: r.scope_id,
+  }));
+}
+
+/** The user's *global* permissions only. Kept for callers that just want to
+ *  know "what can this user do fleet-wide" — a scoped grant is deliberately
+ *  invisible here, because it does not authorize the unscoped operation. */
 export function getUserPermissions(userId: string): string[] {
-  const rows = db.query("SELECT permission FROM user_permissions WHERE user_id = ?").all(userId) as Array<{ permission: string }>;
+  const rows = db
+    .query("SELECT permission FROM user_permissions WHERE user_id = ? AND scope_type = 'global'")
+    .all(userId) as Array<{ permission: string }>;
   return rows.map((r) => r.permission);
 }
 
-export function hasPermission(userId: string, permission: string): boolean {
+/** Resolve which environment an app belongs to, for environment-scoped grants.
+ *  Local query rather than an import from apps.ts to keep this module leaf-level. */
+function environmentIdForApp(appId: number): number | null {
+  const row = db.query("SELECT environment_id FROM apps WHERE id = ?").get(appId) as
+    | { environment_id: number | null }
+    | undefined;
+  return row?.environment_id ?? null;
+}
+
+/** Does `userId` hold `permission`, optionally for a specific app/environment?
+ *
+ *  A global grant always wins. When `scope` is supplied, a grant scoped to that
+ *  exact app also wins, as does a grant scoped to the environment that owns the
+ *  app. Calling without a scope therefore means "fleet-wide" and only a global
+ *  grant satisfies it — that is what keeps a narrowly-scoped user from passing
+ *  a check on a route that never resolved which resource it was acting on. */
+export function hasPermission(userId: string, permission: string, scope?: PermissionScope): boolean {
   const user = getUserById(userId);
   if (!user) return false;
   if (user.is_admin) return true;
-  const row = db.query("SELECT 1 FROM user_permissions WHERE user_id = ? AND permission = ?").get(userId, permission);
-  return !!row;
+
+  const global = db
+    .query("SELECT 1 FROM user_permissions WHERE user_id = ? AND permission = ? AND scope_type = 'global'")
+    .get(userId, permission);
+  if (global) return true;
+
+  if (!scope || !SCOPABLE_PERMISSIONS.has(permission)) return false;
+
+  if (scope.appId != null) {
+    const appGrant = db
+      .query(
+        "SELECT 1 FROM user_permissions WHERE user_id = ? AND permission = ? AND scope_type = 'app' AND scope_id = ?",
+      )
+      .get(userId, permission, String(scope.appId));
+    if (appGrant) return true;
+  }
+
+  // An app inherits its environment's grants; an explicit environmentId (e.g.
+  // an environment route) is used as-is.
+  const envId = scope.environmentId ?? (scope.appId != null ? environmentIdForApp(scope.appId) : null);
+  if (envId != null) {
+    const envGrant = db
+      .query(
+        "SELECT 1 FROM user_permissions WHERE user_id = ? AND permission = ? AND scope_type = 'environment' AND scope_id = ?",
+      )
+      .get(userId, permission, String(envId));
+    if (envGrant) return true;
+  }
+
+  return false;
 }
 
-export function setUserPermissions(userId: string, permissions: string[]): void {
+/** Replace a user's grants wholesale. Accepts bare strings (treated as global)
+ *  or full grants. Scoped grants for non-scopable permissions are dropped
+ *  rather than silently stored as something that could never match. */
+export function setUserPermissions(userId: string, permissions: Array<string | PermissionGrant>): void {
   db.query("DELETE FROM user_permissions WHERE user_id = ?").run(userId);
-  const stmt = db.prepare("INSERT INTO user_permissions (user_id, permission) VALUES (?, ?)");
-  for (const perm of permissions) {
-    stmt.run(userId, perm);
+  const stmt = db.prepare(
+    "INSERT OR IGNORE INTO user_permissions (user_id, permission, scope_type, scope_id) VALUES (?, ?, ?, ?)",
+  );
+  for (const entry of permissions) {
+    const grant: PermissionGrant =
+      typeof entry === "string" ? { permission: entry, scopeType: "global", scopeId: null } : entry;
+    if (grant.scopeType !== "global") {
+      if (!SCOPABLE_PERMISSIONS.has(grant.permission)) continue;
+      if (grant.scopeId == null || grant.scopeId === "") continue;
+    }
+    stmt.run(
+      userId,
+      grant.permission,
+      grant.scopeType,
+      grant.scopeType === "global" ? null : String(grant.scopeId),
+    );
   }
 }
 

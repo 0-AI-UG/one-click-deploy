@@ -312,7 +312,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                     <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={inst.cpu_percent} limitCores={inst.cpu_limit_cores} status={inst.status} /></td>
                     <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={inst.memory_percent} usedMb={inst.memory_used_mb} limitMb={inst.memory_limit_mb} status={inst.status} /></td>
                     <td className="py-2 px-3">
-                      <PermissionGate permission="terminal.access">
+                      <PermissionGate permission="terminal.container">
                         <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/service-instance/${inst.id}`; }}>
                           <Terminal size={12} /> Shell
                         </Btn>

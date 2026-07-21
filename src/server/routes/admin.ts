@@ -79,10 +79,34 @@ export async function handleCreateUser(request: Request): Promise<Response> {
   }
 }
 
+const SCOPE_TYPES = new Set(["global", "environment", "app"]);
+
+/** Keep only grants naming a real permission and a real scope type. Anything
+ *  else is dropped rather than rejected: the admin UI posts the whole grant set
+ *  on every save, so one stale entry must not fail the request. Scoped grants
+ *  for non-scopable permissions are dropped further down, by setUserPermissions. */
+function sanitizeGrants(grants: db.PermissionGrant[]): db.PermissionGrant[] {
+  return grants
+    .filter((g) =>
+      !!g &&
+      (db.ALL_PERMISSIONS as readonly string[]).includes(g.permission) &&
+      SCOPE_TYPES.has(g.scopeType),
+    )
+    .map((g) => ({
+      permission: g.permission,
+      scopeType: g.scopeType,
+      scopeId: g.scopeType === "global" ? null : (g.scopeId == null ? null : String(g.scopeId)),
+    }));
+}
+
 export async function handleUpdateUser(request: Request, userId: string): Promise<Response> {
   try {
     await requireAdmin(request);
-    const body = await request.json() as { password?: string; permissions?: string[] };
+    const body = await request.json() as {
+      password?: string;
+      permissions?: string[];
+      grants?: db.PermissionGrant[];
+    };
 
     const user = db.getUserById(userId);
     if (!user) {
@@ -103,11 +127,17 @@ export async function handleUpdateUser(request: Request, userId: string): Promis
       db.updateUserPassword(userId, hash);
     }
 
-    if (body.permissions !== undefined && !user.is_admin) {
-      const validPerms = body.permissions.filter((p) =>
-        (db.ALL_PERMISSIONS as readonly string[]).includes(p),
-      );
-      db.setUserPermissions(userId, validPerms);
+    // `grants` is the full model and wins when both are sent; `permissions` is
+    // the legacy global-only shape, still accepted for older clients.
+    if (!user.is_admin) {
+      if (Array.isArray(body.grants)) {
+        db.setUserPermissions(userId, sanitizeGrants(body.grants));
+      } else if (body.permissions !== undefined) {
+        const validPerms = body.permissions.filter((p) =>
+          (db.ALL_PERMISSIONS as readonly string[]).includes(p),
+        );
+        db.setUserPermissions(userId, validPerms);
+      }
     }
 
     return Response.json({ success: true }, { headers: corsHeaders });
@@ -153,9 +183,20 @@ export async function handleGetUserPermissions(request: Request, userId: string)
       );
     }
 
-    const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(userId);
+    // An admin implicitly holds everything, fleet-wide; report that as a full
+    // set of global grants so the editor renders the same way for both cases.
+    const grants: db.PermissionGrant[] = user.is_admin
+      ? db.ALL_PERMISSIONS.map((permission) => ({ permission, scopeType: "global" as const, scopeId: null }))
+      : db.getUserGrants(userId);
+
     return Response.json(
-      { permissions, allPermissions: db.ALL_PERMISSIONS },
+      {
+        grants,
+        // Legacy field: the global permission strings only.
+        permissions: grants.filter((g) => g.scopeType === "global").map((g) => g.permission),
+        allPermissions: db.ALL_PERMISSIONS,
+        scopablePermissions: [...db.SCOPABLE_PERMISSIONS],
+      },
       { headers: corsHeaders },
     );
   } catch (error) {

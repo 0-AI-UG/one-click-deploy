@@ -24,6 +24,20 @@ export function randomSuffix(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Route suites that stub out `requirePermission` still need the stubbed
+ *  userId to resolve to a real admin row, because handlers now also call
+ *  `hasPermission` directly to filter what a caller may see (stack member logs,
+ *  for one). Seeding this once keeps those handlers on their admin fast path. */
+export const TEST_ADMIN_ID = "test-admin";
+
+export function seedTestAdmin(): string {
+  const { getUserById, insertUser } = require("./db/users.ts");
+  if (!getUserById(TEST_ADMIN_ID)) {
+    insertUser({ id: TEST_ADMIN_ID, username: "test-admin", password_hash: "x", is_admin: true });
+  }
+  return TEST_ADMIN_ID;
+}
+
 /** Factory for a fully-stubbed ComputeProvider. Every method is a bun mock
  *  so callers can assert calls and override return values per-test. */
 export function makeFakeComputeProvider(

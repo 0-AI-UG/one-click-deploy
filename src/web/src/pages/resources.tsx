@@ -162,7 +162,7 @@ export function ResourcesPage() {
           <Server size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Servers ({data?.servers?.length || 0})</h3>
           <div className="ml-auto relative" ref={popoverRef}>
-            <PermissionGate permission="resources.create">
+            <PermissionGate permission="servers.create">
               <Btn size="xs" onClick={creating ? undefined : togglePopover}>
                 <Plus size={11} /> Create Server
               </Btn>

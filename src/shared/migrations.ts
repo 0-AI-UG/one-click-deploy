@@ -1737,6 +1737,66 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN stack_needs TEXT");
     },
   },
+  {
+    version: 85,
+    description:
+      "Scope user_permissions to a resource and split the coarse permissions. Adds (scope_type, scope_id) so a grant can apply fleet-wide, to one environment, or to one app — the UNIQUE key has to include the scope, which SQLite cannot alter in place, so the table is rebuilt. Old grants are carried over as global and widened into the permissions they were split into (e.g. servers.view was the de facto read-everything grant and becomes the six read permissions), so nobody loses access on upgrade. apps.env and volumes.manage are dropped: the former was never enforced anywhere, the latter is superseded by volumes.attach/detach/resize.",
+    up: (db) => {
+      db.run(`CREATE TABLE user_permissions_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        permission TEXT NOT NULL,
+        scope_type TEXT NOT NULL DEFAULT 'global',
+        scope_id TEXT,
+        UNIQUE(user_id, permission, scope_type, scope_id)
+      )`);
+      db.run(
+        `INSERT OR IGNORE INTO user_permissions_new (user_id, permission, scope_type, scope_id)
+         SELECT user_id, permission, 'global', NULL FROM user_permissions`,
+      );
+      db.run("DROP TABLE user_permissions");
+      db.run("ALTER TABLE user_permissions_new RENAME TO user_permissions");
+
+      // old permission -> permissions it was split into. The old name is kept
+      // wherever it still exists in the new catalog; where it does not (left
+      // column absent from the right), the migration below deletes it.
+      const widen: [string, string[]][] = [
+        ["servers.view", ["fleet.view", "apps.view", "services.view", "environments.view", "metrics.view", "operations.view"]],
+        ["servers.delete", ["servers.delete", "servers.manage"]],
+        ["resources.create", ["servers.create"]],
+        ["apps.deploy", ["apps.deploy", "apps.rename", "apps.promote"]],
+        ["apps.redeploy", ["apps.redeploy", "apps.ingress", "apps.expose", "panel.manage"]],
+        ["apps.logs", ["apps.logs", "deployments.view", "panel.view"]],
+        ["stacks.deploy", ["stacks.deploy", "stacks.settings", "stacks.promote"]],
+        ["scaling.manage", ["scaling.scale", "scaling.policy", "scaling.migrate"]],
+        ["volumes.manage", ["volumes.attach", "volumes.detach", "volumes.resize"]],
+        ["terminal.access", ["terminal.container", "terminal.host"]],
+        ["environments.manage", ["environments.manage", "environments.secrets"]],
+      ];
+      for (const [oldPerm, newPerms] of widen) {
+        for (const newPerm of newPerms) {
+          db.run(
+            `INSERT OR IGNORE INTO user_permissions (user_id, permission, scope_type, scope_id)
+             SELECT user_id, ?, 'global', NULL FROM user_permissions WHERE permission = ? AND scope_type = 'global'`,
+            [newPerm, oldPerm],
+          );
+        }
+      }
+
+      // Everyone who could already reach the API keeps CLI access; it is a new
+      // restriction, not a new capability, so opting existing users in is right.
+      db.run(
+        `INSERT OR IGNORE INTO user_permissions (user_id, permission, scope_type, scope_id)
+         SELECT id, 'cli.access', 'global', NULL FROM users`,
+      );
+
+      // Names that no longer exist in ALL_PERMISSIONS.
+      const retired = ["servers.view", "apps.env", "scaling.manage", "volumes.manage", "terminal.access", "resources.create"];
+      for (const perm of retired) {
+        db.run("DELETE FROM user_permissions WHERE permission = ?", [perm]);
+      }
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

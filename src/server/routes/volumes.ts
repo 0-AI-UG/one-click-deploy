@@ -43,7 +43,7 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
 
 export async function handleAttachExistingVolume(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "volumes.manage");
+    const payload = await requirePermission(request, "volumes.attach");
     const { app_id, volume_id, mount_path } = await request.json() as { app_id: number; volume_id: string; mount_path?: string };
 
     const app = db.getApp(app_id);
@@ -69,7 +69,7 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
 
 export async function handleDetachVolume(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "volumes.manage");
+    const payload = await requirePermission(request, "volumes.detach");
     const { app_id } = await request.json() as { app_id: number };
 
     const app = db.getApp(app_id);
@@ -91,7 +91,7 @@ export async function handleDetachVolume(request: Request): Promise<Response> {
 
 export async function handleReattachVolume(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "volumes.manage");
+    const payload = await requirePermission(request, "volumes.attach");
     const { volume_id, from_app_id, to_app_id, mount_path } = await request.json() as {
       volume_id: string; from_app_id: number; to_app_id: number; mount_path?: string;
     };
@@ -117,7 +117,7 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
 
 export async function handleResizeVolume(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "volumes.manage");
+    const payload = await requirePermission(request, "volumes.resize");
     const { volume_id, size } = await request.json() as { volume_id: string; size: number };
 
     const { opId } = enqueue({

@@ -113,9 +113,18 @@ export {
   getDeployedCommit,
   getDeployment,
 } from "./deployments.ts";
-export type { UserRow, WebAuthnCredential, Permission } from "./users.ts";
+export type {
+  UserRow,
+  WebAuthnCredential,
+  Permission,
+  PermissionGrant,
+  PermissionScope,
+  ScopeType,
+} from "./users.ts";
 export {
   ALL_PERMISSIONS,
+  SCOPABLE_PERMISSIONS,
+  getUserGrants,
   getUserCount,
   getUserByUsername,
   getUserById,

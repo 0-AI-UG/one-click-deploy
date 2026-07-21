@@ -149,7 +149,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
 
 export async function handleGetServerMetricsHistory(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "resources.view");
+    await requirePermission(request, "metrics.view");
     const url = new URL(request.url);
     const since = parseInt(url.searchParams.get("since") || "3600", 10);
     const samples = db.getRecentServerMetrics(since);
@@ -161,11 +161,17 @@ export async function handleGetServerMetricsHistory(request: Request): Promise<R
 
 export async function handleDeleteResource(request: Request, type: string, id: string): Promise<Response> {
   try {
-    await requirePermission(request, "resources.delete");
+    // The permission depends on what is being deleted: a server and a volume
+    // each have their own grant, and "resources.delete" covers the rest.
+    const permission = type === "server"
+      ? "servers.delete"
+      : type === "volume"
+        ? "volumes.delete"
+        : "resources.delete";
+    const payload = await requirePermission(request, permission);
     const compute = hetzner;
 
     if (type === "server") {
-      const payload = await requirePermission(request, "resources.delete");
       const server = db.getServers().find((s) => s.provider_id === id || String(s.id) === id);
       if (server) {
         const replicas = db.getReplicasByServer(server.id);
@@ -286,7 +292,7 @@ export async function handleGetVolumeDetail(request: Request, volumeId: string):
 
 export async function handleListVolumeFiles(request: Request, volumeId: string): Promise<Response> {
   try {
-    await requirePermission(request, "resources.view");
+    await requirePermission(request, "volumes.files.read");
     const url = new URL(request.url);
     const subPath = url.searchParams.get("path") || "";
 
@@ -333,7 +339,7 @@ const FILE_VIEW_MAX_BYTES = 256 * 1024;
 
 export async function handleGetVolumeFile(request: Request, volumeId: string): Promise<Response> {
   try {
-    await requirePermission(request, "resources.view");
+    await requirePermission(request, "volumes.files.read");
     const url = new URL(request.url);
     const subPath = url.searchParams.get("path") || "";
     if (!subPath) {
@@ -518,7 +524,7 @@ async function probeServerHost(server: { ipv4: string; ssh_host_key: string }): 
 
 export async function handleGetServerDetail(request: Request, serverId: number): Promise<Response> {
   try {
-    await requirePermission(request, "resources.view");
+    await requirePermission(request, "fleet.view");
     const server = db.getServer(serverId);
     if (!server) {
       return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
@@ -619,7 +625,7 @@ export async function handleGetServerDetail(request: Request, serverId: number):
 
 export async function handleCreateServer(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "resources.create");
+    const payload = await requirePermission(request, "servers.create");
     const body = await request.json() as { server_type: string; location: string; name?: string };
 
     if (!body.server_type || !body.location) {

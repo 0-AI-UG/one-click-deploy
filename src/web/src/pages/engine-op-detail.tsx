@@ -1,6 +1,7 @@
 import { ArrowLeft, ScrollText } from "lucide-react";
 import { useOperation, cancelOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
 import { Spinner, confirm, Btn } from "../components/ui.tsx";
+import { PermissionGate } from "../components/permission-gate.tsx";
 
 function fmtTs(ts: string | null): string {
   if (!ts) return "—";
@@ -71,12 +72,14 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
           </div>
         </div>
         {active && (
+          <PermissionGate permission="operations.cancel">
           <button
             onClick={onCancel}
             className="font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg bg-accent-red text-white px-3 py-1.5 shadow-neo-sm hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-neo-none transition-all"
           >
             Cancel
           </button>
+          </PermissionGate>
         )}
       </div>
 

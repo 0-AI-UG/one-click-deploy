@@ -1,12 +1,12 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requirePermission, appScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 
 export async function handleScaleApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "scaling.manage");
+    const payload = await requirePermission(request, "scaling.scale", appScope(appId));
     const body = await request.json() as { replicas: number; server_id?: number };
     const replicas = Number(body.replicas);
     if (!Number.isFinite(replicas) || replicas < 0) {
@@ -70,7 +70,7 @@ export async function handleScaleApp(request: Request, appId: number): Promise<R
 
 export async function handleUpdateScalingPolicy(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "scaling.manage");
+    await requirePermission(request, "scaling.policy", appScope(appId));
     const { min_replicas, max_replicas, autoscale_enabled, cpu_threshold, mem_threshold, cooldown, scale_to_zero_after, req_threshold } = await request.json() as {
       min_replicas: number;
       max_replicas: number;
@@ -115,7 +115,7 @@ export async function handleUpdateScalingPolicy(request: Request, appId: number)
 
 export async function handleGetReplicas(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "metrics.view", appScope(appId));
     const replicas = db.getReplicas(appId);
     return Response.json(replicas, { headers: corsHeaders });
   } catch (error) {
@@ -125,7 +125,7 @@ export async function handleGetReplicas(request: Request, appId: number): Promis
 
 export async function handleGetScalingEvents(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "metrics.view", appScope(appId));
     const events = db.getScalingEvents(appId);
     return Response.json(events, { headers: corsHeaders });
   } catch (error) {
@@ -135,7 +135,7 @@ export async function handleGetScalingEvents(request: Request, appId: number): P
 
 export async function handleGetAppMetrics(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "metrics.view", appScope(appId));
     // Serve the reconciler's already-persisted per-replica metrics
     // (cpu_percent / memory_percent, refreshed every ≤30s tick) rather than a
     // per-request SSH `docker stats` fan-out across every replica.
@@ -148,7 +148,7 @@ export async function handleGetAppMetrics(request: Request, appId: number): Prom
 
 export async function handleGetAppMetricsHistory(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "metrics.view", appScope(appId));
     const url = new URL(request.url);
     const sinceSec = Math.max(60, Math.min(86400, parseInt(url.searchParams.get("since") || "3600", 10)));
     const samples = db.getRecentAppMetrics(appId, sinceSec);
@@ -160,7 +160,7 @@ export async function handleGetAppMetricsHistory(request: Request, appId: number
 
 export async function handleMigrateReplica(request: Request, appId: number, replicaId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "scaling.manage");
+    const payload = await requirePermission(request, "scaling.migrate", appScope(appId));
     const body = await request.json() as { target_server_id: number };
     if (!body.target_server_id) {
       return Response.json({ error: "target_server_id is required" }, { status: 400, headers: corsHeaders });

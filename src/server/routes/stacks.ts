@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requirePermission, appScope, stackScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { StackDeployRequest } from "../../shared/rpc.ts";
@@ -71,7 +71,7 @@ export async function handleGetStacks(request: Request): Promise<Response> {
 
 export async function handleGetStack(request: Request, stackId: number): Promise<Response> {
   try {
-    await requirePermission(request, "stacks.view");
+    await requirePermission(request, "stacks.view", stackScope(stackId));
     const stack = db.getStack(stackId);
     if (!stack) {
       return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
@@ -99,7 +99,7 @@ export async function handleGetStack(request: Request, stackId: number): Promise
 // already does properly via a re-up).
 export async function handleUpdateStack(request: Request, stackId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "stacks.deploy");
+    const payload = await requirePermission(request, "stacks.settings", stackScope(stackId));
     const stack = db.getStack(stackId);
     if (!stack) {
       return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
@@ -148,7 +148,7 @@ export async function handleUpdateStack(request: Request, stackId: number): Prom
 
 export async function handleGetStackLog(request: Request, stackId: number): Promise<Response> {
   try {
-    await requirePermission(request, "stacks.view");
+    await requirePermission(request, "stacks.view", stackScope(stackId));
     return Response.json({ log: db.getStackLog(stackId) }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -167,12 +167,14 @@ export async function handleGetStackLog(request: Request, stackId: number): Prom
  * and doesn't re-run N ssh calls.
  *
  * Gated on `apps.logs` on top of `stacks.view`: this returns container output,
- * which is strictly more than the stack metadata `stacks.view` covers.
+ * which is strictly more than the stack metadata `stacks.view` covers. Because
+ * the response is already a per-member list that tolerates missing blocks, the
+ * `apps.logs` check is applied per member and members the caller may not read
+ * are simply omitted, rather than failing the whole request.
  */
 export async function handleGetStackMemberLogs(request: Request, stackId: number): Promise<Response> {
   try {
-    await requirePermission(request, "stacks.view");
-    await requirePermission(request, "apps.logs");
+    const payload = await requirePermission(request, "stacks.view", stackScope(stackId));
     const stack = db.getStack(stackId);
     if (!stack) {
       return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
@@ -181,8 +183,18 @@ export async function handleGetStackMemberLogs(request: Request, stackId: number
 
     // Staging siblings follow their production app and are not members in their
     // own right — the same rule the detail page's member list uses.
-    const apps = db.getAppsByStackId(stackId).filter((a) => a.target_of == null);
-    const services = db.getServicesByStackId(stackId);
+    //
+    // Container output is gated per member: `apps.logs` scoped to each member app,
+    // `services.logs` for the service members. A member the caller may not read is
+    // dropped from the response instead of 403-ing the request, so a user with a
+    // narrow grant still sees the members they were given.
+    const apps = db
+      .getAppsByStackId(stackId)
+      .filter((a) => a.target_of == null)
+      .filter((a) => db.hasPermission(payload.userId, "apps.logs", appScope(a.id)));
+    const services = db.hasPermission(payload.userId, "services.logs")
+      ? db.getServicesByStackId(stackId)
+      : [];
 
     const fetchApp = async (app: { id: number; name: string }) => {
       const replicas = db.getReplicas(app.id);
@@ -230,7 +242,7 @@ export async function handleGetStackMemberLogs(request: Request, stackId: number
 
 export async function handleDestroyStack(request: Request, stackId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "stacks.destroy");
+    const payload = await requirePermission(request, "stacks.destroy", stackScope(stackId));
     await enforceConfirmation(request, payload, "delete_stack", "stack", String(stackId));
     const { opId } = enqueue({ kind: "destroy_stack", resourceKeys: [`stack:${stackId}`], input: { stackId }, trigger: "ui", triggeredBy: payload.userId });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -245,7 +257,7 @@ export async function handleDestroyStack(request: Request, stackId: number): Pro
 // CLI and the UI get identical behaviour.
 export async function handlePromoteStack(request: Request, stackId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "stacks.deploy");
+    const payload = await requirePermission(request, "stacks.promote", stackScope(stackId));
     const stack = db.getStack(stackId);
     if (!stack) {
       return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
@@ -274,7 +286,7 @@ export async function handlePromoteStack(request: Request, stackId: number): Pro
 // exactly the op handleUpdateEnvironment enqueues when env vars change.
 export async function handleRedeployStack(request: Request, stackId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "stacks.deploy");
+    const payload = await requirePermission(request, "stacks.deploy", stackScope(stackId));
     const stack = db.getStack(stackId);
     if (!stack) {
       return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });

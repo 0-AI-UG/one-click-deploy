@@ -32,8 +32,16 @@ function recordFailureKeys(keys: string[]): void {
 }
 
 function userResponse(user: db.UserRow) {
-  const permissions = user.is_admin ? db.ALL_PERMISSIONS.slice() : db.getUserPermissions(user.id);
+  // `permissions` stays global-only (what the account can do fleet-wide);
+  // `grants` carries the scoped rows too, so the UI can hide/show a control for
+  // the one app or environment the user was given. Gating in the browser is
+  // cosmetic — every route re-checks server-side.
+  const grants: db.PermissionGrant[] = user.is_admin
+    ? db.ALL_PERMISSIONS.map((permission) => ({ permission, scopeType: "global" as const, scopeId: null }))
+    : db.getUserGrants(user.id);
+  const permissions = grants.filter((g) => g.scopeType === "global").map((g) => g.permission);
   return {
+    grants,
     id: user.id,
     username: user.username,
     isAdmin: user.is_admin === 1,

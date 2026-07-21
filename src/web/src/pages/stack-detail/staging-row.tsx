@@ -71,7 +71,8 @@ export function StackStagingRow({
     <div className="flex justify-between gap-4 items-center min-h-[1.5rem]">
       <span className="text-muted shrink-0">Staging Environment</span>
       <PermissionGate
-        permission="stacks.deploy"
+        permission="stacks.settings"
+        environmentId={stack.environment_id}
         fallback={
           <span className={enabled ? "text-fg font-bold" : "text-fg-dim"}>{selectedName ?? "none"}</span>
         }

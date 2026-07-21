@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { get, post, del, put } from "../../api/client.ts";
 import { Card, Btn, Table, Spinner, Field, Divider, showToast, confirm } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
+import { PermissionGate } from "../../components/permission-gate.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-server-types.ts";
 import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check } from "lucide-react";
 import type { PanelApp, DeploymentRecord } from "../../types.ts";
@@ -275,12 +276,15 @@ export function UsersPage() {
             <div className="text-fg break-all">{panel.volume_mount || "—"}</div>
           </div>
 
-          <div className="pt-1">
-            <Btn variant="primary" loading={panelBusy} onClick={redeployPanelNow}>
-              <RefreshCw size={13} /> Redeploy panel
-            </Btn>
-          </div>
+          <PermissionGate permission="panel.manage">
+            <div className="pt-1">
+              <Btn variant="primary" loading={panelBusy} onClick={redeployPanelNow}>
+                <RefreshCw size={13} /> Redeploy panel
+              </Btn>
+            </div>
+          </PermissionGate>
 
+          <PermissionGate permission="panel.manage">
           <div className="pt-1">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -314,6 +318,7 @@ export function UsersPage() {
               </Btn>
             </div>
           </div>
+          </PermissionGate>
 
           {panelDeployments.length > 0 && (
             <div className="pt-1">

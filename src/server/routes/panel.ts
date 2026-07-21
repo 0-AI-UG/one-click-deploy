@@ -8,7 +8,7 @@ import { redeployPanel, getPanelContainerLogs } from "../../engine/deploy/panel.
 
 export async function handleGetPanel(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "panel.view");
     const panel = db.getPanel();
     if (!panel) {
       return Response.json({ panel: null }, { headers: corsHeaders });
@@ -29,9 +29,9 @@ export async function handleGetPanel(request: Request): Promise<Response> {
 
 export async function handleRedeployPanel(request: Request): Promise<Response> {
   try {
-    // Redeploying the panel is an admin-level action — reuse the most
-    // privileged perm we already have.
-    await requirePermission(request, "apps.redeploy");
+    // Redeploying the control plane itself — governed by its own grant, not by
+    // any app-level permission.
+    await requirePermission(request, "panel.manage");
     const result = await redeployPanel((_step, _detail) => {
       // Progress goes to logs; no SSE for the minimal panel UI.
     });
@@ -43,7 +43,7 @@ export async function handleRedeployPanel(request: Request): Promise<Response> {
 
 export async function handleGetPanelLogs(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "apps.logs");
+    await requirePermission(request, "panel.view");
     const url = new URL(request.url);
     const tail = parseInt(url.searchParams.get("tail") || "200", 10);
     const logs = await getPanelContainerLogs(tail);
@@ -55,7 +55,7 @@ export async function handleGetPanelLogs(request: Request): Promise<Response> {
 
 export async function handleGetPanelDeployments(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "apps.logs");
+    await requirePermission(request, "panel.view");
     const deployments = db.getPanelDeployments();
     return Response.json(deployments, { headers: corsHeaders });
   } catch (error) {

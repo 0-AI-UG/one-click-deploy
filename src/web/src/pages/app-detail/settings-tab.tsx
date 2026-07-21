@@ -78,7 +78,7 @@ export function SettingsTab({
               onChange={(e) => setNameEdit(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
               placeholder={app.name}
             />
-            <PermissionGate permission="apps.deploy">
+            <PermissionGate permission="apps.rename" appId={appId} environmentId={app.environment_id}>
               <Btn
                 size="sm"
                 variant="primary"
@@ -133,7 +133,7 @@ export function SettingsTab({
           />
         </Field>
 
-        <PermissionGate permission="apps.redeploy">
+        <PermissionGate permission="apps.redeploy" appId={appId} environmentId={app.environment_id}>
           <div className="flex justify-end mt-3">
             <Btn
               size="sm"
@@ -281,6 +281,9 @@ export function SettingsTab({
           </>
         )}
 
+        {/* Publishing a raw public port is strictly more dangerous than the rest
+            of ingress, so it carries its own grant. */}
+        <PermissionGate permission="apps.expose" appId={appId} environmentId={app.environment_id}>
         <Field
           label={<span className="flex items-center gap-2">Public TCP/UDP Port <InfoTip text="A raw public port straight to the app (game servers, databases, MQTT). Separate from the public domain. Blank = auto-assign." /></span>}
           hint={app.public_address
@@ -312,8 +315,9 @@ export function SettingsTab({
             )}
           </div>
         </Field>
+        </PermissionGate>
 
-        <PermissionGate permission="apps.redeploy">
+        <PermissionGate permission="apps.ingress" appId={appId} environmentId={app.environment_id}>
           <div className="flex justify-end mt-3">
             <Btn
               size="sm"
@@ -363,7 +367,7 @@ export function SettingsTab({
               <span className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg">Detach Volume</span>
               <InfoTip text="Detaching keeps the volume in Hetzner but unmounts it from this app. The container will be recreated." />
             </div>
-            <PermissionGate permission="volumes.manage">
+            <PermissionGate permission="volumes.detach">
               <div className="flex justify-end">
                 <Btn
                   size="sm"
@@ -408,7 +412,7 @@ export function SettingsTab({
                 />
               </Field>
             </div>
-            <PermissionGate permission="volumes.create">
+            <PermissionGate permission="volumes.attach">
               <div className="flex justify-end mt-3">
                 <Btn
                   size="sm"

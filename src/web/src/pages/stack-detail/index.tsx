@@ -101,7 +101,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
           </div>
         </div>
         <div className="flex gap-1">
-          <PermissionGate permission="stacks.deploy">
+          <PermissionGate permission="stacks.deploy" environmentId={stack.environment_id}>
             <Btn
               size="xs"
               loading={actionLoading === "redeploy" || ops.isBusyWith("cascade_redeploy")}
@@ -112,7 +112,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
           {/* Promote only exists when there is something to promote — a stack
               with no staging siblings has no use for the button at all. */}
           {promotable > 0 && (
-          <PermissionGate permission="stacks.deploy">
+          <PermissionGate permission="stacks.promote" environmentId={stack.environment_id}>
             <Btn
               size="xs"
               variant="primary"
@@ -127,7 +127,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
             ><ArrowUpFromLine size={12} /> Promote</Btn>
           </PermissionGate>
           )}
-          <PermissionGate permission="stacks.destroy">
+          <PermissionGate permission="stacks.destroy" environmentId={stack.environment_id}>
             <Btn
               size="xs"
               variant="danger"

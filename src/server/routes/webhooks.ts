@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requirePermission, appScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import * as github from "../../shared/github.ts";
@@ -110,7 +110,7 @@ export async function verifyGithubSignature(
 
 export async function handleEnableWebhook(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "webhooks.manage");
+    const payload = await requirePermission(request, "webhooks.manage", appScope(appId));
     const body = await request.json() as { branch?: string; path?: string; wait_for_ci?: boolean; staging_environment_id?: number | null };
 
     const app = db.getApp(appId);
@@ -156,7 +156,7 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
 
 export async function handleUpdateWebhookSettings(request: Request, appId: number): Promise<Response> {
   try {
-    await requirePermission(request, "webhooks.manage");
+    await requirePermission(request, "webhooks.manage", appScope(appId));
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
@@ -183,7 +183,7 @@ export async function handleUpdateWebhookSettings(request: Request, appId: numbe
 
 export async function handleDisableWebhook(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "webhooks.manage");
+    const payload = await requirePermission(request, "webhooks.manage", appScope(appId));
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
@@ -344,7 +344,7 @@ export async function handlePanelGithubWebhook(request: Request): Promise<Respon
 
 export async function handleEnablePanelWebhook(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "webhooks.manage");
+    const payload = await requirePermission(request, "panel.manage");
 
     const panel = db.getPanel();
     if (!panel) {
@@ -384,7 +384,7 @@ export async function handleEnablePanelWebhook(request: Request): Promise<Respon
 
 export async function handleDisablePanelWebhook(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "webhooks.manage");
+    const payload = await requirePermission(request, "panel.manage");
 
     const panel = db.getPanel();
     if (!panel) {

@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requirePermission, requireAuthenticated, envScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../shared/env-crypto.ts";
@@ -8,7 +8,7 @@ import { enforceConfirmation } from "../lib/action-confirm.ts";
 
 export async function handleGetEnvironments(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "environments.view");
     const envs = db.getEnvironments();
     const result = envs.map((e) => ({
       ...e,
@@ -45,16 +45,35 @@ export async function handleCreateEnvironment(request: Request): Promise<Respons
 
 export async function handleUpdateEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "environments.manage");
+    // This route carries two distinct actions: renaming (plain management) and
+    // writing env var *values*, i.e. secrets. They are permissioned separately
+    // so a user can be trusted with one without the other; the body decides
+    // which checks apply.
+    const payload = await requireAuthenticated(request);
     const existing = db.getEnvironment(id);
     if (!existing) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
     const body = await request.json();
     const { name, env_vars } = body;
-    const existingParsed = parseEnvVars(existing.env_vars);
-    const merged = await mergeEnvVarUpdate(existingParsed, env_vars || []);
-    const newSerialized = serializeEnvVars(merged.entries);
+
+    const renaming = typeof name === "string" && name.trim() !== "" && name.trim() !== existing.name;
+    if (renaming) {
+      await requirePermission(request, "environments.manage", envScope(id));
+    }
+    if (env_vars !== undefined) {
+      await requirePermission(request, "environments.secrets", envScope(id));
+    }
+
+    // Only rewrite env vars when the body actually carries them — the merge
+    // treats an absent list as "no entries", which would wipe every var on a
+    // rename-only request.
+    let newSerialized = existing.env_vars;
+    if (env_vars !== undefined) {
+      const existingParsed = parseEnvVars(existing.env_vars);
+      const merged = await mergeEnvVarUpdate(existingParsed, env_vars || []);
+      newSerialized = serializeEnvVars(merged.entries);
+    }
     const envVarsChanged = newSerialized !== existing.env_vars;
     db.updateEnvironment(id, name || existing.name, newSerialized);
 
@@ -85,7 +104,11 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
 
 export async function handleCopyEnvironment(request: Request, id: number): Promise<Response> {
   try {
+    // Creating the copy is a fleet-wide management action; the copy also
+    // duplicates the source environment's secrets, so the caller must be
+    // allowed to read them out of the source.
     await requirePermission(request, "environments.manage");
+    await requirePermission(request, "environments.secrets", envScope(id));
     const src = db.getEnvironment(id);
     if (!src) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -107,7 +130,7 @@ export async function handleCopyEnvironment(request: Request, id: number): Promi
 
 export async function handleDeleteEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "environments.manage");
+    const payload = await requirePermission(request, "environments.manage", envScope(id));
     await enforceConfirmation(request, payload, "delete_environment", "environment", String(id));
     const env = db.getEnvironment(id);
     if (!env) {
@@ -130,7 +153,7 @@ export async function handleDeleteEnvironment(request: Request, id: number): Pro
 
 export async function handleGetEnvironmentApps(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "environments.view", envScope(id));
     const env = db.getEnvironment(id);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -146,7 +169,7 @@ export async function handleGetEnvironmentApps(request: Request, id: number): Pr
 
 export async function handleAttachAppToEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "environments.manage");
+    const payload = await requirePermission(request, "environments.manage", envScope(id));
     const env = db.getEnvironment(id);
     if (!env) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -179,7 +202,7 @@ export async function handleAttachAppToEnvironment(request: Request, id: number)
 
 export async function handleDetachAppFromEnvironment(request: Request, id: number): Promise<Response> {
   try {
-    await requirePermission(request, "environments.manage");
+    await requirePermission(request, "environments.manage", envScope(id));
     const body = await request.json();
     const { app_id } = body;
     const app = db.getApp(app_id);

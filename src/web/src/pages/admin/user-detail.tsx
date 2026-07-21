@@ -1,11 +1,33 @@
 import { useState, useEffect } from "react";
 import { get, put } from "../../api/client.ts";
 import { Card, Btn, Spinner, showToast } from "../../components/ui.tsx";
-import { ArrowLeft, Save, Key, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Save, Key, ShieldCheck, Target, X } from "lucide-react";
 import { useAuth } from "../../stores/auth.ts";
-import type { AdminUser } from "../../types.ts";
+import type { AdminUser, AppData, EnvironmentData, PermissionGrant, UserPermissionsResponse } from "../../types.ts";
 
-const PERMISSION_GROUPS = [
+// Mirrors the sections of ALL_PERMISSIONS in shared/db/users.ts. Every
+// permission in that catalog appears here exactly once; the save path posts
+// whatever the server sent as `allPermissions`, so a permission added there but
+// missed here would still round-trip, just without a checkbox.
+const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string; label: string }> }> = [
+  {
+    label: "Client Access",
+    permissions: [
+      { key: "cli.access", label: "Use the ocd CLI at all" },
+    ],
+  },
+  {
+    label: "Read",
+    permissions: [
+      { key: "fleet.view", label: "View servers, topology, dashboard" },
+      { key: "apps.view", label: "View apps" },
+      { key: "services.view", label: "View services" },
+      { key: "environments.view", label: "View environments (not their values)" },
+      { key: "metrics.view", label: "View replicas, metrics, scaling events" },
+      { key: "operations.view", label: "View engine operations" },
+      { key: "deployments.view", label: "View deployment history and deploy logs" },
+    ],
+  },
   {
     label: "Apps",
     permissions: [
@@ -15,8 +37,12 @@ const PERMISSION_GROUPS = [
       { key: "apps.restart", label: "Restart containers" },
       { key: "apps.pause", label: "Pause/unpause apps" },
       { key: "apps.destroy", label: "Destroy apps" },
-      { key: "apps.logs", label: "View logs" },
-      { key: "apps.env", label: "View/update env vars" },
+      { key: "apps.logs", label: "View app logs" },
+      { key: "apps.rename", label: "Rename apps" },
+      { key: "apps.promote", label: "Promote staging to production" },
+      { key: "apps.ingress", label: "Auth, sticky, rate limit, allowlist, health check" },
+      { key: "apps.expose", label: "Publish an app on a public fleet port" },
+      { key: "webhooks.manage", label: "Enable/disable deploy webhooks" },
     ],
   },
   {
@@ -26,64 +52,93 @@ const PERMISSION_GROUPS = [
       { key: "services.manage", label: "Restart/pause/unpause services" },
       { key: "services.destroy", label: "Destroy services" },
       { key: "services.logs", label: "View service logs" },
-      { key: "services.link", label: "Link/unlink services to apps" },
+      { key: "services.link", label: "Link/unlink services to environments" },
     ],
   },
   {
     label: "Stacks",
     permissions: [
-      { key: "stacks.deploy", label: "Deploy stacks" },
       { key: "stacks.view", label: "View stacks" },
+      { key: "stacks.deploy", label: "Deploy/redeploy stacks" },
+      { key: "stacks.settings", label: "Edit stack settings (staging environment)" },
+      { key: "stacks.promote", label: "Promote a stack's staging members" },
       { key: "stacks.destroy", label: "Destroy stacks" },
+    ],
+  },
+  {
+    label: "Environments",
+    permissions: [
+      { key: "environments.manage", label: "Create/edit/delete environments, attach apps" },
+      { key: "environments.secrets", label: "Read/write env var values (secrets)" },
+    ],
+  },
+  {
+    label: "Scaling",
+    permissions: [
+      { key: "scaling.scale", label: "Manual scale and wake" },
+      { key: "scaling.policy", label: "Edit the autoscaling policy" },
+      { key: "scaling.migrate", label: "Migrate replicas between servers" },
     ],
   },
   {
     label: "Servers",
     permissions: [
-      { key: "servers.view", label: "View server list" },
+      { key: "servers.create", label: "Create servers" },
+      { key: "servers.manage", label: "Manage servers and pool assignment" },
       { key: "servers.delete", label: "Delete servers" },
     ],
   },
   {
     label: "Volumes",
     permissions: [
-      { key: "volumes.create", label: "Create/attach volumes" },
-      { key: "volumes.manage", label: "Detach/resize volumes" },
+      { key: "volumes.create", label: "Create volumes" },
+      { key: "volumes.attach", label: "Attach volumes to apps" },
+      { key: "volumes.detach", label: "Detach volumes" },
+      { key: "volumes.resize", label: "Resize volumes" },
       { key: "volumes.delete", label: "Delete volumes" },
+      { key: "volumes.files.read", label: "Browse and read files on a volume" },
     ],
   },
   {
-    label: "Scaling",
-    permissions: [{ key: "scaling.manage", label: "Scale apps, autoscaling policy" }],
-  },
-  {
-    label: "Webhooks",
-    permissions: [{ key: "webhooks.manage", label: "Enable/disable webhooks" }],
-  },
-  {
-    label: "Resources",
+    label: "Cloud Resources",
     permissions: [
-      { key: "resources.view", label: "View resources summary" },
-      { key: "resources.create", label: "Create servers" },
+      { key: "resources.view", label: "View the resources summary" },
       { key: "resources.delete", label: "Delete orphan resources" },
     ],
   },
   {
-    label: "Environments",
-    permissions: [{ key: "environments.manage", label: "Create/edit/delete environments, attach/detach apps" }],
+    label: "Operations",
+    permissions: [
+      { key: "operations.cancel", label: "Cancel a running engine operation" },
+    ],
+  },
+  {
+    label: "Control Plane",
+    permissions: [
+      { key: "panel.view", label: "View panel status, logs and deployments" },
+      { key: "panel.manage", label: "Redeploy the panel, manage its webhook" },
+    ],
   },
   {
     label: "Terminal",
-    permissions: [{ key: "terminal.access", label: "Access container terminal" }],
+    permissions: [
+      { key: "terminal.container", label: "Shell into a container" },
+      { key: "terminal.host", label: "Shell on a fleet host (root-equivalent)" },
+    ],
   },
 ];
+
+const grantKey = (g: PermissionGrant) => `${g.permission}|${g.scopeType}|${g.scopeId ?? ""}`;
 
 export function UserDetailPage({ userId }: { userId: string }) {
   const auth = useAuth();
   const isSelf = auth.user?.id === userId;
   const [user, setUser] = useState<AdminUser | null>(null);
-  const [permissions, setPermissions] = useState<string[]>([]);
-  const [allPermissions, setAllPermissions] = useState<string[]>([]);
+  const [grants, setGrants] = useState<PermissionGrant[]>([]);
+  const [scopable, setScopable] = useState<Set<string>>(new Set());
+  const [apps, setApps] = useState<AppData[]>([]);
+  const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
+  const [scopeOpen, setScopeOpen] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -93,34 +148,73 @@ export function UserDetailPage({ userId }: { userId: string }) {
     Promise.all([
       get("/api/admin/users"),
       get(`/api/admin/users/${userId}/permissions`),
-    ]).then(([usersRes, permRes]) => {
-      const u = usersRes.users.find((u: AdminUser) => u.id === userId);
-      setUser(u);
-      setPermissions(permRes.permissions);
-      setAllPermissions(permRes.allPermissions);
+    ]).then(([usersRes, permRes]: [{ users: AdminUser[] }, UserPermissionsResponse]) => {
+      setUser(usersRes.users.find((u) => u.id === userId) ?? null);
+      // Older servers only send `permissions`; treat those as global grants.
+      setGrants(
+        permRes.grants ??
+          (permRes.permissions || []).map((p) => ({ permission: p, scopeType: "global" as const, scopeId: null })),
+      );
+      setScopable(new Set(permRes.scopablePermissions || []));
     }).catch((err: any) => showToast(err.message, "error")).finally(() => setLoading(false));
   }, [userId]);
 
-  const togglePermission = (perm: string) => {
-    setPermissions((prev) =>
-      prev.includes(perm) ? prev.filter((p) => p !== perm) : [...prev, perm],
+  // Scope pickers; harmless to fetch even for an admin (whose grants are fixed).
+  useEffect(() => {
+    get("/api/apps").then(setApps).catch(() => {});
+    get("/api/environments").then(setEnvironments).catch(() => {});
+  }, []);
+
+  const isGlobal = (perm: string) => grants.some((g) => g.permission === perm && g.scopeType === "global");
+  const scopedOf = (perm: string) => grants.filter((g) => g.permission === perm && g.scopeType !== "global");
+
+  const toggleGlobal = (perm: string) => {
+    setGrants((prev) =>
+      isGlobal(perm)
+        ? prev.filter((g) => !(g.permission === perm && g.scopeType === "global"))
+        : [...prev, { permission: perm, scopeType: "global", scopeId: null }],
     );
   };
 
-  const selectAllInGroup = (group: typeof PERMISSION_GROUPS[0]) => {
-    const groupPerms = group.permissions.map((p) => p.key);
-    const allSelected = groupPerms.every((p) => permissions.includes(p));
-    if (allSelected) {
-      setPermissions((prev) => prev.filter((p) => !groupPerms.includes(p)));
-    } else {
-      setPermissions((prev) => [...new Set([...prev, ...groupPerms])]);
-    }
+  const toggleScoped = (perm: string, scopeType: "app" | "environment", scopeId: number) => {
+    const target: PermissionGrant = { permission: perm, scopeType, scopeId: String(scopeId) };
+    setGrants((prev) =>
+      prev.some((g) => grantKey(g) === grantKey(target))
+        ? prev.filter((g) => grantKey(g) !== grantKey(target))
+        : [...prev, target],
+    );
   };
 
-  const savePermissions = async () => {
+  const removeScoped = (g: PermissionGrant) =>
+    setGrants((prev) => prev.filter((x) => grantKey(x) !== grantKey(g)));
+
+  const selectAllInGroup = (group: typeof PERMISSION_GROUPS[0]) => {
+    const keys = group.permissions.map((p) => p.key);
+    const allSelected = keys.every((k) => isGlobal(k));
+    setGrants((prev) => {
+      const withoutGroupGlobals = prev.filter(
+        (g) => !(g.scopeType === "global" && keys.includes(g.permission)),
+      );
+      return allSelected
+        ? withoutGroupGlobals
+        : [
+            ...withoutGroupGlobals,
+            ...keys.map((k) => ({ permission: k, scopeType: "global" as const, scopeId: null })),
+          ];
+    });
+  };
+
+  const scopeLabel = (g: PermissionGrant): string => {
+    if (g.scopeType === "app") {
+      return apps.find((a) => String(a.id) === g.scopeId)?.name ?? `app#${g.scopeId}`;
+    }
+    return environments.find((e) => String(e.id) === g.scopeId)?.name ?? `env#${g.scopeId}`;
+  };
+
+  const saveGrants = async () => {
     setSaving(true);
     try {
-      await put(`/api/admin/users/${userId}`, { permissions });
+      await put(`/api/admin/users/${userId}`, { grants });
       showToast("Permissions saved", "success");
     } catch (err: any) {
       showToast(err.message, "error");
@@ -171,11 +265,16 @@ export function UserDetailPage({ userId }: { userId: string }) {
               <Key size={14} className="text-fg" />
               <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Permissions</h3>
             </div>
-            <Btn variant="primary" loading={saving} onClick={savePermissions}><Save size={13} /> Save</Btn>
+            <Btn variant="primary" loading={saving} onClick={saveGrants}><Save size={13} /> Save</Btn>
           </div>
+          <p className="font-mono text-[8px] text-muted mb-4 leading-relaxed">
+            Tick a permission to grant it fleet-wide. For the ones marked scopable, use
+            <span className="text-fg font-bold"> Scope </span>
+            to grant it on individual apps or environments instead — a fleet-wide tick supersedes those.
+          </p>
           <div className="space-y-6">
             {PERMISSION_GROUPS.map((group) => {
-              const allSelected = group.permissions.every((p) => permissions.includes(p.key));
+              const allSelected = group.permissions.every((p) => isGlobal(p.key));
               return (
                 <div key={group.label}>
                   <div className="flex items-center justify-between mb-2 border-b-2 border-fg pb-2">
@@ -189,27 +288,83 @@ export function UserDetailPage({ userId }: { userId: string }) {
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {group.permissions.map((perm) => {
-                      const checked = permissions.includes(perm.key);
+                      const checked = isGlobal(perm.key);
+                      const scoped = scopedOf(perm.key);
+                      const canScope = scopable.has(perm.key);
+                      const open = scopeOpen === perm.key;
                       return (
-                        <label
+                        <div
                           key={perm.key}
-                          className={`flex items-center gap-2.5 px-3 py-2 border-2 border-fg cursor-pointer transition-all ${
-                            checked
-                              ? "bg-accent/20 shadow-neo-sm"
-                              : "bg-bg-raised hover:bg-alt shadow-neo-sm hover:-translate-x-px hover:-translate-y-px hover:shadow-neo"
-                          } active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none`}
+                          className={`border-2 border-fg shadow-neo-sm ${checked ? "bg-accent/20" : "bg-bg-raised"}`}
                         >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => togglePermission(perm.key)}
-                            className="flex-shrink-0"
-                          />
-                          <div>
-                            <span className="font-mono text-[9px] text-fg font-bold uppercase">{perm.key}</span>
-                            <span className="block font-mono text-[8px] text-muted">{perm.label}</span>
+                          <div className="flex items-center gap-2.5 px-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleGlobal(perm.key)}
+                              className="flex-shrink-0"
+                              id={`perm-${perm.key}`}
+                            />
+                            <label htmlFor={`perm-${perm.key}`} className="cursor-pointer min-w-0 flex-1">
+                              <span className="font-mono text-[9px] text-fg font-bold uppercase">{perm.key}</span>
+                              <span className="block font-mono text-[8px] text-muted">{perm.label}</span>
+                            </label>
+                            {canScope && (
+                              <button
+                                type="button"
+                                onClick={() => setScopeOpen(open ? null : perm.key)}
+                                title="Grant on individual apps or environments"
+                                className={`flex-shrink-0 flex items-center gap-1 font-mono text-[8px] font-bold uppercase tracking-wider border-2 border-fg px-1.5 py-0.5 shadow-neo-sm transition-all ${
+                                  open ? "bg-fg text-accent" : "bg-bg-raised text-fg-dim hover:bg-alt"
+                                }`}
+                              >
+                                <Target size={9} /> Scope{scoped.length > 0 ? ` ${scoped.length}` : ""}
+                              </button>
+                            )}
                           </div>
-                        </label>
+
+                          {/* Existing narrower grants. A global tick makes them
+                              redundant, so they are struck through rather than
+                              silently dropped — untick global and they apply again. */}
+                          {scoped.length > 0 && (
+                            <div className={`flex flex-wrap gap-1 px-3 pb-2 ${checked ? "opacity-40" : ""}`}>
+                              {scoped.map((g) => (
+                                <span
+                                  key={grantKey(g)}
+                                  className={`inline-flex items-center gap-1 font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5 bg-alt ${checked ? "line-through" : ""}`}
+                                  title={checked ? "Superseded by the fleet-wide grant" : undefined}
+                                >
+                                  {g.scopeType === "app" ? "app" : "env"}:{scopeLabel(g)}
+                                  <button type="button" onClick={() => removeScoped(g)} className="text-muted hover:text-accent-red">
+                                    <X size={9} />
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {open && (
+                            <div className="border-t-2 border-fg px-3 py-2 space-y-2 bg-alt/40">
+                              {checked && (
+                                <p className="font-mono text-[8px] text-muted uppercase tracking-wider">
+                                  Granted fleet-wide; scopes below are ignored until you untick it.
+                                </p>
+                              )}
+                              <ScopeList
+                                title="Environments"
+                                items={environments.map((e) => ({ id: e.id, name: e.name }))}
+                                selected={scoped.filter((g) => g.scopeType === "environment").map((g) => g.scopeId)}
+                                onToggle={(id) => toggleScoped(perm.key, "environment", id)}
+                              />
+                              <ScopeList
+                                title="Apps"
+                                items={apps.map((a) => ({ id: a.id, name: a.name }))}
+                                selected={scoped.filter((g) => g.scopeType === "app").map((g) => g.scopeId)}
+                                onToggle={(id) => toggleScoped(perm.key, "app", id)}
+                              />
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -231,6 +386,40 @@ export function UserDetailPage({ userId }: { userId: string }) {
             <Btn variant="default" loading={savingPassword} onClick={resetPassword}>Update Password</Btn>
           </div>
         </Card>
+      )}
+    </div>
+  );
+}
+
+function ScopeList({ title, items, selected, onToggle }: {
+  title: string;
+  items: Array<{ id: number; name: string }>;
+  selected: Array<string | null>;
+  onToggle: (id: number) => void;
+}) {
+  return (
+    <div>
+      <div className="font-mono text-[8px] text-muted font-bold uppercase tracking-wider mb-1">{title}</div>
+      {items.length === 0 ? (
+        <div className="font-mono text-[8px] text-muted">none</div>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {items.map((it) => {
+            const on = selected.includes(String(it.id));
+            return (
+              <button
+                key={it.id}
+                type="button"
+                onClick={() => onToggle(it.id)}
+                className={`font-mono text-[8px] font-bold uppercase border-2 border-fg px-1.5 py-0.5 transition-all ${
+                  on ? "bg-accent text-fg shadow-neo-sm" : "bg-bg-raised text-fg-dim hover:bg-alt"
+                }`}
+              >
+                {it.name}
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );

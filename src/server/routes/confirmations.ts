@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { authenticateRequest } from "../lib/auth.ts";
+import { requireAuthenticated } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import {
@@ -18,7 +18,7 @@ type ConfirmableAction = (typeof CONFIRMABLE_ACTIONS)[number];
 // — the CLI does not get to describe what it's about to destroy.
 export async function handleCreateConfirmation(request: Request): Promise<Response> {
   try {
-    const payload = await authenticateRequest(request);
+    const payload = await requireAuthenticated(request);
     const body = (await request.json()) as {
       action?: string;
       resource_type?: string;
@@ -75,7 +75,7 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
 // POST /api/confirmations/poll — polled by CLI (requires auth) for the result.
 export async function handlePollConfirmation(request: Request): Promise<Response> {
   try {
-    await authenticateRequest(request);
+    await requireAuthenticated(request);
     const body = (await request.json()) as { confirm_code?: string };
 
     if (!body.confirm_code) {
@@ -93,7 +93,7 @@ export async function handlePollConfirmation(request: Request): Promise<Response
 // show what the user is being asked to confirm.
 export async function handleLookupConfirmation(request: Request, userCode: string): Promise<Response> {
   try {
-    const payload = await authenticateRequest(request);
+    const payload = await requireAuthenticated(request);
 
     const pending = getPendingForUser(userCode, payload);
     if (!pending) {
@@ -109,7 +109,7 @@ export async function handleLookupConfirmation(request: Request, userCode: strin
 // POST /api/confirmations/item/:userCode/confirm — called by web UI (requires auth).
 export async function handleConfirmConfirmation(request: Request, userCode: string): Promise<Response> {
   try {
-    const payload = await authenticateRequest(request);
+    const payload = await requireAuthenticated(request);
 
     const ok = resolveConfirmation(userCode, payload, "confirmed");
     if (!ok) {
@@ -125,7 +125,7 @@ export async function handleConfirmConfirmation(request: Request, userCode: stri
 // POST /api/confirmations/item/:userCode/deny — called by web UI (requires auth).
 export async function handleDenyConfirmation(request: Request, userCode: string): Promise<Response> {
   try {
-    const payload = await authenticateRequest(request);
+    const payload = await requireAuthenticated(request);
 
     const ok = resolveConfirmation(userCode, payload, "denied");
     if (!ok) {

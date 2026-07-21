@@ -113,13 +113,7 @@ const EMPTY_FORM: FormState = {
   public_port: "",
 };
 
-/**
- * `initialRepo` seeds the repo field so the page introspects on mount. Used by
- * the stack detail page's "re-sync from manifest": a stack deploy is an in-place
- * upsert keyed on the stack name, so re-running this flow against the same repo
- * applies whatever `ocd-stack.json` now says.
- */
-export function DeployPage({ initialRepo }: { initialRepo?: string } = {}) {
+export function DeployPage() {
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [extraEnv, setExtraEnv] = useState<Array<{ key: string; value: string }>>([]);
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<number | null>(null);
@@ -143,7 +137,7 @@ export function DeployPage({ initialRepo }: { initialRepo?: string } = {}) {
   const [selectedManifest, setSelectedManifest] = useState<number | null>(null);
   const [manifestEnvDefs, setManifestEnvDefs] = useState<ManifestEnvDef[]>([]);
 
-  const [form, setForm] = useState<FormState>({ ...EMPTY_FORM, git_repo: initialRepo ?? EMPTY_FORM.git_repo });
+  const [form, setForm] = useState<FormState>({ ...EMPTY_FORM });
 
   function applyManifest(idx: number, result: AppIntrospect) {
     const pm = result.manifests[idx];

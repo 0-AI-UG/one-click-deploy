@@ -119,13 +119,13 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
                   <td className="py-2 px-3"><Sparkline values={series} /></td>
                   <td className="py-2 px-3">
                     <div className="flex items-center gap-1">
-                      <PermissionGate permission="terminal.access">
+                      <PermissionGate permission="terminal.container" appId={appId} environmentId={app.environment_id}>
                         <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/terminal/replica/${r.id}`; }}>
                           <Terminal size={12} /> Shell
                         </Btn>
                       </PermissionGate>
                       {allServers.length >= 2 && (
-                        <PermissionGate permission="scaling.manage">
+                        <PermissionGate permission="scaling.migrate" appId={appId} environmentId={app.environment_id}>
                           <MoveMenu
                             targets={allServers.filter((s) => s.id !== r.server_id)}
                             loading={

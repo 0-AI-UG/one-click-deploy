@@ -336,13 +336,38 @@ export type StackDeployBody = {
   apps: StackAppSpec[];
 };
 
+export type ScopeType = "global" | "environment" | "app";
+
+/** One permission row. `scopeId` is null exactly when scopeType is "global";
+ *  otherwise it is an app id or environment id, stringified. */
+export type PermissionGrant = {
+  permission: string;
+  scopeType: ScopeType;
+  scopeId: string | null;
+};
+
+/** What a client-side permission check is about. */
+export type PermissionScope = {
+  appId?: number | null;
+  environmentId?: number | null;
+};
+
 export type AdminUser = {
   id: string;
   username: string;
   isAdmin: boolean;
   webauthnEnabled: boolean;
+  /** Global permissions only. */
   permissions: string[];
   createdAt: string;
+};
+
+/** GET /api/admin/users/:id/permissions */
+export type UserPermissionsResponse = {
+  grants: PermissionGrant[];
+  permissions: string[];
+  allPermissions: string[];
+  scopablePermissions: string[];
 };
 
 export type PanelApp = {

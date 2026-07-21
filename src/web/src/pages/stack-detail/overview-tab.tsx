@@ -1,16 +1,15 @@
 import { Card, StatusBadge, Table, EmptyState } from "../../components/ui.tsx";
-import { PermissionGate } from "../../components/permission-gate.tsx";
 import { StackStagingRow } from "./staging-row.tsx";
-import { Boxes, Database, ExternalLink, RefreshCw } from "lucide-react";
+import { Boxes, Database, ExternalLink } from "lucide-react";
 import type { StackDetail, StackMemberApp, EnvironmentData } from "../../types.ts";
 
 /**
  * The whole stack on one page: what it is configured with and what it contains.
  * The staging environment is the only thing editable here.
  *
- * What a stack *contains* is declarative: it comes from `ocd-stack.json` and a
- * re-sync through the deploy page. There is no per-member edit — changing
- * membership means editing the manifest and redeploying.
+ * What a stack *contains* is declarative: it comes from `ocd-stack.json`. There
+ * is no membership editing here — changing members means editing the manifest
+ * and deploying the repo again, same as an app.
  */
 export function OverviewTab({
   stack,
@@ -51,18 +50,7 @@ export function OverviewTab({
             {repo && (
               <div className="flex justify-between gap-4 items-center">
                 <span className="text-muted">Source Repo</span>
-                <span className="flex items-center gap-2 min-w-0">
-                  <span className="text-fg font-bold truncate">{repo}</span>
-                  {/* Members, ports and needs ordering live in ocd-stack.json —
-                      re-syncing them means re-running the deploy for this repo. */}
-                  <PermissionGate permission="stacks.deploy">
-                    <a
-                      href={`#/deploy?repo=${encodeURIComponent(repo)}`}
-                      title="Re-sync members from ocd-stack.json"
-                      className="shrink-0 text-muted hover:text-fg"
-                    ><RefreshCw size={11} /></a>
-                  </PermissionGate>
-                </span>
+                <span className="text-fg font-bold truncate">{repo}</span>
               </div>
             )}
             <div className="flex justify-between"><span className="text-muted">Created</span><span className="text-fg">{new Date(stack.created_at).toLocaleString()}</span></div>

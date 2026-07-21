@@ -2,6 +2,7 @@ import * as db from "../../shared/db.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { authenticateRequest } from "../lib/auth.ts";
 import { AuthError } from "../lib/errors.ts";
+import { appScope } from "../lib/permissions.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [terminal-exec:${context}]`, ...args);
@@ -18,7 +19,7 @@ function parseTarget(raw: unknown): { kind: TargetKind; id: number } | null {
   return { kind: m[1] as TargetKind, id: parseInt(m[2], 10) };
 }
 
-function resolveTarget(kind: TargetKind, id: number): { ip: string; hostKey?: string; container?: string } | { error: string } {
+function resolveTarget(kind: TargetKind, id: number): { ip: string; hostKey?: string; container?: string; appId?: number } | { error: string } {
   if (kind === "server") {
     const srv = db.getServer(id);
     if (!srv) return { error: "server not found" };
@@ -29,7 +30,7 @@ function resolveTarget(kind: TargetKind, id: number): { ip: string; hostKey?: st
     if (!replica) return { error: "replica not found" };
     const srv = db.getServer(replica.server_id);
     if (!srv) return { error: "replica's server not found" };
-    return { ip: srv.ipv4, hostKey: srv.ssh_host_key || undefined, container: replica.container_name };
+    return { ip: srv.ipv4, hostKey: srv.ssh_host_key || undefined, container: replica.container_name, appId: replica.app_id };
   }
   const instance = db.getServiceInstance(id);
   if (!instance) return { error: "service instance not found" };
@@ -62,9 +63,6 @@ export async function handleTerminalExec(request: Request): Promise<Response> {
 
   const user = db.getUserById(auth.userId);
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-  if (!user.is_admin && !db.hasPermission(auth.userId, "terminal.access")) {
-    return Response.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const body = await request.json().catch(() => null) as { target?: unknown; command?: unknown } | null;
   if (!body) return Response.json({ error: "invalid JSON" }, { status: 400 });
@@ -81,6 +79,19 @@ export async function handleTerminalExec(request: Request): Promise<Response> {
 
   const resolved = resolveTarget(target.kind, target.id);
   if ("error" in resolved) return Response.json({ error: resolved.error }, { status: 404 });
+
+  // A shell inside a container and a shell on the host are very different
+  // grants: the latter is root-equivalent over every workload on that machine.
+  // Pick the permission from what the target actually resolved to, and scope
+  // the container case to the app when the target carries one (replicas do;
+  // service instances belong to a service, not an app).
+  if (!user.is_admin) {
+    const permission = resolved.container ? "terminal.container" : "terminal.host";
+    const scope = resolved.appId != null ? appScope(resolved.appId) : undefined;
+    if (!db.hasPermission(auth.userId, permission, scope)) {
+      return Response.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
 
   log("exec", `user=${auth.userId} target=${target.kind}:${target.id} ip=${resolved.ip} bytes=${body.command.length}`);
 

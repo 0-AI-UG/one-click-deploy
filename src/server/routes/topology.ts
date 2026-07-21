@@ -37,7 +37,7 @@ export type TopologyData = {
 
 export async function handleGetTopology(request: Request): Promise<Response> {
   try {
-    await requirePermission(request, "servers.view");
+    await requirePermission(request, "fleet.view");
 
     const panelServerId = db.getPanel()?.server_id ?? null;
     const servers: TopologyServer[] = db.getServers().map((s) => ({

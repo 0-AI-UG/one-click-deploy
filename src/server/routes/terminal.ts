@@ -36,11 +36,21 @@ async function authFromQuery(req: Request): Promise<{ userId: string } | null> {
   }
 }
 
-function checkPermission(userId: string): boolean {
+/** A shell on a fleet host is root-equivalent and is gated separately from a
+ *  shell inside a container. The container case is scoped to the app that owns
+ *  the replica, so a per-app grant reaches only its own containers; a service
+ *  instance belongs to no app and needs the fleet-wide grant. */
+function checkPermission(userId: string, target: TerminalWsData["target"]): boolean {
   const user = db.getUserById(userId);
   if (!user) return false;
   if (user.is_admin) return true;
-  return db.hasPermission(userId, "terminal.access");
+
+  if (target.kind === "server") return db.hasPermission(userId, "terminal.host");
+  if (target.kind === "replica") {
+    const replica = db.getReplica(target.id);
+    return db.hasPermission(userId, "terminal.container", replica ? { appId: replica.app_id } : undefined);
+  }
+  return db.hasPermission(userId, "terminal.container");
 }
 
 /**
@@ -67,12 +77,12 @@ export async function tryTerminalUpgrade(req: Request, server: Bun.Server<Termin
   const auth = await authFromQuery(req);
   if (!auth) return new Response("unauthorized", { status: 401 });
 
-  if (!checkPermission(auth.userId)) {
-    return new Response("forbidden", { status: 403 });
-  }
-
   const target = parseTarget(req);
   if (!target) return new Response("bad target", { status: 400 });
+
+  if (!checkPermission(auth.userId, target)) {
+    return new Response("forbidden", { status: 403 });
+  }
 
   const active = sessionsByUser.get(auth.userId) ?? 0;
   if (active >= MAX_SESSIONS_PER_USER) {
