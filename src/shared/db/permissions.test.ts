@@ -213,6 +213,21 @@ describe("migration 85", () => {
     return d;
   }
 
+  /** The production shape: the real connection runs `PRAGMA foreign_keys = ON`
+   *  (connection.ts), and user_permissions carries an FK to users. */
+  function legacyDbWithFk(): Database {
+    const d = new Database(":memory:");
+    d.run("PRAGMA foreign_keys = ON");
+    d.run("CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT NOT NULL)");
+    d.run(`CREATE TABLE user_permissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      permission TEXT NOT NULL,
+      UNIQUE(user_id, permission)
+    )`);
+    return d;
+  }
+
   function runMigration85(d: Database): void {
     const m = migrations.find((x) => x.version === 85);
     expect(m).toBeTruthy();
@@ -228,6 +243,35 @@ describe("migration 85", () => {
       .map((r) => r.permission)
       .sort();
   }
+
+  // Regression: this took the production panel down. The live DB held 24 grants
+  // belonging to a user that had been deleted — the old table declared the FK
+  // but was written while enforcement was off, so the rows outlived their user.
+  // Carrying them into the rebuilt table tripped SQLITE_CONSTRAINT_FOREIGNKEY,
+  // failing the migration and crash-looping the panel on every boot.
+  test("orphaned grants whose user was deleted do not fail the migration", () => {
+    const d = legacyDbWithFk();
+    d.run("INSERT INTO users (id, username) VALUES ('live', 'admin')");
+    d.run("INSERT INTO user_permissions (user_id, permission) VALUES ('live', 'apps.deploy')");
+    // Sneak past the FK the way production did, then leave the rows dangling.
+    d.run("PRAGMA foreign_keys = OFF");
+    d.run("INSERT INTO users (id, username) VALUES ('ghost', 'deleted')");
+    d.run("INSERT INTO user_permissions (user_id, permission) VALUES ('ghost', 'apps.deploy')");
+    d.run("INSERT INTO user_permissions (user_id, permission) VALUES ('ghost', 'servers.view')");
+    d.run("DELETE FROM users WHERE id = 'ghost'");
+    d.run("PRAGMA foreign_keys = ON");
+
+    expect(() => runMigration85(d)).not.toThrow();
+
+    // The live user is carried over and widened; the ghost's rows are gone.
+    expect(permsOf(d, "live")).toContain("apps.deploy");
+    expect(permsOf(d, "live")).toContain("cli.access");
+    expect(permsOf(d, "ghost")).toEqual([]);
+    const orphans = d
+      .query("SELECT COUNT(*) AS n FROM user_permissions WHERE user_id NOT IN (SELECT id FROM users)")
+      .get() as { n: number };
+    expect(orphans.n).toBe(0);
+  });
 
   test("servers.view widens into the six read permissions and is itself dropped", () => {
     const d = legacyDb();

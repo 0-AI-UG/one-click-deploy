@@ -1750,9 +1750,15 @@ export const migrations: Migration[] = [
         scope_id TEXT,
         UNIQUE(user_id, permission, scope_type, scope_id)
       )`);
+      // Skip rows whose user no longer exists. The old table declared the same
+      // FK but was populated while enforcement was off, so deleting a user left
+      // its grants behind; carrying those over trips SQLITE_CONSTRAINT_FOREIGNKEY
+      // and fails the whole migration. Dropping them is what the FK's ON DELETE
+      // CASCADE would have done at the time.
       db.run(
         `INSERT OR IGNORE INTO user_permissions_new (user_id, permission, scope_type, scope_id)
-         SELECT user_id, permission, 'global', NULL FROM user_permissions`,
+         SELECT user_id, permission, 'global', NULL FROM user_permissions
+         WHERE user_id IN (SELECT id FROM users)`,
       );
       db.run("DROP TABLE user_permissions");
       db.run("ALTER TABLE user_permissions_new RENAME TO user_permissions");
