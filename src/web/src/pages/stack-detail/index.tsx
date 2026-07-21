@@ -109,13 +109,15 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
               onClick={() => action("redeploy", () => post(`/api/stacks/${stackId}/redeploy`))}
             ><RefreshCw size={12} /> Redeploy</Btn>
           </PermissionGate>
+          {/* Promote only exists when there is something to promote — a stack
+              with no staging siblings has no use for the button at all. */}
+          {promotable > 0 && (
           <PermissionGate permission="stacks.deploy">
             <Btn
               size="xs"
               variant="primary"
-              disabled={ops.isBusy || promotable === 0}
+              disabled={ops.isBusy}
               loading={actionLoading === "promote" || ops.isBusyWith("promote_stack")}
-              title={promotable === 0 ? "No member has a staging sibling to promote" : undefined}
               onClick={async () => {
                 if (await confirm(
                   "Promote Stack",
@@ -124,6 +126,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
               }}
             ><ArrowUpFromLine size={12} /> Promote</Btn>
           </PermissionGate>
+          )}
           <PermissionGate permission="stacks.destroy">
             <Btn
               size="xs"

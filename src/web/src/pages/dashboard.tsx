@@ -509,20 +509,22 @@ export function DashboardPage() {
                 <RefreshCw size={12} />
               </Btn>
             </PermissionGate>
+            {/* Only shown when there is something to promote — a stack with no
+                staging siblings has no use for the button at all. */}
+            {stagingSiblings > 0 && (
             <PermissionGate permission="stacks.deploy">
               <Btn
                 size="xs"
                 variant="ghost"
-                title={stagingSiblings > 0
-                  ? `Promote staging → production for ${stagingSiblings} member(s)`
-                  : "No staging siblings to promote"}
+                title={`Promote staging → production for ${stagingSiblings} member(s)`}
                 loading={promoting}
-                disabled={busy || stagingSiblings === 0}
+                disabled={busy}
                 onClick={() => stackPromote(stack)}
               >
                 <ArrowUpFromLine size={12} />
               </Btn>
             </PermissionGate>
+            )}
             <PermissionGate permission="stacks.destroy">
               <Btn size="xs" variant="ghost" title="Destroy stack" loading={destroying} disabled={busy} onClick={() => stackDestroy(stack)}>
                 <Trash2 size={12} className="text-accent-red" />
