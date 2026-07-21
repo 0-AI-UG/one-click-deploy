@@ -57,6 +57,59 @@ describe("buildPanelRebuildScript", () => {
     expect(script).toContain("docker rm -f ocd-panel");
   });
 
+  // A bad migration shipped in a new image took the panel down for ~25 minutes:
+  // the swap does `docker rm -f` before starting the replacement, so when the
+  // replacement could not boot there was nothing left to serve, and
+  // `--restart unless-stopped` crash-looped it forever. The panel also
+  // redeploys itself via its own webhook, so once it is down it cannot deploy
+  // the fix — recovery required manual SSH. Hence: health-gate the swap and put
+  // the previous image back automatically.
+  describe("health gate and rollback", () => {
+    test("captures the running image before destroying the container", () => {
+      const script = buildPanelRebuildScript(base);
+      const capture = script.indexOf("PREV_IMAGE=$(docker inspect");
+      const destroy = script.indexOf("docker rm -f ocd-panel");
+      expect(capture).toBeGreaterThan(-1);
+      // Order matters: once the container is gone, its image is unknowable.
+      expect(capture).toBeLessThan(destroy);
+    });
+
+    test("polls /api/health on the loopback port after the swap", () => {
+      const script = buildPanelRebuildScript(base);
+      expect(script).toContain("curl -fsS -m 3 http://127.0.0.1:3001/api/health");
+    });
+
+    test("restarts the previous image when the new one never becomes healthy", () => {
+      const script = buildPanelRebuildScript(base);
+      expect(script).toContain('docker run -d --name ocd-panel --restart unless-stopped -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data $PREV_IMAGE');
+      expect(script).toContain("rolling back to $PREV_IMAGE");
+    });
+
+    test("dumps the failed container's logs so the cause is in the deploy output", () => {
+      const script = buildPanelRebuildScript(base);
+      expect(script).toContain("docker logs --tail 50 ocd-panel");
+    });
+
+    test("does not roll back onto the same image it just failed to start", () => {
+      const script = buildPanelRebuildScript(base);
+      // A first-ever deploy, or a redeploy of the identical tag, has no distinct
+      // previous image — rolling back would just reproduce the failure.
+      expect(script).toContain('[ -z "$PREV_IMAGE" ] || [ "$PREV_IMAGE" = "ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef" ]');
+    });
+
+    test("exits non-zero when it had to roll back, so the deploy is recorded as failed", () => {
+      const script = buildPanelRebuildScript(base);
+      const lines = script.trim().split("\n");
+      expect(lines[lines.length - 1]).toBe("exit 1");
+      expect(script).toContain("exit 0");
+    });
+
+    test("health retries are configurable", () => {
+      const script = buildPanelRebuildScript({ ...base, healthRetries: 5 });
+      expect(script).toContain("for i in $(seq 1 5); do");
+    });
+  });
+
   test("publishes the HTTP waker port on the private IP so sleeping apps can wake", () => {
     const script = buildPanelRebuildScript(base);
     // Bound to the private IP (not 0.0.0.0): the waker bypasses Traefik's auth /

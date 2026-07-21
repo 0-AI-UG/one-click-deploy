@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import path from "path";
-import { mkdirSync } from "fs";
-import { runMigrations } from "../migrations.ts";
+import { mkdirSync, existsSync, rmSync, readdirSync } from "fs";
+import { runMigrations, migrations } from "../migrations.ts";
 import { DATA_DIR } from "../paths.ts";
 
 function log(context: string, ...args: unknown[]) {
@@ -14,8 +14,68 @@ export function createDatabase(dbPathOrMemory: string): Database {
   instance.run("PRAGMA foreign_keys = ON");
   instance.run("PRAGMA busy_timeout = 5000");
   initSchema(instance);
+  backupBeforeMigrating(instance, dbPathOrMemory);
   runMigrations(instance);
   return instance;
+}
+
+/** Snapshot the DB whenever a migration is about to run.
+ *
+ *  Each migration is transactional and rolls back on failure, so this is not
+ *  the first line of defence — it is the one that matters when a migration
+ *  *succeeds* and is wrong, which no transaction can undo. Uses SQLite's own
+ *  VACUUM INTO so the copy is consistent without stopping writers, and keeps
+ *  only the newest few so the disk cannot fill.
+ */
+function backupBeforeMigrating(instance: Database, dbPath: string): void {
+  if (dbPath === ":memory:" || !existsSync(dbPath)) return;
+  try {
+    const pending = pendingMigrationCount(instance);
+    if (pending === 0) return;
+
+    const version = currentSchemaVersion(instance);
+    const dest = `${dbPath}.pre-migration-v${version}`;
+    if (existsSync(dest)) rmSync(dest, { force: true });
+    instance.run(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+    log("backup", `${pending} migration(s) pending — snapshotted v${version} to ${dest}`);
+    pruneOldBackups(dbPath);
+  } catch (err) {
+    // A failed backup must not block startup; the migration itself is still
+    // transactional. Log loudly so it is visible in the deploy output.
+    log("backup", `WARNING: pre-migration backup failed (continuing): ${err}`);
+  }
+}
+
+/** Reads schema_version without creating it — runMigrations owns that. */
+function currentSchemaVersion(instance: Database): number {
+  const exists = instance
+    .query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'")
+    .get();
+  if (!exists) return 0;
+  const row = instance.query("SELECT version FROM schema_version").get() as
+    | { version: number }
+    | null;
+  return row?.version ?? 0;
+}
+
+function pendingMigrationCount(instance: Database): number {
+  const current = currentSchemaVersion(instance);
+  return migrations.filter((m) => m.version > current).length;
+}
+
+const BACKUPS_TO_KEEP = 3;
+
+function pruneOldBackups(dbPath: string): void {
+  const dir = path.dirname(dbPath);
+  const prefix = `${path.basename(dbPath)}.pre-migration-v`;
+  const backups = readdirSync(dir)
+    .filter((f) => f.startsWith(prefix))
+    .map((f) => ({ f, v: parseInt(f.slice(prefix.length), 10) }))
+    .filter((x) => Number.isFinite(x.v))
+    .sort((a, b) => b.v - a.v);
+  for (const old of backups.slice(BACKUPS_TO_KEEP)) {
+    rmSync(path.join(dir, old.f), { force: true });
+  }
 }
 
 function initSchema(instance: Database) {

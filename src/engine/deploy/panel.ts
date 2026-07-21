@@ -509,11 +509,15 @@ export function buildPanelRebuildScript(opts: {
   ghcrConfigDir: string;
   pullRetries: number;
   pullSleepSeconds: number;
+  /** How many times to poll /api/health before declaring the new container bad
+   *  and rolling back. Polls are 2s apart. */
+  healthRetries?: number;
 }): string {
   const {
     containerName, image, hostPort, containerPort, privateIpv4, envFilePath,
     volumeFlag, ghcrEnvPrefix, ghcrConfigDir, pullRetries, pullSleepSeconds,
   } = opts;
+  const healthRetries = opts.healthRetries ?? 30;
   // Publish the waker HTTP port (bound to the private IP) alongside the panel's
   // own loopback port, so sleeping apps' Traefik routers can reach the in-process
   // waker. Without this every sleeping-app hit 502s and nothing wakes.
@@ -538,10 +542,39 @@ export function buildPanelRebuildScript(opts: {
     `  ${cleanup}`,
     `  exit 1`,
     `fi`,
+    // Remember what is serving right now. If the new image cannot boot — a bad
+    // migration, a config error — we put this exact image back, because
+    // `docker rm -f` below has already destroyed the only running copy and
+    // `--restart unless-stopped` would otherwise crash-loop the panel forever.
+    `PREV_IMAGE=$(docker inspect --format '{{.Config.Image}}' ${containerName} 2>/dev/null || echo "")`,
+    `echo "[panel-redeploy] current image: ${"$"}{PREV_IMAGE:-none}"`,
     // Swap on the SAME loopback port that Traefik's panel.yml already targets.
     `docker rm -f ${containerName} 2>/dev/null || true`,
     `su - deploy -c "docker run -d --name ${containerName} --restart unless-stopped -p 127.0.0.1:${hostPort}:${containerPort}${wakerFlags} --env-file ${envFilePath} ${volumeFlag} ${image}"`,
+    // Health gate. A container that exits immediately never answers /api/health,
+    // so this catches both a crash-loop and a process that starts but is unwell.
+    `healthy=0`,
+    `for i in $(seq 1 ${healthRetries}); do`,
+    `  if curl -fsS -m 3 http://127.0.0.1:${hostPort}/api/health >/dev/null 2>&1; then healthy=1; break; fi`,
+    `  sleep 2`,
+    `done`,
+    `if [ "$healthy" = "1" ]; then`,
+    `  echo "[panel-redeploy] new image healthy"`,
+    `  ${cleanup}`,
+    `  exit 0`,
+    `fi`,
+    `echo "[panel-redeploy] ${image} failed health check after $((${healthRetries} * 2))s"`,
+    `docker logs --tail 50 ${containerName} 2>&1 | sed 's/^/[panel-redeploy][failed] /' || true`,
+    `if [ -z "$PREV_IMAGE" ] || [ "$PREV_IMAGE" = "${image}" ]; then`,
+    `  echo "[panel-redeploy] no distinct previous image to roll back to; leaving it running"`,
+    `  ${cleanup}`,
+    `  exit 1`,
+    `fi`,
+    `echo "[panel-redeploy] rolling back to $PREV_IMAGE"`,
+    `docker rm -f ${containerName} 2>/dev/null || true`,
+    `su - deploy -c "docker run -d --name ${containerName} --restart unless-stopped -p 127.0.0.1:${hostPort}:${containerPort}${wakerFlags} --env-file ${envFilePath} ${volumeFlag} $PREV_IMAGE"`,
     `${cleanup}`,
+    `exit 1`,
   ].join("\n");
 }
 
