@@ -1,6 +1,5 @@
-import { useTempDataDir, randomSuffix, TEST_ADMIN_ID, seedTestAdmin } from "../../shared/test-helpers.ts";
+import { useTempDataDir, randomSuffix, seedTestAdmin } from "../../shared/test-helpers.ts";
 useTempDataDir();
-seedTestAdmin();
 
 import { describe, test, expect, mock, afterAll } from "bun:test";
 
@@ -10,9 +9,12 @@ import { describe, test, expect, mock, afterAll } from "bun:test";
 const realPermissions = await import("../lib/permissions.ts");
 mock.module("../lib/permissions.ts", () => ({
   ...realPermissions,
-  requireAdmin: async () => ({ userId: TEST_ADMIN_ID, username: "admin" }),
-  requirePermission: async () => ({ userId: TEST_ADMIN_ID, username: "admin" }),
-  requireAuthenticated: async () => ({ userId: TEST_ADMIN_ID, username: "admin" }),
+  // seedTestAdmin() is idempotent and runs per request, not at module load:
+  // three other suites wipe the whole `users` table, and the row has to exist
+  // at the moment a handler calls hasPermission — file order is not ours.
+  requireAdmin: async () => ({ userId: seedTestAdmin(), username: "admin" }),
+  requirePermission: async () => ({ userId: seedTestAdmin(), username: "admin" }),
+  requireAuthenticated: async () => ({ userId: seedTestAdmin(), username: "admin" }),
 }));
 
 // Every member's log is one ssh round trip; record the calls so we can assert
