@@ -153,7 +153,6 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
           memberApps={memberApps}
           environments={environments}
           reload={load}
-          ops={ops}
         />
       )}
 

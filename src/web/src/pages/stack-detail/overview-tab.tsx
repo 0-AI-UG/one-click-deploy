@@ -1,40 +1,28 @@
-import { useState } from "react";
-import { del } from "../../api/client.ts";
-import { Card, Btn, StatusBadge, Table, EmptyState, showToast, confirm } from "../../components/ui.tsx";
+import { Card, StatusBadge, Table, EmptyState } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { StackStagingRow } from "./staging-row.tsx";
-import { Boxes, Database, ExternalLink, RefreshCw, Unlink } from "lucide-react";
-import type { ResourceOpsResult } from "../../hooks/useOperation.ts";
+import { Boxes, Database, ExternalLink, RefreshCw } from "lucide-react";
 import type { StackDetail, StackMemberApp, EnvironmentData } from "../../types.ts";
 
-const errMessage = (err: unknown): string =>
-  err instanceof Error ? err.message : String(err);
-
 /**
- * The whole stack on one page: what it is configured with, what it contains,
- * and the two things that are actually editable here — the staging environment
- * and membership (detach only).
+ * The whole stack on one page: what it is configured with and what it contains.
+ * The staging environment is the only thing editable here.
  *
  * What a stack *contains* is declarative: it comes from `ocd-stack.json` and a
- * re-sync through the deploy page. Detach is the escape hatch for what the
- * manifest leaves behind — one nullable column (`apps.stack_id` /
- * `services.stack_id`), so nothing is built, moved or destroyed by it.
+ * re-sync through the deploy page. There is no per-member edit — changing
+ * membership means editing the manifest and redeploying.
  */
 export function OverviewTab({
   stack,
   memberApps,
   environments,
   reload,
-  ops,
 }: {
   stack: StackDetail;
   memberApps: StackMemberApp[];
   environments: EnvironmentData[];
   reload: () => void;
-  ops: ResourceOpsResult;
 }) {
-  const [busy, setBusy] = useState<string | null>(null);
-
   const envName = (id: number | null) =>
     id == null ? null : environments.find((e) => e.id === id)?.name ?? `#${id}`;
   const prodEnv = envName(stack.environment_id);
@@ -51,23 +39,6 @@ export function OverviewTab({
       return Array.isArray(parsed) ? parsed.filter((n) => typeof n === "string") : [];
     } catch {
       return [];
-    }
-  };
-
-  const detach = async (kind: "apps" | "services", id: number, name: string) => {
-    if (!(await confirm(
-      "Detach from Stack",
-      `Remove "${name}" from "${stack.name}"? It keeps running with its current config and moves back to the dashboard's top level. Nothing is destroyed.`,
-    ))) return;
-    setBusy(`${kind}-${id}`);
-    try {
-      await del(`/api/stacks/${stack.id}/members/${kind}/${id}`);
-      showToast(`Detached ${name}`, "success");
-      reload();
-    } catch (err) {
-      showToast(errMessage(err), "error");
-    } finally {
-      setBusy(null);
     }
   };
 
@@ -153,18 +124,8 @@ export function OverviewTab({
                     ? <span className="text-accent-amber font-bold">on</span>
                     : <span className="text-fg-dim">off</span>}
                 </td>
-                <td className="py-2 px-3">
-                  <div className="flex items-center justify-end gap-2">
-                    <a href={`#/apps/${a.id}`} className="font-mono text-[9px] text-muted hover:text-fg uppercase tracking-wider">Open</a>
-                    <PermissionGate permission="stacks.deploy">
-                      <Btn
-                        size="xs"
-                        disabled={ops.isBusy}
-                        loading={busy === `apps-${a.id}`}
-                        onClick={() => detach("apps", a.id, a.name)}
-                      ><Unlink size={12} /> Detach</Btn>
-                    </PermissionGate>
-                  </div>
+                <td className="py-2 px-3 text-right">
+                  <a href={`#/apps/${a.id}`} className="font-mono text-[9px] text-muted hover:text-fg uppercase tracking-wider">Open</a>
                 </td>
               </tr>
             ))}
@@ -189,18 +150,8 @@ export function OverviewTab({
                 <td className="py-2 px-3 font-mono text-[10px] text-fg">{s.service_type}</td>
                 <td className="py-2 px-3 font-mono text-[10px] text-muted">{s.version}</td>
                 <td className="py-2 px-3"><StatusBadge status={s.status} /></td>
-                <td className="py-2 px-3">
-                  <div className="flex items-center justify-end gap-2">
-                    <a href={`#/services/${s.id}`} className="font-mono text-[9px] text-muted hover:text-fg uppercase tracking-wider">Open</a>
-                    <PermissionGate permission="stacks.deploy">
-                      <Btn
-                        size="xs"
-                        disabled={ops.isBusy}
-                        loading={busy === `services-${s.id}`}
-                        onClick={() => detach("services", s.id, s.name)}
-                      ><Unlink size={12} /> Detach</Btn>
-                    </PermissionGate>
-                  </div>
+                <td className="py-2 px-3 text-right">
+                  <a href={`#/services/${s.id}`} className="font-mono text-[9px] text-muted hover:text-fg uppercase tracking-wider">Open</a>
                 </td>
               </tr>
             ))}

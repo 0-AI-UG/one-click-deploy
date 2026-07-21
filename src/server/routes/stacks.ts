@@ -144,52 +144,6 @@ export async function handleUpdateStack(request: Request, stackId: number): Prom
   }
 }
 
-// --- Membership ---
-//
-// Membership is declarative: it comes from `ocd-stack.json` and a stack deploy.
-// The only edit exposed here is detach, the escape hatch for what the manifest
-// leaves behind. It writes one nullable column (apps.stack_id /
-// services.stack_id), so nothing is rebuilt, moved or destroyed — a detached app
-// keeps its containers, env and domain and reappears at the dashboard's top
-// level.
-
-function memberPartsFrom(request: Request): { kind: string; id: number } {
-  const m = new URL(request.url).pathname.match(/\/members\/(apps|services)\/(\d+)$/);
-  return m ? { kind: m[1], id: parseInt(m[2], 10) } : { kind: "", id: 0 };
-}
-
-export async function handleRemoveStackMember(request: Request, stackId: number): Promise<Response> {
-  try {
-    await requirePermission(request, "stacks.deploy");
-    const stack = db.getStack(stackId);
-    if (!stack) {
-      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
-    }
-    const { kind, id } = memberPartsFrom(request);
-    if (!id || !kind) {
-      return Response.json({ ok: false, error: "Invalid member path" }, { status: 400, headers: corsHeaders });
-    }
-    if (kind === "apps") {
-      const app = db.getApp(id);
-      if (!app || app.stack_id !== stackId) {
-        return Response.json({ ok: false, error: "App is not a member of this stack" }, { status: 404, headers: corsHeaders });
-      }
-      db.setAppStack(id, null);
-      db.appendStackLog(stackId, `[members] detached app "${app.name}" (${id}) — containers left running`);
-    } else {
-      const svc = db.getService(id);
-      if (!svc || svc.stack_id !== stackId) {
-        return Response.json({ ok: false, error: "Service is not a member of this stack" }, { status: 404, headers: corsHeaders });
-      }
-      db.setServiceStack(id, null);
-      db.appendStackLog(stackId, `[members] detached service "${svc.name}" (${id}) — container left running`);
-    }
-    return Response.json({ ok: true }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
 // --- Log ---
 
 export async function handleGetStackLog(request: Request, stackId: number): Promise<Response> {

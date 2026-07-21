@@ -10,11 +10,7 @@ mock.module("../lib/permissions.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import {
-  handleUpdateStack,
-  handleRemoveStackMember,
-  handleGetStack,
-} from "./stacks.ts";
+import { handleUpdateStack } from "./stacks.ts";
 
 function makeEnv() {
   return db.insertEnvironment(`env-${randomSuffix()}`, "{}");
@@ -40,26 +36,9 @@ function makeApp(overrides: Partial<Parameters<typeof db.insertApp>[0]> = {}) {
   });
 }
 
-function makeService() {
-  return db.insertService({
-    name: `svc-${randomSuffix()}`,
-    service_type: "postgres",
-    version: "16",
-    port: 5432,
-    env_vars: "{}",
-    credentials: "{}",
-  });
-}
-
 const patchReq = (stackId: number, body: unknown) =>
   handleUpdateStack(
     new Request(`http://x/api/stacks/${stackId}`, { method: "PATCH", body: JSON.stringify(body) }),
-    stackId,
-  );
-
-const removeReq = (stackId: number, kind: string, id: number) =>
-  handleRemoveStackMember(
-    new Request(`http://x/api/stacks/${stackId}/members/${kind}/${id}`, { method: "DELETE" }),
     stackId,
   );
 
@@ -104,36 +83,5 @@ describe("PATCH /api/stacks/:id — staging environment", () => {
     expect((await patchReq(stack.id, { staging_environment_id: stack.environment_id })).status).toBe(400);
     expect((await patchReq(stack.id, {})).status).toBe(400);
     expect((await patchReq(999999, { staging_environment_id: null })).status).toBe(404);
-  });
-});
-
-describe("stack membership", () => {
-  test("detaching an app only clears the stack_id", async () => {
-    const stack = makeStack();
-    const app = makeApp();
-    db.setAppStack(app.id, stack.id);
-
-    const detail = await (await handleGetStack(new Request("http://x"), stack.id)).json();
-    expect(detail.apps.map((a: { id: number }) => a.id)).toContain(app.id);
-
-    expect((await removeReq(stack.id, "apps", app.id)).status).toBe(200);
-    // Detach is metadata only: the app itself survives.
-    expect(db.getApp(app.id)).not.toBeNull();
-    expect(db.getApp(app.id)!.stack_id).toBeNull();
-  });
-
-  test("detaching a service works the same way", async () => {
-    const stack = makeStack();
-    const svc = makeService();
-    db.setServiceStack(svc.id, stack.id);
-
-    expect((await removeReq(stack.id, "services", svc.id)).status).toBe(200);
-    expect(db.getService(svc.id)!.stack_id).toBeNull();
-  });
-
-  test("detaching a non-member 404s", async () => {
-    const stack = makeStack();
-    const outsider = makeApp();
-    expect((await removeReq(stack.id, "apps", outsider.id)).status).toBe(404);
   });
 });
