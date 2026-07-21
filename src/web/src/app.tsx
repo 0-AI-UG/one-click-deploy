@@ -13,6 +13,7 @@ import { DashboardPage } from "./pages/dashboard.tsx";
 import { DeployPage } from "./pages/deploy/index.tsx";
 import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail/index.tsx";
+import { StackDetailPage } from "./pages/stack-detail/index.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
 import { VolumeDetailPage } from "./pages/volume-detail.tsx";
 import { ServerDetailPage } from "./pages/server-detail.tsx";
@@ -132,8 +133,11 @@ export function App() {
   let content;
   if (hash === "#/" || hash === "") {
     content = <DashboardPage />;
-  } else if (hash === "#/deploy") {
-    content = <DeployPage />;
+  } else if (hash === "#/deploy" || hash.startsWith("#/deploy?")) {
+    // `?repo=` prefills the repo field and introspects immediately — how the
+    // stack detail page hands you back to the manifest for a re-sync.
+    const repo = new URLSearchParams(hash.split("?")[1] || "").get("repo");
+    content = <DeployPage initialRepo={repo || undefined} />;
   } else if (hash === "#/deploy/stack") {
     // Stack deploy is unified into the single Deploy page (detection is implicit);
     // redirect old links there.
@@ -146,6 +150,9 @@ export function App() {
   } else if (hash.startsWith("#/apps/")) {
     const appId = parseInt(hash.split("/")[2], 10);
     content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;
+  } else if (hash.startsWith("#/stacks/")) {
+    const stackId = parseInt(hash.split("/")[2], 10);
+    content = stackId ? <StackDetailPage stackId={stackId} /> : <DashboardPage />;
   } else if (hash.startsWith("#/deploy-service")) {
     const parts = hash.replace("#/deploy-service", "").replace(/^\//, "");
     content = <DeployServicePage preselectedType={parts || undefined} />;

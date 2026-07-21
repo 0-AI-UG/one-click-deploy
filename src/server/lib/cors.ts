@@ -8,7 +8,7 @@ const IS_PROD = process.env.NODE_ENV === "production";
 const corsOriginHeaders: Record<string, string> = CORS_ORIGIN
   ? {
       "Access-Control-Allow-Origin": CORS_ORIGIN,
-      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
       Vary: "Origin",
     }

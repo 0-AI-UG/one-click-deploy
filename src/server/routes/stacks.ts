@@ -85,6 +85,148 @@ export async function handleGetStack(request: Request, stackId: number): Promise
   }
 }
 
+// --- Settings ---
+
+// The only mutable stack-level setting: the shared staging environment. A stack
+// owns exactly ONE, and no member may override it (deploy_stack overwrites the
+// per-app column on every run), so re-pointing it here means re-pointing every
+// member that currently has staging on.
+//
+// Deliberately NOT settable: `name` (it prefixes every member app/service,
+// container and op resource key) and `environment_id` (members carry their own
+// copy; re-pointing it is a redeploy of the whole stack, which `deploy_stack`
+// already does properly via a re-up).
+export async function handleUpdateStack(request: Request, stackId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "stacks.deploy");
+    const stack = db.getStack(stackId);
+    if (!stack) {
+      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
+    }
+    const body = await request.json() as { staging_environment_id?: number | null };
+    if (!("staging_environment_id" in body)) {
+      return Response.json({ ok: false, error: "staging_environment_id is required" }, { status: 400, headers: corsHeaders });
+    }
+    const next = body.staging_environment_id ?? null;
+    if (next != null) {
+      if (typeof next !== "number" || !db.getEnvironment(next)) {
+        return Response.json({ ok: false, error: `Staging environment ${next} not found` }, { status: 400, headers: corsHeaders });
+      }
+      if (next === stack.environment_id) {
+        return Response.json(
+          { ok: false, error: "Staging environment must differ from the stack's production environment" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
+    }
+    db.updateStackStagingEnvironment(stackId, next);
+    // Push down to members. Staging opt-in itself is manifest intent
+    // (webhook.staging) which we never persist, so we can only re-point members
+    // that ALREADY have staging on — clearing turns it off everywhere, and
+    // turning it on for a new member still requires a stack re-up.
+    let repointed = 0;
+    for (const app of db.getAppsByStackId(stackId)) {
+      if (app.target_of != null) continue; // staging siblings are not members in their own right
+      if ((app.webhook_staging_environment_id ?? null) == null) continue;
+      db.updateAppWebhookStagingEnvironment(app.id, next);
+      repointed++;
+    }
+    db.appendStackLog(
+      stackId,
+      next == null
+        ? `[settings] staging environment cleared — staging disabled on ${repointed} member(s)`
+        : `[settings] staging environment → ${next} (${repointed} member(s) re-pointed)`,
+    );
+    return Response.json({ ok: true, staging_environment_id: next, members_updated: repointed, updated_by: payload.userId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+// --- Membership ---
+//
+// Membership is a single nullable column (apps.stack_id / services.stack_id), so
+// attach/detach is metadata only: nothing is rebuilt, moved, or destroyed. A
+// detached app keeps its containers, env and domain and simply reappears at the
+// dashboard's top level. This is the escape hatch for the declarative path — the
+// authoritative way to change membership is still editing `ocd-stack.json` and
+// re-running the stack deploy.
+
+function memberPartsFrom(request: Request): { kind: string; id: number } {
+  const m = new URL(request.url).pathname.match(/\/members\/(apps|services)\/(\d+)$/);
+  return m ? { kind: m[1], id: parseInt(m[2], 10) } : { kind: "", id: 0 };
+}
+
+export async function handleAddStackMember(request: Request, stackId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "stacks.deploy");
+    const stack = db.getStack(stackId);
+    if (!stack) {
+      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
+    }
+    const body = await request.json() as { kind?: string; id?: number };
+    const id = Number(body?.id);
+    if (!id || (body.kind !== "app" && body.kind !== "service")) {
+      return Response.json({ ok: false, error: 'kind must be "app" or "service" and id is required' }, { status: 400, headers: corsHeaders });
+    }
+    if (body.kind === "app") {
+      const app = db.getApp(id);
+      if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
+      if (app.target_of != null) {
+        return Response.json({ ok: false, error: "Staging siblings follow their production app and cannot be added directly" }, { status: 400, headers: corsHeaders });
+      }
+      if (app.stack_id != null && app.stack_id !== stackId) {
+        return Response.json({ ok: false, error: `App already belongs to stack ${app.stack_id}` }, { status: 409, headers: corsHeaders });
+      }
+      db.setAppStack(id, stackId);
+      db.appendStackLog(stackId, `[members] added app "${app.name}" (${id})`);
+    } else {
+      const svc = db.getService(id);
+      if (!svc) return Response.json({ ok: false, error: "Service not found" }, { status: 404, headers: corsHeaders });
+      if (svc.stack_id != null && svc.stack_id !== stackId) {
+        return Response.json({ ok: false, error: `Service already belongs to stack ${svc.stack_id}` }, { status: 409, headers: corsHeaders });
+      }
+      db.setServiceStack(id, stackId);
+      db.appendStackLog(stackId, `[members] added service "${svc.name}" (${id})`);
+    }
+    return Response.json({ ok: true, added_by: payload.userId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleRemoveStackMember(request: Request, stackId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "stacks.deploy");
+    const stack = db.getStack(stackId);
+    if (!stack) {
+      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
+    }
+    const { kind, id } = memberPartsFrom(request);
+    if (!id || !kind) {
+      return Response.json({ ok: false, error: "Invalid member path" }, { status: 400, headers: corsHeaders });
+    }
+    if (kind === "apps") {
+      const app = db.getApp(id);
+      if (!app || app.stack_id !== stackId) {
+        return Response.json({ ok: false, error: "App is not a member of this stack" }, { status: 404, headers: corsHeaders });
+      }
+      db.setAppStack(id, null);
+      db.appendStackLog(stackId, `[members] detached app "${app.name}" (${id}) — containers left running`);
+    } else {
+      const svc = db.getService(id);
+      if (!svc || svc.stack_id !== stackId) {
+        return Response.json({ ok: false, error: "Service is not a member of this stack" }, { status: 404, headers: corsHeaders });
+      }
+      db.setServiceStack(id, null);
+      db.appendStackLog(stackId, `[members] detached service "${svc.name}" (${id}) — container left running`);
+    }
+    return Response.json({ ok: true }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 // --- Log ---
 
 export async function handleGetStackLog(request: Request, stackId: number): Promise<Response> {

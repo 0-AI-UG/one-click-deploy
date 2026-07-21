@@ -487,7 +487,11 @@ export function DashboardPage() {
               ? <ChevronDown size={12} className="text-muted flex-shrink-0" />
               : <ChevronRight size={12} className="text-muted flex-shrink-0" />}
             <Boxes size={13} className="text-fg flex-shrink-0" />
-            <span className="font-mono text-[10px] font-bold text-fg uppercase">{stack.name}</span>
+            <a
+              href={`#/stacks/${stack.id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="font-mono text-[10px] font-bold text-fg uppercase hover:underline"
+            >{stack.name}</a>
             <StatusBadge status={stack.status} />
             <span className="font-mono text-[9px] text-muted flex items-center gap-1">
               <Box size={9} /> {memberApps.length}

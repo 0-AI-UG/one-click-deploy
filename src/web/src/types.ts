@@ -226,6 +226,15 @@ export type StackMemberApp = {
   status: string;
   domain?: string | null;
   public?: boolean | number;
+  git_repo?: string;
+  webhook_enabled?: number | boolean;
+  webhook_staging_environment_id?: number | null;
+  /** JSON array of member keys this app depends on, as declared by `needs` in
+   *  the stack manifest. Drives the level-by-level deploy/promote order. */
+  stack_needs?: string | null;
+  /** Set on staging siblings — they follow their production app and are not
+   *  members in their own right. */
+  target_of?: number | null;
 };
 
 export type StackMemberService = {
@@ -243,6 +252,7 @@ export type StackDetail = {
   deploy_log: string;
   created_at: string;
   environment_id: number | null;
+  staging_environment_id: number | null;
   apps: StackMemberApp[];
   services: StackMemberService[];
 };
