@@ -4,7 +4,7 @@ import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx"
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
-import { Layers, Plus, Trash2, Copy, ChevronDown, ChevronRight, Key, X } from "lucide-react";
+import { Layers, Plus, Trash2, Copy, Check, ChevronDown, ChevronRight, Key, X } from "lucide-react";
 import type { EnvironmentData, AppData } from "../types.ts";
 
 type AttachedApp = { id: number; name: string; status: string; domain: string };
@@ -17,6 +17,10 @@ export function EnvironmentsPage() {
   const [loading, setLoading] = useState(false);
   const [attachedApps, setAttachedApps] = useState<Record<number, AttachedApp[]>>({});
   const [allApps, setAllApps] = useState<AppData[]>([]);
+  // Inline "copy an environment" bar (source picker + new-name input), opened
+  // from the header Copy button. null = closed.
+  const [copy, setCopy] = useState<{ sourceId: number | null; name: string } | null>(null);
+  const [copyBusy, setCopyBusy] = useState(false);
 
   const ops = useActiveOperations(
     (op) => op.kind === "cascade_redeploy",
@@ -115,15 +119,36 @@ export function EnvironmentsPage() {
     }
   };
 
-  const copyEnv = async (env: EnvironmentData) => {
-    const name = window.prompt(`Duplicate "${env.name}" as:`, `${env.name}-copy`);
-    if (!name?.trim()) return;
+  const startCopy = () => {
+    setExpanded(null);
+    const src = environments[0] ?? null;
+    setCopy({ sourceId: src?.id ?? null, name: src ? `${src.name}-copy` : "" });
+  };
+
+  // When the source changes, pre-fill the name with "<source>-copy" unless the
+  // user has already typed a custom name.
+  const pickCopySource = (id: number | null) => {
+    setCopy((c) => {
+      if (!c) return c;
+      const src = environments.find((e) => e.id === id);
+      const prevSrc = environments.find((e) => e.id === c.sourceId);
+      const untouched = c.name === "" || c.name === (prevSrc ? `${prevSrc.name}-copy` : "");
+      return { sourceId: id, name: untouched && src ? `${src.name}-copy` : c.name };
+    });
+  };
+
+  const doCopy = async () => {
+    if (!copy?.sourceId || !copy.name.trim()) return;
+    setCopyBusy(true);
     try {
-      await post(`/api/environments/${env.id}/copy`, { name: name.trim() });
+      await post(`/api/environments/${copy.sourceId}/copy`, { name: copy.name.trim() });
       showToast("Environment duplicated", "success");
+      setCopy(null);
       load();
     } catch (err: any) {
       showToast(err.message || "Failed to duplicate", "error");
+    } finally {
+      setCopyBusy(false);
     }
   };
 
@@ -160,10 +185,60 @@ export function EnvironmentsPage() {
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Environments</h1>
-        <Btn size="sm" variant="primary" onClick={startNew}>
-          <Plus size={12} /> New
-        </Btn>
+        <div className="flex items-center gap-2">
+          {environments.length > 0 && (
+            <Btn size="sm" variant="ghost" onClick={startCopy} disabled={!!copy}>
+              <Copy size={12} /> Copy
+            </Btn>
+          )}
+          <Btn size="sm" variant="primary" onClick={startNew}>
+            <Plus size={12} /> New
+          </Btn>
+        </div>
       </div>
+
+      {copy && (
+        <Card className="p-3">
+          <div className="flex items-stretch gap-2">
+            <div className="w-48">
+              <NeoSelect
+                compact
+                value={copy.sourceId != null ? String(copy.sourceId) : ""}
+                placeholder="Environment to copy"
+                options={environments.map((e) => ({ value: String(e.id), label: e.name }))}
+                onChange={(v) => pickCopySource(v ? parseInt(v) : null)}
+              />
+            </div>
+            <input
+              type="text"
+              value={copy.name}
+              onChange={(e) => setCopy((c) => (c ? { ...c, name: e.target.value } : c))}
+              onKeyDown={(e) => { if (e.key === "Enter") doCopy(); if (e.key === "Escape") setCopy(null); }}
+              placeholder="New environment name"
+              className="flex-1 !text-[10px] font-bold uppercase"
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={doCopy}
+              disabled={!copy.sourceId || !copy.name.trim() || copyBusy}
+              title="Duplicate environment"
+              className="border-2 border-fg bg-accent/20 px-2 flex items-center text-fg hover:bg-accent/30 disabled:opacity-40"
+            >
+              <Check size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setCopy(null)}
+              disabled={copyBusy}
+              title="Cancel"
+              className="border-2 border-fg px-2 flex items-center text-muted hover:bg-alt disabled:opacity-40"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </Card>
+      )}
 
       {environments.length > 0 || expanded === "new" ? (
         <Card className="overflow-hidden">
@@ -203,14 +278,6 @@ export function EnvironmentsPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      <Btn
-                        size="xs"
-                        variant="ghost"
-                        title="Duplicate"
-                        onClick={() => copyEnv(env)}
-                      >
-                        <Copy size={12} className="text-muted" />
-                      </Btn>
                       <Btn
                         size="xs"
                         variant="ghost"

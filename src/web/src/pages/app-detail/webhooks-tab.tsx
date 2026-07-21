@@ -1,15 +1,18 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../../api/client.ts";
-import { Card, Btn, Field, StatusBadge, Spinner, confirm, showToast } from "../../components/ui.tsx";
+import { Card, Btn, Field, StatusBadge, confirm, showToast } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { InfoTip } from "./shared.tsx";
-import { GitBranch, ArrowUpCircle, ExternalLink, Rocket } from "lucide-react";
+import { GitBranch, ArrowUpCircle, ExternalLink, Rocket, Check, X } from "lucide-react";
 import type { AppData, EnvironmentData } from "../../types.ts";
 import type { AppStagingResponse } from "../../../../shared/rpc.ts";
 
 const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+const STAGING_TIP =
+  "On: a webhook push builds the hidden <name>-staging sibling with the chosen environment and holds — production is swapped only when you click Promote. Off: pushes redeploy production directly.";
 
 interface WebhooksTabProps {
   app: AppData;
@@ -21,30 +24,21 @@ interface WebhooksTabProps {
   ops: ResourceOpsResult;
 }
 
-// Options for the "deploy to staging first" environment picker: an explicit
-// "Off" plus one entry per environment. Staging is on iff an environment is
-// selected; the sibling deploys with exactly that environment (no inheritance).
-const OFF = "";
-function envOptions(envs: EnvironmentData[]): { value: string; label: string }[] {
-  return [{ value: OFF, label: "Off — deploy production directly" }, ...envs.map((e) => ({ value: String(e.id), label: e.name }))];
-}
-
-// The staging panel: shown when the webhook is enabled. Picking an environment
-// turns staging on — webhook pushes then build the hidden <name>-staging sibling
-// (deployed with the chosen environment) and hold, and this panel surfaces that
-// sibling plus a Promote-to-production button (the existing promote op).
+// The staging control (shown when the webhook is enabled) sits inline with the
+// "Wait for CI" toggle. Off = a plain toggle; flipping it on reveals an
+// environment picker with accept (✓) / decline (✗). Accept persists the choice
+// and the toggle reads on with the env name in grey; decline reverts to off.
+// When a sibling has been deployed, a compact promote panel appears below.
 function StagingPanel({ app, appId, envs, actionLoading, action, ops }: Omit<WebhooksTabProps, "webhookForm" | "setWebhookForm"> & { envs: EnvironmentData[] }) {
   const [data, setData] = useState<AppStagingResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [selecting, setSelecting] = useState(false);
+  const [draftEnvId, setDraftEnvId] = useState("");
 
   const load = async () => {
-    setLoading(true);
     try {
       setData(await get(`/api/apps/${appId}/staging`));
     } catch (err) {
       showToast(errMessage(err), "error");
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -52,17 +46,27 @@ function StagingPanel({ app, appId, envs, actionLoading, action, ops }: Omit<Web
 
   const stagingEnvId = data?.staging_environment_id ?? app.webhook_staging_environment_id ?? null;
   const enabled = stagingEnvId != null;
+  const selectedName = envs.find((e) => e.id === stagingEnvId)?.name;
+  const busy = actionLoading === "toggle-staging";
 
-  const selectEnv = (next: number | null) =>
+  const setEnv = (next: number | null) =>
     action("toggle-staging", async () => {
       await post(`/api/apps/${appId}/webhook/settings`, { staging_environment_id: next });
       await load();
     });
 
+  const startSelecting = () => {
+    setDraftEnvId(envs[0] ? String(envs[0].id) : "");
+    setSelecting(true);
+  };
+  const accept = async () => {
+    if (!draftEnvId) return;
+    await setEnv(parseInt(draftEnvId, 10));
+    setSelecting(false);
+  };
+
   const sibling = data?.sibling ?? null;
   const prodCommit = data?.prod_commit ?? null;
-  // Staging is "ahead" (worth promoting) once it has a deployed commit that
-  // differs from production's.
   const canPromote = !!sibling?.commit && sibling.commit !== prodCommit;
 
   const promote = async () => {
@@ -82,82 +86,103 @@ function StagingPanel({ app, appId, envs, actionLoading, action, ops }: Omit<Web
     }
   };
 
-  const selectedName = envs.find((e) => e.id === stagingEnvId)?.name;
-
   return (
-    <div className="mt-3 pt-3 border-t-2 border-fg/10 space-y-3">
-      <div className="flex items-center gap-2 text-[10px] font-mono">
-        <span className="text-muted">Deploy to staging first</span>
-        <InfoTip text="Pick an environment to build the hidden <name>-staging sibling on each push and hold — production is swapped only when you click Promote. The sibling deploys with the environment you choose; duplicate production's environment first if you want isolated staging values. Off: pushes redeploy production directly." />
-      </div>
+    <>
       <PermissionGate
         permission="webhooks.manage"
         fallback={
-          <div className="text-[10px] font-mono font-bold text-fg">{enabled ? (selectedName ?? "On") : "Off"}</div>
+          <div className="flex items-center gap-2 text-[10px] font-mono">
+            <span className="text-muted">Deploy to staging first</span>
+            <span className={`font-bold ${enabled ? "text-fg" : "text-muted"}`}>{enabled ? (selectedName ?? "On") : "Off"}</span>
+          </div>
         }
       >
-        <NeoSelect
-          compact
-          value={stagingEnvId != null ? String(stagingEnvId) : OFF}
-          options={envOptions(envs)}
-          onChange={(v) => selectEnv(v ? parseInt(v, 10) : null)}
-        />
-      </PermissionGate>
-
-      {enabled && (
-        loading ? (
-          <div className="flex justify-center py-4"><Spinner /></div>
-        ) : sibling ? (
-          <div className="border-2 border-fg bg-alt/40 p-3 space-y-2">
-            <div className="flex items-center gap-2">
-              <Rocket size={13} className="text-fg" />
-              <span className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Staging</span>
-              <StatusBadge status={sibling.status} />
-              <a
-                href={`#/apps/${sibling.id}`}
-                className="ml-auto flex items-center gap-1 font-mono text-[9px] font-bold uppercase tracking-wider text-accent-blue hover:underline"
-              >
-                Open <ExternalLink size={11} />
-              </a>
+        {selecting ? (
+          <div className="flex items-stretch gap-1.5">
+            <div className="flex-1">
+              <NeoSelect
+                compact
+                value={draftEnvId}
+                placeholder="Select an environment…"
+                options={envs.map((e) => ({ value: String(e.id), label: e.name }))}
+                onChange={setDraftEnvId}
+              />
             </div>
-            <div className="space-y-1 text-[10px] font-mono">
-              <div className="flex justify-between"><span className="text-muted">Environment</span><span className="text-fg">{selectedName ?? `#${stagingEnvId}`}</span></div>
-              <div className="flex justify-between"><span className="text-muted">Staging commit</span><span className="text-fg">{sibling.commit ? sibling.commit.slice(0, 7) : "—"}</span></div>
-              <div className="flex justify-between"><span className="text-muted">Production commit</span><span className="text-fg">{prodCommit ? prodCommit.slice(0, 7) : "—"}</span></div>
-              {sibling.domain && (
-                <div className="flex justify-between">
-                  <span className="text-muted">Preview</span>
-                  <a href={`https://${sibling.domain}`} target="_blank" rel="noreferrer" className="text-accent-blue hover:underline">{sibling.domain}</a>
-                </div>
-              )}
-            </div>
-            <PermissionGate permission="apps.deploy">
-              <Btn
-                size="xs"
-                variant="primary"
-                disabled={ops.isBusy || !canPromote}
-                loading={ops.isBusyWith("promote")}
-                onClick={promote}
-              >
-                <ArrowUpCircle size={13} /> Promote to production
-              </Btn>
-              {!canPromote && sibling.commit && (
-                <p className="text-[10px] font-mono text-muted">Staging matches production — nothing to promote.</p>
-              )}
-            </PermissionGate>
-            <p className="text-[10px] font-mono text-muted leading-snug">
-              Staging deploys with the <span className="text-fg">{selectedName ?? "selected"}</span> environment. Edit or <a href="#/environments" className="text-accent-blue hover:underline">duplicate an environment</a> to change its values.
-            </p>
+            <button
+              type="button"
+              onClick={accept}
+              disabled={!draftEnvId || busy}
+              title="Enable staging with this environment"
+              className="border-2 border-fg bg-accent/20 px-2 flex items-center text-fg hover:bg-accent/30 disabled:opacity-40"
+            >
+              <Check size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelecting(false)}
+              disabled={busy}
+              title="Cancel"
+              className="border-2 border-fg px-2 flex items-center text-muted hover:bg-alt disabled:opacity-40"
+            >
+              <X size={14} />
+            </button>
           </div>
         ) : (
-          <div className="border-2 border-dashed border-fg/30 bg-alt/20 p-3">
-            <p className="text-[10px] font-mono text-muted leading-snug">
-              No staging deploy yet. Push to <span className="text-fg font-bold">{app.webhook_branch}</span> and the <span className="text-fg font-bold">{app.name}-staging</span> sibling is built with the <span className="text-fg font-bold">{selectedName ?? "selected"}</span> environment — then promote it here.
-            </p>
+          <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={busy}
+              onChange={(e) => (e.target.checked ? startSelecting() : setEnv(null))}
+              className="accent-accent"
+            />
+            <span className="text-muted">Deploy to staging first</span>
+            {enabled && selectedName && <span className="text-muted/70">· {selectedName}</span>}
+            <InfoTip text={STAGING_TIP} />
+          </label>
+        )}
+      </PermissionGate>
+
+      {enabled && sibling && (
+        <div className="border-2 border-fg bg-alt/40 p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <Rocket size={13} className="text-fg" />
+            <span className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Staging</span>
+            <StatusBadge status={sibling.status} />
+            <a
+              href={`#/apps/${sibling.id}`}
+              className="ml-auto flex items-center gap-1 font-mono text-[9px] font-bold uppercase tracking-wider text-accent-blue hover:underline"
+            >
+              Open <ExternalLink size={11} />
+            </a>
           </div>
-        )
+          <div className="space-y-1 text-[10px] font-mono">
+            <div className="flex justify-between"><span className="text-muted">Staging commit</span><span className="text-fg">{sibling.commit ? sibling.commit.slice(0, 7) : "—"}</span></div>
+            <div className="flex justify-between"><span className="text-muted">Production commit</span><span className="text-fg">{prodCommit ? prodCommit.slice(0, 7) : "—"}</span></div>
+            {sibling.domain && (
+              <div className="flex justify-between">
+                <span className="text-muted">Preview</span>
+                <a href={`https://${sibling.domain}`} target="_blank" rel="noreferrer" className="text-accent-blue hover:underline">{sibling.domain}</a>
+              </div>
+            )}
+          </div>
+          <PermissionGate permission="apps.deploy">
+            <Btn
+              size="xs"
+              variant="primary"
+              disabled={ops.isBusy || !canPromote}
+              loading={ops.isBusyWith("promote")}
+              onClick={promote}
+            >
+              <ArrowUpCircle size={13} /> Promote to production
+            </Btn>
+            {!canPromote && sibling.commit && (
+              <p className="text-[10px] font-mono text-muted">Staging matches production — nothing to promote.</p>
+            )}
+          </PermissionGate>
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -193,6 +218,7 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
               />
               <span className="text-muted">Wait for CI checks before deploying</span>
             </label>
+            <StagingPanel app={app} appId={appId} envs={envs} actionLoading={actionLoading} action={action} ops={ops} />
             <Btn size="xs" variant="danger" loading={actionLoading === "disable-webhook"} onClick={() => action("disable-webhook", () => post(`/api/apps/${appId}/webhook/disable`))}>
               Disable Webhook
             </Btn>
@@ -224,26 +250,22 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
               />
               <span className="text-muted">Wait for CI checks before deploying</span>
             </label>
-            <Field label="Deploy to staging first (optional)">
+            <Field label={<>Deploy to staging first (optional) <InfoTip text={STAGING_TIP} /></>}>
               <NeoSelect
-                value={webhookForm.stagingEnvId != null ? String(webhookForm.stagingEnvId) : OFF}
-                options={envOptions(envs)}
+                value={webhookForm.stagingEnvId != null ? String(webhookForm.stagingEnvId) : ""}
+                options={[
+                  { value: "", label: "Off — deploy production directly" },
+                  ...envs.map((e) => ({ value: String(e.id), label: e.name })),
+                ]}
                 onChange={(v) => setWebhookForm({ ...webhookForm, stagingEnvId: v ? parseInt(v, 10) : null })}
               />
             </Field>
-            <p className="text-[10px] font-mono text-muted leading-snug">
-              Pick an environment to hold pushes in a <span className="text-fg">{app.name}-staging</span> sibling for manual promotion. Duplicate production's environment on the <a href="#/environments" className="text-accent-blue hover:underline">Environments</a> page for isolated staging values.
-            </p>
             <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: webhookForm.branch || "main", path: webhookForm.path || undefined, wait_for_ci: webhookForm.waitForCi, staging_environment_id: webhookForm.stagingEnvId }))}>
               Enable Webhook
             </Btn>
           </div>
         )}
       </PermissionGate>
-
-      {app.webhook_enabled && (
-        <StagingPanel app={app} appId={appId} envs={envs} actionLoading={actionLoading} action={action} ops={ops} />
-      )}
     </Card>
   );
 }
