@@ -11,11 +11,15 @@ export async function getContainerLogs(
   ip: string,
   containerName: string,
   tail: number = 100,
-  hostKey?: string
+  hostKey?: string,
+  /** Prefix each line with its RFC3339 timestamp (`docker logs -t`). Only the
+   *  stack's aggregated view needs this — it is what lets lines from different
+   *  members be interleaved into one chronological stream. */
+  timestamps: boolean = false
 ): Promise<string> {
   const result = await sshExec(
     ip,
-    `su - deploy -c "docker logs --tail ${tail} ${containerName} 2>&1"`,
+    `su - deploy -c "docker logs --tail ${tail}${timestamps ? " -t" : ""} ${containerName} 2>&1"`,
     hostKey
   );
   return result.stdout;

@@ -6,6 +6,7 @@ import type { StackDeployRequest } from "../../shared/rpc.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
+import { getContainerLogs } from "../../shared/remote/index.ts";
 
 // --- Deploy ---
 
@@ -233,6 +234,77 @@ export async function handleGetStackLog(request: Request, stackId: number): Prom
   try {
     await requirePermission(request, "stacks.view");
     return Response.json({ log: db.getStackLog(stackId) }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/**
+ * GET /api/stacks/:id/member-logs?tail=N — container logs of every member, in
+ * one round trip.
+ *
+ * A stack is only interesting as a whole: a request crosses three of its apps
+ * and a database, so reading one member's log at a time is the wrong unit. We
+ * fan out over the members' primary replica / instance, ask docker for
+ * timestamped lines, and hand the client one block per member. Interleaving and
+ * per-member filtering happen client-side so toggling a member off is instant
+ * and doesn't re-run N ssh calls.
+ *
+ * Gated on `apps.logs` on top of `stacks.view`: this returns container output,
+ * which is strictly more than the stack metadata `stacks.view` covers.
+ */
+export async function handleGetStackMemberLogs(request: Request, stackId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "stacks.view");
+    await requirePermission(request, "apps.logs");
+    const stack = db.getStack(stackId);
+    if (!stack) {
+      return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
+    }
+    const tail = Math.min(Math.max(parseInt(new URL(request.url).searchParams.get("tail") || "100", 10) || 100, 1), 1000);
+
+    // Staging siblings follow their production app and are not members in their
+    // own right — the same rule the detail page's member list uses.
+    const apps = db.getAppsByStackId(stackId).filter((a) => a.target_of == null);
+    const services = db.getServicesByStackId(stackId);
+
+    const fetchApp = async (app: { id: number; name: string }) => {
+      const replicas = db.getReplicas(app.id);
+      if (replicas.length === 0) throw new Error("No replicas");
+      const replica = replicas[0];
+      const server = db.getServer(replica.server_id);
+      if (!server) throw new Error("Server not found");
+      return getContainerLogs(server.ipv4, replica.container_name, tail, server.ssh_host_key || undefined, true);
+    };
+
+    const fetchService = async (service: { id: number; name: string }) => {
+      const instance = db.getPrimaryInstance(service.id);
+      if (!instance) throw new Error("No primary instance");
+      const server = db.getServer(instance.server_id);
+      if (!server) throw new Error("Server not found");
+      return getContainerLogs(server.ipv4, instance.container_name, tail, server.ssh_host_key || undefined, true);
+    };
+
+    // One slow or unreachable member must not blank the whole view, so each
+    // failure is reported in its own block and the rest still render.
+    const members = await Promise.all([
+      ...apps.map(async (a) => {
+        try {
+          return { kind: "app" as const, id: a.id, name: a.name, logs: await fetchApp(a) };
+        } catch (err) {
+          return { kind: "app" as const, id: a.id, name: a.name, logs: "", error: err instanceof Error ? err.message : String(err) };
+        }
+      }),
+      ...services.map(async (s) => {
+        try {
+          return { kind: "service" as const, id: s.id, name: s.name, logs: await fetchService(s) };
+        } catch (err) {
+          return { kind: "service" as const, id: s.id, name: s.name, logs: "", error: err instanceof Error ? err.message : String(err) };
+        }
+      }),
+    ]);
+
+    return Response.json({ members }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

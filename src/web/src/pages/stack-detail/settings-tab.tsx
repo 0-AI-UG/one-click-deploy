@@ -11,6 +11,12 @@ import type { StackDetail, StackMemberApp, EnvironmentData } from "../../types.t
 const errMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
+/**
+ * Stack settings, laid out like the app's: one short label per row, the
+ * explanation behind an InfoTip, the control on the right. The prose that used
+ * to sit under every row explained the stack model rather than the setting, and
+ * made a page with three real controls read like documentation.
+ */
 export function StackSettingsTab({
   stack,
   memberApps,
@@ -71,20 +77,14 @@ export function StackSettingsTab({
   return (
     <div className="space-y-4">
       <Card className="p-4">
-        <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-1">General</h3>
-
         <Field
-          label={<span className="flex items-center gap-2"><Boxes size={14} className="text-fg" /> Stack Name</span>}
-          hint="Fixed. The name prefixes every member's app, service and container name, and keys the stack's operations."
-          divider
+          label={<span className="flex items-center gap-2"><Boxes size={14} className="text-fg" /> Stack Name <InfoTip text="Fixed. The name prefixes every member's app, service and container name, and keys the stack's operations." /></span>}
         >
           <input type="text" value={stack.name} readOnly disabled />
         </Field>
 
         <Field
-          label={<span className="flex items-center gap-2"><Layers size={14} className="text-fg" /> Environment <InfoTip text="The shared environment every member deploys with. Editing its variables redeploys the whole stack." /></span>}
-          hint="Fixed for the life of the stack. Change it by re-deploying the stack against a different environment."
-          divider
+          label={<span className="flex items-center gap-2"><Layers size={14} className="text-fg" /> Environment <InfoTip text="The shared environment every member deploys with; editing its variables redeploys the whole stack. Fixed for the life of the stack — change it by re-deploying against a different environment." /></span>}
         >
           <div className="flex gap-2 items-center">
             <input type="text" value={prodEnv?.name ?? (stack.environment_id != null ? `#${stack.environment_id}` : "none")} readOnly disabled />
@@ -93,102 +93,91 @@ export function StackSettingsTab({
         </Field>
 
         <Field
-          align="start"
-          label={<span className="flex items-center gap-2"><GitBranch size={14} className="text-fg" /> Staging Environment</span>}
-          hint={
-            onStaging === 0
-              ? "No member currently has webhook staging on. Opt a member in with webhook.staging in its manifest, then re-sync below."
-              : `Applies to the ${onStaging} member(s) with staging on. Re-pointing rebuilds their <name>-staging sibling with the new environment on the next push.`
-          }
+          label={<span className="flex items-center gap-2"><GitBranch size={14} className="text-fg" /> Staging Environment <InfoTip text="Where members with webhook staging on build their <name>-staging sibling. Re-pointing applies on their next push. A member that never opted in stays off — the opt-in is webhook.staging in the manifest, so turning it on needs a re-sync." /></span>}
+          hint={onStaging === 0 ? "no member has staging on" : `applies to ${onStaging} of ${memberApps.length} members`}
         >
-          <div className="space-y-2">
-            <NeoSelect
-              value={stagingEnvId}
-              onChange={setStagingEnvId}
-              options={[
-                { value: "", label: "None — deploy straight to production" },
-                ...environments
-                  .filter((e) => e.id !== stack.environment_id)
-                  .map((e) => ({ value: String(e.id), label: e.name })),
-              ]}
-            />
+          <NeoSelect
+            value={stagingEnvId}
+            onChange={setStagingEnvId}
+            options={[
+              { value: "", label: "None — straight to production" },
+              ...environments
+                .filter((e) => e.id !== stack.environment_id)
+                .map((e) => ({ value: String(e.id), label: e.name })),
+            ]}
+          />
+        </Field>
+
+        <PermissionGate permission="stacks.deploy">
+          <div className="flex justify-end mt-3">
+            <Btn size="sm" variant="primary" disabled={!dirty} loading={saving} onClick={saveStagingEnv}>
+              Save
+            </Btn>
+          </div>
+        </PermissionGate>
+      </Card>
+
+      <Card className="p-4">
+        <Field
+          label={<span className="flex items-center gap-2"><RefreshCw size={14} className="text-fg" /> Re-sync from manifest <InfoTip text="Members, per-member resources, ports and needs ordering are declarative: edit ocd-stack.json, then re-deploy. The deploy page applies the diff in place — members you dropped from the manifest are left running, not destroyed." /></span>}
+          hint={repo || undefined}
+        >
+          <div className="flex justify-end">
             <PermissionGate permission="stacks.deploy">
-              <Btn size="sm" variant="primary" disabled={!dirty} loading={saving} onClick={saveStagingEnv}>
-                Save
-              </Btn>
+              <Btn
+                size="sm"
+                variant="primary"
+                disabled={ops.isBusy}
+                onClick={() => {
+                  window.location.hash = repo ? `#/deploy?repo=${encodeURIComponent(repo)}` : "#/deploy";
+                }}
+              ><RefreshCw size={12} /> Open deploy page</Btn>
+            </PermissionGate>
+          </div>
+        </Field>
+
+        <Field
+          label={<span className="flex items-center gap-2"><RefreshCw size={14} className="text-fg" /> Redeploy all members <InfoTip text="Rebuilds every member from its current branch HEAD with the stack's environment, without re-reading the manifest." /></span>}
+        >
+          <div className="flex justify-end">
+            <PermissionGate permission="stacks.deploy">
+              <Btn
+                size="sm"
+                disabled={ops.isBusy}
+                loading={actionLoading === "redeploy" || ops.isBusyWith("cascade_redeploy")}
+                onClick={() => action("redeploy", () => post(`/api/stacks/${stack.id}/redeploy`))}
+              ><RefreshCw size={12} /> Redeploy stack</Btn>
             </PermissionGate>
           </div>
         </Field>
       </Card>
 
       <Card className="p-4">
-        <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider mb-1">Manifest</h3>
-        <Field
-          align="start"
-          label={<span className="flex items-center gap-2"><RefreshCw size={14} className="text-fg" /> Re-sync from manifest</span>}
-          hint={
-            <>
-              Adding or removing members, changing per-member resources, ports or <span className="text-fg">needs</span> ordering
-              is declarative: edit <span className="text-fg">ocd-stack.json</span> in the repo, then re-deploy. The deploy page
-              re-reads the manifest and applies the diff in place — existing members are redeployed, new ones created, and
-              members you dropped from the manifest are left running so nothing is destroyed behind your back.
-              {repo ? <> Source: <span className="text-fg">{repo}</span>.</> : null}
-            </>
-          }
-        >
-          <PermissionGate permission="stacks.deploy">
-            <Btn
-              size="sm"
-              variant="primary"
-              disabled={ops.isBusy}
-              onClick={() => {
-                window.location.hash = repo ? `#/deploy?repo=${encodeURIComponent(repo)}` : "#/deploy";
-              }}
-            ><RefreshCw size={12} /> Open deploy page</Btn>
-          </PermissionGate>
-        </Field>
-
-        <Field
-          align="start"
-          label="Redeploy all members"
-          hint="Rebuilds every member from its current branch HEAD with the stack's environment, without re-reading the manifest."
-        >
-          <PermissionGate permission="stacks.deploy">
-            <Btn
-              size="sm"
-              disabled={ops.isBusy}
-              loading={actionLoading === "redeploy" || ops.isBusyWith("cascade_redeploy")}
-              onClick={() => action("redeploy", () => post(`/api/stacks/${stack.id}/redeploy`))}
-            ><RefreshCw size={12} /> Redeploy stack</Btn>
-          </PermissionGate>
-        </Field>
-      </Card>
-
-      <Card className="p-4">
         <h3 className="font-mono text-[9px] text-accent-red font-bold uppercase tracking-wider mb-1">Danger Zone</h3>
         <Field
-          align="start"
-          label="Destroy stack"
-          hint={`Removes all ${memberApps.length} app(s) and ${stack.services.length} service(s), including their containers, volumes and data. Not reversible.`}
+          label={<span className="flex items-center gap-2"><Trash2 size={14} className="text-accent-red" /> Destroy stack <InfoTip text="Removes every member's containers, volumes and data. Not reversible." /></span>}
+          hint={`${memberApps.length} app(s) · ${stack.services.length} service(s)`}
         >
-          <PermissionGate permission="stacks.destroy">
-            <Btn
-              size="sm"
-              variant="danger"
-              disabled={ops.isBusy}
-              loading={actionLoading === "destroy" || ops.isBusyWith("destroy_stack")}
-              onClick={async () => {
-                if (await confirm(
-                  "Destroy Stack",
-                  `Permanently destroy "${stack.name}" and all ${memberApps.length} app(s) and ${stack.services.length} service(s)? This removes every member's containers, volumes, and data.`,
-                  true,
-                )) {
-                  await action("destroy", () => del(`/api/stacks/${stack.id}`));
-                  window.location.hash = "#/";
-                }
-              }}
-            ><Trash2 size={12} /> Destroy stack</Btn>
-          </PermissionGate>
+          <div className="flex justify-end">
+            <PermissionGate permission="stacks.destroy">
+              <Btn
+                size="sm"
+                variant="danger"
+                disabled={ops.isBusy}
+                loading={actionLoading === "destroy" || ops.isBusyWith("destroy_stack")}
+                onClick={async () => {
+                  if (await confirm(
+                    "Destroy Stack",
+                    `Permanently destroy "${stack.name}" and all ${memberApps.length} app(s) and ${stack.services.length} service(s)? This removes every member's containers, volumes, and data.`,
+                    true,
+                  )) {
+                    await action("destroy", () => del(`/api/stacks/${stack.id}`));
+                    window.location.hash = "#/";
+                  }
+                }}
+              ><Trash2 size={12} /> Destroy stack</Btn>
+            </PermissionGate>
+          </div>
         </Field>
       </Card>
     </div>

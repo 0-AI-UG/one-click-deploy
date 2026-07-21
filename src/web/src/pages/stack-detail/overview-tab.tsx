@@ -1,16 +1,59 @@
-import { Card, StatusBadge, Table, EmptyState } from "../../components/ui.tsx";
-import { Boxes, Database, ExternalLink } from "lucide-react";
+import { useState, useEffect } from "react";
+import { get, post, del } from "../../api/client.ts";
+import { Card, Btn, StatusBadge, Table, EmptyState, showToast, confirm } from "../../components/ui.tsx";
+import { NeoSelect } from "../../components/neo-select.tsx";
+import { PermissionGate } from "../../components/permission-gate.tsx";
+import { InfoTip } from "../app-detail/shared.tsx";
+import { Boxes, Database, ExternalLink, Link2, Unlink, Plus } from "lucide-react";
+import type { ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { StackDetail, StackMemberApp, EnvironmentData } from "../../types.ts";
 
+const errMessage = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err);
+
+type Candidate = { id: number; name: string; stack_id?: number | null; target_of?: number | null };
+
+/**
+ * The stack at a glance, and the only place its membership is edited.
+ *
+ * These were two tabs and read as one page twice: both listed the same apps and
+ * services, differing only in whether the row ended in a Detach button. The
+ * member list IS the overview of a stack, so the tables carry the actions.
+ *
+ * Membership itself is one nullable column (`apps.stack_id` /
+ * `services.stack_id`) — attaching and detaching here is metadata only, nothing
+ * is built, moved or destroyed. The authoritative way to change what a stack
+ * contains is `ocd-stack.json` plus a re-sync (Settings); this is the escape
+ * hatch for what the manifest leaves behind.
+ */
 export function OverviewTab({
   stack,
   memberApps,
   environments,
+  reload,
+  ops,
 }: {
   stack: StackDetail;
   memberApps: StackMemberApp[];
   environments: EnvironmentData[];
+  reload: () => void;
+  ops: ResourceOpsResult;
 }) {
+  const [apps, setApps] = useState<Candidate[]>([]);
+  const [services, setServices] = useState<Candidate[]>([]);
+  const [addKind, setAddKind] = useState<"app" | "service">("app");
+  const [addId, setAddId] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    get("/api/dashboard")
+      .then((d: { apps: Candidate[]; services: Candidate[] }) => {
+        setApps(d.apps || []);
+        setServices(d.services || []);
+      })
+      .catch(() => {});
+  }, [stack.id]);
+
   const envName = (id: number | null) =>
     id == null ? null : environments.find((e) => e.id === id)?.name ?? `#${id}`;
   const prodEnv = envName(stack.environment_id);
@@ -28,6 +71,46 @@ export function OverviewTab({
       return Array.isArray(parsed) ? parsed.filter((n) => typeof n === "string") : [];
     } catch {
       return [];
+    }
+  };
+
+  // Only unattached, top-level resources can join: a staging sibling follows its
+  // production app, and stealing a member from another stack would silently
+  // break that stack's promote/redeploy fan-out.
+  const free = (addKind === "app" ? apps : services).filter(
+    (r) => r.stack_id == null && r.target_of == null,
+  );
+
+  const addMember = async () => {
+    const id = parseInt(addId, 10);
+    if (!id) return;
+    setBusy("add");
+    try {
+      await post(`/api/stacks/${stack.id}/members`, { kind: addKind, id });
+      showToast(`Added ${addKind} to stack`, "success");
+      setAddId("");
+      reload();
+    } catch (err) {
+      showToast(errMessage(err), "error");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const detach = async (kind: "apps" | "services", id: number, name: string) => {
+    if (!(await confirm(
+      "Detach from Stack",
+      `Remove "${name}" from "${stack.name}"? It keeps running with its current config and moves back to the dashboard's top level. Nothing is destroyed.`,
+    ))) return;
+    setBusy(`${kind}-${id}`);
+    try {
+      await del(`/api/stacks/${stack.id}/members/${kind}/${id}`);
+      showToast(`Detached ${name}`, "success");
+      reload();
+    } catch (err) {
+      showToast(errMessage(err), "error");
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -97,8 +180,18 @@ export function OverviewTab({
                     ? <span className="text-accent-amber font-bold">on</span>
                     : <span className="text-fg-dim">off</span>}
                 </td>
-                <td className="py-2 px-3 text-right">
-                  <a href={`#/apps/${a.id}`} className="font-mono text-[9px] text-muted hover:text-fg uppercase tracking-wider">Open</a>
+                <td className="py-2 px-3">
+                  <div className="flex items-center justify-end gap-2">
+                    <a href={`#/apps/${a.id}`} className="font-mono text-[9px] text-muted hover:text-fg uppercase tracking-wider">Open</a>
+                    <PermissionGate permission="stacks.deploy">
+                      <Btn
+                        size="xs"
+                        disabled={ops.isBusy}
+                        loading={busy === `apps-${a.id}`}
+                        onClick={() => detach("apps", a.id, a.name)}
+                      ><Unlink size={12} /> Detach</Btn>
+                    </PermissionGate>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -123,14 +216,59 @@ export function OverviewTab({
                 <td className="py-2 px-3 font-mono text-[10px] text-fg">{s.service_type}</td>
                 <td className="py-2 px-3 font-mono text-[10px] text-muted">{s.version}</td>
                 <td className="py-2 px-3"><StatusBadge status={s.status} /></td>
-                <td className="py-2 px-3 text-right">
-                  <a href={`#/services/${s.id}`} className="font-mono text-[9px] text-muted hover:text-fg uppercase tracking-wider">Open</a>
+                <td className="py-2 px-3">
+                  <div className="flex items-center justify-end gap-2">
+                    <a href={`#/services/${s.id}`} className="font-mono text-[9px] text-muted hover:text-fg uppercase tracking-wider">Open</a>
+                    <PermissionGate permission="stacks.deploy">
+                      <Btn
+                        size="xs"
+                        disabled={ops.isBusy}
+                        loading={busy === `services-${s.id}`}
+                        onClick={() => detach("services", s.id, s.name)}
+                      ><Unlink size={12} /> Detach</Btn>
+                    </PermissionGate>
+                  </div>
                 </td>
               </tr>
             ))}
           </Table>
         )}
       </Card>
+
+      <PermissionGate permission="stacks.deploy">
+        <Card className="p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Link2 size={14} className="text-fg" />
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">
+              Attach Existing <InfoTip text="Tags an existing app or service as a member. Metadata only — it is not rebuilt, moved to the stack environment, or given a place in the needs order. For that, add it to ocd-stack.json and re-sync from Settings." />
+            </h3>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="w-32">
+              <NeoSelect
+                value={addKind}
+                onChange={(v) => { setAddKind(v as "app" | "service"); setAddId(""); }}
+                options={[{ value: "app", label: "App" }, { value: "service", label: "Service" }]}
+                compact
+              />
+            </div>
+            <div className="flex-1 min-w-[12rem]">
+              <NeoSelect
+                value={addId}
+                onChange={setAddId}
+                options={[
+                  { value: "", label: free.length ? `Select ${addKind}…` : `No unattached ${addKind}s` },
+                  ...free.map((r) => ({ value: String(r.id), label: r.name })),
+                ]}
+                compact
+              />
+            </div>
+            <Btn size="xs" variant="primary" disabled={!addId} loading={busy === "add"} onClick={addMember}>
+              <Plus size={12} /> Attach
+            </Btn>
+          </div>
+        </Card>
+      </PermissionGate>
     </div>
   );
 }

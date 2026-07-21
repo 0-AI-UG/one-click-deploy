@@ -6,7 +6,6 @@ import { TabBar } from "../../components/tab-bar.tsx";
 import { trackOperationInToast, useActiveOperations } from "../../hooks/useOperation.ts";
 import { ArrowLeft, RefreshCw, ArrowUpFromLine, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
-import { MembersTab } from "./members-tab.tsx";
 import { StackLogsTab } from "./logs-tab.tsx";
 import { StackSettingsTab } from "./settings-tab.tsx";
 import type { StackDetail, EnvironmentData } from "../../types.ts";
@@ -17,8 +16,7 @@ const errMessage = (err: unknown): string =>
 export function StackDetailPage({ stackId }: { stackId: number }) {
   const [stack, setStack] = useState<StackDetail | null>(null);
   const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
-  const [tab, setTab] = useState<"overview" | "members" | "logs" | "settings">("overview");
-  const [logText, setLogText] = useState("");
+  const [tab, setTab] = useState<"overview" | "logs" | "settings">("overview");
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   // Stack ops carry different keys depending on kind: `stack:<id>` (destroy,
@@ -47,20 +45,10 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
     }
   };
 
-  const loadLog = async () => {
-    try {
-      const res = await get(`/api/stacks/${stackId}/log`);
-      setLogText(res.log || "No deploy log recorded for this stack.");
-    } catch (err) {
-      setLogText(errMessage(err));
-    }
-  };
-
   useEffect(() => { load(); }, [stackId]);
   useEffect(() => {
     get("/api/environments").then(setEnvironments).catch(() => {});
   }, []);
-  useEffect(() => { if (tab === "logs") loadLog(); }, [tab, stackId]);
 
   const action = async (name: string, fn: () => Promise<unknown>) => {
     setActionLoading(name);
@@ -93,8 +81,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
 
   const tabs = [
     { key: "overview", label: "Overview" },
-    { key: "members", label: "Members" },
-    { key: "logs", label: "Deploy Log" },
+    { key: "logs", label: "Logs" },
     { key: "settings", label: "Settings" },
   ] as const;
 
@@ -159,14 +146,16 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
       <TabBar tabs={tabs} active={tab} onChange={setTab} />
 
       {tab === "overview" && (
-        <OverviewTab stack={stack} memberApps={memberApps} environments={environments} />
+        <OverviewTab
+          stack={stack}
+          memberApps={memberApps}
+          environments={environments}
+          reload={load}
+          ops={ops}
+        />
       )}
 
-      {tab === "members" && (
-        <MembersTab stack={stack} memberApps={memberApps} reload={load} ops={ops} />
-      )}
-
-      {tab === "logs" && <StackLogsTab log={logText} reload={loadLog} />}
+      {tab === "logs" && <StackLogsTab stackId={stackId} />}
 
       {tab === "settings" && (
         <StackSettingsTab

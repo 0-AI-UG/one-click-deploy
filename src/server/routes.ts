@@ -102,6 +102,7 @@ import {
   handleGetStacks,
   handleGetStack,
   handleGetStackLog,
+  handleGetStackMemberLogs,
   handleDestroyStack,
   handleRedeployStack,
   handlePromoteStack,
@@ -431,6 +432,9 @@ export const apiRoutes = {
   },
   "/api/stacks/:id/log": {
     GET: (req: Request) => handleGetStackLog(req, stackIdFrom(req)),
+  },
+  "/api/stacks/:id/member-logs": {
+    GET: (req: Request) => handleGetStackMemberLogs(req, stackIdFrom(req)),
   },
 
   // --- Operation Engine ---
