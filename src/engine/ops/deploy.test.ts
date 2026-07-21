@@ -942,7 +942,8 @@ describe("deploy step: insert_app_row deploy targets", () => {
     return { parent, parentEnv, svc, parentName };
   }
 
-  test("non-production target gets its own environment seeded from the parent, without service links", async () => {
+  test("non-production target gets its own EMPTY override environment but inherits the parent's env live", async () => {
+    const { parseEnvVars } = await import("../../shared/env-crypto.ts");
     const server = makeReadyServer();
     const { parent, parentEnv, svc, parentName } = await makeParentWithEnvAndServiceLink();
     const stagingName = `${parentName}-staging`;
@@ -968,13 +969,17 @@ describe("deploy step: insert_app_row deploy targets", () => {
     expect(app.target_of).toBe(parent.id);
     expect(app.placement_pool).toBe("staging");
 
-    // Own environment named after the app, seeded from the parent's env vars.
+    // Own environment named after the app, but EMPTY — it holds only overrides.
+    // The parent's env is inherited live at resolve time, not copied.
     const env = db.getEnvironments().find((e) => e.name === stagingName);
     expect(env).toBeTruthy();
     expect(out.environmentId).toBe(env!.id);
     expect(env!.id).not.toBe(parentEnv.id);
+    expect(parseEnvVars(env!.env_vars).entries).toEqual([]);
+    // Live inheritance: the first deploy's container env still carries the
+    // parent's DATABASE_URL even though the sibling env stores nothing.
     expect(out.flatEnvVars).toEqual({ DATABASE_URL: "postgres://prod-db" });
-    expect(logLines.some((l) => /created isolated environment/i.test(l))).toBe(true);
+    expect(logLines.some((l) => /override environment .*inherits production env live/i.test(l))).toBe(true);
 
     // NO service links copied: the prod DB link stays on the parent env only.
     const links = db.getServiceLinks(svc.id);

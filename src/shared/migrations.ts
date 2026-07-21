@@ -1660,6 +1660,14 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps RENAME COLUMN sibling_of TO target_of");
     },
   },
+  {
+    version: 81,
+    description:
+      "Add apps.webhook_staging. When set, a webhook push deploys to the app's hidden <name>-staging sibling and holds; production is swapped only when the user clicks Promote. When unset (default), webhook pushes redeploy production directly.",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN webhook_staging INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
 
 /** Helper for migration 36: parse env var entries from raw JSON. */

@@ -49,7 +49,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const ops = useResourceOperations(`app:${appId}`, { rehydrateToasts: true });
   const [tail, setTail] = useState(100);
   const [selectedReplicaId, setSelectedReplicaId] = useState<number | null>(null);
-  const [webhookForm, setWebhookForm] = useState<{ branch: string; path: string; waitForCi: boolean }>({ branch: "main", path: "", waitForCi: false });
+  const [webhookForm, setWebhookForm] = useState<{ branch: string; path: string; waitForCi: boolean; staging: boolean }>({ branch: "main", path: "", waitForCi: false, staging: false });
 
   const load = async () => {
     try {
@@ -317,6 +317,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           setWebhookForm={setWebhookForm}
           actionLoading={actionLoading}
           action={action}
+          ops={ops}
         />
       )}
 

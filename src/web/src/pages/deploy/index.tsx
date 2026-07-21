@@ -9,22 +9,10 @@ import { EnvSection } from "./env-section.tsx";
 import { AdvancedSection } from "./advanced-section.tsx";
 import { ServicesGridSection } from "./services-grid.tsx";
 import { StackSection, useStackForm } from "./stack-section.tsx";
-import { TargetSection } from "./target-section.tsx";
 import { useHasPermission } from "../../stores/auth.ts";
 import { mergeEnv } from "../../../../shared/env-merge.ts";
-import { targetBranchOverride } from "./types.ts";
-import type { IntrospectResult, AppIntrospect, ManifestEnvDef, FormState, DeployTarget } from "./types.ts";
+import type { IntrospectResult, AppIntrospect, ManifestEnvDef, FormState } from "./types.ts";
 import type { DeployBody, EnvironmentData } from "../../types.ts";
-
-// DeployBody plus the deploy-target wire fields the server's DeployRequest
-// accepts (see src/shared/rpc.ts). Declared locally so we don't touch the
-// shared types.ts.
-type DeployBodyWithTarget = DeployBody & {
-  target?: string;
-  target_of?: number;
-  placement_pool?: string;
-  scale_to_zero_after?: number;
-};
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
@@ -146,10 +134,6 @@ export function DeployPage() {
 
   const [selectedManifest, setSelectedManifest] = useState<number | null>(null);
   const [manifestEnvDefs, setManifestEnvDefs] = useState<ManifestEnvDef[]>([]);
-  // Selected deploy target. "" = no explicit target (bare app, unchanged
-  // behavior); "production" = the declared production target; anything else
-  // deploys an isolated `<name>-<target>` sibling.
-  const [targetName, setTargetName] = useState("");
 
   const [form, setForm] = useState<FormState>({ ...EMPTY_FORM });
 
@@ -159,9 +143,6 @@ export function DeployPage() {
     const m = pm.manifest;
 
     setSelectedManifest(idx);
-    // Default the deploy target to "production" when declared, else no target.
-    const targetKeys = Object.keys(m.targets || {});
-    setTargetName(targetKeys.includes("production") ? "production" : "");
     setForm((f) => {
       // internal_protocol and health_check are independent (routing vs probe):
       // take each from the manifest's explicit value, else keep the form default.
@@ -230,7 +211,6 @@ export function DeployPage() {
   function clearManifest(result: AppIntrospect) {
     setSelectedManifest(null);
     setManifestEnvDefs([]);
-    setTargetName("");
     setForm((f) => ({
       ...f,
       app_name: f.app_name || result.suggested_app_name,
@@ -350,7 +330,6 @@ export function DeployPage() {
         // Manifest set can differ between branches — reset selection on every fetch.
         setSelectedManifest(null);
         setManifestEnvDefs([]);
-        setTargetName("");
         if (result.manifests.length === 1) {
           applyManifest(0, result);
         } else if (result.manifests.length === 0) {
@@ -468,7 +447,7 @@ export function DeployPage() {
       return showToast(`Required: ${merged.requiredMissing.map((m) => m.key).join(", ")}`, "error");
     const envArray = merged.entries.length > 0 ? merged.entries : undefined;
 
-    const body: DeployBodyWithTarget = {
+    const body: DeployBody = {
       app_name: form.app_name,
       git_repo: form.git_repo,
       git_branch: form.git_branch || undefined,
@@ -506,50 +485,8 @@ export function DeployPage() {
       public_protocol: form.public_protocol === "off" ? undefined : form.public_protocol,
     };
 
-    // Deploy-target derivation — mirrors src/cli/commands/deploy.ts exactly.
-    // "production" (or the empty target) keeps the bare app name; any other
-    // declared target deploys an isolated `<name>-<target>` sibling.
-    const activeIntrospect =
-      introspect?.ok === true && introspect.kind === "app" ? introspect : null;
-    const activeManifest =
-      activeIntrospect && selectedManifest !== null
-        ? activeIntrospect.manifests[selectedManifest]?.manifest ?? null
-        : null;
-    const targets = activeManifest?.targets ?? {};
-    const target: DeployTarget | undefined = targetName ? targets[targetName] : undefined;
-    const bareName = form.app_name;
-    const isProduction = targetName === "production";
-
-    if (target) {
-      body.app_name = isProduction ? bareName : `${bareName}-${targetName}`;
-      body.target = isProduction ? "production" : targetName;
-      // Shared derivation with the summary receipt (targetBranchOverride):
-      // target.branch || webhook.branch || "main".
-      const branch = targetBranchOverride(activeManifest, targetName)!;
-      body.git_branch = branch;
-      if (body.webhook_enabled) body.webhook_branch = branch;
-      if (target.replicas !== undefined) body.replicas = target.replicas;
-      if (target.domain) body.domain = target.domain;
-      if (target.scale_to_zero_after !== undefined)
-        body.scale_to_zero_after = target.scale_to_zero_after;
-      if (isProduction) {
-        body.placement_pool = "general";
-      } else if (target.isolated !== false) {
-        body.placement_pool = "staging";
-      }
-    }
-
     (async () => {
       try {
-        // Non-production targets link to the parent (production) app when it
-        // already exists — looked up by the bare name. Absent is fine.
-        if (target && !isProduction) {
-          try {
-            const apps = (await get("/api/apps")) as Array<{ id: number; name: string }>;
-            const parent = apps.find((a) => a.name === bareName);
-            if (parent) body.target_of = parent.id;
-          } catch { /* parent may not be deployed yet */ }
-        }
         const res = (await post("/api/apps/deploy", body)) as { op_id: number };
         if (!res.op_id) throw new Error("No op_id returned");
         window.location.hash = `#/deploy/progress/${res.op_id}`;
@@ -591,14 +528,6 @@ export function DeployPage() {
     })();
   };
 
-  // Deploy targets come from the selected manifest's `targets` block (if any).
-  const activeManifest =
-    detected && selectedManifest !== null
-      ? detected.manifests[selectedManifest]?.manifest ?? null
-      : null;
-  const targets = activeManifest?.targets ?? {};
-  const hasTargets = Object.keys(targets).length > 0;
-
   const showReceipt = revealed && (
     stack
       ? true
@@ -618,10 +547,7 @@ export function DeployPage() {
 
   const buildMode = "Dockerfile";
   const dockerfileLabel = form.dockerfile_path || (detected ? "auto-detect" : "");
-  // Effective branch: a selected target's branch override (same derivation the
-  // submit payload uses) wins over the form/introspect branch.
-  const branchLabel =
-    targetBranchOverride(activeManifest, targetName) ?? (form.git_branch || detected?.default_branch || "");
+  const branchLabel = form.git_branch || detected?.default_branch || "";
   const envCount = selectedEnvironmentId
     ? null
     : Object.keys(envValues).length + extraEnv.filter((e) => e.key.trim()).length;
@@ -708,15 +634,6 @@ export function DeployPage() {
               selectedManifest={selectedManifest}
               onSelect={(idx) => applyManifest(idx, detected)}
               onClear={() => clearManifest(detected)}
-            />
-          )}
-
-          {!stack && showReceipt && hasTargets && (
-            <TargetSection
-              targets={targets}
-              appName={form.app_name}
-              selected={targetName}
-              onSelect={setTargetName}
             />
           )}
 
@@ -830,9 +747,6 @@ export function DeployPage() {
             </div>
             <div className="p-4 font-mono text-[11px] space-y-2.5">
               <SummaryRow label="App" value={form.app_name || "(set a name)"} />
-              {hasTargets && targetName && targetName !== "production" && (
-                <SummaryRow label="Target" value={`${targetName} → ${form.app_name}-${targetName}`} />
-              )}
               {branchLabel && <SummaryRow label="Branch" value={branchLabel} />}
               <SummaryRow label="Build" value={buildMode} />
               {dockerfileLabel && (

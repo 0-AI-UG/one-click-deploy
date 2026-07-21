@@ -23,6 +23,11 @@ export type AppData = {
   webhook_branch?: string;
   webhook_path?: string;
   webhook_wait_for_ci?: number | boolean;
+  /** When set, webhook pushes deploy to the <name>-staging sibling and hold for
+   *  manual promotion instead of redeploying production. */
+  webhook_staging?: number | boolean;
+  /** App id this app is a staging sibling of; set = it's a hidden sibling. */
+  target_of?: number | null;
   desired_replicas: number;
   volume_id?: string | number;
   volume_mount?: string;
@@ -58,8 +63,6 @@ export type AppData = {
   public_protocol?: string;
   /** `<panel-ip>:<public_port>` when raw TCP/UDP exposed (server-derived). */
   public_address?: string | null;
-  /** servers.pool this app's replicas schedule onto ("general" = default). */
-  placement_pool?: string;
 };
 
 export type ReplicaData = {

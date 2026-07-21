@@ -5,8 +5,6 @@ import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { Pencil, Lock, Settings as SettingsIcon, HardDrive, Globe, Cpu, Network } from "lucide-react";
 import { HealthCheckField, InfoTip } from "./shared.tsx";
-import { PlacementPoolField } from "./placement-pool-field.tsx";
-import { TargetsSection } from "./targets-section.tsx";
 import type { AppData } from "../../types.ts";
 
 export type IngressForm = {
@@ -134,8 +132,6 @@ export function SettingsTab({
             placeholder="1 (platform default)"
           />
         </Field>
-
-        <PlacementPoolField appId={appId} placementPool={app.placement_pool} />
 
         <PermissionGate permission="apps.redeploy">
           <div className="flex justify-end mt-3">
@@ -435,8 +431,6 @@ export function SettingsTab({
           </>
         )}
       </Card>
-
-      <TargetsSection app={app} action={action} ops={ops} />
     </div>
   );
 }

@@ -4,80 +4,7 @@ import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
 import { getGitRepo, readManifest, promptRequired } from "../manifest.ts";
 import { mergeEnv } from "../../shared/env-merge.ts";
-import type { DeployRequest, DeployManifest } from "../../shared/rpc.ts";
-
-/** Target-specific DeployRequest fields derived from a manifest's `targets`
- *  block. Pure data — the caller applies it to the wire request. */
-export interface DerivedTarget {
-  app_name: string;
-  target: string;
-  git_branch: string;
-  replicas?: number;
-  domain?: string;
-  scale_to_zero_after?: number;
-  placement_pool?: string;
-  /** true when the target is "production" (bare app name, no isolation). */
-  isProduction: boolean;
-}
-
-export type DeriveTargetResult =
-  | { ok: true; value: DerivedTarget | null }
-  | { ok: false; error: string; hint: string };
-
-/**
- * Pure derivation of the deploy-target fields for `ocd deploy [--target=<t>]`.
- * A "production" target (and no other) keeps the bare app name; other targets
- * become a `<name>-<target>` sibling. Branch precedence: the target's branch,
- * else the manifest webhook branch, else "main". Non-production targets are
- * isolated by default (placement_pool "staging") unless `isolated: false`.
- * No --target flag: when the manifest declares `targets.production`, a plain
- * deploy applies that target (identical derivation to --target=production so
- * the two paths can't drift); otherwise `value: null` means "no target
- * semantics apply".
- */
-export function deriveTarget(
-  manifest: Pick<DeployManifest, "targets" | "webhook">,
-  targetName: string | undefined,
-  name: string,
-): DeriveTargetResult {
-  const targets = manifest.targets || {};
-  if (!targetName) {
-    // Plain deploy defaults to the declared production target (if any).
-    if (!targets.production) return { ok: true, value: null };
-    targetName = "production";
-  }
-  const t = targets[targetName];
-  if (!t) {
-    const declared = Object.keys(targets);
-    return {
-      ok: false,
-      error: `Unknown target "${targetName}".`,
-      hint: declared.length
-        ? `Declared targets: ${declared.join(", ")}`
-        : `The manifest has no "targets" block.`,
-    };
-  }
-  const isProduction = targetName === "production";
-  const value: DerivedTarget = {
-    app_name: isProduction ? name : `${name}-${targetName}`,
-    target: isProduction ? "production" : targetName,
-    // Branch: the target's branch wins, else the manifest webhook branch, else main.
-    git_branch: t.branch || manifest.webhook?.branch || "main",
-    isProduction,
-  };
-  // Per-target overrides.
-  if (t.replicas !== undefined) value.replicas = t.replicas;
-  if (t.domain) value.domain = t.domain;
-  if (t.scale_to_zero_after !== undefined) value.scale_to_zero_after = t.scale_to_zero_after;
-  if (isProduction) {
-    value.placement_pool = "general";
-  } else if (t.isolated !== false) {
-    // Non-production targets are isolated by default: their own placement
-    // pool, and (server-side) their own environment without the prod DB link.
-    value.placement_pool = "staging";
-  }
-  return { ok: true, value };
-}
+import type { DeployRequest } from "../../shared/rpc.ts";
 
 interface Environment {
   id: number;
@@ -107,22 +34,18 @@ function parseFlags(args: string[]): {
   manifestPath: string;
   domain?: string;
   envName?: string;
-  targetName?: string;
   sets: Record<string, string>;
   help: boolean;
 } {
   let manifestPath = "";
   let domain: string | undefined;
   let envName: string | undefined;
-  let targetName: string | undefined;
   const sets: Record<string, string> = {};
   let help = false;
 
   for (const arg of args) {
     if (arg.startsWith("--domain=")) {
       domain = arg.slice(9);
-    } else if (arg.startsWith("--target=")) {
-      targetName = arg.slice(9);
     } else if (arg.startsWith("--env=")) {
       envName = arg.slice(6);
     } else if (arg.startsWith("--set=")) {
@@ -142,7 +65,7 @@ function parseFlags(args: string[]): {
 
   if (!manifestPath) manifestPath = ".ocd-deploy.json";
 
-  return { manifestPath, domain, envName, targetName, sets, help };
+  return { manifestPath, domain, envName, sets, help };
 }
 
 export async function deploy(args: string[]): Promise<void> {
@@ -152,7 +75,7 @@ export async function deploy(args: string[]): Promise<void> {
     return;
   }
 
-  const { manifestPath, domain, envName, targetName, sets, help } = parseFlags(args);
+  const { manifestPath, domain, envName, sets, help } = parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
@@ -173,10 +96,6 @@ ${BOLD}Subcommands:${RESET}
 
 ${BOLD}Options:${RESET}
   --domain=<domain>          Custom domain
-  --target=<name>            Deploy a declared target from the manifest's
-                             "targets" block (e.g. staging → myapp-staging,
-                             its own isolated environment). Mutually exclusive
-                             with --env.
   --env=<name|id>            Link an existing environment (env-var bag) by
                              name or id
   --set=KEY=VALUE            Set an env var (repeatable)`);
@@ -234,56 +153,13 @@ ${BOLD}Options:${RESET}
 
   if (manifest.extra_volumes?.length) body.extra_volumes = manifest.extra_volumes;
 
-  // Durability policy applies to every path (default/production/target).
+  // Durability policy applies to every path.
   if (manifest.durability_class) body.durability_class = manifest.durability_class;
 
   // Unified env resolution: manifest defaults + --set, layered on top of a
   // linked environment when one is given. Existing env values win; --set
   // overrides everything.
   let existingKeys = new Set<string>();
-
-  // --target deploys a declared target from the manifest's `targets` block as
-  // its own app: a "production" target (and the no-flag default) keeps the bare
-  // name; other targets become a `<name>-<t>` sibling wired to an isolated
-  // environment server-side. `--env` (below) links an existing env-var bag
-  // instead — the two are mutually exclusive.
-  if (targetName && envName) {
-    console.error(`${RED}--target and --env are mutually exclusive.${RESET}`);
-    console.error(`--target deploys a declared target (its own environment); --env links an existing environment.`);
-    process.exit(1);
-  }
-
-  // No --target: deriveTarget still applies a declared production target (the
-  // plain-deploy default); value stays null only without a production target.
-  const derived = deriveTarget(manifest, targetName, name);
-  if (!derived.ok) {
-    console.error(`${RED}${derived.error}${RESET}`);
-    console.error(derived.hint);
-    process.exit(1);
-  }
-  const d = derived.value;
-  if (d) {
-    body.app_name = d.app_name;
-    body.target = d.target;
-    body.git_branch = d.git_branch;
-    if (body.webhook_enabled) body.webhook_branch = d.git_branch;
-    if (d.replicas !== undefined) body.replicas = d.replicas;
-    if (d.domain) body.domain = d.domain;
-    if (d.scale_to_zero_after !== undefined) body.scale_to_zero_after = d.scale_to_zero_after;
-    if (d.placement_pool) body.placement_pool = d.placement_pool;
-
-    if (!d.isProduction) {
-      // Link to the parent/production app so this is a target of it.
-      const apps = await get<Array<{ id: number; name: string }>>("/api/apps");
-      const parent = apps.find((a) => a.name === name);
-      if (parent) body.target_of = parent.id;
-      console.log(
-        `${DIM}Target:${RESET}   deploying the ${BOLD}${targetName}${RESET} target of ${BOLD}${name}${RESET} as ${BOLD}${body.app_name}${RESET}`,
-      );
-    } else if (!targetName) {
-      console.log(`${DIM}Target:${RESET}   production (manifest default)`);
-    }
-  }
 
   if (envName) {
     const env = await resolveEnvironment(envName);

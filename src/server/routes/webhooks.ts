@@ -5,6 +5,7 @@ import * as db from "../../shared/db.ts";
 import * as github from "../../shared/github.ts";
 import { redeployPanel } from "../../engine/deploy/panel.ts";
 import { enqueue } from "../ipc/enqueue.ts";
+import { deployToStaging } from "../lib/staging.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { getCommitCiStatus } from "../../shared/github.ts";
 import { timingSafeEqual } from "node:crypto";
@@ -110,7 +111,7 @@ export async function verifyGithubSignature(
 export async function handleEnableWebhook(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "webhooks.manage");
-    const body = await request.json() as { branch?: string; path?: string; wait_for_ci?: boolean };
+    const body = await request.json() as { branch?: string; path?: string; wait_for_ci?: boolean; staging?: boolean };
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
@@ -138,7 +139,7 @@ export async function handleEnableWebhook(request: Request, appId: number): Prom
       token: pat,
     });
 
-    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath, !!body.wait_for_ci);
+    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath, !!body.wait_for_ci, !!body.staging);
     db.updateAppDeployedBy(appId, payload.userId);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
@@ -157,9 +158,12 @@ export async function handleUpdateWebhookSettings(request: Request, appId: numbe
       return Response.json({ ok: false, error: "Webhook is not enabled" }, { status: 400, headers: corsHeaders });
     }
 
-    const body = await request.json() as { wait_for_ci?: boolean };
+    const body = await request.json() as { wait_for_ci?: boolean; staging?: boolean };
     if (body.wait_for_ci !== undefined) {
       db.updateAppWebhookWaitForCi(appId, !!body.wait_for_ci);
+    }
+    if (body.staging !== undefined) {
+      db.updateAppWebhookStaging(appId, !!body.staging);
     }
 
     return Response.json({ ok: true }, { headers: corsHeaders });
@@ -246,17 +250,29 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
           const ok = await waitForCi(appId, fullSha);
           if (!ok) return;
         }
-        enqueue({
-          kind: "redeploy",
-          resourceKeys: [`app:${appId}`],
-          input: { appId, userId: app.deployed_by || undefined },
-          trigger: "webhook",
-          triggeredBy: `github:${deliveryId}`,
-          // GitHub uses one delivery GUID per push across all webhooks on a
-          // repo. Without app scoping, sibling apps sharing a repo collide on
-          // this key and all but one get dropped.
-          idempotencyKey: `webhook-delivery:${appId}:${deliveryId}`,
-        });
+        // GitHub uses one delivery GUID per push across all webhooks on a repo.
+        // Without app scoping, sibling apps sharing a repo collide on this key
+        // and all but one get dropped.
+        if (app.webhook_staging) {
+          // Staging mode: deploy the pushed commit to the <name>-staging sibling
+          // and HOLD. Production keeps serving until the user clicks Promote.
+          const res = deployToStaging(appId, {
+            userId: app.deployed_by || undefined,
+            trigger: "webhook",
+            triggeredBy: `github:${deliveryId}`,
+            idempotencyKey: `webhook-delivery:staging:${appId}:${deliveryId}`,
+          });
+          if (!res.ok) console.error(`[webhook] staging deploy failed for app ${appId}: ${res.error}`);
+        } else {
+          enqueue({
+            kind: "redeploy",
+            resourceKeys: [`app:${appId}`],
+            input: { appId, userId: app.deployed_by || undefined },
+            trigger: "webhook",
+            triggeredBy: `github:${deliveryId}`,
+            idempotencyKey: `webhook-delivery:${appId}:${deliveryId}`,
+          });
+        }
       } catch (err) {
         console.error(`[webhook] enqueue failed for app ${appId}:`, err);
       }

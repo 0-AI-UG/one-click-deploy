@@ -457,11 +457,13 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const flatEnvVars: Record<string, string> = {};
 
     // Isolated environment for a non-production deploy target (design "A"):
-    // staging/dev gets its OWN environment named "<app_name>", seeded by copying
-    // the parent production app's env vars — but deliberately NOT its
-    // service_links. service_links are keyed on environment_id, so a fresh env
-    // simply has none: the production DB link is absent, and staging can never
-    // touch production data. If no DB is linked, we tell the user to link one.
+    // staging/dev gets its OWN environment named "<app_name>", seeded EMPTY. It
+    // inherits the parent production app's env LIVE at resolve time (see
+    // resolveAppEnvVars) rather than copying — so new/rotated prod vars flow
+    // through and secrets aren't duplicated. This env holds only the keys the
+    // target OVERRIDES on top of prod (e.g. a staging DATABASE_URL). Because
+    // inheritance is live, prod's own service-link vars (DATABASE_* etc.) DO
+    // flow into staging unless overridden — the override set is the safety valve.
     // Back-compat: legacy clients sent env_label/sibling_of for what are now
     // target/target_of — honor them (identical semantics) when the new fields
     // are absent.
@@ -474,21 +476,9 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       const groupName = req.app_name;
       let group = db.getEnvironments().find((e) => e.name === groupName);
       if (!group) {
-        let seed = serializeEnvVars([]);
-        if (targetOf) {
-          const parent = db.getApp(targetOf);
-          if (parent) {
-            if (parent.environment_id) {
-              const parentEnv = db.getEnvironment(parent.environment_id);
-              if (parentEnv) seed = parentEnv.env_vars;
-            } else if (parent.env_vars) {
-              seed = parent.env_vars;
-            }
-          }
-        }
-        group = db.insertEnvironment(groupName, seed);
+        group = db.insertEnvironment(groupName, serializeEnvVars([]));
         createdIsolatedGroup = true;
-        ctx.log(`created isolated environment "${groupName}" for ${target} (seeded from production, no DB link)`);
+        ctx.log(`created override environment "${groupName}" for ${target} (inherits production env live)`);
       }
       environmentId = group.id;
     }
@@ -521,6 +511,19 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       const envRow = db.insertEnvironment(envName, serializeEnvVars(incoming.entries));
       environmentId = envRow.id;
       Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
+    }
+
+    // Isolated targets inherit their production parent's env LIVE. The app row
+    // doesn't exist yet here, so resolveAppEnvVars can't run — replicate its
+    // inheritance for the first deploy: layer the parent's resolved user vars
+    // UNDER whatever this target already resolved (its overrides win).
+    if (isolatedTarget && targetOf) {
+      const parent = db.getApp(targetOf);
+      const parentRow = parent?.environment_id ? db.getEnvironment(parent.environment_id) : null;
+      const parentVars = await resolveEnvVarsForDeploy(parentRow?.env_vars);
+      for (const [k, v] of Object.entries(parentVars)) {
+        if (!(k in flatEnvVars)) flatEnvVars[k] = v;
+      }
     }
 
     const extraVolumes = (req.extra_volumes || []).map(
@@ -612,8 +615,8 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     if (createdIsolatedGroup) {
       db.appendDeployLog(
         app.id,
-        `[env] Isolated ${target} environment "${req.app_name}" created (seeded from production env vars, no database linked). ` +
-          `Link a database to the "${req.app_name}" environment (e.g. via \`ocd services\`) so ${target} never touches production data.`,
+        `[env] ${target} inherits production's environment live; override "${req.app_name}" holds only the keys you change. ` +
+          `Production service-link vars (e.g. DATABASE_*) flow through unless overridden — override stateful URLs so ${target} never writes to production data.`,
       );
     }
 

@@ -159,15 +159,13 @@ export type PromoteRequest = {
   dest_app: string; // app name to promote TO (e.g. "myapp")
 };
 
-export type AppTargetsResponse = {
-  self: {
-    id: number;
-    name: string;
-    target: string;
-    /** Production parent resolved from target_of; null for standalone/production apps or when the parent row is gone. */
-    parent: { id: number; name: string } | null;
-  };
-  targets: Array<{ id: number; name: string; target: string; status: string; domain: string }>;
+export type AppStagingResponse = {
+  /** Whether the app's webhook staging toggle is on. */
+  staging_enabled: boolean;
+  /** Git commit of production's most recent successful deployment, or null. */
+  prod_commit: string | null;
+  /** The auto-managed <name>-staging sibling, once it has been deployed. */
+  sibling: { id: number; name: string; status: string; domain: string; commit: string | null } | null;
 };
 
 export type PanelInfo = {

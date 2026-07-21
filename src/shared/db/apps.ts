@@ -47,6 +47,9 @@ export type AppRow = {
   sleeping_host_port: number | null;
   scale_to_zero_after: number;
   webhook_wait_for_ci: number;
+  /** When set, a webhook push deploys to this app's <name>-staging sibling and
+   *  holds; production is swapped only on manual Promote. 0 = deploy prod. */
+  webhook_staging: number;
   environment_id: number | null;
   stack_id: number | null;
   public: number;
@@ -583,15 +586,22 @@ export function updateAppWebhook(
   branch: string,
   githubWebhookId: string,
   path: string = "",
-  waitForCi: boolean = false
+  waitForCi: boolean = false,
+  staging: boolean = false
 ): void {
   db.query(
-    "UPDATE apps SET webhook_enabled = ?, webhook_secret = ?, webhook_branch = ?, webhook_path = ?, github_webhook_id = ?, webhook_wait_for_ci = ? WHERE id = ?"
-  ).run(enabled ? 1 : 0, secret, branch, path, githubWebhookId, waitForCi ? 1 : 0, id);
+    "UPDATE apps SET webhook_enabled = ?, webhook_secret = ?, webhook_branch = ?, webhook_path = ?, github_webhook_id = ?, webhook_wait_for_ci = ?, webhook_staging = ? WHERE id = ?"
+  ).run(enabled ? 1 : 0, secret, branch, path, githubWebhookId, waitForCi ? 1 : 0, staging ? 1 : 0, id);
 }
 
 export function updateAppWebhookWaitForCi(id: number, waitForCi: boolean): void {
   db.query("UPDATE apps SET webhook_wait_for_ci = ? WHERE id = ?").run(waitForCi ? 1 : 0, id);
+}
+
+/** Toggle whether webhook pushes deploy to the app's staging sibling (and hold
+ *  for manual promotion) instead of redeploying production directly. */
+export function updateAppWebhookStaging(id: number, staging: boolean): void {
+  db.query("UPDATE apps SET webhook_staging = ? WHERE id = ?").run(staging ? 1 : 0, id);
 }
 
 export function updateAppScaling(id: number, fields: {
@@ -665,6 +675,14 @@ export function getAppTargets(appId: number): AppRow[] {
   return db
     .query("SELECT * FROM apps WHERE target_of = ? ORDER BY created_at DESC")
     .all(appId) as AppRow[];
+}
+
+/** The app's staging sibling (target='staging', target_of=appId), or null. The
+ *  webhook staging flow deploys to and promotes from exactly this row. */
+export function getStagingSibling(appId: number): AppRow | null {
+  return (db
+    .query("SELECT * FROM apps WHERE target_of = ? AND target = 'staging' ORDER BY created_at ASC LIMIT 1")
+    .get(appId) as AppRow | undefined) ?? null;
 }
 
 /** Partial update of the per-app ingress settings (sticky sessions, rate

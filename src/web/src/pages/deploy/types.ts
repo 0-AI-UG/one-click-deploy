@@ -53,36 +53,7 @@ export type DeployManifest = {
   compress?: boolean;
   public_port?: number | "auto" | null;
   public_protocol?: "tcp" | "udp";
-  // Deploy targets: each declares a sibling deployment of this app. "production"
-  // (or no target) keeps the bare name; any other target deploys an isolated
-  // `<name>-<target>` sibling on a separate server pool. Mirrors the manifest
-  // `targets` block the CLI reads (see src/cli/commands/deploy.ts).
-  targets?: Record<string, DeployTarget>;
 };
-
-export type DeployTarget = {
-  branch?: string;
-  replicas?: number;
-  domain?: string;
-  scale_to_zero_after?: number;
-  isolated?: boolean;
-};
-
-/**
- * Effective git-branch override for a selected deploy target. Single source of
- * truth for the submit payload AND the deploy summary so the two can't drift.
- * Precedence mirrors the CLI (src/cli/commands/deploy.ts deriveTarget):
- * target.branch || manifest webhook.branch || "main". Returns null when no
- * declared target is selected (the form/introspect branch applies unchanged).
- */
-export function targetBranchOverride(
-  manifest: DeployManifest | null,
-  targetName: string,
-): string | null {
-  const target = targetName ? manifest?.targets?.[targetName] : undefined;
-  if (!target) return null;
-  return target.branch || manifest?.webhook?.branch || "main";
-}
 
 export type ParsedManifest = {
   path: string;

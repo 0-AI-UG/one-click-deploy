@@ -1,19 +1,158 @@
-import { post } from "../../api/client.ts";
-import { Card, Btn, Field } from "../../components/ui.tsx";
+import { useState, useEffect } from "react";
+import { get, post } from "../../api/client.ts";
+import { Card, Btn, Field, StatusBadge, Spinner, confirm, showToast } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { GitBranch } from "lucide-react";
+import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
+import { InfoTip } from "./shared.tsx";
+import { GitBranch, ArrowUpCircle, ExternalLink, Rocket } from "lucide-react";
 import type { AppData } from "../../types.ts";
+import type { AppStagingResponse } from "../../../../shared/rpc.ts";
+
+const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 interface WebhooksTabProps {
   app: AppData;
   appId: number;
-  webhookForm: { branch: string; path: string; waitForCi: boolean };
-  setWebhookForm: (f: { branch: string; path: string; waitForCi: boolean }) => void;
+  webhookForm: { branch: string; path: string; waitForCi: boolean; staging: boolean };
+  setWebhookForm: (f: { branch: string; path: string; waitForCi: boolean; staging: boolean }) => void;
   actionLoading: string | null;
   action: (name: string, fn: () => Promise<unknown>) => Promise<void>;
+  ops: ResourceOpsResult;
 }
 
-export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoading, action }: WebhooksTabProps) {
+// The staging panel: shown when the webhook is enabled. Toggling "Deploy to
+// staging first" flips app.webhook_staging; when on, webhook pushes build the
+// hidden <name>-staging sibling and hold, and this panel surfaces that sibling
+// plus a Promote-to-production button (the existing promote op).
+function StagingPanel({ app, appId, actionLoading, action, ops }: Omit<WebhooksTabProps, "webhookForm" | "setWebhookForm">) {
+  const [data, setData] = useState<AppStagingResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      setData(await get(`/api/apps/${appId}/staging`));
+    } catch (err) {
+      showToast(errMessage(err), "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [appId]);
+
+  const enabled = data?.staging_enabled ?? !!app.webhook_staging;
+
+  const toggleStaging = (next: boolean) =>
+    action("toggle-staging", async () => {
+      await post(`/api/apps/${appId}/webhook/settings`, { staging: next });
+      await load();
+    });
+
+  const sibling = data?.sibling ?? null;
+  const prodCommit = data?.prod_commit ?? null;
+  // Staging is "ahead" (worth promoting) once it has a deployed commit that
+  // differs from production's.
+  const canPromote = !!sibling?.commit && sibling.commit !== prodCommit;
+
+  const promote = async () => {
+    if (!sibling) return;
+    if (await confirm(
+      "Promote to production",
+      `Promote ${sibling.name} → ${app.name}? This rebuilds production at the commit currently running in staging (${sibling.commit?.slice(0, 7)}).`,
+    )) {
+      await action("promote", async () => {
+        const res = (await post("/api/apps/promote", { source_app: sibling.name, dest_app: app.name })) as { op_id?: number };
+        if (res?.op_id) {
+          trackOperationInToast(res.op_id, "Promoting to production");
+          ops.track(res.op_id);
+        }
+      });
+      load();
+    }
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t-2 border-fg/10 space-y-3">
+      <PermissionGate
+        permission="webhooks.manage"
+        fallback={
+          <div className="flex justify-between text-[10px] font-mono">
+            <span className="text-muted">Deploy to staging first</span>
+            <span className={`font-bold ${enabled ? "text-fg" : "text-muted"}`}>{enabled ? "On" : "Off"}</span>
+          </div>
+        }
+      >
+        <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={actionLoading === "toggle-staging"}
+            onChange={(e) => toggleStaging(e.target.checked)}
+            className="accent-accent"
+          />
+          <span className="text-muted">Deploy to staging first (manual promote to production)</span>
+          <InfoTip text="On: a webhook push builds the hidden <name>-staging sibling and holds. Production is swapped only when you click Promote. Off: pushes redeploy production directly." />
+        </label>
+      </PermissionGate>
+
+      {enabled && (
+        loading ? (
+          <div className="flex justify-center py-4"><Spinner /></div>
+        ) : sibling ? (
+          <div className="border-2 border-fg bg-alt/40 p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Rocket size={13} className="text-fg" />
+              <span className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Staging</span>
+              <StatusBadge status={sibling.status} />
+              <a
+                href={`#/apps/${sibling.id}`}
+                className="ml-auto flex items-center gap-1 font-mono text-[9px] font-bold uppercase tracking-wider text-accent-blue hover:underline"
+              >
+                Open <ExternalLink size={11} />
+              </a>
+            </div>
+            <div className="space-y-1 text-[10px] font-mono">
+              <div className="flex justify-between"><span className="text-muted">Staging commit</span><span className="text-fg">{sibling.commit ? sibling.commit.slice(0, 7) : "—"}</span></div>
+              <div className="flex justify-between"><span className="text-muted">Production commit</span><span className="text-fg">{prodCommit ? prodCommit.slice(0, 7) : "—"}</span></div>
+              {sibling.domain && (
+                <div className="flex justify-between">
+                  <span className="text-muted">Preview</span>
+                  <a href={`https://${sibling.domain}`} target="_blank" rel="noreferrer" className="text-accent-blue hover:underline">{sibling.domain}</a>
+                </div>
+              )}
+            </div>
+            <PermissionGate permission="apps.deploy">
+              <Btn
+                size="xs"
+                variant="primary"
+                disabled={ops.isBusy || !canPromote}
+                loading={ops.isBusyWith("promote")}
+                onClick={promote}
+              >
+                <ArrowUpCircle size={13} /> Promote to production
+              </Btn>
+              {!canPromote && sibling.commit && (
+                <p className="text-[10px] font-mono text-muted">Staging matches production — nothing to promote.</p>
+              )}
+            </PermissionGate>
+            <p className="text-[10px] font-mono text-muted leading-snug">
+              Staging inherits production's environment live. Override staging-only values (e.g. a staging <span className="text-fg">DATABASE_URL</span>) on the staging app — inherited production service vars flow through until you do.
+            </p>
+          </div>
+        ) : (
+          <div className="border-2 border-dashed border-fg/30 bg-alt/20 p-3">
+            <p className="text-[10px] font-mono text-muted leading-snug">
+              No staging deploy yet. Push to <span className="text-fg font-bold">{app.webhook_branch}</span> and the <span className="text-fg font-bold">{app.name}-staging</span> sibling is built automatically — then promote it here.
+            </p>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoading, action, ops }: WebhooksTabProps) {
   return (
     <Card className="p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -73,12 +212,26 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
               />
               <span className="text-muted">Wait for CI checks before deploying</span>
             </label>
-            <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: webhookForm.branch || "main", path: webhookForm.path || undefined, wait_for_ci: webhookForm.waitForCi }))}>
+            <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">
+              <input
+                type="checkbox"
+                checked={webhookForm.staging}
+                onChange={(e) => setWebhookForm({ ...webhookForm, staging: e.target.checked })}
+                className="accent-accent"
+              />
+              <span className="text-muted">Deploy to staging first (manual promote to production)</span>
+              <InfoTip text="On: a webhook push builds the hidden <name>-staging sibling and holds. Production is swapped only when you click Promote. Off: pushes redeploy production directly." />
+            </label>
+            <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: webhookForm.branch || "main", path: webhookForm.path || undefined, wait_for_ci: webhookForm.waitForCi, staging: webhookForm.staging }))}>
               Enable Webhook
             </Btn>
           </div>
         )}
       </PermissionGate>
+
+      {app.webhook_enabled && (
+        <StagingPanel app={app} appId={appId} actionLoading={actionLoading} action={action} ops={ops} />
+      )}
     </Card>
   );
 }
