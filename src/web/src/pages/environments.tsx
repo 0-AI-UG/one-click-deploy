@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { get, post, put, del } from "../api/client.ts";
+import { get, post, put } from "../api/client.ts";
 import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx";
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
@@ -7,11 +7,14 @@ import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { Layers, Plus, Trash2, Copy, ChevronDown, ChevronRight, Key, X } from "lucide-react";
 import type { EnvironmentData, AppData } from "../types.ts";
+import { serverConfirmedDelete } from "../api/server-confirmation.ts";
 
 type AttachedApp = { id: number; name: string; status: string; domain: string };
+type EnvironmentMutationResult = { warnings?: string[]; redeploying?: number; restarting?: number; op_id?: number };
 
 export function EnvironmentsPage() {
   const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
+  const [deletedEnvironments, setDeletedEnvironments] = useState<EnvironmentData[]>([]);
   const [expanded, setExpanded] = useState<number | "new" | null>(null);
   const [editName, setEditName] = useState("");
   const [editVars, setEditVars] = useState<EnvVarRow[]>([]);
@@ -46,6 +49,7 @@ export function EnvironmentsPage() {
 
   const load = () => {
     get("/api/environments").then(setEnvironments).catch(() => {});
+    get("/api/environments/deleted").then(setDeletedEnvironments).catch(() => {});
     get("/api/apps").then(setAllApps).catch(() => {});
   };
 
@@ -87,8 +91,9 @@ export function EnvironmentsPage() {
         key: e.key.trim(), value: e.value, secret: e.secret,
       }));
       if (id === "new") {
-        await post("/api/environments", { name: editName, env_vars: vars });
+        const res = await post("/api/environments", { name: editName, env_vars: vars }) as EnvironmentMutationResult;
         showToast("Environment created", "success");
+        for (const warning of res.warnings ?? []) showToast(warning, "info");
       } else {
         const apps = attachedApps[id] || [];
         const activeApps = apps.filter((a) => a.status !== "stopped" && a.status !== "destroying");
@@ -102,7 +107,7 @@ export function EnvironmentsPage() {
           );
           if (!ok) { setLoading(false); return; }
         }
-        const res = await put(`/api/environments/${id}`, { name: editName, env_vars: vars, rollout });
+        const res = await put(`/api/environments/${id}`, { name: editName, env_vars: vars, rollout }) as EnvironmentMutationResult;
         const rolling = (res?.redeploying ?? 0) + (res?.restarting ?? 0);
         if (rolling > 0 && res?.op_id) {
           const action = rollout === "restart" ? "Reloading" : "Redeploying";
@@ -111,6 +116,7 @@ export function EnvironmentsPage() {
         } else {
           showToast("Environment updated", "success");
         }
+        for (const warning of res.warnings ?? []) showToast(warning, "info");
       }
       setExpanded(null);
       load();
@@ -323,7 +329,18 @@ export function EnvironmentsPage() {
                           }
                           if (await confirm("Delete Environment", `Delete "${env.name}"?`, true)) {
                             try {
-                              await del(`/api/environments/${env.id}`);
+                              const result = await serverConfirmedDelete<{ recoverable_until?: string | null }>(
+                                `/api/environments/${env.id}`,
+                                "delete_environment",
+                                "environment",
+                                env.id,
+                              );
+                              showToast(
+                                result.recoverable_until
+                                  ? `Environment retained for recovery until ${result.recoverable_until}`
+                                  : "Environment retained for recovery",
+                                "success",
+                              );
                               load();
                             } catch (err: any) {
                               showToast(err.message || "Failed to delete", "error");
@@ -377,6 +394,74 @@ export function EnvironmentsPage() {
         </Card>
       ) : (
         <EmptyState message="No environments yet" icon={Layers} />
+      )}
+
+      {deletedEnvironments.length > 0 && (
+        <Card className="overflow-hidden">
+          <div className="px-4 py-3 bg-alt/30">
+            <h2 className="font-mono text-[10px] font-bold text-fg uppercase">Deleted environments</h2>
+            <p className="font-mono text-[9px] text-muted mt-1">Recoverable configuration retained separately from apps and stacks.</p>
+          </div>
+          <div className="divide-y divide-fg/10">
+            {deletedEnvironments.map((environment) => (
+              <div key={environment.id} className="px-4 py-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-mono text-[10px] font-bold text-fg uppercase">{environment.name}</div>
+                  <div className="font-mono text-[9px] text-muted">
+                    Protected from permanent deletion until {environment.purge_after || "the recovery window ends"}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Btn
+                    size="xs"
+                    variant="ghost"
+                    disabled={!!environment.purge_after &&
+                      Date.now() < Date.parse(`${environment.purge_after.replace(" ", "T")}Z`)}
+                    title={environment.purge_after
+                      ? `Permanent deletion becomes available after ${environment.purge_after} UTC`
+                      : "Permanently delete environment"}
+                    onClick={async () => {
+                      try {
+                        await post(`/api/environments/${environment.id}/restore`);
+                        showToast("Environment restored", "success");
+                        load();
+                      } catch (err: any) {
+                        showToast(err.message || "Failed to restore", "error");
+                      }
+                    }}
+                  >
+                    Restore
+                  </Btn>
+                  <Btn
+                    size="xs"
+                    variant="ghost"
+                    onClick={async () => {
+                      if (!await confirm(
+                        "Permanently Delete Environment",
+                        `Permanently delete "${environment.name}" and all its variables? This cannot be undone.`,
+                        true,
+                      )) return;
+                      try {
+                        await serverConfirmedDelete(
+                          `/api/environments/${environment.id}/purge`,
+                          "purge_environment",
+                          "environment",
+                          environment.id,
+                        );
+                        showToast("Environment permanently deleted", "success");
+                        load();
+                      } catch (err: any) {
+                        showToast(err.message || "Failed to purge", "error");
+                      }
+                    }}
+                  >
+                    <Trash2 size={12} className="text-accent-red" /> Purge
+                  </Btn>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
       )}
     </div>
   );

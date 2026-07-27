@@ -22,7 +22,7 @@ Use this decision table:
 | Preview what a manifest would change | `ocd config diff [manifest]` |
 | Make stored configuration match a manifest without code rollout | `ocd config apply [manifest]` |
 | Apply manifest and deploy latest code | `ocd deploy [manifest]` |
-| Deploy latest code while preserving UI/current config | `ocd redeploy <app>` |
+| Repeat the stored source deployment while preserving UI/current config | `ocd redeploy <app>` |
 | Load environment changes without a build | `ocd restart <app>` |
 | Return to the prior successful commit | `ocd rollback <app>` |
 
@@ -34,7 +34,8 @@ to create a duplicate app.
 
 The complete normalized specification covers:
 
-- Git repository, branch, Dockerfile, and build context;
+- source mode; immutable image digest, or Git repository/branch/Dockerfile/build
+  context; explicit registry-backed build cache;
 - container port and linked environment projection;
 - public/private state, domain when explicitly present, internal protocol,
   health checks, auth, sticky sessions, rate limit, IP allowlist, compression,
@@ -109,15 +110,17 @@ next restart/redeploy as appropriate.
 
 The command returns the resulting configuration revision and field changes.
 
-## Code-only redeploy
+## Source-only redeploy
 
 ```bash
 ocd redeploy <app>
 ```
 
-Redeploy reads the Git repository, branch, build paths, port, environment link,
-routing, resources, scaling, and other configuration already stored on the app.
-It does not read a local manifest and does not overwrite UI changes.
+Redeploy reads source identity, port, environment link, routing, resources,
+scaling, health contract, and other configuration already stored on the app.
+It does not read a local manifest and does not overwrite UI changes. In `git`
+mode it clones/builds the configured branch. In `image` mode it re-pulls and
+runs the exact stored digest; it never contacts Git.
 
 Use this for:
 
@@ -138,6 +141,7 @@ to a linked environment's variables advance linked apps as well.
 Every deployment-history record stores:
 
 - image tag;
+- actual immutable image digest when applicable;
 - Git commit;
 - status/source/log;
 - configuration revision.

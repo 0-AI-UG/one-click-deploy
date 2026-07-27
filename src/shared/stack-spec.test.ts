@@ -107,4 +107,35 @@ describe("buildStackAppSpec", () => {
     expect(spec.env_projection).toEqual([]);
     expect(spec.durability_class).toBe("standard");
   });
+
+  test("defaults a new stack member to only child-manifest declarations", () => {
+    const spec = buildStackAppSpec(
+      "docs",
+      { manifest: "docs/.ocd-deploy.json", needs: ["api"] },
+      {
+        name: "Docs",
+        env: [
+          { key: "DOCS_THEME", default: "light" },
+          { key: "SEARCH_TOKEN", required: true, secret: true },
+        ],
+      },
+      "https://github.com/acme/docs",
+      "docs",
+    );
+    expect(spec.env_projection_mode).toBe("declared");
+    expect(spec.env_projection).toEqual(["DOCS_THEME", "SEARCH_TOKEN"]);
+    expect(spec.declared_env_keys).toEqual(["DOCS_THEME", "SEARCH_TOKEN"]);
+  });
+
+  test("requires env_all for explicit access to every shared key", () => {
+    const spec = buildStackAppSpec(
+      "legacy",
+      { manifest: ".ocd-deploy.json", env_all: true },
+      { name: "Legacy" },
+      "https://github.com/acme/legacy",
+      "",
+    );
+    expect(spec.env_projection_mode).toBe("all");
+    expect(spec.env_projection).toBeNull();
+  });
 });

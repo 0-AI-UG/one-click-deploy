@@ -47,7 +47,7 @@ Scaling/infrastructure:
 
 - `scaling.scale`, `scaling.policy`, `scaling.migrate`;
 - `servers.create`, `servers.manage`, `servers.delete`;
-- `volumes.create`, `volumes.attach`, `volumes.detach`, `volumes.resize`,
+- `volumes.create`, `volumes.attach`, `volumes.detach`, `volumes.resize`, `volumes.rename`,
   `volumes.delete`, `volumes.files.read`;
 - `resources.view`, `resources.delete`;
 - `operations.cancel`, `panel.view`, `panel.manage`;
@@ -78,8 +78,10 @@ Apply least privilege and prefer app/environment scopes.
 
 ## Confirmation model
 
-CLI destructive actions can create a single-use, resource-bound confirmation.
-The CLI opens a web page showing an action summary. Approval is bound to:
+High-risk destructive actions use a server-issued, single-use,
+resource-bound confirmation. The CLI opens a web page showing an action
+summary; the normal web panel converts its destructive dialog into the same
+server-side confirmation. Approval is bound to:
 
 - user;
 - action;
@@ -101,15 +103,16 @@ Invariant:
 - legacy/current `--yes` automation tokens are rejected server-side for all
   three.
 
-The normal web panel also displays a destructive confirmation dialog before
-sending stack/environment deletion.
+Bare authenticated stack/environment/provider-volume DELETE requests are
+rejected. Permanent volume deletion additionally requires typing the exact
+provider volume ID before the server marks the confirmation approved.
 
 ## Deletion matrix
 
 | Action | Confirmation | Environment | Managed volume | Other effects |
 |---|---|---|---|---|
 | Delete app | Browser by default; app-only `--yes` allowed when explicitly authorized | retained | detached/retained | staging sibling, containers, DNS, ingress, webhook removed |
-| Delete stack | Web UI always; no `--yes` | production and staging retained | member volumes detached/retained | all recorded apps/services destroyed |
+| Delete stack | Web UI always; no `--yes` | production and staging retained | member volumes detached/retained | member webhooks suspended; all recorded apps/services destroyed |
 | Delete environment | Web UI always; no `--yes` | explicitly deleted only if unused | n/a | fails while apps link it |
 | Cancel operation | Browser by default; authorized `--yes` allowed | compensation depends on provisional ownership | compensation may detach created volume | runs operation rollback |
 | Delete provider volume | Web UI + typed provider ID; no `--yes` | n/a | provider data destroyed | irreversible; verify backup/ownership |
@@ -134,25 +137,38 @@ row as `cleanup_failed`.
 Stack deletion:
 
 1. requires web UI confirmation;
-2. enqueues child destroy operations for every app/service;
-3. waits for children;
-4. logs retention of production/staging environments;
-5. deletes only the stack row.
+2. enqueues a durable stack-wide destroy operation;
+3. drops pending member webhook deployments and requests cancellation of
+   running ones;
+4. rejects/drops later webhook pushes, including pushes finishing a CI wait;
+5. enqueues child destroy operations for every app/service;
+6. waits for children;
+7. logs retention of production/staging environments;
+8. deletes only the stack row.
 
 Confirmation text explicitly states environment and volume retention.
+`--suspend-webhooks` is an explicit alias for the automatic default, not an
+option that weakens the barrier.
 
 ## Environment deletion
 
-Environment deletion:
+Environment retirement:
 
 1. requires `environments.manage`;
 2. requires web UI confirmation;
 3. verifies the exact environment still exists;
 4. lists attached apps;
 5. refuses deletion when any are attached;
-6. deletes only on explicit confirmed request.
+6. records deletion and seven-day recovery timestamps only on explicit
+   confirmed request.
 
 There is no force flag.
+
+Deleted environments keep encrypted variables, remain separate from active
+selection, and can be listed/restored in the UI or with `ocd envs
+deleted`/`restore`. Permanent purge is blocked during the seven-day recovery
+window; afterward it is a second browser-confirmed action and cannot use
+`--yes`.
 
 ## Volume/resource deletion
 
@@ -168,6 +184,10 @@ Before provider deletion, verify:
 - backup/checksum;
 - no recovery/rollback need;
 - billing implications.
+
+OCD creates a durable audit record before provider deletion and records the
+actor, provider identity, former owner, retention state/dates, outcome, and
+provider error. Inspect it with `ocd volumes audit`.
 
 ## Secret safety
 

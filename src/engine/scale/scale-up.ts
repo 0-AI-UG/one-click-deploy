@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  sshExec, cloneAndBuild,
+  sshExec, cloneAndBuild, pullImmutableImageAndRun,
   transferImage, probeAppHealth, startAppReplica,
 } from "../../shared/remote/index.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
@@ -69,13 +69,15 @@ export async function scaleUp(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       emit("scale", `Image transfer from primary failed: ${msg}`);
-      if (!app.git_repo) {
+      if (!app.git_repo && app.source_mode !== "image") {
         throw new Error(`Image '${imageName}' missing on source server and app has no git_repo configured for rebuild fallback.`);
       }
       // Rebuild on the target from git. Match the dispatch in
       // ops/redeploy.ts so the rebuilt image is identical to what an
       // initial deploy would produce.
-      emit("scale", `Falling back to rebuild from git on ${targetServer.name}...`);
+      emit("scale", app.source_mode === "image"
+        ? `Falling back to immutable registry pull on ${targetServer.name}...`
+        : `Falling back to rebuild from git on ${targetServer.name}...`);
       rebuildFallback = true;
     }
 
@@ -98,11 +100,19 @@ export async function scaleUp(
         hostKey: targetHostKey,
       };
       const logLine = (line: string) => emit("scale", line);
-      await cloneAndBuild(targetServer.ipv4, {
-        ...buildOpts,
-        dockerfilePath: app.dockerfile_path || undefined,
-        dockerContext: app.docker_context || undefined,
-      }, logLine);
+      if (app.source_mode === "image") {
+        await pullImmutableImageAndRun(targetServer.ipv4, {
+          ...buildOpts,
+          imageRef: app.image_ref,
+        }, logLine);
+      } else {
+        await cloneAndBuild(targetServer.ipv4, {
+          ...buildOpts,
+          dockerfilePath: app.dockerfile_path || undefined,
+          dockerContext: app.docker_context || undefined,
+          buildCacheRef: app.build_cache_ref || undefined,
+        }, logLine);
+      }
     }
 
     const containerName = `${app.name}-r${replicaNum}`;

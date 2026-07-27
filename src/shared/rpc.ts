@@ -145,6 +145,15 @@ export type DeployRequest = {
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
   cpu_limit?: number; // Per-container CPU ceiling in cores (fractional allowed). Omit / 0 → platform default
   health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
+  health_check_mode?: "http" | "container" | "exec" | "heartbeat" | "periodic_job";
+  health_check_command?: string;
+  health_check_file?: string;
+  health_check_max_age_seconds?: number;
+  /** Immutable prebuilt OCI image. Production artifact deployments require
+   * an @sha256 digest; tags are never accepted as deploy identity. */
+  image_ref?: string;
+  /** Registry-backed BuildKit cache shared across build hosts. */
+  build_cache_ref?: string;
   internal_protocol?: "http" | "tcp"; // Internal routing protocol (independent of health_check); omit → "http". Raw-TCP apps must set "tcp".
   sticky?: boolean; // Sticky sessions (cookie-based) on the app's ingress service
   rate_limit_rps?: number; // Public-router rate limit in req/s; omit / 0 = unlimited
@@ -239,6 +248,13 @@ export type StackDeployRequest = {
     key: string;
     needs?: string[];
     webhook_staging?: boolean;
+    /** Stack-only projection intent. `declared` is the safe default for a new
+     * member; existing members preserve their stored projection for backwards
+     * compatibility until env/env_all is explicit. */
+    env_projection_mode?: "declared" | "explicit" | "all";
+    /** Child-manifest declarations, used for least-privilege derivation and
+     * public-app exposure warnings. Values never appear here. */
+    declared_env_keys?: string[];
   }>;
 };
 

@@ -51,7 +51,13 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
         <Card className="p-4 space-y-3">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Configuration</h3>
           <div className="space-y-2 text-[10px] font-mono">
-            <div className="flex justify-between"><span className="text-muted">Git Repo</span><span className="text-fg font-bold">{app.git_repo}</span></div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted">{app.source_mode === "image" ? "Immutable Image" : "Git Repo"}</span>
+              <span className="text-fg font-bold truncate" title={app.image_ref || app.git_repo}>
+                {app.source_mode === "image" ? app.image_ref : app.git_repo}
+              </span>
+            </div>
+            {app.build_cache_ref && <div className="flex justify-between gap-4"><span className="text-muted">Build Cache</span><span className="text-fg truncate" title={app.build_cache_ref}>{app.build_cache_ref}</span></div>}
             <div className="flex justify-between">
               <span className="text-muted">Configuration</span>
               <span className="text-fg">OCD revision {app.config_revision ?? 1}</span>
@@ -69,6 +75,13 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
               </div>
             )}
             <div className="flex justify-between"><span className="text-muted">Container Port</span><span className="text-fg">{app.container_port}</span></div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted">Readiness</span>
+              <span className="text-fg text-right" title={app.health_check_command || app.health_check_file}>
+                {app.health_check_mode || (app.health_check ? "http" : "container")}
+                {app.health_check_file ? ` · ${app.health_check_file} ≤ ${app.health_check_max_age_seconds}s` : ""}
+              </span>
+            </div>
             {replicas[0]?.host_port != null && (
               <div className="flex justify-between"><span className="text-muted">Host Port</span><span className="text-fg">{replicas[0].host_port}</span></div>
             )}

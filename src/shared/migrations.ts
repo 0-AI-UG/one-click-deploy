@@ -1875,6 +1875,89 @@ export const migrations: Migration[] = [
         END`);
     },
   },
+  {
+    version: 89,
+    description:
+      "Soft-delete environments for seven-day recovery instead of permanently removing them immediately.",
+    up: (db) => {
+      db.run("ALTER TABLE environments ADD COLUMN deleted_at TEXT");
+      db.run("ALTER TABLE environments ADD COLUMN purge_after TEXT");
+      db.run("CREATE INDEX idx_environments_deleted_at ON environments(deleted_at)");
+    },
+  },
+  {
+    version: 90,
+    description:
+      "Audit permanent provider-volume deletion and add the dedicated volume rename permission.",
+    up: (db) => {
+      db.run(`CREATE TABLE volume_deletion_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_user_id TEXT NOT NULL,
+        provider_volume_id TEXT NOT NULL,
+        provider_volume_name TEXT NOT NULL,
+        former_resource_type TEXT NOT NULL DEFAULT '',
+        former_resource_id INTEGER NOT NULL DEFAULT 0,
+        former_resource_name TEXT NOT NULL DEFAULT '',
+        retention_state TEXT NOT NULL DEFAULT '',
+        retired_at TEXT,
+        purge_after TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        error TEXT NOT NULL DEFAULT '',
+        requested_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+      )`);
+      db.run(
+        "CREATE INDEX idx_volume_deletion_audit_provider ON volume_deletion_audit(provider_volume_id, requested_at)",
+      );
+      // Existing users trusted to resize provider volumes may also rename
+      // their metadata; this preserves behavior when the finer grant appears.
+      db.run(
+        `INSERT OR IGNORE INTO user_permissions (user_id, permission, scope_type, scope_id)
+         SELECT user_id, 'volumes.rename', scope_type, scope_id
+         FROM user_permissions WHERE permission = 'volumes.resize'`,
+      );
+    },
+  },
+  {
+    version: 91,
+    description:
+      "Add immutable OCI artifact deployments, registry-backed source-build cache configuration, truthful workload health contracts, and deployed image digest history.",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'git'");
+      db.run("ALTER TABLE apps ADD COLUMN image_ref TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE apps ADD COLUMN build_cache_ref TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE apps ADD COLUMN health_check_mode TEXT NOT NULL DEFAULT 'http'");
+      db.run("ALTER TABLE apps ADD COLUMN health_check_command TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE apps ADD COLUMN health_check_file TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE apps ADD COLUMN health_check_max_age_seconds INTEGER NOT NULL DEFAULT 0");
+      db.run("UPDATE apps SET health_check_mode = CASE WHEN health_check = 0 THEN 'container' ELSE 'http' END");
+      db.run("ALTER TABLE deployment_history ADD COLUMN image_digest TEXT NOT NULL DEFAULT ''");
+
+      // Recreate the revision trigger so changes to artifact identity, shared
+      // build cache, or the readiness contract are versioned desired config.
+      db.run("DROP TRIGGER apps_bump_config_revision");
+      db.run(`CREATE TRIGGER apps_bump_config_revision
+        AFTER UPDATE OF
+          domain, git_repo, git_branch, dockerfile_path, docker_context,
+          source_mode, image_ref, build_cache_ref,
+          container_port, auth_password_hash, environment_id, env_projection,
+          public, health_check, health_check_mode, health_check_command,
+          health_check_file, health_check_max_age_seconds,
+          internal_protocol, sticky, rate_limit_rps,
+          ip_allowlist, health_check_path, compress, public_port,
+          public_protocol, desired_replicas, min_replicas, max_replicas,
+          autoscale_enabled, autoscale_cpu_threshold, autoscale_mem_threshold,
+          autoscale_cooldown, autoscale_req_threshold, scale_to_zero_after,
+          volume_id, volume_mount, extra_volumes, memory_mb, cpu_limit,
+          webhook_enabled, webhook_branch, webhook_path, webhook_wait_for_ci,
+          webhook_staging_environment_id, durability_class, max_per_host,
+          min_locations, placement_pool
+        ON apps
+        BEGIN
+          UPDATE apps SET config_revision = config_revision + 1 WHERE id = NEW.id;
+        END`);
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

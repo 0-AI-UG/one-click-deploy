@@ -8,7 +8,11 @@ import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
 import { deriveStackResourceState } from "../../engine/resource-state.ts";
-import { findLatestRelatedStackOperation, stackLockKeys } from "../lib/stack-operations.ts";
+import {
+  findLatestRelatedStackOperation,
+  stackLockKeys,
+  suspendStackWebhookOperations,
+} from "../lib/stack-operations.ts";
 
 const TERMINAL_OPERATION_STATUSES = new Set([
   "done",
@@ -288,11 +292,18 @@ export async function handleDestroyStack(request: Request, stackId: number): Pro
     const { opId } = enqueue({
       kind: "destroy_stack",
       resourceKeys: stackLockKeys(stack),
-      input: { stackId },
+      input: { stackId, suspendWebhooks: true },
       trigger: "ui",
       triggeredBy: payload.userId,
     });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
+    // Enqueue first so this newer row is the durable superseding owner before
+    // running webhook work is asked to cancel and compensate.
+    const suspendedWebhookOperationIds = suspendStackWebhookOperations(stack);
+    return Response.json({
+      op_id: opId,
+      webhooks_suspended: true,
+      suspended_webhook_operation_ids: suspendedWebhookOperationIds,
+    }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

@@ -10,6 +10,7 @@ import {
   processIncomingEnvVars,
   platformEnvVars,
   encryptValue,
+  isSuspiciousSecretKey,
   type EnvVarEntry,
 } from "../../shared/env-crypto.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
@@ -127,6 +128,90 @@ function injectAppUrl(envId: number, key: string, app: AppRow): void {
  */
 function injectStagingUrl(stagingEnvId: number, key: string, app: AppRow, staged: boolean): void {
   injectAppUrl(stagingEnvId, key, staged ? ({ ...app, name: `${app.name}-staging` } as AppRow) : app);
+}
+
+type StackAppRequest = DeployStackInput["apps"][number];
+
+/** Dependency variables are generated into the shared environment, so the
+ * safe projection must include them even though they are not present in the
+ * child manifest's env declarations. */
+export function dependencyProjectionKeys(
+  appReq: Pick<StackAppRequest, "needs">,
+  req: Pick<DeployStackInput, "apps" | "services">,
+): string[] {
+  const serviceKeys = new Set(req.services.map((service) => service.key));
+  const keys: string[] = [];
+  for (const dependency of appReq.needs ?? []) {
+    const prefix = envPrefix(dependency);
+    if (serviceKeys.has(dependency)) {
+      keys.push(
+        `${prefix}_URL`,
+        `${prefix}_HOST`,
+        `${prefix}_PORT`,
+        `${prefix}_USER`,
+        `${prefix}_PASSWORD`,
+        `${prefix}_NAME`,
+      );
+    } else {
+      keys.push(`${prefix}_URL`);
+    }
+  }
+  return keys;
+}
+
+function projectionMode(appReq: StackAppRequest): "declared" | "explicit" | "all" {
+  if (appReq.env_projection_mode) return appReq.env_projection_mode;
+  if (appReq.env_projection === null) return "all";
+  if (appReq.env_projection !== undefined) return "explicit";
+  return "declared";
+}
+
+export function leastPrivilegeProjection(
+  appReq: StackAppRequest,
+  req: Pick<DeployStackInput, "apps" | "services">,
+): string[] {
+  const declared = appReq.declared_env_keys ??
+    (Array.isArray(appReq.env_vars) ? appReq.env_vars.map((entry) => entry.key) : []);
+  return [...new Set([...declared, ...dependencyProjectionKeys(appReq, req)])].sort();
+}
+
+export function suspiciousUnrelatedProjectionKeys(
+  environmentKeys: string[],
+  allowedKeys: string[],
+  effectiveProjection: string[] | null,
+): string[] {
+  const allowed = new Set(allowedKeys);
+  const received = effectiveProjection === null ? null : new Set(effectiveProjection);
+  return [...new Set(environmentKeys
+    .filter((key) => isSuspiciousSecretKey(key))
+    .filter((key) => received === null || received.has(key))
+    .filter((key) => !allowed.has(key)))]
+    .sort();
+}
+
+function warnPublicAppSecretExposure(
+  ctx: OpContext<DeployStackInput>,
+  stackId: number,
+  environmentId: number,
+  key: string,
+  appReq: StackAppRequest,
+  effectiveProjection: string[] | null,
+): void {
+  const isPublic = appReq.public !== false;
+  if (!isPublic) return;
+  const env = db.getEnvironment(environmentId);
+  if (!env) return;
+  const unrelated = suspiciousUnrelatedProjectionKeys(
+    parseEnvVars(env.env_vars).entries.map((entry) => entry.key),
+    leastPrivilegeProjection(appReq, ctx.input),
+    effectiveProjection,
+  );
+  if (unrelated.length === 0) return;
+  const message =
+    `[security] public app ${key} receives suspicious unrelated variable(s): ` +
+    `${[...new Set(unrelated)].sort().join(", ")}; declare only required keys or remove env_all`;
+  ctx.log(message);
+  db.appendStackLog(stackId, message);
 }
 
 function childByKey(opId: number): Map<string, OperationRow> {
@@ -554,15 +639,45 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
         if (prev) { levelChildIds.push(prev.id); continue; }
 
         const existingApp = db.getAppByName(name);
+        const mode = projectionMode(appReq);
+        // Omitted projection is least-privilege for new members. Existing
+        // members retain their stored behavior until env/env_all is explicit,
+        // avoiding a surprise rollout-time compatibility break.
+        const effectiveProjection = existingApp && mode === "declared"
+          ? db.parseAppEnvProjection(existingApp)
+          : mode === "declared"
+            ? leastPrivilegeProjection(appReq, req)
+            : mode === "all"
+              ? null
+              : (appReq.env_projection ?? []);
+        warnPublicAppSecretExposure(
+          ctx,
+          stackId,
+          environmentId,
+          key,
+          {
+            ...appReq,
+            public: appReq.public ?? (existingApp ? existingApp.public === 1 : true),
+          },
+          effectiveProjection,
+        );
         let row: OperationRow;
         if (existingApp) {
           // The stack and standalone paths share one complete desired-config
           // apply. Stack ownership only supplies the resolved shared prod and
           // staging environments before the code-only child redeploy.
+          const {
+            key: _key,
+            needs: _needs,
+            env_projection_mode: _projectionMode,
+            declared_env_keys: _declaredKeys,
+            ...configFields
+          } = appReq;
           await applyAppConfig(existingApp.id, {
-            ...appReq,
+            ...configFields,
             app_name: name,
             environment_id: environmentId,
+            env_projection: effectiveProjection,
             webhook_staging: false,
             webhook_staging_environment_id: stagingEnvFor(key),
           }, {
@@ -585,7 +700,15 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
           // `plan` (with conflict checks), so members deploy against it directly.
           // `webhook_staging` is stack-only intent — the child deploy takes the
           // RESOLVED staging environment id instead.
-          const { key: _k, needs: _n, env_vars: _e, webhook_staging: _s, ...deployFields } = appReq;
+          const {
+            key: _k,
+            needs: _n,
+            env_vars: _e,
+            webhook_staging: _s,
+            env_projection_mode: _projectionMode,
+            declared_env_keys: _declaredKeys,
+            ...deployFields
+          } = appReq;
           row = enqueueOperation({
             kind: "deploy",
             resourceKeys: [`app:create:${name}`],
@@ -593,6 +716,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
               ...deployFields,
               app_name: name,
               environment_id: environmentId,
+              env_projection: effectiveProjection,
               webhook_staging_environment_id: stagingEnvFor(key) ?? undefined,
             },
             trigger: "stack",

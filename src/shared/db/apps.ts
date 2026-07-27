@@ -11,6 +11,9 @@ export type AppRow = {
   git_branch: string;
   dockerfile_path: string;
   docker_context: string;
+  source_mode: string;
+  image_ref: string;
+  build_cache_ref: string;
   container_port: number;
   env_vars: string;
   status: string;
@@ -72,6 +75,10 @@ export type AppRow = {
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
   cpu_limit: number; // per-container CPU ceiling in cores (fractional allowed); 0 = platform default
   health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
+  health_check_mode: string;
+  health_check_command: string;
+  health_check_file: string;
+  health_check_max_age_seconds: number;
   /** Internal routing protocol on the app's internal entrypoint: 'http' =
    *  Traefik HTTP router (L7), 'tcp' = raw TCP pass-through. Decoupled from
    *  health_check (which only controls the container probe) — see migration 67.
@@ -269,6 +276,12 @@ export type AppIngressSettings = {
   /** Post-deploy HTTP probe on/off. Applies on the app's next (re)deploy or
    *  scale — unlike the rest of these, it isn't a live Traefik-config change. */
   health_check?: boolean;
+  health_check_mode?: "http" | "container" | "exec" | "heartbeat" | "periodic_job";
+  health_check_command?: string;
+  health_check_file?: string;
+  health_check_max_age_seconds?: number;
+  image_ref?: string;
+  build_cache_ref?: string;
 };
 
 type InsertAppFields = {
@@ -324,14 +337,16 @@ function resolvePublicPort(app: InsertAppFields): number | null {
 // tx). resolvePublicPort/allocateInternalPort run here so both paths allocate
 // identically.
 function insertAppRow(app: InsertAppFields): AppRow {
-  const healthCheck = app.health_check ?? true;
+  const healthCheck = app.health_check_mode
+    ? app.health_check_mode === "http"
+    : (app.health_check ?? true);
   // Internal routing protocol is an explicit, first-class field (independent of
   // health_check): use the caller's value or default to "http". Raw-TCP apps
   // (e.g. databases) must set internal_protocol: "tcp" explicitly.
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, source_mode, image_ref, build_cache_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -340,6 +355,9 @@ function insertAppRow(app: InsertAppFields): AppRow {
       app.git_branch || "",
       app.dockerfile_path,
       app.docker_context || ".",
+      app.image_ref ? "image" : "git",
+      app.image_ref || "",
+      app.build_cache_ref || "",
       app.container_port,
       app.env_vars,
       hashAuthPassword(app.auth_password || ""),
@@ -349,6 +367,10 @@ function insertAppRow(app: InsertAppFields): AppRow {
         : JSON.stringify(app.env_projection),
       (app.public ?? true) ? 1 : 0,
       healthCheck ? 1 : 0,
+      app.health_check_mode ?? (healthCheck ? "http" : "container"),
+      app.health_check_command ?? "",
+      app.health_check_file ?? "",
+      app.health_check_max_age_seconds ?? 0,
       internalProtocol,
       allocateInternalPort(),
       allocateVirtualIp(),
@@ -593,6 +615,33 @@ export function updateAppBuildSource(
   db.query(
     "UPDATE apps SET git_repo = ?, git_branch = ?, dockerfile_path = ?, docker_context = ? WHERE id = ?",
   ).run(fields.gitRepo, fields.gitBranch, fields.dockerfilePath, fields.dockerContext, id);
+}
+
+export function updateAppArtifactAndHealth(
+  id: number,
+  fields: {
+    imageRef: string;
+    buildCacheRef: string;
+    healthMode: string;
+    healthCommand: string;
+    healthFile: string;
+    healthMaxAgeSeconds: number;
+  },
+): void {
+  db.query(
+    `UPDATE apps SET source_mode = ?, image_ref = ?, build_cache_ref = ?,
+       health_check_mode = ?, health_check_command = ?, health_check_file = ?,
+       health_check_max_age_seconds = ? WHERE id = ?`,
+  ).run(
+    fields.imageRef ? "image" : "git",
+    fields.imageRef,
+    fields.buildCacheRef,
+    fields.healthMode,
+    fields.healthCommand,
+    fields.healthFile,
+    fields.healthMaxAgeSeconds,
+    id,
+  );
 }
 
 /** Record provenance after an explicit manifest apply. This metadata is not

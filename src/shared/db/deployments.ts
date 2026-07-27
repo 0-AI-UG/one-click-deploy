@@ -4,6 +4,7 @@ export type DeploymentRow = {
   id: number;
   app_id: number;
   image_tag: string;
+  image_digest: string;
   git_commit: string;
   status: string;
   source: string;
@@ -15,6 +16,7 @@ export type DeploymentRow = {
 export function insertDeployment(deployment: {
   app_id: number;
   image_tag: string;
+  image_digest?: string;
   git_commit: string;
   deploy_log?: string;
   status?: string;
@@ -27,11 +29,12 @@ export function insertDeployment(deployment: {
   if (deployment.created_at) {
     return db
       .query(
-        "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log, status, source, config_revision, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+        "INSERT INTO deployment_history (app_id, image_tag, image_digest, git_commit, deploy_log, status, source, config_revision, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
       )
       .get(
         deployment.app_id,
         deployment.image_tag,
+        deployment.image_digest ?? "",
         deployment.git_commit,
         deployment.deploy_log ?? "",
         status,
@@ -42,11 +45,12 @@ export function insertDeployment(deployment: {
   }
   return db
     .query(
-      "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log, status, source, config_revision) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO deployment_history (app_id, image_tag, image_digest, git_commit, deploy_log, status, source, config_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       deployment.app_id,
       deployment.image_tag,
+      deployment.image_digest ?? "",
       deployment.git_commit,
       deployment.deploy_log ?? "",
       status,

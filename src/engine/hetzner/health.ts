@@ -328,7 +328,14 @@ export async function containerRunningCheck(
  * result shape either way.
  */
 export async function probeAppHealth(
-  app: { health_check: number; health_check_path?: string | null },
+  app: {
+    health_check: number;
+    health_check_path?: string | null;
+    health_check_mode?: string | null;
+    health_check_command?: string | null;
+    health_check_file?: string | null;
+    health_check_max_age_seconds?: number | null;
+  },
   ip: string,
   containerName: string,
   bindHost: string,
@@ -336,9 +343,95 @@ export async function probeAppHealth(
   maxAttempts = 5,
   hostKey?: string,
 ): Promise<{ healthy: boolean; statusCode?: number; error?: string; inconclusive?: boolean }> {
-  return app.health_check
-    ? healthCheck(ip, containerName, bindHost, port, maxAttempts, hostKey, app.health_check_path ?? undefined)
-    : containerRunningCheck(ip, containerName, maxAttempts, hostKey);
+  const mode = app.health_check_mode || (app.health_check ? "http" : "container");
+  if (mode === "http") {
+    return healthCheck(ip, containerName, bindHost, port, maxAttempts, hostKey, app.health_check_path ?? undefined);
+  }
+  if (mode === "exec") {
+    if (!app.health_check_command) return { healthy: false, error: "Exec health check command is missing" };
+    return serviceHealthCheck(ip, containerName, app.health_check_command, maxAttempts, hostKey);
+  }
+  if (mode === "heartbeat" || mode === "periodic_job") {
+    if (!app.health_check_file || !app.health_check_max_age_seconds) {
+      return { healthy: false, error: `${mode} health check marker file/max age is missing` };
+    }
+    return markerFreshnessHealthCheck(
+      ip,
+      containerName,
+      app.health_check_file,
+      app.health_check_max_age_seconds,
+      mode,
+      maxAttempts,
+      hostKey,
+    );
+  }
+  return containerRunningCheck(ip, containerName, maxAttempts, hostKey);
+}
+
+/** Pure marker assessment used by probes and unit tests. */
+export function assessMarkerFreshness(
+  modifiedEpochSeconds: number,
+  maxAgeSeconds: number,
+  nowEpochSeconds = Math.floor(Date.now() / 1000),
+): { fresh: boolean; ageSeconds: number } {
+  const ageSeconds = Math.max(0, nowEpochSeconds - modifiedEpochSeconds);
+  return { fresh: Number.isFinite(modifiedEpochSeconds) && ageSeconds <= maxAgeSeconds, ageSeconds };
+}
+
+export async function markerFreshnessHealthCheck(
+  ip: string,
+  containerName: string,
+  markerFile: string,
+  maxAgeSeconds: number,
+  label: "heartbeat" | "periodic_job",
+  maxAttempts = 5,
+  hostKey?: string,
+): Promise<{ healthy: boolean; error?: string; inconclusive?: boolean }> {
+  if (!/^\/[A-Za-z0-9._/-]+$/.test(markerFile)) {
+    return { healthy: false, error: `Invalid ${label} marker path` };
+  }
+  return runHealthProbe(
+    `${label} freshness check for ${containerName}: ${markerFile} <= ${maxAgeSeconds}s`,
+    maxAttempts,
+    async (i) => {
+      const inspect = await inspectContainer(ip, containerName, hostKey);
+      if (inspect.sshFailed) return inconclusiveStep(i, maxAttempts);
+      const assessment = inspect.state ? assessContainerInspection(inspect.state) : {
+        runnable: false,
+        error: "Container does not exist",
+      };
+      if (!assessment.runnable) {
+        return {
+          done: false,
+          retryLog: `${assessment.error} (attempt ${i + 1}/${maxAttempts})`,
+          finalResult: { healthy: false, running: false, ready: false, error: assessment.error },
+        };
+      }
+      const result = await sshExec(
+        ip,
+        asUser(`docker exec ${containerName} stat -c %Y ${markerFile}`),
+        hostKey,
+      );
+      if (result.exitCode === SSH_TRANSPORT_FAILURE) return inconclusiveStep(i, maxAttempts);
+      const modified = Number(result.stdout.trim());
+      const freshness = assessMarkerFreshness(modified, maxAgeSeconds);
+      if (result.exitCode === 0 && freshness.fresh) {
+        return {
+          done: true,
+          log: `${label} marker is fresh (${freshness.ageSeconds}s old)`,
+          result: { healthy: true, running: true, ready: true },
+        };
+      }
+      const error = result.exitCode === 0 && Number.isFinite(modified)
+        ? `${label} marker is stale (${freshness.ageSeconds}s old; maximum ${maxAgeSeconds}s)`
+        : `${label} marker file ${markerFile} is missing or unreadable`;
+      return {
+        done: false,
+        retryLog: `${error} (attempt ${i + 1}/${maxAttempts})`,
+        finalResult: { healthy: false, running: true, ready: false, error },
+      };
+    },
+  );
 }
 
 export async function serviceHealthCheck(

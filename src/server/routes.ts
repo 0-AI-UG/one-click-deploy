@@ -36,7 +36,7 @@ import {
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers, handleSetServerPool } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
-import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail } from "./routes/resources.ts";
+import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail, handleRenameVolume, handleGetVolumeDeletionAudit } from "./routes/resources.ts";
 import { handleGetTopology } from "./routes/topology.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
@@ -68,10 +68,13 @@ import { handleCliInstallSh, handleCliDownload } from "./routes/cli.ts";
 import { handleGetDeploySession, handleSaveDeploySession, handleDeleteDeploySession } from "./routes/deploy-sessions.ts";
 import {
   handleGetEnvironments,
+  handleGetDeletedEnvironments,
   handleCreateEnvironment,
   handleUpdateEnvironment,
   handleCopyEnvironment,
   handleDeleteEnvironment,
+  handleRestoreEnvironment,
+  handlePurgeEnvironment,
   handleGetEnvironmentApps,
   handleAttachAppToEnvironment,
   handleDetachAppFromEnvironment,
@@ -336,6 +339,9 @@ export const apiRoutes = {
   "/api/topology": { GET: (req: Request) => handleGetTopology(req) },
   "/api/resources/servers": { POST: (req: Request) => handleCreateServer(req) },
   "/api/resources/metrics/history": { GET: (req: Request) => handleGetServerMetricsHistory(req) },
+  "/api/resources/volumes/deletion-audit": {
+    GET: (req: Request) => handleGetVolumeDeletionAudit(req),
+  },
   "/api/resources/servers/:id": {
     GET: (req: Request) => {
       const id = parseInt(new URL(req.url).pathname.split("/")[4], 10);
@@ -346,6 +352,10 @@ export const apiRoutes = {
     GET: (req: Request) => {
       const id = new URL(req.url).pathname.split("/")[4];
       return handleGetVolumeDetail(req, id);
+    },
+    PUT: (req: Request) => {
+      const id = new URL(req.url).pathname.split("/")[4];
+      return handleRenameVolume(req, id);
     },
   },
   "/api/resources/volumes/:id/files": {
@@ -395,12 +405,21 @@ export const apiRoutes = {
     GET: (req: Request) => handleGetEnvironments(req),
     POST: (req: Request) => handleCreateEnvironment(req),
   },
+  "/api/environments/deleted": {
+    GET: (req: Request) => handleGetDeletedEnvironments(req),
+  },
   "/api/environments/:id": {
     PUT: (req: Request) => handleUpdateEnvironment(req, environmentIdFrom(req)),
     DELETE: (req: Request) => handleDeleteEnvironment(req, environmentIdFrom(req)),
   },
   "/api/environments/:id/copy": {
     POST: (req: Request) => handleCopyEnvironment(req, environmentIdFrom(req)),
+  },
+  "/api/environments/:id/restore": {
+    POST: (req: Request) => handleRestoreEnvironment(req, environmentIdFrom(req)),
+  },
+  "/api/environments/:id/purge": {
+    DELETE: (req: Request) => handlePurgeEnvironment(req, environmentIdFrom(req)),
   },
   "/api/environments/:id/apps": {
     GET: (req: Request) => handleGetEnvironmentApps(req, environmentIdFrom(req)),

@@ -71,7 +71,7 @@ describe("embedded OCD skill", () => {
     for (const link of overviewLinks) {
       expect(files[link]).toBeDefined();
     }
-    expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(13);
+    expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(14);
   });
 
   test("documents every top-level CLI command and safety-critical flag", () => {
@@ -97,6 +97,7 @@ describe("embedded OCD skill", () => {
       "--limit", "--since", "--follow", "--status", "--interactive",
       "--replica", "--instance", "--service", "--secret-file",
       "--secret-stdin", "--from-env", "--from-dotenv", "--async", "--wait",
+      "--suspend-webhooks",
       "--agent", "--dir", "--force",
     ]) {
       expect(cli).toContain(flag);

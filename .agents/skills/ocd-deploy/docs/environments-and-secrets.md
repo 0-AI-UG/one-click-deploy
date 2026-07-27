@@ -33,7 +33,10 @@ ocd envs create <name> [KEY=VALUE ...] [--secret KEY=VALUE ...]
 ocd envs copy <name|id> <new-name>
 ocd envs set <name|id> KEY=VALUE ... [options]
 ocd envs unset <name|id> KEY [KEY...] [options]
-ocd envs remove <name|id>
+ocd envs remove <name|id> [--copy-before-delete[=<backup-name>]]
+ocd envs deleted
+ocd envs restore <name|id>
+ocd envs purge <name|id>
 ```
 
 `show` prints plain values, masks secrets, and lists linked apps. `copy`
@@ -100,6 +103,11 @@ remain stale until recreated.
 The UI/CLI reports `stale environment, redeploy required` for containers whose
 environment snapshot predates a relevant change.
 
+Set/unset waits for the complete cascade by default and fails if any child app
+fails. `--async`/`--no-wait` returns after queueing. `--json` emits one stable
+object with the environment, changed keys, rollout, affected count, operation
+ID, status, and error.
+
 ## Projections
 
 An app's environment projection controls which shared keys enter its container:
@@ -107,6 +115,13 @@ An app's environment projection controls which shared keys enter its container:
 - `null`/omitted: all shared keys;
 - `[]`: no shared user keys;
 - `["DATABASE_URL", "LOG_LEVEL"]`: only named keys.
+
+That raw storage model remains backward-compatible for standalone and existing
+apps. Stack manifest intent is safer: a newly created stack member that omits
+`apps.<key>.env` receives its child-manifest declarations plus generated
+dependency keys. Use `apps.<key>.env_all: true` for an explicit all-key opt-in.
+An existing stack member preserves its stored projection when neither field is
+specified on a re-up.
 
 Platform `OCD_INTERNAL_*` variables are injected regardless of an empty
 projection. A user value with the same key overrides its generated value.
@@ -124,11 +139,15 @@ Follow these rules:
   `auth.password_env`, CLI `--auth-password-env`, or the hidden prompt.
 - Avoid displaying `ocd envs show` output in public logs even though stored
   secrets are masked; non-secret values may still be sensitive.
-- `--set` and `--secret` values currently travel through process arguments.
-  They can appear in local process inspection or shell history.
+- Prefer `--secret-file KEY=PATH`, `--secret-stdin KEY`, `--from-env KEY`, or
+  `--from-dotenv PATH`; these keep secret values out of process arguments.
+- Plain `--set` and `--secret KEY=VALUE` values travel through process
+  arguments and can appear in local process inspection or shell history.
 - For automation, use ephemeral runners, masked CI variables, disabled shell
   tracing, and short-lived credentials.
-- OCD currently has no stdin/file secret-input flag.
+- The server automatically encrypts suspicious plaintext names such as
+  `PASSWORD`, `API_TOKEN`, `PRIVATE_KEY`, `DATABASE_URL`, and `REDIS_URL`, even
+  when an old client sends `secret: false`, and returns a warning.
 
 Safer interactive manifest flow:
 
@@ -164,12 +183,17 @@ environment. Prepare it before `ocd deploy stack --staging-env=staging`.
 ocd envs remove <name|id>
 ```
 
-Deletion:
+Removal:
 
 - always opens/requires OCD web UI approval;
 - rejects `--yes`, including server-side rejection of legacy automation tokens;
 - fails while any app links the environment;
+- retains the environment and encrypted variables for seven-day recovery;
 - is never invoked automatically by app or stack deletion.
 
-Reassign/destroy linked apps first, verify the environment is unused, then
-approve the explicit deletion in the UI.
+`--copy-before-delete` makes a server-side recovery copy first; supply
+`--copy-before-delete=<name>` to choose its name. `ocd envs deleted` lists
+retired environments and recovery dates. `restore` reactivates one. `purge` is
+blocked during the seven-day recovery window. After that window it becomes the
+separate irreversible action and always requires browser approval. Active and
+deleted environments both reserve their names.

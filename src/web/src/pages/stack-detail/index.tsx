@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { get, post, del } from "../../api/client.ts";
+import { get, post } from "../../api/client.ts";
 import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { TabBar } from "../../components/tab-bar.tsx";
@@ -8,6 +8,7 @@ import { ArrowLeft, RefreshCw, ArrowUpFromLine, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
 import { StackLogsTab } from "./logs-tab.tsx";
 import type { StackDetail, EnvironmentData } from "../../types.ts";
+import { serverConfirmedDelete } from "../../api/server-confirmation.ts";
 
 const errMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
@@ -145,7 +146,12 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
                   `Destroy "${stack.name}" and all ${memberApps.length} app(s) and ${stack.services.length} service(s)? Containers and routing are removed; environments are retained, and managed volumes are detached for recovery.`,
                   true,
                 )) {
-                  await action("destroy", () => del(`/api/stacks/${stackId}`));
+                  await action("destroy", () => serverConfirmedDelete(
+                    `/api/stacks/${stackId}`,
+                    "delete_stack",
+                    "stack",
+                    stackId,
+                  ));
                   window.location.hash = "#/";
                 }
               }}

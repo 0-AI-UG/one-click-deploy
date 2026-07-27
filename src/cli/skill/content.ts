@@ -15,6 +15,7 @@ import SKILL_MD from "./assets/SKILL.md" with { type: "text" };
 import REFERENCE_MD from "./assets/reference.md" with { type: "text" };
 import DOC_CONCEPTS from "./assets/docs/concepts.md" with { type: "text" };
 import DOC_APP_MANIFEST from "./assets/docs/app-manifest.md" with { type: "text" };
+import DOC_ARTIFACTS_HEALTH from "./assets/docs/artifacts-build-cache-and-health.md" with { type: "text" };
 import DOC_STACK_MANIFEST from "./assets/docs/stack-manifest.md" with { type: "text" };
 import DOC_CLI_REFERENCE from "./assets/docs/cli-reference.md" with { type: "text" };
 import DOC_DEPLOY_CONFIG from "./assets/docs/deploy-and-config.md" with { type: "text" };
@@ -42,6 +43,7 @@ const RAW_FILES: ReadonlyArray<readonly [string, string]> = [
   ["reference.md", REFERENCE_MD],
   ["docs/concepts.md", DOC_CONCEPTS],
   ["docs/app-manifest.md", DOC_APP_MANIFEST],
+  ["docs/artifacts-build-cache-and-health.md", DOC_ARTIFACTS_HEALTH],
   ["docs/stack-manifest.md", DOC_STACK_MANIFEST],
   ["docs/cli-reference.md", DOC_CLI_REFERENCE],
   ["docs/deploy-and-config.md", DOC_DEPLOY_CONFIG],

@@ -42,6 +42,55 @@ const validApp = {
 };
 
 describe("validateDeployManifest", () => {
+  test("accepts immutable image artifacts only by digest", () => {
+    const digest = "a".repeat(64);
+    expect(() =>
+      validateDeployManifest(
+        { name: "worker", image: { ref: `ghcr.io/acme/worker@sha256:${digest}` } },
+        ".ocd-deploy.json",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateDeployManifest(
+        { name: "worker", image: { ref: "ghcr.io/acme/worker:latest" } },
+        ".ocd-deploy.json",
+      ),
+    ).toThrow();
+  });
+
+  test("validates truthful worker and job health contracts", () => {
+    expect(() =>
+      validateDeployManifest(
+        { name: "worker", health_check: { mode: "exec", command: "test -f /tmp/ready" } },
+        ".ocd-deploy.json",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateDeployManifest(
+        { name: "worker", health_check: { mode: "exec" } },
+        ".ocd-deploy.json",
+      ),
+    ).toThrow();
+    expect(() =>
+      validateDeployManifest(
+        {
+          name: "cron",
+          health_check: {
+            mode: "periodic_job",
+            file: "/run/last-success",
+            max_age_seconds: 3600,
+          },
+        },
+        ".ocd-deploy.json",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateDeployManifest(
+        { name: "cron", health_check: { mode: "periodic_job", file: "/run/last-success" } },
+        ".ocd-deploy.json",
+      ),
+    ).toThrow();
+  });
   test("a correct manifest passes", () => {
     expect(() => validateDeployManifest(validApp, "docker/.ocd-deploy.json")).not.toThrow();
   });
@@ -54,7 +103,7 @@ describe("validateDeployManifest", () => {
       msg = (e as Error).message;
     }
     expect(msg).toContain("docker/.ocd-deploy.json");
-    expect(msg).toContain("health_check: expected object { enabled?: boolean, path?: string }, got boolean (false)");
+    expect(msg).toContain("health_check: expected health-check object, got boolean (false)");
   });
 
   test("bad internal_protocol enum fails", () => {
@@ -79,7 +128,7 @@ describe("validateDeployManifest", () => {
       msg = (e as Error).message;
     }
     expect(msg).toContain("public: expected boolean, got \"yes\"");
-    expect(msg).toContain("health_check: expected object");
+    expect(msg).toContain("health_check: expected health-check object");
   });
 
   test("wrong-typed build / container_port fails", () => {
@@ -210,6 +259,17 @@ describe("validateStackManifest", () => {
         api: { manifest: "api/.ocd-deploy.json", env: "DATABASE_URL" },
       },
     }, "ocd-stack.json")).toThrow("apps.api.env");
+  });
+
+  test("env_all opts into all keys and cannot combine with env", () => {
+    expect(() => validateStackManifest({
+      name: "legacy",
+      apps: { web: { manifest: "web/.ocd-deploy.json", env_all: true } },
+    }, "ocd-stack.json")).not.toThrow();
+    expect(() => validateStackManifest({
+      name: "ambiguous",
+      apps: { web: { manifest: "web/.ocd-deploy.json", env: ["SAFE"], env_all: true } },
+    }, "ocd-stack.json")).toThrow(/env_all.*cannot be combined/i);
   });
 
   test("needs referencing a missing app key fails", () => {

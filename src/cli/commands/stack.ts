@@ -577,7 +577,12 @@ export async function stackDown(args: string[]): Promise<void> {
     if (!arg.startsWith("-") && !name) name = arg;
   }
   if (!name) {
-    console.error(`Usage: ocd delete stack <name>`);
+    console.error(`Usage: ocd delete stack <name> [--suspend-webhooks]`);
+    process.exit(1);
+  }
+  const unknown = args.filter((arg) => arg.startsWith("-") && arg !== "--suspend-webhooks");
+  if (unknown.length > 0) {
+    console.error(`Unknown option: ${unknown[0]}`);
     process.exit(1);
   }
 
@@ -590,9 +595,19 @@ export async function stackDown(args: string[]): Promise<void> {
   }
 
   console.log(`Destroying stack ${BOLD}${stackRef.name}${RESET}...`);
-  const { op_id } = await del<{ op_id: number }>(`/api/stacks/${stackRef.id}`, undefined, {
+  console.log(`${DIM}Member webhook deployments will be suspended and superseded (default).${RESET}`);
+  const { op_id, suspended_webhook_operation_ids } = await del<{
+    op_id: number;
+    suspended_webhook_operation_ids?: number[];
+  }>(`/api/stacks/${stackRef.id}`, undefined, {
     "X-OCD-Confirmation": confirm,
   });
+  if (suspended_webhook_operation_ids?.length) {
+    console.log(
+      `${DIM}Suspended webhook operation(s): ` +
+        `${suspended_webhook_operation_ids.map((id) => `#${id}`).join(", ")}${RESET}`,
+    );
+  }
   const result = await followOp(op_id);
   if (result.ok) {
     console.log(`\n${GREEN}Stack destroyed.${RESET}`);

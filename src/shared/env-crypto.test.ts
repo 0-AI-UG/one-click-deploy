@@ -3,7 +3,52 @@ useTempDataDir();
 
 import { describe, test, expect } from "bun:test";
 import * as db from "./db.ts";
-import { platformEnvVars, resolveAppEnvVars, serializeEnvVars } from "./env-crypto.ts";
+import {
+  isSuspiciousSecretKey,
+  mergeEnvVarUpdate,
+  parseEnvVars,
+  platformEnvVars,
+  processIncomingEnvVars,
+  resolveAppEnvVars,
+  serializeEnvVars,
+  suspiciousPlaintextKeys,
+} from "./env-crypto.ts";
+
+describe("suspicious secret classification", () => {
+  test("recognizes credential and connection names without flagging ordinary settings", () => {
+    expect(isSuspiciousSecretKey("API_TOKEN")).toBe(true);
+    expect(isSuspiciousSecretKey("AWS_SECRET_ACCESS_KEY")).toBe(true);
+    expect(isSuspiciousSecretKey("SENTRY_DSN")).toBe(true);
+    expect(isSuspiciousSecretKey("DATABASE_URL")).toBe(true);
+    expect(isSuspiciousSecretKey("REDIS_URL")).toBe(true);
+    expect(isSuspiciousSecretKey("LOG_LEVEL")).toBe(false);
+    expect(suspiciousPlaintextKeys([
+      { key: "API_TOKEN", value: "secret", secret: false },
+      { key: "LOG_LEVEL", value: "info", secret: false },
+    ])).toEqual(["API_TOKEN"]);
+  });
+
+  test("server converts suspicious plaintext input into encrypted secret storage", async () => {
+    const result = await processIncomingEnvVars([
+      { key: "DATABASE_URL", value: "postgres://user:pass@db/test", secret: false },
+    ]);
+    expect(result.entries[0].secret).toBe(true);
+    expect(result.entries[0].value).toBe("");
+    expect(result.entries[0].encrypted_value).toBeTruthy();
+    expect(JSON.stringify(result)).not.toContain("postgres://user:pass");
+  });
+
+  test("merge path also converts suspicious plaintext while preserving masked ciphertext", async () => {
+    const original = await processIncomingEnvVars([
+      { key: "API_TOKEN", value: "token-value", secret: true },
+    ]);
+    const preserved = await mergeEnvVarUpdate(original, [
+      { key: "API_TOKEN", value: "••••••••", secret: false },
+    ]);
+    expect(preserved.entries[0]).toEqual(original.entries[0]);
+    expect(parseEnvVars(serializeEnvVars(preserved.entries)).entries[0].secret).toBe(true);
+  });
+});
 
 describe("platformEnvVars", () => {
   test("HTTP-routed app (internal_protocol=http) gets a port-less http:// internal URL", () => {

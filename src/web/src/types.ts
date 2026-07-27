@@ -10,6 +10,8 @@ export type EnvironmentData = {
   name: string;
   env_vars: EnvVarEntry[];
   created_at: string;
+  deleted_at?: string | null;
+  purge_after?: string | null;
 };
 
 export type AppData = {
@@ -17,6 +19,9 @@ export type AppData = {
   name: string;
   domain: string;
   git_repo: string;
+  source_mode?: string;
+  image_ref?: string;
+  build_cache_ref?: string;
   status: string;
   container_port: number;
   webhook_enabled: number | boolean;
@@ -56,6 +61,10 @@ export type AppData = {
   cpu_limit?: number;
   internal_port?: number;
   health_check?: boolean | number;
+  health_check_mode?: string;
+  health_check_command?: string;
+  health_check_file?: string;
+  health_check_max_age_seconds?: number;
   internal_protocol?: string; // 'http' | 'tcp'
   sticky?: boolean | number;
   rate_limit_rps?: number;
@@ -104,6 +113,7 @@ export type ScalingEvent = {
 export type DeploymentRecord = {
   id: number;
   image_tag?: string;
+  image_digest?: string;
   git_commit?: string;
   source?: string;
   status: string;

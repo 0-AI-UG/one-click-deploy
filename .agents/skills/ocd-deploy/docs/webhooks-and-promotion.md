@@ -38,6 +38,20 @@ With webhook enabled and no staging environment:
 Webhook settings can themselves be applied from a manifest, but future pushes
 use the stored settings.
 
+Stack destruction is a durable webhook barrier:
+
+- deletion automatically suspends webhook work for every member;
+- pending duplicate pushes are dropped/coalesced;
+- running webhook deployments receive cancellation and compensate before
+  destruction acquires the stack;
+- a push received while destruction is pending/running returns accepted but
+  does not enqueue deployment;
+- the same guard is checked again after a long CI wait.
+
+`ocd delete stack <name> --suspend-webhooks` is accepted as an explicit spelling
+of the automatic safe default. There is no flag to keep member webhooks running
+during stack destruction.
+
 ## Branch, path, and CI filtering
 
 - Branch defaults to `main`.

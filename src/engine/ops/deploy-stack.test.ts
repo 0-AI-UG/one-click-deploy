@@ -8,7 +8,13 @@ import {
   listChildOperations,
   markOperationFinished,
 } from "../../shared/db/operations.ts";
-import deployStackOp, { topoLevels, portCapacityExceeded } from "./deploy-stack.ts";
+import deployStackOp, {
+  dependencyProjectionKeys,
+  leastPrivilegeProjection,
+  suspiciousUnrelatedProjectionKeys,
+  topoLevels,
+  portCapacityExceeded,
+} from "./deploy-stack.ts";
 import type { StackDeployRequest } from "../../shared/rpc.ts";
 import type { OpContext } from "../types.ts";
 
@@ -72,6 +78,66 @@ describe("topoLevels", () => {
 
   test("throws on a dependency cycle", () => {
     expect(() => topoLevels([app("a", ["b"]), app("b", ["a"])])).toThrow(/cycle/i);
+  });
+});
+
+describe("least-privilege stack environment projection", () => {
+  test("includes declared variables and generated dependency variables", () => {
+    const input = req(
+      "safe",
+      [app("web", ["api", "database"]), app("api")],
+      [{ key: "database", type: "postgresql" }],
+    );
+    const web = {
+      ...input.apps[0],
+      declared_env_keys: ["NODE_ENV", "STRIPE_API_KEY"],
+      env_projection_mode: "declared" as const,
+    };
+    expect(dependencyProjectionKeys(web, input)).toEqual([
+      "API_URL",
+      "DATABASE_URL",
+      "DATABASE_HOST",
+      "DATABASE_PORT",
+      "DATABASE_USER",
+      "DATABASE_PASSWORD",
+      "DATABASE_NAME",
+    ]);
+    expect(leastPrivilegeProjection(web, input)).toEqual([
+      "API_URL",
+      "DATABASE_HOST",
+      "DATABASE_NAME",
+      "DATABASE_PASSWORD",
+      "DATABASE_PORT",
+      "DATABASE_URL",
+      "DATABASE_USER",
+      "NODE_ENV",
+      "STRIPE_API_KEY",
+    ]);
+  });
+
+  test("warn candidates contain names only and exclude declared/dependency secrets", () => {
+    expect(suspiciousUnrelatedProjectionKeys(
+      [
+        "DATABASE_PASSWORD",
+        "STRIPE_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "MONGO_URL",
+        "DOCS_THEME",
+        "EMAIL_TOKEN",
+      ],
+      ["DATABASE_PASSWORD", "DOCS_THEME"],
+      null,
+    )).toEqual([
+      "AWS_SECRET_ACCESS_KEY",
+      "EMAIL_TOKEN",
+      "MONGO_URL",
+      "STRIPE_API_KEY",
+    ]);
+    expect(suspiciousUnrelatedProjectionKeys(
+      ["STRIPE_API_KEY", "EMAIL_TOKEN"],
+      [],
+      ["EMAIL_TOKEN"],
+    )).toEqual(["EMAIL_TOKEN"]);
   });
 });
 

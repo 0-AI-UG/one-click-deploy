@@ -54,6 +54,7 @@ export function makeFakeComputeProvider(
     volumeDelete: ReturnType<typeof mock>;
     volumeAttach: ReturnType<typeof mock>;
     volumeDetach: ReturnType<typeof mock>;
+    volumeRename: ReturnType<typeof mock>;
   };
 } {
   const _mocks = {
@@ -80,6 +81,7 @@ export function makeFakeComputeProvider(
     volumeDelete: mock(async (_id: string) => {}),
     volumeAttach: mock(async () => {}),
     volumeDetach: mock(async () => {}),
+    volumeRename: mock(async () => {}),
   };
   const provider: Hetzner = {
     id: "hetzner",
@@ -108,6 +110,7 @@ export function makeFakeComputeProvider(
       attach: _mocks.volumeAttach,
       detach: _mocks.volumeDetach,
       resize: async () => {},
+      rename: _mocks.volumeRename,
       delete: _mocks.volumeDelete,
     },
     networks: {

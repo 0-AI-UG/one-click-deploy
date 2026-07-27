@@ -89,6 +89,15 @@ export async function resizeVolume(volumeId: string, size: number) {
   log("volume", `Volume ${volumeId} resized to ${size}GB`);
 }
 
+export async function renameVolume(volumeId: string, name: string) {
+  log("volume", `Renaming volume ${volumeId} to "${name}"`);
+  await hetznerApi(`/volumes/${volumeId}`, {
+    method: "PUT",
+    body: JSON.stringify({ name }),
+  });
+  log("volume", `Volume ${volumeId} renamed to "${name}"`);
+}
+
 export async function deleteVolume(volumeId: string) {
   // Try to detach first (required by Hetzner before delete)
   const volumeData = await hetznerApi(`/volumes/${volumeId}`) as unknown as WithVolume;

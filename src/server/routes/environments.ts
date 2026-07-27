@@ -2,7 +2,7 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission, requireAuthenticated, envScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
-import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars } from "../../shared/env-crypto.ts";
+import { parseEnvVars, maskEnvVarsForResponse, serializeEnvVars, mergeEnvVarUpdate, processIncomingEnvVars, suspiciousPlaintextKeys } from "../../shared/env-crypto.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 
@@ -20,6 +20,19 @@ export async function handleGetEnvironments(request: Request): Promise<Response>
   }
 }
 
+export async function handleGetDeletedEnvironments(request: Request): Promise<Response> {
+  try {
+    await requirePermission(request, "environments.view");
+    const result = db.getDeletedEnvironments().map((environment) => ({
+      ...environment,
+      env_vars: maskEnvVarsForResponse(parseEnvVars(environment.env_vars)),
+    }));
+    return Response.json(result, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export async function handleCreateEnvironment(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "environments.manage");
@@ -29,14 +42,22 @@ export async function handleCreateEnvironment(request: Request): Promise<Respons
       return Response.json({ ok: false, error: "Name is required" }, { status: 400, headers: corsHeaders });
     }
     const existing = db.getEnvironments().find((e) => e.name === name.trim());
-    if (existing) {
-      return Response.json({ ok: false, error: "An environment with that name already exists" }, { status: 409, headers: corsHeaders });
+    const deleted = db.getDeletedEnvironments().find((e) => e.name === name.trim());
+    if (existing || deleted) {
+      return Response.json({
+        ok: false,
+        error: deleted
+          ? "A deleted environment has that name; restore or permanently purge it first"
+          : "An environment with that name already exists",
+      }, { status: 409, headers: corsHeaders });
     }
+    const warnings = suspiciousPlaintextKeys(env_vars || []);
     const processed = await processIncomingEnvVars(env_vars || []);
     const env = db.insertEnvironment(name.trim(), serializeEnvVars(processed.entries));
     return Response.json({
       ...env,
       env_vars: maskEnvVarsForResponse(parseEnvVars(env.env_vars)),
+      warnings: warnings.map((key) => `${key} looked sensitive and was stored as an encrypted secret automatically.`),
     }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -82,6 +103,7 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
     // rename-only request.
     let newSerialized = existing.env_vars;
     let changedKeys: string[] = [];
+    const warnings = env_vars === undefined ? [] : suspiciousPlaintextKeys(env_vars);
     if (env_vars !== undefined) {
       const existingParsed = parseEnvVars(existing.env_vars);
       const merged = await mergeEnvVarUpdate(existingParsed, env_vars || []);
@@ -144,6 +166,7 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
       stale_apps: staleApps,
       rollout,
       changed_keys: changedKeys,
+      warnings: warnings.map((key) => `${key} looked sensitive and was stored as an encrypted secret automatically.`),
       op_id: opId,
     }, { headers: corsHeaders });
   } catch (error) {
@@ -164,8 +187,8 @@ export async function handleCopyEnvironment(request: Request, id: number): Promi
     }
     const body = await request.json().catch(() => ({}));
     const name = (typeof body.name === "string" && body.name.trim() ? body.name : `${src.name}-copy`).trim();
-    if (db.getEnvironments().some((e) => e.name === name)) {
-      return Response.json({ ok: false, error: "An environment with that name already exists" }, { status: 409, headers: corsHeaders });
+    if (db.getEnvironments().some((e) => e.name === name) || db.getDeletedEnvironments().some((e) => e.name === name)) {
+      return Response.json({ ok: false, error: "An active or deleted environment with that name already exists" }, { status: 409, headers: corsHeaders });
     }
     const env = db.duplicateEnvironment(id, name);
     return Response.json({
@@ -193,8 +216,63 @@ export async function handleDeleteEnvironment(request: Request, id: number): Pro
         error: `Cannot delete: environment is used by ${attachedApps.length} app(s): ${names}. Reassign them first.`,
       }, { status: 409, headers: corsHeaders });
     }
+    const serviceLinks = db.getServiceLinksByEnvironmentId(id);
+    if (serviceLinks.length > 0) {
+      return Response.json({
+        ok: false,
+        error: `Cannot delete: environment is linked to ${serviceLinks.length} managed service(s). Uninject them first.`,
+      }, { status: 409, headers: corsHeaders });
+    }
+    db.softDeleteEnvironment(id);
+    const deleted = db.getDeletedEnvironment(id);
+    return Response.json({
+      ok: true,
+      recoverable: true,
+      recoverable_until: deleted?.purge_after ?? null,
+    }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleRestoreEnvironment(request: Request, id: number): Promise<Response> {
+  try {
+    await requirePermission(request, "environments.manage", envScope(id));
+    const environment = db.getDeletedEnvironment(id);
+    if (!environment) {
+      return Response.json({ ok: false, error: "Deleted environment not found" }, { status: 404, headers: corsHeaders });
+    }
+    db.restoreEnvironment(id);
+    const restored = db.getEnvironment(id)!;
+    return Response.json({
+      ...restored,
+      env_vars: maskEnvVarsForResponse(parseEnvVars(restored.env_vars)),
+    }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handlePurgeEnvironment(request: Request, id: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "environments.manage", envScope(id));
+    const environment = db.getDeletedEnvironment(id);
+    if (!environment) {
+      return Response.json({ ok: false, error: "Deleted environment not found" }, { status: 404, headers: corsHeaders });
+    }
+    if (db.isEnvironmentPurgeProtected(environment)) {
+      return Response.json(
+        {
+          ok: false,
+          error: `Environment is protected from permanent deletion until ${environment.purge_after} UTC`,
+          purge_after: environment.purge_after,
+        },
+        { status: 409, headers: corsHeaders },
+      );
+    }
+    await enforceConfirmation(request, payload, "purge_environment", "environment", String(id));
     db.deleteEnvironment(id);
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    return Response.json({ ok: true, permanently_deleted: true }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

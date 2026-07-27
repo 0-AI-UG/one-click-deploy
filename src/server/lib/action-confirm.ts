@@ -93,11 +93,11 @@ export function resolveConfirmation(
 }
 
 /**
- * Server-side gate for destructive actions. Enforced ONLY for CLI-minted tokens
- * (payload.client === "cli"); UI/browser tokens pass through untouched. For a
- * CLI token, the caller must present the `x-ocd-confirmation` header carrying a
- * confirm_code that was browser-approved for this exact user + action +
- * resource; the code is consumed (single-use) here.
+ * Server-side gate for destructive actions. Stack/environment/volume deletion
+ * always requires a server-issued, browser-approved confirmation, including
+ * requests made with a web token. Other actions retain the historical
+ * CLI-only gate. The code is bound to the exact user/action/resource and is
+ * consumed here exactly once.
  */
 export async function enforceConfirmation(
   request: Request,
@@ -106,12 +106,19 @@ export async function enforceConfirmation(
   resourceType: string,
   resourceId: string,
 ): Promise<void> {
-  if (payload.client !== "cli") return;
+  const alwaysBrowserConfirmed =
+    action === "delete_environment" ||
+    action === "purge_environment" ||
+    action === "delete_stack" ||
+    action === "delete_volume";
+  if (payload.client !== "cli" && !alwaysBrowserConfirmed) return;
 
   const token = request.headers.get("x-ocd-confirmation");
   if (!token) {
     throw new ConfirmationError(
-      "This action requires browser confirmation. Run it through the ocd CLI so you can approve it in your browser.",
+      payload.client === "cli"
+        ? "This action requires browser confirmation. Re-run it through the ocd CLI and approve it in your browser."
+        : "This action requires a server-issued browser confirmation. Use the OCD web UI to perform it.",
     );
   }
 
@@ -128,6 +135,7 @@ export async function enforceConfirmation(
     // volume deletion is included because it irreversibly destroys user data.
     if (
       action === "delete_environment" ||
+      action === "purge_environment" ||
       action === "delete_stack" ||
       action === "delete_volume"
     ) {

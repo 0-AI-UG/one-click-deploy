@@ -6,8 +6,10 @@ import {
   writeEnvDeployFile,
   buildAppImage,
   findDockerfile,
+  pullImmutableImage,
 } from "../../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -23,6 +25,7 @@ type TargetOut = {
   serverId: number;
   gitCommit: string;
   imageTag: string;
+  imageDigest?: string;
   previousStatus: string;
 };
 
@@ -57,6 +60,7 @@ const loadTargetDeployment: Step<RollbackInput, TargetOut> = {
       serverId: first.server_id,
       gitCommit: deployment.git_commit,
       imageTag: deployment.image_tag,
+      imageDigest: deployment.image_digest || undefined,
       previousStatus: app.status,
     };
   },
@@ -82,7 +86,9 @@ const checkoutTarget: Step<{ appId: number }, CheckoutOut> = {
     const hostKey = server.ssh_host_key || undefined;
     const appDir = `/home/deploy/apps/${app.name}`;
 
-    await sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${target.gitCommit}`), hostKey);
+    if (app.source_mode !== "image") {
+      await sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${target.gitCommit}`), hostKey);
+    }
 
     const envVars = await resolveAppEnvVars(app);
     const envFilePath = (await writeEnvDeployFile(server.ipv4, app.name, envVars, hostKey)) ?? null;
@@ -101,6 +107,19 @@ const rebuildImage: Step<{ appId: number }, RebuildOut> = {
     if (!server) throw new Error("Server not found");
     const hostKey = server.ssh_host_key || undefined;
     const appDir = `/home/deploy/apps/${app.name}`;
+    if (app.source_mode === "image") {
+      if (!target.imageDigest?.includes("@sha256:")) {
+        throw new Error("Rollback target predates immutable image digest history");
+      }
+      const token = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
+      await pullImmutableImage(server.ipv4, {
+        name: app.name,
+        imageRef: target.imageDigest,
+        gitToken: token,
+        hostKey,
+      }, (line) => ctx.log(`[pull] ${line}`));
+      return { dockerfilePath: null };
+    }
 
     let dockerfilePath = app.dockerfile_path?.replace(/^\/+/, "");
     if (!dockerfilePath) {
@@ -273,6 +292,7 @@ const recordRollback: Step<RollbackInput, { deploymentId: number }> = {
     const row = db.insertDeployment({
       app_id: target.appId,
       image_tag: target.imageTag,
+      image_digest: target.imageDigest || "",
       git_commit: `rollback-from-${target.gitCommit}`,
       config_revision: db.getApp(target.appId)?.config_revision ?? 1,
     });

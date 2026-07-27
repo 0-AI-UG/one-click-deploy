@@ -11,19 +11,29 @@ configuration, rollout, and recovery semantics.
 
 ## Core mental model
 
-- Treat Git as the source of application code.
+- Treat each app's stored `source_mode` as authoritative: `git` builds source,
+  while `image` pulls one immutable OCI digest and never reads Git.
 - Treat OCD's database as the source of desired runtime configuration.
 - Treat a manifest as a complete configuration input that is applied only by an
   explicit manifest operation.
 - Use `ocd deploy` to apply a manifest and then build/deploy Git code.
-- Use `ocd redeploy` to build/deploy the latest configured Git branch with the
-  configuration already stored in OCD. It does not reread a manifest.
+- Use `ocd redeploy` to repeat the stored source operation with configuration
+  already in OCD: build the configured Git branch, or re-pull the configured
+  immutable image digest. It does not reread a local manifest.
 - Use `ocd config diff` to preview a manifest against stored configuration.
 - Use `ocd config apply` to apply manifest configuration without deploying code.
 - Expect UI edits and environment edits to update stored configuration. A later
   code-only redeploy preserves them.
 - Expect a later manifest apply to reconcile the complete manifest-controlled
   specification. Review the diff when UI and manifest values may have diverged.
+- Treat environment removal as retirement: unused environments move to the
+  deleted list with their encrypted values intact and can be restored. A
+  separate permanent purge always requires browser approval.
+- Expect the server to upgrade suspicious plaintext credential names to
+  encrypted secrets and warn the caller; client-side flags are defense in
+  depth, not the storage security boundary.
+- Treat provider-volume rename as metadata-only. Permanent provider-volume
+  deletion is browser-gated and durably audited before the provider call.
 
 Read [docs/concepts.md](docs/concepts.md) before changing deployment behavior
 or explaining configuration ownership.
@@ -60,6 +70,7 @@ Read only the files relevant to the task, but read each selected file fully.
 |---|---|
 | Understand config ownership, revisions, deploy vs redeploy | [docs/concepts.md](docs/concepts.md), [docs/deploy-and-config.md](docs/deploy-and-config.md) |
 | Author or review `.ocd-deploy.json` | [docs/app-manifest.md](docs/app-manifest.md) |
+| Deploy a prebuilt image, configure build cache, or model worker/job readiness | [docs/artifacts-build-cache-and-health.md](docs/artifacts-build-cache-and-health.md) |
 | Author or review `ocd-stack.json` | [docs/stack-manifest.md](docs/stack-manifest.md), [docs/stacks-and-services.md](docs/stacks-and-services.md) |
 | Use any CLI command or flag | [docs/cli-reference.md](docs/cli-reference.md) |
 | Manage variables, secrets, or environment rollouts | [docs/environments-and-secrets.md](docs/environments-and-secrets.md) |
@@ -84,8 +95,16 @@ files; detailed truth lives under `docs/`.
   resources created by the operation.
 - Treat stack reconciliation as destructive when members were removed from the
   manifest: omitted recorded members are destroyed.
+- Expect stack deletion to suspend/supersede member webhook deployments before
+  destroying members; new webhook pushes are dropped once destruction starts.
+- For new stack members, omitted `apps.<key>.env` means least-privilege
+  child-declared plus dependency keys. Use `env_all: true` only when sending the
+  full shared environment is intentional. Existing members preserve stored
+  projection until manifest intent is explicit.
 - Treat volumes as billable even after detachment. OCD retains managed volumes
   for recovery; retention is not deletion.
+- Never bypass browser approval for permanent environment purge or provider
+  volume deletion. Inspect `ocd volumes audit` after destructive volume work.
 - Never invent a managed-service type or version. Query
   `ocd service catalog`.
 - Never commit basic-auth passwords or required secrets. Use a local

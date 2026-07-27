@@ -39,7 +39,8 @@ runtime configuration into the stack manifest.
 | `apps` | non-empty object map, required | App members. |
 | `apps.<key>.manifest` | non-empty string, required | Child app manifest path relative to `ocd-stack.json`. |
 | `apps.<key>.needs` | string[] | Declared app/service keys that must become healthy first. |
-| `apps.<key>.env` | string[] | Shared-environment projection. Omit for all keys; `[]` for platform keys only. |
+| `apps.<key>.env` | string[] | Explicit shared-environment projection. `[]` means platform/dependency variables only. |
+| `apps.<key>.env_all` | boolean, `false` | Explicitly send every shared key to this member. Cannot be combined with `env`. |
 | `apps.<key>.domain` | string | Override the child manifest domain. |
 | `apps.<key>.public` | boolean | Override the child manifest public setting. |
 
@@ -84,11 +85,20 @@ Dependency injection names are derived from stack keys:
 
 `_URL` and `_PASSWORD` service values are secret.
 
-Use `apps.<key>.env` to apply least privilege:
+New stack members use least privilege by default:
 
-- omit: receive every shared key;
-- `[]`: receive no shared user keys, only platform-injected values;
+- omit both `env` and `env_all`: receive keys declared in the child manifest
+  plus variables generated for entries in `needs`;
+- `[]`: receive no child-declared shared keys, but still receive dependency and
+  platform-injected values;
 - `["API_URL", "NODE_ENV"]`: receive only those shared keys.
+- `"env_all": true`: explicitly receive the entire shared environment.
+
+For backward compatibility, an existing stored member keeps its current
+projection when a re-up omits both fields. Add `env` or `env_all` to make a
+projection change explicit. OCD warns in stack logs when a public app receives
+suspicious unrelated names such as `*_PASSWORD`, `*_TOKEN`, `*_SECRET`,
+`*_PRIVATE_KEY`, or `*_API_KEY`; warning output contains names, never values.
 
 Do not mark dependency-generated variables as `required` in a child manifest;
 they do not exist at initial CLI prompt time.
@@ -106,6 +116,9 @@ Re-running `ocd deploy stack` is a complete reconciliation:
 - the production and staging environments are never deleted by member or stack
   destruction;
 - managed volumes are detached and retained rather than provider-deleted.
+- stack deletion automatically suspends pending member webhook deployments,
+  cancels/compensates running webhook deployments, and drops pushes received
+  after destruction begins.
 
 Review the manifest diff before removing a member key. Renaming a key is
 equivalent to destroying the old member and creating a new one.

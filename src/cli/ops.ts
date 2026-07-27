@@ -141,10 +141,13 @@ export function formatFallbackProgress(op: OperationFallbackPoll): string {
  * connection is retried (with backoff) rather than aborting, since the op keeps
  * running server-side. Only a terminal op status or exhausted retries stop us.
  */
-export async function followOp(opId: number): Promise<{ ok: boolean; error?: string }> {
+export async function followOp(
+  opId: number,
+  opts: { quiet?: boolean } = {},
+): Promise<{ ok: boolean; error?: string }> {
   // Always surface the durable handle before attempting any long-poll. If the
   // CLI disconnects, this is enough to resume inspection with `ocd ops <id>`.
-  console.log(`${DIM}Operation #${opId} — inspect with: ocd ops ${opId}${RESET}`);
+  if (!opts.quiet) console.log(`${DIM}Operation #${opId} — inspect with: ocd ops ${opId}${RESET}`);
   let lastSeq = 0;
   const printed = new Set<string>();
   const retry = newFollowRetryState();
@@ -161,7 +164,7 @@ export async function followOp(opId: number): Promise<{ ok: boolean; error?: str
         try {
           fallback = await get<OperationFallbackPoll>(`/api/operations/${opId}`);
           const progress = formatFallbackProgress(fallback);
-          if (retry.lastProgressKey !== progress) {
+          if (!opts.quiet && retry.lastProgressKey !== progress) {
             console.log(`  ${DIM}${progress}${RESET}`);
             retry.lastProgressKey = progress;
           }
@@ -172,7 +175,7 @@ export async function followOp(opId: number): Promise<{ ok: boolean; error?: str
             const key = `${event.seq}:${event.status}:${event.phase}`;
             if (printed.has(key)) continue;
             printed.add(key);
-            printFollowEvent(event);
+            if (!opts.quiet) printFollowEvent(event);
             lastSeq = Math.max(lastSeq, event.seq);
           }
           if (TERMINAL.has(fallback.status)) {
@@ -186,7 +189,7 @@ export async function followOp(opId: number): Promise<{ ok: boolean; error?: str
         const progress = fallback ? formatFallbackProgress(fallback) : undefined;
         if (await handleTransientFollowError(
           retry,
-          (line) => console.log(`  ${line}`),
+          (line) => { if (!opts.quiet) console.log(`  ${line}`); },
           { progress },
         )) continue;
       }
@@ -202,7 +205,7 @@ export async function followOp(opId: number): Promise<{ ok: boolean; error?: str
       const key = `${event.seq}:${event.status}:${event.phase}`;
       if (!printed.has(key)) {
         printed.add(key);
-        printFollowEvent(event);
+        if (!opts.quiet) printFollowEvent(event);
       }
       lastSeq = event.seq;
     }

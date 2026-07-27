@@ -22,12 +22,14 @@ export { pruneAfterBuild, pruneServer } from "./prune.ts";
 
 export { transferImage } from "./image-transfer.ts";
 
-export { findDockerfile, buildAppImage, cloneRepo, cloneAndBuild } from "./build.ts";
+export { findDockerfile, buildAppImage, cloneRepo, cloneAndBuild, pullImmutableImage, pullImmutableImageAndRun } from "./build.ts";
 
 export {
   healthCheck,
   containerRunningCheck,
   probeAppHealth,
+  markerFreshnessHealthCheck,
+  assessMarkerFreshness,
   serviceHealthCheck,
 } from "./health.ts";
 

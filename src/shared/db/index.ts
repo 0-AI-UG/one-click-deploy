@@ -44,6 +44,7 @@ export {
   updateAppEnvVars,
   updateAppContainerPort,
   updateAppBuildSource,
+  updateAppArtifactAndHealth,
   recordAppManifestApplied,
   updateAppDomain,
   updateAppVolume,
@@ -89,7 +90,9 @@ export {
   PUBLIC_UDP_PORT_COUNT,
 } from "./apps.ts";
 export type { RetiredVolumeRow } from "./retired-volumes.ts";
-export { retireVolume, getRetiredVolumes } from "./retired-volumes.ts";
+export { retireVolume, getRetiredVolumes, deleteRetiredVolume } from "./retired-volumes.ts";
+export type { VolumeDeletionAuditRow } from "./volume-audit.ts";
+export { beginVolumeDeletionAudit, finishVolumeDeletionAudit, getVolumeDeletionAudit } from "./volume-audit.ts";
 export type { ReplicaRow, MetricSampleRow, ScalingEventRow } from "./replicas.ts";
 export {
   insertReplica,
@@ -205,15 +208,21 @@ export {
   insertServiceLink,
   deleteServiceLink,
   getServiceLinks,
+  getServiceLinksByEnvironmentId,
   getServicesOnServer,
 } from "./services.ts";
 export type { EnvironmentRow } from "./environments.ts";
 export {
   getEnvironments,
   getEnvironment,
+  getDeletedEnvironments,
+  getDeletedEnvironment,
   insertEnvironment,
   updateEnvironment,
   deleteEnvironment,
+  softDeleteEnvironment,
+  restoreEnvironment,
+  isEnvironmentPurgeProtected,
   duplicateEnvironment,
 } from "./environments.ts";
 export type { StackRow } from "./stacks.ts";

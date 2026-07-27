@@ -41,3 +41,7 @@ export function retireVolume(data: {
 export function getRetiredVolumes(): RetiredVolumeRow[] {
   return db.query("SELECT * FROM retired_volumes ORDER BY retired_at DESC").all() as RetiredVolumeRow[];
 }
+
+export function deleteRetiredVolume(providerVolumeId: string): void {
+  db.query("DELETE FROM retired_volumes WHERE provider_volume_id = ?").run(providerVolumeId);
+}

@@ -92,6 +92,7 @@ export const ALL_PERMISSIONS = [
   "volumes.attach",
   "volumes.detach",
   "volumes.resize",
+  "volumes.rename",
   "volumes.delete",
   /** Browsing and reading file contents off a volume — i.e. application data. */
   "volumes.files.read",

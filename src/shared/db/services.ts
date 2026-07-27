@@ -200,6 +200,17 @@ export function getServiceLinks(serviceId: number): ServiceLinkWithEnvironmentRo
     .all(serviceId) as ServiceLinkWithEnvironmentRow[];
 }
 
+export function getServiceLinksByEnvironmentId(environmentId: number): ServiceLinkWithEnvironmentRow[] {
+  return db
+    .query(
+      `SELECT sl.*, e.name as environment_name
+       FROM service_links sl
+       JOIN environments e ON sl.environment_id = e.id
+       WHERE sl.environment_id = ?`,
+    )
+    .all(environmentId) as ServiceLinkWithEnvironmentRow[];
+}
+
 export function getServicesOnServer(serverId: number): ServiceRow[] {
   return db
     .query(`
@@ -210,4 +221,3 @@ export function getServicesOnServer(serverId: number): ServiceRow[] {
     `)
     .all(serverId) as ServiceRow[];
 }
-

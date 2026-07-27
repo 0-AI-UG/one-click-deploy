@@ -1,4 +1,4 @@
-import { del, get, post, resolveApp } from "../api.ts";
+import { del, get, post, put, resolveApp } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { promptLine } from "../prompt.ts";
 import { BOLD, DIM, GREEN, RED, RESET, table } from "../format.ts";
@@ -85,6 +85,34 @@ async function showVolume(ref: string): Promise<void> {
   console.log(`State: ${data.attached ? "attached" : "detached"}  Size: ${data.size} GB  Location: ${data.location}`);
   console.log(`Server: ${data.server_name || "-"}  App: ${data.app_name || "-"}  Cost: ${money(data.monthly_eur)}`);
   if (data.host_path) console.log(`Host path: ${data.host_path}`);
+}
+
+async function renameVolume(volumeId: string, name: string): Promise<void> {
+  const result = await put<{ id: string; name: string }>(
+    `/api/resources/volumes/${encodeURIComponent(volumeId)}`,
+    { name },
+  );
+  console.log(`${GREEN}Renamed volume ${BOLD}${result.id}${RESET}${GREEN} to ${BOLD}${result.name}${RESET}`);
+}
+
+async function volumeDeletionAudit(): Promise<void> {
+  const rows = await get<Array<{
+    provider_volume_id: string; provider_volume_name: string; former_resource_name: string;
+    retention_state: string; status: string; actor_user_id: string; requested_at: string; error: string;
+  }>>("/api/resources/volumes/deletion-audit");
+  table(
+    ["REQUESTED", "ID", "NAME", "FORMER OWNER", "STATE", "STATUS", "ACTOR", "ERROR"],
+    rows.map((row) => [
+      row.requested_at,
+      row.provider_volume_id,
+      row.provider_volume_name,
+      row.former_resource_name || "-",
+      row.retention_state || "-",
+      row.status,
+      row.actor_user_id,
+      row.error || "-",
+    ]),
+  );
 }
 
 async function topology(): Promise<void> {
@@ -304,6 +332,8 @@ ${BOLD}Commands:${RESET}
   detach <app>                          Detach but retain the volume
   reattach <id> --from=<app> --to=<app> [--mount-path=/data]
   resize <id> --size=<gb>               Grow a volume (provider volumes cannot shrink)
+  rename <id> <name>                    Rename a provider volume
+  audit                                 Show the durable permanent-deletion audit
   ls <id> [path]                        Browse an attached volume
   cat <id> <path>                       Read a text file (max 256 KiB)
   delete <id>                           Permanently destroy an unused volume (browser approval)`);
@@ -336,6 +366,11 @@ export async function volumes(args: string[] = []): Promise<void> {
   if (sub === "detach") return volumeDetach(args.slice(1));
   if (sub === "reattach" || sub === "move") return volumeReattach(args.slice(1));
   if (sub === "resize") return volumeResize(args.slice(1));
+  if (sub === "rename") {
+    if (!args[1] || !args[2]) throw new Error("Usage: ocd volumes rename <provider-volume-id> <name>");
+    return renameVolume(args[1], args[2]);
+  }
+  if (sub === "audit" || sub === "deletion-audit") return volumeDeletionAudit();
   if (sub === "ls" || sub === "files") {
     if (!args[1]) throw new Error("Usage: ocd volumes ls <provider-volume-id> [path]");
     return listVolumeFiles(args[1], args[2] || "");

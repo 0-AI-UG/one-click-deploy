@@ -5,12 +5,16 @@ import { describe, expect, test } from "bun:test";
 import * as db from "../../shared/db.ts";
 import {
   enqueueOperation,
+  getOperation,
   markOperationFinished,
+  markOperationRunning,
 } from "../../shared/db/operations.ts";
 import { withOwningStackKeys } from "../ipc/enqueue.ts";
 import {
   findLatestRelatedStackOperation,
+  isStackDestructionActiveForApp,
   stackLockKeys,
+  suspendStackWebhookOperations,
 } from "./stack-operations.ts";
 import { release, tryAcquire } from "../../engine/scheduler.ts";
 
@@ -83,5 +87,34 @@ describe("stack operation association and locking", () => {
 
     expect(findLatestRelatedStackOperation(stack)?.id).toBe(member.id);
     expect(findLatestRelatedStackOperation(stack)?.status).toBe("failed");
+  });
+
+  test("stack destroy drops queued webhook work and requests cancellation of running work", () => {
+    const { stack, app } = fixture();
+    const pending = enqueueOperation(withOwningStackKeys({
+      kind: "redeploy",
+      resourceKeys: [`app:${app.id}`],
+      input: { appId: app.id },
+      trigger: "webhook",
+    }));
+    const running = enqueueOperation(withOwningStackKeys({
+      kind: "redeploy",
+      resourceKeys: [`app:${app.id}`],
+      input: { appId: app.id },
+      trigger: "webhook",
+      idempotencyKey: `running-${randomSuffix()}`,
+    }));
+    markOperationRunning(running.id);
+    enqueueOperation({
+      kind: "destroy_stack",
+      resourceKeys: stackLockKeys(stack),
+      input: { stackId: stack.id, suspendWebhooks: true },
+      trigger: "ui",
+    });
+
+    expect(isStackDestructionActiveForApp(app.id)).toBe(true);
+    expect(suspendStackWebhookOperations(stack)).toEqual([pending.id, running.id]);
+    expect(getOperation(pending.id)?.status).toBe("cancelled");
+    expect(getOperation(running.id)?.error_json).toContain("cancel_requested");
   });
 });

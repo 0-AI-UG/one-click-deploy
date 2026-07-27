@@ -3,6 +3,7 @@ import {
   sshExec,
   cloneRepo,
   cloneAndBuild,
+  pullImmutableImageAndRun,
   probeAppHealth,
   startAppReplica,
 } from "../../shared/remote/index.ts";
@@ -42,6 +43,7 @@ type RollbackSnapshot = {
 };
 type BuildOut = {
   imageTag: string;
+  imageDigest?: string;
   rollback: RollbackSnapshot | null;
 };
 type HealthOut = { healthy: boolean; statusCode?: number };
@@ -67,6 +69,11 @@ const cloneRepoStep: Step<RedeployInput, { ok: true }> = {
   async run(ctx) {
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
+    if (app.source_mode === "image") {
+      if (ctx.input.gitSha) throw new Error("Webhook commit redeploy is not valid for an image artifact app");
+      ctx.log("Immutable image deployment: no Git clone required");
+      return { ok: true };
+    }
     const replicas = db.getReplicas(ctx.input.appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
     const server = db.getServer(replicas[0].server_id);
@@ -193,14 +200,24 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       ctx.log(`[build] ${line}`);
     };
 
-    const r = await cloneAndBuild(server.ipv4, {
-      ...buildOpts,
-      dockerfilePath: app.dockerfile_path || undefined,
-      dockerContext: app.docker_context || undefined,
-    }, logLine);
+    const r = app.source_mode === "image"
+      ? await pullImmutableImageAndRun(server.ipv4, {
+          ...buildOpts,
+          imageRef: app.image_ref,
+        }, logLine)
+      : await cloneAndBuild(server.ipv4, {
+          ...buildOpts,
+          dockerfilePath: app.dockerfile_path || undefined,
+          dockerContext: app.docker_context || undefined,
+          buildCacheRef: app.build_cache_ref || undefined,
+        }, logLine);
     if (r.imageTag) imageTag = r.imageTag;
 
-    return { imageTag, rollback };
+    return {
+      imageTag,
+      imageDigest: "imageDigest" in r ? r.imageDigest : undefined,
+      rollback,
+    };
   },
   // If a later step fails (e.g. the new build never becomes healthy), restore
   // the previous container so the app keeps serving instead of going unhealthy.
@@ -326,8 +343,13 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
     // prematurely — but if it never comes up, throw so the op fails and
     // pull_and_build's compensate rolls back to the previous image.
     const health = await probeAppHealth(app, server.ipv4, first.container_name, bindAddr, first.host_port, 10, hostKey);
-    if (!app.health_check && health.healthy) {
-      db.appendDeployLog(ctx.input.appId, `[health] HTTP probe disabled; container is running`);
+    if (health.healthy) {
+      db.appendDeployLog(
+        ctx.input.appId,
+        app.health_check_mode === "container" || !app.health_check
+          ? "[health] HTTP probe disabled; container is running"
+          : `[health] ${app.health_check_mode || "http"} readiness passed`,
+      );
     }
     db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
     if (!health.healthy) {
@@ -350,8 +372,8 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
     const first = replicas[0];
     const server = first ? db.getServer(first.server_id) : null;
     const build = prior["pull_and_build"] as BuildOut;
-    let gitCommit = "unknown";
-    if (server) {
+    let gitCommit = app.source_mode === "image" ? "artifact" : "unknown";
+    if (server && app.source_mode !== "image") {
       try {
         const r = await sshExec(
           server.ipv4,
@@ -371,6 +393,7 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
     const row = db.insertDeployment({
       app_id: ctx.input.appId,
       image_tag: build.imageTag,
+      image_digest: build.imageDigest || app.image_ref || "",
       git_commit: gitCommit,
       config_revision: app.config_revision ?? 1,
       source: ctx.trigger === "ui" ? "manual" : ctx.trigger,

@@ -5,6 +5,7 @@ import { PermissionGate } from "../components/permission-gate.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box, Boxes, ChevronDown, ChevronRight, Table2, Share2, ArrowUpFromLine } from "lucide-react";
 import { TopologyGraph, type TopologyData } from "../components/topology-graph.tsx";
+import { serverConfirmedDelete } from "../api/server-confirmation.ts";
 
 type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
@@ -241,7 +242,12 @@ export function DashboardPage() {
     const key = `stack-delete-${stack.id}`;
     setActionLoading(key);
     try {
-      const res = await del(`/api/stacks/${stack.id}`) as { op_id?: number };
+      const res = await serverConfirmedDelete<{ op_id?: number }>(
+        `/api/stacks/${stack.id}`,
+        "delete_stack",
+        "stack",
+        stack.id,
+      );
       if (res?.op_id) {
         trackOperationInToast(res.op_id, `Destroying stack ${stack.name}`);
         ops.track(res.op_id);

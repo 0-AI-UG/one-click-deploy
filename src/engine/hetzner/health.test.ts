@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   assessContainerInspection,
+  assessMarkerFreshness,
   parseContainerInspection,
 } from "./health.ts";
 
@@ -61,5 +62,15 @@ describe("docker container state health", () => {
       restartCount: 7,
       startedAt: "2026-07-27T10:00:00Z",
     }, now).runnable).toBe(true);
+  });
+});
+
+describe("worker and periodic job freshness", () => {
+  test("accepts a marker at the configured age boundary", () => {
+    expect(assessMarkerFreshness(1_000, 60, 1_060)).toEqual({ fresh: true, ageSeconds: 60 });
+  });
+
+  test("rejects a stale marker", () => {
+    expect(assessMarkerFreshness(1_000, 60, 1_061)).toEqual({ fresh: false, ageSeconds: 61 });
   });
 });

@@ -8,7 +8,7 @@ import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
-type DestroyStackInput = { stackId: number };
+type DestroyStackInput = { stackId: number; suspendWebhooks?: boolean };
 
 const destroyMembers: Step<DestroyStackInput, { childIds: number[] }> = {
   name: "destroy_members",

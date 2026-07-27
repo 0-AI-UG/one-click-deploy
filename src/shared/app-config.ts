@@ -20,13 +20,19 @@ function normalizedSpec(req: DeployRequest) {
     git_branch: req.git_branch ?? "",
     dockerfile_path: req.dockerfile_path ?? "Dockerfile",
     docker_context: req.docker_context ?? ".",
+    image_ref: req.image_ref ?? "",
+    build_cache_ref: req.build_cache_ref ?? "",
     container_port: req.container_port,
     environment_id: req.environment_id,
     env_projection: req.env_projection ?? null,
     public: req.public ?? true,
     memory_mb: req.memory_mb ?? 0,
     cpu_limit: req.cpu_limit ?? 0,
-    health_check: req.health_check ?? true,
+    health_check: req.health_check_mode ? req.health_check_mode === "http" : (req.health_check ?? true),
+    health_check_mode: req.health_check_mode ?? (req.health_check === false ? "container" : "http"),
+    health_check_command: req.health_check_command ?? "",
+    health_check_file: req.health_check_file ?? "",
+    health_check_max_age_seconds: req.health_check_max_age_seconds ?? 0,
     internal_protocol: req.internal_protocol ?? "http",
     sticky: req.sticky ?? false,
     rate_limit_rps: req.rate_limit_rps ?? 0,
@@ -57,6 +63,8 @@ function comparableApp(app: AppRow) {
     git_branch: app.git_branch || "",
     dockerfile_path: app.dockerfile_path || "Dockerfile",
     docker_context: app.docker_context || ".",
+    image_ref: app.image_ref || "",
+    build_cache_ref: app.build_cache_ref || "",
     container_port: app.container_port,
     environment_id: app.environment_id,
     env_projection: db.parseAppEnvProjection(app),
@@ -64,6 +72,10 @@ function comparableApp(app: AppRow) {
     memory_mb: app.memory_mb ?? 0,
     cpu_limit: app.cpu_limit ?? 0,
     health_check: !!app.health_check,
+    health_check_mode: app.health_check_mode || (app.health_check ? "http" : "container"),
+    health_check_command: app.health_check_command || "",
+    health_check_file: app.health_check_file || "",
+    health_check_max_age_seconds: app.health_check_max_age_seconds || 0,
     internal_protocol: app.internal_protocol || "http",
     sticky: !!app.sticky,
     rate_limit_rps: app.rate_limit_rps ?? 0,
@@ -232,6 +244,19 @@ export async function applyAppConfig(
       gitBranch: desired.git_branch,
       dockerfilePath: desired.dockerfile_path,
       dockerContext: desired.docker_context,
+    });
+  }
+  if ([
+    "image_ref", "build_cache_ref", "health_check_mode", "health_check_command",
+    "health_check_file", "health_check_max_age_seconds",
+  ].some((f) => changed.has(f))) {
+    db.updateAppArtifactAndHealth(app.id, {
+      imageRef: desired.image_ref,
+      buildCacheRef: desired.build_cache_ref,
+      healthMode: desired.health_check_mode,
+      healthCommand: desired.health_check_command,
+      healthFile: desired.health_check_file,
+      healthMaxAgeSeconds: desired.health_check_max_age_seconds,
     });
   }
   if (changed.has("container_port")) db.updateAppContainerPort(app.id, desired.container_port);

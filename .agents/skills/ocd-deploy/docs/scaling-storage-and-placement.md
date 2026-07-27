@@ -108,7 +108,7 @@ Constraints:
 - default mount path is `/data`;
 - adding a volume to an existing volume-less app through manifest/config apply
   is refused;
-- use `ocd volumes attach/adopt/detach/reattach/resize` for lifecycle
+- use `ocd volumes attach/adopt/detach/reattach/resize/rename` for lifecycle
   operations.
 
 An existing provider volume attached through “attach existing” is treated as
@@ -135,3 +135,7 @@ deadline. Detached volumes remain billable.
 
 Recover with `ocd volumes adopt`/`reattach`. Inspect with `volumes show/ls/cat`.
 Permanent delete always requires browser approval and typing the provider ID.
+`ocd volumes rename <id> <name>` changes provider metadata only.
+`ocd volumes audit` shows the durable deletion ledger. OCD writes a pending
+row before calling the provider, then records completion or failure with actor,
+former owner, retention state, dates, and error.

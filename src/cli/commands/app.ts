@@ -23,6 +23,14 @@ type AppDetail = App & {
   autoscale_req_threshold?: number;
   scale_to_zero_after?: number;
   config_revision?: number;
+  source_mode?: string;
+  image_ref?: string;
+  build_cache_ref?: string;
+  health_check_mode?: string;
+  health_check?: boolean | number;
+  health_check_command?: string;
+  health_check_file?: string;
+  health_check_max_age_seconds?: number;
 };
 
 export type ParsedFlags = {
@@ -96,6 +104,9 @@ async function showApp(args: string[]): Promise<void> {
     ["Name", app.name],
     ["Status", app.status],
     ["Repository", app.git_repo || "-"],
+    ["Source mode", app.source_mode || "git"],
+    ["Immutable image", app.image_ref || "-"],
+    ["Build cache", app.build_cache_ref || "-"],
     ["Domain", app.domain || "-"],
     ["Public", String(!!app.public)],
     ["Container port", String(app.container_port ?? "-")],
@@ -105,6 +116,11 @@ async function showApp(args: string[]): Promise<void> {
     ["Memory MB", String(app.memory_mb ?? "-")],
     ["CPU cores", String(app.cpu_limit ?? "-")],
     ["Config revision", String(app.config_revision ?? "-")],
+    ["Health mode", app.health_check_mode || (app.health_check ? "http" : "container")],
+    ["Health command", app.health_check_command || "-"],
+    ["Health marker", app.health_check_file
+      ? `${app.health_check_file} (max ${app.health_check_max_age_seconds}s)`
+      : "-"],
     ["Webhook", app.webhook_enabled ? "enabled" : "disabled"],
   ]);
 }
@@ -124,6 +140,7 @@ async function renameApp(args: string[]): Promise<void> {
 type Deployment = {
   id: number;
   image_tag?: string;
+  image_digest?: string;
   git_commit?: string;
   config_revision?: number;
   source?: string;
@@ -137,10 +154,11 @@ async function deployments(args: string[]): Promise<void> {
   const app = await resolveApp(requireAppName(parsed, "ocd app deployments <app>"));
   const rows = await get<Deployment[]>(`/api/apps/${app.id}/deployments`);
   table(
-    ["ID", "Image", "Commit", "Config", "Source", "Status", "Date"],
+    ["ID", "Image", "Digest", "Commit", "Config", "Source", "Status", "Date"],
     rows.map((d) => [
       String(d.id),
       d.image_tag || "-",
+      d.image_digest ? d.image_digest.split("@sha256:").pop()!.slice(0, 12) : "-",
       d.git_commit?.slice(0, 12) || "-",
       `r${d.config_revision ?? 1}`,
       d.source || "manual",

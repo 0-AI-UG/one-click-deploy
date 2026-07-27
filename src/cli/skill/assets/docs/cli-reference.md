@@ -222,7 +222,7 @@ use restart/redeploy when configuration must enter a new container.
 
 ```bash
 ocd delete <app> [--yes]
-ocd delete stack <name|id>
+ocd delete stack <name|id> [--suspend-webhooks]
 ```
 
 App deletion removes containers, routing, DNS, webhook registration, and the
@@ -231,6 +231,9 @@ environment. Browser confirmation is the default; `--yes` is allowed only for
 explicitly authorized app-deletion automation.
 
 Stack deletion always requires web UI approval and does not accept `--yes`.
+It automatically suspends/supersedes member webhook deployments and drops new
+pushes after destruction begins. `--suspend-webhooks` explicitly requests this
+default behavior; there is no keep-webhooks override.
 See [security-and-deletion.md](security-and-deletion.md).
 
 ### `ocd promote`
@@ -359,7 +362,10 @@ ocd envs attach <name|id> <app>
 ocd envs detach <name|id> <app>
 ocd envs set <name|id> KEY=VALUE ... [options]
 ocd envs unset <name|id> KEY [KEY...] [options]
-ocd envs remove <name|id>
+ocd envs remove <name|id> [--copy-before-delete[=<name>]]
+ocd envs deleted
+ocd envs restore <name|id>
+ocd envs purge <name|id>
 ```
 
 Set/unset options:
@@ -380,10 +386,11 @@ Set/unset options:
 | `--app=<name\|id>` | Limit rollout to a linked app; repeatable. |
 | `--wait` | Follow the cascade and fail when any child fails; default. |
 | `--async`, `--no-wait` | Queue rollout and return its operation ID. |
+| `--json` | Emit one structured rollout result on stdout. |
 
 `envs duplicate` aliases `copy`; `envs delete` aliases `remove`.
-Environment deletion always requires web UI approval and fails while any app is
-linked.
+Removal always requires web UI approval, fails while an app is linked, and is
+recoverable for seven days. Purge is permanent and separately browser-gated.
 
 Restart rollouts recreate from the current image using the same `ocd-net`,
 internal aliases, limits, volumes, and routing inputs as normal creation. The
@@ -430,6 +437,8 @@ ocd volumes adopt <app> <provider-volume-id> [--mount-path=/data]
 ocd volumes detach <app>
 ocd volumes reattach <id> --from=<app> --to=<app> [--mount-path=/data]
 ocd volumes resize <id> --size=GB
+ocd volumes rename <id> <name>
+ocd volumes audit
 ocd volumes ls <id> [path]
 ocd volumes cat <id> <path>
 ocd volumes delete <id>
@@ -441,6 +450,8 @@ approval, requires typing the exact provider volume ID, and rejects `--yes`.
 
 New app/service volumes use operation-scoped provider names. Resume adoption
 verifies retained ownership, size, location, and server before reuse.
+Rename changes metadata only. Audit reports durable attempted permanent
+deletions and their completed/failed outcome.
 
 ## Operations
 

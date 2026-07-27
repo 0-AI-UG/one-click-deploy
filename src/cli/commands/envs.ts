@@ -7,6 +7,8 @@ interface Environment {
   id: number;
   name: string;
   env_vars: Array<{ key: string; value: string; secret: boolean }>;
+  deleted_at?: string | null;
+  purge_after?: string | null;
 }
 
 interface LinkedApp {
@@ -21,9 +23,10 @@ type RolloutMode = "redeploy" | "restart" | "none";
 async function rolloutOptions(
   envId: number,
   args: string[],
-): Promise<{ args: string[]; rollout: RolloutMode; app_ids?: number[]; wait: boolean }> {
+): Promise<{ args: string[]; rollout: RolloutMode; app_ids?: number[]; wait: boolean; json: boolean }> {
   let rollout: RolloutMode = "redeploy";
   let wait = true;
+  let json = false;
   const selectors: string[] = [];
   const remaining: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -54,11 +57,13 @@ async function rolloutOptions(
       wait = false;
     } else if (arg === "--wait") {
       wait = true;
+    } else if (arg === "--json") {
+      json = true;
     } else {
       remaining.push(arg);
     }
   }
-  if (selectors.length === 0) return { args: remaining, rollout, wait };
+  if (selectors.length === 0) return { args: remaining, rollout, wait, json };
   const linked = await get<LinkedApp[]>(`/api/environments/${envId}/apps`);
   const appIds = selectors.map((selector) => {
     const id = parseInt(selector, 10);
@@ -71,7 +76,7 @@ async function rolloutOptions(
     }
     return match.id;
   });
-  return { args: remaining, rollout, app_ids: [...new Set(appIds)], wait };
+  return { args: remaining, rollout, app_ids: [...new Set(appIds)], wait, json };
 }
 
 function printRollout(result: { redeploying?: number; restarting?: number; affected?: number; rollout?: string }) {
@@ -87,17 +92,19 @@ function printRollout(result: { redeploying?: number; restarting?: number; affec
 async function finishRollout(
   result: { op_id?: number | null },
   wait: boolean,
-): Promise<void> {
-  if (result.op_id == null) return;
+  quiet = false,
+): Promise<{ status: "not_queued" | "queued" | "done"; error?: string }> {
+  if (result.op_id == null) return { status: "not_queued" };
   if (!wait) {
-    console.log(`${DIM}Queued operation #${result.op_id}. Follow it with: ocd ops logs ${result.op_id} --follow${RESET}`);
-    return;
+    if (!quiet) console.log(`${DIM}Queued operation #${result.op_id}. Follow it with: ocd ops logs ${result.op_id} --follow${RESET}`);
+    return { status: "queued" };
   }
-  const op = await followOp(result.op_id);
+  const op = await followOp(result.op_id, { quiet });
   if (!op.ok) {
-    throw new Error(`Environment rollout failed: ${op.error || "a child operation failed"}`);
+    return { status: "done", error: op.error || "a child operation failed" };
   }
-  console.log(`${GREEN}Environment rollout complete.${RESET}`);
+  if (!quiet) console.log(`${GREEN}Environment rollout complete.${RESET}`);
+  return { status: "done" };
 }
 
 async function resolveEnv(nameOrId: string): Promise<Environment> {
@@ -118,6 +125,16 @@ async function resolveEnv(nameOrId: string): Promise<Environment> {
   process.exit(1);
 }
 
+async function resolveDeletedEnv(nameOrId: string): Promise<Environment> {
+  const list = await get<Environment[]>("/api/environments/deleted");
+  const id = parseInt(nameOrId, 10);
+  const environment = Number.isInteger(id)
+    ? list.find((item) => item.id === id)
+    : list.find((item) => item.name.toLowerCase() === nameOrId.toLowerCase());
+  if (environment) return environment;
+  throw new Error(`Deleted environment not found: ${nameOrId}`);
+}
+
 async function listEnvs(): Promise<void> {
   const list = await get<Environment[]>("/api/environments");
 
@@ -127,6 +144,19 @@ async function listEnvs(): Promise<void> {
       String(e.id),
       e.name,
       String(e.env_vars?.length || 0),
+    ]),
+  );
+}
+
+async function listDeletedEnvs(): Promise<void> {
+  const list = await get<Environment[]>("/api/environments/deleted");
+  table(
+    ["ID", "Name", "Deleted", "Recoverable until"],
+    list.map((environment) => [
+      String(environment.id),
+      environment.name,
+      environment.deleted_at || "",
+      environment.purge_after || "",
     ]),
   );
 }
@@ -221,9 +251,24 @@ async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
     app_ids: options.app_ids,
   });
 
-  console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(${incoming.map((v) => v.key).join(", ")})${RESET}`);
-  printRollout(result);
-  await finishRollout(result, options.wait);
+  if (!options.json) {
+    console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(${incoming.map((v) => v.key).join(", ")})${RESET}`);
+    printRollout(result);
+  }
+  const terminal = await finishRollout(result, options.wait, options.json);
+  if (options.json) {
+    console.log(JSON.stringify({
+      ok: !terminal.error,
+      environment: { id: env.id, name: env.name },
+      changed_keys: incoming.map((v) => v.key),
+      rollout: result.rollout,
+      affected: result.affected,
+      op_id: result.op_id,
+      status: terminal.status,
+      error: terminal.error ?? null,
+    }));
+  }
+  if (terminal.error) throw new Error(`Environment rollout failed: ${terminal.error}`);
 }
 
 async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
@@ -238,7 +283,20 @@ async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
   const kept = existing.filter((v) => !remove.has(v.key));
 
   if (kept.length === existing.length) {
-    console.log(`${DIM}No changes${RESET}`);
+    if (options.json) {
+      console.log(JSON.stringify({
+        ok: true,
+        environment: { id: env.id, name: env.name },
+        changed_keys: [],
+        rollout: options.rollout,
+        affected: 0,
+        op_id: null,
+        status: "not_queued",
+        error: null,
+      }));
+    } else {
+      console.log(`${DIM}No changes${RESET}`);
+    }
     return;
   }
 
@@ -248,9 +306,25 @@ async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
     app_ids: options.app_ids,
   });
 
-  console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(removed ${options.args.filter((k) => !missing.includes(k)).join(", ")})${RESET}`);
-  printRollout(result);
-  await finishRollout(result, options.wait);
+  const changedKeys = options.args.filter((k) => !missing.includes(k));
+  if (!options.json) {
+    console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(removed ${changedKeys.join(", ")})${RESET}`);
+    printRollout(result);
+  }
+  const terminal = await finishRollout(result, options.wait, options.json);
+  if (options.json) {
+    console.log(JSON.stringify({
+      ok: !terminal.error,
+      environment: { id: env.id, name: env.name },
+      changed_keys: changedKeys,
+      rollout: result.rollout,
+      affected: result.affected,
+      op_id: result.op_id,
+      status: terminal.status,
+      error: terminal.error ?? null,
+    }));
+  }
+  if (terminal.error) throw new Error(`Environment rollout failed: ${terminal.error}`);
 }
 
 function mergeWithExisting(
@@ -268,8 +342,8 @@ export async function parseVarArgs(args: string[]): Promise<Array<{ key: string;
 
   const add = (key: string, value: string, secret: boolean) => {
     if (!key) throw new Error("Variable key cannot be empty");
-    if (!secret && /(?:PASSWORD|TOKEN|SECRET|PRIVATE_KEY|API_KEY)$/i.test(key)) {
-      console.error(`${YELLOW}Warning: ${key} looks sensitive; use --secret or a secret input flag.${RESET}`);
+    if (!secret && /(?:PASSWORD|PASSWD|TOKEN|SECRET|SECRET_KEY|SECRET_ACCESS_KEY|CLIENT_SECRET|PRIVATE_KEY|API_KEY|ACCESS_KEY(?:_ID)?|CREDENTIALS?|DATABASE_URL|REDIS_URL|MONGO_URL|CONNECTION_(?:STRING|URL)|DSN)$/i.test(key)) {
+      console.error(`${YELLOW}Warning: ${key} looks sensitive; the server will store it as an encrypted secret automatically.${RESET}`);
     }
     vars.push({ key, value, secret });
   };
@@ -425,12 +499,53 @@ export async function envs(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "deleted" || sub === "trash") {
+    await listDeletedEnvs();
+    return;
+  }
+
+  if (sub === "restore") {
+    if (!args[1]) {
+      console.error("Usage: ocd envs restore <name|id>");
+      process.exit(1);
+    }
+    const environment = await resolveDeletedEnv(args[1]);
+    await post(`/api/environments/${environment.id}/restore`);
+    console.log(`${GREEN}Restored environment ${BOLD}${environment.name}${RESET}`);
+    return;
+  }
+
+  if (sub === "purge") {
+    if (!args[1]) {
+      console.error("Usage: ocd envs purge <name|id>");
+      process.exit(1);
+    }
+    const environment = await resolveDeletedEnv(args[1]);
+    const confirmation = await webConfirm("purge_environment", "environment", environment.id);
+    if (!confirmation) {
+      console.log("Aborted.");
+      return;
+    }
+    await del(`/api/environments/${environment.id}/purge`, undefined, { "X-OCD-Confirmation": confirmation });
+    console.log(`${GREEN}Permanently deleted environment ${BOLD}${environment.name}${RESET}`);
+    return;
+  }
+
   if (sub === "remove" || sub === "delete") {
     if (!args[1]) {
       console.error("Usage: ocd envs remove <name|id>");
       process.exit(1);
     }
     const env = await resolveEnv(args[1]);
+    const copyFlag = args.slice(2).find((arg) => arg === "--copy-before-delete" || arg.startsWith("--copy-before-delete="));
+    const copyName = copyFlag
+      ? (copyFlag.includes("=")
+        ? copyFlag.slice(copyFlag.indexOf("=") + 1)
+        : `${env.name}-backup-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}`)
+      : null;
+    if (copyFlag?.includes("=") && !copyName) {
+      throw new Error("--copy-before-delete requires a non-empty name");
+    }
     const confirm = await webConfirm(
       "delete_environment",
       "environment",
@@ -440,8 +555,21 @@ export async function envs(args: string[]): Promise<void> {
       console.log("Aborted.");
       return;
     }
-    await del(`/api/environments/${env.id}`, undefined, { "X-OCD-Confirmation": confirm });
-    console.log(`${GREEN}Deleted environment ${BOLD}${env.name}${RESET}`);
+    if (copyName) {
+      await post(`/api/environments/${env.id}/copy`, { name: copyName });
+      console.log(`${GREEN}Created recovery copy ${BOLD}${copyName}${RESET}`);
+    }
+    const result = await del<{ recoverable_until?: string | null }>(
+      `/api/environments/${env.id}`,
+      undefined,
+      { "X-OCD-Confirmation": confirm },
+    );
+    console.log(
+      `${GREEN}Retired environment ${BOLD}${env.name}${RESET}${GREEN}; it can be restored` +
+      `${result.recoverable_until
+        ? ` and is protected from permanent deletion until ${result.recoverable_until}`
+        : " from the deleted-environments list"}.${RESET}`,
+    );
     return;
   }
 
@@ -457,7 +585,10 @@ ${BOLD}Commands:${RESET}
   detach <name|id> <app>     Remove the app's environment link (no rollout)
   set <name|id> [vars...]    Merge variables into env
   unset <name|id> KEY...     Remove variables from env
-  remove <name|id>           Delete an environment (always requires web UI confirmation; must have no linked apps)
+  deleted                    List recoverable deleted environments
+  restore <name|id>          Restore a deleted environment
+  remove <name|id>           Retire an unused environment for recovery (web approval)
+  purge <name|id>            Permanently delete a retired environment (web approval)
 
 ${BOLD}Variable format:${RESET}
   KEY=VALUE                  Plain variable

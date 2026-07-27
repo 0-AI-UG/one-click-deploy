@@ -49,11 +49,31 @@ export function buildStackAppSpec(
     app_name: key, // server derives <stack>-<key>; sent only to satisfy the type
     git_repo: repo,
     container_port: manifest.build?.container_port ?? 3000,
+    declared_env_keys: [...new Set((manifest.env ?? []).map((entry) => entry.key))],
   };
+  if (manifest.image) {
+    spec.git_repo = "";
+    spec.image_ref = manifest.image.ref;
+  }
+  if (manifest.build?.cache_ref) spec.build_cache_ref = manifest.build.cache_ref;
 
   if (entry.needs) spec.needs = entry.needs;
-  if (entry.env !== undefined) spec.env_projection = entry.env;
-  else if (manifest.env_projection !== undefined) spec.env_projection = manifest.env_projection;
+  if (entry.env !== undefined) {
+    spec.env_projection = entry.env;
+    spec.env_projection_mode = "explicit";
+  } else if (entry.env_all) {
+    spec.env_projection = null;
+    spec.env_projection_mode = "all";
+  } else if (manifest.env_projection !== undefined) {
+    spec.env_projection = manifest.env_projection;
+    spec.env_projection_mode = "explicit";
+  } else {
+    // A new stack member receives only variables it declared plus dependency
+    // injection keys resolved by deploy_stack. Existing stored members preserve
+    // their current projection when this default intent is applied.
+    spec.env_projection = spec.declared_env_keys;
+    spec.env_projection_mode = "declared";
+  }
   const domain = entry.domain ?? manifest.domain;
   if (domain) spec.domain = domain;
   const gitBranch = manifest.git_branch;
@@ -86,6 +106,11 @@ export function buildStackAppSpec(
   const cpuLimit = manifest.cpu_limit;
   if (cpuLimit !== undefined) spec.cpu_limit = cpuLimit;
   if (healthCheck?.enabled === false) spec.health_check = false;
+  if (healthCheck?.mode) spec.health_check_mode = healthCheck.mode;
+  if (healthCheck?.mode) spec.health_check = healthCheck.mode === "http";
+  if (healthCheck?.command) spec.health_check_command = healthCheck.command;
+  if (healthCheck?.file) spec.health_check_file = healthCheck.file;
+  if (healthCheck?.max_age_seconds) spec.health_check_max_age_seconds = healthCheck.max_age_seconds;
   const internalProtocol = manifest.internal_protocol;
   if (internalProtocol) spec.internal_protocol = internalProtocol;
   const sticky = manifest.sticky;

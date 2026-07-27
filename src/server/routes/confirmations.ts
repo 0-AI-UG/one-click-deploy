@@ -11,7 +11,7 @@ import {
   resolveConfirmation,
 } from "../lib/action-confirm.ts";
 
-const CONFIRMABLE_ACTIONS = ["delete_app", "delete_stack", "delete_environment", "delete_volume", "cancel_operation"] as const;
+const CONFIRMABLE_ACTIONS = ["delete_app", "delete_stack", "delete_environment", "purge_environment", "delete_volume", "cancel_operation"] as const;
 type ConfirmableAction = (typeof CONFIRMABLE_ACTIONS)[number];
 
 // POST /api/confirmations — called by CLI (requires auth) to open a pending
@@ -62,9 +62,14 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       const env = db.getEnvironment(Number(resourceId));
       if (!env) return Response.json({ error: "Environment not found" }, { status: 404, headers: corsHeaders });
       const inUse = db.getAppsByEnvironmentId(env.id);
-      summary = inUse.length
-        ? `Delete environment "${env.name}" (id ${env.id}) — currently used by ${inUse.length} app(s).`
-        : `Delete environment "${env.name}" (id ${env.id}) and its variables.`;
+      const serviceLinks = db.getServiceLinksByEnvironmentId(env.id);
+      summary = inUse.length || serviceLinks.length
+        ? `Retire environment "${env.name}" (id ${env.id}) — currently used by ${inUse.length} app(s) and linked to ${serviceLinks.length} service(s).`
+        : `Retire environment "${env.name}" (id ${env.id}) for seven-day recovery.`;
+    } else if (action === "purge_environment") {
+      const env = db.getDeletedEnvironment(Number(resourceId));
+      if (!env) return Response.json({ error: "Deleted environment not found" }, { status: 404, headers: corsHeaders });
+      summary = `Permanently delete retired environment "${env.name}" (id ${env.id}) and all its variables. This cannot be undone.`;
     } else if (action === "delete_volume") {
       let volume;
       try {

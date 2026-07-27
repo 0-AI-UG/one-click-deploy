@@ -22,11 +22,14 @@ export function DeploymentsTab({ appId, deployments, action, ops }: DeploymentsT
       {deployments.length === 0 ? (
         <p className="text-[10px] text-muted font-mono py-4 text-center uppercase tracking-wider">No deployments yet</p>
       ) : (
-        <Table headers={["ID", "Image", "Commit", "Config", "Source", "Status", "Date", ""]}>
+        <Table headers={["ID", "Image", "Digest", "Commit", "Config", "Source", "Status", "Date", ""]}>
           {deployments.map((d) => (
             <tr key={d.id} className="hover:bg-alt/50">
               <td className="py-2 px-3 text-fg font-bold">#{d.id}</td>
               <td className="py-2 px-3 text-fg-dim">{d.image_tag}</td>
+              <td className="py-2 px-3 text-fg-dim font-mono" title={d.image_digest}>
+                {d.image_digest ? d.image_digest.split("@sha256:").pop()?.slice(0, 12) : "—"}
+              </td>
               <td className="py-2 px-3 text-fg-dim">{d.git_commit?.slice(0, 7) || "—"}</td>
               <td className="py-2 px-3 text-fg-dim">r{d.config_revision ?? 1}</td>
               <td className="py-2 px-3 text-fg-dim uppercase tracking-wider text-[9px]">{d.source || "manual"}</td>

@@ -4,6 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import * as github from "../../shared/github.ts";
 import { redeployPanel } from "../../engine/deploy/panel.ts";
+import { isStackDestructionActiveForApp } from "../lib/stack-operations.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { deployToStaging } from "../lib/staging.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
@@ -224,6 +225,9 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
     if (!app || !app.webhook_enabled || !app.webhook_secret) {
       return new Response("Not found", { status: 404 });
     }
+    if (isStackDestructionActiveForApp(appId)) {
+      return new Response("Stack destruction in progress; webhook deployment dropped", { status: 202 });
+    }
 
     const sigHeader = request.headers.get("x-hub-signature-256") || "";
     const rawBody = await request.text();
@@ -264,6 +268,12 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
         if (app.webhook_wait_for_ci && fullSha) {
           const ok = await waitForCi(appId, fullSha);
           if (!ok) return;
+        }
+        // Destruction may have started during a long CI wait. Re-read durable
+        // state before enqueueing so a deleted member cannot be resurrected.
+        if (!db.getApp(appId) || isStackDestructionActiveForApp(appId)) {
+          console.log(`[webhook] dropping deployment for app ${appId}: stack destruction is active or app is gone`);
+          return;
         }
         // GitHub uses one delivery GUID per push across all webhooks on a repo.
         // Without app scoping, sibling apps sharing a repo collide on this key

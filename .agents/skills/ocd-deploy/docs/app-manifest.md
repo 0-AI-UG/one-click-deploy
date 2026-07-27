@@ -35,6 +35,9 @@ nested manifest objects are validated against their supported fields.
 | `build.dockerfile` | string, `Dockerfile` | Path relative to the manifest directory. `..` is forbidden. |
 | `build.context` | string, `.` | Docker build context relative to repository root. `..` is forbidden. |
 | `build.container_port` | integer `1..65535`, `3000` | Port on which the process listens inside the container. |
+| `build.cache_ref` | OCI registry repository/tag | Explicit shared BuildKit cache. OCD uses registry `cache-from` and `cache-to` with `mode=max`. Source builds only. |
+| `image` | object | Prebuilt artifact mode. Mutually exclusive with Dockerfile/context/cache source-build settings. |
+| `image.ref` | digest-pinned OCI reference | Required form `registry/repository@sha256:<64 hex>`. Tags such as `latest` are rejected. |
 | `git_branch` | string | Branch used by manual deploy/redeploy; otherwise repository/provider default behavior. |
 | `env` | array | Deployer-supplied variable declarations; see below. |
 | `env_projection` | string[] | Restrict a linked environment to these keys. Omit for every key; `[]` for platform variables only. |
@@ -46,6 +49,10 @@ nested manifest objects are validated against their supported fields.
 | `health_check` | object | Post-deploy/ingress health behavior. Bare booleans are invalid. |
 | `health_check.enabled` | boolean, `true` | When false, only verify that the container remains running. |
 | `health_check.path` | string, `/` | HTTP probe path; also enables continuous Traefik rotation checks. |
+| `health_check.mode` | `http`, `container`, `exec`, `heartbeat`, or `periodic_job` | Readiness contract. Omitted preserves legacy `enabled/path` behavior. |
+| `health_check.command` | non-empty string | Required for `exec`; runs inside the container and exit code 0 means ready. |
+| `health_check.file` | safe absolute container path | Required for `heartbeat` and `periodic_job`; marker mtime records last successful progress. |
+| `health_check.max_age_seconds` | positive integer | Required with a marker mode; readiness fails when marker age exceeds this value. |
 | `internal_protocol` | `http` or `tcp`, `http` | Private routing protocol. Use `tcp` only when the process speaks raw TCP. |
 | `sticky` | boolean, `false` | Cookie stickiness on HTTP ingress. |
 | `rate_limit_rps` | integer `0..1000000`, `0` | Public per-client request limit; zero disables it. |
@@ -113,6 +120,10 @@ the repository root.
 
 - `health_check.path`, basic auth, and `sticky` require
   `internal_protocol: "http"`.
+- `exec` requires `command`; `heartbeat` and `periodic_job` require both
+  `file` and `max_age_seconds`. Non-HTTP explicit modes cannot set `path`.
+- `image.ref` must be immutable by digest. Image mode cannot set
+  `build.dockerfile`, `build.context`, or `build.cache_ref`.
 - Raw-TCP workers/databases should use `internal_protocol: "tcp"` and normally
   `health_check.enabled: false`.
 - A managed persistent volume forces single-replica operation.

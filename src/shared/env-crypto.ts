@@ -5,6 +5,24 @@ export { encryptValue, decryptValue };
 
 export const SECRET_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
 
+const SUSPICIOUS_SECRET_KEY =
+  /(?:^|_)(?:PASSWORD|PASSWD|TOKEN|SECRET|SECRET_KEY|SECRET_ACCESS_KEY|CLIENT_SECRET|PRIVATE_KEY|API_KEY|ACCESS_KEY|ACCESS_KEY_ID|CREDENTIALS?|DATABASE_URL|REDIS_URL|MONGO_URL|CONNECTION_STRING|CONNECTION_URL|DSN)$/i;
+
+/** Names that should never be persisted as plaintext even when an older or
+ * third-party client forgets to set `secret: true`. */
+export function isSuspiciousSecretKey(key: string): boolean {
+  return SUSPICIOUS_SECRET_KEY.test(key.trim());
+}
+
+export function suspiciousPlaintextKeys(
+  input: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>,
+): string[] {
+  const items = Array.isArray(input)
+    ? input
+    : Object.entries(input).map(([key, value]) => ({ key, value, secret: false }));
+  return [...new Set(items.filter((item) => !item.secret && isSuspiciousSecretKey(item.key)).map((item) => item.key))];
+}
+
 export type EnvVarEntry = {
   key: string;
   value: string;
@@ -99,8 +117,9 @@ export async function mergeEnvVarUpdate(
   const entries: EnvVarEntry[] = [];
   for (const item of incoming) {
     const prev = existingByKey.get(item.key);
+    const secret = item.secret || isSuspiciousSecretKey(item.key);
 
-    if (item.secret) {
+    if (secret) {
       if (item.value === SECRET_MASK && prev?.secret && prev.encrypted_value && prev.iv) {
         // Preserve existing secret unchanged
         entries.push(prev);
@@ -148,7 +167,7 @@ export async function processIncomingEnvVars(
 
   const entries: EnvVarEntry[] = [];
   for (const item of items) {
-    if (item.secret) {
+    if (item.secret || isSuspiciousSecretKey(item.key)) {
       const { encrypted_value, iv } = await encryptValue(item.value);
       entries.push({ key: item.key, value: "", encrypted_value, iv, secret: true, updated_at: now });
     } else {

@@ -143,13 +143,14 @@ ${BOLD}Options:${RESET}
     process.exit(0);
   }
 
-  const repo = getGitRepo();
   const manifest = readManifest(resolve(manifestPath));
+  const repo = manifest.image ? "" : getGitRepo();
 
-  console.log(`${DIM}Repo:${RESET}     ${repo}`);
+  console.log(`${DIM}${manifest.image ? "Image" : "Repo"}:${RESET}    ${manifest.image?.ref || repo}`);
   console.log(`${DIM}Manifest:${RESET} ${manifestPath} ${BOLD}(${manifest.name})${RESET}`);
 
-  const name = manifest.suggested_app_name || repo.replace(/.*\//, "");
+  const name = manifest.suggested_app_name ||
+    (manifest.image ? manifest.image.ref.split("/").pop()!.split("@")[0] : repo.replace(/.*\//, ""));
   const port = manifest.build?.container_port ?? 3000;
 
   const body: DeployRequest = {
@@ -169,6 +170,8 @@ ${BOLD}Options:${RESET}
   if (serverId !== undefined) body.server_id = serverId;
   if (manifest.build?.dockerfile) body.dockerfile_path = manifest.build.dockerfile;
   if (manifest.build?.context) body.docker_context = manifest.build.context;
+  if (manifest.build?.cache_ref) body.build_cache_ref = manifest.build.cache_ref;
+  if (manifest.image) body.image_ref = manifest.image.ref;
 
   if (manifest.webhook?.enabled) {
     body.webhook_enabled = true;
@@ -207,6 +210,12 @@ ${BOLD}Options:${RESET}
   // flat. Only send the path when the probe isn't disabled, so a contradictory
   // { enabled: false, path } can't reach (and be rejected by) the server.
   if (manifest.health_check?.enabled === false) body.health_check = false;
+  if (manifest.health_check?.mode) body.health_check_mode = manifest.health_check.mode;
+  if (manifest.health_check?.mode) body.health_check = manifest.health_check.mode === "http";
+  if (manifest.health_check?.command) body.health_check_command = manifest.health_check.command;
+  if (manifest.health_check?.file) body.health_check_file = manifest.health_check.file;
+  if (manifest.health_check?.max_age_seconds)
+    body.health_check_max_age_seconds = manifest.health_check.max_age_seconds;
   if (manifest.internal_protocol) body.internal_protocol = manifest.internal_protocol;
   if (manifest.sticky) body.sticky = true;
   if (manifest.rate_limit_rps !== undefined) body.rate_limit_rps = manifest.rate_limit_rps;

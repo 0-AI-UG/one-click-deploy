@@ -13,6 +13,7 @@ import {
   attachVolume,
   detachVolume,
   resizeVolume,
+  renameVolume,
   deleteVolume,
 } from "../../engine/hetzner/volumes.ts";
 import {
@@ -212,6 +213,9 @@ export const hetzner = {
     },
     async resize(volumeId: string, sizeGb: number) {
       await resizeVolume(volumeId, sizeGb);
+    },
+    async rename(volumeId: string, name: string) {
+      await renameVolume(volumeId, name);
     },
     async delete(volumeId: string) {
       await deleteVolume(volumeId);

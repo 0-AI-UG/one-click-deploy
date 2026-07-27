@@ -91,6 +91,7 @@ import * as db from "../../shared/db.ts";
 import { ALL_PERMISSIONS, type PermissionGrant } from "../../shared/db/users.ts";
 import { enqueueOperation } from "../../shared/db/operations.ts";
 import { createToken } from "../lib/auth.ts";
+import { createConfirmation, resolveConfirmation } from "../lib/action-confirm.ts";
 
 import {
   handleGetApps,
@@ -127,9 +128,12 @@ import {
 } from "./services.ts";
 import {
   handleGetEnvironments,
+  handleGetDeletedEnvironments,
   handleCreateEnvironment,
   handleUpdateEnvironment,
   handleDeleteEnvironment,
+  handleRestoreEnvironment,
+  handlePurgeEnvironment,
   handleGetEnvironmentApps,
   handleAttachAppToEnvironment,
 } from "./environments.ts";
@@ -151,6 +155,8 @@ import {
   handleDeleteResource,
   handleListVolumeFiles,
   handleCreateServer,
+  handleRenameVolume,
+  handleGetVolumeDeletionAudit,
 } from "./resources.ts";
 import { handleListOperations, handleCancelOperation } from "./operations.ts";
 import { handleGetPanel, handleRedeployPanel } from "./panel.ts";
@@ -188,9 +194,17 @@ async function userWith(
 
 function req(
   path: string,
-  opts: { method?: string; body?: unknown; token?: string | null } = {},
+  opts: {
+    method?: string;
+    body?: unknown;
+    token?: string | null;
+    headers?: Record<string, string>;
+  } = {},
 ): Request {
-  const headers: Record<string, string> = { "content-type": "application/json" };
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    ...opts.headers,
+  };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   return new Request(`http://panel.test${path}`, {
     method: opts.method ?? (opts.body !== undefined ? "POST" : "GET"),
@@ -356,6 +370,11 @@ type Case = {
 const CASES: Case[] = [
   // --- apps ----------------------------------------------------------------
   {
+    name: "environments: handleGetDeletedEnvironments",
+    permission: "environments.view",
+    call: (c) => handleGetDeletedEnvironments(req("/api/environments/deleted", { token: c.token })),
+  },
+  {
     name: "apps: handleGetApps",
     permission: "apps.view",
     call: (c) => handleGetApps(req("/api/apps", { token: c.token })),
@@ -497,11 +516,19 @@ const CASES: Case[] = [
   {
     name: "stacks: handleDestroyStack",
     permission: "stacks.destroy",
-    call: (c) =>
-      handleDestroyStack(
-        req(`/api/stacks/${stackA}`, { method: "DELETE", token: c.token }),
+    call: (c) => {
+      const user = { userId: c.userId, username: c.userId };
+      const confirmation = createConfirmation(user, "delete_stack", "stack", String(stackA), "test");
+      resolveConfirmation(confirmation.userCode, user, "confirmed");
+      return handleDestroyStack(
+        req(`/api/stacks/${stackA}`, {
+          method: "DELETE",
+          token: c.token,
+          headers: { "x-ocd-confirmation": confirmation.confirmCode },
+        }),
         stackA,
-      ),
+      );
+    },
   },
   {
     name: "stacks: handlePromoteStack",
@@ -620,11 +647,42 @@ const CASES: Case[] = [
     permission: "environments.manage",
     call: (c) => {
       const env = db.insertEnvironment(`perm-tmp-${uid()}`, "{}").id;
+      const user = { userId: c.userId, username: c.userId };
+      const confirmation = createConfirmation(
+        user,
+        "delete_environment",
+        "environment",
+        String(env),
+        "test",
+      );
+      resolveConfirmation(confirmation.userCode, user, "confirmed");
       return handleDeleteEnvironment(
-        req(`/api/environments/${env}`, { method: "DELETE", token: c.token }),
+        req(`/api/environments/${env}`, {
+          method: "DELETE",
+          token: c.token,
+          headers: { "x-ocd-confirmation": confirmation.confirmCode },
+        }),
         env,
       );
     },
+  },
+  {
+    name: "environments: handleRestoreEnvironment",
+    permission: "environments.manage",
+    denyOnly: "allow path requires a deleted environment fixture",
+    call: (c) => handleRestoreEnvironment(
+      req("/api/environments/999999/restore", { method: "POST", token: c.token }),
+      999999,
+    ),
+  },
+  {
+    name: "environments: handlePurgeEnvironment",
+    permission: "environments.manage",
+    denyOnly: "allow path requires a deleted environment and confirmation fixture",
+    call: (c) => handlePurgeEnvironment(
+      req("/api/environments/999999/purge", { method: "DELETE", token: c.token }),
+      999999,
+    ),
   },
   {
     name: "environments: handleAttachAppToEnvironment",
@@ -787,6 +845,20 @@ const CASES: Case[] = [
         "volume",
         "x",
       ),
+  },
+  {
+    name: "resources: handleRenameVolume",
+    permission: "volumes.rename",
+    denyOnly: "allow path calls the provider",
+    call: (c) => handleRenameVolume(
+      req("/api/resources/volumes/x", { method: "PUT", body: { name: "renamed" }, token: c.token }),
+      "x",
+    ),
+  },
+  {
+    name: "resources: handleGetVolumeDeletionAudit",
+    permission: "volumes.delete",
+    call: (c) => handleGetVolumeDeletionAudit(req("/api/resources/volumes/deletion-audit", { token: c.token })),
   },
 
   // --- operations -----------------------------------------------------------

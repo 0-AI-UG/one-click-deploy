@@ -110,9 +110,18 @@ const buildSchema = z.object(
       "expected integer 1-65535",
       (v) => Number.isInteger(v) && v >= 1 && v <= 65535,
     ).optional(),
+    /** Registry cache shared between build hosts via BuildKit. */
+    cache_ref: nonEmptyString("expected an OCI registry cache reference").optional(),
   },
   { error: "expected object { dockerfile?, context?, container_port? }" },
 );
+
+const imageSchema = z.object({
+  ref: z.string({ error: "expected immutable OCI image reference" }).refine(
+    (value) => /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(value),
+    { error: (iss) => `expected image@sha256:<64 hex digest>, got ${got(iss.input)}` },
+  ),
+}, { error: "expected object { ref }" }).strict();
 
 /** One declared env var. `key` must be a valid env-var name. */
 const envEntrySchema = z.object(
@@ -181,9 +190,38 @@ const healthCheckSchema = z.object(
   {
     enabled: z.boolean({ error: "expected boolean" }).optional(),
     path: z.string({ error: "expected string" }).optional(),
+    /** Readiness contract. Omit for the legacy enabled/path behavior. */
+    mode: z.enum(["http", "container", "exec", "heartbeat", "periodic_job"], {
+      error: 'expected "http" | "container" | "exec" | "heartbeat" | "periodic_job"',
+    }).optional(),
+    /** Shell command executed inside the container for mode=exec. Exit 0=ready. */
+    command: nonEmptyString("expected a non-empty string").optional(),
+    /** Absolute timestamp-marker path for heartbeat/periodic_job modes. */
+    file: z.string({ error: 'expected absolute path string' }).refine((v) => /^\/[A-Za-z0-9._/-]+$/.test(v), {
+      error: (iss) => `expected absolute path string, got ${got(iss.input)}`,
+    }).optional(),
+    /** Maximum marker age before readiness fails. */
+    max_age_seconds: guardedNumber(
+      "expected positive integer",
+      (v) => Number.isInteger(v) && v >= 1,
+    ).optional(),
   },
-  { error: "expected object { enabled?: boolean, path?: string }" },
-);
+  { error: "expected health-check object" },
+).superRefine((value, ctx) => {
+  const mode = value.mode ?? (value.enabled === false ? "container" : "http");
+  if (mode === "exec" && !value.command) {
+    ctx.addIssue({ code: "custom", message: "required when mode is exec", path: ["command"] });
+  }
+  if ((mode === "heartbeat" || mode === "periodic_job") && !value.file) {
+    ctx.addIssue({ code: "custom", message: `required when mode is ${mode}`, path: ["file"] });
+  }
+  if ((mode === "heartbeat" || mode === "periodic_job") && !value.max_age_seconds) {
+    ctx.addIssue({ code: "custom", message: `required when mode is ${mode}`, path: ["max_age_seconds"] });
+  }
+  if (value.mode && mode !== "http" && value.path) {
+    ctx.addIssue({ code: "custom", message: "only valid when mode is http", path: ["path"] });
+  }
+});
 
 /**
  * HTTP basic-auth intent. Password material is deliberately never accepted
@@ -210,6 +248,8 @@ export const DeployManifestSchema = z
     description: z.string({ error: "expected string" }).optional(),
     icon: z.string({ error: "expected string" }).optional(),
     build: buildSchema.optional(),
+    /** Prebuilt artifact mode: pull and run this exact immutable OCI digest. */
+    image: imageSchema.optional(),
     env: z
       .array(envEntrySchema, {
         error: "expected array of { key, description?, default?, required?, secret? }",
@@ -283,7 +323,16 @@ export const DeployManifestSchema = z
       (v) => Number.isInteger(v) && v >= 0,
     ).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.image && (value.build?.dockerfile || value.build?.context || value.build?.cache_ref)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "prebuilt image mode cannot also configure source-build dockerfile, context, or cache_ref",
+        path: ["image"],
+      });
+    }
+  });
 
 export type DeployManifest = z.infer<typeof DeployManifestSchema>;
 
@@ -314,13 +363,24 @@ const stackAppSchema = z
       .optional(),
     domain: z.string({ error: "expected string" }).optional(),
     public: z.boolean({ error: "expected boolean" }).optional(),
-    /** Keys this member receives from the shared stack environment. Omit for
-     *  legacy/all; [] intentionally receives none of the shared variables. */
+    /** Keys this member receives from the shared stack environment. Omit to
+     *  derive least privilege from the child manifest and declared needs. */
     env: z.array(z.string({ error: "expected an environment key string" }), {
       error: "expected array of environment variable keys",
     }).optional(),
-  }, { error: "expected object { manifest, needs?, domain?, public?, env? }" })
-  .strict();
+    /** Explicitly opt this member into the complete shared environment. */
+    env_all: z.boolean({ error: "expected boolean" }).optional(),
+  }, { error: "expected object { manifest, needs?, domain?, public?, env?, env_all? }" })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.env !== undefined && value.env_all) {
+      ctx.addIssue({
+        code: "custom",
+        message: "cannot be combined with env; choose an explicit key list or env_all",
+        path: ["env_all"],
+      });
+    }
+  });
 
 export const StackManifestSchema = z
   .object({

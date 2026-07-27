@@ -1,18 +1,23 @@
 import { useState, useEffect, useRef } from "react";
-import { get, del, post } from "../api/client.ts";
+import { get, del, post, put } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
-import { HardDrive, Server, Database, Trash2, RefreshCw, Plus } from "lucide-react";
+import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, Pencil, History } from "lucide-react";
 import { InfoTip } from "./app-detail/shared.tsx";
 import type { ResourcesData } from "../types.ts";
+import { serverConfirmedDelete } from "../api/server-confirmation.ts";
 
 export function ResourcesPage() {
   const [data, setData] = useState<ResourcesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [volumeAudit, setVolumeAudit] = useState<Array<{
+    id: number; requested_at: string; provider_volume_id: string; provider_volume_name: string;
+    former_resource_name: string; status: string; actor_user_id: string; error: string;
+  }> | null>(null);
 
   // Create server form state
   const [createType, setCreateType] = useState("");
@@ -91,10 +96,26 @@ export function ResourcesPage() {
 
   const handleDelete = async (type: string, id: string, name: string) => {
     if (!await confirm("Delete Resource", `Delete ${type.replace("_", " ")} "${name}"? This cannot be undone.`, true)) return;
+    let typedVolumeId: string | undefined;
+    if (type === "volume") {
+      typedVolumeId = window.prompt(`Type the provider volume ID "${id}" to permanently delete its data:`)?.trim();
+      if (typedVolumeId !== id) {
+        showToast("Volume ID did not match; deletion cancelled", "error");
+        return;
+      }
+    }
     const key = `${type}-${id}`;
     setDeleting(key);
     try {
-      const res = await del(`/api/resources/${type}/${id}`);
+      const res = type === "volume"
+        ? await serverConfirmedDelete<{ ok: boolean; audit_id?: number; error?: string }>(
+            `/api/resources/${type}/${id}`,
+            "delete_volume",
+            "volume",
+            id,
+            typedVolumeId,
+          )
+        : await del(`/api/resources/${type}/${id}`);
       if (res.ok) {
         if (type === "server" && res.op_id) {
           trackOperationInToast(res.op_id, `Destroying ${name}`);
@@ -110,6 +131,30 @@ export function ResourcesPage() {
       showToast(err.message, "error");
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const handleRenameVolume = async (id: string, currentName: string) => {
+    const name = window.prompt("New provider volume name", currentName)?.trim();
+    if (!name || name === currentName) return;
+    try {
+      await put(`/api/resources/volumes/${encodeURIComponent(id)}`, { name });
+      showToast(`Volume renamed to ${name}`, "success");
+      load();
+    } catch (err: any) {
+      showToast(err.message || "Failed to rename volume", "error");
+    }
+  };
+
+  const toggleVolumeAudit = async () => {
+    if (volumeAudit) {
+      setVolumeAudit(null);
+      return;
+    }
+    try {
+      setVolumeAudit(await get("/api/resources/volumes/deletion-audit"));
+    } catch (err: any) {
+      showToast(err.message || "Failed to load deletion audit", "error");
     }
   };
 
@@ -255,6 +300,13 @@ export function ResourcesPage() {
         <div className="flex items-center gap-2 mb-3">
           <Database size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Volumes ({data?.volumes?.length || 0})</h3>
+          <div className="ml-auto">
+            <PermissionGate permission="volumes.delete">
+              <Btn size="xs" variant="ghost" onClick={toggleVolumeAudit}>
+                <History size={11} /> {volumeAudit ? "Hide audit" : "Deletion audit"}
+              </Btn>
+            </PermissionGate>
+          </div>
         </div>
         {!data?.volumes?.length ? <EmptyState message="No volumes" /> : (
           <Table headers={["Name", "State", "Size", "Location", "Server", "App", "€/mo", ""]}>
@@ -279,15 +331,43 @@ export function ResourcesPage() {
                 <td className="py-2 px-3 text-accent-blue font-bold">{v.app_name || "—"}</td>
                 <td className="py-2 px-3 text-fg font-bold">{fmtPrice(v.monthly_eur)}</td>
                 <td className="py-2 px-3">
-                  <PermissionGate permission="resources.delete">
-                    <Btn size="xs" variant="danger" disabled={!!v.app_name} title={v.app_name ? `In use by ${v.app_name}` : undefined} loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>
-                      <Trash2 size={11} />
-                    </Btn>
-                  </PermissionGate>
+                  <div className="flex items-center gap-1">
+                    <PermissionGate permission="volumes.rename">
+                      <Btn size="xs" variant="ghost" title="Rename volume" onClick={() => handleRenameVolume(v.id, v.name)}>
+                        <Pencil size={11} />
+                      </Btn>
+                    </PermissionGate>
+                    <PermissionGate permission="volumes.delete">
+                      <Btn size="xs" variant="danger" disabled={!!v.app_name} title={v.app_name ? `In use by ${v.app_name}` : undefined} loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>
+                        <Trash2 size={11} />
+                      </Btn>
+                    </PermissionGate>
+                  </div>
                 </td>
               </tr>
             ))}
           </Table>
+        )}
+        {volumeAudit && (
+          <div className="mt-4">
+            <h4 className="font-mono text-[9px] font-bold uppercase mb-2">Permanent deletion audit</h4>
+            {volumeAudit.length === 0 ? (
+              <div className="font-mono text-[9px] text-muted">No deletion attempts recorded.</div>
+            ) : (
+              <Table headers={["Requested", "Volume", "Former owner", "Status", "Actor", "Error"]}>
+                {volumeAudit.map((row) => (
+                  <tr key={row.id}>
+                    <td className="py-2 px-3 text-fg-dim">{row.requested_at}</td>
+                    <td className="py-2 px-3 font-bold">{row.provider_volume_name} <span className="text-muted">#{row.provider_volume_id}</span></td>
+                    <td className="py-2 px-3 text-fg-dim">{row.former_resource_name || "—"}</td>
+                    <td className="py-2 px-3">{row.status}</td>
+                    <td className="py-2 px-3 text-fg-dim">{row.actor_user_id}</td>
+                    <td className="py-2 px-3 text-accent-red">{row.error || "—"}</td>
+                  </tr>
+                ))}
+              </Table>
+            )}
+          </div>
         )}
       </Card>
     </div>

@@ -35,11 +35,17 @@ export async function buildAppImage(
     envPrefix?: string;
     /** Incremental, already-sanitized operation log sink. */
     onOutput?: (line: string) => void;
+    /** Registry-backed BuildKit cache shared between build hosts. */
+    cacheRef?: string;
   },
   hostKey?: string,
 ): Promise<void> {
   const dockerContext = opts.dockerContext || ".";
-  const rawBuildCmd = `cd ${opts.appDir} && ${opts.envPrefix ?? ""}docker build --progress=plain --label ${OCD_IMAGE_LABEL} -t ${opts.imageTag} -f ${opts.dockerfilePath} ${dockerContext}`;
+  const cacheArgs = opts.cacheRef
+    ? `--cache-from=type=registry,ref=${opts.cacheRef} --cache-to=type=registry,ref=${opts.cacheRef},mode=max`
+    : "";
+  const builder = opts.cacheRef ? "docker buildx build --load" : "docker build";
+  const rawBuildCmd = `cd ${opts.appDir} && ${opts.envPrefix ?? ""}${builder} --progress=plain --label ${OCD_IMAGE_LABEL} ${cacheArgs} -t ${opts.imageTag} -f ${opts.dockerfilePath} ${dockerContext}`;
   // Builds take a shared lease; prune paths take the exclusive side of the
   // same host lock. Multiple builds remain concurrent, while GC can never
   // remove image/cache state out from under an active build.
@@ -175,6 +181,8 @@ export async function cloneAndBuild(
     cpus?: number;
     /** Pinned SSH host key of the target server, threaded to every remote call. */
     hostKey?: string;
+    /** Registry-backed BuildKit cache shared between build hosts. */
+    buildCacheRef?: string;
   },
   onLog?: (line: string) => void
 ) {
@@ -225,6 +233,7 @@ export async function cloneAndBuild(
       dockerContext: opts.dockerContext,
       envPrefix: ghcrAuth?.envPrefix,
       onOutput: emit,
+      cacheRef: opts.buildCacheRef,
     }, hostKey);
   } finally {
     // Wipe the ephemeral ghcr creds whether or not the build succeeded.
@@ -232,6 +241,12 @@ export async function cloneAndBuild(
   }
   log("build", `Docker build completed in ${((Date.now() - dockerBuildStart) / 1000).toFixed(1)}s`);
   emit("Image built successfully");
+  const builtImage = await sshExec(
+    ip,
+    asUser(`docker image inspect --format='{{.Id}}' ${opts.name}:latest`),
+    hostKey,
+  );
+  const imageDigest = builtImage.stdout.trim();
 
   // Build succeeded — now safe to stop old container and swap.
   const containerName = opts.containerName || opts.name;
@@ -258,5 +273,82 @@ export async function cloneAndBuild(
   // Fire-and-forget cleanup of dangling images and git repo
   pruneAfterBuild(ip, opts.name, hostKey);
 
-  return { containerId, dockerfilePath, imageTag: `${opts.name}:latest` };
+  return { containerId, dockerfilePath, imageTag: `${opts.name}:latest`, imageDigest };
+}
+
+/**
+ * Pull and run an immutable prebuilt OCI artifact. The digest is the deployment
+ * identity; tags are intentionally rejected by request/manifest validation.
+ * A local app:latest alias keeps scale/migration paths compatible while the
+ * returned imageTag/imageDigest retain the immutable registry identity.
+ */
+export async function pullImmutableImageAndRun(
+  ip: string,
+  opts: {
+    name: string;
+    imageRef: string;
+    port: number;
+    hostPort: number;
+    envVars: Record<string, string>;
+    containerName?: string;
+    bindAddr?: string;
+    volumeMount?: string;
+    extraVolumes?: string[];
+    memoryMb?: number;
+    cpus?: number;
+    gitToken?: string;
+    hostKey?: string;
+  },
+  onLog?: (line: string) => void,
+): Promise<{ containerId: string; imageTag: string; imageDigest: string }> {
+  await pullImmutableImage(ip, {
+    name: opts.name,
+    imageRef: opts.imageRef,
+    gitToken: opts.gitToken,
+    hostKey: opts.hostKey,
+  }, onLog);
+  const hostKey = opts.hostKey;
+
+  await ensureOcdNetwork(ip, hostKey);
+  const { containerId } = await startAppReplica(ip, {
+    containerName: opts.containerName || opts.name,
+    image: opts.imageRef,
+    appName: opts.name,
+    bindAddr: opts.bindAddr || "127.0.0.1",
+    hostPort: opts.hostPort,
+    containerPort: opts.port,
+    volumeMount: opts.volumeMount,
+    extraVolumes: opts.extraVolumes,
+    memoryMb: opts.memoryMb,
+    cpus: opts.cpus,
+    envVars: opts.envVars,
+  }, hostKey);
+  return { containerId, imageTag: opts.imageRef, imageDigest: opts.imageRef };
+}
+
+export async function pullImmutableImage(
+  ip: string,
+  opts: { name: string; imageRef: string; gitToken?: string; hostKey?: string },
+  onLog?: (line: string) => void,
+): Promise<void> {
+  if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(opts.imageRef)) {
+    throw new Error("Immutable image reference must end in @sha256:<64 hex digest>");
+  }
+  const hostKey = opts.hostKey;
+  let auth: GhcrAuth | null = null;
+  if (opts.gitToken && opts.imageRef.toLowerCase().startsWith("ghcr.io/")) {
+    auth = await dockerLoginGhcr(ip, opts.gitToken, hostKey);
+  }
+  try {
+    onLog?.(`Pulling immutable image ${opts.imageRef}`);
+    const pull = await sshExecStreaming(
+      ip,
+      asUser(`${auth?.envPrefix ?? ""}docker pull ${opts.imageRef}`),
+      { hostKey, onLine: (line) => line.trim() && onLog?.(line) },
+    );
+    if (pull.exitCode !== 0) throw new Error(describeFailure("Docker image pull failed", pull));
+    await sshExec(ip, asUser(`docker tag ${opts.imageRef} ${opts.name}:latest`), hostKey);
+  } finally {
+    if (auth) await auth.cleanup();
+  }
 }

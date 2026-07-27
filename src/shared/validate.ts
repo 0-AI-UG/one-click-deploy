@@ -493,6 +493,8 @@ export function validateDeployRequest(req: {
   app_name: string;
   domain?: string;
   git_repo: string;
+  image_ref?: string;
+  build_cache_ref?: string;
   git_branch?: string;
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
@@ -501,6 +503,10 @@ export function validateDeployRequest(req: {
   public?: boolean;
   auth_password?: string;
   health_check?: boolean;
+  health_check_mode?: string;
+  health_check_command?: string;
+  health_check_file?: string;
+  health_check_max_age_seconds?: number;
   internal_protocol?: string;
   sticky?: boolean;
   rate_limit_rps?: number;
@@ -513,8 +519,18 @@ export function validateDeployRequest(req: {
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };
 
-  const repoResult = validateGitRepo(req.git_repo);
-  if (!repoResult.valid) return { valid: false, error: `Git repo: ${repoResult.error}` };
+  if (req.image_ref) {
+    if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(req.image_ref)) {
+      return { valid: false, error: "Image must be an immutable OCI reference ending in @sha256:<64 hex digest>" };
+    }
+    if (req.git_repo) return { valid: false, error: "Prebuilt image deployments must not also specify a Git repository" };
+  } else {
+    const repoResult = validateGitRepo(req.git_repo);
+    if (!repoResult.valid) return { valid: false, error: `Git repo: ${repoResult.error}` };
+  }
+  if (req.build_cache_ref && !/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+(?::[A-Za-z0-9._-]+)?$/i.test(req.build_cache_ref)) {
+    return { valid: false, error: "Build cache must be an OCI registry repository/tag reference" };
+  }
 
   if (req.git_branch) {
     const branchResult = validateGitBranch(req.git_branch);
@@ -554,6 +570,25 @@ export function validateDeployRequest(req: {
   // (independent of health_check). Auth / health-check-path rules key off the
   // resolved routing protocol (they are HTTP-router features).
   const internalProtocol = resolveInternalProtocol(req.internal_protocol);
+
+  const healthMode = req.health_check_mode ?? (req.health_check === false ? "container" : "http");
+  if (!["http", "container", "exec", "heartbeat", "periodic_job"].includes(healthMode)) {
+    return { valid: false, error: "Health check mode is invalid" };
+  }
+  if (healthMode === "exec" && !req.health_check_command?.trim()) {
+    return { valid: false, error: "Exec health checks require health_check.command" };
+  }
+  if (healthMode === "heartbeat" || healthMode === "periodic_job") {
+    if (!req.health_check_file || !/^\/[A-Za-z0-9._/-]+$/.test(req.health_check_file)) {
+      return { valid: false, error: `${healthMode} health checks require a safe absolute file path` };
+    }
+    if (!Number.isInteger(req.health_check_max_age_seconds) || (req.health_check_max_age_seconds ?? 0) < 1) {
+      return { valid: false, error: `${healthMode} health checks require max_age_seconds >= 1` };
+    }
+  }
+  if (healthMode !== "http" && req.health_check_path) {
+    return { valid: false, error: "health_check.path is only valid for HTTP health checks" };
+  }
 
   // Auth / rate limit / allowlist / health-check path / public-port rules are
   // shared with the ingress-update endpoint — one validator, one set of errors.

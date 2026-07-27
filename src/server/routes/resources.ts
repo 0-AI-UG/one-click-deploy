@@ -213,15 +213,75 @@ export async function handleDeleteResource(request: Request, type: string, id: s
     } else if (type === "volume") {
       const allApps = db.getApps();
       const using = allApps.filter((a) => a.volume_id === id);
-      if (using.length > 0) {
-        return Response.json({ ok: false, error: `Volume is in use by: ${using.map((a) => a.name).join(", ")}` }, { headers: corsHeaders });
+      const servicesById = new Map(db.getServices().map((service) => [service.id, service.name]));
+      const usingServices = db.getAllServiceInstances().filter((instance) => instance.volume_id === id);
+      const panel = db.getPanel();
+      const users = [
+        ...using.map((app) => `app ${app.name}`),
+        ...usingServices.map((instance) =>
+          `service ${servicesById.get(instance.service_id) ?? `#${instance.service_id}`}`),
+        ...(panel?.volume_id === id ? [`panel ${panel.name}`] : []),
+      ];
+      if (users.length > 0) {
+        return Response.json(
+          { ok: false, error: `Volume is in use by: ${users.join(", ")}` },
+          { status: 409, headers: corsHeaders },
+        );
       }
       await enforceConfirmation(request, payload, "delete_volume", "volume", id);
-      await compute.volumes.delete(id);
-      return Response.json({ ok: true }, { headers: corsHeaders });
+      const volume = await compute.volumes.get(id);
+      const retired = db.getRetiredVolumes().find((row) => row.provider_volume_id === id);
+      const audit = db.beginVolumeDeletionAudit({
+        actorUserId: payload.userId,
+        providerVolumeId: id,
+        providerVolumeName: volume.name,
+        formerResourceType: retired?.former_resource_type,
+        formerResourceId: retired?.former_resource_id,
+        formerResourceName: retired?.former_resource_name,
+        retentionState: retired?.state ?? (volume.serverId ? "attached" : "detached"),
+        retiredAt: retired?.retired_at,
+        purgeAfter: retired?.purge_after,
+      });
+      try {
+        await compute.volumes.delete(id);
+        db.finishVolumeDeletionAudit(audit.id);
+        db.deleteRetiredVolume(id);
+      } catch (error) {
+        db.finishVolumeDeletionAudit(audit.id, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+      return Response.json({ ok: true, audit_id: audit.id }, { headers: corsHeaders });
     }
 
     return Response.json({ ok: false, error: "Unknown resource type" }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleRenameVolume(request: Request, volumeId: string): Promise<Response> {
+  try {
+    await requirePermission(request, "volumes.rename");
+    const body = await request.json().catch(() => ({})) as { name?: string };
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/.test(name)) {
+      return Response.json(
+        { error: "Volume name must be 1-63 letters, digits, or hyphens and start with a letter or digit" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    await hetzner.volumes.get(volumeId);
+    await hetzner.volumes.rename(volumeId, name);
+    return Response.json({ ok: true, id: volumeId, name }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+export async function handleGetVolumeDeletionAudit(request: Request): Promise<Response> {
+  try {
+    await requirePermission(request, "volumes.delete");
+    return Response.json(db.getVolumeDeletionAudit(), { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

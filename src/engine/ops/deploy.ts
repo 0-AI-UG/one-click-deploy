@@ -7,11 +7,13 @@ import {
   sshExec,
   cloneRepo,
   cloneAndBuild,
+  pullImmutableImageAndRun,
   removeContainer,
   healthCheck,
   containerRunningCheck,
   containerExists,
   containerRunning,
+  probeAppHealth,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress, syncAllTraefik } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -72,6 +74,7 @@ type CloneOut = { ok: true };
 
 type BuildOut = {
   imageTag: string;
+  imageDigest?: string;
 };
 
 function log(context: string, ...args: unknown[]) {
@@ -545,6 +548,8 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           git_branch: req.git_branch,
           dockerfile_path: dockerfilePath,
           docker_context: req.docker_context,
+          image_ref: req.image_ref,
+          build_cache_ref: req.build_cache_ref,
           container_port: req.container_port,
           env_vars: serializeEnvVars([]),
           auth_password: req.auth_password,
@@ -552,6 +557,10 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           env_projection: req.env_projection,
           public: req.public,
           health_check: req.health_check,
+          health_check_mode: req.health_check_mode,
+          health_check_command: req.health_check_command,
+          health_check_file: req.health_check_file,
+          health_check_max_age_seconds: req.health_check_max_age_seconds,
           internal_protocol: req.internal_protocol,
           sticky: req.sticky,
           rate_limit_rps: req.rate_limit_rps,
@@ -687,6 +696,7 @@ const cloneRepoStep: Step<DeployInput, CloneOut> = {
   label: "Clone repository",
   async probe(ctx, prior) {
     const req = ctx.input;
+    if (req.image_ref) return { ok: true };
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     if (!server) return null;
     const check = await sshExec(
@@ -702,6 +712,10 @@ const cloneRepoStep: Step<DeployInput, CloneOut> = {
   },
   async run(ctx, prior) {
     const req = ctx.input;
+    if (req.image_ref) {
+      ctx.log("Immutable image deployment: no Git clone required");
+      return { ok: true };
+    }
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
     const { mask, githubPat } = await buildMasker(req, ctx.triggeredBy);
@@ -789,11 +803,8 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
       : appOut.flatEnvVars;
 
     let imageTag = `${req.app_name}:latest`;
-    const result = await cloneAndBuild(
-      server.serverIp,
-      {
+    const common = {
         name: req.app_name,
-        gitRepo: req.git_repo,
         port: req.container_port,
         hostPort: appOut.hostPort,
         envVars,
@@ -808,6 +819,22 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         memoryMb: req.memory_mb || undefined,
         cpus: req.cpu_limit || undefined,
         hostKey: server.serverHostKey || undefined,
+    };
+    const result = req.image_ref
+      ? await pullImmutableImageAndRun(server.serverIp, {
+          ...common,
+          imageRef: req.image_ref,
+          gitToken: githubPat,
+        }, (line) => {
+          maskedLog(`[pull] ${line}`);
+          ctx.log(`[pull] ${mask(line)}`);
+        })
+      : await cloneAndBuild(
+      server.serverIp,
+      {
+        ...common,
+        gitRepo: req.git_repo,
+        buildCacheRef: req.build_cache_ref,
       },
       (line) => {
         maskedLog(`[build] ${line}`);
@@ -816,7 +843,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     );
     if (result.imageTag) imageTag = result.imageTag;
 
-    return { imageTag };
+    return { imageTag, imageDigest: "imageDigest" in result ? result.imageDigest : undefined };
   },
   async compensate(ctx, out, prior) {
     if (!out) return;
@@ -890,15 +917,20 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
     // Generous window (10 attempts) so a slow first boot isn't failed early.
     // Apps with the HTTP probe opted out (databases, queue workers) only get
     // the container-is-running verification.
-    const httpProbe = req.health_check !== false;
-    const health = httpProbe
-      ? await healthCheck(server.serverIp, req.app_name, containerBindAddr, appOut.hostPort, 10, server.serverHostKey || undefined, req.health_check_path)
-      : await containerRunningCheck(server.serverIp, req.app_name, 10, server.serverHostKey || undefined);
+    const app = db.getApp(appOut.appId);
+    if (!app) throw new Error("App row missing during health check");
+    const health = await probeAppHealth(
+      app, server.serverIp, req.app_name, containerBindAddr, appOut.hostPort,
+      10, server.serverHostKey || undefined,
+    );
 
     if (health.healthy) {
-      db.appendDeployLog(appOut.appId, httpProbe
-        ? `[health] Health check passed (HTTP ${health.statusCode})`
-        : `[health] HTTP probe disabled; container is running`);
+      db.appendDeployLog(
+        appOut.appId,
+        app.health_check_mode === "container" || !app.health_check
+          ? "[health] HTTP probe disabled; container is running"
+          : `[health] ${app.health_check_mode || "http"} readiness passed`,
+      );
       db.updateAppStatus(appOut.appId, "running");
       db.updateReplicaStatus(appOut.replicaId, "running");
       db.markAppEnvironmentFresh(appOut.appId);
@@ -945,15 +977,19 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
     const appOut = prior["insert_app_row"] as InsertAppOut;
     const build = prior["build_and_run_container"] as BuildOut;
 
-    const gitCommitResult = await sshExec(
-      server.serverIp,
-      `su - deploy -c "cd /home/deploy/apps/${req.app_name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
-      server.serverHostKey || undefined,
-    );
-    const gitCommit = gitCommitResult.stdout.trim();
+    let gitCommit = "artifact";
+    if (!req.image_ref) {
+      const gitCommitResult = await sshExec(
+        server.serverIp,
+        `su - deploy -c "cd /home/deploy/apps/${req.app_name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
+        server.serverHostKey || undefined,
+      );
+      gitCommit = gitCommitResult.stdout.trim();
+    }
     const row = db.insertDeployment({
       app_id: appOut.appId,
       image_tag: build.imageTag,
+      image_digest: build.imageDigest || req.image_ref,
       git_commit: gitCommit,
       config_revision: db.getApp(appOut.appId)?.config_revision ?? 1,
     });

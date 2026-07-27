@@ -5,14 +5,28 @@ export type EnvironmentRow = {
   name: string;
   env_vars: string;
   created_at: string;
+  deleted_at: string | null;
+  purge_after: string | null;
 };
 
 export function getEnvironments(): EnvironmentRow[] {
-  return db.query("SELECT * FROM environments ORDER BY name ASC").all() as EnvironmentRow[];
+  return db.query("SELECT * FROM environments WHERE deleted_at IS NULL ORDER BY name ASC").all() as EnvironmentRow[];
 }
 
 export function getEnvironment(id: number): EnvironmentRow | null {
-  return db.query("SELECT * FROM environments WHERE id = ?").get(id) as EnvironmentRow | null;
+  return db.query("SELECT * FROM environments WHERE id = ? AND deleted_at IS NULL").get(id) as EnvironmentRow | null;
+}
+
+export function getDeletedEnvironments(): EnvironmentRow[] {
+  return db.query(
+    "SELECT * FROM environments WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+  ).all() as EnvironmentRow[];
+}
+
+export function getDeletedEnvironment(id: number): EnvironmentRow | null {
+  return db.query(
+    "SELECT * FROM environments WHERE id = ? AND deleted_at IS NOT NULL",
+  ).get(id) as EnvironmentRow | null;
 }
 
 export function insertEnvironment(name: string, envVars: string): EnvironmentRow {
@@ -28,6 +42,29 @@ export function updateEnvironment(id: number, name: string, envVars: string): vo
 
 export function deleteEnvironment(id: number): void {
   db.query("DELETE FROM environments WHERE id = ?").run(id);
+}
+
+export function softDeleteEnvironment(id: number): void {
+  db.query(
+    `UPDATE environments
+     SET deleted_at = datetime('now'), purge_after = datetime('now', '+7 days')
+     WHERE id = ? AND deleted_at IS NULL`,
+  ).run(id);
+}
+
+export function restoreEnvironment(id: number): void {
+  db.query(
+    "UPDATE environments SET deleted_at = NULL, purge_after = NULL WHERE id = ? AND deleted_at IS NOT NULL",
+  ).run(id);
+}
+
+export function isEnvironmentPurgeProtected(
+  environment: Pick<EnvironmentRow, "purge_after">,
+  now = Date.now(),
+): boolean {
+  if (!environment.purge_after) return false;
+  const purgeAt = Date.parse(`${environment.purge_after.replace(" ", "T")}Z`);
+  return Number.isFinite(purgeAt) && now < purgeAt;
 }
 
 /** Clone an environment under a new name. The stored env_vars blob (including
