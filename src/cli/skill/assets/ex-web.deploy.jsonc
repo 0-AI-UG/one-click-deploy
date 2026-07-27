@@ -1,7 +1,7 @@
 {
   "$schema": 1,
   "name": "Web Frontend",
-  "description": "React SPA served by nginx. In a stack it reads API_URL from the shared environment (injected automatically because it `needs` the `api` app), so API_URL is NOT declared here.",
+  "description": "React SPA served by nginx. Its container entrypoint renders API_URL from the runtime environment into a browser-readable config file; API_URL is injected by the stack and is not declared here.",
   "build": { "dockerfile": "Dockerfile", "context": ".", "container_port": 80 },
   "env": [
     { "key": "NODE_ENV", "default": "production" }

@@ -1,72 +1,49 @@
 ---
 name: ocd-deploy
-description: Deploy and operate apps on One-Click Deploy (OCD), a self-hosted Hetzner PaaS (like Heroku/Railway/Render). Use when authoring an `.ocd-deploy.json` app manifest or an `ocd-stack.json` multi-app stack, or when running the `ocd` CLI to deploy, redeploy, roll back, scale, view logs, enable webhook staging, promote staging to production, manage environments/managed services (Postgres, Redis, MySQL, ...), or wire several apps and databases together. Trigger on: "deploy this to OCD", ".ocd-deploy.json", "ocd-stack.json", "ocd deploy", "ocd deploy --staging-env", "ocd promote", "ocd stack", "one-click deploy", "deploy to my panel/Hetzner PaaS".
+description: Deploy and operate apps on One-Click Deploy (OCD), a self-hosted Hetzner PaaS. Use when authoring or reviewing `.ocd-deploy.json` app manifests and `ocd-stack.json` multi-app stacks; running the `ocd` CLI for deploys, logs, SSH, environments, managed services, staging promotion, or operation recovery; choosing routing, health checks, volumes, scaling, placement, and secret handling; or diagnosing stale environments, failed stacks, PostgreSQL restores, and retained volumes. Trigger on “deploy to OCD”, “one-click deploy”, `.ocd-deploy.json`, `ocd-stack.json`, `ocd deploy`, `ocd stack`, or an OCD panel/Hetzner PaaS.
 ---
 
-# One-Click Deploy (OCD)
+# Deploy and operate with OCD
 
-One-Click Deploy ("OCD") is a self-hosted, open-source PaaS for Hetzner Cloud —
-a lightweight alternative to Heroku, Railway, and Render. Point it at a Git repo
-containing a Dockerfile and it provisions a Hetzner server, builds the image,
-configures DNS, issues TLS (Traefik + Let's Encrypt), and serves traffic over
-HTTPS. It is deeply tied to one provider: Hetzner servers, volumes, private
-networks, firewalls, and DNS.
+OCD is CLI-first. Commit deployment intent to manifests, keep secrets outside
+Git, and use the web panel primarily to observe resources and approve
+destructive CLI actions.
 
-## When to use this skill
+## Working method
 
-Use it whenever you need to:
+1. Inspect the repo, Dockerfile, exposed port, health endpoint, required runtime
+   variables, persistent paths, and Git remote.
+2. Choose one app, a standalone managed service, or a stack.
+3. Start from the matching file under [examples/](examples/).
+4. Read only the relevant section of [reference.md](reference.md) for exact
+   fields and flags.
+5. Validate assumptions locally, deploy through the CLI, and follow the
+   operation until it is terminal.
+6. After a mutation, check `ocd status` or `ocd stack status <name>`; do not
+   infer health from the last operation alone.
 
-- Write or edit an **`.ocd-deploy.json`** manifest so a repo deploys with sensible defaults.
-- Write or edit an **`ocd-stack.json`** to deploy several apps + managed services together.
-- Drive the **`ocd` CLI** — deploy, redeploy, rollback, restart, pause, logs, ssh, envs, services, stacks.
-- Decide the right OCD settings for an app (ports, health checks, volumes, scaling, networking, public exposure).
+Install and authenticate once:
 
-The full field-by-field schema and complete CLI reference are in
-[reference.md](reference.md). Copy-pasteable starting points are in
-[examples/](examples/). This file is the map; reach for those two when you need
-detail.
+```bash
+curl -fsSL {{PANEL_URL}}/cli/install.sh | sh
+ocd login {{PANEL_URL}}
+```
 
-## Core concepts
+## Choose the deployment shape
 
-- **App** — one deployable unit: a Git repo (or subdir) with a Dockerfile, built and run as one or more containers behind Traefik with automatic HTTPS.
-- **Manifest** — `.ocd-deploy.json`, committed to a repo, pre-configures `ocd deploy` with no interactive configuration beyond missing secrets. One per deployable app.
-- **Managed service** — one-click Postgres, Redis, MySQL, MongoDB, ClickHouse, and more. Credentials are injected into linked environments.
-- **Environment** — a named group of env vars (plain or secret) shared across apps. Changing an environment redeploys its linked apps.
-- **Stack** — `ocd-stack.json`: several apps + services deployed together as one ordered, health-gated unit, with credentials and internal URLs wired automatically.
-- **Internal networking** — every app is reachable at `<app>.ocd.internal:<port>` on the private network. The platform injects `OCD_INTERNAL_URL/HOST/PORT`; stacks additionally publish each app as `<KEY>_URL`.
-- **Health-gated deploys** — a deploy that never passes its health check is automatically rolled back.
+- **One app**: commit `.ocd-deploy.json`; run `ocd deploy`.
+- **Several dependent apps/services**: commit one app manifest per app plus
+  `ocd-stack.json`; run `ocd deploy stack`.
+- **Standalone managed service**: inspect `ocd service catalog`, then run
+  `ocd service create`.
 
-## Deployment model
+The referenced app manifest is the canonical full spec inside and outside a
+stack. A stack entry adds only dependency wiring, environment projection, and
+optional `domain`/`public` overrides.
 
-The CLI is the deployment interface. Commit a `.ocd-deploy.json` for each app,
-then run `ocd deploy`; use `ocd-stack.json` plus `ocd deploy stack` for an
-ordered group of apps and managed services.
+## Author app manifests
 
-For several apps and services at once, use a **stack** (`ocd-stack.json`) via
-`ocd deploy stack`.
-
-## Decision guide
-
-**One app or a stack?**
-- One app (optionally using an existing managed service) → a single `.ocd-deploy.json`, deploy with `ocd deploy`.
-- Several apps that must deploy together, in order, sharing credentials/URLs (e.g. api + web + db) → an `ocd-stack.json` referencing each app's manifest, deploy with `ocd deploy stack`.
-
-**Does the app speak HTTP on its port?**
-- Yes → leave `health_check` default, optionally set `health_check.path` to a real endpoint (`/healthz`) for better rollout safety.
-- No (worker, queue consumer, raw-TCP database) → set `"health_check": { "enabled": false }`. For raw TCP also set `"internal_protocol": "tcp"`. See [examples/worker/.ocd-deploy.json](examples/worker/.ocd-deploy.json).
-
-**Should it be reachable from the internet?**
-- Public website/API → `"public": true` (default) → gets an HTTPS domain.
-- Internal-only (backend behind another app) → `"public": false`; reach it via `<app>.ocd.internal` / the stack's `<KEY>_URL`.
-- Raw TCP/UDP port (game server, MQTT, exposed DB) → `public_port` (+ `public_protocol`), independent of the HTTP domain.
-
-**Needs to persist data?** Add a `volume` (`size` in GB + mount `path`).
-
-**Needs more/less resources?** `memory_mb` and `cpu_limit` (omit or `0` for platform defaults: 512 MB / 1 core). Scale horizontally with `replicas`.
-
-## Authoring an `.ocd-deploy.json`
-
-Minimum viable manifest:
+Minimum:
 
 ```json
 {
@@ -76,150 +53,130 @@ Minimum viable manifest:
 }
 ```
 
-Add `env[]` for configuration, `webhook` for auto-deploy on push, `volume` for
-persistence, and `health_check.path` for a real health endpoint. A fuller
-single-service example is in
-[examples/single-service/.ocd-deploy.json](examples/single-service/.ocd-deploy.json).
-Every field is documented in [reference.md](reference.md#the-ocd-deployjson-manifest).
+Apply these rules:
 
-Key rules to get right:
-- `name` is the only required field.
-- Paths in the manifest are relative to the manifest's directory, **except `build.context`** (relative to repo root). No `..` allowed.
-- `env[].key` must match `^[A-Za-z_][A-Za-z0-9_]*$`; mark credentials `secret: true` and must-provide values `required: true`.
-- `health_check.path`, `sticky`, and password protection need `internal_protocol: "http"` (the default).
+- Set a real `health_check.path` for HTTP apps. For workers, set
+  `"health_check": { "enabled": false }`; also set
+  `"internal_protocol": "tcp"` only when the app itself speaks raw TCP.
+- Use `"public": false` for internal apps. HTTP apps use
+  `http://<app>.ocd.internal`; TCP apps use
+  `tcp://<app>.ocd.internal:<container_port>`.
+- Declare deployer-supplied variables in `env[]`. Mark credentials
+  `secret: true`; mark values with no safe default `required: true`.
+- Never commit a basic-auth password. Use `auth.password_env` or the hidden CLI
+  prompt.
+- Add `volume` only for data that must survive container replacement. A
+  volume-backed app cannot scale beyond one replica.
+- Use `placement_pool` in committed manifests. Reserve `--server=<id>` for a
+  nonportable one-run override.
+- Manifest paths are relative to the manifest directory, except
+  `build.context`, which is repo-root-relative. Never use `..`.
 
-## Authoring an `ocd-stack.json`
+See [reference.md](reference.md#the-ocd-deployjson-manifest) for all routing,
+resource, webhook, durability, placement, volume, and scaling fields.
 
-A stack references each app's own `.ocd-deploy.json` and adds ordering + wiring.
-See [examples/monorepo/ocd-stack.json](examples/monorepo/ocd-stack.json) plus
-the two app manifests it references.
+## Author stacks safely
 
 ```json
 {
   "$schema": 1,
   "name": "blog",
-  "services": { "database": { "type": "postgresql", "version": "16", "volume_size": 10 } },
+  "services": {
+    "database": { "type": "postgresql", "volume_size": 10 }
+  },
   "apps": {
-    "api": { "manifest": "services/api/.ocd-deploy.json", "needs": ["database"] },
-    "web": { "manifest": "services/web/.ocd-deploy.json", "needs": ["api"], "public": true }
+    "api": {
+      "manifest": "services/api/.ocd-deploy.json",
+      "needs": ["database"],
+      "env": ["DATABASE_URL", "JWT_SECRET", "LOG_LEVEL"]
+    },
+    "web": {
+      "manifest": "services/web/.ocd-deploy.json",
+      "needs": ["api"],
+      "env": ["API_URL", "NODE_ENV"]
+    }
   }
 }
 ```
 
-What the stack does for you:
-- **Order**: `needs` builds a dependency graph; services first, then apps in order, each waiting for its dependencies to become **healthy**. Cycles are rejected.
-- **Wiring**: one shared environment linked to every member. Each **app** is published as `<KEY>_URL` (uppercased app key), so `web` (needing `api`) automatically gets `API_URL`. Each **service** injects `<KEY>_URL`, `<KEY>_HOST`, `<KEY>_PORT`, `<KEY>_USER`, `<KEY>_PASSWORD`, `<KEY>_NAME` using its **uppercased service key** as the prefix — a service keyed `database` yields `DATABASE_URL` (etc.), one keyed `redis` yields `REDIS_URL`. Pick the service key to match the env-var name your app reads. A stack app entry may set `"env": ["DATABASE_URL", "JWT_SECRET"]` to receive only those shared keys; omit it for the legacy all-keys behavior.
-- **Reconcile**: re-running `ocd deploy stack` redeploys listed members and destroys dropped ones.
-- **Atomic**: any member failing rolls back the whole run.
+- `needs` controls health-gated order and must be acyclic.
+- Service keys define injected names. Key `database` produces
+  `DATABASE_URL`, `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USER`,
+  `DATABASE_PASSWORD`, and `DATABASE_NAME`; app key `api` produces `API_URL`.
+- Do not declare injected connection/URL keys as `required` in child manifests;
+  they do not exist until their dependency deploys.
+- Use an app entry’s `env` list to project only selected shared-environment
+  keys; omit it for all keys, or use `[]` for platform keys only.
+- Re-running a stack reconciles it. Review removed members carefully: resources
+  omitted from the manifest are destroyed, while adopted resources and retained
+  volumes are protected by recovery ownership checks.
+- Catalog types and versions change. Always use `ocd service catalog` rather
+  than inventing or relying on a memorized list.
 
-Because injected `<KEY>_URL` values only exist after the service/app deploys, **don't list them as `required` in an app's `env[]`** — that makes `ocd deploy stack` prompt for them up front. Leave connection/URL vars out of the manifest (the container still gets them from the shared env); declare only vars the deployer must supply, like `JWT_SECRET`.
-
-Common mistake: the service `type` must be the **exact catalog key** —
-`postgresql` (not `postgres`), `redis`, `mysql`, `mariadb`, `mongodb`,
-`clickhouse`, `rabbitmq`, `kafka`, `meilisearch`, `minio`, `qdrant`, `typesense`,
-`ollama`. A wrong type fails the deploy with "Unknown service type".
-
-## Driving the `ocd` CLI
-
-Install and log in once:
-
-```bash
-curl -fsSL <PANEL_URL>/cli/install.sh | sh
-ocd login <PANEL_URL>
-```
-
-Everyday commands (full list + flags in
-[reference.md](reference.md#the-ocd-cli)):
+## Operate through the CLI
 
 ```bash
-ocd deploy                 # deploy the current repo from ./.ocd-deploy.json
-ocd deploy stack               # deploy the whole ocd-stack.json in dependency order
-ocd service catalog        # discover managed service types and defaults
+ocd deploy [manifest]                         # app manifest
+ocd deploy stack [manifest]                   # stack + child manifests
+ocd service catalog
 ocd service create db --type=postgresql --volume-size=20
-ocd status                 # apps + services overview
-ocd logs <app> --tail=200  # recent logs
-ocd redeploy <app>         # rebuild + redeploy
-ocd rollback <app>         # back to the previous good deploy
-ocd ssh <app> -i           # shell inside an app container
-ocd envs set <env> KEY=VALUE   # set a var (redeploys affected linked apps)
-ocd envs set <env> KEY=VALUE --restart     # recreate from current image; no build
-ocd envs set <env> KEY=VALUE --no-rollout  # store now, apply on a later recreate
+ocd status
+ocd stack status <name>
+ocd logs <app> --tail=200
+ocd ssh <app> -i
+ocd redeploy <app>
+ocd rollback <app>
+ocd envs set <env> KEY=VALUE --restart
+ocd ops logs <id> --follow
 ```
 
-`ocd deploy` reads the manifest, sends `env[]` defaults, prompts for missing
-`required` vars (hidden when `secret`), and streams progress. Override or add
-values with repeatable `--set=KEY=VALUE`; link an existing environment with
-`--env=<name|id>`. `ocd deploy stack` does the same across the whole stack, merging
-every app's `env[]` into the one shared environment.
+Environment mutations default to rebuild/redeploy. Use `--restart` to recreate
+from the current image, `--no-rollout` to defer, and repeat `--app=<name|id>` to
+limit affected linked apps. Deferred or partial changes are reported as
+`stale environment, redeploy required`.
 
-### Webhook staging (deploy-to-staging-first)
+## Webhook staging
 
-When a webhook is enabled, you can hold each pushed commit in a `<name>-staging`
-sibling app for manual promotion instead of redeploying production directly.
-Staging is **explicit**: it deploys with an **environment** you select (a named
-env-var bag managed by `ocd envs`), so it never implicitly shares production's
-env. Duplicate production's environment first if you want isolated staging
-values:
+Set `"webhook": { "enabled": true, "staging": true }` in each participating app
+manifest.
 
-```bash
-ocd envs copy my-app my-app-staging     # duplicate the env, then tweak it
-ocd deploy --staging-env=my-app-staging # webhook pushes → <name>-staging, hold
-ocd promote --yes                       # rebuild production at staging's commit
-```
+- Standalone: OCD auto-creates `<app>-staging-env` from the app environment.
+  Override it with `ocd deploy --staging-env=<name|id>`.
+- Stack: opted-in members share one stack staging environment, auto-created
+  from the production stack environment. Override with
+  `ocd deploy stack --staging-env=<name|id>`; clear with `--staging-env=`.
+- Pushes deploy the staging sibling and hold. Promote the exact deployed commit
+  with `ocd promote` or `ocd promote stack <name>`.
 
-- `--staging-env=<name|id>` enables staging and picks the environment the
-  `<name>-staging` sibling deploys with. It requires `webhook.enabled` in the
-  manifest. Pick production's own environment to share it, or a copy to isolate.
-- Declare intent in the manifest with `"webhook": { "enabled": true, "staging": true }`.
-  This still requires `--staging-env` at deploy time — deploying `staging: true`
-  without it is an error (staging must have an explicit environment).
-- On each push the sibling rebuilds at the new commit and **holds**; production
-  keeps serving until you promote.
-- `ocd promote` (run in the repo) promotes the exact commit running in the
-  `<name>-staging` sibling up to production, rebuilding production pinned to that
-  commit (reusing the rollback machinery). Be explicit with
-  `ocd promote --from=<app> --to=<app>`. Pass `--yes` to skip confirmation
-  (required in non-interactive contexts).
+The copy includes credentials and service URLs. For data isolation, pre-create
+a staging environment and staging services, inject their URLs there, then pass
+that environment with `--staging-env`.
 
-#### In a stack
+## Production safety and recovery
 
-Staging is **opt-in per member**: a member joins by setting
-`"webhook": { "enabled": true, "staging": true }` in its **own**
-`.ocd-deploy.json`. The stack manifest declares nothing about staging — the
-environment is chosen on the command line:
+- Treat `ocd ops cancel` as destructive: it may compensate created resources.
+  Review the exact targets in browser confirmation; use `--yes` only in an
+  explicitly authorized automation session.
+- Prefer `ocd ops retry <id>` for resumable work. Use
+  `ocd ops finalize <id>` only to reconcile and close an irrecoverably stale
+  operation; it will not claim success when resources disagree.
+- Stack status is resource-derived. A healthy stack may separately report that
+  its last operation failed.
+- Destroyed managed volumes are detached and retained for recovery rather than
+  immediately deleted. They still incur provider charges.
+- Automated `--set` and `--secret` values are passed through process arguments
+  today. Use ephemeral runners, masked CI variables, and disabled shell tracing;
+  there is no stdin/file secret input yet.
+- Before PostgreSQL restore, isolate writers and take a fresh backup. Managed
+  images may pre-create extension schemas; use a clean restore or recreate an
+  empty target as described in
+  [reference.md](reference.md#postgresql-restore-and-retained-volumes).
 
-```bash
-ocd deploy stack                                 # staging env auto-created
-ocd deploy stack --staging-env=blog-staging      # …or name an existing one
-ocd deploy stack --staging-env=                  # clear the staging env
-ocd promote stack blog --yes                     # promote every staging sibling
-```
+## Frequent mistakes
 
-- A stack has **one** staging environment, shared by every opted-in member —
-  exactly like the stack's one production environment. There is no per-member
-  override.
-- `--staging-env` is **optional**. As soon as one member opts into staging, a
-  stack without a staging environment gets `<stack>-stack-staging-env`
-  auto-created as a copy of the stack's environment (secrets included), mirroring
-  how `<stack>-stack-env` is auto-created for production. Edit it afterwards with
-  `ocd envs` to give staging its own values.
-- `--staging-env=<name|id>` names an **existing** environment to use instead of
-  the auto-created one. It's remembered on the stack, so later re-ups don't need
-  the flag; `--staging-env=` (empty) clears it.
-- `ocd promote stack <name>` promotes every staging sibling in the stack.
-
-## Common recipes
-
-- **Node/Go/Python web app** → single manifest, `build.container_port`, `health_check.path`, `webhook.enabled`. See the single-service example.
-- **API + SPA in a monorepo** → two manifests under `services/*`, each with its own `webhook.path`; deploy independently or together in a stack.
-- **App + database** → a stack with a `postgresql` service the app `needs`; the connection string is injected — don't hardcode it.
-- **Background worker** → `public: false` + `health_check.enabled: false`. See the worker example.
-- **Raw TCP service (e.g. exposed database, game server)** → `internal_protocol: "tcp"`, `health_check.enabled: false`, and `public_port` if it must be reachable from the internet.
-
-## Pitfalls to avoid
-
-- Don't invent a service type — use the exact catalog keys above (`postgresql`, not `postgres`).
-- Don't set `health_check.path` on a non-HTTP app; it'll fail the probe and roll back. Use `health_check.enabled: false` instead.
-- Don't put `..` in any manifest path.
-- Don't hardcode inter-app URLs or DB credentials in a stack — consume the injected `<KEY>_URL` / service env vars.
-- Remember `build.context` is repo-root-relative while every other path is manifest-relative.
+- Using `postgres` instead of the catalog key `postgresql`.
+- Health-checking a worker or raw-TCP process over HTTP.
+- Hardcoding stack service credentials or sibling URLs.
+- Assuming pause/unpause refreshes container environment; it does not recreate
+  the container.
+- Treating an operation failure as the current resource state.

@@ -65,8 +65,8 @@ Promotes every member of the stack that has a webhook-staging sibling holding a
 successful deployment. Members without a sibling (or whose sibling has never
 deployed) are skipped and reported in the stack log.
 
-Members are promoted CONCURRENTLY: stack dependency edges (\`needs\`) are only
-used at deploy time and are not persisted, so promotion cannot be ordered.
+Members are promoted dependency level by dependency level. Independent members
+within one level may promote concurrently.
 
 ${BOLD}Options:${RESET}
   --yes, -y         Skip the confirmation prompt`);
@@ -123,8 +123,8 @@ Run with no arguments inside a repo to promote its webhook-staging sibling:
 source = <name>-staging, destination = <name>, where <name> comes from the
 manifest. Use --from/--to to promote between any two apps explicitly.
 
-Use \`ocd promote stack <name>\` to promote every staging sibling in a stack
-at once.
+Use \`ocd promote stack <name>\` to promote ready staging siblings in one stack
+operation, respecting dependency levels.
 
 ${BOLD}Options:${RESET}
   --from=<app>      Explicit source app (name or id)

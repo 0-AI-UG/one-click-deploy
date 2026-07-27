@@ -601,11 +601,6 @@ export function DashboardPage() {
             ><Share2 size={12} /> Graph</button>
           </div>
           <Btn onClick={() => { load(); if (view === "graph") loadTopo(); }} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>
-          <PermissionGate permission="apps.deploy">
-            <div className="font-mono text-[10px] text-muted">
-              Deploy your first app with <span className="font-bold text-fg">ocd deploy</span>.
-            </div>
-          </PermissionGate>
         </div>
       </div>
 

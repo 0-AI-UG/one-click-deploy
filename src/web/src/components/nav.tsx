@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
 import { useAuth, logout } from "../stores/auth.ts";
 import { Server, HardDrive, Users, LogOut, Terminal, Layers, TerminalSquare, Check, Cpu, Menu } from "lucide-react";
+import { NeoSelect } from "./neo-select.tsx";
+import { SKILL_AGENT_TARGETS } from "../../../shared/skill-agents.ts";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
@@ -26,6 +28,34 @@ function CliCopyButton() {
       {copied ? <Check size={13} className="text-green-600" /> : <TerminalSquare size={13} />}
       {copied ? "Copied" : "CLI"}
     </button>
+  );
+}
+
+function SkillInstallButton() {
+  const [copied, setCopied] = useState(false);
+
+  const copyInstallCommand = (agent: string) => {
+    navigator.clipboard.writeText(`ocd skill install --agent ${agent}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div
+      className="w-24"
+      title="Choose an agent and copy its OCD skill install command"
+    >
+      <NeoSelect
+        compact
+        value=""
+        placeholder={copied ? "Copied" : "Skill"}
+        options={SKILL_AGENT_TARGETS.map((agent) => ({
+          value: agent.name,
+          label: agent.label,
+        }))}
+        onChange={copyInstallCommand}
+      />
+    </div>
   );
 }
 
@@ -83,7 +113,10 @@ function MobileMenu({ hash }: { hash: string }) {
             </a>
           )}
           <div className="border-t border-fg/10 py-1">
-            <CliCopyButton />
+            <div className="flex items-center">
+              <CliCopyButton />
+              <SkillInstallButton />
+            </div>
           </div>
           <div className="border-t border-fg/10 px-3 py-2 font-mono text-[10px] text-fg/70 flex items-center justify-between">
             <a
@@ -153,7 +186,10 @@ function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; 
         </div>
       </div>
       <div className="flex items-center gap-3">
-        <CliCopyButton />
+        <div className="flex items-center">
+          <CliCopyButton />
+          <SkillInstallButton />
+        </div>
         <div className="h-5 w-0.5 bg-fg/30" />
         <a
           href="#/account"

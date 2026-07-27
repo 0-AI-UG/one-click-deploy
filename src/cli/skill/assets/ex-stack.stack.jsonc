@@ -3,11 +3,20 @@
   "name": "blog",
   "description": "API + web frontend on Postgres, with a Redis cache",
   "services": {
-    "database": { "type": "postgresql", "version": "16", "volume_size": 10 },
+    "database": { "type": "postgresql", "volume_size": 10 },
     "redis": { "type": "redis" }
   },
   "apps": {
-    "api": { "manifest": "services/api/.ocd-deploy.json", "needs": ["database", "redis"] },
-    "web": { "manifest": "services/web/.ocd-deploy.json", "needs": ["api"], "public": true }
+    "api": {
+      "manifest": "services/api/.ocd-deploy.json",
+      "needs": ["database", "redis"],
+      "env": ["DATABASE_URL", "REDIS_URL", "JWT_SECRET", "LOG_LEVEL"]
+    },
+    "web": {
+      "manifest": "services/web/.ocd-deploy.json",
+      "needs": ["api"],
+      "env": ["API_URL", "NODE_ENV"],
+      "public": true
+    }
   }
 }

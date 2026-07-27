@@ -3,38 +3,10 @@ import fs from "node:fs";
 import { loadConfig } from "../config.ts";
 import { renderSkillFiles, SKILL_DIR_NAME } from "../skill/content.ts";
 import { BOLD, DIM, GREEN, RESET } from "../format.ts";
-
-/** A supported target agent: its canonical name, any aliases the user may type,
- *  the base directory (relative to the install root) it discovers skills in,
- *  and a human label for the summary. */
-interface AgentTarget {
-  name: string;
-  aliases: string[];
-  /** Directory that holds `<skill-name>/SKILL.md`, relative to the install root. */
-  skillsDir: string;
-  label: string;
-}
-
-// Every supported agent discovers skills as `<dir>/<name>/SKILL.md`; only the
-// parent directory differs. (Codex and Antigravity both use `.agents/skills`;
-// OpenCode also auto-discovers that path.) Keep this table as the single source
-// of truth — adding an agent is one row.
-const AGENTS: AgentTarget[] = [
-  { name: "claude", aliases: ["claude-code", "claudecode"], skillsDir: ".claude/skills", label: "Claude Code" },
-  { name: "codex", aliases: [], skillsDir: ".agents/skills", label: "OpenAI Codex" },
-  { name: "cursor", aliases: [], skillsDir: ".cursor/skills", label: "Cursor" },
-  { name: "antigravity", aliases: ["agy", "gemini"], skillsDir: ".agents/skills", label: "Google Antigravity" },
-  { name: "opencode", aliases: ["open-code"], skillsDir: ".opencode/skills", label: "OpenCode" },
-  { name: "pi", aliases: [], skillsDir: ".pi/skills", label: "pi" },
-];
-
-function resolveAgent(input: string): AgentTarget | undefined {
-  const key = input.toLowerCase();
-  return AGENTS.find((a) => a.name === key || a.aliases.includes(key));
-}
+import { SKILL_AGENT_TARGETS, resolveSkillAgent } from "../../shared/skill-agents.ts";
 
 function agentList(): string {
-  return AGENTS.map((a) => {
+  return SKILL_AGENT_TARGETS.map((a) => {
     const names = [a.name, ...a.aliases].join(", ");
     return `  ${a.name.padEnd(14)} ${DIM}${a.label} → ${a.skillsDir}/${SKILL_DIR_NAME}/${RESET}${a.aliases.length ? `  ${DIM}(aka ${a.aliases.join(", ")})${RESET}` : ""}`;
   }).join("\n");
@@ -97,7 +69,7 @@ function install(args: string[]): void {
     process.exit(1);
   }
 
-  const target = resolveAgent(agent);
+  const target = resolveSkillAgent(agent);
   if (!target) {
     console.error(`Unknown agent: ${agent}\n\nSupported agents:\n${agentList()}`);
     process.exit(1);

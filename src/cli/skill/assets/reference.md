@@ -4,6 +4,20 @@ Full field-by-field reference for the `.ocd-deploy.json` and `ocd-stack.json`
 manifests and the complete `ocd` CLI. The [SKILL.md](SKILL.md) file has the
 overview and the decision guidance; this file is the exhaustive lookup.
 
+## Contents
+
+- [App manifest](#the-ocd-deployjson-manifest)
+- [Stack manifest](#the-ocd-stackjson-manifest-multi-app-stacks)
+- [Internal networking](#internal-networking)
+- [CLI installation and commands](#the-ocd-cli)
+- [Managed services](#ocd-service)
+- [App deployment](#ocd-deploy)
+- [Staging promotion](#ocd-promote)
+- [Stack operations](#ocd-stack)
+- [Environment operations](#ocd-envs)
+- [Operation recovery](#ocd-ops)
+- [PostgreSQL and volume recovery](#postgresql-restore-and-retained-volumes)
+
 ---
 
 ## The `.ocd-deploy.json` manifest
@@ -14,8 +28,9 @@ anywhere in the repo; for a monorepo add one per deployable service (e.g.
 the directory that contains the manifest file, **except** `build.context`,
 which is relative to the repo root.
 
-All fields except `name` are optional. Unknown top-level fields are ignored
-for forward compatibility (nested unknown keys are silently stripped).
+All fields except `name` are optional. Unknown fields warn and are ignored for
+forward compatibility; misspelled known fields therefore do not configure
+anything.
 
 ### Fields
 
@@ -53,7 +68,7 @@ for forward compatibility (nested unknown keys are silently stripped).
 | `rate_limit_rps` | integer ≥ 0 | Public-domain rate limit in req/s per client IP. `0` = unlimited. Default `0`. |
 | `ip_allowlist` | string | Comma-separated IPs/CIDRs allowed to reach the public domain, e.g. `"203.0.113.4, 10.0.0.0/8"`. Empty = open. |
 | `compress` | boolean | gzip responses on the public domain. Default `false`. |
-| `public_port` | integer \| `"auto"` | Expose a raw public TCP/UDP port on the panel IP (game servers, databases, MQTT). `"auto"` picks the lowest free pool port. Independent of the HTTP domain. Omit for none. |
+| `public_port` | integer \| `"auto"` \| `null` | Expose a raw public TCP/UDP port on the panel IP (game servers, databases, MQTT). `"auto"` picks the lowest free pool port. `null` explicitly removes exposure; omit for none on a new app. Independent of the HTTP domain. |
 | `public_protocol` | `"tcp"` \| `"udp"` | Pool for `public_port`: `tcp` (30000–30049) or `udp` (30050–30099). Default `tcp`. |
 | `extra_volumes[]` | array | Extra host→container bind mounts: `{ "host_path": "/abs/host", "container_path": "/abs/container" }`. |
 | `durability_class` | `"none"` \| `"standard"` \| `"high"` | Availability policy and replica-spread floor. |
@@ -101,7 +116,7 @@ per-app build/env config.
 | `name` | string **(required)** | Stack name. Every member is named `<name>-<key>` and is fleet-globally unique (stack `blog` + app key `web` → app `blog-web`). |
 | `description` | string | Optional. |
 | `services` | object | Map of service key → managed service. Optional. |
-| `services.<key>.type` | string **(required)** | Catalog type — the exact catalog key, e.g. `postgresql`, `redis`, `mysql`, `mariadb`, `mongodb`, `clickhouse`, `rabbitmq`, `kafka`, `meilisearch`, `minio`, `qdrant`, `typesense`, `ollama`. **Use `postgresql`, not `postgres`.** |
+| `services.<key>.type` | string **(required)** | Exact catalog key, such as `postgresql`, `redis`, or `mysql`. Run `ocd service catalog` for the current authoritative list. **Use `postgresql`, not `postgres`.** |
 | `services.<key>.version` | string | Image version/tag. Optional. |
 | `services.<key>.volume_size` | number ≥ 1 | Data volume size in GB. Optional. |
 | `services.<key>.env_overrides` | object (string→string) | Override generated service env vars. Optional. |
@@ -132,7 +147,7 @@ or add any other extension already included in the chosen image.
   - Each **service** injects `<KEY>_URL`, `<KEY>_HOST`, `<KEY>_PORT`, `<KEY>_USER`, `<KEY>_PASSWORD`, `<KEY>_NAME` — where `<KEY>` is the **uppercased service key** (`_URL` and `_PASSWORD` are stored as secrets). So a service keyed `database` yields `DATABASE_URL`, `DATABASE_HOST`, …; a service keyed `redis` yields `REDIS_URL`, … Choose the service key to get the env-var name your app expects.
 - **Don't redeclare injected vars as `required`**: because the injected `<KEY>_URL` values only land after the service/app deploys, listing them as `required` in an app's `env[]` makes `ocd deploy stack` prompt for them up front. Leave service-provided connection vars and sibling `<KEY>_URL` vars **out** of the app manifest — the container still receives them from the shared environment at runtime. Declare only vars the deployer must supply (e.g. `JWT_SECRET`).
 - **Reconcile**: re-running `ocd deploy stack` redeploys every app in the manifest and destroys members recorded under the stack but no longer listed.
-- **Atomic**: if any member fails, the whole run rolls back — members deployed in that run are destroyed.
+- **Atomic**: if any member fails, the run compensates newly created resources. Reused or subsequently adopted resources are protected from stale-operation compensation.
 - **Capacity**: the fleet has a hard 200-app cap; a stack that would exceed it is rejected before anything deploys.
 
 `server_id` is intentionally not a manifest field: numeric server IDs are
@@ -144,13 +159,13 @@ standalone operational override.
 
 ## Internal networking
 
-Every app has a stable private address `<app>.ocd.internal:<internal-port>`
-reachable from other apps on the private network (private apps have **only**
-this address). Routing is set by `internal_protocol` (`http` L7 routing, or
-`tcp` raw pass-through; default `http`). The platform injects into every
+Every app has a stable `<app>.ocd.internal` name reachable from other apps on
+the private network. Routing is set by `internal_protocol` (`http` L7 routing,
+or `tcp` raw pass-through; default `http`). The platform injects into every
 container:
 
-- `OCD_INTERNAL_URL` — `http://<app>.ocd.internal:<port>` for HTTP-routed apps, `tcp://…` for TCP-routed ones.
+- `OCD_INTERNAL_URL` — `http://<app>.ocd.internal` for HTTP-routed apps, or
+  `tcp://<app>.ocd.internal:<container_port>` for TCP-routed apps.
 - `OCD_INTERNAL_HOST`, `OCD_INTERNAL_PORT`.
 
 A user-defined env var with the same key takes precedence. Inside a stack you
@@ -206,7 +221,9 @@ ocd ops <subcommand>         Inspect, cancel, retry, or finalize engine operatio
 ocd services                 List managed services (Postgres, Redis, ...)
 ocd service catalog          List catalog types, default versions and volumes
 ocd service create <name> --type=<type> [options]  Create a managed service
-ocd stack <up|down|ls|status|logs>   Deploy/manage multi-app stacks (ocd-stack.json)
+ocd deploy stack [manifest] Deploy a multi-app stack
+ocd delete stack <name>     Destroy a stack and its declared members
+ocd stack <ls|status|logs>  Inspect multi-app stacks
 ocd servers                  List Hetzner servers and the apps on them
 ocd ssh <app> <cmd>          Run a command inside an app container
 ocd ssh <app> -i             Interactive shell inside an app container
@@ -224,10 +241,10 @@ ocd service create <name> --type=<type> [--version=<tag>] [--volume-size=<gb>]
                    [--env-prefix=<prefix>] [--domain=<domain>]
 ```
 
-`catalog` replaces the former deploy-page service picker. `create` exposes the
-same type, version, volume, environment overrides and HTTP-domain fields as a
-stack service. With `--env`, generated credentials are injected into that
-environment; `--env-prefix` selects their key prefix.
+`catalog` is the source of truth for supported types, versions, and default
+volumes. `create` exposes the same type, version, volume, environment overrides
+and HTTP-domain fields as a stack service. With `--env`, generated credentials
+are injected into that environment; `--env-prefix` selects their key prefix.
 
 App and server arguments accept a name or numeric ID.
 
@@ -259,6 +276,20 @@ members. Pass `--staging-env=<name|id>` to point the sibling at an existing
 environment instead — production's own to share it outright, or an
 `ocd envs copy` of it you then edit.
 
+The copy includes credentials and service URLs. If staging must not access
+production data, prepare it before the first deployment:
+
+```bash
+ocd envs copy <production-env> <staging-env>
+ocd service create <staging-db> --type=postgresql \
+  --env=<staging-env> --env-prefix=DATABASE
+ocd deploy stack --staging-env=<staging-env>
+```
+
+Repeat service creation for other stateful dependencies, using the prefix the
+app expects. This replaces copied production connection values before a
+staging container starts.
+
 Env vars from the manifest's `env[]` are included automatically: entries with a
 `default` are sent as-is, `--set=KEY=VALUE` (repeatable) overrides or adds
 values, and `required` vars still missing a value are prompted for
@@ -286,15 +317,15 @@ commit (reusing the rollback machinery).
   inside the repo.
 - `--from=<app>` / `--to=<app>` — explicit source and destination apps (name or
   id); both are required together and override the manifest-derived names.
-- `stack <name>` — promotes **every** staging sibling in a stack: each member
-  that runs webhook staging is promoted to its production app.
+- `stack <name>` — promotes every ready staging sibling in dependency order.
+  Independent members in the same dependency level may promote concurrently.
 - `--yes`, `-y` — skip the confirmation prompt (required in non-interactive
   shells; otherwise the command refuses to promote).
 
 ### `ocd stack`
 
 ```
-ocd deploy stack [manifest] [--env=<name|id>] [--staging-env=<name|id>] [--set=<app>.KEY=VALUE ...]   Deploy a stack (default: ocd-stack.json)
+ocd deploy stack [manifest] [--env=<name|id>] [--staging-env=<name|id>] [--set=KEY=VALUE ...] [--set=<app>.KEY=VALUE ...]   Deploy a stack (default: ocd-stack.json)
 ocd delete stack <name> [--yes]                          Destroy a stack and every member
 ocd stack ls                                           List stacks
 ocd stack status <name>                                Show a stack's apps and services
@@ -341,8 +372,8 @@ member.
   environment. (If a member still opts into staging, the next deploy auto-creates
   one again.)
 
-`ocd promote stack <name>` promotes every staging sibling in the stack at once
-(see `ocd promote`).
+`ocd promote stack <name>` promotes ready staging siblings dependency level by
+dependency level (see `ocd promote`).
 
 ### `ocd envs`
 
@@ -350,6 +381,7 @@ member.
 ocd envs list                                                List all environments
 ocd envs show <name|id>                                      Show details and variables
 ocd envs create <name> [KEY=VALUE ...] [--secret KEY=VALUE]  Create an environment
+ocd envs copy <name|id> <new-name>                           Duplicate an environment, including secrets
 ocd envs set <name|id> KEY=VALUE ... [--replace] [rollout]   Merge (or replace) variables
 ocd envs unset <name|id> KEY [KEY...] [rollout]              Remove variables
 ocd envs remove <name|id> [--yes]                            Delete an unused environment
@@ -361,6 +393,11 @@ apps. Use `--rollout=restart` (or `--restart`) to recreate containers from the
 existing image, `--rollout=none` (or `--no-rollout`) to defer application, and
 repeat `--app=<name|id>` to limit the rollout. Stack members with an `env`
 projection are affected only when a key they consume changed.
+
+Both `--set` and `--secret` values are passed through process arguments today.
+For automation, use an ephemeral runner, expand values from masked CI
+variables, disable shell tracing, and avoid shared hosts. OCD does not yet
+accept secret values through stdin or a file.
 
 ### `ocd ops`
 
@@ -377,3 +414,61 @@ ocd ops finalize <id> [--status auto|done|failed]  Reconcile and close a stale o
 match the intended successful state. Destructive CLI actions use browser
 confirmation by default; `--yes` is the explicit non-interactive approval for
 an already-authorized automation session.
+
+`cancel` is potentially destructive because it runs compensation for resources
+created by that operation. The browser confirmation shows the operation and
+compensation targets; inspect them before approving. Ownership checks prevent
+an old operation from deleting resources reused or adopted by later successful
+work.
+
+Use `retry` when work can be resumed or safely replayed. Use `finalize` when an
+operation is irrecoverably stale and current resources should determine its
+terminal result. `ocd stack status` reports resource-derived health separately
+from the last operation result.
+
+---
+
+## PostgreSQL restore and retained volumes
+
+Managed PostgreSQL images may initialize bundled extensions before a restore.
+A custom-format archive containing the same schemas can then fail with errors
+such as `schema "pgmq" already exists`. Isolate application writers and take a
+fresh backup before either workflow.
+
+Clean an existing target when the dump is authoritative:
+
+```bash
+pg_restore --clean --if-exists --no-owner --no-privileges \
+  --exit-on-error --dbname="$DATABASE_URL" backup.dump
+```
+
+For a full recovery, prefer an empty target: connect through the administrative
+`postgres` database, terminate target sessions, drop and recreate the
+application database, then run `pg_restore --no-owner --no-privileges
+--exit-on-error`. Keep apps isolated until schema and data checks pass. Redeploy
+linked apps afterward so their containers receive current service credentials.
+
+Prefer an authorized linked-app shell so the connection URL stays in the
+container environment instead of local shell history:
+
+```bash
+ocd ssh <linked-app> -i
+```
+
+If that image contains `pg_dump`, a custom-format backup can be streamed
+without printing the URL:
+
+```bash
+ocd ssh <linked-app> 'pg_dump "$DATABASE_URL" --format=custom' > backup.dump
+```
+
+Verify the file and checksum. For restore, use a controlled shell or container
+with `pg_restore`, transfer the archive securely, and keep writers stopped
+until validation is complete.
+
+Managed app and service volumes are detached and registered as retained when
+their owner is destroyed or a stateful deployment compensates. The retention
+record has a seven-day review date; it is not automatic deletion. Retained
+volumes remain billable. Recover an app volume through the panel’s
+attach-existing-volume action. Delete a detached provider volume only after
+backups and recovery are no longer needed.
