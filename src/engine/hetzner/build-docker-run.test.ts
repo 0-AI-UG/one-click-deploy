@@ -44,6 +44,31 @@ describe("buildDockerRunArgs", () => {
     expect(cmd).not.toContain("--network");
   });
 
+  test("injects managed-service aliases even when app replicas use the default bridge", () => {
+    const cmd = buildDockerRunArgs({
+      name: "api",
+      image: "api:latest",
+      appName: "api",
+      network: null,
+      extraHosts: [
+        { hostname: "postgres.svc.ocd.internal", address: "10.0.0.8" },
+        { hostname: "redis.svc.ocd.internal", address: "10.0.0.9" },
+      ],
+    });
+    expect(cmd).not.toContain("--network");
+    expect(cmd).toContain("--add-host=postgres.svc.ocd.internal:10.0.0.8");
+    expect(cmd).toContain("--add-host=redis.svc.ocd.internal:10.0.0.9");
+  });
+
+  test("rejects unsafe service alias values", () => {
+    expect(() => buildDockerRunArgs({
+      name: "api",
+      image: "api:latest",
+      appName: "api",
+      extraHosts: [{ hostname: "db;touch /tmp/pwn", address: "10.0.0.8" }],
+    })).toThrow(/Invalid extra host name/);
+  });
+
   test("accepts allowlisted volumes", () => {
     const cmd = buildDockerRunArgs({
       name: "myapp",

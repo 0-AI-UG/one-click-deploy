@@ -60,7 +60,10 @@ const deleteStackRow: Step<DestroyStackInput, { ok: true }> = {
   async run(ctx) {
     const stack = db.getStack(ctx.input.stackId);
     if (stack?.environment_id) {
-      try { db.deleteEnvironment(stack.environment_id); } catch (err) { ctx.log(`deleteEnvironment failed: ${err}`); }
+      ctx.log(`retaining environment #${stack.environment_id}; environments are only deleted explicitly`);
+    }
+    if (stack?.staging_environment_id) {
+      ctx.log(`retaining staging environment #${stack.staging_environment_id}; environments are only deleted explicitly`);
     }
     db.deleteStack(ctx.input.stackId);
     ctx.log(`stack #${ctx.input.stackId} deleted`);

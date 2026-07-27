@@ -43,15 +43,36 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
   async probe(ctx, prior) {
     const target = prior["validate"] as SingleReplicaTarget;
     const volName = volumeName(target, ctx.opId);
+    let all;
     try {
-      const all = await hetzner.volumes.list();
-      const existing = all.find((v) => v.name === volName);
-      if (!existing) return null;
-      ctx.log(`adopting existing volume ${existing.providerId} (${volName})`);
-      return { volumeId: existing.providerId, hostMountPath: `/mnt/${volName}`, volName };
+      all = await hetzner.volumes.list();
     } catch {
       return null;
     }
+    const existing = all.find((v) => v.name === volName);
+    if (!existing) return null;
+    const retired = db.getRetiredVolumes().find(
+      (row) => row.provider_volume_id === existing.providerId,
+    );
+    if (retired) {
+      throw new Error(
+        `Refusing to adopt retained volume ${existing.providerId} (${volName}); ` +
+        `it belongs to ${retired.former_resource_type}:${retired.former_resource_name}. ` +
+        "Attach it explicitly as an existing volume or permanently delete it first.",
+      );
+    }
+    if (
+      existing.sizeGb !== ctx.input.sizeGb ||
+      existing.location !== target.serverLocation ||
+      (existing.serverId != null && existing.serverId !== target.providerServerId)
+    ) {
+      throw new Error(
+        `Volume name collision for ${volName}: provider volume ${existing.providerId} ` +
+        `does not match the requested size/location/server. Refusing implicit adoption.`,
+      );
+    }
+    ctx.log(`adopting existing volume ${existing.providerId} (${volName})`);
+    return { volumeId: existing.providerId, hostMountPath: `/mnt/${volName}`, volName };
   },
   async run(ctx, prior) {
     const target = prior["validate"] as SingleReplicaTarget;

@@ -232,7 +232,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           </PermissionGate>
           <PermissionGate permission="apps.redeploy" appId={appId} environmentId={app.environment_id}>
             <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", () => post(`/api/apps/${appId}/redeploy`))}>
-              <RefreshCw size={12} /> Redeploy
+              <RefreshCw size={12} /> Deploy latest code
             </Btn>
           </PermissionGate>
           <PermissionGate permission="apps.destroy" appId={appId} environmentId={app.environment_id}>

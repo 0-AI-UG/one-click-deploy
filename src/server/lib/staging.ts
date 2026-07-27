@@ -1,6 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
+import { stackLockKeys } from "./stack-operations.ts";
 
 /** The deploy-target tag of the auto-managed staging sibling. */
 export const STAGING_TARGET = "staging";
@@ -69,6 +70,8 @@ export function deployToStaging(
 
   const existing = db.getStagingSibling(prodAppId);
   const trigger = opts.trigger ?? "webhook";
+  const stack = prod.stack_id == null ? null : db.getStack(prod.stack_id);
+  const stackKeys = stack ? stackLockKeys(stack) : [];
 
   if (existing) {
     // Keep the sibling pointed at the currently-selected staging environment —
@@ -78,7 +81,7 @@ export function deployToStaging(
     }
     const { opId } = enqueue({
       kind: "redeploy",
-      resourceKeys: [`app:${existing.id}`],
+      resourceKeys: [`app:${existing.id}`, ...stackKeys],
       input: { appId: existing.id, userId: opts.userId, gitSha: opts.gitSha },
       trigger,
       triggeredBy: opts.triggeredBy,
@@ -90,7 +93,7 @@ export function deployToStaging(
   const req = stagingDeployRequest(prod, opts.gitSha);
   const { opId } = enqueue({
     kind: "deploy",
-    resourceKeys: [`app:create:${req.app_name}`],
+    resourceKeys: [`app:create:${req.app_name}`, ...stackKeys],
     input: req,
     trigger,
     triggeredBy: opts.triggeredBy ?? opts.userId,

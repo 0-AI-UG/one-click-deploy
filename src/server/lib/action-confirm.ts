@@ -66,7 +66,7 @@ export function pollConfirmation(
 export function getPendingForUser(
   userCode: string,
   user: TokenPayload,
-): { action: string; summary: string } | null {
+): { action: string; summary: string; resourceType: string; resourceId: string } | null {
   const row = getByUserCode(userCode);
   if (
     !row ||
@@ -76,7 +76,12 @@ export function getPendingForUser(
   ) {
     return null;
   }
-  return { action: row.action, summary: row.summary };
+  return {
+    action: row.action,
+    summary: row.summary,
+    resourceType: row.resource_type,
+    resourceId: row.resource_id,
+  };
 }
 
 export function resolveConfirmation(
@@ -115,7 +120,23 @@ export async function enforceConfirmation(
   // permission. Bind the approval to the exact action and resource so it cannot
   // be replayed for a broader target.
   const automationApproval = `automation:${action}:${resourceType}:${resourceId}`;
-  if (token === automationApproval) return;
+  if (token === automationApproval) {
+    // Environments are durable user-owned configuration, independent of any
+    // app/stack lifecycle. Stack deletion fans out across several resources.
+    // These therefore always require human approval in the browser; do not
+    // let an old CLI's --yes token bypass that invariant. Permanent provider
+    // volume deletion is included because it irreversibly destroys user data.
+    if (
+      action === "delete_environment" ||
+      action === "delete_stack" ||
+      action === "delete_volume"
+    ) {
+      throw new ConfirmationError(
+        "This action always requires confirmation in the OCD web UI. Re-run the command and approve it in your browser.",
+      );
+    }
+    return;
+  }
 
   const ok = consumeConfirmation(token, payload.userId, action, resourceType, resourceId);
   if (!ok) {

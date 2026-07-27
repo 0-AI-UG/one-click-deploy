@@ -3,24 +3,35 @@ import { get, post } from "../api/client.ts";
 import { showToast, Spinner } from "../components/ui.tsx";
 import { Trash2, Check, AlertTriangle, Ban } from "lucide-react";
 
-type Item = { action: string; summary: string };
+type Item = {
+  action: string;
+  summary: string;
+  resource_type: string;
+  resource_id: string;
+};
 
 export function CliConfirmPage({ userCode }: { userCode: string }) {
   const [item, setItem] = useState<Item | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<null | "confirm" | "deny">(null);
   const [done, setDone] = useState<null | "confirmed" | "denied">(null);
+  const [typedResource, setTypedResource] = useState("");
 
   useEffect(() => {
     get(`/api/confirmations/item/${encodeURIComponent(userCode)}`)
-      .then((res: Item) => setItem({ action: res.action, summary: res.summary }))
+      .then((res: Item) => setItem(res))
       .catch(() => setError("This confirmation link is invalid or has expired."));
   }, [userCode]);
 
   const handleConfirm = async () => {
     setSubmitting("confirm");
     try {
-      await post(`/api/confirmations/item/${encodeURIComponent(userCode)}/confirm`);
+      await post(
+        `/api/confirmations/item/${encodeURIComponent(userCode)}/confirm`,
+        item?.action === "delete_volume"
+          ? { typed_resource_id: typedResource.trim() }
+          : undefined,
+      );
       setDone("confirmed");
     } catch (err: any) {
       showToast(err.message || "Failed to confirm action", "error");
@@ -96,6 +107,9 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
   }
 
   // --- loaded (pending) ---
+  const requiresTypedVolume = item.action === "delete_volume";
+  const typedVolumeMatches = !requiresTypedVolume || typedResource.trim() === item.resource_id;
+
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm animate-slide-up">
@@ -110,11 +124,26 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
           <div className="border-2 border-fg bg-bg p-3 mb-5">
             <p className="font-mono text-xs text-fg break-words">{item.summary}</p>
           </div>
+          {requiresTypedVolume && (
+            <div className="mb-5">
+              <label className="block font-mono text-[10px] font-bold text-fg mb-2" htmlFor="volume-confirmation">
+                Type volume ID <span className="select-all">{item.resource_id}</span> to permanently delete it
+              </label>
+              <input
+                id="volume-confirmation"
+                type="text"
+                value={typedResource}
+                onChange={(event) => setTypedResource(event.target.value)}
+                autoComplete="off"
+                className="w-full border-2 border-fg bg-bg px-3 py-2 font-mono text-xs text-fg outline-none focus:shadow-neo-sm"
+              />
+            </div>
+          )}
           <div className="space-y-2">
             <button
               type="button"
               onClick={handleConfirm}
-              disabled={submitting !== null}
+              disabled={submitting !== null || !typedVolumeMatches}
               className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35"
             >
               {submitting === "confirm" ? <Spinner /> : "Confirm & Delete"}

@@ -1,182 +1,114 @@
 ---
 name: ocd-deploy
-description: Deploy and operate apps on One-Click Deploy (OCD), a self-hosted Hetzner PaaS. Use when authoring or reviewing `.ocd-deploy.json` app manifests and `ocd-stack.json` multi-app stacks; running the `ocd` CLI for deploys, logs, SSH, environments, managed services, staging promotion, or operation recovery; choosing routing, health checks, volumes, scaling, placement, and secret handling; or diagnosing stale environments, failed stacks, PostgreSQL restores, and retained volumes. Trigger on “deploy to OCD”, “one-click deploy”, `.ocd-deploy.json`, `ocd-stack.json`, `ocd deploy`, `ocd stack`, or an OCD panel/Hetzner PaaS.
+description: Deploy, configure, operate, recover, and troubleshoot apps, stacks, environments, managed services, networking, storage, scaling, webhooks, and engine operations on One-Click Deploy (OCD), a self-hosted Hetzner PaaS. Use for `.ocd-deploy.json`, `ocd-stack.json`, every `ocd` CLI command, OCD panel behavior, desired-configuration changes, code-only redeploys, staging promotion, destructive-action confirmation, retained environments or volumes, and OCD deployment incidents.
 ---
 
 # Deploy and operate with OCD
 
-OCD is CLI-first. Commit deployment intent to manifests, keep secrets outside
-Git, and use the web panel primarily to observe resources and approve
-destructive CLI actions.
+Use this skill as the operational source of truth for OCD. Do not infer behavior
+from Heroku, Railway, Docker Compose, or Kubernetes: OCD has its own ownership,
+configuration, rollout, and recovery semantics.
 
-## Working method
+## Core mental model
 
-1. Inspect the repo, Dockerfile, exposed port, health endpoint, required runtime
-   variables, persistent paths, and Git remote.
-2. Choose one app, a standalone managed service, or a stack.
-3. Start from the matching file under [examples/](examples/).
-4. Read only the relevant section of [reference.md](reference.md) for exact
-   fields and flags.
-5. Validate assumptions locally, deploy through the CLI, and follow the
-   operation until it is terminal.
-6. After a mutation, check `ocd status` or `ocd stack status <name>`; do not
-   infer health from the last operation alone.
+- Treat Git as the source of application code.
+- Treat OCD's database as the source of desired runtime configuration.
+- Treat a manifest as a complete configuration input that is applied only by an
+  explicit manifest operation.
+- Use `ocd deploy` to apply a manifest and then build/deploy Git code.
+- Use `ocd redeploy` to build/deploy the latest configured Git branch with the
+  configuration already stored in OCD. It does not reread a manifest.
+- Use `ocd config diff` to preview a manifest against stored configuration.
+- Use `ocd config apply` to apply manifest configuration without deploying code.
+- Expect UI edits and environment edits to update stored configuration. A later
+  code-only redeploy preserves them.
+- Expect a later manifest apply to reconcile the complete manifest-controlled
+  specification. Review the diff when UI and manifest values may have diverged.
 
-Install and authenticate once:
+Read [docs/concepts.md](docs/concepts.md) before changing deployment behavior
+or explaining configuration ownership.
+
+## Mandatory working method
+
+1. Inspect the repo, Git remote, Dockerfile, build context, listening port,
+   health endpoint, runtime variables, persistent paths, and dependency graph.
+2. Identify whether the target is one app, a stack, or a standalone managed
+   service.
+3. Read the relevant documentation file from the routing table below. For
+   manifest or CLI work, always read the exact field/command reference rather
+   than relying on memory.
+4. Start from the closest file under [examples/](examples/) and adapt it.
+5. Keep secrets out of Git and avoid printing them in commands, logs, or output.
+6. Run the requested CLI operation and follow its engine operation until it is
+   terminal.
+7. Verify current resources with `ocd status`, `ocd apps`, or
+   `ocd stack status <name>`. Do not equate the last operation result with
+   current resource health.
+
+Install and authenticate:
 
 ```bash
 curl -fsSL {{PANEL_URL}}/cli/install.sh | sh
 ocd login {{PANEL_URL}}
 ```
 
-## Choose the deployment shape
+## Documentation routing
 
-- **One app**: commit `.ocd-deploy.json`; run `ocd deploy`.
-- **Several dependent apps/services**: commit one app manifest per app plus
-  `ocd-stack.json`; run `ocd deploy stack`.
-- **Standalone managed service**: inspect `ocd service catalog`, then run
-  `ocd service create`.
+Read only the files relevant to the task, but read each selected file fully.
 
-The referenced app manifest is the canonical full spec inside and outside a
-stack. A stack entry adds only dependency wiring, environment projection, and
-optional `domain`/`public` overrides.
+| Task | Required documentation |
+|---|---|
+| Understand config ownership, revisions, deploy vs redeploy | [docs/concepts.md](docs/concepts.md), [docs/deploy-and-config.md](docs/deploy-and-config.md) |
+| Author or review `.ocd-deploy.json` | [docs/app-manifest.md](docs/app-manifest.md) |
+| Author or review `ocd-stack.json` | [docs/stack-manifest.md](docs/stack-manifest.md), [docs/stacks-and-services.md](docs/stacks-and-services.md) |
+| Use any CLI command or flag | [docs/cli-reference.md](docs/cli-reference.md) |
+| Manage variables, secrets, or environment rollouts | [docs/environments-and-secrets.md](docs/environments-and-secrets.md) |
+| Configure domains, private URLs, protocols, auth, or raw ports | [docs/networking-and-ingress.md](docs/networking-and-ingress.md) |
+| Configure replicas, durability, placement, or volumes | [docs/scaling-storage-and-placement.md](docs/scaling-storage-and-placement.md) |
+| Configure webhooks, staging, or promotion | [docs/webhooks-and-promotion.md](docs/webhooks-and-promotion.md) |
+| Inspect, cancel, retry, finalize, or recover operations | [docs/operations-and-recovery.md](docs/operations-and-recovery.md) |
+| Delete anything or assess retention/confirmation | [docs/security-and-deletion.md](docs/security-and-deletion.md) |
+| Diagnose a failure or stale state | [docs/troubleshooting.md](docs/troubleshooting.md) |
 
-## Author app manifests
+The compatibility [reference.md](reference.md) is only an index into these
+files; detailed truth lives under `docs/`.
 
-Minimum:
+## Non-negotiable safety invariants
 
-```json
-{
-  "$schema": 1,
-  "name": "My App",
-  "build": { "container_port": 3000 }
-}
-```
+- Never delete an environment as a side effect of deleting an app or stack.
+- Require OCD web UI approval for every environment deletion and every stack
+  deletion. `--yes` must not bypass either action.
+- Permit app deletion automation only when the user explicitly authorized
+  `--yes`; otherwise use browser confirmation.
+- Treat `ocd ops cancel` as destructive because compensation can remove
+  resources created by the operation.
+- Treat stack reconciliation as destructive when members were removed from the
+  manifest: omitted recorded members are destroyed.
+- Treat volumes as billable even after detachment. OCD retains managed volumes
+  for recovery; retention is not deletion.
+- Never invent a managed-service type or version. Query
+  `ocd service catalog`.
+- Never commit basic-auth passwords or required secrets. Use a local
+  environment variable, hidden prompt, or explicit environment operation.
+- Do not add a persistent volume to an existing app through manifest apply.
+  Attach storage explicitly in the UI first.
 
-Apply these rules:
-
-- Set a real `health_check.path` for HTTP apps. For workers, set
-  `"health_check": { "enabled": false }`; also set
-  `"internal_protocol": "tcp"` only when the app itself speaks raw TCP.
-- Use `"public": false` for internal apps. HTTP apps use
-  `http://<app>.ocd.internal`; TCP apps use
-  `tcp://<app>.ocd.internal:<container_port>`.
-- Declare deployer-supplied variables in `env[]`. Mark credentials
-  `secret: true`; mark values with no safe default `required: true`.
-- Never commit a basic-auth password. Use `auth.password_env` or the hidden CLI
-  prompt.
-- Add `volume` only for data that must survive container replacement. A
-  volume-backed app cannot scale beyond one replica.
-- Use `placement_pool` in committed manifests. Reserve `--server=<id>` for a
-  nonportable one-run override.
-- Manifest paths are relative to the manifest directory, except
-  `build.context`, which is repo-root-relative. Never use `..`.
-
-See [reference.md](reference.md#the-ocd-deployjson-manifest) for all routing,
-resource, webhook, durability, placement, volume, and scaling fields.
-
-## Author stacks safely
-
-```json
-{
-  "$schema": 1,
-  "name": "blog",
-  "services": {
-    "database": { "type": "postgresql", "volume_size": 10 }
-  },
-  "apps": {
-    "api": {
-      "manifest": "services/api/.ocd-deploy.json",
-      "needs": ["database"],
-      "env": ["DATABASE_URL", "JWT_SECRET", "LOG_LEVEL"]
-    },
-    "web": {
-      "manifest": "services/web/.ocd-deploy.json",
-      "needs": ["api"],
-      "env": ["API_URL", "NODE_ENV"]
-    }
-  }
-}
-```
-
-- `needs` controls health-gated order and must be acyclic.
-- Service keys define injected names. Key `database` produces
-  `DATABASE_URL`, `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USER`,
-  `DATABASE_PASSWORD`, and `DATABASE_NAME`; app key `api` produces `API_URL`.
-- Do not declare injected connection/URL keys as `required` in child manifests;
-  they do not exist until their dependency deploys.
-- Use an app entry’s `env` list to project only selected shared-environment
-  keys; omit it for all keys, or use `[]` for platform keys only.
-- Re-running a stack reconciles it. Review removed members carefully: resources
-  omitted from the manifest are destroyed, while adopted resources and retained
-  volumes are protected by recovery ownership checks.
-- Catalog types and versions change. Always use `ocd service catalog` rather
-  than inventing or relying on a memorized list.
-
-## Operate through the CLI
+## Fast command map
 
 ```bash
-ocd deploy [manifest]                         # app manifest
-ocd deploy stack [manifest]                   # stack + child manifests
-ocd service catalog
-ocd service create db --type=postgresql --volume-size=20
 ocd status
-ocd stack status <name>
-ocd logs <app> --tail=200
-ocd ssh <app> -i
+ocd apps
+ocd deploy [manifest]
+ocd deploy --dry-run
+ocd config diff [manifest]
+ocd config apply [manifest]
 ocd redeploy <app>
-ocd rollback <app>
-ocd envs set <env> KEY=VALUE --restart
+ocd deploy stack [manifest]
+ocd stack status <name>
+ocd service catalog
+ocd envs show <environment>
 ocd ops logs <id> --follow
 ```
 
-Environment mutations default to rebuild/redeploy. Use `--restart` to recreate
-from the current image, `--no-rollout` to defer, and repeat `--app=<name|id>` to
-limit affected linked apps. Deferred or partial changes are reported as
-`stale environment, redeploy required`.
-
-## Webhook staging
-
-Set `"webhook": { "enabled": true, "staging": true }` in each participating app
-manifest.
-
-- Standalone: OCD auto-creates `<app>-staging-env` from the app environment.
-  Override it with `ocd deploy --staging-env=<name|id>`.
-- Stack: opted-in members share one stack staging environment, auto-created
-  from the production stack environment. Override with
-  `ocd deploy stack --staging-env=<name|id>`; clear with `--staging-env=`.
-- Pushes deploy the staging sibling and hold. Promote the exact deployed commit
-  with `ocd promote` or `ocd promote stack <name>`.
-
-The copy includes credentials and service URLs. For data isolation, pre-create
-a staging environment and staging services, inject their URLs there, then pass
-that environment with `--staging-env`.
-
-## Production safety and recovery
-
-- Treat `ocd ops cancel` as destructive: it may compensate created resources.
-  Review the exact targets in browser confirmation; use `--yes` only in an
-  explicitly authorized automation session.
-- Prefer `ocd ops retry <id>` for resumable work. Use
-  `ocd ops finalize <id>` only to reconcile and close an irrecoverably stale
-  operation; it will not claim success when resources disagree.
-- Stack status is resource-derived. A healthy stack may separately report that
-  its last operation failed.
-- Destroyed managed volumes are detached and retained for recovery rather than
-  immediately deleted. They still incur provider charges.
-- Automated `--set` and `--secret` values are passed through process arguments
-  today. Use ephemeral runners, masked CI variables, and disabled shell tracing;
-  there is no stdin/file secret input yet.
-- Before PostgreSQL restore, isolate writers and take a fresh backup. Managed
-  images may pre-create extension schemas; use a clean restore or recreate an
-  empty target as described in
-  [reference.md](reference.md#postgresql-restore-and-retained-volumes).
-
-## Frequent mistakes
-
-- Using `postgres` instead of the catalog key `postgresql`.
-- Health-checking a worker or raw-TCP process over HTTP.
-- Hardcoding stack service credentials or sibling URLs.
-- Assuming pause/unpause refreshes container environment; it does not recreate
-  the container.
-- Treating an operation failure as the current resource state.
+Use [docs/cli-reference.md](docs/cli-reference.md) for complete syntax, aliases,
+flags, defaults, confirmation behavior, and command outcomes.

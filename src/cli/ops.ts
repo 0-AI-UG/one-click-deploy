@@ -19,7 +19,19 @@ export interface OperationEventPoll {
     phase: "forward" | "compensate";
     status: "started" | "ok" | "skipped" | "failed";
     detail: string;
+    started_at?: string | null;
+    finished_at?: string | null;
   }>;
+}
+
+interface OperationFallbackPoll {
+  id: number;
+  status: OperationEventPoll["status"];
+  last_step: string | null;
+  error: { message?: string; cancelled?: boolean } | null;
+  started_at: string | null;
+  finished_at: string | null;
+  steps: OperationEventPoll["steps"];
 }
 
 export const TERMINAL = new Set([
@@ -48,10 +60,17 @@ function sleep(ms: number): Promise<void> {
 export interface FollowRetryState {
   outageStartedAt: number;
   backoffMs: number;
+  reconnectWarningShown: boolean;
+  lastProgressKey: string;
 }
 
 export function newFollowRetryState(): FollowRetryState {
-  return { outageStartedAt: 0, backoffMs: RETRY_BACKOFF_START_MS };
+  return {
+    outageStartedAt: 0,
+    backoffMs: RETRY_BACKOFF_START_MS,
+    reconnectWarningShown: false,
+    lastProgressKey: "",
+  };
 }
 
 /**
@@ -68,6 +87,10 @@ export function newFollowRetryState(): FollowRetryState {
 export async function handleTransientFollowError(
   state: FollowRetryState,
   log: (line: string) => void,
+  opts: {
+    sleep?: (ms: number) => Promise<void>;
+    progress?: string;
+  } = {},
 ): Promise<boolean> {
   const now = Date.now();
   if (state.outageStartedAt === 0) state.outageStartedAt = now;
@@ -76,12 +99,16 @@ export async function handleTransientFollowError(
 
   const elapsedSec = Math.round(elapsedMs / 1000);
   const budgetMin = Math.round(FOLLOW_OUTAGE_BUDGET_MS / 60_000);
-  log(
-    `${YELLOW}reconnecting${RESET} ${DIM}(operation stream unavailable ${elapsedSec}s; ` +
-      `the panel or only this long-poll may be restarting; will keep trying up to ~${budgetMin} min)${RESET}`,
-  );
+  if (!state.reconnectWarningShown) {
+    const progress = opts.progress ? `; ${opts.progress}` : "";
+    log(
+      `${YELLOW}stream unavailable; polling operation state${RESET} ` +
+        `${DIM}(outage ${elapsedSec}s${progress}; retrying for up to ~${budgetMin} min)${RESET}`,
+    );
+    state.reconnectWarningShown = true;
+  }
 
-  await sleep(state.backoffMs);
+  await (opts.sleep ?? sleep)(state.backoffMs);
   state.backoffMs = Math.min(Math.round(state.backoffMs * RETRY_BACKOFF_FACTOR), RETRY_BACKOFF_MAX_MS);
   return true;
 }
@@ -90,6 +117,20 @@ export async function handleTransientFollowError(
 export function resetFollowRetryState(state: FollowRetryState): void {
   state.outageStartedAt = 0;
   state.backoffMs = RETRY_BACKOFF_START_MS;
+  state.reconnectWarningShown = false;
+  state.lastProgressKey = "";
+}
+
+function progressTimestamp(op: OperationFallbackPoll): string {
+  const step = [...op.steps].reverse().find((item) => item.finished_at || item.started_at);
+  return step?.finished_at || step?.started_at || op.finished_at || op.started_at || "";
+}
+
+export function formatFallbackProgress(op: OperationFallbackPoll): string {
+  const step = op.last_step || "waiting to start";
+  const ts = progressTimestamp(op);
+  const time = ts ? ts.replace("T", " ").replace(/Z$/, "").slice(0, 19) : "timestamp unavailable";
+  return `last step ${step} at ${time}`;
 }
 
 /**
@@ -101,7 +142,11 @@ export function resetFollowRetryState(state: FollowRetryState): void {
  * running server-side. Only a terminal op status or exhausted retries stop us.
  */
 export async function followOp(opId: number): Promise<{ ok: boolean; error?: string }> {
+  // Always surface the durable handle before attempting any long-poll. If the
+  // CLI disconnects, this is enough to resume inspection with `ocd ops <id>`.
+  console.log(`${DIM}Operation #${opId} — inspect with: ocd ops ${opId}${RESET}`);
   let lastSeq = 0;
+  const printed = new Set<string>();
   const retry = newFollowRetryState();
   while (true) {
     let poll: OperationEventPoll;
@@ -112,7 +157,38 @@ export async function followOp(opId: number): Promise<{ ok: boolean; error?: str
       resetFollowRetryState(retry);
     } catch (err) {
       if (err instanceof ApiError && err.isTransient) {
-        if (await handleTransientFollowError(retry, (line) => console.log(`  ${line}`))) continue;
+        let fallback: OperationFallbackPoll | null = null;
+        try {
+          fallback = await get<OperationFallbackPoll>(`/api/operations/${opId}`);
+          const progress = formatFallbackProgress(fallback);
+          if (retry.lastProgressKey !== progress) {
+            console.log(`  ${DIM}${progress}${RESET}`);
+            retry.lastProgressKey = progress;
+          }
+          // The detail endpoint is ordinary short polling, independent of the
+          // long-poll/event stream. Print state transitions it reveals without
+          // repeating the same seq/status pair after reconnects.
+          for (const event of fallback.steps) {
+            const key = `${event.seq}:${event.status}:${event.phase}`;
+            if (printed.has(key)) continue;
+            printed.add(key);
+            printFollowEvent(event);
+            lastSeq = Math.max(lastSeq, event.seq);
+          }
+          if (TERMINAL.has(fallback.status)) {
+            if (fallback.status === "done") return { ok: true };
+            return { ok: false, error: fallback.error?.message || fallback.status };
+          }
+        } catch {
+          // Both paths may be unavailable during a panel restart. The bounded
+          // retry state below remains authoritative.
+        }
+        const progress = fallback ? formatFallbackProgress(fallback) : undefined;
+        if (await handleTransientFollowError(
+          retry,
+          (line) => console.log(`  ${line}`),
+          { progress },
+        )) continue;
       }
       // Give up following, but the op may still be running server-side.
       const detail = err instanceof Error ? err.message : String(err);
@@ -123,18 +199,10 @@ export async function followOp(opId: number): Promise<{ ok: boolean; error?: str
     }
 
     for (const event of poll.steps) {
-      if (event.phase === "compensate") {
-        const step = `rollback ${event.step}`.padEnd(22);
-        console.log(`  ${RED}${step}${RESET} ${event.detail || event.status}`);
-      } else {
-        const step = event.step.padEnd(22);
-        if (event.status === "failed") {
-          console.log(`  ${RED}${step}${RESET} ${event.detail}`);
-        } else if (event.status === "ok" || event.status === "skipped") {
-          console.log(`  ${GREEN}${step}${RESET} ${event.status === "skipped" ? "(skipped) " : ""}${event.detail}`);
-        } else {
-          console.log(`  ${CYAN}${step}${RESET} ${event.detail || "…"}`);
-        }
+      const key = `${event.seq}:${event.status}:${event.phase}`;
+      if (!printed.has(key)) {
+        printed.add(key);
+        printFollowEvent(event);
       }
       lastSeq = event.seq;
     }
@@ -142,6 +210,22 @@ export async function followOp(opId: number): Promise<{ ok: boolean; error?: str
     if (TERMINAL.has(poll.status)) {
       if (poll.status === "done") return { ok: true };
       return { ok: false, error: poll.error?.message || poll.status };
+    }
+  }
+}
+
+function printFollowEvent(event: OperationEventPoll["steps"][number]): void {
+  if (event.phase === "compensate") {
+    const step = `rollback ${event.step}`.padEnd(22);
+    console.log(`  ${RED}${step}${RESET} ${event.detail || event.status}`);
+  } else {
+    const step = event.step.padEnd(22);
+    if (event.status === "failed") {
+      console.log(`  ${RED}${step}${RESET} ${event.detail}`);
+    } else if (event.status === "ok" || event.status === "skipped") {
+      console.log(`  ${GREEN}${step}${RESET} ${event.status === "skipped" ? "(skipped) " : ""}${event.detail}`);
+    } else {
+      console.log(`  ${CYAN}${step}${RESET} ${event.detail || "…"}`);
     }
   }
 }

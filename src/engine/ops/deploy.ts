@@ -98,6 +98,10 @@ async function findVolumeByName(name: string) {
   }
 }
 
+export function appVolumeName(appName: string, opId: number): string {
+  return `ocd-${appName}-op${opId}`;
+}
+
 async function buildMasker(input: DeployInput, userId: string) {
   const providerToken = await getProviderToken();
   const resolvedGitToken = await resolveGitHubToken(userId || undefined);
@@ -315,13 +319,38 @@ const createDnsRecord: Step<DeployInput, DnsOut> = {
 const createVolume: Step<DeployInput, VolumeOut> = {
   name: "create_volume",
   label: "Create volume",
-  async probe(ctx) {
+  async probe(ctx, prior) {
     const req = ctx.input;
     if (!req.volume_size || req.volume_size <= 0) return null;
-    const volName = `ocd-${req.app_name}-data`;
+    const server = prior["pick_or_provision_server"] as ServerOut;
+    const settings = db.getSettings();
+    let providerServerId = server.providerServerId;
+    if (!providerServerId) providerServerId = db.getServer(server.serverId)?.provider_id;
+    if (!providerServerId) return null;
+    const location = db.getServer(server.serverId)?.location || settings.default_location || "nbg1";
+    const volName = appVolumeName(req.app_name, ctx.opId);
     const existing = await findVolumeByName(volName);
     if (!existing) return null;
-    const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
+    const retired = db.getRetiredVolumes().find(
+      (row) => row.provider_volume_id === existing.providerId,
+    );
+    if (retired) {
+      throw new Error(
+        `Refusing to adopt retained volume ${existing.providerId} (${volName}); it belongs to ` +
+        `${retired.former_resource_type}:${retired.former_resource_name}.`,
+      );
+    }
+    if (
+      existing.sizeGb !== req.volume_size ||
+      existing.location !== location ||
+      (existing.serverId != null && existing.serverId !== providerServerId)
+    ) {
+      throw new Error(
+        `Volume name collision for ${volName}: provider volume ${existing.providerId} ` +
+        "does not match requested size/location/server. Refusing implicit adoption.",
+      );
+    }
+    const hostMountPath = `/mnt/${volName}`;
     const containerPath = req.volume_path || "/data";
     ctx.log(`adopting existing volume ${existing.providerId} (${volName})`);
     return {
@@ -352,13 +381,14 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       providerServerId = existingServer.provider_id;
     }
 
+    const volName = appVolumeName(req.app_name, ctx.opId);
     const vol = await compute.volumes.create({
-      name: `ocd-${req.app_name}-data`,
+      name: volName,
       sizeGb: req.volume_size,
       serverId: providerServerId,
       location: settings.default_location || "nbg1",
     });
-    const hostMountPath = `/mnt/ocd-${req.app_name}-data`;
+    const hostMountPath = `/mnt/${volName}`;
     const containerPath = req.volume_path || "/data";
     // Host bind-mount setup happens in a later step (setup_volume_bind_mount)
     // once we have an app.id to tag the fstab block with.
@@ -925,6 +955,7 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
       app_id: appOut.appId,
       image_tag: build.imageTag,
       git_commit: gitCommit,
+      config_revision: db.getApp(appOut.appId)?.config_revision ?? 1,
     });
     return { deploymentId: row.id, gitCommit };
   },
@@ -1079,6 +1110,14 @@ const finalizeDeploy: Step<DeployInput, { ok: true }> = {
         max_replicas: desired,
       });
       db.appendDeployLog(appOut.appId, `[scale] Target ${desired} replicas — reconciler will converge`);
+    }
+    if (req.manifest_path && req.manifest_hash) {
+      db.recordAppManifestApplied(appOut.appId, req.manifest_path, req.manifest_hash);
+    }
+    const deployment = prior["record_deployment_history"] as { deploymentId: number } | undefined;
+    const finalRevision = db.getApp(appOut.appId)?.config_revision;
+    if (deployment && finalRevision != null) {
+      db.updateDeploymentConfigRevision(deployment.deploymentId, finalRevision);
     }
 
     db.appendDeployLog(appOut.appId, `[done] App deployed successfully`);

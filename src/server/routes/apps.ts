@@ -12,6 +12,8 @@ import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
+import { applyAppConfig, diffAppConfig } from "../../shared/app-config.ts";
+import type { DeployRequest } from "../../shared/rpc.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
  *  public raw TCP/UDP address, a boolean `auth_enabled` flag, and strips every
@@ -114,9 +116,39 @@ export async function handleGetApps(request: Request): Promise<Response> {
 export async function handleDeploy(request: Request): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.deploy");
-    const req = await request.json();
+    const req = await request.json() as DeployRequest;
     if (!req?.app_name || typeof req.app_name !== "string") {
       return Response.json({ ok: false, error: "app_name is required" }, { status: 400, headers: corsHeaders });
+    }
+    // `deploy` is an idempotent apply + rollout. Creation still uses the
+    // provisioning saga; an existing name applies the submitted desired spec
+    // to that app and then performs the same code-only redeploy used by the UI.
+    const existing = db.getAppByName(req.app_name);
+    if (existing) {
+      const acq = tryAcquire([`app:${existing.id}`], NON_OP_HOLDER, "apply_config");
+      if (!acq.ok) {
+        return Response.json(
+          { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
+          { status: 409, headers: corsHeaders },
+        );
+      }
+      try {
+        const changes = await applyAppConfig(existing.id, req, {
+          userId: payload.userId,
+          log: (line) => db.appendDeployLog(existing.id, `[config] ${line}`),
+        });
+        await syncAppIngress(existing.id);
+        const { opId } = enqueue({
+          kind: "redeploy",
+          resourceKeys: [`app:${existing.id}`],
+          input: { appId: existing.id, userId: payload.userId },
+          trigger: payload.client === "cli" ? "cli" : "api",
+          triggeredBy: payload.userId,
+        });
+        return Response.json({ op_id: opId, applied: true, changes }, { headers: corsHeaders });
+      } finally {
+        release([`app:${existing.id}`]);
+      }
     }
     const { opId } = enqueue({
       kind: "deploy",
@@ -126,6 +158,68 @@ export async function handleDeploy(request: Request): Promise<Response> {
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/** Preview or explicitly apply a complete desired app spec. Applying config is
+ * separate from a code rollout at the API level; callers may request a rollout
+ * (the default) or use `deploy: false` for a config-only operation. */
+export async function handleApplyAppConfig(request: Request, appId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "apps.deploy", appScope(appId));
+    const body = await request.json() as DeployRequest & { dry_run?: boolean; deploy?: boolean };
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
+    const changes = diffAppConfig(app, body);
+    if (body.dry_run) {
+      return Response.json({
+        ok: true,
+        dry_run: true,
+        changes,
+        current_config_revision: app.config_revision,
+      }, { headers: corsHeaders });
+    }
+
+    const acq = tryAcquire([`app:${appId}`], NON_OP_HOLDER, "apply_config");
+    if (!acq.ok) {
+      return Response.json(
+        { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
+        { status: 409, headers: corsHeaders },
+      );
+    }
+    try {
+      await applyAppConfig(appId, body, {
+        userId: payload.userId,
+        log: (line) => db.appendDeployLog(appId, `[config] ${line}`),
+      });
+      await syncAppIngress(appId);
+    } finally {
+      release([`app:${appId}`]);
+    }
+
+    if (body.deploy === false) {
+      return Response.json({
+        ok: true,
+        changes,
+        config_revision: db.getApp(appId)?.config_revision,
+        op_id: null,
+      }, { headers: corsHeaders });
+    }
+    const { opId } = enqueue({
+      kind: "redeploy",
+      resourceKeys: [`app:${appId}`],
+      input: { appId, userId: payload.userId },
+      trigger: payload.client === "cli" ? "cli" : "api",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({
+      ok: true,
+      changes,
+      config_revision: db.getApp(appId)?.config_revision,
+      op_id: opId,
+    }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

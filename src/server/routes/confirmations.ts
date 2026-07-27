@@ -3,6 +3,7 @@ import { requireAuthenticated } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { getOperation } from "../../shared/db/operations.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import {
   createConfirmation,
   pollConfirmation,
@@ -10,7 +11,7 @@ import {
   resolveConfirmation,
 } from "../lib/action-confirm.ts";
 
-const CONFIRMABLE_ACTIONS = ["delete_app", "delete_stack", "delete_environment", "cancel_operation"] as const;
+const CONFIRMABLE_ACTIONS = ["delete_app", "delete_stack", "delete_environment", "delete_volume", "cancel_operation"] as const;
 type ConfirmableAction = (typeof CONFIRMABLE_ACTIONS)[number];
 
 // POST /api/confirmations — called by CLI (requires auth) to open a pending
@@ -30,7 +31,7 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       typeof body.action !== "string" ||
       !CONFIRMABLE_ACTIONS.includes(body.action as ConfirmableAction)
     ) {
-      return Response.json({ error: "action must be one of delete_app, delete_stack, delete_environment, cancel_operation" }, { status: 400, headers: corsHeaders });
+      return Response.json({ error: `action must be one of ${CONFIRMABLE_ACTIONS.join(", ")}` }, { status: 400, headers: corsHeaders });
     }
     if (
       typeof body.resource_type !== "string" ||
@@ -56,7 +57,7 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       if (!s) return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
       const apps = db.getAppsByStackId(s.id);
       const svcs = db.getServicesByStackId(s.id);
-      summary = `Destroy stack "${s.name}" and all ${apps.length} app(s) + ${svcs.length} service(s); managed volumes are detached and retained for recovery.`;
+      summary = `Destroy stack "${s.name}" and all ${apps.length} app(s) + ${svcs.length} service(s); its production and staging environments are retained, and managed volumes are detached for recovery.`;
     } else if (action === "delete_environment") {
       const env = db.getEnvironment(Number(resourceId));
       if (!env) return Response.json({ error: "Environment not found" }, { status: 404, headers: corsHeaders });
@@ -64,6 +65,16 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       summary = inUse.length
         ? `Delete environment "${env.name}" (id ${env.id}) — currently used by ${inUse.length} app(s).`
         : `Delete environment "${env.name}" (id ${env.id}) and its variables.`;
+    } else if (action === "delete_volume") {
+      let volume;
+      try {
+        volume = await hetzner.volumes.get(resourceId);
+      } catch {
+        return Response.json({ error: "Volume not found" }, { status: 404, headers: corsHeaders });
+      }
+      summary =
+        `Permanently delete provider volume "${volume.name}" (id ${volume.providerId}, ` +
+        `${volume.sizeGb} GB, ${volume.location}) and all data on it. This cannot be undone.`;
     } else {
       const op = getOperation(Number(resourceId));
       if (!op) return Response.json({ error: "Operation not found" }, { status: 404, headers: corsHeaders });
@@ -106,7 +117,12 @@ export async function handleLookupConfirmation(request: Request, userCode: strin
       return Response.json({ error: "Confirmation not found or expired" }, { status: 404, headers: corsHeaders });
     }
 
-    return Response.json({ action: pending.action, summary: pending.summary }, { headers: corsHeaders });
+    return Response.json({
+      action: pending.action,
+      summary: pending.summary,
+      resource_type: pending.resourceType,
+      resource_id: pending.resourceId,
+    }, { headers: corsHeaders });
   } catch (err) {
     return handleError(err);
   }
@@ -116,6 +132,19 @@ export async function handleLookupConfirmation(request: Request, userCode: strin
 export async function handleConfirmConfirmation(request: Request, userCode: string): Promise<Response> {
   try {
     const payload = await requireAuthenticated(request);
+    const pending = getPendingForUser(userCode, payload);
+    if (!pending) {
+      return Response.json({ error: "Confirmation not found or expired" }, { status: 400, headers: corsHeaders });
+    }
+    if (pending.action === "delete_volume") {
+      const body = await request.json().catch(() => ({})) as { typed_resource_id?: string };
+      if (body.typed_resource_id !== pending.resourceId) {
+        return Response.json(
+          { error: `Type volume ID ${pending.resourceId} to confirm permanent deletion` },
+          { status: 400, headers: corsHeaders },
+        );
+      }
+    }
 
     const ok = resolveConfirmation(userCode, payload, "confirmed");
     if (!ok) {

@@ -5,6 +5,7 @@ import * as db from "../../shared/db.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { sshExec } from "../../shared/remote/index.ts";
+import { enforceConfirmation } from "../lib/action-confirm.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
@@ -215,6 +216,7 @@ export async function handleDeleteResource(request: Request, type: string, id: s
       if (using.length > 0) {
         return Response.json({ ok: false, error: `Volume is in use by: ${using.map((a) => a.name).join(", ")}` }, { headers: corsHeaders });
       }
+      await enforceConfirmation(request, payload, "delete_volume", "volume", id);
       await compute.volumes.delete(id);
       return Response.json({ ok: true }, { headers: corsHeaders });
     }

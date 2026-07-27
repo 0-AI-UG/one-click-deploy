@@ -38,17 +38,13 @@
     }
   },
   "panels": {
-    "e25a79d2-77db-4d38-8524-9c876cfbb5cf": {
+    "6c4e42ce-ccc9-42d9-946c-131bd8afc0c8": {
       "type": "terminal",
-      "title": "Claude Code 2"
+      "title": "Codex"
     },
-    "568b418f-d863-4392-9e1f-3ed00c6dfaf4": {
+    "8b6ab41a-1f74-49ea-82ce-b6495fb49250": {
       "type": "terminal",
       "title": "Terminal 1"
-    },
-    "e852ae0e-7bdf-4d8a-856a-280f49664097": {
-      "type": "terminal",
-      "title": "Claude Code"
     },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
@@ -59,77 +55,55 @@
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "id": "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea",
       "canvasNodes": {
-        "ae6363aa-0547-4ef2-8fdf-f914788bc6d3": {
-          "id": "ae6363aa-0547-4ef2-8fdf-f914788bc6d3",
+        "2bd40ab6-83ae-4c12-9bb2-dc68302a8140": {
+          "id": "2bd40ab6-83ae-4c12-9bb2-dc68302a8140",
           "origin": {
-            "x": 1700,
-            "y": 780
+            "x": 1583.1550464624672,
+            "y": 800.2025993928911
           },
           "size": {
-            "width": 640.5834779396491,
-            "height": 640
+            "width": 640,
+            "height": 459.797400607109
           },
-          "zOrder": 765,
-          "creationIndex": 13,
+          "zOrder": 833,
+          "creationIndex": 16,
           "animationState": "idle",
           "dockLayout": {
             "type": "tabs",
-            "id": "322b8e93-981e-42ab-ae95-f758e6da5f8c",
+            "id": "6e890481-32c3-4501-83f6-71a4cc4249b1",
             "panelIds": [
-              "e25a79d2-77db-4d38-8524-9c876cfbb5cf"
+              "6c4e42ce-ccc9-42d9-946c-131bd8afc0c8"
             ],
             "activeIndex": 0
           }
         },
-        "8cbf9999-b951-42f5-b2f7-cb45ef50fcfd": {
-          "id": "8cbf9999-b951-42f5-b2f7-cb45ef50fcfd",
+        "abb9e84a-0fdc-43f5-82b4-4abc3a61d88b": {
+          "id": "abb9e84a-0fdc-43f5-82b4-4abc3a61d88b",
           "origin": {
-            "x": 1000,
-            "y": 1380
+            "x": 2280,
+            "y": 800
           },
           "size": {
-            "width": 640.5834779396491,
-            "height": 560
+            "width": 639.9999999999998,
+            "height": 399.9999999999999
           },
-          "zOrder": 782,
-          "creationIndex": 15,
-          "animationState": "idle",
-          "dockLayout": {
-            "type": "tabs",
-            "id": "fed9871e-1c8c-4cde-ad3a-65726e45be8e",
-            "panelIds": [
-              "568b418f-d863-4392-9e1f-3ed00c6dfaf4"
-            ],
-            "activeIndex": 0
-          }
-        },
-        "9094b80c-b90e-4f64-9162-31168dce3405": {
-          "id": "9094b80c-b90e-4f64-9162-31168dce3405",
-          "origin": {
-            "x": 1000,
-            "y": 780
-          },
-          "size": {
-            "width": 660,
-            "height": 460
-          },
-          "zOrder": 783,
+          "zOrder": 831,
           "creationIndex": 17,
           "animationState": "idle",
           "dockLayout": {
             "type": "tabs",
-            "id": "e02f916c-9987-44c3-b99f-337e4f9ff0cd",
+            "id": "8b561e2f-f826-430e-a6e1-a48453c80343",
             "panelIds": [
-              "e852ae0e-7bdf-4d8a-856a-280f49664097"
+              "8b6ab41a-1f74-49ea-82ce-b6495fb49250"
             ],
             "activeIndex": 0
           }
         }
       },
-      "zoomLevel": 0.862538401186466,
+      "zoomLevel": 0.8662755946915208,
       "viewportOffset": {
-        "x": -689.4613571709236,
-        "y": -609.6456677543416
+        "x": -1284.3788180729537,
+        "y": -620.6146696915207
       }
     }
   }

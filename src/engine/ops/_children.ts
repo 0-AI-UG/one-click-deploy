@@ -69,7 +69,23 @@ export async function awaitChildren(
         const summary = summarize(children);
         ctx.log(`children: ${summary.succeeded} succeeded, ${summary.failed} failed, ${summary.cancelled} cancelled`);
         if (summary.failed > 0) {
-          throw new Error(`${summary.failed} child op(s) failed (succeeded=${summary.succeeded})`);
+          const details = children
+            .filter((child) =>
+              child.status === "failed" ||
+              child.status === "compensated" ||
+              child.status === "compensation_failed"
+            )
+            .map((child) => {
+              let message: string = child.status;
+              try {
+                const parsed = JSON.parse(child.error_json || "{}") as { message?: string };
+                if (parsed.message) message = parsed.message;
+              } catch { /* retain status */ }
+              return `#${child.id} ${child.kind}: ${message}`;
+            });
+          throw new Error(
+            `${summary.failed} child op(s) failed (succeeded=${summary.succeeded}): ${details.join("; ")}`,
+          );
         }
         return summary;
       }

@@ -8,6 +8,33 @@ import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
 import { deriveStackResourceState } from "../../engine/resource-state.ts";
+import { findLatestRelatedStackOperation, stackLockKeys } from "../lib/stack-operations.ts";
+
+const TERMINAL_OPERATION_STATUSES = new Set([
+  "done",
+  "failed",
+  "cancelled",
+  "compensated",
+  "compensation_failed",
+]);
+
+function operationFields(stack: db.StackRow, fallback: ReturnType<typeof deriveStackResourceState>) {
+  const latest = findLatestRelatedStackOperation(stack);
+  if (!latest) {
+    return {
+      last_operation_id: fallback.lastOperationId,
+      last_operation_status: fallback.lastOperationStatus,
+      last_operation_failed: fallback.lastOperationFailed,
+      operation_in_progress: fallback.operationInProgress,
+    };
+  }
+  return {
+    last_operation_id: latest.id,
+    last_operation_status: latest.status,
+    last_operation_failed: ["failed", "compensated", "compensation_failed"].includes(latest.status),
+    operation_in_progress: !TERMINAL_OPERATION_STATUSES.has(latest.status),
+  };
+}
 
 // --- Deploy ---
 
@@ -26,9 +53,10 @@ export async function handleDeployStack(request: Request): Promise<Response> {
     if (existing) {
       return Response.json({ op_id: existing.id, attached: true }, { headers: corsHeaders });
     }
+    const stack = db.getStackByName(req.name);
     const { opId } = enqueue({
       kind: "deploy_stack",
-      resourceKeys: [`stack:${req.name}`],
+      resourceKeys: stack ? stackLockKeys(stack) : [`stack:${req.name}`],
       input: req,
       trigger: payload.client === "cli" ? "cli" : "api",
       triggeredBy: payload.userId,
@@ -52,10 +80,7 @@ export async function handleGetStacks(request: Request): Promise<Response> {
         ...s,
         status: resourceState.status,
         resource_status_reason: resourceState.reason,
-        last_operation_id: resourceState.lastOperationId,
-        last_operation_status: resourceState.lastOperationStatus,
-        last_operation_failed: resourceState.lastOperationFailed,
-        operation_in_progress: resourceState.operationInProgress,
+        ...operationFields(s, resourceState),
         app_count: apps.length,
         service_count: db.getServicesByStackId(s.id).length,
         // How many members `promote_stack` would actually promote. This applies
@@ -89,10 +114,7 @@ export async function handleGetStack(request: Request, stackId: number): Promise
       ...stack,
       status: resourceState.status,
       resource_status_reason: resourceState.reason,
-      last_operation_id: resourceState.lastOperationId,
-      last_operation_status: resourceState.lastOperationStatus,
-      last_operation_failed: resourceState.lastOperationFailed,
-      operation_in_progress: resourceState.operationInProgress,
+      ...operationFields(stack, resourceState),
       apps: db.getAppsByStackId(stackId),
       services: db.getServicesByStackId(stackId),
     }, { headers: corsHeaders });
@@ -259,7 +281,17 @@ export async function handleDestroyStack(request: Request, stackId: number): Pro
   try {
     const payload = await requirePermission(request, "stacks.destroy", stackScope(stackId));
     await enforceConfirmation(request, payload, "delete_stack", "stack", String(stackId));
-    const { opId } = enqueue({ kind: "destroy_stack", resourceKeys: [`stack:${stackId}`], input: { stackId }, trigger: "ui", triggeredBy: payload.userId });
+    const stack = db.getStack(stackId);
+    if (!stack) {
+      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
+    }
+    const { opId } = enqueue({
+      kind: "destroy_stack",
+      resourceKeys: stackLockKeys(stack),
+      input: { stackId },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -284,7 +316,7 @@ export async function handlePromoteStack(request: Request, stackId: number): Pro
       // name). Without the name key a concurrent stack deploy would enqueue a
       // `redeploy` on the same member as our `promote`, and if the redeploy
       // landed last production would sit on branch HEAD, not the promoted commit.
-      resourceKeys: [`stack:${stackId}`, `stack:${stack.name}`],
+      resourceKeys: stackLockKeys(stack),
       input: { stackId, userId: payload.userId },
       trigger: "ui",
       triggeredBy: payload.userId,
@@ -315,7 +347,7 @@ export async function handleRedeployStack(request: Request, stackId: number): Pr
     }
     const { opId } = enqueue({
       kind: "cascade_redeploy",
-      resourceKeys: [`env:${stack.environment_id}`],
+      resourceKeys: [...stackLockKeys(stack), `env:${stack.environment_id}`],
       input: { environmentId: stack.environment_id },
       trigger: "ui",
       triggeredBy: payload.userId,

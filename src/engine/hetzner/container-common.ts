@@ -44,6 +44,9 @@ export type DockerRunOpts = {
   appName: string;
   /** Override the docker network. Default "ocd-net". Pass null to skip --network. */
   network?: string | null;
+  /** Static hostname mappings injected into the container. OCD uses these for
+   * managed-service aliases because containers do not inherit host /etc/hosts. */
+  extraHosts?: Array<{ hostname: string; address: string }>;
   /** Port publish spec. Omit for containers that don't expose ports. */
   publish?: { bindAddr: string; hostPort: number; containerPort: number };
   /** Extra, already-formatted `-p ...` publish flags (e.g. the panel's waker
@@ -99,6 +102,15 @@ export function buildDockerRunArgs(opts: DockerRunOpts): string {
     `--restart ${restart}`,
   ];
   if (network) parts.push(`--network ${network}`);
+  for (const host of opts.extraHosts ?? []) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(host.hostname)) {
+      throw new Error(`Invalid extra host name: ${host.hostname}`);
+    }
+    if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(host.address)) {
+      throw new Error(`Invalid extra host address: ${host.address}`);
+    }
+    parts.push(`--add-host=${host.hostname}:${host.address}`);
+  }
   parts.push(
     "--cap-drop=ALL",
     "--security-opt=no-new-privileges",

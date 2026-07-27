@@ -1,10 +1,16 @@
 import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { BOLD, DIM, RED, RESET } from "./format.ts";
 import { promptLine, promptHidden } from "./prompt.ts";
 import type { DeployManifest } from "../shared/rpc.ts";
 import type { RequiredMissing } from "../shared/env-merge.ts";
 import { validateDeployManifest } from "../shared/manifest-validate.ts";
+
+/** Stable provenance for the exact manifest bytes the caller applied. */
+export function manifestHash(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
 
 /**
  * Prompt (grouped) for required env vars that the merge could not fill from a

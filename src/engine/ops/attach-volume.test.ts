@@ -77,6 +77,7 @@ beforeEach(() => {
   compute._mocks.volumeDelete.mockClear();
   compute._mocks.volumeAttach.mockClear();
   compute._mocks.volumeDetach.mockClear();
+  compute.volumes.list = async () => [];
   recreateAppContainer.mockClear();
   recreateAppContainer.mockImplementation(async () => ({ ok: true }));
   __setBindImplForTest({ ensureVolumeBindMount, removeVolumeBindMount });
@@ -134,6 +135,33 @@ describe("attach_volume: create_volume", () => {
     expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
     expect(db.getRetiredVolumes().some((v) => v.provider_volume_id === "v-abc")).toBe(true);
+  });
+
+  test("does not silently adopt a retained same-name volume", async () => {
+    const { app, server } = makeApp();
+    const opId = 811;
+    const name = `ocd-${app.name}-op${opId}`;
+    db.retireVolume({
+      providerVolumeId: "v-retained",
+      formerResourceType: "app",
+      formerResourceId: app.id,
+      formerResourceName: app.name,
+      reason: "prior failed attach",
+    });
+    compute.volumes.list = mock(async () => [{
+      providerId: "v-retained",
+      name,
+      sizeGb: 10,
+      location: "fsn1",
+      serverId: null,
+    }]);
+    const { ctx } = makeCtx({ appId: app.id, sizeGb: 10 }, opId);
+    const target = {
+      providerServerId: server.provider_id,
+      serverLocation: "fsn1",
+      appName: app.name,
+    } as any;
+    await expect(step.probe!(ctx, { validate: target })).rejects.toThrow(/Refusing to adopt retained volume/);
   });
 });
 

@@ -39,4 +39,19 @@ describe("enforceConfirmation automation approval", () => {
       enforceConfirmation(request, cliUser, "delete_app", "app", "42"),
     ).rejects.toThrow("Confirmation invalid");
   });
+
+  for (const [action, resourceType] of [
+    ["delete_stack", "stack"],
+    ["delete_environment", "environment"],
+    ["delete_volume", "volume"],
+  ] as const) {
+    test(`requires web UI approval for ${action} even with an automation token`, async () => {
+      const request = new Request("http://localhost/api/destructive/42", {
+        headers: { "x-ocd-confirmation": `automation:${action}:${resourceType}:42` },
+      });
+      await expect(
+        enforceConfirmation(request, cliUser, action, resourceType, "42"),
+      ).rejects.toThrow("always requires confirmation");
+    });
+  }
 });

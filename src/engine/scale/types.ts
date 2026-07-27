@@ -34,7 +34,9 @@ export function appReplicaRunOpts(
     containerName: opts.containerName,
     image: `${app.name}:latest`,
     appName: app.name,
-    network: null as string | null, // replicas historically don't join ocd-net
+    // Initial deploys use startAppReplica's canonical ocd-net default. Keep
+    // every reload/scale/recreate path on the same network.
+    network: "ocd-net",
     bindAddr: replicaBindHost(server),
     hostPort: opts.hostPort,
     containerPort: app.container_port,

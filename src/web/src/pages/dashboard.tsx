@@ -235,7 +235,7 @@ export function DashboardPage() {
   const stackDestroy = async (stack: StackData) => {
     if (!(await confirm(
       "Destroy Stack",
-      `Permanently destroy "${stack.name}" and all ${stack.app_count} app(s) and ${stack.service_count} service(s)? This removes every member's containers, volumes, and data.`,
+      `Permanently destroy "${stack.name}" and all ${stack.app_count} app(s) and ${stack.service_count} service(s)? Containers and routing are removed; environments are retained, and managed volumes are detached for recovery.`,
       true,
     ))) return;
     const key = `stack-delete-${stack.id}`;

@@ -66,6 +66,11 @@ export type AppData = {
   public_protocol?: string;
   /** `<panel-ip>:<public_port>` when raw TCP/UDP exposed (server-derived). */
   public_address?: string | null;
+  config_revision?: number;
+  last_manifest_path?: string | null;
+  last_manifest_hash?: string | null;
+  last_manifest_applied_at?: string | null;
+  last_manifest_config_revision?: number | null;
 };
 
 export type ReplicaData = {
@@ -103,6 +108,7 @@ export type DeploymentRecord = {
   source?: string;
   status: string;
   deploy_log?: string;
+  config_revision?: number;
   created_at: string;
 };
 

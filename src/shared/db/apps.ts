@@ -98,6 +98,13 @@ export type AppRow = {
   placement_pool: string; // which servers.pool this app's replicas may be placed on; 'general' = default pool
   target: string; // deploy target tag: '' | 'production' | 'staging' | 'dev'
   target_of: number | null; // app id this is a staging/dev target of; NULL = standalone
+  /** Monotonic desired-configuration revision. It changes independently of
+   * source commits and is captured by every successful deployment. */
+  config_revision: number;
+  last_manifest_path: string | null;
+  last_manifest_hash: string | null;
+  last_manifest_applied_at: string | null;
+  last_manifest_config_revision: number | null;
 };
 
 /** Internal ingress port block: every app owns one port in
@@ -576,6 +583,24 @@ export function parseAppEnvProjection(app: Pick<AppRow, "env_projection">): stri
 
 export function updateAppContainerPort(id: number, port: number): void {
   db.query("UPDATE apps SET container_port = ? WHERE id = ?").run(port, id);
+}
+
+/** Update the build source used by later code-only redeploys. */
+export function updateAppBuildSource(
+  id: number,
+  fields: { gitRepo: string; gitBranch: string; dockerfilePath: string; dockerContext: string },
+): void {
+  db.query(
+    "UPDATE apps SET git_repo = ?, git_branch = ?, dockerfile_path = ?, docker_context = ? WHERE id = ?",
+  ).run(fields.gitRepo, fields.gitBranch, fields.dockerfilePath, fields.dockerContext, id);
+}
+
+/** Record provenance after an explicit manifest apply. This metadata is not
+ * itself runtime configuration and therefore does not bump config_revision. */
+export function recordAppManifestApplied(id: number, path: string, hash: string): void {
+  db.query(
+    "UPDATE apps SET last_manifest_path = ?, last_manifest_hash = ?, last_manifest_applied_at = datetime('now'), last_manifest_config_revision = config_revision WHERE id = ?",
+  ).run(path, hash, id);
 }
 
 export function updateAppDomain(id: number, domain: string): void {

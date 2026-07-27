@@ -164,7 +164,7 @@ const swapContainer: Step<{ appId: number }, SwapOut> = {
       containerName: app.name,
       image: `${app.name}:latest`,
       appName: app.name,
-      network: null,
+      network: "ocd-net",
       bindAddr,
       hostPort,
       containerPort: app.container_port,
@@ -199,7 +199,7 @@ const swapContainer: Step<{ appId: number }, SwapOut> = {
       containerName: app.name,
       image: snap.image,
       appName: app.name,
-      network: null,
+      network: "ocd-net",
       bindAddr: snap.bindAddr,
       hostPort: snap.hostPort,
       containerPort: snap.containerPort,
@@ -274,6 +274,7 @@ const recordRollback: Step<RollbackInput, { deploymentId: number }> = {
       app_id: target.appId,
       image_tag: target.imageTag,
       git_commit: `rollback-from-${target.gitCommit}`,
+      config_revision: db.getApp(target.appId)?.config_revision ?? 1,
     });
     db.appendDeployLog(
       target.appId,

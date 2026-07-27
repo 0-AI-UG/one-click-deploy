@@ -18,6 +18,7 @@ import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
+import { applyAppConfig } from "../../shared/app-config.ts";
 
 type DeployStackInput = StackDeployRequest;
 
@@ -555,19 +556,21 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
         const existingApp = db.getAppByName(name);
         let row: OperationRow;
         if (existingApp) {
-          // Reconcile manifest projection before the child reload/build reads
-          // the linked environment. Omit means legacy/all; [] means none.
-          db.updateAppEnvProjection(existingApp.id, appReq.env_projection ?? null);
-          if (appReq.public === false && (existingApp.public || existingApp.domain)) {
-            db.updateAppPublic(existingApp.id, false);
-            db.updateAppDomain(existingApp.id, "");
-            // Apply maintenance isolation before the potentially long rebuild.
-            // A successful operation must not be reported while an old public
-            // router is still serving this app.
-            await syncAllTraefik();
-            db.appendStackLog(stackId, `[apps] ${key}: public ingress removed`);
-          }
-          // Reconcile = redeploy the existing member (env/image refresh).
+          // The stack and standalone paths share one complete desired-config
+          // apply. Stack ownership only supplies the resolved shared prod and
+          // staging environments before the code-only child redeploy.
+          await applyAppConfig(existingApp.id, {
+            ...appReq,
+            app_name: name,
+            environment_id: environmentId,
+            webhook_staging: false,
+            webhook_staging_environment_id: stagingEnvFor(key),
+          }, {
+            userId: ctx.triggeredBy || undefined,
+            log: (line) => db.appendStackLog(stackId, `[config] ${key}: ${line}`),
+          });
+          await syncAllTraefik();
+          db.appendStackLog(stackId, `[apps] ${key}: desired configuration applied`);
           row = enqueueOperation({
             kind: "redeploy",
             resourceKeys: [`app:${existingApp.id}`],

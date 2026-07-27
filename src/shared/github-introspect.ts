@@ -11,6 +11,7 @@ import { parseGitHubRepo, getGitHubPat } from "./github.ts";
 import { validateDeployManifest } from "./validate.ts";
 import { buildStackAppSpec, resolveRepoPath, repoDirOf, type StackAppSpec } from "./stack-spec.ts";
 import type { ParsedManifest, StackManifest, StackDeployRequest, DeployManifest } from "./rpc.ts";
+import { createHash } from "node:crypto";
 
 // The stack payload resolved from an `ocd-stack.json` — every service plus every
 // per-app `.ocd-deploy.json` it references, ready for the builder to edit.
@@ -423,10 +424,13 @@ async function resolveStack(
     } catch {
       return { ok: false, error: `App "${key}" (${manifestPath}) is not valid JSON.` };
     }
+    const spec = buildStackAppSpec(key, entry, appManifest, repoUrl, repoDirOf(manifestPath));
+    spec.manifest_path = manifestPath;
+    spec.manifest_hash = createHash("sha256").update(content).digest("hex");
     apps.push({
       manifest_path: manifestPath,
       env: appManifest.env ?? [],
-      spec: buildStackAppSpec(key, entry, appManifest, repoUrl, repoDirOf(manifestPath)),
+      spec,
     });
   }
 

@@ -4,7 +4,7 @@ import { get, post, del } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, colorStatus, table } from "../format.ts";
 import { webConfirm } from "../confirm.ts";
-import { getGitRepo, readManifest, promptRequired, resolveAuthPassword } from "../manifest.ts";
+import { getGitRepo, readManifest, promptRequired, resolveAuthPassword, manifestHash } from "../manifest.ts";
 import { mergeEnv, type AppEnvDefs } from "../../shared/env-merge.ts";
 import { buildStackAppSpec, resolveRepoPath, repoDirOf } from "../../shared/stack-spec.ts";
 import { validateStackManifest } from "../../shared/manifest-validate.ts";
@@ -92,8 +92,12 @@ function buildAppElement(
   repo: string,
   envVars: Array<{ key: string; value: string; secret?: boolean }>,
   manifestDir: string,
+  manifestPath: string,
+  manifestFullPath: string,
 ): AppElement {
   const el = buildStackAppSpec(key, entry, manifest, repo, manifestDir);
+  el.manifest_path = manifestPath;
+  el.manifest_hash = manifestHash(manifestFullPath);
   if (envVars.length > 0) el.env_vars = envVars;
   return el;
 }
@@ -308,7 +312,17 @@ export async function stackUp(args: string[]): Promise<void> {
     // Dockerfile paths resolve relative to the app manifest's dir (repo-root-
     // relative, assuming the stack manifest sits at the repo root).
     const manifestDir = repoDirOf(resolveRepoPath("", entry.manifest));
-    const appElement = buildAppElement(key, entry, appManifest, repo, [], manifestDir);
+    const childManifestPath = resolve(baseDir, entry.manifest);
+    const appElement = buildAppElement(
+      key,
+      entry,
+      appManifest,
+      repo,
+      [],
+      manifestDir,
+      resolveRepoPath("", entry.manifest),
+      childManifestPath,
+    );
     const authPassword = await resolveAuthPassword(appManifest.auth);
     if (authPassword !== undefined) appElement.auth_password = authPassword;
     apps.push(appElement);
@@ -516,6 +530,47 @@ async function stackLogs(args: string[]): Promise<void> {
   }
 }
 
+async function stackMemberLogs(args: string[]): Promise<void> {
+  const name = args.find((arg) => !arg.startsWith("-"));
+  if (!name) {
+    console.error(`Usage: ocd stack member-logs <name|id> [--tail=N]`);
+    process.exit(1);
+  }
+  const tailArg = args.find((arg) => arg.startsWith("--tail="));
+  const tail = tailArg ? parseInt(tailArg.slice(7), 10) : 100;
+  if (!Number.isInteger(tail) || tail < 1 || tail > 1000) {
+    console.error(`${RED}--tail must be an integer from 1 to 1000${RESET}`);
+    process.exit(1);
+  }
+  const stackRef = await resolveStack(name);
+  const { members } = await get<{
+    members: Array<{ kind: "app" | "service"; id: number; name: string; logs: string; error?: string }>;
+  }>(`/api/stacks/${stackRef.id}/member-logs?tail=${tail}`);
+  for (const member of members) {
+    console.log(`${BOLD}==> ${member.kind} ${member.name} (#${member.id}) <==${RESET}`);
+    if (member.error) console.log(`${RED}${member.error}${RESET}`);
+    else process.stdout.write(member.logs.endsWith("\n") ? member.logs : `${member.logs}\n`);
+  }
+  if (members.length === 0) console.log(`${DIM}(no readable member logs)${RESET}`);
+}
+
+async function stackRedeploy(args: string[]): Promise<void> {
+  const name = args.find((arg) => !arg.startsWith("-"));
+  if (!name) {
+    console.error(`Usage: ocd stack redeploy <name|id>`);
+    process.exit(1);
+  }
+  const stackRef = await resolveStack(name);
+  console.log(`Redeploying stack ${BOLD}${stackRef.name}${RESET} from stored configuration...`);
+  const { op_id } = await post<{ op_id: number }>(`/api/stacks/${stackRef.id}/redeploy`, {});
+  const result = await followOp(op_id);
+  if (!result.ok) {
+    console.error(`\n${RED}Stack redeploy failed: ${result.error || "unknown error"}${RESET}`);
+    process.exit(1);
+  }
+  console.log(`\n${GREEN}Stack redeployed.${RESET}`);
+}
+
 export async function stackDown(args: string[]): Promise<void> {
   let name = "";
   for (const arg of args) {
@@ -528,7 +583,7 @@ export async function stackDown(args: string[]): Promise<void> {
 
   const stackRef = await resolveStack(name);
 
-  const confirm = await webConfirm("delete_stack", "stack", stackRef.id, { yes: args.includes("--yes") });
+  const confirm = await webConfirm("delete_stack", "stack", stackRef.id);
   if (!confirm) {
     console.log("Aborted.");
     return;
@@ -548,12 +603,14 @@ export async function stackDown(args: string[]): Promise<void> {
 }
 
 function usage(): void {
-  console.error(`${BOLD}Usage:${RESET} ocd stack <ls|status|logs> [args]
+  console.error(`${BOLD}Usage:${RESET} ocd stack <ls|status|logs|member-logs|redeploy> [args]
 
 ${BOLD}Subcommands:${RESET}
   ls                   List all stacks
   status <name>        Show a stack's apps and services
   logs <name>          Print a stack's deploy log
+  member-logs <name>   Print current container logs for every readable member
+  redeploy <name>      Redeploy every member from stored configuration
 
 ${DIM}Deploy a stack with \`ocd deploy stack\`; destroy one with \`ocd delete stack\`.${RESET}`);
 }
@@ -574,6 +631,13 @@ export async function stack(args: string[]): Promise<void> {
       break;
     case "logs":
       await stackLogs(rest);
+      break;
+    case "member-logs":
+    case "members-logs":
+      await stackMemberLogs(rest);
+      break;
+    case "redeploy":
+      await stackRedeploy(rest);
       break;
     case "down":
       console.error("`ocd stack down` has moved to `ocd delete stack`.");

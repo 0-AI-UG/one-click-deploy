@@ -41,6 +41,10 @@ export async function put<T>(path: string, body?: unknown): Promise<T> {
   return apiRequest<T>("PUT", path, body);
 }
 
+export async function patch<T>(path: string, body?: unknown): Promise<T> {
+  return apiRequest<T>("PATCH", path, body);
+}
+
 export async function del<T>(path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {
   return apiRequest<T>("DELETE", path, body, headers);
 }

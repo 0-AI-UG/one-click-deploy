@@ -16,6 +16,10 @@ import { ops } from "./commands/ops.ts";
 import { servers } from "./commands/servers.ts";
 import { ssh } from "./commands/ssh.ts";
 import { skill } from "./commands/skill.ts";
+import { appConfig } from "./commands/app-config.ts";
+import { app } from "./commands/app.ts";
+import { scale } from "./commands/scale.ts";
+import { resources, volumes } from "./commands/resources.ts";
 import { BOLD, DIM, RESET } from "./format.ts";
 import { VERSION } from "./version.ts";
 
@@ -40,6 +44,11 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   servers,
   ssh,
   skill,
+  config: appConfig,
+  app,
+  scale,
+  resources,
+  volumes,
 };
 
 function printUsage(): void {
@@ -51,18 +60,22 @@ ${BOLD}Commands:${RESET}
   login <panel-url>      Log in to a panel
   status                 Dashboard overview
   apps                   List all apps
+  app <command>          Inspect or configure an existing app
   logs <app> [--tail=N]  View app logs
-  deploy [manifest]      Deploy current repo using .ocd-deploy.json
+  deploy [manifest]      Apply desired config, then deploy current Git code
+  config diff [manifest] Preview manifest changes against stored config
+  config apply [manifest] Apply manifest config without deploying code
   deploy stack [manifest]  Deploy a multi-app stack
   delete <app>           Destroy an app
   delete stack <name>    Destroy a stack and all its members
-  redeploy <app>         Redeploy an existing app
+  redeploy <app>         Deploy latest code with the stored configuration
   envs                   Manage environments and variables
   restart <app>          Restart an app
   rollback <app>         Roll back to previous deployment
   promote                Promote the webhook-staging sibling to production
   pause <app>            Pause an app
   unpause <app>          Unpause an app
+  scale <app> <count>    Scale, wake, set policy, or migrate replicas
   services               List managed services
   service catalog        List available managed-service types and defaults
   service create <name>  Create a standalone managed service
@@ -70,7 +83,9 @@ ${BOLD}Commands:${RESET}
   ops [--app X]          List deploy engine operations
   ops <id> | logs <id>   Inspect an operation or stream its logs
   ops cancel|retry|finalize <id>  Recover a stuck operation
-  servers                List servers
+  servers                Inspect and manage servers
+  resources              Inventory, estimated cost, and topology
+  volumes                Manage attached and retained volumes
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session
   ssh <server> --server  Interactive shell on a server

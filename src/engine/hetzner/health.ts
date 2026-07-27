@@ -6,7 +6,20 @@ import { asUser, log } from "./container-common.ts";
 // per-tick burst), NOT that the container is down. Callers must treat it as
 // "unknown" and leave the existing status untouched rather than flip to
 // unhealthy on what is really a transport hiccup.
-type HealthResult = { healthy: boolean; statusCode?: number; error?: string; inconclusive?: boolean };
+type HealthResult = {
+  /** Ready to receive the workload's expected traffic/work. */
+  healthy: boolean;
+  /** Docker reports the process as running. A running process is not
+   * necessarily ready (HTTP/exec probes may still fail). */
+  running?: boolean;
+  /** Explicit readiness alias for API/diagnostic callers. */
+  ready?: boolean;
+  statusCode?: number;
+  error?: string;
+  inconclusive?: boolean;
+  containerStatus?: string;
+  restartCount?: number;
+};
 
 // `ssh` exits 255 only when the transport fails (connection closed/refused/
 // timed out during the handshake) — remote command exit codes pass through
@@ -51,21 +64,76 @@ async function runHealthProbe(
   return { healthy: false, error: "Health check timed out" };
 }
 
-// Running-check via `docker inspect` (shared by the container-scoped probes).
-// `sshFailed` distinguishes a dropped SSH connection (transport hiccup) from an
-// authoritative "not running" so callers don't misread the former as a crash.
-async function inspectRunning(
+export type ContainerInspection = {
+  status: string;
+  running: boolean;
+  restarting: boolean;
+  restartCount: number;
+  startedAt: string | null;
+};
+
+const RESTART_LOOP_THRESHOLD = 5;
+const RESTART_LOOP_WINDOW_MS = 5 * 60_000;
+
+/** Parse the tab-separated, single-line docker-inspect format used below. */
+export function parseContainerInspection(raw: string): ContainerInspection | null {
+  const [status = "", runningRaw = "", restartingRaw = "", restartRaw = "", startedAtRaw = ""] =
+    raw.trim().split("\t");
+  if (!status) return null;
+  const restartCount = Number(restartRaw);
+  return {
+    status,
+    running: runningRaw === "true",
+    restarting: restartingRaw === "true",
+    restartCount: Number.isFinite(restartCount) ? restartCount : 0,
+    startedAt: startedAtRaw && !startedAtRaw.startsWith("0001-") ? startedAtRaw : null,
+  };
+}
+
+/**
+ * Docker "running" is process state, not readiness. Reject explicit
+ * restarting/exited/dead states and a young container with a high restart
+ * count (a restart loop). A formerly unstable container becomes eligible
+ * again after it has remained up for the full stability window.
+ */
+export function assessContainerInspection(
+  state: ContainerInspection,
+  nowMs = Date.now(),
+): { runnable: boolean; error?: string } {
+  if (state.restarting || state.status === "restarting") {
+    return { runnable: false, error: `Container is restarting (restart count ${state.restartCount})` };
+  }
+  if (!state.running || state.status !== "running") {
+    return { runnable: false, error: `Container state is ${state.status || "unknown"}` };
+  }
+  const startedMs = state.startedAt ? Date.parse(state.startedAt) : NaN;
+  const recentlyStarted = Number.isFinite(startedMs) && nowMs - startedMs < RESTART_LOOP_WINDOW_MS;
+  if (state.restartCount >= RESTART_LOOP_THRESHOLD && recentlyStarted) {
+    return {
+      runnable: false,
+      error: `Container restarted ${state.restartCount} times and has not remained stable for 5 minutes`,
+    };
+  }
+  return { runnable: true };
+}
+
+// Container-state check via `docker inspect` (shared by the container-scoped
+// probes). `sshFailed` distinguishes a dropped SSH connection from an
+// authoritative container state so callers don't misread transport as a crash.
+async function inspectContainer(
   ip: string,
   containerName: string,
   hostKey?: string,
-): Promise<{ running: boolean; sshFailed: boolean }> {
+): Promise<{ state: ContainerInspection | null; sshFailed: boolean }> {
   const inspect = await sshExec(
     ip,
-    asUser(`docker inspect --format='{{.State.Running}}' ${containerName} 2>/dev/null`),
+    asUser(
+      `docker inspect --format='{{.State.Status}}\\t{{.State.Running}}\\t{{.State.Restarting}}\\t{{.RestartCount}}\\t{{.State.StartedAt}}' ${containerName} 2>/dev/null`,
+    ),
     hostKey,
   );
-  if (inspect.exitCode === SSH_TRANSPORT_FAILURE) return { running: false, sshFailed: true };
-  return { running: inspect.stdout.trim() === "true", sshFailed: false };
+  if (inspect.exitCode === SSH_TRANSPORT_FAILURE) return { state: null, sshFailed: true };
+  return { state: parseContainerInspection(inspect.stdout), sshFailed: false };
 }
 
 // Normalize a configured health path into a curl-safe request path. Empty
@@ -149,22 +217,55 @@ export async function healthCheck(
     `Checking health of ${containerName} on ${ip} via ${bindHost}:${port}${probePath(path)}`,
     maxAttempts,
     async (i) => {
-      const inspect = await inspectRunning(ip, containerName, hostKey);
+      const inspect = await inspectContainer(ip, containerName, hostKey);
       if (inspect.sshFailed) return inconclusiveStep(i, maxAttempts);
-      if (!inspect.running) {
+      const assessment = inspect.state ? assessContainerInspection(inspect.state) : {
+        runnable: false,
+        error: "Container does not exist",
+      };
+      if (!assessment.runnable) {
         return {
           done: false,
-          retryLog: `Container not running yet (attempt ${i + 1}/${maxAttempts})`,
-          finalResult: { healthy: false, error: "Container is not running" },
+          retryLog: `${assessment.error} (attempt ${i + 1}/${maxAttempts})`,
+          finalResult: {
+            healthy: false,
+            running: false,
+            ready: false,
+            error: assessment.error,
+            containerStatus: inspect.state?.status,
+            restartCount: inspect.state?.restartCount,
+          },
         };
       }
       // Check HTTP response on the container's published port. `bindHost`
       // is whatever address the container is bound to — typically the
       // server's private IPv4 for tenant apps, 127.0.0.1 for the panel.
-      return httpProbeStep(
+      const outcome = await httpProbeStep(
         ip, bindHost, port, i, maxAttempts,
         "Health check passed", "Health check returned", hostKey, path,
       );
+      if (outcome.done) {
+        return {
+          ...outcome,
+          result: {
+            ...outcome.result,
+            running: true,
+            ready: outcome.result.healthy,
+            containerStatus: inspect.state?.status,
+            restartCount: inspect.state?.restartCount,
+          },
+        };
+      }
+      return {
+        ...outcome,
+        finalResult: {
+          ...outcome.finalResult,
+          running: true,
+          ready: false,
+          containerStatus: inspect.state?.status,
+          restartCount: inspect.state?.restartCount,
+        },
+      };
     },
   );
 }
@@ -185,15 +286,36 @@ export async function containerRunningCheck(
     `HTTP probe disabled for ${containerName} on ${ip}; verifying container is running`,
     maxAttempts,
     async (i) => {
-      const inspect = await inspectRunning(ip, containerName, hostKey);
+      const inspect = await inspectContainer(ip, containerName, hostKey);
       if (inspect.sshFailed) return inconclusiveStep(i, maxAttempts);
-      if (inspect.running) {
-        return { done: true, log: `HTTP probe disabled; container is running`, result: { healthy: true } };
+      const assessment = inspect.state ? assessContainerInspection(inspect.state) : {
+        runnable: false,
+        error: "Container does not exist",
+      };
+      if (assessment.runnable) {
+        return {
+          done: true,
+          log: `HTTP probe disabled; container is running`,
+          result: {
+            healthy: true,
+            running: true,
+            ready: true,
+            containerStatus: inspect.state?.status,
+            restartCount: inspect.state?.restartCount,
+          },
+        };
       }
       return {
         done: false,
-        retryLog: `Container not running yet (attempt ${i + 1}/${maxAttempts})`,
-        finalResult: { healthy: false, error: "Container is not running" },
+        retryLog: `${assessment.error} (attempt ${i + 1}/${maxAttempts})`,
+        finalResult: {
+          healthy: false,
+          running: false,
+          ready: false,
+          error: assessment.error,
+          containerStatus: inspect.state?.status,
+          restartCount: inspect.state?.restartCount,
+        },
       };
     },
   );
@@ -230,13 +352,24 @@ export async function serviceHealthCheck(
     `Service health check for ${containerName}: ${healthCmd}`,
     maxAttempts,
     async (i) => {
-      const inspect = await inspectRunning(ip, containerName, hostKey);
+      const inspect = await inspectContainer(ip, containerName, hostKey);
       if (inspect.sshFailed) return inconclusiveStep(i, maxAttempts);
-      if (!inspect.running) {
+      const assessment = inspect.state ? assessContainerInspection(inspect.state) : {
+        runnable: false,
+        error: "Container does not exist",
+      };
+      if (!assessment.runnable) {
         return {
           done: false,
-          retryLog: `Service container not running yet (attempt ${i + 1}/${maxAttempts})`,
-          finalResult: { healthy: false, error: "Container is not running" },
+          retryLog: `${assessment.error} (attempt ${i + 1}/${maxAttempts})`,
+          finalResult: {
+            healthy: false,
+            running: false,
+            ready: false,
+            error: assessment.error,
+            containerStatus: inspect.state?.status,
+            restartCount: inspect.state?.restartCount,
+          },
         };
       }
 
@@ -249,12 +382,29 @@ export async function serviceHealthCheck(
 
       if (result.exitCode === SSH_TRANSPORT_FAILURE) return inconclusiveStep(i, maxAttempts);
       if (result.exitCode === 0) {
-        return { done: true, log: `Service health check passed for ${containerName}`, result: { healthy: true } };
+        return {
+          done: true,
+          log: `Service health check passed for ${containerName}`,
+          result: {
+            healthy: true,
+            running: true,
+            ready: true,
+            containerStatus: inspect.state?.status,
+            restartCount: inspect.state?.restartCount,
+          },
+        };
       }
       return {
         done: false,
         retryLog: `Service health check failed (attempt ${i + 1}/${maxAttempts}): ${result.stdout.trim()}`,
-        finalResult: { healthy: false, error: `Health check failed: ${result.stdout.trim() || result.stderr.trim()}` },
+        finalResult: {
+          healthy: false,
+          running: true,
+          ready: false,
+          error: `Health check failed: ${result.stdout.trim() || result.stderr.trim()}`,
+          containerStatus: inspect.state?.status,
+          restartCount: inspect.state?.restartCount,
+        },
       };
     },
   );

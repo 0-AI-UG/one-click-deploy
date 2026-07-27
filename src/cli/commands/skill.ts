@@ -27,8 +27,9 @@ ${BOLD}Options:${RESET}
 ${BOLD}Agents:${RESET}
 ${agentList()}
 
-The skill is written to <root>/<agent-dir>/${SKILL_DIR_NAME}/ (SKILL.md, reference.md,
-and example manifests). Run it from the repo you want the agent to understand.`);
+The skill is written to <root>/<agent-dir>/${SKILL_DIR_NAME}/ with an overview,
+the complete docs/ manual, and example manifests. Run it from the repo you want
+the agent to understand.`);
 }
 
 function parseFlags(args: string[]): {

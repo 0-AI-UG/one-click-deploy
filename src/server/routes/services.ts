@@ -132,7 +132,11 @@ export async function handleGetServiceLogs(request: Request, serviceId: number):
     const instanceId = url.searchParams.get("instance_id")
       ? parseInt(url.searchParams.get("instance_id")!, 10)
       : undefined;
-    const logs = await getServiceLogs(serviceId, instanceId);
+    const requestedTail = parseInt(url.searchParams.get("tail") || "100", 10);
+    const tail = Number.isInteger(requestedTail)
+      ? Math.max(1, Math.min(requestedTail, 10_000))
+      : 100;
+    const logs = await getServiceLogs(serviceId, instanceId, tail);
     return Response.json({ logs }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

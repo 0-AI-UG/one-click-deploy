@@ -6,11 +6,12 @@ import { BOLD, GREEN, RED, RESET } from "../format.ts";
 
 function usage(): void {
   console.error(`${BOLD}Usage:${RESET} ocd delete <app> [--yes]
-       ocd delete stack <name> [--yes]
+       ocd delete stack <name>
 
 Destroys an app (its container(s), DNS records, and managed volumes) or a
-whole stack. Confirmation happens in your browser unless --yes is supplied for
-an explicitly authorized non-interactive session.`);
+whole stack. Stack deletion always requires confirmation in the OCD web UI.
+App deletion requires browser confirmation unless --yes is supplied for an
+explicitly authorized non-interactive session.`);
 }
 
 export async function deleteCmd(args: string[]): Promise<void> {

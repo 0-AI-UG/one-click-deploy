@@ -162,6 +162,10 @@ export type DeployRequest = {
   sibling_of?: number;
   durability_class?: "none" | "standard" | "high"; // availability policy, mapped to placement-spread + min-replica floors at insert
   scale_to_zero_after?: number; // idle seconds before scaling to zero (deploy-target override); omit = leave default
+  /** Client-computed provenance for an explicitly applied manifest. These are
+   * metadata only; the normalized fields above remain the desired spec. */
+  manifest_path?: string;
+  manifest_hash?: string;
 };
 
 export type PromoteRequest = {

@@ -1,211 +1,69 @@
 ---
 name: cate-cli
-description: Drive the Cate IDE from inside a Cate terminal with the `cate` CLI — control the built-in browser panel (open URLs, navigate, screenshot, read an accessibility snapshot, click/type/press by ref), read and drive terminal panels (read the rendered screen, send keystrokes), and reach the granted cate.* host scopes (panels, editor, notifications) through named verbs. Use when an agent or user working in a Cate terminal needs to see or steer a web page, capture a screenshot, read another terminal, or reach Cate's host API from the shell.
+description: Use the `cate` CLI inside Cate terminals to inspect or control browser and terminal panels, open files, and manage panels. Use when work must happen through Cate's visible UI or another Cate panel.
 user-invocable: true
 ---
 
-# Driving Cate from the terminal with `cate`
+# Cate CLI
 
-`cate` is a small CLI, preinstalled on PATH **inside Cate terminals and Cate
-agent shells**. It lets you control Cate — its browser panels, plus each granted
-`cate.*` host scope through a matching command group (`ui`, `editor`, `panel`,
-`terminal`). Every reachable host method has a named verb; `cate --help` is the
-complete surface. There are no workspace/theme verbs: your cwd IS the workspace
-root, and git knows the branch. It talks to a per-workspace loopback endpoint
-Cate injects as `CATE_API` + `CATE_TOKEN`.
+`cate` is available only inside Cate terminals and agent shells. It uses the
+current workspace automatically. Run `cate --help` or `cate <group> --help` for
+the command reference.
 
-**It only works inside a Cate terminal, and only when command-line control is
-enabled.** It is on by default; the user can turn it off in Settings → CLI
-("Command-line control"). While it is off — or outside a Cate terminal — the env
-vars are unset and every command exits `3` with a message explaining how to
-enable the setting. There is nothing to install. The same Settings → CLI section
-holds a permission matrix — Browser, Terminal, Panels, Editor and Notifications,
-each split into Read (observe) and Control (act). A verb whose cell is off fails
-with a stable error naming the cell (e.g. `panel-control-disabled: enable Panels
-→ Control in Cate Settings → CLI`); Terminal → Control is the only cell off by
-default.
+If a command reports that command-line control or a permission is disabled, the
+user must enable the named setting under Settings → CLI. Terminal input is off
+by default.
 
-## Browser control
+## Workflow
 
-A Cate window can host browser panels. These verbs act on the **active** browser
-panel by default; target a specific one with `--panel <id>` (get ids from
-`cate panel list` — browser rows show their url).
+Start by finding the panels and their short ids:
 
 ```bash
-cate browser open https://x.com   # navigate; prints the resulting url
-cate browser wait                 # until the page settles; prints the url
-                                  #   (instant when idle — also "where am I")
-cate browser wait 8000            # same, custom deadline in ms (capped at 8s)
-cate browser reload               # reload
-cate browser screenshot           # prints ONLY a file path (see below)
-cate browser snapshot             # accessibility tree with refs (see below)
-cate browser click @e12           # click the element with ref @e12
-cate browser type @e7 hello world # type text into the element with ref @e7
-cate browser press @e7 Enter      # focus @e7, then press Enter (submits forms)
-cate browser press PageDown       # press a key with no target (scroll, Escape...)
+cate panel list
 ```
 
-`press` sends **trusted** key input (unlike `click`/`type`, which synthesise DOM
-events), so Enter genuinely submits a form. Supported keys: Enter, Tab, Escape,
-Backspace, Delete, Space, the arrows (Up/Down/Left/Right), PageUp, PageDown,
-Home, End — case-insensitive.
+Pass `--panel <id>` on every command when operating an existing browser or
+terminal. Without it, browser and panel-creation commands use the caller's
+placement group; `browser open` creates a background browser if that group has
+none. Pass `--new` to always create another browser. `panel create` is limited
+to terminal and canvas panels. The CLI cannot focus panels or move the user's
+view.
 
-### Reading a screenshot
-
-`cate browser screenshot` prints a single line: the path to a PNG in the OS
-temp dir (a `cate-screenshots/` folder — take as many as you like, nothing
-lands in the user's Desktop or workspace). Nothing else goes to stdout. Read
-that file to see the page:
+For browser work, inspect before acting and verify afterward:
 
 ```bash
-shot=$(cate browser screenshot)
-# now view "$shot" (e.g. open it, or read it as an image)
+cate browser open https://example.com
+cate browser snapshot
+cate browser inspect label=Email
+cate browser fill label=Email user@example.com
+cate browser click text=Continue --exact
+cate browser wait url '**/dashboard' --snapshot
 ```
 
-### Reading a snapshot, then acting
+Prefer `wait text`, `wait gone`, `wait url`, `wait ref`, or `wait selector` to a
+fixed delay. `--snapshot` returns the post-action state but does not replace a
+conditional wait for asynchronous updates.
 
-`cate browser snapshot` prints a compact accessibility view: a `url:` line, a
-`title:` line, then one line per interactive element. Inputs show their current
-value after `=`:
+Snapshot refs such as `@s1e4` expire after navigation or a newer snapshot. Take
+a new snapshot instead of retrying a stale ref. Locators use
+`role=`, `text=`, `label=`, `placeholder=`, `testid=`, `css=`, `alt=`, or
+`title=`. Ambiguous locators fail; refine them, add `--exact`, or deliberately
+choose a match with `--nth`.
 
-```
-url: https://example.com
-title: Example
-[@e12] link "Home"
-[@e13] input:submit "Sign in"
-[@e14] input:search "Search" = "mechanical keyboards"
-```
+Browser actions are visible and use trusted input. A screenshot command prints
+only the temporary PNG path.
 
-Bare `<input>` elements expose their type (`input:search` vs `input:submit`) so
-a field and its submit button never read alike; names come from the aria-label,
-an associated `<label>`, visible text, or the placeholder — whichever exists
-first.
+## Terminal input
 
-The bracketed token (`@e12`) is the element's **ref**. Feed it back to `click`,
-`type`, or `press`:
+Read the target first. `terminal type` stages text without Enter; verify it,
+then execute with `terminal press enter`:
 
 ```bash
-cate browser click @e13           # click "Sign in"
-cate browser type @e14 mechanical keyboards
-cate browser press @e14 Enter     # submit
+cate terminal read --panel 1a2b3c4d
+cate terminal type npm test --panel 1a2b3c4d
+cate terminal read --panel 1a2b3c4d
+cate terminal press enter --panel 1a2b3c4d
 ```
 
-Very large pages are truncated to 150 ref lines with a trailing `(+N more refs)`
-note; pass `--max <n>` to change the cap (`--max 0` prints everything).
-
-Typical loop: `snapshot` to find a ref → `click`/`type`/`press` → `wait` →
-`snapshot` again (or `screenshot`) to confirm the result. Refs don't survive a
-navigation; re-snapshot after one. There is no back/forward/current: navigate
-by URL with `open`, and `wait` doubles as "where am I" since it returns the
-url instantly when the page is idle.
-
-One timing caveat: `wait` polls the page's loading flag, so calling it right
-after an action that *triggers* a navigation (`press Enter`, a `click` on a
-link) can return before loading has even started. When you expect a navigation,
-confirm it from the url `wait` prints (or re-snapshot) instead of treating a
-fast return as "already loaded".
-
-## Host API groups
-
-Every `cate.*` scope has its own command group with named verbs, so common calls
-need no JSON. Each maps one-to-one onto a host method:
-
-```bash
-cate ui notify build finished     # OS notification; trailing words are the message
-cate editor open src/app.ts       # open a file; prints the new panel's short id
-cate editor open src/app.ts:42    # ...and jump to line 42 (or :42:7 for a column)
-cate panel list                   # ALL panels: id, type, path/url/title; * = focused
-cate panel focus 1a2b3c4d         # reveal/focus a panel (short ids from `list` ok)
-cate panel close 1a2b3c4d         # close a panel without revealing it first
-cate panel create terminal        # auto-place a new panel in the background
-cate panel create browser https://x.com  # browser panels can seed a url
-cate panel set-title My Panel     # rename this Cate terminal panel
-cate panel set-title My Panel --panel 1a2b3c4d  # agent shells target explicitly
-cate version                      # host API version (for feature detection)
-```
-
-`panel list` is the single enumeration surface and the way to orient yourself:
-one line per panel — editors show their file path, browsers their url — with
-the focused panel marked `*`. Its short ids feed `panel focus` and `--panel`.
-So "what is the user looking at?" is the `*` row, and there is no separate
-browser or editor list. To open a file (any type — a PDF becomes a document
-panel), use `cate editor open`; the file must exist (`file-not-found`
-otherwise — the verb never creates files). `panel create` is for empty panels,
-except `create browser`, which accepts an optional url to open with (without
-one the panel sits on its start page until a `browser open` navigates it).
-
-Panel/file/browser creation is deliberately non-disruptive: it uses automatic
-background placement and does not open the placement picker, change focus or
-selection, switch tabs, or move the canvas camera. `panel focus` is the explicit
-opt-in command for changing the user's view. A new browser is kept mounted even
-off-screen, and `browser open` waits for its webview before returning, so the
-next `wait`/`snapshot` is safe to run immediately.
-
-## Terminal control
-
-Read another terminal panel's screen and (optionally) send keystrokes to it.
-Target terminals by id from `cate panel list`:
-
-```bash
-cate terminal read --panel 1a2b3c4d   # the rendered screen text
-cate terminal read                    # ...of the FOCUSED panel, if a terminal
-cate terminal type ls -la --panel 1a2b3c4d   # type text; does NOT execute
-cate terminal press enter --panel 1a2b3c4d   # ...press Enter to run it
-cate terminal press ctrl-c --panel 1a2b3c4d  # interrupt (any ctrl-<letter>)
-```
-
-`read` shows what the terminal shows: when a TUI holds the alternate screen you
-get that screen; otherwise the tail of the normal buffer including scrollback.
-Output is capped at 200 lines (the tail — pass `--max <n>`, `0` = all).
-`--json` returns `{panelId, alt, text}` where `alt` says which buffer you got.
-`read` without `--panel` targets the focused panel and errors
-(`no-terminal-focused`) when that isn't a terminal; `type`/`press` always
-require `--panel` — a misdirected keystroke runs in the wrong shell.
-
-`type` writes text to the terminal's input **without a trailing newline** —
-nothing executes until you follow with `press enter`. That two-step is
-deliberate: read back the input line first if you want to verify what you're
-about to run. Keys for `press` (case-insensitive): `enter`/`return`, `tab`,
-`escape`/`esc`, `backspace`, `space`, `up`/`down`/`left`/`right`,
-`pageup`/`pagedown`, `home`/`end`, and any `ctrl-<letter>` chord (`ctrl-c`,
-`ctrl-d`, ...).
-
-Input goes to **whatever runs in the terminal**: a foreground TUI receives the
-keys (arrows move its cursor, `q` is its quit), not the shell. Each half is its
-own cell in the Settings → CLI permission matrix: `read` needs Terminal → Read
-(on by default), `type`/`press` need Terminal → Control, which is **off by
-default** — while off they fail with `terminal-input-disabled` (or
-`terminal-read-disabled`) and
-how to enable it. Terminals the Cate Agent is actively driving refuse input
-(`agent-owned-terminal`).
-
-Each group maps to a host scope that a Cate terminal is granted. Two host scopes
-are **not** available from a terminal: `agent` (a terminal must not drive the
-agent that may have spawned it) and `storage` (extension-scoped key/value, and a
-shared terminal has no extension identity). They exist only for extensions, so
-this CLI has no `agent`/`storage` group — and no raw method passthrough: the
-verbs above are the complete surface.
-
-## Flags
-
-- `--panel <id>` — target a specific panel (sets `args.panelId`; the short
-  8-char ids printed by `panel list` are accepted).
-- `--json` — print the raw unwrapped result as one JSON line (nothing else on
-  stdout). Use this when you want to parse the output.
-- `--max <n>` — `browser snapshot`: max ref lines to print (default 150;
-  0 = all). `terminal read`: max tail lines to print (default 200; 0 = all).
-- `--timeout <ms>` — request timeout (default 30000).
-- `-h`, `--help` — usage.
-- `--version` — the CLI's own version (prints `cate cli <version>`).
-
-## Output and exit codes
-
-- Human output goes to **stdout**; diagnostics go to **stderr**.
-- `0` — success.
-- `1` — the call reported an error. Message: `cate: <method>: <error>` (e.g.
-  `cate: cate.browser.click: no-such-browser`). This covers both an HTTP error
-  response and an in-band `{result:{error}}`.
-- `2` — usage error (unknown command/verb, missing argument, bad flag value).
-- `3` — not inside a Cate terminal, or the request could not reach Cate.
-
-Check `$?` (or catch a non-zero exit) rather than scraping stderr.
+Input goes to whatever currently owns the terminal, including a foreground TUI.
+Never send keys until the panel id and current screen are verified.

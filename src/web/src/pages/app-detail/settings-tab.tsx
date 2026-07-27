@@ -152,7 +152,7 @@ export function SettingsTab({
                   ops.track(res.op_id);
                 }
               })}
-            >Save & Redeploy</Btn>
+            >Save configuration & deploy</Btn>
           </div>
         </PermissionGate>
       </Card>

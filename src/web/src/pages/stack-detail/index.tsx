@@ -142,7 +142,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
               onClick={async () => {
                 if (await confirm(
                   "Destroy Stack",
-                  `Destroy "${stack.name}" and all ${memberApps.length} app(s) and ${stack.services.length} service(s)? Containers and routing are removed; managed volumes are detached and retained for recovery.`,
+                  `Destroy "${stack.name}" and all ${memberApps.length} app(s) and ${stack.services.length} service(s)? Containers and routing are removed; environments are retained, and managed volumes are detached for recovery.`,
                   true,
                 )) {
                   await action("destroy", () => del(`/api/stacks/${stackId}`));

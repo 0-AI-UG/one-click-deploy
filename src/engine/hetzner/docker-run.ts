@@ -1,5 +1,6 @@
 import { sshExec, describeFailure } from "./ssh.ts";
 import { asUser, log, buildDockerRunArgs, withImageGcLease } from "./container-common.ts";
+import * as db from "../../shared/db.ts";
 
 /**
  * Write `<baseDir>/<appName>/.env.deploy` from resolved env vars — single-quote
@@ -107,6 +108,9 @@ export type StartAppReplicaOpts = {
   /** Docker network. Defaults to "ocd-net"; pass null for the default bridge
    *  (replicas historically don't join ocd-net). */
   network?: string | null;
+  /** Override service aliases. Omit to inject every current
+   * `<service>.svc.ocd.internal` mapping from desired state. */
+  extraHosts?: Array<{ hostname: string; address: string }>;
   volumeMount?: string;
   extraVolumes?: string[];
   /** Extra, already-formatted `-p ...` publish flags beyond the primary port
@@ -126,6 +130,41 @@ export type StartAppReplicaOpts = {
    *  path passes false (the container provably does not exist). */
   removeExisting?: boolean;
 };
+
+/** Resolve the current single-instance service names to their private fleet
+ * addresses. Exported so reload/deploy parity can be regression-tested without
+ * reaching a real Docker host. */
+export function currentServiceAliases(): Array<{ hostname: string; address: string }> {
+  const aliases: Array<{ hostname: string; address: string }> = [];
+  try {
+    for (const service of db.getServices()) {
+      const instance = db.getServiceInstances(service.id)[0];
+      const server = instance ? db.getServer(instance.server_id) : null;
+      if (server?.private_ipv4) {
+        aliases.push({
+          hostname: `${service.name}.svc.ocd.internal`,
+          address: server.private_ipv4,
+        });
+      }
+    }
+  } catch {
+    // Early bootstrap and isolated unit tests may not have an initialized DB.
+  }
+  return aliases;
+}
+
+export function currentAppAliases(): Array<{ hostname: string; address: string }> {
+  try {
+    return db.getApps()
+      .filter((app) => Boolean(app.virtual_ip))
+      .map((app) => ({
+        hostname: `${app.name}.ocd.internal`,
+        address: app.virtual_ip,
+      }));
+  } catch {
+    return [];
+  }
+}
 
 /**
  * The one place that starts a hardened app-replica container: optional
@@ -155,11 +194,21 @@ export async function startAppReplica(
     await ensureVolumeOwnership(ip, opts.image, opts.volumeMount.split(":")[0], hostKey);
   }
 
+  // `/etc/hosts` on the fleet host is not inherited by Docker containers.
+  // Resolve the managed-service aliases on every create/recreate path here,
+  // rather than relying on each deploy/rollback/reload caller to remember.
+  // This keeps environment-only reloads equivalent to initial deploys.
+  let extraHosts = opts.extraHosts;
+  if (extraHosts === undefined) {
+    extraHosts = [...currentAppAliases(), ...currentServiceAliases()];
+  }
+
   const cmd = buildDockerRunArgs({
     name: opts.containerName,
     image: opts.image,
     appName: opts.appName,
     network: opts.network,
+    extraHosts,
     publish: { bindAddr: opts.bindAddr, hostPort: opts.hostPort, containerPort: opts.containerPort },
     extraPublish: opts.extraPublish,
     envFilePath,

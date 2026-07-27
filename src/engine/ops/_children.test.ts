@@ -41,7 +41,9 @@ describe("awaitChildren", () => {
       unpark: () => { parked--; },
     } satisfies OpContext;
 
-    await expect(awaitChildren(ctx)).rejects.toThrow("1 child op(s) failed");
+    await expect(awaitChildren(ctx)).rejects.toThrow(
+      `1 child op(s) failed (succeeded=0): #${child.id} test_child: rollback failed`,
+    );
     expect(parked).toBe(0);
   });
 });

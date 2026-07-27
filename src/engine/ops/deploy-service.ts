@@ -61,6 +61,34 @@ type VolumeOut = {
   skipped: boolean;
 };
 
+export function serviceVolumeName(serviceName: string, opId: number): string {
+  return `ocd-svc-${serviceName}-op${opId}`;
+}
+
+export function assertAdoptableServiceVolume(
+  volume: { providerId: string; sizeGb: number; location: string; serverId: string | null },
+  expected: { sizeGb: number; location: string; serverId: string },
+  retired: { provider_volume_id: string; former_resource_type: string; former_resource_name: string }[],
+): void {
+  const retiredRow = retired.find((row) => row.provider_volume_id === volume.providerId);
+  if (retiredRow) {
+    throw new Error(
+      `Refusing to adopt retained volume ${volume.providerId}; it belongs to ` +
+      `${retiredRow.former_resource_type}:${retiredRow.former_resource_name}.`,
+    );
+  }
+  if (
+    volume.sizeGb !== expected.sizeGb ||
+    volume.location !== expected.location ||
+    (volume.serverId != null && volume.serverId !== expected.serverId)
+  ) {
+    throw new Error(
+      `Provider volume ${volume.providerId} does not match the requested size/location/server. ` +
+      "Refusing implicit adoption.",
+    );
+  }
+}
+
 type InsertOut = {
   serviceId: number;
   instanceId: number;
@@ -168,6 +196,46 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
 const createVolume: Step<DeployServiceInput, VolumeOut> = {
   name: "create_volume",
   label: "Create volume",
+  async probe(ctx, prior) {
+    const req = ctx.input;
+    const server = prior["pick_or_provision_server"] as ServerOut;
+    const catalog = resolveCatalog(req);
+    if (!catalog.volumePath) {
+      return {
+        volumeId: "", volumeMount: "", hostMountPath: "", containerPath: "",
+        volumeSize: 0, skipped: true,
+      };
+    }
+    const volumeSize = req.volume_size || catalog.defaultVolumeSize;
+    let providerServerId = server.providerServerId;
+    const serverRow = db.getServer(server.serverId);
+    if (!providerServerId) providerServerId = serverRow?.provider_id;
+    if (!providerServerId || !serverRow) return null;
+    const name = serviceVolumeName(req.name, ctx.opId);
+    let volumes;
+    try {
+      volumes = await hetzner.volumes.list();
+    } catch {
+      return null;
+    }
+    const existing = volumes.find((volume) => volume.name === name);
+    if (!existing) return null;
+    assertAdoptableServiceVolume(existing, {
+      sizeGb: volumeSize,
+      location: serverRow.location || "nbg1",
+      serverId: providerServerId,
+    }, db.getRetiredVolumes());
+    const hostMountPath = `/mnt/${name}`;
+    ctx.log(`Adopting verified operation-owned volume ${existing.providerId} (${name})`);
+    return {
+      volumeId: existing.providerId,
+      volumeMount: `${hostMountPath}:${catalog.volumePath}`,
+      hostMountPath,
+      containerPath: catalog.volumePath,
+      volumeSize,
+      skipped: false,
+    };
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
@@ -198,15 +266,16 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
       providerServerId = existing.provider_id;
     }
     const serverLocation = db.getServer(server.serverId)?.location || "nbg1";
+    const name = serviceVolumeName(req.name, ctx.opId);
     const vol = await compute.volumes.create({
-      name: `ocd-svc-${req.name}-data`,
+      name,
       sizeGb: volumeSize,
       serverId: providerServerId,
       location: serverLocation,
     });
     // Hetzner volumes need a moment before the mount appears.
     await Bun.sleep(3000);
-    const hostMountPath = `/mnt/ocd-svc-${req.name}-data`;
+    const hostMountPath = `/mnt/${name}`;
     const containerPath = catalog.volumePath;
     ctx.log(`Volume ready (${volumeSize}GB)`);
     return {

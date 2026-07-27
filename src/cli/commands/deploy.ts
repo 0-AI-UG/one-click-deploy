@@ -1,8 +1,8 @@
 import { resolve } from "node:path";
-import { get, post } from "../api.ts";
+import { get, post, put } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
-import { getGitRepo, readManifest, promptRequired, resolveAuthPassword } from "../manifest.ts";
+import { getGitRepo, readManifest, promptRequired, resolveAuthPassword, manifestHash } from "../manifest.ts";
 import { mergeEnv } from "../../shared/env-merge.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
 
@@ -39,6 +39,8 @@ function parseFlags(args: string[]): {
   serverId?: number;
   sets: Record<string, string>;
   help: boolean;
+  dryRun: boolean;
+  configOnly: boolean;
 } {
   let manifestPath = "";
   let domain: string | undefined;
@@ -48,6 +50,8 @@ function parseFlags(args: string[]): {
   let serverId: number | undefined;
   const sets: Record<string, string> = {};
   let help = false;
+  let dryRun = false;
+  let configOnly = false;
 
   for (const arg of args) {
     if (arg.startsWith("--domain=")) {
@@ -75,6 +79,10 @@ function parseFlags(args: string[]): {
       }
     } else if (arg === "--help" || arg === "-h") {
       help = true;
+    } else if (arg === "--dry-run") {
+      dryRun = true;
+    } else if (arg === "--config-only") {
+      configOnly = true;
     } else if (arg.startsWith("--")) {
       console.error(`${RED}Unknown option: ${arg}${RESET}`);
       process.exit(1);
@@ -85,7 +93,7 @@ function parseFlags(args: string[]): {
 
   if (!manifestPath) manifestPath = ".ocd-deploy.json";
 
-  return { manifestPath, domain, envName, stagingEnvName, authPasswordEnv, serverId, sets, help };
+  return { manifestPath, domain, envName, stagingEnvName, authPasswordEnv, serverId, sets, help, dryRun, configOnly };
 }
 
 export async function deploy(args: string[]): Promise<void> {
@@ -95,7 +103,7 @@ export async function deploy(args: string[]): Promise<void> {
     return;
   }
 
-  const { manifestPath, domain, envName, stagingEnvName, authPasswordEnv, serverId, sets, help } = parseFlags(args);
+  const { manifestPath, domain, envName, stagingEnvName, authPasswordEnv, serverId, sets, help, dryRun, configOnly } = parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
@@ -129,7 +137,9 @@ ${BOLD}Options:${RESET}
   --server=<id>              Pin this one deploy to a server ID. This is an
                              operational override; use placement_pool in a
                              committed manifest for portable scheduling intent.
-  --set=KEY=VALUE            Set an env var (repeatable)`);
+  --set=KEY=VALUE            Set an env var (repeatable)
+  --dry-run                  Show the desired-configuration diff without applying or deploying
+  --config-only              Apply configuration without deploying code`);
     process.exit(0);
   }
 
@@ -146,6 +156,8 @@ ${BOLD}Options:${RESET}
     app_name: name,
     git_repo: repo,
     container_port: port,
+    manifest_path: manifestPath,
+    manifest_hash: manifestHash(resolve(manifestPath)),
   };
 
   if (manifest.domain) body.domain = manifest.domain;
@@ -222,21 +234,80 @@ ${BOLD}Options:${RESET}
   // linked environment when one is given. Existing env values win; --set
   // overrides everything.
   let existingKeys = new Set<string>();
+  const existingApps = await get<Array<{ id: number; name: string; environment_id?: number | null; config_revision?: number }>>("/api/apps");
+  const existingApp = existingApps.find((a) => a.name === body.app_name);
 
   if (envName) {
     const env = await resolveEnvironment(envName);
     body.environment_id = env.id;
     existingKeys = new Set((env.env_vars || []).map((v) => v.key));
     console.log(`${DIM}Env:${RESET}      ${env.name}`);
+  } else if (existingApp?.environment_id != null) {
+    // A repeated `ocd deploy` applies manifest defaults to the app's existing
+    // environment with existing values winning. This mirrors stack re-ups and
+    // prevents a harmless code deploy from silently replacing a UI-edited env
+    // value with its old manifest default. Explicit --set still wins.
+    const environments = await get<Environment[]>("/api/environments");
+    const current = environments.find((env) => env.id === existingApp.environment_id);
+    existingKeys = new Set((current?.env_vars || []).map((v) => v.key));
   }
 
   const merged = mergeEnv([{ app: body.app_name, defs: manifest.env || [] }], sets, existingKeys);
   const entries = [...merged.entries, ...(await promptRequired(merged.requiredMissing))];
   if (entries.length > 0) body.env_vars = entries;
 
+  if (dryRun) {
+    const existing = existingApp;
+    if (!existing) {
+      console.log(`\n${GREEN}Would create ${BOLD}${body.app_name}${RESET} from ${manifestPath}.`);
+      return;
+    }
+    const preview = await put<{
+      changes: Array<{ field: string; before: unknown; after: unknown }>;
+      current_config_revision: number;
+    }>(`/api/apps/${existing.id}/config`, { ...body, dry_run: true });
+    console.log(`\nConfiguration revision ${preview.current_config_revision}:`);
+    if (preview.changes.length === 0) {
+      console.log(`  ${DIM}No configuration changes.${RESET}`);
+    } else {
+      for (const change of preview.changes) {
+        console.log(`  ${change.field}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`);
+      }
+    }
+    console.log(`\n${DIM}No changes applied; no code deployed.${RESET}`);
+    return;
+  }
+
+  if (configOnly) {
+    const existing = existingApp;
+    if (!existing) {
+      console.error(`${RED}Cannot apply configuration only: app "${body.app_name}" does not exist.${RESET}`);
+      process.exit(1);
+    }
+    const applied = await put<{
+      changes: Array<{ field: string; before: unknown; after: unknown }>;
+      config_revision: number;
+    }>(`/api/apps/${existing.id}/config`, { ...body, deploy: false });
+    console.log(`\n${GREEN}Configuration applied.${RESET} Revision ${applied.config_revision}.`);
+    for (const change of applied.changes) {
+      console.log(`  ${change.field}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`);
+    }
+    console.log(`${DIM}Code was not deployed.${RESET}`);
+    return;
+  }
+
   console.log(`\nDeploying ${BOLD}${body.app_name}${RESET}...`);
 
-  const { op_id } = await post<{ op_id: number }>("/api/apps/deploy", body);
+  const { op_id, changes } = await post<{
+    op_id: number;
+    changes?: Array<{ field: string; before: unknown; after: unknown }>;
+  }>("/api/apps/deploy", body);
+  if (changes?.length) {
+    console.log(`${DIM}Applied configuration:${RESET}`);
+    for (const change of changes) {
+      console.log(`  ${change.field}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`);
+    }
+  }
 
   const result = await followOp(op_id);
   if (result.ok) {

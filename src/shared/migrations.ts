@@ -1830,6 +1830,51 @@ export const migrations: Migration[] = [
       )`);
     },
   },
+  {
+    version: 88,
+    description:
+      "Version the desired app configuration separately from source deployments, retain provenance for the last explicitly applied manifest, and snapshot the configuration revision in deployment history.",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 1");
+      db.run("ALTER TABLE apps ADD COLUMN last_manifest_path TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN last_manifest_hash TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN last_manifest_applied_at TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN last_manifest_config_revision INTEGER");
+      db.run("ALTER TABLE deployment_history ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 1");
+      // Every user-controlled runtime/build field writes through the apps row,
+      // whether the caller is the UI, CLI manifest apply, stack reconciler, or
+      // an operational endpoint. Keeping the revision bump in SQLite prevents
+      // one of those paths from silently escaping provenance.
+      db.run(`CREATE TRIGGER apps_bump_config_revision
+        AFTER UPDATE OF
+          domain, git_repo, git_branch, dockerfile_path, docker_context,
+          container_port, auth_password_hash, environment_id, env_projection,
+          public, health_check, internal_protocol, sticky, rate_limit_rps,
+          ip_allowlist, health_check_path, compress, public_port,
+          public_protocol, desired_replicas, min_replicas, max_replicas,
+          autoscale_enabled, autoscale_cpu_threshold, autoscale_mem_threshold,
+          autoscale_cooldown, autoscale_req_threshold, scale_to_zero_after,
+          volume_id, volume_mount, extra_volumes, memory_mb, cpu_limit,
+          webhook_enabled, webhook_branch, webhook_path, webhook_wait_for_ci,
+          webhook_staging_environment_id, durability_class, max_per_host,
+          min_locations, placement_pool
+        ON apps
+        BEGIN
+          UPDATE apps SET config_revision = config_revision + 1 WHERE id = NEW.id;
+        END`);
+      // Environment values are desired runtime configuration too. Because an
+      // environment may be shared, one edit advances every linked app (and a
+      // parent whose webhook-staging environment points at it).
+      db.run(`CREATE TRIGGER environments_bump_linked_app_config_revision
+        AFTER UPDATE OF env_vars ON environments
+        BEGIN
+          UPDATE apps
+          SET config_revision = config_revision + 1
+          WHERE environment_id = NEW.id
+             OR webhook_staging_environment_id = NEW.id;
+        END`);
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

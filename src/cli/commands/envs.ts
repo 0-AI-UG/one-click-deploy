@@ -1,4 +1,5 @@
-import { get, post, put, del } from "../api.ts";
+import { get, post, put, del, resolveApp } from "../api.ts";
+import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, YELLOW, table } from "../format.ts";
 import { webConfirm } from "../confirm.ts";
 
@@ -20,8 +21,9 @@ type RolloutMode = "redeploy" | "restart" | "none";
 async function rolloutOptions(
   envId: number,
   args: string[],
-): Promise<{ args: string[]; rollout: RolloutMode; app_ids?: number[] }> {
+): Promise<{ args: string[]; rollout: RolloutMode; app_ids?: number[]; wait: boolean }> {
   let rollout: RolloutMode = "redeploy";
+  let wait = true;
   const selectors: string[] = [];
   const remaining: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -48,11 +50,15 @@ async function rolloutOptions(
       selectors.push(args[++i] || "");
     } else if (arg.startsWith("--app=")) {
       selectors.push(arg.slice(6));
+    } else if (arg === "--async" || arg === "--no-wait") {
+      wait = false;
+    } else if (arg === "--wait") {
+      wait = true;
     } else {
       remaining.push(arg);
     }
   }
-  if (selectors.length === 0) return { args: remaining, rollout };
+  if (selectors.length === 0) return { args: remaining, rollout, wait };
   const linked = await get<LinkedApp[]>(`/api/environments/${envId}/apps`);
   const appIds = selectors.map((selector) => {
     const id = parseInt(selector, 10);
@@ -65,7 +71,7 @@ async function rolloutOptions(
     }
     return match.id;
   });
-  return { args: remaining, rollout, app_ids: [...new Set(appIds)] };
+  return { args: remaining, rollout, app_ids: [...new Set(appIds)], wait };
 }
 
 function printRollout(result: { redeploying?: number; restarting?: number; affected?: number; rollout?: string }) {
@@ -76,6 +82,22 @@ function printRollout(result: { redeploying?: number; restarting?: number; affec
   } else if (result.rollout === "none" && (result.affected || 0) > 0) {
     console.log(`${DIM}No rollout requested; ${result.affected} app(s) will pick up values on their next recreate.${RESET}`);
   }
+}
+
+async function finishRollout(
+  result: { op_id?: number | null },
+  wait: boolean,
+): Promise<void> {
+  if (result.op_id == null) return;
+  if (!wait) {
+    console.log(`${DIM}Queued operation #${result.op_id}. Follow it with: ocd ops logs ${result.op_id} --follow${RESET}`);
+    return;
+  }
+  const op = await followOp(result.op_id);
+  if (!op.ok) {
+    throw new Error(`Environment rollout failed: ${op.error || "a child operation failed"}`);
+  }
+  console.log(`${GREEN}Environment rollout complete.${RESET}`);
 }
 
 async function resolveEnv(nameOrId: string): Promise<Environment> {
@@ -134,7 +156,7 @@ async function showEnv(nameOrId: string): Promise<void> {
 }
 
 async function createEnv(name: string, varArgs: string[]): Promise<void> {
-  const env_vars = parseVarArgs(varArgs);
+  const env_vars = await parseVarArgs(varArgs);
 
   const result = await post<Environment>("/api/environments", { name, env_vars });
   console.log(`${GREEN}Created environment ${BOLD}${result.name}${RESET}${GREEN} (id: ${result.id})${RESET}`);
@@ -146,12 +168,43 @@ async function copyEnv(nameOrId: string, newName: string): Promise<void> {
   console.log(`${GREEN}Copied ${BOLD}${env.name}${RESET}${GREEN} → ${BOLD}${result.name}${RESET}${GREEN} (id: ${result.id})${RESET}`);
 }
 
+async function renameEnv(nameOrId: string, newName: string): Promise<void> {
+  const env = await resolveEnv(nameOrId);
+  await put(`/api/environments/${env.id}`, { name: newName });
+  console.log(`${GREEN}Renamed ${BOLD}${env.name}${RESET}${GREEN} → ${BOLD}${newName}${RESET}`);
+}
+
+async function attachApp(nameOrId: string, appRef: string): Promise<void> {
+  const env = await resolveEnv(nameOrId);
+  const app = await resolveApp(appRef);
+  const result = await post<{ ok: boolean; op_id: number | null }>(
+    `/api/environments/${env.id}/apps`,
+    { app_id: app.id },
+  );
+  console.log(`${GREEN}Attached ${BOLD}${app.name}${RESET}${GREEN} to ${BOLD}${env.name}${RESET}`);
+  if (result.op_id != null) {
+    console.log(`${YELLOW}Redeploying ${app.name} with the environment…${RESET}`);
+    const op = await followOp(result.op_id);
+    if (!op.ok) throw new Error(op.error || "Environment attach redeploy failed");
+  }
+}
+
+async function detachApp(nameOrId: string, appRef: string): Promise<void> {
+  const env = await resolveEnv(nameOrId);
+  const app = await resolveApp(appRef);
+  await post(`/api/environments/${env.id}/apps/detach`, { app_id: app.id });
+  console.log(
+    `${GREEN}Detached ${BOLD}${app.name}${RESET}${GREEN} from ${BOLD}${env.name}${RESET}. ` +
+      `${DIM}The running container keeps its current values until it is recreated.${RESET}`,
+  );
+}
+
 async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
   const env = await resolveEnv(nameOrId);
   const options = await rolloutOptions(env.id, varArgs);
   const replace = options.args.includes("--replace");
   const filtered = options.args.filter((a) => a !== "--replace");
-  const incoming = parseVarArgs(filtered);
+  const incoming = await parseVarArgs(filtered);
 
   if (incoming.length === 0) {
     console.error(`${RED}No variables provided. Use KEY=VALUE or --secret KEY=VALUE${RESET}`);
@@ -162,7 +215,7 @@ async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
   // so we have to send everything we want to keep. Use `--replace` to opt out.
   const env_vars = replace ? incoming : mergeWithExisting(env.env_vars || [], incoming);
 
-  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string }>(`/api/environments/${env.id}`, {
+  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string; op_id: number | null }>(`/api/environments/${env.id}`, {
     env_vars,
     rollout: options.rollout,
     app_ids: options.app_ids,
@@ -170,6 +223,7 @@ async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
 
   console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(${incoming.map((v) => v.key).join(", ")})${RESET}`);
   printRollout(result);
+  await finishRollout(result, options.wait);
 }
 
 async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
@@ -188,7 +242,7 @@ async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
     return;
   }
 
-  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string }>(`/api/environments/${env.id}`, {
+  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string; op_id: number | null }>(`/api/environments/${env.id}`, {
     env_vars: kept,
     rollout: options.rollout,
     app_ids: options.app_ids,
@@ -196,6 +250,7 @@ async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
 
   console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(removed ${options.args.filter((k) => !missing.includes(k)).join(", ")})${RESET}`);
   printRollout(result);
+  await finishRollout(result, options.wait);
 }
 
 function mergeWithExisting(
@@ -207,18 +262,82 @@ function mergeWithExisting(
   return Array.from(byKey.values());
 }
 
-function parseVarArgs(args: string[]): Array<{ key: string; value: string; secret: boolean }> {
+export async function parseVarArgs(args: string[]): Promise<Array<{ key: string; value: string; secret: boolean }>> {
   const vars: Array<{ key: string; value: string; secret: boolean }> = [];
   let nextSecret = false;
 
-  for (const arg of args) {
+  const add = (key: string, value: string, secret: boolean) => {
+    if (!key) throw new Error("Variable key cannot be empty");
+    if (!secret && /(?:PASSWORD|TOKEN|SECRET|PRIVATE_KEY|API_KEY)$/i.test(key)) {
+      console.error(`${YELLOW}Warning: ${key} looks sensitive; use --secret or a secret input flag.${RESET}`);
+    }
+    vars.push({ key, value, secret });
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === "--secret") {
       nextSecret = true;
       continue;
     }
+    if (arg === "--secret-file") {
+      const spec = args[++i] || "";
+      const eq = spec.indexOf("=");
+      if (eq < 1) throw new Error("--secret-file expects KEY=PATH");
+      const value = (await Bun.file(spec.slice(eq + 1)).text()).replace(/\r?\n$/, "");
+      add(spec.slice(0, eq), value, true);
+      continue;
+    }
+    if (arg.startsWith("--secret-file=")) {
+      const spec = arg.slice(14);
+      const eq = spec.indexOf("=");
+      if (eq < 1) throw new Error("--secret-file expects KEY=PATH");
+      const value = (await Bun.file(spec.slice(eq + 1)).text()).replace(/\r?\n$/, "");
+      add(spec.slice(0, eq), value, true);
+      continue;
+    }
+    if (arg === "--secret-stdin") {
+      const key = args[++i] || "";
+      if (!key) throw new Error("--secret-stdin expects KEY");
+      add(key, (await Bun.stdin.text()).replace(/\r?\n$/, ""), true);
+      continue;
+    }
+    if (arg === "--from-env" || arg.startsWith("--from-env=")) {
+      const spec = arg === "--from-env" ? (args[++i] || "") : arg.slice(11);
+      const eq = spec.indexOf("=");
+      const key = eq === -1 ? spec : spec.slice(0, eq);
+      const source = eq === -1 ? spec : spec.slice(eq + 1);
+      if (!key || !source) throw new Error("--from-env expects KEY or KEY=ENV_NAME");
+      const value = process.env[source];
+      if (value === undefined) throw new Error(`Environment variable ${source} is not set`);
+      add(key, value, true);
+      continue;
+    }
+    if (arg === "--from-dotenv" || arg.startsWith("--from-dotenv=")) {
+      const path = arg === "--from-dotenv" ? (args[++i] || "") : arg.slice(14);
+      if (!path) throw new Error("--from-dotenv expects a file path");
+      const text = await Bun.file(path).text();
+      for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith("#")) continue;
+        const normalized = line.startsWith("export ") ? line.slice(7) : line;
+        const eq = normalized.indexOf("=");
+        if (eq < 1) throw new Error(`Invalid dotenv line in ${path}: ${raw}`);
+        let value = normalized.slice(eq + 1).trim();
+        if (
+          value.length >= 2 &&
+          ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'")))
+        ) {
+          value = value.slice(1, -1);
+        }
+        add(normalized.slice(0, eq).trim(), value, true);
+      }
+      continue;
+    }
     const eq = arg.indexOf("=");
     if (eq !== -1) {
-      vars.push({ key: arg.slice(0, eq), value: arg.slice(eq + 1), secret: nextSecret });
+      add(arg.slice(0, eq), arg.slice(eq + 1), nextSecret);
       nextSecret = false;
     }
   }
@@ -261,6 +380,33 @@ export async function envs(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "rename") {
+    if (!args[1] || !args[2]) {
+      console.error("Usage: ocd envs rename <name|id> <new-name>");
+      process.exit(1);
+    }
+    await renameEnv(args[1], args[2]);
+    return;
+  }
+
+  if (sub === "attach") {
+    if (!args[1] || !args[2]) {
+      console.error("Usage: ocd envs attach <name|id> <app>");
+      process.exit(1);
+    }
+    await attachApp(args[1], args[2]);
+    return;
+  }
+
+  if (sub === "detach") {
+    if (!args[1] || !args[2]) {
+      console.error("Usage: ocd envs detach <name|id> <app>");
+      process.exit(1);
+    }
+    await detachApp(args[1], args[2]);
+    return;
+  }
+
   if (sub === "set") {
     if (!args[1]) {
       console.error("Usage: ocd envs set <name|id> KEY=VALUE [--secret KEY=VALUE] ... [--replace]");
@@ -289,7 +435,6 @@ export async function envs(args: string[]): Promise<void> {
       "delete_environment",
       "environment",
       env.id,
-      { yes: args.includes("--yes") },
     );
     if (!confirm) {
       console.log("Aborted.");
@@ -307,17 +452,26 @@ ${BOLD}Commands:${RESET}
   show <name|id>             Show environment details and variables
   create <name> [vars...]    Create a new environment
   copy <name|id> <new-name>  Duplicate an environment (secrets included)
+  rename <name|id> <new-name> Rename an environment without changing variables
+  attach <name|id> <app>     Move an app to this environment and redeploy it
+  detach <name|id> <app>     Remove the app's environment link (no rollout)
   set <name|id> [vars...]    Merge variables into env
   unset <name|id> KEY...     Remove variables from env
-  remove <name|id> [--yes]   Delete an environment (must have no linked apps)
+  remove <name|id>           Delete an environment (always requires web UI confirmation; must have no linked apps)
 
 ${BOLD}Variable format:${RESET}
   KEY=VALUE                  Plain variable
   --secret KEY=VALUE         Secret variable (encrypted, not retrievable)
+  --secret-file KEY=PATH     Read one secret without putting its value in argv
+  --secret-stdin KEY         Read one secret from stdin
+  --from-env KEY[=ENV_NAME]  Read a secret from the local process environment
+  --from-dotenv PATH         Import dotenv entries as secrets
   --replace                  With set: replace all vars instead of merging
   --rollout=MODE             redeploy (default), restart (no build), or none
   --app=<name|id>            Limit rollout to a linked app (repeatable)
   --restart                  Alias for --rollout=restart
-  --no-rollout               Alias for --rollout=none`);
+  --no-rollout               Alias for --rollout=none
+  --async, --no-wait         Queue the rollout instead of waiting for child apps
+  --wait                     Wait for the full cascade (default; child failure fails CLI)`);
   process.exit(1);
 }

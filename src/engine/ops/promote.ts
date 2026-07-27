@@ -113,6 +113,7 @@ const recordPromotion: Step<PromoteInput, { deploymentId: number }> = {
       app_id: target.appId,
       image_tag: target.imageTag,
       git_commit: target.gitCommit,
+      config_revision: db.getApp(target.appId)?.config_revision ?? 1,
       source: `promote-from-${sourceName}@${target.gitCommit}`,
     });
     db.appendDeployLog(target.appId, `[done] Promoted ${sourceName} @ ${target.gitCommit}`);

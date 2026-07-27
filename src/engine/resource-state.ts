@@ -11,6 +11,7 @@ const OP_TERMINAL = new Set<OperationStatus>([
   "compensated",
   "compensation_failed",
 ]);
+const HEALTH_STALE_AFTER_MS = 90_000;
 
 export type ResourceAssessment = {
   safeToFinalizeDone: boolean;
@@ -25,6 +26,44 @@ function inputOf(op: OperationRow): Record<string, any> {
   } catch {
     return {};
   }
+}
+
+function healthTimestampIsStale(value: string | null | undefined, nowMs = Date.now()): boolean {
+  if (!value) return false;
+  const normalized = value.includes("T") ? value : value.replace(" ", "T") + "Z";
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) && nowMs - timestamp > HEALTH_STALE_AFTER_MS;
+}
+
+/** Aggregate rows are intentionally not trusted alone: the reconciler updates
+ * an instance first and propagates its parent status later in the same tick.
+ * Status/readiness views must not report that gap as healthy. */
+function memberInstanceIssues(
+  apps: Array<NonNullable<ReturnType<typeof db.getApp>>>,
+  services: Array<NonNullable<ReturnType<typeof db.getService>>>,
+): string[] {
+  const issues: string[] = [];
+  for (const app of apps) {
+    if (app.status === "paused" || app.status === "sleeping") continue;
+    for (const replica of db.getReplicas(app.id)) {
+      if (replica.status !== "running") {
+        issues.push(`${app.name}/replica-${replica.id}:${replica.status}`);
+      } else if (healthTimestampIsStale(replica.last_health_at)) {
+        issues.push(`${app.name}/replica-${replica.id}:health-stale`);
+      }
+    }
+  }
+  for (const service of services) {
+    if (service.status === "paused") continue;
+    for (const instance of db.getServiceInstances(service.id)) {
+      if (instance.status !== "running") {
+        issues.push(`${service.name}/instance-${instance.id}:${instance.status}`);
+      } else if (healthTimestampIsStale(instance.last_health_at)) {
+        issues.push(`${service.name}/instance-${instance.id}:health-stale`);
+      }
+    }
+  }
+  return issues;
 }
 
 function assessApp(appId: number | undefined): ResourceAssessment {
@@ -86,6 +125,10 @@ function assessStack(op: OperationRow): ResourceAssessment {
   const unhealthy = [
     ...apps.filter((a) => a && !APP_READY.has(a.status)).map((a) => `${a!.name}:${a!.status}`),
     ...services.filter((s) => s && !SERVICE_READY.has(s.status)).map((s) => `${s!.name}:${s!.status}`),
+    ...memberInstanceIssues(
+      apps.filter((a): a is NonNullable<typeof a> => !!a),
+      services.filter((s): s is NonNullable<typeof s> => !!s),
+    ),
   ];
   const ready = missing.length === 0 && unhealthy.length === 0;
   return {
@@ -205,6 +248,7 @@ export function deriveStackResourceState(stack: db.StackRow): StackResourceState
   const unhealthy = [
     ...apps.filter((app) => !APP_READY.has(app.status)).map((app) => `${app.name}:${app.status}`),
     ...services.filter((service) => !SERVICE_READY.has(service.status)).map((service) => `${service.name}:${service.status}`),
+    ...memberInstanceIssues(apps, services),
   ];
   const rows = dbConn
     .query("SELECT * FROM operations ORDER BY id DESC")

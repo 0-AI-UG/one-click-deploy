@@ -1,0 +1,180 @@
+# Security, authorization, deletion, and retention
+
+## Contents
+
+- [Authentication and CLI access](#authentication-and-cli-access)
+- [Permission model](#permission-model)
+- [Sensitive permissions](#sensitive-permissions)
+- [Confirmation model](#confirmation-model)
+- [Deletion matrix](#deletion-matrix)
+- [App deletion](#app-deletion)
+- [Stack deletion](#stack-deletion)
+- [Environment deletion](#environment-deletion)
+- [Volume/resource deletion](#volumeresource-deletion)
+- [Secret safety](#secret-safety)
+
+## Authentication and CLI access
+
+The browser login/device flow issues a token marked with client type. Every
+CLI-minted token additionally requires `cli.access`; revoking it disables CLI
+use without removing the user's web grants.
+
+Admins bypass ordinary permission checks. Non-admins require the exact
+permission, globally or at a supported resource scope.
+
+## Permission model
+
+Read permissions:
+
+- `fleet.view`, `apps.view`, `services.view`, `environments.view`,
+  `metrics.view`, `operations.view`, `deployments.view`.
+
+App permissions:
+
+- `apps.deploy`, `apps.redeploy`, `apps.rollback`, `apps.restart`,
+  `apps.pause`, `apps.destroy`, `apps.logs`, `apps.rename`, `apps.promote`,
+  `apps.ingress`, `apps.expose`, `webhooks.manage`.
+
+Service/stack/environment:
+
+- `services.deploy`, `services.manage`, `services.destroy`, `services.logs`,
+  `services.link`;
+- `stacks.view`, `stacks.deploy`, `stacks.settings`, `stacks.promote`,
+  `stacks.destroy`;
+- `environments.manage`, `environments.secrets`.
+
+Scaling/infrastructure:
+
+- `scaling.scale`, `scaling.policy`, `scaling.migrate`;
+- `servers.create`, `servers.manage`, `servers.delete`;
+- `volumes.create`, `volumes.attach`, `volumes.detach`, `volumes.resize`,
+  `volumes.delete`, `volumes.files.read`;
+- `resources.view`, `resources.delete`;
+- `operations.cancel`, `panel.view`, `panel.manage`;
+- `terminal.container`, `terminal.host`.
+
+Scopes:
+
+- app grants can cover an individual app;
+- environment grants can cover that environment and applicable linked-app
+  actions;
+- stack permissions are scoped through the stack's environment;
+- new-app deployment and infrastructure operations are global-only where no
+  resource exists to scope yet.
+
+`environments.manage` does not grant access to variable values.
+`environments.secrets` is separately required to read/write them.
+
+## Sensitive permissions
+
+- `apps.expose` is stricter than `apps.ingress`; raw public ports expose fleet
+  services to the internet.
+- `volumes.files.read` grants application-data access.
+- `terminal.host` is effectively root-equivalent infrastructure access.
+- `resources.delete`, `servers.delete`, and `volumes.delete` can remove
+  provider resources/data.
+
+Apply least privilege and prefer app/environment scopes.
+
+## Confirmation model
+
+CLI destructive actions can create a single-use, resource-bound confirmation.
+The CLI opens a web page showing an action summary. Approval is bound to:
+
+- user;
+- action;
+- resource type;
+- exact resource ID;
+- expiry (about ten minutes).
+
+The confirmation is consumed once. It cannot be replayed for another target.
+
+Authorized automation tokens use a resource-bound `automation:` value only
+where the server permits it.
+
+Invariant:
+
+- stack deletion always requires actual web UI approval;
+- environment deletion always requires actual web UI approval;
+- permanent provider-volume deletion always requires web UI approval and typing
+  the exact provider volume ID;
+- legacy/current `--yes` automation tokens are rejected server-side for all
+  three.
+
+The normal web panel also displays a destructive confirmation dialog before
+sending stack/environment deletion.
+
+## Deletion matrix
+
+| Action | Confirmation | Environment | Managed volume | Other effects |
+|---|---|---|---|---|
+| Delete app | Browser by default; app-only `--yes` allowed when explicitly authorized | retained | detached/retained | staging sibling, containers, DNS, ingress, webhook removed |
+| Delete stack | Web UI always; no `--yes` | production and staging retained | member volumes detached/retained | all recorded apps/services destroyed |
+| Delete environment | Web UI always; no `--yes` | explicitly deleted only if unused | n/a | fails while apps link it |
+| Cancel operation | Browser by default; authorized `--yes` allowed | compensation depends on provisional ownership | compensation may detach created volume | runs operation rollback |
+| Delete provider volume | Web UI + typed provider ID; no `--yes` | n/a | provider data destroyed | irreversible; verify backup/ownership |
+
+## App deletion
+
+App deletion cascades to its hidden webhook-staging sibling, then:
+
+1. attempts GitHub webhook removal;
+2. stops/removes containers and app directories;
+3. removes managed DNS records;
+4. detaches and retains volumes;
+5. deletes app/replica rows only if cleanup gates succeed;
+6. rerenders ingress;
+7. garbage-collects eligible empty servers.
+
+It never calls environment deletion. If cleanup partially fails, keep the app
+row as `cleanup_failed`.
+
+## Stack deletion
+
+Stack deletion:
+
+1. requires web UI confirmation;
+2. enqueues child destroy operations for every app/service;
+3. waits for children;
+4. logs retention of production/staging environments;
+5. deletes only the stack row.
+
+Confirmation text explicitly states environment and volume retention.
+
+## Environment deletion
+
+Environment deletion:
+
+1. requires `environments.manage`;
+2. requires web UI confirmation;
+3. verifies the exact environment still exists;
+4. lists attached apps;
+5. refuses deletion when any are attached;
+6. deletes only on explicit confirmed request.
+
+There is no force flag.
+
+## Volume/resource deletion
+
+Detachment/retention and provider deletion are different operations. App/stack
+destroy performs the former. A later explicit volume delete can destroy data
+and requires the corresponding global permission, a single-use resource-bound
+browser approval, and the exact provider ID typed into the approval page.
+
+Before provider deletion, verify:
+
+- detached state and exact provider ID;
+- former owner and intended target;
+- backup/checksum;
+- no recovery/rollback need;
+- billing implications.
+
+## Secret safety
+
+- Store environment secrets encrypted; do not commit them.
+- Keep GitHub tokens and webhook secrets out of logs.
+- Prefer container-side access to connection URLs.
+- Prefer `--secret-file`, `--secret-stdin`, `--from-env`, or `--from-dotenv` so
+  secret values do not appear in process arguments or shell history.
+- Do not send tokens, passwords, connection strings, or personal identifiers
+  into issue comments, dashboards, or agent-visible output.

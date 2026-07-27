@@ -268,13 +268,13 @@ export async function recreateAppContainer(
     // Recreate through the shared hardened path. The previous hand-built
     // `docker run` here skipped cap-drop / no-new-privileges / mem-cpu-pids
     // ceilings and did no allowlist validation of the interpolated -v flags;
-    // buildDockerRunArgs (via startAppReplica) applies all of them. network:null
-    // preserves the historical default-bridge attachment for this container.
+    // buildDockerRunArgs (via startAppReplica) applies all of them. Use the
+    // same ocd-net attachment as initial deploys and environment reloads.
     await startAppReplica(server.ipv4, {
       containerName: app.name,
       image: `${app.name}:latest`,
       appName: app.name,
-      network: null,
+      network: "ocd-net",
       bindAddr,
       hostPort,
       containerPort: app.container_port,

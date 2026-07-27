@@ -44,7 +44,11 @@ interface OpsList {
   running: Op[];
   pending: Op[];
   recent: Op[];
-  engine: unknown;
+  engine: {
+    heartbeat: string | null;
+    concurrency: number;
+    known_kinds?: Array<{ kind: string; label: string; steps: number }>;
+  };
 }
 
 interface OpLog {
@@ -126,6 +130,10 @@ async function opsList(args: string[]): Promise<void> {
   }
 
   const data = await get<OpsList>("/api/operations");
+  console.log(
+    `${DIM}Engine:${RESET} heartbeat ${data.engine?.heartbeat ? fmtTime(data.engine.heartbeat) : "none"}, ` +
+    `concurrency ${data.engine?.concurrency ?? "-"}`,
+  );
   let ops = mergeOps(data);
   if (app) {
     const needle = app.toLowerCase();
@@ -147,6 +155,19 @@ async function opsList(args: string[]): Promise<void> {
 
   if (ops.length > 0) {
     console.log(`\n${DIM}Details: ocd ops <id>  ·  Logs: ocd ops logs <id>${RESET}`);
+  }
+}
+
+async function opsEngine(): Promise<void> {
+  const { engine } = await get<OpsList>("/api/operations");
+  console.log(`${BOLD}Operation engine${RESET}`);
+  console.log(`${DIM}Heartbeat:${RESET} ${engine.heartbeat ? fmtTime(engine.heartbeat) : "none"}`);
+  console.log(`${DIM}Concurrency:${RESET} ${engine.concurrency ?? "-"}`);
+  if (engine.known_kinds?.length) {
+    table(
+      ["KIND", "LABEL", "STEPS"],
+      engine.known_kinds.map((kind) => [kind.kind, kind.label, String(kind.steps)]),
+    );
   }
 }
 
@@ -329,6 +350,7 @@ function usage(): void {
 
 ${BOLD}Subcommands:${RESET}
   (list)                     List deploy engine operations (default)
+  engine                     Show heartbeat, concurrency and operation kinds
   <id>                       Show an operation's steps and children
   logs <id> [--follow]       Print an operation's logs (--follow to stream)
   cancel <id> [--yes]        Confirm, then stop and compensate safely
@@ -345,6 +367,10 @@ export async function ops(args: string[]): Promise<void> {
       return;
     case "list":
       await opsList(args.slice(1));
+      return;
+    case "engine":
+    case "health":
+      await opsEngine();
       return;
     case "cancel":
       await opsCancel(args.slice(1));

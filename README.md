@@ -14,7 +14,7 @@ No Kubernetes. No YAML. Just your Hetzner account.
 
 ---
 
-A lightweight, self-hostable alternative to Heroku, Railway, and Render, built exclusively for [Hetzner Cloud](https://www.hetzner.com/cloud). Deployments are CLI-first and reproducible from versioned app and stack manifests; the web panel focuses on observing and operating the resulting resources. One provider, deeply integrated: Hetzner servers, volumes, private networks, firewalls, and DNS.
+A lightweight, self-hostable alternative to Heroku, Railway, and Render, built exclusively for [Hetzner Cloud](https://www.hetzner.com/cloud). Git supplies application code; OCD stores the desired runtime configuration used by every rollout. Versioned manifests explicitly apply that configuration, while the web panel edits the same stored specification. One provider, deeply integrated: Hetzner servers, volumes, private networks, firewalls, and DNS.
 
 ## Quick Start
 

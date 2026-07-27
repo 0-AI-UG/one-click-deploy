@@ -8,6 +8,7 @@ export type DeploymentRow = {
   status: string;
   source: string;
   deploy_log: string;
+  config_revision: number;
   created_at: string;
 };
 
@@ -18,6 +19,7 @@ export function insertDeployment(deployment: {
   deploy_log?: string;
   status?: string;
   source?: string;
+  config_revision?: number;
   created_at?: string;
 }): DeploymentRow {
   const status = deployment.status ?? "deployed";
@@ -25,7 +27,7 @@ export function insertDeployment(deployment: {
   if (deployment.created_at) {
     return db
       .query(
-        "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log, status, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+        "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log, status, source, config_revision, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
       )
       .get(
         deployment.app_id,
@@ -34,12 +36,13 @@ export function insertDeployment(deployment: {
         deployment.deploy_log ?? "",
         status,
         source,
+        deployment.config_revision ?? 1,
         deployment.created_at
       ) as DeploymentRow;
   }
   return db
     .query(
-      "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log, status, source) VALUES (?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO deployment_history (app_id, image_tag, git_commit, deploy_log, status, source, config_revision) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       deployment.app_id,
@@ -47,7 +50,8 @@ export function insertDeployment(deployment: {
       deployment.git_commit,
       deployment.deploy_log ?? "",
       status,
-      source
+      source,
+      deployment.config_revision ?? 1
     ) as DeploymentRow;
 }
 
@@ -63,6 +67,10 @@ export function appendDeploymentLog(id: number, line: string): void {
 
 export function updateDeploymentGitCommit(id: number, gitCommit: string): void {
   db.query("UPDATE deployment_history SET git_commit = ? WHERE id = ?").run(gitCommit, id);
+}
+
+export function updateDeploymentConfigRevision(id: number, configRevision: number): void {
+  db.query("UPDATE deployment_history SET config_revision = ? WHERE id = ?").run(configRevision, id);
 }
 
 export function getDeployments(appId: number): DeploymentRow[] {

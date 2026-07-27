@@ -224,7 +224,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       containerName: snap.containerName,
       image: snap.image,
       appName: app.name,
-      network: null,
+      network: "ocd-net",
       bindAddr: snap.bindAddr,
       hostPort: snap.hostPort,
       containerPort: snap.containerPort,
@@ -372,6 +372,7 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
       app_id: ctx.input.appId,
       image_tag: build.imageTag,
       git_commit: gitCommit,
+      config_revision: app.config_revision ?? 1,
       source: ctx.trigger === "ui" ? "manual" : ctx.trigger,
     });
     db.appendDeployLog(ctx.input.appId, `[done] Redeployed successfully`);

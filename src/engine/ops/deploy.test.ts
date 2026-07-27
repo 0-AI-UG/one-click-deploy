@@ -59,7 +59,7 @@ mock.module("../../shared/github.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import deployOp, { resolveAppDomain, resolveStagingEnvironment } from "./deploy.ts";
+import deployOp, { appVolumeName, resolveAppDomain, resolveStagingEnvironment } from "./deploy.ts";
 import redeployOp from "./redeploy.ts";
 
 // Synthetic op context. Steps that don't call park/unpark can use this shape.
@@ -95,6 +95,7 @@ beforeEach(() => {
   dns._mocks.deleteRecord.mockClear();
   compute._mocks.volumeCreate.mockClear();
   compute._mocks.volumeDelete.mockClear();
+  compute.volumes.list = async () => [];
   healthCheckMock.mockClear();
   containerRunningCheckMock.mockClear();
   cloneAndBuildMock.mockClear();
@@ -436,10 +437,43 @@ describe("deploy step: create_volume", () => {
     expect(out.volumeMount.endsWith(":/var/lib/data")).toBe(true);
     expect(compute._mocks.volumeCreate).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeCreate.mock.calls[0][0]).toMatchObject({
+      name: appVolumeName(req.app_name, ctx.opId),
       sizeGb: 25,
       serverId: "h-new",
       location: "fsn1",
     });
+  });
+
+  test("probe refuses a retained same-name volume instead of blind adoption", async () => {
+    db.saveSetting("default_location", "fsn1");
+    const req = { ...baseReq(`collision-${randomSuffix()}`), volume_size: 10 };
+    const { ctx } = makeCtx(req);
+    const name = appVolumeName(req.app_name, ctx.opId);
+    db.retireVolume({
+      providerVolumeId: "vol-retained-app",
+      formerResourceType: "app",
+      formerResourceId: 0,
+      formerResourceName: req.app_name,
+      reason: "prior deployment compensated",
+    });
+    compute.volumes.list = async () => [{
+      providerId: "vol-retained-app",
+      name,
+      sizeGb: 10,
+      location: "fsn1",
+      serverId: null,
+    }];
+    const prior = {
+      pick_or_provision_server: {
+        serverId: 999999,
+        serverIp: "1.1.1.1",
+        serverHostKey: "",
+        provisioned: true,
+        providerServerId: "h-new",
+        ingressIp: "1.1.1.1",
+      },
+    };
+    await expect(step.probe!(ctx, prior)).rejects.toThrow(/Refusing to adopt retained volume/);
   });
 
   test("defaults containerPath to /data when volume_path not provided", async () => {
