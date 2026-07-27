@@ -5,11 +5,12 @@ import { stackDown } from "./stack.ts";
 import { BOLD, GREEN, RED, RESET } from "../format.ts";
 
 function usage(): void {
-  console.error(`${BOLD}Usage:${RESET} ocd delete <app>
-       ocd delete stack <name>
+  console.error(`${BOLD}Usage:${RESET} ocd delete <app> [--yes]
+       ocd delete stack <name> [--yes]
 
 Destroys an app (its container(s), DNS records, and managed volumes) or a
-whole stack. Confirmation always happens in your browser.`);
+whole stack. Confirmation happens in your browser unless --yes is supplied for
+an explicitly authorized non-interactive session.`);
 }
 
 export async function deleteCmd(args: string[]): Promise<void> {
@@ -31,7 +32,7 @@ export async function deleteCmd(args: string[]): Promise<void> {
   }
 
   const app = await resolveApp(name);
-  const confirm = await webConfirm("delete_app", "app", app.id);
+  const confirm = await webConfirm("delete_app", "app", app.id, { yes: args.includes("--yes") });
   if (!confirm) {
     console.log("Aborted.");
     return;

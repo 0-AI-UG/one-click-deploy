@@ -9,6 +9,8 @@ interface DashboardApp {
   public?: boolean | number;
   container_port?: number;
   internal_protocol?: string;
+  deployed_commit?: string | null;
+  environment_stale?: boolean | number;
 }
 
 interface DashboardService {
@@ -33,8 +35,15 @@ export async function status(): Promise<void> {
 
   if (data.apps.length > 0) {
     table(
-      ["Name", "Status", "Domain"],
-      data.apps.map((a) => [a.name, colorStatus(a.status), appAddress(a)]),
+      ["Name", "Status", "Commit", "Domain"],
+      data.apps.map((a) => [
+        a.name,
+        a.environment_stale
+          ? `${colorStatus(a.status)} — stale environment, redeploy required`
+          : colorStatus(a.status),
+        a.deployed_commit ? a.deployed_commit.slice(0, 12) : "-",
+        appAddress(a),
+      ]),
     );
   }
 

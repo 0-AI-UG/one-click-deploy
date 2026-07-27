@@ -1,5 +1,6 @@
-import { get, ApiError } from "../api.ts";
+import { get, post, ApiError } from "../api.ts";
 import { newFollowRetryState, resetFollowRetryState, handleTransientFollowError } from "../ops.ts";
+import { webConfirm } from "../confirm.ts";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW, colorStatus, table } from "../format.ts";
 
 interface Op {
@@ -163,6 +164,15 @@ async function opsShow(id: number): Promise<void> {
     console.log(`\n${RED}${BOLD}Error:${RESET} ${RED}${op.error.message}${RESET}`);
   }
 
+  const commitStep = [...(op.steps || [])]
+    .reverse()
+    .find((step) => {
+      const out = step.output as { gitCommit?: unknown } | null;
+      return typeof out?.gitCommit === "string";
+    });
+  const deployedCommit = (commitStep?.output as { gitCommit?: string } | null)?.gitCommit;
+  if (deployedCommit) console.log(`${DIM}Commit:${RESET}   ${deployedCommit}`);
+
   if (op.steps && op.steps.length > 0) {
     console.log();
     for (const step of op.steps) {
@@ -241,7 +251,7 @@ async function opsLogs(args: string[]): Promise<void> {
         if (await handleTransientFollowError(retry, (line) => console.log(line))) continue;
       }
       const detail = err instanceof Error ? err.message : String(err);
-      console.error(`${RED}Lost contact with panel while following op #${id} (${detail})${RESET}`);
+      console.error(`${RED}Operation log stream for #${id} remained unavailable (${detail})${RESET}`);
       process.exit(1);
     }
 
@@ -257,13 +267,73 @@ async function opsLogs(args: string[]): Promise<void> {
   }
 }
 
+function parseOpId(args: string[], usageLine: string): number {
+  const id = parseInt(args[0] || "", 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    console.error(usageLine);
+    process.exit(1);
+  }
+  return id;
+}
+
+async function opsCancel(args: string[]): Promise<void> {
+  const id = parseOpId(args, "Usage: ocd ops cancel <id> [--yes]");
+  const confirmation = await webConfirm(
+    "cancel_operation",
+    "operation",
+    id,
+    { yes: args.includes("--yes") },
+  );
+  if (!confirmation) return;
+  await post(
+    `/api/operations/${id}/cancel`,
+    undefined,
+    { "X-OCD-Confirmation": confirmation },
+  );
+  console.log(`${YELLOW}Cancellation requested for operation #${id}.${RESET}`);
+}
+
+async function opsRetry(args: string[]): Promise<void> {
+  const id = parseOpId(args, "Usage: ocd ops retry <id>");
+  const result = await post<{ op_id: number; resumed: boolean }>(`/api/operations/${id}/retry`);
+  console.log(
+    `${GREEN}${result.resumed ? "Resumed" : "Retried"} operation as #${result.op_id}.${RESET} ` +
+      `${DIM}Follow: ocd ops logs ${result.op_id} --follow${RESET}`,
+  );
+}
+
+async function opsFinalize(args: string[]): Promise<void> {
+  const id = parseOpId(args, "Usage: ocd ops finalize <id> [--status auto|done|failed]");
+  let status: "auto" | "done" | "failed" = "auto";
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    const value = arg === "--status" ? args[++i] : arg.startsWith("--status=") ? arg.slice(9) : "";
+    if (value) {
+      if (value !== "auto" && value !== "done" && value !== "failed") {
+        console.error("--status must be auto, done, or failed");
+        process.exit(1);
+      }
+      status = value;
+    }
+  }
+  const result = await post<{ status: string; assessment: string }>(
+    `/api/operations/${id}/finalize`,
+    { status },
+  );
+  console.log(`${GREEN}Operation #${id} finalized as ${result.status}.${RESET}`);
+  console.log(`${DIM}${result.assessment}${RESET}`);
+}
+
 function usage(): void {
   console.error(`${BOLD}Usage:${RESET} ocd ops [--app <name>] [--limit N]
 
 ${BOLD}Subcommands:${RESET}
   (list)                     List deploy engine operations (default)
   <id>                       Show an operation's steps and children
-  logs <id> [--follow]       Print an operation's logs (--follow to stream)`);
+  logs <id> [--follow]       Print an operation's logs (--follow to stream)
+  cancel <id> [--yes]        Confirm, then stop and compensate safely
+  retry <id>                 Resume cleanup or create a fresh retry
+  finalize <id>              Reconcile resources and close a stale operation`);
 }
 
 export async function ops(args: string[]): Promise<void> {
@@ -275,6 +345,15 @@ export async function ops(args: string[]): Promise<void> {
       return;
     case "list":
       await opsList(args.slice(1));
+      return;
+    case "cancel":
+      await opsCancel(args.slice(1));
+      return;
+    case "retry":
+      await opsRetry(args.slice(1));
+      return;
+    case "finalize":
+      await opsFinalize(args.slice(1));
       return;
     case "help":
     case "--help":

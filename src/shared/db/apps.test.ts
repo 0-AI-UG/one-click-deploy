@@ -113,6 +113,49 @@ describe("internal port allocation", () => {
   });
 });
 
+describe("environment staleness", () => {
+  test("marks only apps whose environment projection consumes a changed key", () => {
+    const env = db.insertEnvironment(`env-${randomSuffix()}`, "");
+    const all = db.insertApp({
+      name: `all-${randomSuffix()}`,
+      domain: "",
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      environment_id: env.id,
+    });
+    const consumesA = db.insertApp({
+      name: `a-${randomSuffix()}`,
+      domain: "",
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      environment_id: env.id,
+      env_projection: ["A"],
+    });
+    const onlyB = db.insertApp({
+      name: `b-${randomSuffix()}`,
+      domain: "",
+      git_repo: "https://github.com/x/y",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      environment_id: env.id,
+      env_projection: ["B"],
+    });
+
+    expect(db.markAppsEnvironmentStaleForKeys(env.id, ["A"])).toBe(2);
+    expect(db.getApp(all.id)?.environment_stale).toBe(1);
+    expect(db.getApp(consumesA.id)?.environment_stale).toBe(1);
+    expect(db.getApp(onlyB.id)?.environment_stale).toBe(0);
+
+    db.markAppEnvironmentFresh(consumesA.id);
+    expect(db.getApp(consumesA.id)?.environment_stale).toBe(0);
+  });
+});
+
 describe("virtual IP allocation", () => {
   function lowestFreeVip(): string {
     const used = new Set(db.getApps().map((a) => a.virtual_ip));

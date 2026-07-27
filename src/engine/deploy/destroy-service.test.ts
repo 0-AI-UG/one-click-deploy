@@ -59,7 +59,7 @@ beforeEach(() => {
 });
 
 describe("destroyService", () => {
-  test("removes container, deletes volume, and removes DB rows on success", async () => {
+  test("removes container, retains detached volume, and removes DB rows on success", async () => {
     const server = freshServer();
     const service = freshService();
     const inst = db.insertServiceInstance({
@@ -76,8 +76,9 @@ describe("destroyService", () => {
 
     expect(result.ok).toBe(true);
     expect(sshExec).toHaveBeenCalled();
-    expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
-    expect(compute._mocks.volumeDelete.mock.calls[0][0]).toBe("v-abc");
+    expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
+    expect(compute._mocks.volumeDetach).toHaveBeenCalledWith("v-abc");
+    expect(db.getRetiredVolumes().some((v) => v.provider_volume_id === "v-abc")).toBe(true);
     expect(db.getService(service.id)).toBeNull();
     expect(db.getServiceInstance(inst.id)).toBeNull();
   });
@@ -121,7 +122,7 @@ describe("destroyService", () => {
     expect(db.getService(service.id)?.status).toBe("cleanup_failed");
   });
 
-  test("marks service cleanup_failed when volume delete fails", async () => {
+  test("marks service cleanup_failed when volume retirement detach fails", async () => {
     const server = freshServer();
     const service = freshService();
     db.insertServiceInstance({
@@ -132,7 +133,7 @@ describe("destroyService", () => {
       host_port: 15435,
       volume_id: "v-err",
     });
-    compute._mocks.volumeDelete.mockImplementationOnce(async () => { throw new Error("still attached"); });
+    compute._mocks.volumeDetach.mockImplementationOnce(async () => { throw new Error("detach failed"); });
 
     const result = await destroyService(service.id);
 

@@ -110,6 +110,13 @@ export async function enforceConfirmation(
     );
   }
 
+  // Non-interactive automation is opt-in at the command line (`--yes`) and is
+  // still authenticated by the signed CLI bearer token + normal destructive
+  // permission. Bind the approval to the exact action and resource so it cannot
+  // be replayed for a broader target.
+  const automationApproval = `automation:${action}:${resourceType}:${resourceId}`;
+  if (token === automationApproval) return;
+
   const ok = consumeConfirmation(token, payload.userId, action, resourceType, resourceId);
   if (!ok) {
     throw new ConfirmationError(

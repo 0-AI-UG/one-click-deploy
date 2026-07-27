@@ -20,8 +20,13 @@ const removeEnvFromLinkedEnvironments: Step<DestroyServiceInput, { ok: true }> =
         if (!envRow) return;
         const parsed = parseEnvVars(envRow.env_vars);
         const prefix = link.env_prefix || "DATABASE";
+        const removedKeys = parsed.entries
+          .filter((e) => e.key.startsWith(`${prefix}_`))
+          .map((e) => e.key);
         const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
         db.updateEnvironment(link.environment_id, envRow.name, serializeEnvVars(filtered));
+        const stale = db.markAppsEnvironmentStaleForKeys(link.environment_id, removedKeys);
+        if (stale > 0) ctx.log(`Marked ${stale} linked app(s) stale after removing ${prefix}_*`);
       });
     }
     return { ok: true };
@@ -61,8 +66,9 @@ const stopAndRemoveContainers: Step<DestroyServiceInput, { affectedServerIds: nu
 
 const deleteVolumes: Step<DestroyServiceInput, { failed: boolean }> = {
   name: "delete_volume",
-  label: "Delete volume",
+  label: "Detach and retain volumes",
   async run(ctx) {
+    const service = db.getService(ctx.input.serviceId);
     const instances = db.getServiceInstances(ctx.input.serviceId);
     let failed = false;
     for (const inst of instances) {
@@ -75,7 +81,15 @@ const deleteVolumes: Step<DestroyServiceInput, { failed: boolean }> = {
           // the safe branch for any future attach path).
           await compute.volumes?.detach(inst.volume_id);
         } else {
-          await compute.volumes?.delete(inst.volume_id);
+          await compute.volumes?.detach(inst.volume_id);
+          db.retireVolume({
+            providerVolumeId: inst.volume_id,
+            formerResourceType: "service",
+            formerResourceId: ctx.input.serviceId,
+            formerResourceName: service?.name ?? `service-${ctx.input.serviceId}`,
+            reason: `service destroy operation #${ctx.opId}`,
+          });
+          ctx.log(`Detached volume ${inst.volume_id}; retained for recovery for 7 days`);
         }
       });
       if (!r.ok) failed = true;

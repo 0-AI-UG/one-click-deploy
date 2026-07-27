@@ -257,7 +257,7 @@ export function ResourcesPage() {
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Volumes ({data?.volumes?.length || 0})</h3>
         </div>
         {!data?.volumes?.length ? <EmptyState message="No volumes" /> : (
-          <Table headers={["Name", "Size", "Location", "Server", "App", "€/mo", ""]}>
+          <Table headers={["Name", "State", "Size", "Location", "Server", "App", "€/mo", ""]}>
             {data.volumes.map((v) => (
               <tr key={v.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3">
@@ -267,6 +267,11 @@ export function ResourcesPage() {
                   >
                     {v.name}
                   </a>
+                </td>
+                <td className="py-2 px-3 text-fg-dim">
+                  {v.retired_state
+                    ? `retained until ${String(v.purge_after || "").slice(0, 10)} (${v.retired_from})`
+                    : "attached"}
                 </td>
                 <td className="py-2 px-3 text-fg-dim">{v.size} GB</td>
                 <td className="py-2 px-3 text-fg-dim">{v.location}</td>

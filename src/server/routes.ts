@@ -81,6 +81,8 @@ import {
   handleOperationEvents,
   handleGetOperationLogs,
   handleCancelOperation,
+  handleRetryOperation,
+  handleFinalizeOperation,
 } from "./routes/operations.ts";
 import { handleTerminalExec } from "./routes/terminal-exec.ts";
 import { handleInternalWake } from "./routes/internal.ts";
@@ -446,6 +448,14 @@ export const apiRoutes = {
   "/api/operations/:id/cancel": { POST: (req: Request) => {
     const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
     return handleCancelOperation(req, id);
+  }},
+  "/api/operations/:id/retry": { POST: (req: Request) => {
+    const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
+    return handleRetryOperation(req, id);
+  }},
+  "/api/operations/:id/finalize": { POST: (req: Request) => {
+    const id = parseInt(new URL(req.url).pathname.split("/")[3], 10);
+    return handleFinalizeOperation(req, id);
   }},
 
   // --- Terminal ---

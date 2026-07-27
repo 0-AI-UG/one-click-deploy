@@ -96,7 +96,7 @@ export async function handleDeployService(request: Request): Promise<Response> {
       kind: "deploy_service",
       resourceKeys: [`service:create:${req.name}`],
       input: req,
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "api",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -190,8 +190,12 @@ export async function handleInjectService(request: Request, serviceId: number, e
     db.updateEnvironment(environmentId, envRow.name, serializeEnvVars([...filtered, ...newEntries]));
 
     db.insertServiceLink(serviceId, environmentId, envPrefix);
+    const staleApps = db.markAppsEnvironmentStaleForKeys(
+      environmentId,
+      newEntries.map((entry) => entry.key),
+    );
 
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    return Response.json({ ok: true, stale_apps: staleApps }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -219,12 +223,16 @@ export async function handleUninjectService(request: Request, serviceId: number,
 
     const prefix = link.env_prefix || "DATABASE";
     const envParsed = parseEnvVars(envRow.env_vars);
+    const removedKeys = envParsed.entries
+      .filter((e) => e.key.startsWith(`${prefix}_`))
+      .map((e) => e.key);
     const filtered = envParsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
     db.updateEnvironment(environmentId, envRow.name, serializeEnvVars(filtered));
+    const staleApps = db.markAppsEnvironmentStaleForKeys(environmentId, removedKeys);
 
     db.deleteServiceLink(serviceId, environmentId);
 
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    return Response.json({ ok: true, stale_apps: staleApps }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

@@ -99,6 +99,12 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
           <div className="font-mono text-[9px] text-muted mt-0.5">
             {memberApps.length} app{memberApps.length !== 1 ? "s" : ""} · {stack.services.length} service{stack.services.length !== 1 ? "s" : ""}
           </div>
+          {stack.last_operation_id != null && (
+            <div className={`font-mono text-[9px] mt-0.5 ${stack.last_operation_failed ? "text-danger" : "text-muted"}`}>
+              Last operation #{stack.last_operation_id}: {stack.last_operation_status}
+              {stack.operation_in_progress ? " (in progress)" : ""}
+            </div>
+          )}
         </div>
         <div className="flex gap-1">
           <PermissionGate permission="stacks.deploy" environmentId={stack.environment_id}>
@@ -136,7 +142,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
               onClick={async () => {
                 if (await confirm(
                   "Destroy Stack",
-                  `Permanently destroy "${stack.name}" and all ${memberApps.length} app(s) and ${stack.services.length} service(s)? This removes every member's containers, volumes, and data.`,
+                  `Destroy "${stack.name}" and all ${memberApps.length} app(s) and ${stack.services.length} service(s)? Containers and routing are removed; managed volumes are detached and retained for recovery.`,
                   true,
                 )) {
                   await action("destroy", () => del(`/api/stacks/${stackId}`));

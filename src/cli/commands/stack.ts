@@ -4,13 +4,28 @@ import { get, post, del } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, colorStatus, table } from "../format.ts";
 import { webConfirm } from "../confirm.ts";
-import { getGitRepo, readManifest, promptRequired } from "../manifest.ts";
+import { getGitRepo, readManifest, promptRequired, resolveAuthPassword } from "../manifest.ts";
 import { mergeEnv, type AppEnvDefs } from "../../shared/env-merge.ts";
 import { buildStackAppSpec, resolveRepoPath, repoDirOf } from "../../shared/stack-spec.ts";
 import { validateStackManifest } from "../../shared/manifest-validate.ts";
 import type { StackManifest, StackDeployRequest } from "../../shared/rpc.ts";
 
 type AppElement = StackDeployRequest["apps"][number];
+
+/** Pure manifest→wire mapping kept exported for parity regression tests. */
+export function buildStackServiceSpecs(
+  manifest: StackManifest,
+): StackDeployRequest["services"] {
+  return Object.entries(manifest.services || {}).map(([key, svc]) => ({
+    key,
+    type: svc.type,
+    version: svc.version,
+    volume_size: svc.volume_size,
+    env_overrides: svc.env_overrides,
+    domain: svc.domain,
+    needs: undefined,
+  }));
+}
 
 interface StackListItem {
   id: number;
@@ -22,6 +37,10 @@ interface StackListItem {
   environment_id?: number | null;
   /** The stack's shared webhook-staging environment, remembered across re-ups. */
   staging_environment_id?: number | null;
+  last_operation_id?: number | null;
+  last_operation_status?: string | null;
+  last_operation_failed?: boolean;
+  operation_in_progress?: boolean;
 }
 
 interface StackDetail {
@@ -29,7 +48,12 @@ interface StackDetail {
   name: string;
   status: string;
   created_at: string;
-  apps: Array<{ id: number; name: string; status: string; domain: string; public?: number | boolean }>;
+  last_operation_id?: number | null;
+  last_operation_status?: string | null;
+  last_operation_failed?: boolean;
+  operation_in_progress?: boolean;
+  resource_status_reason?: string;
+  apps: Array<{ id: number; name: string; status: string; domain: string; public?: number | boolean; environment_stale?: number | boolean }>;
   services: Array<{ id: number; name: string; service_type: string; version: string; status: string }>;
 }
 
@@ -57,9 +81,9 @@ function readStackManifest(path: string): StackManifest {
 
 /**
  * Build a stack app element from its DeployManifest via the shared mapping
- * (src/shared/stack-spec.ts) so the CLI and the web builder deploy identically,
- * then attach the CLI-collected env vars. `manifestDir` is the app manifest's
- * repo-root-relative directory (used to resolve the Dockerfile path).
+ * (src/shared/stack-spec.ts), then attach the CLI-collected env vars.
+ * `manifestDir` is the app manifest's repo-root-relative directory (used to
+ * resolve the Dockerfile path).
  */
 function buildAppElement(
   key: string,
@@ -209,8 +233,14 @@ export async function stackUp(args: string[]): Promise<void> {
       rawStagingEnvs.push(arg.slice(14));
     } else if (arg.startsWith("--env=")) {
       envRef = arg.slice(6);
+    } else if (arg.startsWith("--")) {
+      console.error(`${RED}Unknown option: ${arg}${RESET}`);
+      process.exit(1);
     } else if (!arg.startsWith("--") && !manifestPath) {
       manifestPath = arg;
+    } else {
+      console.error(`${RED}Unexpected argument: ${arg}${RESET}`);
+      process.exit(1);
     }
   }
   if (!manifestPath) manifestPath = "ocd-stack.json";
@@ -266,17 +296,7 @@ export async function stackUp(args: string[]): Promise<void> {
   console.log(`${DIM}Stack:${RESET} ${manifestPath} ${BOLD}(${manifest.name})${RESET}`);
 
   // Managed services
-  const services: StackDeployRequest["services"] = [];
-  for (const [key, svc] of Object.entries(manifest.services || {})) {
-    services.push({
-      key,
-      type: svc.type,
-      version: svc.version,
-      volume_size: svc.volume_size,
-      env_overrides: svc.env_overrides,
-      needs: undefined,
-    });
-  }
+  const services = buildStackServiceSpecs(manifest);
 
   // Apps. Members share one environment, so env vars are merged across all
   // apps (not collected per-app) into a single stack env.
@@ -288,7 +308,10 @@ export async function stackUp(args: string[]): Promise<void> {
     // Dockerfile paths resolve relative to the app manifest's dir (repo-root-
     // relative, assuming the stack manifest sits at the repo root).
     const manifestDir = repoDirOf(resolveRepoPath("", entry.manifest));
-    apps.push(buildAppElement(key, entry, appManifest, repo, [], manifestDir));
+    const appElement = buildAppElement(key, entry, appManifest, repo, [], manifestDir);
+    const authPassword = await resolveAuthPassword(appManifest.auth);
+    if (authPassword !== undefined) appElement.auth_password = authPassword;
+    apps.push(appElement);
   }
 
   // Resolve the target environment (reused or, if omitted, auto-created) so we
@@ -382,10 +405,13 @@ export async function stackUp(args: string[]): Promise<void> {
 async function stackLs(): Promise<void> {
   const list = await get<StackListItem[]>("/api/stacks");
   table(
-    ["NAME", "STATUS", "APPS", "SERVICES", "CREATED"],
+    ["NAME", "STATUS", "LAST OP", "APPS", "SERVICES", "CREATED"],
     list.map((s) => [
       s.name,
       colorStatus(s.status),
+      s.last_operation_id
+        ? `#${s.last_operation_id} ${s.last_operation_status}${s.last_operation_failed ? " (failed)" : ""}`
+        : "-",
       String(s.app_count),
       String(s.service_count),
       (s.created_at || "").replace("T", " ").slice(0, 16),
@@ -403,6 +429,17 @@ async function stackStatus(args: string[]): Promise<void> {
   const detail = await get<StackDetail>(`/api/stacks/${stackRef.id}`);
 
   console.log(`${BOLD}${detail.name}${RESET}  ${colorStatus(detail.status)}`);
+  if (detail.resource_status_reason) {
+    console.log(`${DIM}Resources:${RESET} ${detail.resource_status_reason}`);
+  }
+  console.log(
+    `${DIM}Last operation:${RESET} ` +
+      (detail.last_operation_id
+        ? `#${detail.last_operation_id} ${detail.last_operation_status}` +
+          `${detail.last_operation_failed ? " (failed)" : ""}` +
+          `${detail.operation_in_progress ? " (in progress)" : ""}`
+        : "none"),
+  );
   console.log(`${DIM}Created:${RESET} ${(detail.created_at || "").replace("T", " ").slice(0, 16)}\n`);
 
   console.log(`${BOLD}Services${RESET}`);
@@ -416,7 +453,9 @@ async function stackStatus(args: string[]): Promise<void> {
     ["NAME", "STATUS", "ADDRESS"],
     (detail.apps || []).map((a) => [
       a.name,
-      colorStatus(a.status),
+      a.environment_stale
+        ? `${colorStatus(a.status)} — stale environment, redeploy required`
+        : colorStatus(a.status),
       a.public === false || a.public === 0 ? `${DIM}(private)${RESET}` : a.domain || "-",
     ]),
   );
@@ -489,7 +528,7 @@ export async function stackDown(args: string[]): Promise<void> {
 
   const stackRef = await resolveStack(name);
 
-  const confirm = await webConfirm("delete_stack", "stack", stackRef.id);
+  const confirm = await webConfirm("delete_stack", "stack", stackRef.id, { yes: args.includes("--yes") });
   if (!confirm) {
     console.log("Aborted.");
     return;

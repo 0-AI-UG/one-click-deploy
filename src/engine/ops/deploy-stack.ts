@@ -9,6 +9,7 @@ import {
   serializeEnvVars,
   processIncomingEnvVars,
   platformEnvVars,
+  encryptValue,
   type EnvVarEntry,
 } from "../../shared/env-crypto.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
@@ -16,6 +17,7 @@ import type { StackDeployRequest } from "../../shared/rpc.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
+import { syncAllTraefik } from "../scale/traefik-manager.ts";
 
 type DeployStackInput = StackDeployRequest;
 
@@ -128,6 +130,41 @@ function injectStagingUrl(stagingEnvId: number, key: string, app: AppRow, staged
 
 function childByKey(opId: number): Map<string, OperationRow> {
   return new Map(listChildOperations(opId).map((c) => [c.idempotency_key ?? "", c]));
+}
+
+async function injectExistingServiceCredentials(
+  service: db.ServiceRow,
+  environmentId: number,
+  prefix: string,
+): Promise<void> {
+  const credentials = JSON.parse(service.credentials || "{}") as Record<string, unknown>;
+  const now = new Date().toISOString();
+  const secretKeys = new Set([`${prefix}_URL`, `${prefix}_PASSWORD`]);
+  const pairs: [string, string][] = [
+    [`${prefix}_URL`, String(credentials.connection_url || "")],
+    [`${prefix}_HOST`, String(credentials.host || "")],
+    [`${prefix}_PORT`, String(credentials.port || "")],
+  ];
+  if (credentials.username) pairs.push([`${prefix}_USER`, String(credentials.username)]);
+  if (credentials.password) pairs.push([`${prefix}_PASSWORD`, String(credentials.password)]);
+  if (credentials.database) pairs.push([`${prefix}_NAME`, String(credentials.database)]);
+
+  const entries: EnvVarEntry[] = [];
+  for (const [key, value] of pairs) {
+    if (secretKeys.has(key)) {
+      const { encrypted_value, iv } = await encryptValue(value);
+      entries.push({ key, value: "", encrypted_value, iv, secret: true, updated_at: now });
+    } else {
+      entries.push({ key, value, secret: false, updated_at: now });
+    }
+  }
+  const env = db.getEnvironment(environmentId);
+  if (!env) throw new Error(`Environment ${environmentId} not found`);
+  const keys = new Set(entries.map((entry) => entry.key));
+  const retained = parseEnvVars(env.env_vars).entries.filter((entry) => !keys.has(entry.key));
+  db.updateEnvironment(environmentId, env.name, serializeEnvVars([...retained, ...entries]));
+  db.insertServiceLink(service.id, environmentId, prefix);
+  db.markAppsEnvironmentStaleForKeys(environmentId, entries.map((entry) => entry.key));
 }
 
 /**
@@ -435,6 +472,19 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
     const childIds: number[] = [];
     for (const svc of req.services) {
       const name = memberName(req.name, svc.key);
+      const existing = db.getServiceByName(name);
+      if (existing) {
+        if (existing.service_type !== svc.type) {
+          throw new Error(
+            `Existing service "${name}" has type ${existing.service_type}, expected ${svc.type}; refusing unsafe adoption`,
+          );
+        }
+        db.setServiceStack(existing.id, stackId);
+        await injectExistingServiceCredentials(existing, environmentId, envPrefix(svc.key));
+        db.appendStackLog(stackId, `[services] adopted existing service ${name} (id ${existing.id})`);
+        ctx.log(`adopted existing service "${name}"`);
+        continue;
+      }
       const idk = `stack:${ctx.opId}:svc:${svc.key}`;
       const prev = byKey.get(idk);
       if (prev) { childIds.push(prev.id); continue; }
@@ -447,6 +497,7 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
           version: svc.version,
           volume_size: svc.volume_size,
           env_overrides: svc.env_overrides,
+          domain: svc.domain,
           environment_id: environmentId,
           env_prefix: envPrefix(svc.key),
         },
@@ -504,6 +555,18 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
         const existingApp = db.getAppByName(name);
         let row: OperationRow;
         if (existingApp) {
+          // Reconcile manifest projection before the child reload/build reads
+          // the linked environment. Omit means legacy/all; [] means none.
+          db.updateAppEnvProjection(existingApp.id, appReq.env_projection ?? null);
+          if (appReq.public === false && (existingApp.public || existingApp.domain)) {
+            db.updateAppPublic(existingApp.id, false);
+            db.updateAppDomain(existingApp.id, "");
+            // Apply maintenance isolation before the potentially long rebuild.
+            // A successful operation must not be reported while an old public
+            // router is still serving this app.
+            await syncAllTraefik();
+            db.appendStackLog(stackId, `[apps] ${key}: public ingress removed`);
+          }
           // Reconcile = redeploy the existing member (env/image refresh).
           row = enqueueOperation({
             kind: "redeploy",

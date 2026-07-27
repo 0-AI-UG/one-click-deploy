@@ -128,12 +128,12 @@ describe("attach_volume: create_volume", () => {
     expect(out.hostMountPath).toBe(`/mnt/ocd-${app.name}-op77`);
   });
 
-  test("compensate detaches (best-effort) then deletes the volume", async () => {
+  test("compensate detaches and retains the volume", async () => {
     const { ctx } = makeCtx({ appId: 1, sizeGb: 10 });
     await step.compensate!(ctx, { volumeId: "v-abc", hostMountPath: "/mnt/x", volName: "x" }, {});
     expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
-    expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
-    expect(compute._mocks.volumeDelete.mock.calls[0][0]).toBe("v-abc");
+    expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
+    expect(db.getRetiredVolumes().some((v) => v.provider_volume_id === "v-abc")).toBe(true);
   });
 });
 
@@ -206,8 +206,10 @@ describe("attach_volume: full rollback on a failed recreate", () => {
     expect(fresh.max_replicas).toBe(3);
     expect(removeVolumeBindMount).toHaveBeenCalled();
     expect(compute._mocks.volumeDetach).toHaveBeenCalled();
-    expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
-    expect(compute._mocks.volumeDelete.mock.calls[0][0]).toBe((createOut as any).volumeId);
+    expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
+    expect(
+      db.getRetiredVolumes().some((v) => v.provider_volume_id === (createOut as any).volumeId),
+    ).toBe(true);
     expect(server.location).toBe("fsn1"); // sanity: target server used
   });
 });

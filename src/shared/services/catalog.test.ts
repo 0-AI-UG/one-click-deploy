@@ -60,6 +60,15 @@ describe("Kafka catalog entry", () => {
 });
 
 describe("PostgreSQL extensions", () => {
+  test("uses a volume subdirectory and the extension-worker-compatible postgres role", () => {
+    const def = getCatalogEntry("postgresql")!;
+    const env = generateEnvVars(def);
+
+    expect(def.volumePath).toBe("/var/lib/postgresql/data");
+    expect(env.PGDATA).toBe("/var/lib/postgresql/data/pgdata");
+    expect(env.POSTGRES_USER).toBe("postgres");
+  });
+
   test("accepts an optional extension list and provisions it after startup", () => {
     const def = getCatalogEntry("postgresql")!;
     expect(def.requiredEnvVars.some((env) => env.key === "POSTGRES_EXTENSIONS")).toBe(true);

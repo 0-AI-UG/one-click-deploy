@@ -1,8 +1,7 @@
 // Single source of truth for turning a per-app DeployManifest (+ its stack-entry
-// overrides) into the wire fields the deploy op expects. Both the CLI
-// (`ocd stack up`, cli/commands/stack.ts) and the web builder (server-side
-// introspectStack) call this, so a stack deploys identically from either front
-// end. Pure + dependency-light so it's safe to import from the CLI bundle.
+// overrides) into the wire fields the deploy op expects. The CLI and optional
+// repository-introspection API share it, so every manifest-driven stack uses
+// the same mapping. Pure + dependency-light so it is safe in the CLI bundle.
 
 import type { StackManifest, StackDeployRequest, DeployManifest } from "./rpc.ts";
 
@@ -27,8 +26,8 @@ export function repoDirOf(path: string): string {
 
 /**
  * Map an app's DeployManifest (+ stack-entry overrides) onto a StackAppSpec.
- * env_vars are NOT set here — each front end attaches them (the CLI collects
- * them from the manifest/flags/prompts, the web from the builder form).
+ * env_vars are NOT set here — the caller attaches the values collected from
+ * manifest defaults, CLI flags, linked environments, and secure prompts.
  *
  * `manifestDir` is the app manifest's repo-root-relative directory; the
  * Dockerfile path is resolved against it so monorepo apps build the right file
@@ -41,6 +40,10 @@ export function buildStackAppSpec(
   repo: string,
   manifestDir: string,
 ): StackAppSpec {
+  // The referenced app manifest is the canonical, full-capability app spec.
+  // Stack entries add dependency/env wiring and the two useful deployment
+  // overrides (domain/public) rather than duplicating that entire schema.
+  const healthCheck = manifest.health_check;
   const spec: StackAppSpec = {
     key,
     app_name: key, // server derives <stack>-<key>; sent only to satisfy the type
@@ -49,7 +52,12 @@ export function buildStackAppSpec(
   };
 
   if (entry.needs) spec.needs = entry.needs;
-  if (entry.domain) spec.domain = entry.domain;
+  if (entry.env !== undefined) spec.env_projection = entry.env;
+  else if (manifest.env_projection !== undefined) spec.env_projection = manifest.env_projection;
+  const domain = entry.domain ?? manifest.domain;
+  if (domain) spec.domain = domain;
+  const gitBranch = manifest.git_branch;
+  if (gitBranch) spec.git_branch = gitBranch;
   if (manifest.build?.dockerfile) {
     spec.dockerfile_path = manifestDir
       ? `${manifestDir}/${manifest.build.dockerfile}`
@@ -64,27 +72,42 @@ export function buildStackAppSpec(
     if (manifest.webhook.wait_for_ci) spec.webhook_wait_for_ci = true;
     // Staging is opt-in per member, declared in the member's own manifest. The
     // ENVIRONMENT it deploys with is not known here — it comes from the stack's
-    // shared staging env (or a per-app override) and is attached by each front
-    // end / resolved in the deploy_stack op, exactly like env_vars.
+    // shared staging env and is resolved in the deploy_stack op, exactly like
+    // env_vars.
     if (manifest.webhook.staging) spec.webhook_staging = true;
   }
 
-  if (manifest.replicas) spec.replicas = manifest.replicas;
-  if (entry.public !== undefined) spec.public = entry.public;
-  else if (manifest.public !== undefined) spec.public = manifest.public;
-  if (manifest.memory_mb) spec.memory_mb = manifest.memory_mb;
-  if (manifest.cpu_limit) spec.cpu_limit = manifest.cpu_limit;
-  if (manifest.health_check?.enabled === false) spec.health_check = false;
-  if (manifest.internal_protocol) spec.internal_protocol = manifest.internal_protocol;
-  if (manifest.sticky) spec.sticky = true;
-  if (manifest.rate_limit_rps !== undefined) spec.rate_limit_rps = manifest.rate_limit_rps;
-  if (manifest.ip_allowlist) spec.ip_allowlist = manifest.ip_allowlist;
-  if (manifest.health_check?.enabled !== false && manifest.health_check?.path)
-    spec.health_check_path = manifest.health_check.path;
-  if (manifest.compress) spec.compress = true;
-  if (manifest.public_port !== undefined && manifest.public_port !== null)
-    spec.public_port = manifest.public_port;
-  if (manifest.public_protocol) spec.public_protocol = manifest.public_protocol;
+  const replicas = manifest.replicas;
+  if (replicas) spec.replicas = replicas;
+  const isPublic = entry.public ?? manifest.public;
+  if (isPublic !== undefined) spec.public = isPublic;
+  const memoryMb = manifest.memory_mb;
+  if (memoryMb !== undefined) spec.memory_mb = memoryMb;
+  const cpuLimit = manifest.cpu_limit;
+  if (cpuLimit !== undefined) spec.cpu_limit = cpuLimit;
+  if (healthCheck?.enabled === false) spec.health_check = false;
+  const internalProtocol = manifest.internal_protocol;
+  if (internalProtocol) spec.internal_protocol = internalProtocol;
+  const sticky = manifest.sticky;
+  if (sticky !== undefined) spec.sticky = sticky;
+  const rateLimit = manifest.rate_limit_rps;
+  if (rateLimit !== undefined) spec.rate_limit_rps = rateLimit;
+  const allowlist = manifest.ip_allowlist;
+  if (allowlist !== undefined) spec.ip_allowlist = allowlist;
+  if (healthCheck?.enabled !== false && healthCheck?.path)
+    spec.health_check_path = healthCheck.path;
+  const compress = manifest.compress;
+  if (compress !== undefined) spec.compress = compress;
+  const publicPort = manifest.public_port;
+  if (publicPort !== undefined) spec.public_port = publicPort;
+  const publicProtocol = manifest.public_protocol;
+  if (publicProtocol) spec.public_protocol = publicProtocol;
+  const durability = manifest.durability_class;
+  if (durability) spec.durability_class = durability;
+  const placementPool = manifest.placement_pool;
+  if (placementPool) spec.placement_pool = placementPool;
+  const scaleToZeroAfter = manifest.scale_to_zero_after;
+  if (scaleToZeroAfter !== undefined) spec.scale_to_zero_after = scaleToZeroAfter;
 
   if (manifest.volume?.size) {
     spec.volume_size = manifest.volume.size;

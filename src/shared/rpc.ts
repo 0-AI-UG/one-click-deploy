@@ -116,9 +116,13 @@ export type DeployRequest = {
   domain?: string;
   git_repo: string;
   git_branch?: string; // Branch to clone/build from, defaults to repo default branch
+  git_sha?: string; // Immutable commit selected by a webhook; omit for branch HEAD
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   environment_id?: number; // Link to an existing environment instead of providing env_vars
+  /** Limit this app to selected keys from its linked environment. null/omit =
+   *  all keys (legacy); [] = platform OCD_INTERNAL_* variables only. */
+  env_projection?: string[] | null;
   volume_size?: number; // GB, if set a Hetzner Volume is created and mounted
   volume_path?: string; // Container mount path, defaults to /data
   dockerfile_path?: string; // Path to Dockerfile in repo, auto-discovered if omitted
@@ -221,7 +225,7 @@ export type StackDeployRequest = {
   staging_environment_id?: number | null;
   env_vars?: Array<{ key: string; value: string; secret?: boolean }>; // Already-merged member env (manifest defaults + --set), written into the shared environment
   services: Array<{ key: string; type: string; version?: string; volume_size?: number;
-                    env_overrides?: Record<string, string>; needs?: string[] }>;
+                    env_overrides?: Record<string, string>; domain?: string; needs?: string[] }>;
   /** Members. `webhook_staging` is the member manifest's opt-in intent
    *  (webhook.staging) — the ONLY staging input a member has. The environment
    *  is the stack's; any inherited `webhook_staging_environment_id` on an

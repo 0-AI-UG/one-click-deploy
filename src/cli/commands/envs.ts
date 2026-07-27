@@ -15,6 +15,69 @@ interface LinkedApp {
   domain: string;
 }
 
+type RolloutMode = "redeploy" | "restart" | "none";
+
+async function rolloutOptions(
+  envId: number,
+  args: string[],
+): Promise<{ args: string[]; rollout: RolloutMode; app_ids?: number[] }> {
+  let rollout: RolloutMode = "redeploy";
+  const selectors: string[] = [];
+  const remaining: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--restart") {
+      rollout = "restart";
+    } else if (arg === "--no-rollout") {
+      rollout = "none";
+    } else if (arg === "--rollout") {
+      const value = args[++i] || "";
+      if (!["redeploy", "restart", "none"].includes(value)) {
+        console.error("--rollout must be redeploy, restart, or none");
+        process.exit(1);
+      }
+      rollout = value as RolloutMode;
+    } else if (arg.startsWith("--rollout=")) {
+      const value = arg.slice(10);
+      if (!["redeploy", "restart", "none"].includes(value)) {
+        console.error("--rollout must be redeploy, restart, or none");
+        process.exit(1);
+      }
+      rollout = value as RolloutMode;
+    } else if (arg === "--app") {
+      selectors.push(args[++i] || "");
+    } else if (arg.startsWith("--app=")) {
+      selectors.push(arg.slice(6));
+    } else {
+      remaining.push(arg);
+    }
+  }
+  if (selectors.length === 0) return { args: remaining, rollout };
+  const linked = await get<LinkedApp[]>(`/api/environments/${envId}/apps`);
+  const appIds = selectors.map((selector) => {
+    const id = parseInt(selector, 10);
+    const match = Number.isInteger(id)
+      ? linked.find((app) => app.id === id)
+      : linked.find((app) => app.name.toLowerCase() === selector.toLowerCase());
+    if (!match) {
+      console.error(`Linked app not found: ${selector}`);
+      process.exit(1);
+    }
+    return match.id;
+  });
+  return { args: remaining, rollout, app_ids: [...new Set(appIds)] };
+}
+
+function printRollout(result: { redeploying?: number; restarting?: number; affected?: number; rollout?: string }) {
+  if ((result.redeploying || 0) > 0) {
+    console.log(`${YELLOW}Redeploying ${result.redeploying} linked app(s)${RESET}`);
+  } else if ((result.restarting || 0) > 0) {
+    console.log(`${YELLOW}Reloading ${result.restarting} linked app(s) from existing images${RESET}`);
+  } else if (result.rollout === "none" && (result.affected || 0) > 0) {
+    console.log(`${DIM}No rollout requested; ${result.affected} app(s) will pick up values on their next recreate.${RESET}`);
+  }
+}
+
 async function resolveEnv(nameOrId: string): Promise<Environment> {
   const list = await get<Environment[]>("/api/environments");
 
@@ -84,9 +147,10 @@ async function copyEnv(nameOrId: string, newName: string): Promise<void> {
 }
 
 async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
-  const replace = varArgs.includes("--replace");
-  const filtered = varArgs.filter((a) => a !== "--replace");
   const env = await resolveEnv(nameOrId);
+  const options = await rolloutOptions(env.id, varArgs);
+  const replace = options.args.includes("--replace");
+  const filtered = options.args.filter((a) => a !== "--replace");
   const incoming = parseVarArgs(filtered);
 
   if (incoming.length === 0) {
@@ -98,21 +162,22 @@ async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
   // so we have to send everything we want to keep. Use `--replace` to opt out.
   const env_vars = replace ? incoming : mergeWithExisting(env.env_vars || [], incoming);
 
-  const result = await put<{ ok: boolean; redeploying: number }>(`/api/environments/${env.id}`, {
+  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string }>(`/api/environments/${env.id}`, {
     env_vars,
+    rollout: options.rollout,
+    app_ids: options.app_ids,
   });
 
   console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(${incoming.map((v) => v.key).join(", ")})${RESET}`);
-  if (result.redeploying > 0) {
-    console.log(`${YELLOW}Redeploying ${result.redeploying} linked app(s)${RESET}`);
-  }
+  printRollout(result);
 }
 
 async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
   const env = await resolveEnv(nameOrId);
-  const remove = new Set(keys);
+  const options = await rolloutOptions(env.id, keys);
+  const remove = new Set(options.args);
   const existing = env.env_vars || [];
-  const missing = keys.filter((k) => !existing.find((v) => v.key === k));
+  const missing = options.args.filter((k) => !existing.find((v) => v.key === k));
   if (missing.length) {
     console.error(`${YELLOW}Not set: ${missing.join(", ")}${RESET}`);
   }
@@ -123,14 +188,14 @@ async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
     return;
   }
 
-  const result = await put<{ ok: boolean; redeploying: number }>(`/api/environments/${env.id}`, {
+  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string }>(`/api/environments/${env.id}`, {
     env_vars: kept,
+    rollout: options.rollout,
+    app_ids: options.app_ids,
   });
 
-  console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(removed ${keys.filter((k) => !missing.includes(k)).join(", ")})${RESET}`);
-  if (result.redeploying > 0) {
-    console.log(`${YELLOW}Redeploying ${result.redeploying} linked app(s)${RESET}`);
-  }
+  console.log(`${GREEN}Updated ${env.name}${RESET} ${DIM}(removed ${options.args.filter((k) => !missing.includes(k)).join(", ")})${RESET}`);
+  printRollout(result);
 }
 
 function mergeWithExisting(
@@ -220,7 +285,12 @@ export async function envs(args: string[]): Promise<void> {
       process.exit(1);
     }
     const env = await resolveEnv(args[1]);
-    const confirm = await webConfirm("delete_environment", "environment", env.id);
+    const confirm = await webConfirm(
+      "delete_environment",
+      "environment",
+      env.id,
+      { yes: args.includes("--yes") },
+    );
     if (!confirm) {
       console.log("Aborted.");
       return;
@@ -237,13 +307,17 @@ ${BOLD}Commands:${RESET}
   show <name|id>             Show environment details and variables
   create <name> [vars...]    Create a new environment
   copy <name|id> <new-name>  Duplicate an environment (secrets included)
-  set <name|id> [vars...]    Merge variables into env (redeploys linked apps)
-  unset <name|id> KEY...     Remove variables from env (redeploys linked apps)
-  remove <name|id>           Delete an environment (must have no linked apps)
+  set <name|id> [vars...]    Merge variables into env
+  unset <name|id> KEY...     Remove variables from env
+  remove <name|id> [--yes]   Delete an environment (must have no linked apps)
 
 ${BOLD}Variable format:${RESET}
   KEY=VALUE                  Plain variable
   --secret KEY=VALUE         Secret variable (encrypted, not retrievable)
-  --replace                  With set: replace all vars instead of merging`);
+  --replace                  With set: replace all vars instead of merging
+  --rollout=MODE             redeploy (default), restart (no build), or none
+  --app=<name|id>            Limit rollout to a linked app (repeatable)
+  --restart                  Alias for --rollout=restart
+  --no-rollout               Alias for --rollout=none`);
   process.exit(1);
 }

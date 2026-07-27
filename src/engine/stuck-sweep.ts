@@ -6,8 +6,10 @@
 import * as db from "../shared/db.ts";
 import dbConn from "../shared/db/connection.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
-import { markOperationFinished } from "../shared/db/operations.ts";
+import { getOperation, markOperationFinished } from "../shared/db/operations.ts";
 import { requeueForCompensation } from "./engine.ts";
+import { currentHolder } from "./scheduler.ts";
+import { reconcileStaleStackStates } from "./resource-state.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -87,6 +89,13 @@ export function sweepStuckStates(): void {
       // already-completed steps.
       if (op.status === "running") {
         try {
+          const full = getOperation(op.id);
+          const keys = full ? JSON.parse(full.resource_keys) as unknown : [];
+          const held = Array.isArray(keys) && keys.some((key) => currentHolder(String(key))?.opId === op.id);
+          if (held) {
+            log("sweep", `op#${op.id} is still held by the live engine — leaving it running`);
+            continue;
+          }
           dbConn.run("UPDATE operations SET status = 'pending' WHERE id = ? AND status = 'running'", [op.id]);
         } catch (err) {
           log("sweep", `revive failed for op#${op.id}: ${err}`);
@@ -112,5 +121,10 @@ export function sweepStuckStates(): void {
     }
   } catch (err) {
     log("sweep", `sleep-state correction failed: ${err}`);
+  }
+  try {
+    reconcileStaleStackStates();
+  } catch (err) {
+    log("sweep", `stack-state reconciliation failed: ${err}`);
   }
 }

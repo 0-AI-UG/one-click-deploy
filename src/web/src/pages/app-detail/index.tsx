@@ -202,7 +202,10 @@ export function AppDetailPage({ appId }: { appId: number }) {
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="font-mono font-bold text-sm text-fg uppercase">{app.name}</h1>
-            <StatusBadge status={app.status} subLabel={badgeSubLabel} />
+            <StatusBadge
+              status={app.status}
+              subLabel={app.environment_stale ? "stale environment — redeploy required" : badgeSubLabel}
+            />
           </div>
           {server && (
             <div className="flex items-center gap-1.5 mt-0.5">

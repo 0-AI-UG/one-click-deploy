@@ -106,6 +106,9 @@ export async function handleGetResources(request: Request): Promise<Response> {
       app_name: string;
       location: string;
       app_id: number;
+      retired_state: string;
+      retired_from: string;
+      purge_after: string;
       monthly_eur: number | null;
     }
 
@@ -113,9 +116,13 @@ export async function handleGetResources(request: Request): Promise<Response> {
     try {
       const vols = await compute.volumes?.list() ?? [];
       const allApps = db.getApps();
+      const retiredById = new Map(
+        db.getRetiredVolumes().map((row) => [row.provider_volume_id, row]),
+      );
       volumes = vols.map((v) => {
         const serverName = v.serverId ? dbServers.find((s) => s.provider_id === v.serverId)?.name || `server-${v.serverId}` : "";
         const app = allApps.find((a) => a.volume_id === v.providerId);
+        const retired = retiredById.get(v.providerId);
         return {
           id: v.providerId,
           name: v.name,
@@ -124,6 +131,11 @@ export async function handleGetResources(request: Request): Promise<Response> {
           app_name: app?.name || "",
           location: v.location,
           app_id: app?.id || 0,
+          retired_state: retired?.state ?? "",
+          retired_from: retired
+            ? `${retired.former_resource_type}:${retired.former_resource_name}`
+            : "",
+          purge_after: retired?.purge_after ?? "",
           monthly_eur: volumePerGbMonth != null ? volumePerGbMonth * v.sizeGb : null,
         };
       });

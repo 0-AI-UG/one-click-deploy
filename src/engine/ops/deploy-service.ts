@@ -221,30 +221,23 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
   async compensate(ctx, out) {
     if (!out || out.skipped) return;
     const compute = hetzner;
-    // Detach is best-effort (may already be detached) and must not mask the
-    // delete. Let a genuine delete failure PROPAGATE — orphaning the created
-    // cloud volume behind a clean `compensated` is a silent leak.
-    // probeCompensated short-circuits once the volume is gone, so retries stay
-    // idempotent.
-    try { await compute.volumes?.detach(out.volumeId); } catch { /* already detached */ }
-    try {
-      await compute.volumes?.delete(out.volumeId);
-    } catch (err) {
-      if (!isNotFoundError(err)) throw err; // already gone = success; else surface
+    // Stateful service data gets a seven-day recovery window. Compensation
+    // detaches and records the volume rather than immediately deleting it.
+    try { await compute.volumes?.detach(out.volumeId); } catch (err) {
+      if (!isNotFoundError(err)) throw err;
     }
+    db.retireVolume({
+      providerVolumeId: out.volumeId,
+      formerResourceType: "service",
+      formerResourceId: 0,
+      formerResourceName: ctx.input.name,
+      reason: `deployment operation #${ctx.opId} compensated`,
+    });
+    ctx.log(`Retained detached volume ${out.volumeId} for recovery until its purge-after date`);
   },
   async probeCompensated(_ctx, out) {
     if (!out || out.skipped) return true;
-    const compute = hetzner;
-    if (!compute.volumes) return true;
-    try {
-      await compute.volumes.get(out.volumeId);
-      return false;
-    } catch (err) {
-      // Only a definitive not-found means "already deleted"; a transient error
-      // must fall through to run the delete rather than leak the volume.
-      return isNotFoundError(err);
-    }
+    return db.getRetiredVolumes().some((row) => row.provider_volume_id === out.volumeId);
   },
 };
 
@@ -527,7 +520,12 @@ const injectCredentials: Step<DeployServiceInput, { ok: true; injected: boolean 
       const filtered = parsed.entries.filter((e) => !newKeys.has(e.key));
       db.updateEnvironment(req.environment_id, envRow.name, serializeEnvVars([...filtered, ...newEntries]));
       db.insertServiceLink(svc.serviceId, req.environment_id, envPrefix);
+      const stale = db.markAppsEnvironmentStaleForKeys(
+        req.environment_id,
+        newEntries.map((entry) => entry.key),
+      );
       ctx.log(`Credentials added to environment "${envRow.name}"`);
+      if (stale > 0) ctx.log(`Marked ${stale} linked app(s) as stale environment`);
     }
     return { ok: true, injected: true };
   },

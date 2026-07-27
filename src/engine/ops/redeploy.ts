@@ -19,6 +19,8 @@ type RedeployInput = {
   appId: number;
   container_port?: number;
   userId?: string;
+  /** Immutable commit selected by a webhook. Manual redeploys follow git_branch. */
+  gitSha?: string;
 };
 
 type WakeOut = { woke: boolean };
@@ -74,6 +76,18 @@ const cloneRepoStep: Step<RedeployInput, { ok: true }> = {
       db.appendDeployLog(ctx.input.appId, `[clone] ${line}`);
       ctx.log(`[clone] ${line}`);
     }, app.git_branch || undefined, server.ssh_host_key || undefined);
+    if (ctx.input.gitSha) {
+      if (!/^[0-9a-f]{7,64}$/i.test(ctx.input.gitSha)) throw new Error("Invalid webhook commit SHA");
+      const checkedOut = await sshExec(
+        server.ipv4,
+        asUser(`cd /home/deploy/apps/${app.name} && git checkout --detach ${ctx.input.gitSha}`),
+        server.ssh_host_key || undefined,
+      );
+      if (checkedOut.exitCode !== 0) {
+        throw new Error(`Could not check out webhook commit ${ctx.input.gitSha}`);
+      }
+      ctx.log(`Checked out webhook commit ${ctx.input.gitSha}`);
+    }
     return { ok: true };
   },
 };
@@ -321,6 +335,7 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
       db.appendDeployLog(ctx.input.appId, `[health] ${detail}`);
       throw new Error(`App did not become healthy after redeploy: ${detail}`);
     }
+    db.markAppEnvironmentFresh(ctx.input.appId);
     return { healthy: health.healthy, statusCode: health.statusCode };
   },
 };

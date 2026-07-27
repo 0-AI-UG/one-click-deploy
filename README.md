@@ -10,13 +10,11 @@ No Kubernetes. No YAML. Just your Hetzner account.
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/0-AI-UG/one-click-deploy/pkgs/container/one-click-deploy)
 [![Stars](https://img.shields.io/github/stars/0-AI-UG/one-click-deploy?style=social)](https://github.com/0-AI-UG/one-click-deploy)
 
-![Deploy](docs/screenshots/deploy.png)
-
 </div>
 
 ---
 
-A lightweight, self-hostable alternative to Heroku, Railway, and Render, built exclusively for [Hetzner Cloud](https://www.hetzner.com/cloud). Point it at a Git repo and your Hetzner account, and it provisions the server, builds your container, configures DNS, issues TLS, and serves traffic. One provider, deeply integrated: Hetzner servers, volumes, private networks, firewalls, and DNS.
+A lightweight, self-hostable alternative to Heroku, Railway, and Render, built exclusively for [Hetzner Cloud](https://www.hetzner.com/cloud). Deployments are CLI-first and reproducible from versioned app and stack manifests; the web panel focuses on observing and operating the resulting resources. One provider, deeply integrated: Hetzner servers, volumes, private networks, firewalls, and DNS.
 
 ## Quick Start
 
@@ -58,14 +56,22 @@ Prefer bash? Copy `example.panel.json` to `panel.json` and run `./scripts/bootst
 - `ocd` CLI for Linux, macOS, Windows
 - Self-managing: the panel deploys itself
 
-## CLI
+Managed PostgreSQL recovery: [clean and empty-target restore workflows](docs/postgresql-restore.md).
+Retained volume recovery: [grace-period and reattachment workflow](docs/volume-recovery.md).
+
+## CLI-first deployments
 
 ```bash
 ocd login https://panel.example.com
-ocd deploy
+ocd deploy .ocd-deploy.json
+ocd deploy stack ocd-stack.json
 ocd logs my-app --tail=200
 ocd ssh my-app -i
 ```
+
+The single-app `.ocd-deploy.json` schema is also used by every app entry in
+`ocd-stack.json`, so moving an app into or out of a stack does not change its
+deployment capabilities.
 
 ## Development
 

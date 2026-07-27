@@ -40,6 +40,7 @@ export type AppData = {
   env_vars?: EnvVarEntry[] | string | Record<string, string>;
   environment_id?: number | null;
   environment_name?: string | null;
+  environment_stale?: boolean | number;
   autoscale_enabled?: boolean;
   min_replicas?: number;
   max_replicas?: number;
@@ -188,6 +189,9 @@ export type ResourceVolume = {
   location: string;
   server_name?: string;
   app_name?: string;
+  retired_state?: string;
+  retired_from?: string;
+  purge_after?: string;
   monthly_eur?: number;
 };
 
@@ -218,6 +222,11 @@ export type Stack = {
   environment_id: number | null;
   app_count: number;
   service_count: number;
+  last_operation_id?: number | null;
+  last_operation_status?: string | null;
+  last_operation_failed?: boolean;
+  operation_in_progress?: boolean;
+  resource_status_reason?: string;
 };
 
 export type StackMemberApp = {
@@ -235,6 +244,7 @@ export type StackMemberApp = {
   /** Set on staging siblings — they follow their production app and are not
    *  members in their own right. */
   target_of?: number | null;
+  environment_stale?: boolean | number;
 };
 
 export type StackMemberService = {
@@ -253,6 +263,11 @@ export type StackDetail = {
   created_at: string;
   environment_id: number | null;
   staging_environment_id: number | null;
+  last_operation_id?: number | null;
+  last_operation_status?: string | null;
+  last_operation_failed?: boolean;
+  operation_in_progress?: boolean;
+  resource_status_reason?: string;
   apps: StackMemberApp[];
   services: StackMemberService[];
 };

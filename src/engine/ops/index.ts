@@ -19,6 +19,7 @@ import "./deploy-stack.ts";
 import "./destroy-stack.ts";
 import "./promote-stack.ts";
 import "./restart-app.ts";
+import "./reload-app.ts";
 import "./pause-app.ts";
 import "./unpause-app.ts";
 import "./rename-app.ts";

@@ -252,12 +252,12 @@ export function isInternalProtocol(value: unknown): value is InternalProtocol {
 
 /**
  * Resolve a deploy request's internal routing protocol. `internal_protocol` is
- * an explicit, first-class field (the deploy UI exposes it as an "internal
- * routing layer" select): a valid explicit value wins, otherwise it defaults to
- * "http". It is intentionally independent of `health_check` — routing (L7 HTTP
- * vs raw TCP pass-through) and the post-deploy probe (HTTP vs container-running)
- * are orthogonal, so a raw-TCP app (e.g. a database) must set
- * `internal_protocol: "tcp"` explicitly rather than relying on `health_check`.
+ * an explicit, first-class field: a valid explicit value wins, otherwise it
+ * defaults to "http". It is intentionally independent of `health_check` —
+ * routing (L7 HTTP vs raw TCP pass-through) and the post-deploy probe (HTTP vs
+ * container-running) are orthogonal, so a raw-TCP app (e.g. a database) must
+ * set `internal_protocol: "tcp"` explicitly rather than relying on
+ * `health_check`.
  */
 export function resolveInternalProtocol(
   internalProtocol: unknown,

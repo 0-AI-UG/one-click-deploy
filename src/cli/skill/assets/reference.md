@@ -14,17 +14,16 @@ anywhere in the repo; for a monorepo add one per deployable service (e.g.
 the directory that contains the manifest file, **except** `build.context`,
 which is relative to the repo root.
 
-A repo may hold up to 10 manifests; extras are ignored. All fields except
-`name` are optional. Unknown top-level fields are ignored for forward
-compatibility (nested unknown keys are silently stripped).
+All fields except `name` are optional. Unknown top-level fields are ignored
+for forward compatibility (nested unknown keys are silently stripped).
 
 ### Fields
 
 | Field | Type | Meaning |
 |---|---|---|
 | `$schema` | `1` | Schema version. Must be `1` or omitted. |
-| `name` | string **(required)** | Display name shown in the deploy UI. Must be non-empty. |
-| `description` | string | Short description shown when picking a service. |
+| `name` | string **(required)** | Human-readable manifest name. Must be non-empty. |
+| `description` | string | Short description for operators and tooling. |
 | `icon` | string | URL to a small logo/icon. |
 | `build.dockerfile` | string | Path to the Dockerfile, relative to this manifest's directory. Default `Dockerfile`. |
 | `build.context` | string | Docker build context, relative to the **repo root**. Default `"."`. |
@@ -38,6 +37,11 @@ compatibility (nested unknown keys are silently stripped).
 | `webhook.wait_for_ci` | boolean | Wait for CI checks to pass before deploying. Default `false`. |
 | `webhook.staging` | boolean | Hold each pushed commit in a `<name>-staging` sibling for manual promotion. Requires `webhook.enabled`. The staging environment is auto-created if absent — `<app>-staging-env` (a copy of the app's environment) standalone, or the stack's single staging environment in a stack. Override with `--staging-env=<name\|id>`. Default `false`. |
 | `suggested_app_name` | string | Suggested app name (DNS-safe: lowercase, digits, hyphens). |
+| `domain` | string | Custom public domain. `--domain` overrides it for one CLI run. |
+| `git_branch` | string | Branch used for manual deploys and redeploys. |
+| `env_projection` | string[] | Limit a linked environment to these keys. Omit for all keys; `[]` for platform-injected keys only. |
+| `auth.enabled` | boolean | Enable/disable HTTP basic auth. An enabled manifest prompts securely unless `auth.password_env` is set. |
+| `auth.password_env` | string | Name of a local environment variable containing the basic-auth password. The password itself is never committed to the manifest. |
 | `replicas` | integer ≥ 1 | Desired replica count. Default `1`. |
 | `public` | boolean | Whether the app gets a public HTTPS domain. Default `true`. |
 | `memory_mb` | `0` or 128–32768 | Per-container memory ceiling (MB). `0`/omitted → platform default (512). |
@@ -52,16 +56,19 @@ compatibility (nested unknown keys are silently stripped).
 | `public_port` | integer \| `"auto"` | Expose a raw public TCP/UDP port on the panel IP (game servers, databases, MQTT). `"auto"` picks the lowest free pool port. Independent of the HTTP domain. Omit for none. |
 | `public_protocol` | `"tcp"` \| `"udp"` | Pool for `public_port`: `tcp` (30000–30049) or `udp` (30050–30099). Default `tcp`. |
 | `extra_volumes[]` | array | Extra host→container bind mounts: `{ "host_path": "/abs/host", "container_path": "/abs/container" }`. |
+| `durability_class` | `"none"` \| `"standard"` \| `"high"` | Availability policy and replica-spread floor. |
+| `placement_pool` | string | Scheduler pool this app may run in. Default `general`. |
+| `scale_to_zero_after` | non-negative integer | Idle seconds before a deploy target may scale to zero. |
 
 ### `env[]` entry
 
 | Field | Type | Meaning |
 |---|---|---|
 | `key` | string **(required)** | Env-var name. Must match `^[A-Za-z_][A-Za-z0-9_]*$`. Reserved prefixes (`DOCKER_`, `PATH`, `HOME`, `LD_`, `DYLD_`) are blocked. |
-| `description` | string | Shown as a hint in the deploy UI. |
+| `description` | string | Shown beside the variable when the CLI prompts for a value. |
 | `default` | string | Pre-filled value. Omit for secrets the user must provide. |
 | `required` | boolean | If true, deploy is blocked until a value is supplied. |
-| `secret` | boolean | If true, the input is masked in the UI and stored encrypted. |
+| `secret` | boolean | If true, CLI input is hidden and the value is stored encrypted. |
 
 **Env-var guidance**
 - `required: true` for values with no sensible default that the deployer must supply.
@@ -98,11 +105,19 @@ per-app build/env config.
 | `services.<key>.version` | string | Image version/tag. Optional. |
 | `services.<key>.volume_size` | number ≥ 1 | Data volume size in GB. Optional. |
 | `services.<key>.env_overrides` | object (string→string) | Override generated service env vars. Optional. |
+| `services.<key>.domain` | string | Custom domain for an HTTP-facing managed service. Optional. |
 | `apps` | object **(required)** | Map of app key → app. Must be non-empty. |
 | `apps.<key>.manifest` | string **(required)** | Path to that app's `.ocd-deploy.json`, relative to `ocd-stack.json`. |
 | `apps.<key>.needs` | string[] | Keys of services/apps this app depends on. Every entry must name a declared key. |
+| `apps.<key>.env` | string[] | Project the shared environment onto this app. Omit for all keys; `[]` gives the app only platform-injected `OCD_INTERNAL_*` values. |
 | `apps.<key>.domain` | string | Override the app's custom domain. Optional. |
 | `apps.<key>.public` | boolean | Override the app manifest's `public`. Optional. |
+
+The referenced `.ocd-deploy.json` is the canonical full deployment spec for
+each app. Stack entries intentionally add only graph/environment wiring plus
+`domain` and `public` overrides; all build, routing, resources, auth, volumes,
+webhook, durability, placement, and scaling settings come from the child app
+manifest with the same behavior as standalone `ocd deploy`.
 
 PostgreSQL image variants are available as `17-pgvector`, `17-postgis`,
 `17-pgmq`, and `17-pgvector-postgis-pgmq`. Each variant automatically enables
@@ -112,13 +127,18 @@ or add any other extension already included in the chosen image.
 ### Semantics
 
 - **Ordering + readiness**: `needs` forms a dependency graph. Services deploy first, then apps in dependency order — an app starts only once everything it needs is deployed **and healthy**. Dependency cycles are rejected.
-- **Wiring**: a stack owns one shared environment (auto-created, or an existing one reused via `--env` when the stack is first created). Every member's own `env[]` vars merge into it, and everything flows to every member's container because they all link that one environment:
+- **Wiring**: a stack owns one shared environment (auto-created, or an existing one reused via `--env` when the stack is first created). Every member's own manifest `env[]` declarations merge into it. By default every app receives every key; use the stack entry's `env` projection to limit a member:
   - Each **app** publishes its private internal URL as `<KEY>_URL` (uppercased app key). An app with `needs: ["api"]` sees `API_URL` pointing at the `api` app — no DNS or real names needed.
   - Each **service** injects `<KEY>_URL`, `<KEY>_HOST`, `<KEY>_PORT`, `<KEY>_USER`, `<KEY>_PASSWORD`, `<KEY>_NAME` — where `<KEY>` is the **uppercased service key** (`_URL` and `_PASSWORD` are stored as secrets). So a service keyed `database` yields `DATABASE_URL`, `DATABASE_HOST`, …; a service keyed `redis` yields `REDIS_URL`, … Choose the service key to get the env-var name your app expects.
 - **Don't redeclare injected vars as `required`**: because the injected `<KEY>_URL` values only land after the service/app deploys, listing them as `required` in an app's `env[]` makes `ocd deploy stack` prompt for them up front. Leave service-provided connection vars and sibling `<KEY>_URL` vars **out** of the app manifest — the container still receives them from the shared environment at runtime. Declare only vars the deployer must supply (e.g. `JWT_SECRET`).
 - **Reconcile**: re-running `ocd deploy stack` redeploys every app in the manifest and destroys members recorded under the stack but no longer listed.
 - **Atomic**: if any member fails, the whole run rolls back — members deployed in that run are destroyed.
 - **Capacity**: the fleet has a hard 200-app cap; a stack that would exceed it is rejected before anything deploys.
+
+`server_id` is intentionally not a manifest field: numeric server IDs are
+panel-local and make a committed manifest non-portable. Use `placement_pool`
+for declarative scheduling, or `ocd deploy --server=<id>` as a one-run
+standalone operational override.
 
 ---
 
@@ -174,7 +194,7 @@ ocd status                   Dashboard overview: apps and services with statuses
 ocd apps                     List all apps (name, status, domain, repo)
 ocd deploy [manifest]        Deploy the current git repo using .ocd-deploy.json
 ocd redeploy <app>           Rebuild and redeploy an existing app
-ocd delete <app>             Delete an app
+ocd delete <app> [--yes]     Delete an app (browser confirmation by default)
 ocd logs <app> [--tail=N]    Show app logs (default: last 100 lines)
 ocd restart <app>            Restart an app's containers
 ocd rollback <app>           Roll back to the previous successful deployment
@@ -182,7 +202,10 @@ ocd promote                  Promote the webhook-staging sibling's commit to pro
 ocd pause <app>              Stop an app without deleting it
 ocd unpause <app>            Start a paused app again
 ocd envs <subcommand>        Manage environments and their variables
+ocd ops <subcommand>         Inspect, cancel, retry, or finalize engine operations
 ocd services                 List managed services (Postgres, Redis, ...)
+ocd service catalog          List catalog types, default versions and volumes
+ocd service create <name> --type=<type> [options]  Create a managed service
 ocd stack <up|down|ls|status|logs>   Deploy/manage multi-app stacks (ocd-stack.json)
 ocd servers                  List Hetzner servers and the apps on them
 ocd ssh <app> <cmd>          Run a command inside an app container
@@ -192,18 +215,36 @@ ocd skill install --agent X  Install this skill for another agent
 ocd version                  Print CLI version
 ```
 
+### `ocd service`
+
+```
+ocd service catalog
+ocd service create <name> --type=<type> [--version=<tag>] [--volume-size=<gb>]
+                   [--set=KEY=VALUE ...] [--env=<name|id>]
+                   [--env-prefix=<prefix>] [--domain=<domain>]
+```
+
+`catalog` replaces the former deploy-page service picker. `create` exposes the
+same type, version, volume, environment overrides and HTTP-domain fields as a
+stack service. With `--env`, generated credentials are injected into that
+environment; `--env-prefix` selects their key prefix.
+
 App and server arguments accept a name or numeric ID.
 
 ### `ocd deploy`
 
 ```
-ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>] [--staging-env=<name|id>] [--set=KEY=VALUE ...]
+ocd deploy [manifest] [--domain=<domain>] [--env=<name|id>]
+           [--staging-env=<name|id>] [--auth-password-env=<key>]
+           [--server=<id>] [--set=KEY=VALUE ...]
 ```
 
 Run from inside a git repo with an `origin` remote. Reads the manifest
 (default `./.ocd-deploy.json`) for name, build settings, port, env, webhook,
 volume, and scaling, then streams deploy progress until it completes or fails.
-`--domain` sets a custom domain.
+`--domain` overrides the manifest domain. `--auth-password-env` overrides
+`auth.password_env` without exposing a password in argv or the manifest.
+`--server` is a deliberately non-portable one-run placement override.
 
 **Webhook staging** holds each pushed commit in the `<name>-staging` sibling for
 manual promotion instead of redeploying production. Turn it on with
@@ -309,10 +350,30 @@ member.
 ocd envs list                                                List all environments
 ocd envs show <name|id>                                      Show details and variables
 ocd envs create <name> [KEY=VALUE ...] [--secret KEY=VALUE]  Create an environment
-ocd envs set <name|id> KEY=VALUE ... [--replace]             Merge (or replace) variables
-ocd envs unset <name|id> KEY [KEY...]                        Remove variables
+ocd envs set <name|id> KEY=VALUE ... [--replace] [rollout]   Merge (or replace) variables
+ocd envs unset <name|id> KEY [KEY...] [rollout]              Remove variables
+ocd envs remove <name|id> [--yes]                            Delete an unused environment
 ```
 
 `--secret KEY=VALUE` marks a variable secret (encrypted at rest, not
-retrievable later). `set` and `unset` automatically redeploy the apps linked to
-the environment.
+retrievable later). `set` and `unset` default to rebuilding affected linked
+apps. Use `--rollout=restart` (or `--restart`) to recreate containers from the
+existing image, `--rollout=none` (or `--no-rollout`) to defer application, and
+repeat `--app=<name|id>` to limit the rollout. Stack members with an `env`
+projection are affected only when a key they consume changed.
+
+### `ocd ops`
+
+```
+ocd ops [--app <name>] [--limit N]                 List recent operations
+ocd ops <id>                                       Show durable steps and commit SHA
+ocd ops logs <id> [--follow]                       Stream operation/build logs
+ocd ops cancel <id>                                Request cancellation
+ocd ops retry <id>                                 Resume recovery or enqueue a retry
+ocd ops finalize <id> [--status auto|done|failed]  Reconcile and close a stale operation
+```
+
+`finalize` refuses to mark an operation successful unless its current resources
+match the intended successful state. Destructive CLI actions use browser
+confirmation by default; `--yes` is the explicit non-interactive approval for
+an already-authorized automation session.

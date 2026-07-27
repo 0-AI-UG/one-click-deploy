@@ -162,7 +162,7 @@ const deleteDnsRecords: Step<DestroyInput, { ok: boolean; failed: boolean }> = {
 
 const deleteVolume: Step<DestroyInput, { ok: boolean; error?: string }> = {
   name: "delete_volume",
-  label: "Delete volume",
+  label: "Detach and retain volume",
   async run(ctx) {
     const app = db.getApp(ctx.input.appId);
     if (!app || !app.volume_id) return { ok: true };
@@ -173,7 +173,15 @@ const deleteVolume: Step<DestroyInput, { ok: boolean; error?: string }> = {
         // us and may hold data we don't own. DETACH only; never delete.
         await compute.volumes?.detach(app.volume_id);
       } else {
-        await compute.volumes?.delete(app.volume_id);
+        await compute.volumes?.detach(app.volume_id);
+        db.retireVolume({
+          providerVolumeId: app.volume_id,
+          formerResourceType: "app",
+          formerResourceId: app.id,
+          formerResourceName: app.name,
+          reason: `app destroy operation #${ctx.opId}`,
+        });
+        ctx.log(`Detached volume ${app.volume_id}; retained for recovery for 7 days`);
       }
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };

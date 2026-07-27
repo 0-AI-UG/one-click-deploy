@@ -29,21 +29,21 @@ detail.
 ## Core concepts
 
 - **App** — one deployable unit: a Git repo (or subdir) with a Dockerfile, built and run as one or more containers behind Traefik with automatic HTTPS.
-- **Manifest** — `.ocd-deploy.json`, committed to a repo, pre-configures the deploy so a user just clicks "Deploy" (or runs `ocd deploy`) with no manual settings. One per deployable service.
+- **Manifest** — `.ocd-deploy.json`, committed to a repo, pre-configures `ocd deploy` with no interactive configuration beyond missing secrets. One per deployable app.
 - **Managed service** — one-click Postgres, Redis, MySQL, MongoDB, ClickHouse, and more. Credentials are injected into linked environments.
 - **Environment** — a named group of env vars (plain or secret) shared across apps. Changing an environment redeploys its linked apps.
 - **Stack** — `ocd-stack.json`: several apps + services deployed together as one ordered, health-gated unit, with credentials and internal URLs wired automatically.
 - **Internal networking** — every app is reachable at `<app>.ocd.internal:<port>` on the private network. The platform injects `OCD_INTERNAL_URL/HOST/PORT`; stacks additionally publish each app as `<KEY>_URL`.
 - **Health-gated deploys** — a deploy that never passes its health check is automatically rolled back.
 
-## Three ways to deploy
+## Deployment model
 
-1. **Web panel** — paste a GitHub repo URL; the panel introspects Dockerfiles, `EXPOSE` port, `.env.example`, and any `.ocd-deploy.json`, and pre-fills the form.
-2. **`.ocd-deploy.json` manifest** — commit it so deploys need zero manual config.
-3. **`ocd` CLI** — deploy the current git checkout from the terminal.
+The CLI is the deployment interface. Commit a `.ocd-deploy.json` for each app,
+then run `ocd deploy`; use `ocd-stack.json` plus `ocd deploy stack` for an
+ordered group of apps and managed services.
 
 For several apps and services at once, use a **stack** (`ocd-stack.json`) via
-`ocd deploy stack` or the panel's Deploy → Stack tab.
+`ocd deploy stack`.
 
 ## Decision guide
 
@@ -108,7 +108,7 @@ the two app manifests it references.
 
 What the stack does for you:
 - **Order**: `needs` builds a dependency graph; services first, then apps in order, each waiting for its dependencies to become **healthy**. Cycles are rejected.
-- **Wiring**: one shared environment linked to every member. Each **app** is published as `<KEY>_URL` (uppercased app key), so `web` (needing `api`) automatically gets `API_URL`. Each **service** injects `<KEY>_URL`, `<KEY>_HOST`, `<KEY>_PORT`, `<KEY>_USER`, `<KEY>_PASSWORD`, `<KEY>_NAME` using its **uppercased service key** as the prefix — a service keyed `database` yields `DATABASE_URL` (etc.), one keyed `redis` yields `REDIS_URL`. Pick the service key to match the env-var name your app reads.
+- **Wiring**: one shared environment linked to every member. Each **app** is published as `<KEY>_URL` (uppercased app key), so `web` (needing `api`) automatically gets `API_URL`. Each **service** injects `<KEY>_URL`, `<KEY>_HOST`, `<KEY>_PORT`, `<KEY>_USER`, `<KEY>_PASSWORD`, `<KEY>_NAME` using its **uppercased service key** as the prefix — a service keyed `database` yields `DATABASE_URL` (etc.), one keyed `redis` yields `REDIS_URL`. Pick the service key to match the env-var name your app reads. A stack app entry may set `"env": ["DATABASE_URL", "JWT_SECRET"]` to receive only those shared keys; omit it for the legacy all-keys behavior.
 - **Reconcile**: re-running `ocd deploy stack` redeploys listed members and destroys dropped ones.
 - **Atomic**: any member failing rolls back the whole run.
 
@@ -134,12 +134,16 @@ Everyday commands (full list + flags in
 ```bash
 ocd deploy                 # deploy the current repo from ./.ocd-deploy.json
 ocd deploy stack               # deploy the whole ocd-stack.json in dependency order
+ocd service catalog        # discover managed service types and defaults
+ocd service create db --type=postgresql --volume-size=20
 ocd status                 # apps + services overview
 ocd logs <app> --tail=200  # recent logs
 ocd redeploy <app>         # rebuild + redeploy
 ocd rollback <app>         # back to the previous good deploy
 ocd ssh <app> -i           # shell inside an app container
-ocd envs set <env> KEY=VALUE   # set a var (redeploys linked apps)
+ocd envs set <env> KEY=VALUE   # set a var (redeploys affected linked apps)
+ocd envs set <env> KEY=VALUE --restart     # recreate from current image; no build
+ocd envs set <env> KEY=VALUE --no-rollout  # store now, apply on a later recreate
 ```
 
 `ocd deploy` reads the manifest, sends `env[]` defaults, prompts for missing

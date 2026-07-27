@@ -2,7 +2,15 @@ import { get, post, put, resolveApp, ApiError, type App } from "./api.ts";
 import { CYAN, DIM, GREEN, RED, RESET, YELLOW } from "./format.ts";
 
 export interface OperationEventPoll {
-  status: "pending" | "running" | "done" | "failed" | "compensating" | "compensated" | "cancelled";
+  status:
+    | "pending"
+    | "running"
+    | "done"
+    | "failed"
+    | "compensating"
+    | "compensated"
+    | "compensation_failed"
+    | "cancelled";
   last_step: string | null;
   error: { message?: string; cancelled?: boolean } | null;
   steps: Array<{
@@ -14,7 +22,13 @@ export interface OperationEventPoll {
   }>;
 }
 
-export const TERMINAL = new Set(["done", "failed", "cancelled", "compensated"]);
+export const TERMINAL = new Set([
+  "done",
+  "failed",
+  "cancelled",
+  "compensated",
+  "compensation_failed",
+]);
 
 // The op runs server-side regardless of our connection, so a transient gateway
 // blip (panel restart/redeploy mid-op, which can 502 for minutes) shouldn't
@@ -63,7 +77,8 @@ export async function handleTransientFollowError(
   const elapsedSec = Math.round(elapsedMs / 1000);
   const budgetMin = Math.round(FOLLOW_OUTAGE_BUDGET_MS / 60_000);
   log(
-    `${YELLOW}reconnecting${RESET} ${DIM}(panel unreachable ${elapsedSec}s; will keep trying up to ~${budgetMin} min)${RESET}`,
+    `${YELLOW}reconnecting${RESET} ${DIM}(operation stream unavailable ${elapsedSec}s; ` +
+      `the panel or only this long-poll may be restarting; will keep trying up to ~${budgetMin} min)${RESET}`,
   );
 
   await sleep(state.backoffMs);

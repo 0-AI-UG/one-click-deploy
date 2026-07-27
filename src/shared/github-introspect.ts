@@ -27,10 +27,9 @@ export type StackPayload = {
   notes: string[];
 };
 
-// `introspectRepo` returns a discriminated result: repos with an `ocd-stack.json`
-// come back as `kind: "stack"` (the deploy page renders the stack builder);
-// everything else is `kind: "app"` (the single-app form). The choice is implicit —
-// the caller never picks a mode.
+// `introspectRepo` returns a discriminated result: repos with an
+// `ocd-stack.json` come back as `kind: "stack"`; everything else is
+// `kind: "app"`. The choice is implicit — the caller never picks a mode.
 export type IntrospectResult = {
   ok: true;
   kind: "app";
@@ -359,10 +358,10 @@ export async function introspectRepo(
 
 // --- Stack resolution -------------------------------------------------------
 // Resolves an `ocd-stack.json` manifest and every per-app `.ocd-deploy.json` it
-// references, all from a GitHub repo, so the web deploy page can build a stack
-// without the local filesystem the CLI's `ocd stack up` reads from. Called by
-// `introspectRepo` once the tree scan detects a stack manifest — the repo info
-// and branch list are already fetched, so this only reads the manifests.
+// references, all from a GitHub repo, so API consumers can inspect a complete
+// stack without a local filesystem. Called by `introspectRepo` once the tree
+// scan detects a stack manifest — the repo info and branch list are already
+// fetched, so this only reads the manifests.
 
 async function resolveStack(
   owner: string,

@@ -15,6 +15,12 @@ const _deploy: DeployManifest = {
   internal_protocol: "http",
   public_port: "auto",
   public_protocol: "tcp",
+  domain: "web.example.com",
+  git_branch: "release",
+  env_projection: ["DATABASE_URL"],
+  auth: { enabled: true, password_env: "OCD_BASIC_AUTH_PASSWORD" },
+  placement_pool: "production",
+  scale_to_zero_after: 0,
 };
 const _enabled: boolean | undefined = _deploy.health_check?.enabled;
 const _port: number | undefined = _deploy.build?.container_port;
@@ -95,6 +101,26 @@ describe("validateDeployManifest", () => {
     ).not.toThrow();
   });
 
+  test("CLI-focused domain, branch, environment projection, auth and placement fields validate", () => {
+    expect(() =>
+      validateDeployManifest({
+        name: "web",
+        domain: "web.example.com",
+        git_branch: "release",
+        env_projection: [],
+        auth: { enabled: true, password_env: "OCD_BASIC_AUTH_PASSWORD" },
+        placement_pool: "production",
+        scale_to_zero_after: 0,
+      }, "a/.ocd-deploy.json"),
+    ).not.toThrow();
+    expect(() =>
+      validateDeployManifest({
+        name: "web",
+        auth: { enabled: true, password_env: "not-valid!" },
+      }, "a/.ocd-deploy.json"),
+    ).toThrow(/auth\.password_env/);
+  });
+
   test("webhook.staging boolean validates", () => {
     expect(() =>
       validateDeployManifest(
@@ -155,6 +181,35 @@ describe("validateStackManifest", () => {
 
   test("a correct stack passes", () => {
     expect(() => validateStackManifest(validStack, "ocd-stack.json")).not.toThrow();
+  });
+
+  test("managed service custom domains validate", () => {
+    expect(() => validateStackManifest({
+      name: "search",
+      services: {
+        search: { type: "meilisearch", domain: "search.example.com" },
+      },
+      apps: { web: { manifest: "web/.ocd-deploy.json" } },
+    }, "ocd-stack.json")).not.toThrow();
+  });
+
+  test("stack app environment projections accept selected keys and an empty list", () => {
+    expect(() => validateStackManifest({
+      $schema: 1,
+      name: "projected",
+      apps: {
+        api: { manifest: "api/.ocd-deploy.json", env: ["DATABASE_URL", "JWT_SECRET"] },
+        docs: { manifest: "docs/.ocd-deploy.json", env: [] },
+      },
+    }, "ocd-stack.json")).not.toThrow();
+
+    expect(() => validateStackManifest({
+      $schema: 1,
+      name: "bad-projection",
+      apps: {
+        api: { manifest: "api/.ocd-deploy.json", env: "DATABASE_URL" },
+      },
+    }, "ocd-stack.json")).toThrow("apps.api.env");
   });
 
   test("needs referencing a missing app key fails", () => {

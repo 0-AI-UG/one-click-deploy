@@ -146,6 +146,48 @@ export function listChildOperations(parentId: number): OperationRow[] {
     .all(parentId) as OperationRow[];
 }
 
+/** Return the newest later operation that may have adopted one of `op`'s
+ * resources. Every later operation is an ownership boundary—even an operation
+ * that later failed may have durably adopted some children before failing.
+ * Preserving a resource while ownership is ambiguous is strictly safer than
+ * allowing an old rollback to delete it underneath a newer reconcile. */
+export function findSupersedingOperation(op: OperationRow): OperationRow | null {
+  const owned = expandedResourceKeys(op);
+  if (owned.size === 0) return null;
+  const rows = db
+    .query(
+      `SELECT * FROM operations
+        WHERE id > ?
+        ORDER BY id DESC`,
+    )
+    .all(op.id) as OperationRow[];
+  for (const row of rows) {
+    if ([...expandedResourceKeys(row)].some((key) => owned.has(key))) return row;
+  }
+  return null;
+}
+
+/** Destructive children spawned by a parent's compensation inherit the
+ * parent's ownership. This catches children that were durably queued before a
+ * crash/cancel and prevents them from running after a newer operation adopted
+ * the parent resource. */
+export function findSupersedingAncestorOperation(op: OperationRow): {
+  ancestor: OperationRow;
+  supersededBy: OperationRow;
+} | null {
+  let parentId = op.parent_id;
+  const seen = new Set<number>();
+  while (parentId != null && !seen.has(parentId)) {
+    seen.add(parentId);
+    const parent = getOperation(parentId);
+    if (!parent) return null;
+    const supersededBy = findSupersedingOperation(parent);
+    if (supersededBy) return { ancestor: parent, supersededBy };
+    parentId = parent.parent_id;
+  }
+  return null;
+}
+
 export function markOperationRunning(id: number): void {
   db.run(
     "UPDATE operations SET status = 'running', started_at = COALESCE(started_at, datetime('now')), attempt = attempt + 1 WHERE id = ?",
@@ -189,6 +231,74 @@ export function requestCancel(id: number): void {
        WHERE id = ? AND status IN ('running','compensating')`,
     [id],
   );
+}
+
+/**
+ * Put an interrupted operation back into the engine queue. Forward work resumes
+ * from its durable completed steps; compensation resumes from its durable
+ * compensation steps. The caller is responsible for ensuring no in-process
+ * holder is still executing the operation.
+ */
+export function requeueOperation(id: number): OperationRow | null {
+  const op = getOperation(id);
+  if (!op) return null;
+  const nextStatus = op.status === "compensation_failed" || op.status === "compensating"
+    ? "compensating"
+    : "pending";
+  db.run(
+    `UPDATE operations
+        SET status = ?,
+            finished_at = NULL,
+            error_json = NULL,
+            scheduled_for = NULL
+      WHERE id = ?`,
+    [nextStatus, id],
+  );
+  abandonInFlightSteps(id);
+  return getOperation(id);
+}
+
+/** Enqueue a fresh attempt with the same immutable request envelope. */
+export function retryOperationAsNew(
+  id: number,
+  triggeredBy: string,
+): OperationRow | null {
+  const op = getOperation(id);
+  if (!op) return null;
+  return enqueueOperation({
+    kind: op.kind,
+    resourceKeys: safeStringArray(op.resource_keys),
+    input: safeJson(op.input_json, {}),
+    trigger: "retry",
+    triggeredBy,
+  });
+}
+
+/**
+ * Operator acknowledgement for an irrecoverable stale operation. This is
+ * intentionally a force transition: route-level recovery checks decide whether
+ * the requested terminal status is safe for the affected resources.
+ */
+export function finalizeOperation(
+  id: number,
+  status: Extract<OperationStatus, "done" | "failed" | "cancelled">,
+  detail: string,
+): OperationRow | null {
+  const op = getOperation(id);
+  if (!op) return null;
+  db.run(
+    `UPDATE operations
+        SET status = ?,
+            finished_at = datetime('now'),
+            error_json = ?
+      WHERE id = ?`,
+    [
+      status,
+      status === "done" ? null : JSON.stringify({ message: detail, finalized: true }),
+      id,
+    ],
+  );
+  return getOperation(id);
 }
 
 export function isCancelRequested(id: number): boolean {
@@ -326,4 +436,59 @@ export function abandonInFlightSteps(opId: number): void {
         WHERE op_id = ? AND status IN ('started','executing')`,
     [opId],
   );
+}
+
+function safeJson<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeStringArray(raw: string): string[] {
+  const parsed = safeJson<unknown>(raw, []);
+  return Array.isArray(parsed) ? parsed.map(String) : [];
+}
+
+/** Expand create-time/name keys into their durable numeric identities. Resource
+ * keys intentionally change from `app:create:<name>` to `app:<id>` (and the
+ * service equivalent) after insertion; compensation ownership must span that
+ * transition or a stale create op could delete an app a later redeploy owns. */
+function expandedResourceKeys(op: OperationRow): Set<string> {
+  const keys = new Set(safeStringArray(op.resource_keys));
+  const input = safeJson<Record<string, unknown>>(op.input_json, {});
+
+  const tableFor = (type: "app" | "service" | "stack"): string =>
+    type === "app" ? "apps" : type === "service" ? "services" : "stacks";
+  const addNamed = (type: "app" | "service" | "stack", name: unknown): void => {
+    if (typeof name !== "string" || !name) return;
+    keys.add(`${type}:create:${name}`);
+    keys.add(`${type}:${name}`);
+    const row = db.query(`SELECT id FROM ${tableFor(type)} WHERE name = ?`).get(name) as
+      | { id: number }
+      | null;
+    if (row) keys.add(`${type}:${row.id}`);
+  };
+  const addId = (type: "app" | "service" | "stack", id: unknown): void => {
+    const numeric = Number(id);
+    if (!Number.isInteger(numeric) || numeric <= 0) return;
+    keys.add(`${type}:${numeric}`);
+    const row = db.query(`SELECT name FROM ${tableFor(type)} WHERE id = ?`).get(numeric) as
+      | { name: string }
+      | null;
+    if (row) {
+      keys.add(`${type}:${row.name}`);
+      keys.add(`${type}:create:${row.name}`);
+    }
+  };
+
+  if (op.kind === "deploy") addNamed("app", input.app_name);
+  if (op.kind === "deploy_service") addNamed("service", input.name);
+  if (op.kind === "deploy_stack") addNamed("stack", input.name);
+  if ("appId" in input) addId("app", input.appId);
+  if ("destAppId" in input) addId("app", input.destAppId);
+  if ("serviceId" in input) addId("service", input.serviceId);
+  if ("stackId" in input) addId("stack", input.stackId);
+  return keys;
 }

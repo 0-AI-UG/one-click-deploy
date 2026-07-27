@@ -11,7 +11,7 @@ import {
   startAppReplica,
 } from "../../shared/remote/index.ts";
 import { syncAllTraefik, syncAppIngress } from "../scale/traefik-manager.ts";
-import { replicaBindHost } from "../scale/types.ts";
+import { replicaBindHost, appReplicaRunOpts } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 
 function log(context: string, ...args: any[]) {
@@ -106,8 +106,15 @@ export async function destroyAppCore(appId: number): Promise<{ ok: boolean; erro
           await compute.volumes?.detach(app.volume_id);
           log("destroyApp", `Detached pre-existing volume ${app.volume_id}`);
         } else {
-          await compute.volumes?.delete(app.volume_id);
-          log("destroyApp", `Deleted volume ${app.volume_id}`);
+          await compute.volumes?.detach(app.volume_id);
+          db.retireVolume({
+            providerVolumeId: app.volume_id,
+            formerResourceType: "app",
+            formerResourceId: app.id,
+            formerResourceName: app.name,
+            reason: "app destroyed through server cleanup",
+          });
+          log("destroyApp", `Detached volume ${app.volume_id}; retained for recovery for 7 days`);
         }
       } catch (err) {
         log("destroyApp", `Failed to release volume ${app.volume_id}:`, err instanceof Error ? err.message : err);
@@ -171,6 +178,66 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log("restartApp", `Failed:`, msg);
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * Recreate every replica from its existing :latest image with freshly resolved
+ * environment variables. This applies config changes without cloning/building
+ * source and keeps the ordinary restart command's lighter docker-restart
+ * semantics separate.
+ */
+export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean; error?: string }> {
+  log("reloadAppEnvironment", `Reloading app id=${appId} from existing image`);
+  try {
+    const app = db.getApp(appId);
+    if (!app) throw new Error("App not found");
+    const replicas = db.getReplicas(appId);
+    if (replicas.length === 0) throw new Error("App has no replicas");
+    const envVars = await resolveAppEnvVars(app);
+    let allHealthy = true;
+
+    for (const replica of replicas) {
+      const server = db.getServer(replica.server_id);
+      if (!server) {
+        allHealthy = false;
+        continue;
+      }
+      if (replicas.length > 1) {
+        db.updateReplicaStatus(replica.id, "draining");
+        await syncAppIngress(appId).catch(() => {});
+      }
+      await startAppReplica(
+        server.ipv4,
+        appReplicaRunOpts(app, server, {
+          containerName: replica.container_name,
+          hostPort: replica.host_port,
+          envVars,
+        }),
+        server.ssh_host_key || undefined,
+      );
+      const bindAddr = replicaBindHost(server);
+      const health = await probeAppHealth(
+        app,
+        server.ipv4,
+        replica.container_name,
+        bindAddr,
+        replica.host_port,
+        5,
+        server.ssh_host_key || undefined,
+      );
+      db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
+      if (!health.healthy) allHealthy = false;
+      await syncAppIngress(appId).catch(() => {});
+    }
+    db.updateAppStatus(appId, allHealthy ? "running" : "unhealthy");
+    if (!allHealthy) throw new Error("One or more replicas were unhealthy after environment reload");
+    db.markAppEnvironmentFresh(appId);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log("reloadAppEnvironment", `Failed: ${msg}`);
     return { ok: false, error: msg };
   }
 }

@@ -34,6 +34,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   unpause,
   envs,
   services,
+  service: services,
   stack,
   ops,
   servers,
@@ -62,10 +63,13 @@ ${BOLD}Commands:${RESET}
   promote                Promote the webhook-staging sibling to production
   pause <app>            Pause an app
   unpause <app>          Unpause an app
-  services               List services
+  services               List managed services
+  service catalog        List available managed-service types and defaults
+  service create <name>  Create a standalone managed service
   stack <ls|status|logs>   Inspect multi-app stacks
   ops [--app X]          List deploy engine operations
   ops <id> | logs <id>   Inspect an operation or stream its logs
+  ops cancel|retry|finalize <id>  Recover a stuck operation
   servers                List servers
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session

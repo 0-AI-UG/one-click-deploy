@@ -2,6 +2,7 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requireAuthenticated } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
+import { getOperation } from "../../shared/db/operations.ts";
 import {
   createConfirmation,
   pollConfirmation,
@@ -9,7 +10,7 @@ import {
   resolveConfirmation,
 } from "../lib/action-confirm.ts";
 
-const CONFIRMABLE_ACTIONS = ["delete_app", "delete_stack", "delete_environment"] as const;
+const CONFIRMABLE_ACTIONS = ["delete_app", "delete_stack", "delete_environment", "cancel_operation"] as const;
 type ConfirmableAction = (typeof CONFIRMABLE_ACTIONS)[number];
 
 // POST /api/confirmations — called by CLI (requires auth) to open a pending
@@ -29,7 +30,7 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       typeof body.action !== "string" ||
       !CONFIRMABLE_ACTIONS.includes(body.action as ConfirmableAction)
     ) {
-      return Response.json({ error: "action must be one of delete_app, delete_stack, delete_environment" }, { status: 400, headers: corsHeaders });
+      return Response.json({ error: "action must be one of delete_app, delete_stack, delete_environment, cancel_operation" }, { status: 400, headers: corsHeaders });
     }
     if (
       typeof body.resource_type !== "string" ||
@@ -49,20 +50,25 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
     if (action === "delete_app") {
       const app = db.getApp(Number(resourceId));
       if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
-      summary = `Destroy app "${app.name}" (id ${app.id}) — removes its container(s), DNS records, and any managed volumes.`;
+      summary = `Destroy app "${app.name}" (id ${app.id}) — removes its container(s) and DNS records; managed volumes are detached and retained for recovery.`;
     } else if (action === "delete_stack") {
       const s = db.getStack(Number(resourceId));
       if (!s) return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
       const apps = db.getAppsByStackId(s.id);
       const svcs = db.getServicesByStackId(s.id);
-      summary = `Destroy stack "${s.name}" and all ${apps.length} app(s) + ${svcs.length} service(s).`;
-    } else {
+      summary = `Destroy stack "${s.name}" and all ${apps.length} app(s) + ${svcs.length} service(s); managed volumes are detached and retained for recovery.`;
+    } else if (action === "delete_environment") {
       const env = db.getEnvironment(Number(resourceId));
       if (!env) return Response.json({ error: "Environment not found" }, { status: 404, headers: corsHeaders });
       const inUse = db.getAppsByEnvironmentId(env.id);
       summary = inUse.length
         ? `Delete environment "${env.name}" (id ${env.id}) — currently used by ${inUse.length} app(s).`
         : `Delete environment "${env.name}" (id ${env.id}) and its variables.`;
+    } else {
+      const op = getOperation(Number(resourceId));
+      if (!op) return Response.json({ error: "Operation not found" }, { status: 404, headers: corsHeaders });
+      const { previewCompensation } = await import("../../engine/compensation-safety.ts");
+      summary = previewCompensation(op).summary;
     }
 
     const { confirmCode, userCode, expiresIn } = await createConfirmation(payload, action, resourceType, resourceId, summary);

@@ -186,7 +186,7 @@ describe("destroyApp: happy path", () => {
 });
 
 describe("destroyApp: volume cleanup", () => {
-  test("deletes the associated volume when volume_id is set (managed/created)", async () => {
+  test("detaches and retains the associated managed volume", async () => {
     const server = freshServer();
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
@@ -194,9 +194,9 @@ describe("destroyApp: volume cleanup", () => {
 
     await destroyApp(app.id);
 
-    expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
-    expect(compute._mocks.volumeDelete.mock.calls[0][0]).toBe("vol-abc");
-    expect(compute._mocks.volumeDetach).not.toHaveBeenCalled();
+    expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
+    expect(compute._mocks.volumeDetach).toHaveBeenCalledWith("vol-abc");
+    expect(db.getRetiredVolumes().some((v) => v.provider_volume_id === "vol-abc")).toBe(true);
   });
 
   test("detaches (never deletes) an attached-existing volume on destroy", async () => {
@@ -260,12 +260,12 @@ describe("destroyApp: partial failure handling", () => {
     expect(db.getApp(app.id)?.status).toBe("cleanup_failed");
   });
 
-  test("marks app cleanup_failed when volume deletion fails", async () => {
+  test("marks app cleanup_failed when volume detach for retirement fails", async () => {
     const server = freshServer();
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
     db.updateAppVolume(app.id, "vol-err", "/data");
-    compute._mocks.volumeDelete.mockImplementationOnce(async () => { throw new Error("still attached"); });
+    compute._mocks.volumeDetach.mockImplementationOnce(async () => { throw new Error("detach failed"); });
     const result = await destroyApp(app.id);
     expect(result.ok).toBe(false);
     expect(db.getApp(app.id)?.status).toBe("cleanup_failed");

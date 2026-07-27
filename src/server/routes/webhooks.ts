@@ -249,10 +249,14 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
 
     const fullSha = payload.after ? String(payload.after) : "";
     const deliveryId = request.headers.get("x-github-delivery") || `${appId}:${fullSha}:${Date.now()}`;
+    // Delivery GUIDs differ when GitHub emits another event around CI
+    // completion. Commit identity does not: app + full SHA is the deployment
+    // unit operators care about, so both deliveries collapse onto one op.
+    const dedupeId = fullSha || `delivery:${deliveryId}`;
 
     // CI-wait remains a panel-side prelude so we don't hold an engine slot
     // for 30 minutes. Once CI passes (or is disabled), enqueue the redeploy
-    // op with a delivery-scoped idempotency key so retries collapse.
+    // op with a commit-scoped idempotency key so push/CI deliveries collapse.
     (async () => {
       try {
         if (app.webhook_wait_for_ci && fullSha) {
@@ -269,17 +273,18 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
             userId: app.deployed_by || undefined,
             trigger: "webhook",
             triggeredBy: `github:${deliveryId}`,
-            idempotencyKey: `webhook-delivery:staging:${appId}:${deliveryId}`,
+            idempotencyKey: `webhook-commit:staging:${appId}:${dedupeId}`,
+            gitSha: fullSha || undefined,
           });
           if (!res.ok) console.error(`[webhook] staging deploy failed for app ${appId}: ${res.error}`);
         } else {
           enqueue({
             kind: "redeploy",
             resourceKeys: [`app:${appId}`],
-            input: { appId, userId: app.deployed_by || undefined },
+            input: { appId, userId: app.deployed_by || undefined, gitSha: fullSha || undefined },
             trigger: "webhook",
             triggeredBy: `github:${deliveryId}`,
-            idempotencyKey: `webhook-delivery:${appId}:${deliveryId}`,
+            idempotencyKey: `webhook-commit:${appId}:${dedupeId}`,
           });
         }
       } catch (err) {

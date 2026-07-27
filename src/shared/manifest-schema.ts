@@ -185,6 +185,24 @@ const healthCheckSchema = z.object(
   { error: "expected object { enabled?: boolean, path?: string }" },
 );
 
+/**
+ * HTTP basic-auth intent. Password material is deliberately never accepted
+ * inline: it comes from a local process environment variable or a hidden CLI
+ * prompt, so a deploy manifest remains safe to commit.
+ */
+const authSchema = z.object(
+  {
+    enabled: z.boolean({ error: "expected boolean" }),
+    password_env: z
+      .string({ error: "expected environment variable name string" })
+      .refine((v) => ENV_KEY_PATTERN.test(v), {
+        error: (iss) => `expected environment variable name string, got ${got(iss.input)}`,
+      })
+      .optional(),
+  },
+  { error: "expected object { enabled, password_env? }" },
+).strict();
+
 export const DeployManifestSchema = z
   .object({
     $schema: z.literal(1, { error: "expected 1" }).optional(),
@@ -200,6 +218,15 @@ export const DeployManifestSchema = z
     volume: volumeSchema.optional(),
     webhook: webhookSchema.optional(),
     suggested_app_name: z.string({ error: "expected string" }).optional(),
+    /** Custom public domain. A --domain CLI flag overrides this value. */
+    domain: z.string({ error: "expected string" }).optional(),
+    /** Source branch used for manual deploy/redeploy. */
+    git_branch: z.string({ error: "expected string" }).optional(),
+    /** Limit a linked environment to selected keys. null/omit = all, [] = none. */
+    env_projection: z.array(z.string({ error: "expected an environment key string" }), {
+      error: "expected array of environment variable keys",
+    }).optional(),
+    auth: authSchema.optional(),
     replicas: guardedNumber(
       "expected positive integer",
       (v) => Number.isInteger(v) && v >= 1,
@@ -248,6 +275,13 @@ export const DeployManifestSchema = z
     durability_class: z
       .enum(["none", "standard", "high"], { error: 'expected "none" | "standard" | "high"' })
       .optional(),
+    /** Placement pool used by the scheduler. */
+    placement_pool: nonEmptyString("expected a non-empty string").optional(),
+    /** Idle seconds before a deploy target may scale to zero. 0 means no delay. */
+    scale_to_zero_after: guardedNumber(
+      "expected non-negative integer",
+      (v) => Number.isInteger(v) && v >= 0,
+    ).optional(),
   })
   .strict();
 
@@ -264,7 +298,9 @@ const stackServiceSchema = z
     env_overrides: z
       .record(z.string(), z.string(), { error: "expected object map of string -> string" })
       .optional(),
-  }, { error: "expected object { type, version?, volume_size?, env_overrides? }" })
+    /** Custom domain for HTTP-facing catalog services. */
+    domain: z.string({ error: "expected string" }).optional(),
+  }, { error: "expected object { type, version?, volume_size?, env_overrides?, domain? }" })
   .strict();
 
 /** One app member: a path to a child `.ocd-deploy.json` + stack-level overrides. */
@@ -278,7 +314,12 @@ const stackAppSchema = z
       .optional(),
     domain: z.string({ error: "expected string" }).optional(),
     public: z.boolean({ error: "expected boolean" }).optional(),
-  }, { error: "expected object { manifest, needs?, domain?, public? }" })
+    /** Keys this member receives from the shared stack environment. Omit for
+     *  legacy/all; [] intentionally receives none of the shared variables. */
+    env: z.array(z.string({ error: "expected an environment key string" }), {
+      error: "expected array of environment variable keys",
+    }).optional(),
+  }, { error: "expected object { manifest, needs?, domain?, public?, env? }" })
   .strict();
 
 export const StackManifestSchema = z

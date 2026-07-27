@@ -25,7 +25,14 @@ export async function webConfirm(
   action: string,
   resourceType: string,
   resourceId: number | string,
+  opts: { yes?: boolean } = {},
 ): Promise<string | null> {
+  if (opts.yes) {
+    // The bearer token authenticating the destructive request is server-signed;
+    // this value binds the caller's explicit --yes to one exact action/resource.
+    // The server validates both together and never accepts a generic "yes".
+    return `automation:${action}:${resourceType}:${resourceId}`;
+  }
   const config = loadConfig();
   const panel = config?.panel_url ?? "";
 

@@ -32,6 +32,7 @@ function makeCtx(input: StackDeployRequest): OpContext<StackDeployRequest> {
 
 const planStep = deployStackOp.steps.find((s) => s.name === "plan")!;
 const deployAppsStep = deployStackOp.steps.find((s) => s.name === "deploy_apps")!;
+const reconcileServicesStep = deployStackOp.steps.find((s) => s.name === "reconcile_services")!;
 
 function app(key: string, needs?: string[]) {
   return { key, needs, app_name: key, git_repo: "https://github.com/x/y", container_port: 3000 };
@@ -185,6 +186,40 @@ describe("deploy_stack plan step", () => {
     await planStep.compensate!(makeCtx(freshInput), freshOut, {});
     expect(db.getEnvironment(freshOut.environmentId)).toBeNull();
     expect(db.getStackByName(freshInput.name)).toBeNull();
+  });
+});
+
+describe("deploy_stack service adoption", () => {
+  test("adopts a recovered existing service instead of enqueueing service:create again", async () => {
+    const name = `adopt-${randomSuffix()}`;
+    const input = req(name, [], [{ key: "db", type: "postgresql" }]);
+    const service = db.insertService({
+      name: `${name}-db`,
+      service_type: "postgresql",
+      version: "17",
+      port: 5432,
+      env_vars: "{}",
+      credentials: JSON.stringify({
+        host: `${name}-db.svc.ocd.internal`,
+        port: 15432,
+        username: "postgres",
+        password: "secret",
+        database: "ocd_db",
+        connection_url: `postgresql://postgres:secret@${name}-db.svc.ocd.internal:15432/ocd_db`,
+      }),
+    });
+    const ctx = makeCtx(input);
+    const planOut = await planStep.run(ctx, {}) as any;
+
+    const result = await reconcileServicesStep.run(ctx, { plan: planOut }) as { childIds: number[] };
+
+    expect(result.childIds).toEqual([]);
+    expect(db.getService(service.id)?.stack_id).toBe(planOut.stackId);
+    expect(db.getServiceLinks(service.id)).toHaveLength(1);
+    expect(db.getServiceLinks(service.id)[0].environment_id).toBe(planOut.environmentId);
+    expect(
+      listChildOperations(ctx.opId).filter((op) => op.kind === "deploy_service"),
+    ).toHaveLength(0);
   });
 });
 

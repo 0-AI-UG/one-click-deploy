@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { buildDockerRunArgs, DEFAULT_MEM_MB, DEFAULT_CPUS, DEFAULT_PIDS } from "./containers.ts";
+import { withExclusiveImageGc, withImageGcLease } from "./container-common.ts";
 
 describe("buildDockerRunArgs", () => {
   test("always emits hardening flags", () => {
@@ -84,5 +85,19 @@ describe("buildDockerRunArgs", () => {
       cmd: "'arg1' 'arg2'",
     });
     expect(cmd.endsWith("x:latest 'arg1' 'arg2'")).toBe(true);
+  });
+});
+
+describe("image GC coordination", () => {
+  test("builds and image consumers share a host lock while prune is exclusive", () => {
+    const build = withImageGcLease("docker build -t app:latest .");
+    const run = withImageGcLease("docker run app:latest");
+    const prune = withExclusiveImageGc("docker image prune -af");
+
+    expect(build).toContain("flock -s");
+    expect(run).toContain("flock -s");
+    expect(prune).toContain("flock -x");
+    expect(build).toContain("/tmp/ocd-image-gc.lock");
+    expect(prune).toContain("/tmp/ocd-image-gc.lock");
   });
 });

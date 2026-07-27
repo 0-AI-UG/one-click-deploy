@@ -10,7 +10,7 @@ export const STAGING_TARGET = "staging";
  *  user selected for staging (prod.webhook_staging_environment_id) — no live
  *  inheritance from production. Volumes/webhooks are NOT carried over: staging
  *  is a clean, isolated deploy. */
-function stagingDeployRequest(prod: db.AppRow): DeployRequest {
+function stagingDeployRequest(prod: db.AppRow, gitSha?: string): DeployRequest {
   return {
     environment_id: prod.webhook_staging_environment_id ?? undefined,
     app_name: `${prod.name}-${STAGING_TARGET}`,
@@ -18,6 +18,7 @@ function stagingDeployRequest(prod: db.AppRow): DeployRequest {
     // Track the branch the webhook watches (what was just pushed) so staging
     // reflects the incoming commit; fall back to prod's deploy branch.
     git_branch: prod.webhook_branch || prod.git_branch || undefined,
+    git_sha: gitSha,
     container_port: prod.container_port,
     dockerfile_path: prod.dockerfile_path || undefined,
     docker_context: prod.docker_context || undefined,
@@ -54,7 +55,7 @@ export type DeployToStagingResult =
  */
 export function deployToStaging(
   prodAppId: number,
-  opts: { userId?: string; trigger?: string; triggeredBy?: string; idempotencyKey?: string } = {},
+  opts: { userId?: string; trigger?: string; triggeredBy?: string; idempotencyKey?: string; gitSha?: string } = {},
 ): DeployToStagingResult {
   const prod = db.getApp(prodAppId);
   if (!prod) return { ok: false, error: "App not found" };
@@ -78,7 +79,7 @@ export function deployToStaging(
     const { opId } = enqueue({
       kind: "redeploy",
       resourceKeys: [`app:${existing.id}`],
-      input: { appId: existing.id, userId: opts.userId },
+      input: { appId: existing.id, userId: opts.userId, gitSha: opts.gitSha },
       trigger,
       triggeredBy: opts.triggeredBy,
       idempotencyKey: opts.idempotencyKey,
@@ -86,7 +87,7 @@ export function deployToStaging(
     return { ok: true, opId, siblingName: existing.name, created: false };
   }
 
-  const req = stagingDeployRequest(prod);
+  const req = stagingDeployRequest(prod, opts.gitSha);
   const { opId } = enqueue({
     kind: "deploy",
     resourceKeys: [`app:create:${req.app_name}`],

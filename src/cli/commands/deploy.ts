@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
-import { getGitRepo, readManifest, promptRequired } from "../manifest.ts";
+import { getGitRepo, readManifest, promptRequired, resolveAuthPassword } from "../manifest.ts";
 import { mergeEnv } from "../../shared/env-merge.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
 
@@ -35,6 +35,8 @@ function parseFlags(args: string[]): {
   domain?: string;
   envName?: string;
   stagingEnvName?: string;
+  authPasswordEnv?: string;
+  serverId?: number;
   sets: Record<string, string>;
   help: boolean;
 } {
@@ -42,6 +44,8 @@ function parseFlags(args: string[]): {
   let domain: string | undefined;
   let envName: string | undefined;
   let stagingEnvName: string | undefined;
+  let authPasswordEnv: string | undefined;
+  let serverId: number | undefined;
   const sets: Record<string, string> = {};
   let help = false;
 
@@ -60,8 +64,20 @@ function parseFlags(args: string[]): {
         process.exit(1);
       }
       sets[pair.slice(0, eq)] = pair.slice(eq + 1);
+    } else if (arg.startsWith("--auth-password-env=")) {
+      authPasswordEnv = arg.slice(20);
+    } else if (arg.startsWith("--server=")) {
+      const raw = arg.slice(9);
+      serverId = Number(raw);
+      if (!Number.isInteger(serverId) || serverId < 1) {
+        console.error(`${RED}Invalid --server value (expected a positive numeric ID): ${raw}${RESET}`);
+        process.exit(1);
+      }
     } else if (arg === "--help" || arg === "-h") {
       help = true;
+    } else if (arg.startsWith("--")) {
+      console.error(`${RED}Unknown option: ${arg}${RESET}`);
+      process.exit(1);
     } else if (!arg.startsWith("--") && !manifestPath) {
       manifestPath = arg;
     }
@@ -69,7 +85,7 @@ function parseFlags(args: string[]): {
 
   if (!manifestPath) manifestPath = ".ocd-deploy.json";
 
-  return { manifestPath, domain, envName, stagingEnvName, sets, help };
+  return { manifestPath, domain, envName, stagingEnvName, authPasswordEnv, serverId, sets, help };
 }
 
 export async function deploy(args: string[]): Promise<void> {
@@ -79,7 +95,7 @@ export async function deploy(args: string[]): Promise<void> {
     return;
   }
 
-  const { manifestPath, domain, envName, stagingEnvName, sets, help } = parseFlags(args);
+  const { manifestPath, domain, envName, stagingEnvName, authPasswordEnv, serverId, sets, help } = parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
@@ -108,6 +124,11 @@ ${BOLD}Options:${RESET}
   --staging-env=<name|id>    Enable webhook staging: pushes deploy to the
                              <name>-staging sibling (with this environment) and
                              hold for manual promotion. Requires webhook.enabled.
+  --auth-password-env=<key>  Read the basic-auth password from a local
+                             environment variable (never stored in the manifest)
+  --server=<id>              Pin this one deploy to a server ID. This is an
+                             operational override; use placement_pool in a
+                             committed manifest for portable scheduling intent.
   --set=KEY=VALUE            Set an env var (repeatable)`);
     process.exit(0);
   }
@@ -127,7 +148,13 @@ ${BOLD}Options:${RESET}
     container_port: port,
   };
 
+  if (manifest.domain) body.domain = manifest.domain;
   if (domain) body.domain = domain;
+  if (manifest.git_branch) body.git_branch = manifest.git_branch;
+  if (manifest.env_projection !== undefined) body.env_projection = manifest.env_projection;
+  const authPassword = await resolveAuthPassword(manifest.auth, authPasswordEnv);
+  if (authPassword !== undefined) body.auth_password = authPassword;
+  if (serverId !== undefined) body.server_id = serverId;
   if (manifest.build?.dockerfile) body.dockerfile_path = manifest.build.dockerfile;
   if (manifest.build?.context) body.docker_context = manifest.build.context;
 
@@ -187,6 +214,9 @@ ${BOLD}Options:${RESET}
 
   // Durability policy applies to every path.
   if (manifest.durability_class) body.durability_class = manifest.durability_class;
+  if (manifest.placement_pool) body.placement_pool = manifest.placement_pool;
+  if (manifest.scale_to_zero_after !== undefined)
+    body.scale_to_zero_after = manifest.scale_to_zero_after;
 
   // Unified env resolution: manifest defaults + --set, layered on top of a
   // linked environment when one is given. Existing env values win; --set

@@ -5,10 +5,13 @@ export async function apps(): Promise<void> {
   const list = await getApps();
 
   table(
-    ["Name", "Status", "Domain", "Repo"],
+    ["Name", "Status", "Commit", "Domain", "Repo"],
     list.map((a) => [
       a.name,
-      colorStatus(a.status),
+      a.environment_stale
+        ? `${colorStatus(a.status)} — stale environment, redeploy required`
+        : colorStatus(a.status),
+      a.deployed_commit ? a.deployed_commit.slice(0, 12) : "-",
       appAddress(a),
       a.git_repo ? a.git_repo.replace("https://github.com/", "") : "-",
     ]),

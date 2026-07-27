@@ -11,6 +11,9 @@ import {
   getOperation,
   getSteps,
   isCancelRequested,
+  insertStep,
+  markOperationCompensating,
+  markOperationFinished,
   requestCancel,
 } from "../shared/db/operations.ts";
 import { runOperation } from "./step-runner.ts";
@@ -107,6 +110,76 @@ describe("step-runner: skip already-completed steps", () => {
 // ---- compensation order ------------------------------------------------------
 
 describe("step-runner: compensation on failure", () => {
+  test("a newer operation adopting the same resource fences every old compensation", async () => {
+    const compensate = mock(async () => {});
+    const old = enqueueOperation({
+      kind: "test-op",
+      resourceKeys: ["stack:production"],
+      input: {},
+      trigger: "test",
+    });
+    const def = makeDef([
+      { name: "created", run: async () => ({ id: 1 }), compensate },
+      {
+        name: "fail",
+        run: async () => {
+          const newer = enqueueOperation({
+            kind: "test-op",
+            resourceKeys: ["stack:production"],
+            input: {},
+            trigger: "test",
+          });
+          markOperationFinished(newer.id, "done");
+          throw new Error("old run failed late");
+        },
+      },
+    ]);
+
+    await runOperation(getOperation(old.id)!, def);
+
+    expect(compensate).not.toHaveBeenCalled();
+    expect(getOperation(old.id)!.status).toBe("compensated");
+    const fenced = getSteps(old.id).find(
+      (step) => step.phase === "compensate" && step.step === "created",
+    );
+    expect(fenced?.status).toBe("skipped");
+    expect(fenced?.detail).toContain("adopted by newer operation");
+  });
+
+  test("an already-enqueued destructive child inherits the superseded parent fence", async () => {
+    const parent = enqueueOperation({
+      kind: "deploy_stack",
+      resourceKeys: ["stack:production-child"],
+      input: {},
+      trigger: "test",
+    });
+    const child = enqueueOperation({
+      kind: "destroy_service",
+      resourceKeys: ["service:9"],
+      input: { serviceId: 9 },
+      trigger: "stack",
+      parentId: parent.id,
+    });
+    const newer = enqueueOperation({
+      kind: "deploy_stack",
+      resourceKeys: ["stack:production-child"],
+      input: {},
+      trigger: "test",
+    });
+    markOperationFinished(newer.id, "done");
+    const destructiveRun = mock(async () => ({ ok: true }));
+    const def = {
+      ...makeDef([{ name: "delete", run: destructiveRun }]),
+      kind: "destroy_service",
+    } as AnyOpKind;
+
+    await runOperation(getOperation(child.id)!, def);
+
+    expect(destructiveRun).not.toHaveBeenCalled();
+    expect(getOperation(child.id)!.status).toBe("cancelled");
+    expect(getOperation(child.id)!.error_json).toContain("destructive child fenced");
+  });
+
   test("failure triggers reverse compensation: 3→2→1", async () => {
     const compensated: string[] = [];
     const def = makeDef([
@@ -176,6 +249,84 @@ describe("step-runner: compensation on failure", () => {
     // so the reconciler can retry it. Only fully successful rollback yields
     // 'compensated'.
     expect(getOperation(op.id)!.status).toBe("compensating");
+  });
+});
+
+describe("step-runner: superseded compensation fencing", () => {
+  test("does not run an old compensator after a newer operation adopts the resource", async () => {
+    const compensate = mock(async () => {});
+    const old = enqueueOperation({
+      kind: "test-op",
+      resourceKeys: ["stack:production"],
+      input: {},
+      trigger: "test",
+    });
+    insertStep({
+      opId: old.id,
+      seq: 1,
+      step: "create-live-resource",
+      phase: "forward",
+      status: "ok",
+      outputJson: JSON.stringify({ resourceId: 42 }),
+    });
+    markOperationCompensating(old.id, { message: "old failure" });
+    const newer = enqueueOperation({
+      kind: "test-op",
+      resourceKeys: ["stack:production"],
+      input: {},
+      trigger: "test",
+    });
+    markOperationFinished(newer.id, "done");
+
+    const def = makeDef([
+      {
+        name: "create-live-resource",
+        run: async () => ({ resourceId: 42 }),
+        compensate,
+      },
+    ]);
+    await runOperation(getOperation(old.id)!, def);
+
+    expect(compensate).not.toHaveBeenCalled();
+    expect(getOperation(old.id)?.status).toBe("compensated");
+    expect(getSteps(old.id).some(
+      (step) => step.phase === "compensate" && step.status === "skipped",
+    )).toBe(true);
+  });
+
+  test("fences an already-queued destructive child through its superseded parent", async () => {
+    const parent = enqueueOperation({
+      kind: "deploy_stack",
+      resourceKeys: ["stack:production-child"],
+      input: {},
+      trigger: "test",
+    });
+    const child = enqueueOperation({
+      kind: "destroy_app",
+      resourceKeys: ["app:42"],
+      input: { appId: 42 },
+      trigger: "compensation",
+      parentId: parent.id,
+    });
+    const newer = enqueueOperation({
+      kind: "deploy_stack",
+      resourceKeys: ["stack:production-child"],
+      input: {},
+      trigger: "test",
+    });
+    markOperationFinished(newer.id, "done");
+    const destroy = mock(async () => ({ ok: true }));
+    const def: AnyOpKind = {
+      kind: "destroy_app",
+      label: "Destroy app",
+      resourceKeys: () => ["app:42"],
+      steps: [{ name: "destroy", run: destroy }],
+    };
+
+    await runOperation(getOperation(child.id)!, def);
+
+    expect(destroy).not.toHaveBeenCalled();
+    expect(getOperation(child.id)?.status).toBe("cancelled");
   });
 });
 

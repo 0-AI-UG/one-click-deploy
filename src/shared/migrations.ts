@@ -1803,6 +1803,33 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 86,
+    description:
+      "Add apps.env_projection. NULL preserves the legacy behavior (receive every variable from the linked environment); a JSON array limits a stack member to explicitly selected keys, including [] for platform variables only.",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN env_projection TEXT");
+    },
+  },
+  {
+    version: 87,
+    description:
+      "Track app containers whose linked environment changed after they were created, and retain detached managed volumes in a recoverable retired_volumes registry instead of deleting them immediately.",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN environment_stale INTEGER NOT NULL DEFAULT 0");
+      db.run(`CREATE TABLE retired_volumes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider_volume_id TEXT NOT NULL UNIQUE,
+        former_resource_type TEXT NOT NULL,
+        former_resource_id INTEGER NOT NULL,
+        former_resource_name TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'detached',
+        retired_at TEXT NOT NULL DEFAULT (datetime('now')),
+        purge_after TEXT NOT NULL DEFAULT (datetime('now', '+7 days'))
+      )`);
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

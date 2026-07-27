@@ -98,7 +98,12 @@ export function OverviewTab({
                 <td className="py-2 px-3">
                   <a href={`#/apps/${a.id}`} className="font-mono text-[10px] font-bold text-fg hover:underline">{a.name}</a>
                 </td>
-                <td className="py-2 px-3"><StatusBadge status={a.status} /></td>
+                <td className="py-2 px-3">
+                  <StatusBadge
+                    status={a.status}
+                    subLabel={a.environment_stale ? "stale environment — redeploy required" : undefined}
+                  />
+                </td>
                 <td className="py-2 px-3 font-mono text-[10px]">
                   {a.domain && a.public
                     ? <a href={`https://${a.domain}`} target="_blank" rel="noopener" className="text-accent-blue hover:underline inline-flex items-center gap-1">{a.domain} <ExternalLink size={9} /></a>

@@ -66,6 +66,15 @@ export async function resolveEnvVarsForDeploy(
   return result;
 }
 
+export function projectEnvVars(
+  vars: Record<string, string>,
+  projection: string[] | null | undefined,
+): Record<string, string> {
+  if (projection == null) return vars;
+  const allowed = new Set(projection);
+  return Object.fromEntries(Object.entries(vars).filter(([key]) => allowed.has(key)));
+}
+
 /** Mask secret values for API responses. Strips encrypted_value/iv. */
 export function maskEnvVarsForResponse(parsed: EnvVarsV2): EnvVarEntry[] {
   return parsed.entries.map((entry) => ({
@@ -189,6 +198,8 @@ export function platformEnvVars(
 export async function resolveAppEnvVars(app: AppRow): Promise<Record<string, string>> {
   const db = await import("./db.ts");
   const ownRow = app.environment_id ? db.getEnvironment(app.environment_id) : null;
-  const ownVars = await resolveEnvVarsForDeploy(ownRow?.env_vars);
+  let ownVars = await resolveEnvVarsForDeploy(ownRow?.env_vars);
+  const projection = db.parseAppEnvProjection(app);
+  ownVars = projectEnvVars(ownVars, projection);
   return { ...platformEnvVars(app), ...ownVars };
 }

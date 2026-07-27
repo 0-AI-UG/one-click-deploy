@@ -56,6 +56,12 @@ export type AppRow = {
    *  the sibling links to exactly this environment — no live inheritance. */
   webhook_staging_environment_id: number | null;
   environment_id: number | null;
+  /** NULL = inherit every linked-environment key (legacy). JSON array = only
+   *  those keys; [] = platform-injected OCD_INTERNAL_* variables only. */
+  env_projection: string | null;
+  /** 1 when the linked environment changed since the running containers were
+   * created. A plain pause/unpause does not clear it; deploy/redeploy/reload do. */
+  environment_stale: number;
   stack_id: number | null;
   /** JSON array of the member keys this stack member depends on, as declared by
    *  `needs` in the stack manifest. NULL for non-members and for members
@@ -271,6 +277,7 @@ type InsertAppFields = {
    *  stored. Empty/omitted = auth disabled. */
   auth_password?: string;
   environment_id?: number;
+  env_projection?: string[] | null;
   public?: boolean;
   health_check?: boolean;
   /** Internal routing protocol. Omitted → derived from health_check (http when
@@ -317,7 +324,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, public, health_check, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -330,6 +337,9 @@ function insertAppRow(app: InsertAppFields): AppRow {
       app.env_vars,
       hashAuthPassword(app.auth_password || ""),
       app.environment_id ?? null,
+      app.env_projection === undefined || app.env_projection === null
+        ? null
+        : JSON.stringify(app.env_projection),
       (app.public ?? true) ? 1 : 0,
       healthCheck ? 1 : 0,
       internalProtocol,
@@ -517,6 +527,51 @@ export function getAppsByEnvironmentId(environmentId: number): AppRow[] {
 
 export function updateAppEnvironment(id: number, environmentId: number | null): void {
   db.query("UPDATE apps SET environment_id = ? WHERE id = ?").run(environmentId, id);
+}
+
+export function updateAppEnvProjection(id: number, projection: string[] | null): void {
+  db.query("UPDATE apps SET env_projection = ? WHERE id = ?")
+    .run(projection === null ? null : JSON.stringify(projection), id);
+}
+
+export function markAppsEnvironmentStale(environmentId: number): number {
+  const result = db.query(
+    "UPDATE apps SET environment_stale = 1 WHERE environment_id = ? AND status NOT IN ('destroying','cleanup_failed')",
+  ).run(environmentId);
+  return result.changes;
+}
+
+export function markAppsEnvironmentStaleForKeys(environmentId: number, changedKeys: string[]): number {
+  if (changedKeys.length === 0) return 0;
+  const changed = new Set(changedKeys);
+  let count = 0;
+  for (const app of getAppsByEnvironmentId(environmentId)) {
+    const projection = parseAppEnvProjection(app);
+    if (projection !== null && !projection.some((key) => changed.has(key))) continue;
+    const result = db.query(
+      "UPDATE apps SET environment_stale = 1 WHERE id = ? AND status NOT IN ('destroying','cleanup_failed')",
+    ).run(app.id);
+    count += result.changes;
+  }
+  return count;
+}
+
+export function markAppEnvironmentFresh(id: number): void {
+  db.query("UPDATE apps SET environment_stale = 0 WHERE id = ?").run(id);
+}
+
+/** NULL means legacy/all. Invalid stored JSON also fails open to all so an
+ *  upgrade cannot silently remove variables from a running app. */
+export function parseAppEnvProjection(app: Pick<AppRow, "env_projection">): string[] | null {
+  if (app.env_projection == null) return null;
+  try {
+    const parsed = JSON.parse(app.env_projection);
+    return Array.isArray(parsed) && parsed.every((key) => typeof key === "string")
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function updateAppContainerPort(id: number, port: number): void {

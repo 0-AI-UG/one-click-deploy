@@ -66,7 +66,12 @@ export {
   getStagingSibling,
   updateAppIngressSettings,
   updateAppEnvironment,
+  updateAppEnvProjection,
+  parseAppEnvProjection,
   getAppsByEnvironmentId,
+  markAppsEnvironmentStale,
+  markAppsEnvironmentStaleForKeys,
+  markAppEnvironmentFresh,
   nextReplicaHostPort,
   countApps,
   allocateInternalPort,
@@ -81,6 +86,8 @@ export {
   PUBLIC_UDP_PORT_BASE,
   PUBLIC_UDP_PORT_COUNT,
 } from "./apps.ts";
+export type { RetiredVolumeRow } from "./retired-volumes.ts";
+export { retireVolume, getRetiredVolumes } from "./retired-volumes.ts";
 export type { ReplicaRow, MetricSampleRow, ScalingEventRow } from "./replicas.ts";
 export {
   insertReplica,

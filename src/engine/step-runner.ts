@@ -11,6 +11,8 @@ import {
   markOperationFinished,
   markOperationRunning,
   bumpAttempt,
+  findSupersedingOperation,
+  findSupersedingAncestorOperation,
 } from "../shared/db/operations.ts";
 import type { AnyOpKind, OpContext, Step } from "./types.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
@@ -61,6 +63,25 @@ export async function runOperation(op: OperationRow, def: AnyOpKind): Promise<vo
 
 async function runOperationInner(op: OperationRow, def: AnyOpKind): Promise<void> {
   const input = JSON.parse(op.input_json || "{}");
+
+  // A compensation can durably enqueue destroy children. If the engine died
+  // after enqueue and a later reconcile adopted the parent's resources, those
+  // old children must not wake up and delete the live resources.
+  if (def.kind.startsWith("destroy_") && op.parent_id != null) {
+    const inherited = findSupersedingAncestorOperation(op);
+    if (inherited) {
+      const detail =
+        `destructive child fenced: parent operation #${inherited.ancestor.id} ` +
+        `was superseded by operation #${inherited.supersededBy.id}`;
+      log(`op#${op.id} ${detail}`);
+      markOperationFinished(op.id, "cancelled", {
+        message: detail,
+        compensation_skipped: true,
+        superseded_by: inherited.supersededBy.id,
+      });
+      return;
+    }
+  }
 
   // Resume directly into compensation if the op was interrupted there.
   if (op.status === "compensating") {
@@ -199,12 +220,53 @@ async function runCompensation(
     compensateDone.add(row.step);
   }
 
+  // Ownership expires the moment a newer operation begins reconciling any of
+  // the same logical resources. This is deliberately checked before *and*
+  // during the reverse walk: an old rollback must prefer leaking/reviewing a
+  // resource over deleting one that a later successful run now serves from.
+  const skipSupersededCompensation = (supersededBy: OperationRow): void => {
+    const detail =
+      `compensation fenced: resources were adopted by newer operation #${supersededBy.id} ` +
+      `(${supersededBy.kind}, ${supersededBy.status})`;
+    for (let i = def.steps.length - 1; i >= 0; i--) {
+      const step = def.steps[i];
+      if (!step.compensate || !forwardDone.has(step.name) || compensateDone.has(step.name)) continue;
+      const seq = nextStepSeq(op.id);
+      insertStep({
+        opId: op.id,
+        seq,
+        step: step.name,
+        phase: "compensate",
+        status: "skipped",
+        detail,
+      });
+    }
+    markOperationFinished(op.id, cancelled ? "cancelled" : "compensated", {
+      ...(error && typeof error === "object" ? error as Record<string, unknown> : {}),
+      message: detail,
+      compensation_skipped: true,
+      superseded_by: supersededBy.id,
+    });
+  };
+
+  const initiallySuperseded = findSupersedingOperation(op);
+  if (initiallySuperseded) {
+    skipSupersededCompensation(initiallySuperseded);
+    return;
+  }
+
   let anyFailed = false;
   for (let i = def.steps.length - 1; i >= 0; i--) {
     const step = def.steps[i];
     if (!step.compensate) continue;
     if (!forwardDone.has(step.name)) continue;
     if (compensateDone.has(step.name)) continue;
+
+    const superseded = findSupersedingOperation(op);
+    if (superseded) {
+      skipSupersededCompensation(superseded);
+      return;
+    }
 
     const seq = nextStepSeq(op.id);
     insertStep({
@@ -240,6 +302,7 @@ async function runCompensation(
     try {
       await step.compensate!(ctx, out, priorOutputs);
       finishStep({ opId: op.id, seq, status: "ok" });
+      compensateDone.add(step.name);
     } catch (err) {
       finishStep({
         opId: op.id,

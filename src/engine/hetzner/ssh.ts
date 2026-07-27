@@ -165,6 +165,82 @@ export async function sshExec(
   }
 }
 
+/**
+ * SSH execution that forwards stdout/stderr incrementally. Long Docker builds
+ * use this instead of buffering the whole command until exit, so operation
+ * followers see cache/build progress and a heartbeat even during quiet stages.
+ */
+export async function sshExecStreaming(
+  ip: string,
+  command: string,
+  opts: {
+    hostKey?: string;
+    onLine?: (line: string, source: "stdout" | "stderr") => void;
+    onHeartbeat?: (elapsedMs: number, outputLines: number) => void;
+    heartbeatMs?: number;
+  } = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const shortCmd = command.length > 120 ? command.slice(0, 120) + "..." : command;
+  log("ssh", `Streaming exec on ${ip}: ${shortCmd}`);
+  const started = Date.now();
+  const { args, tmpKnownHostsPath } = buildSshArgs({
+    ip,
+    command,
+    hostKey: opts.hostKey,
+    interactive: false,
+  });
+  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+  let outputLines = 0;
+  const MAX_CAPTURE = 1024 * 1024;
+
+  async function consume(
+    stream: ReadableStream<Uint8Array>,
+    source: "stdout" | "stderr",
+  ): Promise<string> {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let pending = "";
+    let captured = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      if (captured.length < MAX_CAPTURE) captured += chunk.slice(0, MAX_CAPTURE - captured.length);
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() || "";
+      for (const line of lines) {
+        outputLines++;
+        opts.onLine?.(line, source);
+      }
+    }
+    pending += decoder.decode();
+    if (pending) {
+      outputLines++;
+      opts.onLine?.(pending, source);
+    }
+    return captured;
+  }
+
+  const heartbeat = setInterval(
+    () => opts.onHeartbeat?.(Date.now() - started, outputLines),
+    opts.heartbeatMs ?? 30_000,
+  );
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      consume(proc.stdout, "stdout"),
+      consume(proc.stderr, "stderr"),
+      proc.exited,
+    ]);
+    return { stdout, stderr, exitCode };
+  } finally {
+    clearInterval(heartbeat);
+    if (tmpKnownHostsPath) {
+      try { unlinkSync(tmpKnownHostsPath); } catch { /* cleanup */ }
+    }
+  }
+}
+
 export async function captureHostKey(ip: string): Promise<string> {
   log("ssh", `Capturing host key for ${ip}`);
   const proc = Bun.spawn(

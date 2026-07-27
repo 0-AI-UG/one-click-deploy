@@ -35,8 +35,11 @@
     }
   },
   "defaultPort": 5432,
+  "defaultEnvVars": {
+    "PGDATA": "/var/lib/postgresql/data/pgdata"
+  },
   "requiredEnvVars": [
-    { "key": "POSTGRES_USER", "label": "Username", "generate": "username" },
+    { "key": "POSTGRES_USER", "label": "Username", "default": "postgres" },
     { "key": "POSTGRES_PASSWORD", "label": "Password", "generate": "password" },
     { "key": "POSTGRES_DB", "label": "Database", "default": "app" },
     { "key": "POSTGRES_EXTENSIONS", "label": "Extensions (comma-separated)" }

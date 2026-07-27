@@ -40,8 +40,12 @@ export async function destroyServiceCore(serviceId: number): Promise<{ ok: boole
         if (envRow) {
           const parsed = parseEnvVars(envRow.env_vars);
           const prefix = link.env_prefix || "DATABASE";
+          const removedKeys = parsed.entries
+            .filter((e) => e.key.startsWith(`${prefix}_`))
+            .map((e) => e.key);
           const filtered = parsed.entries.filter((e) => !e.key.startsWith(`${prefix}_`));
           db.updateEnvironment(link.environment_id, envRow.name, serializeEnvVars(filtered));
+          db.markAppsEnvironmentStaleForKeys(link.environment_id, removedKeys);
         }
       } catch (err) {
         log("destroy", `Failed to uninject from environment ${link.environment_id}: ${err}`);
@@ -77,13 +81,20 @@ export async function destroyServiceCore(serviceId: number): Promise<{ ok: boole
         }
       }
 
-      // Delete Hetzner volume
+      // Detach and retain managed data for operator recovery.
       if (instance.volume_id) {
         try {
-          await hetzner.volumes!.delete(instance.volume_id);
-          log("destroy", `Deleted volume ${instance.volume_id}`);
+          await hetzner.volumes!.detach(instance.volume_id);
+          db.retireVolume({
+            providerVolumeId: instance.volume_id,
+            formerResourceType: "service",
+            formerResourceId: service.id,
+            formerResourceName: service.name,
+            reason: "service destroyed through server cleanup",
+          });
+          log("destroy", `Detached volume ${instance.volume_id}; retained for recovery`);
         } catch (err) {
-          log("destroy", `Failed to delete volume ${instance.volume_id}: ${err}`);
+          log("destroy", `Failed to retire volume ${instance.volume_id}: ${err}`);
           cleanupFailed = true;
         }
       }

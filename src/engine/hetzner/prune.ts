@@ -1,5 +1,5 @@
 import { sshExec } from "./ssh.ts";
-import { asUser, log, OCD_IMAGE_LABEL } from "./container-common.ts";
+import { asUser, log, OCD_IMAGE_LABEL, withExclusiveImageGc } from "./container-common.ts";
 
 // `docker image prune -a` reclaims tagged-but-unreferenced images. A deploy's
 // freshly built `${app}:latest` is unreferenced for the brief build-before-swap
@@ -11,7 +11,6 @@ import { asUser, log, OCD_IMAGE_LABEL } from "./container-common.ts";
 // seconds-long swap gap, while genuinely stale images are still reclaimed.
 // (Filters AND together, so this can only ever prune fewer images, never more.)
 const PRUNE_MIN_IMAGE_AGE = "10m";
-
 /**
  * Prune dangling Docker images and trim the git repo after a successful build.
  * Runs in the background (fire-and-forget) so it doesn't slow down deploys.
@@ -35,7 +34,7 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
     `cd ${appDir} && git gc --auto 2>/dev/null || true`,
   ].join(" && ");
 
-  sshExec(ip, asUser(cmd), hostKey).catch((err) => {
+  sshExec(ip, asUser(withExclusiveImageGc(cmd)), hostKey).catch((err) => {
     log("prune", `Post-build cleanup on ${ip} failed (non-fatal): ${err}`);
   });
 }
@@ -86,7 +85,7 @@ export async function pruneServer(ip: string, hostKey?: string) {
         `docker image prune -f 2>&1 | tail -1`,
         `docker builder prune -af 2>&1 | tail -1`,
       ];
-  const result = await sshExec(ip, asUser(steps.join("; ")), hostKey);
+  const result = await sshExec(ip, asUser(withExclusiveImageGc(steps.join("; "))), hostKey);
   const tag = underPressure ? "prune(pressure)" : "prune";
   log(tag, `Server ${ip} (disk ${usedPct}%): ${result.stdout.trim().replace(/\n/g, " | ")}`);
 }

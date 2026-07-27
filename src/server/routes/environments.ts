@@ -54,8 +54,20 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
     if (!existing) {
       return Response.json({ ok: false, error: "Environment not found" }, { status: 404, headers: corsHeaders });
     }
-    const body = await request.json();
+    const body = await request.json() as {
+      name?: string;
+      env_vars?: Array<{ key: string; value: string; secret: boolean }>;
+      rollout?: "redeploy" | "restart" | "none";
+      app_ids?: number[];
+    };
     const { name, env_vars } = body;
+    const rollout = body.rollout ?? "redeploy";
+    if (!["redeploy", "restart", "none"].includes(rollout)) {
+      return Response.json(
+        { ok: false, error: "rollout must be redeploy, restart, or none" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
 
     const renaming = typeof name === "string" && name.trim() !== "" && name.trim() !== existing.name;
     if (renaming) {
@@ -69,23 +81,55 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
     // treats an absent list as "no entries", which would wipe every var on a
     // rename-only request.
     let newSerialized = existing.env_vars;
+    let changedKeys: string[] = [];
     if (env_vars !== undefined) {
       const existingParsed = parseEnvVars(existing.env_vars);
       const merged = await mergeEnvVarUpdate(existingParsed, env_vars || []);
       newSerialized = serializeEnvVars(merged.entries);
+      const before = new Map(existingParsed.entries.map((entry) => [entry.key, JSON.stringify(entry)]));
+      const after = new Map(merged.entries.map((entry) => [entry.key, JSON.stringify(entry)]));
+      changedKeys = [...new Set([...before.keys(), ...after.keys()])]
+        .filter((key) => before.get(key) !== after.get(key));
+    }
+    const attachedApps = db.getAppsByEnvironmentId(id);
+    if (body.app_ids !== undefined && !Array.isArray(body.app_ids)) {
+      return Response.json(
+        { ok: false, error: "app_ids must be an array" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const requestedIds = body.app_ids === undefined ? null : new Set(body.app_ids.map(Number));
+    if (requestedIds && [...requestedIds].some((appId) => !attachedApps.some((app) => app.id === appId))) {
+      return Response.json(
+        { ok: false, error: "app_ids may only contain apps linked to this environment" },
+        { status: 400, headers: corsHeaders },
+      );
     }
     const envVarsChanged = newSerialized !== existing.env_vars;
     db.updateEnvironment(id, name || existing.name, newSerialized);
+    const staleApps = envVarsChanged
+      ? db.markAppsEnvironmentStaleForKeys(id, changedKeys)
+      : 0;
 
-    // Cascade redeploy all attached apps if env vars changed — enqueued as a
-    // single fan-out op whose children are individual app redeploys.
-    const attachedApps = db.getAppsByEnvironmentId(id);
+    // Roll out only to linked apps that consume at least one changed key. A
+    // null projection is the legacy "all keys" behavior.
+    const affectedApps = attachedApps
+      .filter((app) => !requestedIds || requestedIds.has(app.id))
+      .filter((app) => {
+        const projection = db.parseAppEnvProjection(app);
+        return projection === null || projection.some((key) => changedKeys.includes(key));
+      });
     let opId: number | null = null;
-    if (envVarsChanged && attachedApps.length > 0) {
+    if (envVarsChanged && rollout !== "none" && affectedApps.length > 0) {
       const r = enqueue({
         kind: "cascade_redeploy",
         resourceKeys: [`env:${id}`],
-        input: { environmentId: id },
+        input: {
+          environmentId: id,
+          appIds: affectedApps.map((app) => app.id),
+          changedKeys,
+          mode: rollout,
+        },
         trigger: "ui",
         triggeredBy: payload.userId,
       });
@@ -94,7 +138,12 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
 
     return Response.json({
       ok: true,
-      redeploying: envVarsChanged ? attachedApps.length : 0,
+      redeploying: envVarsChanged && rollout === "redeploy" ? affectedApps.length : 0,
+      restarting: envVarsChanged && rollout === "restart" ? affectedApps.length : 0,
+      affected: envVarsChanged ? affectedApps.length : 0,
+      stale_apps: staleApps,
+      rollout,
+      changed_keys: changedKeys,
       op_id: opId,
     }, { headers: corsHeaders });
   } catch (error) {

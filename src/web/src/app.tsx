@@ -10,8 +10,6 @@ import { TwoFactorSetupPage } from "./pages/two-factor-setup.tsx";
 import { PasswordResetPage } from "./pages/password-reset.tsx";
 import { SetupPage } from "./pages/setup.tsx";
 import { DashboardPage } from "./pages/dashboard.tsx";
-import { DeployPage } from "./pages/deploy/index.tsx";
-import { DeployProgressPage } from "./pages/deploy-progress.tsx";
 import { AppDetailPage } from "./pages/app-detail/index.tsx";
 import { StackDetailPage } from "./pages/stack-detail/index.tsx";
 import { ResourcesPage } from "./pages/resources.tsx";
@@ -21,8 +19,6 @@ import { AccountPage } from "./pages/account.tsx";
 import { UsersPage } from "./pages/admin/users.tsx";
 import { UserDetailPage } from "./pages/admin/user-detail.tsx";
 import { TerminalPage } from "./pages/terminal.tsx";
-import { DeployServicePage } from "./pages/deploy-service.tsx";
-import { ServiceDeployProgressPage } from "./pages/service-deploy-progress.tsx";
 import { ServiceDetailPage } from "./pages/service-detail.tsx";
 import { EnvironmentsPage } from "./pages/environments.tsx";
 import { DeviceAuthPage } from "./pages/device-auth.tsx";
@@ -133,29 +129,12 @@ export function App() {
   let content;
   if (hash === "#/" || hash === "") {
     content = <DashboardPage />;
-  } else if (hash === "#/deploy" || hash.startsWith("#/deploy?")) {
-    content = <DeployPage />;
-  } else if (hash === "#/deploy/stack") {
-    // Stack deploy is unified into the single Deploy page (detection is implicit);
-    // redirect old links there.
-    window.location.replace("#/deploy");
-    content = <DeployPage />;
-  } else if (hash.startsWith("#/deploy/progress")) {
-    const parts = hash.split("/");
-    const opId = parts[3] ? parseInt(parts[3], 10) : null;
-    content = <DeployProgressPage opId={opId && !Number.isNaN(opId) ? opId : null} />;
   } else if (hash.startsWith("#/apps/")) {
     const appId = parseInt(hash.split("/")[2], 10);
     content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;
   } else if (hash.startsWith("#/stacks/")) {
     const stackId = parseInt(hash.split("/")[2], 10);
     content = stackId ? <StackDetailPage stackId={stackId} /> : <DashboardPage />;
-  } else if (hash.startsWith("#/deploy-service")) {
-    const parts = hash.replace("#/deploy-service", "").replace(/^\//, "");
-    content = <DeployServicePage preselectedType={parts || undefined} />;
-  } else if (hash.startsWith("#/deploy/service-progress/")) {
-    const opId = parseInt(hash.split("/")[3], 10);
-    content = <ServiceDeployProgressPage opId={opId && !Number.isNaN(opId) ? opId : null} />;
   } else if (hash.startsWith("#/services/")) {
     const serviceId = parseInt(hash.split("/")[2], 10);
     content = serviceId ? <ServiceDetailPage serviceId={serviceId} /> : <DashboardPage />;

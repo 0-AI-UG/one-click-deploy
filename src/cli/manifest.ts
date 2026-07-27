@@ -76,6 +76,35 @@ export function readManifest(path: string): DeployManifest {
 }
 
 /**
+ * Resolve declarative basic-auth intent without ever putting a plaintext
+ * password in the manifest. Disabled auth returns an empty string (the wire
+ * protocol's explicit "clear auth" value); enabled auth reads password_env or
+ * prompts on a TTY.
+ */
+export async function resolveAuthPassword(
+  auth: DeployManifest["auth"],
+  passwordEnvOverride?: string,
+): Promise<string | undefined> {
+  if (!auth) return undefined;
+  if (!auth.enabled) return "";
+  const envKey = passwordEnvOverride || auth.password_env;
+  if (envKey) {
+    const value = process.env[envKey];
+    if (value) return value;
+    if (!process.stdin.isTTY) {
+      throw new Error(`Basic auth password environment variable ${envKey} is not set`);
+    }
+  } else if (!process.stdin.isTTY) {
+    throw new Error(
+      "Basic auth is enabled but no password is available; set auth.password_env or use --auth-password-env",
+    );
+  }
+  let password = "";
+  while (!password) password = await promptHidden("  Basic auth password: ");
+  return password;
+}
+
+/**
  * Resolve the manifest's env[] section into concrete values: --set overrides
  * (per-app `sets`), then a shared `fallback` lookup (used only for declared
  * vars, never added as extras), then manifest defaults, then interactive

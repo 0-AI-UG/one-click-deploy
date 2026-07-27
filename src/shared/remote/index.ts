@@ -4,6 +4,7 @@
 // SSH & server access
 export {
   sshExec,
+  sshExecStreaming,
   getSshKeyPath,
   getOrCreateLocalKeyPair,
   captureHostKey,
@@ -41,4 +42,3 @@ export {
   deployConfigFile,
   pruneServer,
 } from "../../engine/hetzner/containers.ts";
-

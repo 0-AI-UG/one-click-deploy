@@ -14,6 +14,17 @@ export const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 // other applications on the same host.
 export const OCD_IMAGE_LABEL_KEY = "ocd.managed";
 export const OCD_IMAGE_LABEL = `${OCD_IMAGE_LABEL_KEY}=true`;
+export const IMAGE_GC_LOCK_PATH = "/tmp/ocd-image-gc.lock";
+
+/** Coordinate image consumers with host-wide garbage collection. Builds and
+ * docker-run take shared leases; pruning takes the exclusive side. */
+export function withImageGcLease(command: string, waitSeconds = 600): string {
+  return `flock -s -w ${waitSeconds} ${IMAGE_GC_LOCK_PATH} -c ${JSON.stringify(command)}`;
+}
+
+export function withExclusiveImageGc(command: string, waitSeconds = 60): string {
+  return `flock -x -w ${waitSeconds} ${IMAGE_GC_LOCK_PATH} -c ${JSON.stringify(command)}`;
+}
 
 // Default per-container resource ceilings. Applied to every app/replica unless
 // the caller overrides. Sized for small web apps; infra services pass their

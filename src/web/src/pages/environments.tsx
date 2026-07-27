@@ -15,6 +15,7 @@ export function EnvironmentsPage() {
   const [expanded, setExpanded] = useState<number | "new" | null>(null);
   const [editName, setEditName] = useState("");
   const [editVars, setEditVars] = useState<EnvVarRow[]>([]);
+  const [rollout, setRollout] = useState<"redeploy" | "restart" | "none">("redeploy");
   const [loading, setLoading] = useState(false);
   const [attachedApps, setAttachedApps] = useState<Record<number, AttachedApp[]>>({});
   const [allApps, setAllApps] = useState<AppData[]>([]);
@@ -68,6 +69,7 @@ export function EnvironmentsPage() {
       setExpanded(env.id);
       setEditName(env.name);
       setEditVars(env.env_vars.map((e) => ({ key: e.key, value: e.value, secret: e.secret })));
+      setRollout("redeploy");
     }
   };
 
@@ -75,6 +77,7 @@ export function EnvironmentsPage() {
     setExpanded("new");
     setEditName("");
     setEditVars([]);
+    setRollout("redeploy");
   };
 
   const save = async (id: number | "new") => {
@@ -89,18 +92,21 @@ export function EnvironmentsPage() {
       } else {
         const apps = attachedApps[id] || [];
         const activeApps = apps.filter((a) => a.status !== "stopped" && a.status !== "destroying");
-        if (activeApps.length > 0) {
+        if (activeApps.length > 0 && rollout !== "none") {
           const ok = await confirm(
-            "Redeploy Apps",
-            `Saving will redeploy ${activeApps.length} app(s): ${activeApps.map((a) => a.name).join(", ")}`,
+            rollout === "restart" ? "Reload Apps" : "Redeploy Apps",
+            rollout === "restart"
+              ? `Saving will recreate ${activeApps.length} app(s) from existing images: ${activeApps.map((a) => a.name).join(", ")}`
+              : `Saving will redeploy ${activeApps.length} app(s): ${activeApps.map((a) => a.name).join(", ")}`,
             true,
           );
           if (!ok) { setLoading(false); return; }
         }
-        const res = await put(`/api/environments/${id}`, { name: editName, env_vars: vars });
-        const redeploying = res?.redeploying ?? 0;
-        if (redeploying > 0 && res?.op_id) {
-          trackOperationInToast(res.op_id, `Redeploying ${redeploying} app${redeploying !== 1 ? "s" : ""}`);
+        const res = await put(`/api/environments/${id}`, { name: editName, env_vars: vars, rollout });
+        const rolling = (res?.redeploying ?? 0) + (res?.restarting ?? 0);
+        if (rolling > 0 && res?.op_id) {
+          const action = rollout === "restart" ? "Reloading" : "Redeploying";
+          trackOperationInToast(res.op_id, `${action} ${rolling} app${rolling !== 1 ? "s" : ""}`);
           ops.track(res.op_id);
         } else {
           showToast("Environment updated", "success");
@@ -199,10 +205,25 @@ export function EnvironmentsPage() {
         >
           <EnvVarEditor entries={editVars} onChange={setEditVars} />
         </PermissionGate>
+        {typeof id === "number" && (
+          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+            <span className="font-mono text-[9px] font-bold uppercase text-muted">On variable change</span>
+            <NeoSelect
+              compact
+              value={rollout}
+              options={[
+                { value: "redeploy", label: "Redeploy (build)" },
+                { value: "restart", label: "Reload existing image" },
+                { value: "none", label: "No rollout" },
+              ]}
+              onChange={(value) => setRollout((value || "redeploy") as typeof rollout)}
+            />
+          </div>
+        )}
         <div className="flex gap-2 justify-end">
           <Btn size="xs" variant="ghost" onClick={() => setExpanded(null)}>Cancel</Btn>
           <Btn size="xs" variant="primary" loading={loading || envBusy} disabled={!editName.trim() || envBusy} onClick={() => save(id)}>
-            {id === "new" ? "Create" : envBusy ? "Redeploying…" : "Save"}
+            {id === "new" ? "Create" : envBusy ? "Rolling out…" : "Save"}
           </Btn>
         </div>
       </div>

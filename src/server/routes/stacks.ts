@@ -7,6 +7,7 @@ import { enqueue } from "../ipc/enqueue.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
+import { deriveStackResourceState } from "../../engine/resource-state.ts";
 
 // --- Deploy ---
 
@@ -29,7 +30,7 @@ export async function handleDeployStack(request: Request): Promise<Response> {
       kind: "deploy_stack",
       resourceKeys: [`stack:${req.name}`],
       input: req,
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "api",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -46,8 +47,15 @@ export async function handleGetStacks(request: Request): Promise<Response> {
     const stacks = db.getStacks();
     const result = stacks.map((s) => {
       const apps = db.getAppsByStackId(s.id);
+      const resourceState = deriveStackResourceState(s);
       return {
         ...s,
+        status: resourceState.status,
+        resource_status_reason: resourceState.reason,
+        last_operation_id: resourceState.lastOperationId,
+        last_operation_status: resourceState.lastOperationStatus,
+        last_operation_failed: resourceState.lastOperationFailed,
+        operation_in_progress: resourceState.operationInProgress,
         app_count: apps.length,
         service_count: db.getServicesByStackId(s.id).length,
         // How many members `promote_stack` would actually promote. This applies
@@ -76,8 +84,15 @@ export async function handleGetStack(request: Request, stackId: number): Promise
     if (!stack) {
       return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
     }
+    const resourceState = deriveStackResourceState(stack);
     return Response.json({
       ...stack,
+      status: resourceState.status,
+      resource_status_reason: resourceState.reason,
+      last_operation_id: resourceState.lastOperationId,
+      last_operation_status: resourceState.lastOperationStatus,
+      last_operation_failed: resourceState.lastOperationFailed,
+      operation_in_progress: resourceState.operationInProgress,
       apps: db.getAppsByStackId(stackId),
       services: db.getServicesByStackId(stackId),
     }, { headers: corsHeaders });

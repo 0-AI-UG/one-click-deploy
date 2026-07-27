@@ -1,5 +1,5 @@
 import { sshExec, describeFailure } from "./ssh.ts";
-import { asUser, log, buildDockerRunArgs } from "./container-common.ts";
+import { asUser, log, buildDockerRunArgs, withImageGcLease } from "./container-common.ts";
 
 /**
  * Write `<baseDir>/<appName>/.env.deploy` from resolved env vars — single-quote
@@ -168,7 +168,10 @@ export async function startAppReplica(
     memoryMb: opts.memoryMb,
     cpus: opts.cpus,
   });
-  const result = await sshExec(ip, asUser(cmd), hostKey);
+  // Keep GC out while Docker resolves the image tag and creates the container.
+  // The build path takes the same shared lease, while every prune takes the
+  // exclusive side, closing both ends of the build-before-run race.
+  const result = await sshExec(ip, asUser(withImageGcLease(cmd)), hostKey);
   if (result.exitCode !== 0) {
     log("run", `Docker run stderr: ${result.stderr}`);
     throw new Error(describeFailure("Failed to start container", result));

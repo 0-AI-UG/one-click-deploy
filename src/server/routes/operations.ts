@@ -11,12 +11,22 @@ import {
   listRecentOperations,
   listChildOperations,
   requestCancel,
+  requeueOperation,
+  retryOperationAsNew,
+  finalizeOperation,
 } from "../../shared/db/operations.ts";
 import { getSettings } from "../../shared/db/settings.ts";
 import { getApp } from "../../shared/db/apps.ts";
 import { getServer } from "../../shared/db/servers.ts";
 import { stepCount, listOps, getOp } from "../../engine/ops/registry.ts";
 import { getOpLogs } from "../../engine/op-logger.ts";
+import { currentHolder } from "../../engine/scheduler.ts";
+import {
+  applyOperationResourceStatus,
+  assessOperationResources,
+} from "../../engine/resource-state.ts";
+import { previewCompensation } from "../../engine/compensation-safety.ts";
+import { enforceConfirmation } from "../lib/action-confirm.ts";
 
 // Keys whose values may contain secrets (connection strings, passwords,
 // tokens, webhook secrets, env-var values). Redacted in any op input/output
@@ -137,7 +147,7 @@ export async function handleGetOperation(request: Request, id: number): Promise<
     const steps = getSteps(id, 0).map(mapStep);
     const children = listChildOperations(id).map(toJsonRow);
     return Response.json(
-      { ...toJsonRow(op), steps, children },
+      { ...toJsonRow(op), steps, children, compensation_preview: previewCompensation(op) },
       { headers: corsHeaders },
     );
   } catch (err) {
@@ -232,8 +242,105 @@ export async function handleCancelOperation(request: Request, id: number): Promi
     if (!user.is_admin && op.triggered_by !== payload.userId) {
       throw new PermissionError("Cannot cancel another user's operation");
     }
+    // Pending operations have not run a side effect and requestCancel performs
+    // a plain queue removal. Once forward work started, cancellation invokes
+    // compensation and is therefore a destructive action.
+    if (op.status !== "pending") {
+      await enforceConfirmation(request, payload, "cancel_operation", "operation", String(id));
+    }
     requestCancel(id);
-    return Response.json({ ok: true }, { headers: corsHeaders });
+    return Response.json({ ok: true, compensation_preview: previewCompensation(op) }, { headers: corsHeaders });
+  } catch (err) {
+    return handleError(err);
+  }
+}
+
+async function requireOperationRecoveryAccess(request: Request, id: number) {
+  const payload = await requirePermission(request, "operations.cancel");
+  const user = getUserById(payload.userId);
+  if (!user) throw new PermissionError("Unauthorized");
+  const op = getOperation(id);
+  if (!op) return { payload, user, op: null };
+  if (!user.is_admin && op.triggered_by !== payload.userId) {
+    throw new PermissionError("Cannot recover another user's operation");
+  }
+  return { payload, user, op };
+}
+
+function opIsHeld(op: NonNullable<ReturnType<typeof getOperation>>): boolean {
+  const keys = safeParse<string[]>(op.resource_keys, []);
+  return keys.some((key) => currentHolder(key)?.opId === op.id);
+}
+
+export async function handleRetryOperation(request: Request, id: number): Promise<Response> {
+  try {
+    const { payload, op } = await requireOperationRecoveryAccess(request, id);
+    if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
+    if (op.status === "done") {
+      return Response.json({ error: "A successful operation does not need retrying" }, { status: 409, headers: corsHeaders });
+    }
+    if (opIsHeld(op)) {
+      return Response.json({ error: "Operation is still executing; cancel it before retrying" }, { status: 409, headers: corsHeaders });
+    }
+
+    // Compensation retries continue on the same durable operation so already
+    // completed cleanup steps stay skipped. A completed/rolled-back forward
+    // attempt gets a new audit row and starts from scratch.
+    const sameAttempt = ["pending", "running", "compensating", "compensation_failed"].includes(op.status);
+    const retried = sameAttempt
+      ? requeueOperation(op.id)
+      : retryOperationAsNew(op.id, payload.userId);
+    if (!retried) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
+    return Response.json(
+      { ok: true, op_id: retried.id, resumed: retried.id === op.id },
+      { headers: corsHeaders },
+    );
+  } catch (err) {
+    return handleError(err);
+  }
+}
+
+export async function handleFinalizeOperation(request: Request, id: number): Promise<Response> {
+  try {
+    const { op } = await requireOperationRecoveryAccess(request, id);
+    if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
+    if (opIsHeld(op)) {
+      return Response.json({ error: "Operation is still executing and cannot be finalized" }, { status: 409, headers: corsHeaders });
+    }
+    const body = (await request.json().catch(() => ({}))) as { status?: "auto" | "done" | "failed" };
+    const requested = body.status ?? "auto";
+    if (!["auto", "done", "failed"].includes(requested)) {
+      return Response.json({ error: "status must be auto, done, or failed" }, { status: 400, headers: corsHeaders });
+    }
+
+    const terminal = ["done", "failed", "cancelled", "compensated", "compensation_failed"].includes(op.status);
+    const start = Date.parse(`${(op.started_at || op.enqueued_at).replace(" ", "T")}Z`);
+    const stale = Number.isFinite(start) && Date.now() - start >= 10 * 60_000;
+    if (!terminal && !stale) {
+      return Response.json(
+        { error: "Operation is not terminal or stale yet; cancel it first" },
+        { status: 409, headers: corsHeaders },
+      );
+    }
+
+    const assessment = assessOperationResources(op);
+    const next = requested === "auto" ? assessment.status : requested;
+    if (next === "done" && !assessment.safeToFinalizeDone) {
+      return Response.json(
+        { error: `Resources do not match a successful operation: ${assessment.reason}` },
+        { status: 409, headers: corsHeaders },
+      );
+    }
+    const finalized = finalizeOperation(
+      op.id,
+      next,
+      `operator finalized operation after resource assessment: ${assessment.reason}`,
+    )!;
+    applyOperationResourceStatus(op, next);
+    return Response.json(
+      { ok: true, op_id: finalized.id, status: finalized.status, assessment: assessment.reason },
+      { headers: corsHeaders },
+    );
   } catch (err) {
     return handleError(err);
   }

@@ -12,6 +12,7 @@ const TERMINAL: ReadonlySet<OperationStatus> = new Set([
   "failed",
   "cancelled",
   "compensated",
+  "compensation_failed",
 ]);
 
 export type ChildSummary = { succeeded: number; failed: number; cancelled: number };
@@ -40,7 +41,11 @@ export async function awaitChildren(
     for (const r of rows) {
       if (r.status === "done") succeeded++;
       else if (r.status === "cancelled") cancelled++;
-      else if (r.status === "failed" || r.status === "compensated") failed++;
+      else if (
+        r.status === "failed" ||
+        r.status === "compensated" ||
+        r.status === "compensation_failed"
+      ) failed++;
     }
     return { succeeded, failed, cancelled };
   };

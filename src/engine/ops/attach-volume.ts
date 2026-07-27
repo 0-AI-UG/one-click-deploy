@@ -67,31 +67,22 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
   },
   async compensate(ctx, out) {
     if (!out) return;
-    // Detach is best-effort: the volume may already be detached (or never
-    // reached the attach), and a benign "already detached" here must not mask
-    // the delete below.
-    try { await hetzner.volumes.detach(out.volumeId); } catch { /* already detached */ }
-    // Do NOT swallow a delete failure: leaving the just-created cloud volume
-    // behind a clean `compensated` status is a silent leak. Delete is
-    // idempotent (an already-gone volume is success); any other failure
-    // propagates so the op ends `compensation_failed`.
-    try {
-      await hetzner.volumes.delete(out.volumeId);
-      ctx.log(`Deleted volume ${out.volumeId}`);
-    } catch (err) {
+    try { await hetzner.volumes.detach(out.volumeId); } catch (err) {
       if (!isNotFoundError(err)) throw err;
     }
+    const app = db.getApp(ctx.input.appId);
+    db.retireVolume({
+      providerVolumeId: out.volumeId,
+      formerResourceType: "app",
+      formerResourceId: ctx.input.appId,
+      formerResourceName: app?.name ?? `app-${ctx.input.appId}`,
+      reason: `attach-volume operation #${ctx.opId} compensated`,
+    });
+    ctx.log(`Retained detached volume ${out.volumeId} for recovery`);
   },
   async probeCompensated(_ctx, out) {
     if (!out) return true;
-    try {
-      await hetzner.volumes.get(out.volumeId);
-      return false;
-    } catch (err) {
-      // Only a definitive not-found means "already deleted"; a transient error
-      // must fall through to run the delete rather than leak the volume.
-      return isNotFoundError(err);
-    }
+    return db.getRetiredVolumes().some((row) => row.provider_volume_id === out.volumeId);
   },
 };
 

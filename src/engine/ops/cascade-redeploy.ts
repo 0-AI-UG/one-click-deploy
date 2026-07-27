@@ -7,7 +7,12 @@ import { awaitChildren, type ChildSummary } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
-type CascadeRedeployInput = { environmentId: number };
+type CascadeRedeployInput = {
+  environmentId: number;
+  appIds?: number[];
+  changedKeys?: string[];
+  mode?: "redeploy" | "restart";
+};
 
 type ResolveOut = { appIds: number[] };
 type EnqueueOut = { childOpIds: number[] };
@@ -35,8 +40,18 @@ const resolveApps: Step<CascadeRedeployInput, ResolveOut> = {
     const env = db.getEnvironment(ctx.input.environmentId);
     if (!env) throw new Error(`Environment ${ctx.input.environmentId} not found`);
     const apps = db.getAppsByEnvironmentId(ctx.input.environmentId);
-    const appIds = apps.filter((a) => shouldRedeploy(a.status)).map((a) => a.id);
-    ctx.log(`resolved ${appIds.length} app(s) to redeploy attached to env ${env.name}`);
+    const requested = ctx.input.appIds ? new Set(ctx.input.appIds) : null;
+    const changed = ctx.input.changedKeys ? new Set(ctx.input.changedKeys) : null;
+    const appIds = apps
+      .filter((a) => shouldRedeploy(a.status))
+      .filter((a) => !requested || requested.has(a.id))
+      .filter((a) => {
+        if (!changed) return true;
+        const projection = db.parseAppEnvProjection(a);
+        return projection === null || projection.some((key) => changed.has(key));
+      })
+      .map((a) => a.id);
+    ctx.log(`resolved ${appIds.length} app(s) for ${ctx.input.mode ?? "redeploy"} rollout from env ${env.name}`);
     return { appIds };
   },
 };
@@ -51,6 +66,7 @@ const enqueueChildRedeploys: Step<CascadeRedeployInput, EnqueueOut> = {
     const existingByKey = new Map(existing.map((c) => [c.idempotency_key ?? "", c]));
 
     const childOpIds: number[] = [];
+    const kind = ctx.input.mode === "restart" ? "reload_app" : "redeploy";
     for (const appId of appIds) {
       const key = `cascade:${ctx.opId}:${appId}`;
       const prev = existingByKey.get(key);
@@ -59,7 +75,7 @@ const enqueueChildRedeploys: Step<CascadeRedeployInput, EnqueueOut> = {
         continue;
       }
       const row = enqueueOperation({
-        kind: "redeploy",
+        kind,
         resourceKeys: [`app:${appId}`],
         input: { appId, userId: ctx.triggeredBy || undefined },
         trigger: "cascade",
@@ -69,7 +85,7 @@ const enqueueChildRedeploys: Step<CascadeRedeployInput, EnqueueOut> = {
       });
       childOpIds.push(row.id);
     }
-    ctx.log(`enqueued ${childOpIds.length} child redeploy op(s)`);
+    ctx.log(`enqueued ${childOpIds.length} child ${kind} op(s)`);
     return { childOpIds };
   },
 };

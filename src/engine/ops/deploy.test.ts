@@ -459,19 +459,21 @@ describe("deploy step: create_volume", () => {
     expect(out.containerPath).toBe("/data");
   });
 
-  test("compensation detaches (best-effort) then deletes the volume", async () => {
+  test("compensation detaches and retains the volume", async () => {
     const { ctx } = makeCtx({});
     await step.compensate!(ctx, { volumeId: "v-abc", volumeMount: "/mnt/x:/data", containerPath: "/data" }, {});
     expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
-    expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
-    expect(compute._mocks.volumeDelete.mock.calls[0][0]).toBe("v-abc");
+    expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
+    expect(db.getRetiredVolumes().some((v) => v.provider_volume_id === "v-abc")).toBe(true);
   });
 
-  test("compensation swallows detach failure and still calls delete", async () => {
-    compute._mocks.volumeDetach.mockImplementationOnce(async () => { throw new Error("already detached"); });
+  test("compensation surfaces detach failure and does not claim retirement", async () => {
+    compute._mocks.volumeDetach.mockImplementationOnce(async () => { throw new Error("ssh/provider unavailable"); });
     const { ctx } = makeCtx({});
-    await step.compensate!(ctx, { volumeId: "v-xyz", volumeMount: "", containerPath: "/d" }, {});
-    expect(compute._mocks.volumeDelete).toHaveBeenCalledTimes(1);
+    await expect(
+      step.compensate!(ctx, { volumeId: "v-xyz", volumeMount: "", containerPath: "/d" }, {}),
+    ).rejects.toThrow(/unavailable/);
+    expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
   });
 });
 

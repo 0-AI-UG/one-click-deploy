@@ -18,7 +18,7 @@ import { replicaBindHost } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
 import { createMasker } from "../../shared/mask.ts";
-import { processIncomingEnvVars, serializeEnvVars, parseEnvVars, platformEnvVars } from "../../shared/env-crypto.ts";
+import { processIncomingEnvVars, serializeEnvVars, parseEnvVars, platformEnvVars, projectEnvVars } from "../../shared/env-crypto.ts";
 import { getProviderToken } from "../../shared/secret-store.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
@@ -332,16 +332,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
   },
   async probeCompensated(_ctx, out) {
     if (!out) return true;
-    const compute = hetzner;
-    if (!compute.volumes) return true;
-    try {
-      await compute.volumes.get(out.volumeId);
-      return false;
-    } catch (err) {
-      // Only a definitive not-found means "already deleted"; a transient error
-      // must fall through to run the delete rather than leak the volume.
-      return isNotFoundError(err);
-    }
+    return db.getRetiredVolumes().some((row) => row.provider_volume_id === out.volumeId);
   },
   async run(ctx, prior) {
     const req = ctx.input;
@@ -381,17 +372,17 @@ const createVolume: Step<DeployInput, VolumeOut> = {
   async compensate(ctx, out) {
     if (!out) return;
     const compute = hetzner;
-    // Detach is best-effort (may already be detached) and must not mask the
-    // delete. Let a genuine delete failure PROPAGATE — orphaning the created
-    // cloud volume behind a clean `compensated` is a silent leak.
-    // probeCompensated short-circuits once the volume is gone, so retries stay
-    // idempotent.
-    try { await compute.volumes?.detach(out.volumeId); } catch { /* already detached */ }
-    try {
-      await compute.volumes?.delete(out.volumeId);
-    } catch (err) {
-      if (!isNotFoundError(err)) throw err; // already gone = success; else surface
+    try { await compute.volumes?.detach(out.volumeId); } catch (err) {
+      if (!isNotFoundError(err)) throw err;
     }
+    db.retireVolume({
+      providerVolumeId: out.volumeId,
+      formerResourceType: "app",
+      formerResourceId: 0,
+      formerResourceName: ctx.input.app_name || "unknown-app",
+      reason: `deployment operation #${ctx.opId} compensated`,
+    });
+    ctx.log(`Retained detached volume ${out.volumeId} for recovery`);
   },
 };
 
@@ -417,8 +408,10 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     if (existing.environment_id) {
       const envRow = db.getEnvironment(existing.environment_id);
       if (envRow) {
-        const { resolveEnvVarsForDeploy } = await import("../../shared/env-crypto.ts");
-        Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
+        const { resolveAppEnvVars } = await import("../../shared/env-crypto.ts");
+        const resolved = await resolveAppEnvVars(existing);
+        for (const key of Object.keys(platformEnvVars(existing))) delete resolved[key];
+        Object.assign(flatEnvVars, resolved);
       }
     }
     ctx.log(`adopting existing app row id=${existing.id} (already inserted in prior attempt)`);
@@ -495,6 +488,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       environmentId = envRow.id;
       Object.assign(flatEnvVars, await resolveEnvVarsForDeploy(envRow.env_vars));
     }
+    const projectedFlatEnvVars = projectEnvVars(flatEnvVars, req.env_projection);
 
     const extraVolumes = (req.extra_volumes || []).map(
       (v) => `${v.host_path}:${v.container_path}`,
@@ -525,6 +519,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           env_vars: serializeEnvVars([]),
           auth_password: req.auth_password,
           environment_id: environmentId ?? undefined,
+          env_projection: req.env_projection,
           public: req.public,
           health_check: req.health_check,
           internal_protocol: req.internal_protocol,
@@ -590,7 +585,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       domain: useDomain,
       useInternalTls,
       environmentId,
-      flatEnvVars,
+      flatEnvVars: projectedFlatEnvVars,
       dockerfilePath,
     };
   },
@@ -684,6 +679,16 @@ const cloneRepoStep: Step<DeployInput, CloneOut> = {
       db.appendDeployLog(appOut.appId, mask(`[clone] ${line}`));
       ctx.log(`[clone] ${mask(line)}`);
     }, req.git_branch, server.serverHostKey || undefined);
+    if (req.git_sha) {
+      if (!/^[0-9a-f]{7,64}$/i.test(req.git_sha)) throw new Error("Invalid webhook commit SHA");
+      const checkedOut = await sshExec(
+        server.serverIp,
+        `su - deploy -c ${JSON.stringify(`cd /home/deploy/apps/${req.app_name} && git checkout --detach ${req.git_sha}`)}`,
+        server.serverHostKey || undefined,
+      );
+      if (checkedOut.exitCode !== 0) throw new Error(`Could not check out webhook commit ${req.git_sha}`);
+      ctx.log(`Checked out webhook commit ${req.git_sha}`);
+    }
     return { ok: true };
   },
   async compensate(ctx, _out, prior) {
@@ -866,6 +871,7 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
         : `[health] HTTP probe disabled; container is running`);
       db.updateAppStatus(appOut.appId, "running");
       db.updateReplicaStatus(appOut.replicaId, "running");
+      db.markAppEnvironmentFresh(appOut.appId);
     } else {
       // Hard failure: a deploy that never becomes healthy must fail the op so
       // its compensations tear down the half-deployed app rather than leaving

@@ -7,18 +7,20 @@ process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-test-"));
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
 // Mock the engine enqueue so we never actually schedule any op.
-const fakeRunner = mock((appId: number, sha: string) => {
-  void appId; void sha;
+const fakeRunner = mock((appId: number, sha: string, idempotencyKey: string) => {
+  void appId; void sha; void idempotencyKey;
   return { opId: 1 };
 });
 mock.module("../ipc/enqueue.ts", () => ({
-  enqueue: (args: { kind: string; input: { appId: number }; triggeredBy: string }) => {
+  enqueue: (args: {
+    kind: string;
+    input: { appId: number; gitSha?: string };
+    triggeredBy: string;
+    idempotencyKey?: string;
+  }) => {
     if (args.kind === "redeploy") {
-      // idempotency_key is `webhook-delivery:<appId>:<delivery-id>`, and when
-      // there's no x-github-delivery header the synthesized delivery-id is
-      // `<appId>:<fullSha>:<ts>`. The short sha lives at split index [3].
-      const sha = (args as any).idempotencyKey?.split(":")[3]?.slice(0, 7) || "";
-      fakeRunner(args.input.appId, sha);
+      const sha = args.input.gitSha?.slice(0, 7) || "";
+      fakeRunner(args.input.appId, sha, args.idempotencyKey || "");
     }
     return { opId: 1 };
   },
@@ -139,6 +141,30 @@ describe("handleGithubWebhook", () => {
     expect(fakeRunner).toHaveBeenCalledTimes(1);
     expect(fakeRunner.mock.calls[0][0]).toBe(app.id);
     expect(fakeRunner.mock.calls[0][1]).toBe("deadbee");
+  });
+
+  test("uses the same app-and-commit key for distinct GitHub deliveries", async () => {
+    const secret = "secret-dedupe";
+    const app = makeApp(secret, "main");
+    const body = JSON.stringify({ ref: "refs/heads/main", after: "1234567890abcdef" });
+    const sig = await sign(secret, body);
+    const makeDelivery = (delivery: string) => new Request(
+      `http://localhost/webhooks/github/${app.id}`,
+      {
+        method: "POST",
+        headers: {
+          "x-hub-signature-256": sig,
+          "x-github-delivery": delivery,
+        },
+        body,
+      },
+    );
+
+    expect((await handleGithubWebhook(makeDelivery("push-guid"), app.id)).status).toBe(202);
+    expect((await handleGithubWebhook(makeDelivery("ci-guid"), app.id)).status).toBe(202);
+    expect(fakeRunner).toHaveBeenCalledTimes(2);
+    expect(fakeRunner.mock.calls[0][2]).toBe(`webhook-commit:${app.id}:1234567890abcdef`);
+    expect(fakeRunner.mock.calls[1][2]).toBe(fakeRunner.mock.calls[0][2]);
   });
 
   test("panel webhook: 401 on bad signature", async () => {

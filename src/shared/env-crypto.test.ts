@@ -26,7 +26,12 @@ describe("platformEnvVars", () => {
 });
 
 describe("resolveAppEnvVars platform injection", () => {
-  function makeApp(opts: { environment_id?: number; health_check?: boolean; internal_protocol?: "http" | "tcp" } = {}) {
+  function makeApp(opts: {
+    environment_id?: number;
+    env_projection?: string[] | null;
+    health_check?: boolean;
+    internal_protocol?: "http" | "tcp";
+  } = {}) {
     const name = `envtest-${randomSuffix()}`;
     return db.insertApp({
       name,
@@ -36,6 +41,7 @@ describe("resolveAppEnvVars platform injection", () => {
       container_port: 3000,
       env_vars: "{}",
       environment_id: opts.environment_id,
+      env_projection: opts.env_projection,
       health_check: opts.health_check,
       internal_protocol: opts.internal_protocol,
     });
@@ -71,5 +77,37 @@ describe("resolveAppEnvVars platform injection", () => {
     const app = makeApp({ internal_protocol: "tcp" });
     const vars = await resolveAppEnvVars(app);
     expect(vars.OCD_INTERNAL_URL).toBe(`tcp://${app.name}.ocd.internal:${app.container_port}`);
+  });
+
+  test("projects a shared environment per app while retaining platform variables", async () => {
+    const now = new Date().toISOString();
+    const env = db.insertEnvironment(
+      `envtest-projected-${randomSuffix()}`,
+      serializeEnvVars([
+        { key: "API_ONLY", value: "yes", secret: false, updated_at: now },
+        { key: "WORKER_ONLY", value: "no", secret: false, updated_at: now },
+      ]),
+    );
+    const app = makeApp({ environment_id: env.id, env_projection: ["API_ONLY"] });
+    const vars = await resolveAppEnvVars(app);
+
+    expect(vars.API_ONLY).toBe("yes");
+    expect(vars.WORKER_ONLY).toBeUndefined();
+    expect(vars.OCD_INTERNAL_HOST).toBe(`${app.name}.ocd.internal`);
+  });
+
+  test("an empty projection receives platform variables only", async () => {
+    const now = new Date().toISOString();
+    const env = db.insertEnvironment(
+      `envtest-empty-projection-${randomSuffix()}`,
+      serializeEnvVars([
+        { key: "SHARED", value: "hidden", secret: false, updated_at: now },
+      ]),
+    );
+    const app = makeApp({ environment_id: env.id, env_projection: [] });
+    const vars = await resolveAppEnvVars(app);
+
+    expect(vars.SHARED).toBeUndefined();
+    expect(vars.OCD_INTERNAL_URL).toBe(`http://${app.name}.ocd.internal`);
   });
 });

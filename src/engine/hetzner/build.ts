@@ -1,5 +1,5 @@
-import { sshExec, describeFailure } from "./ssh.ts";
-import { asUser, log, OCD_IMAGE_LABEL } from "./container-common.ts";
+import { sshExec, sshExecStreaming, describeFailure } from "./ssh.ts";
+import { asUser, log, OCD_IMAGE_LABEL, withImageGcLease } from "./container-common.ts";
 import { dockerLoginGhcr, type GhcrAuth } from "./registry.ts";
 import { startAppReplica } from "./docker-run.ts";
 import { ensureOcdNetwork } from "./lifecycle.ts";
@@ -33,13 +33,29 @@ export async function buildAppImage(
     dockerContext?: string;
     /** Prefix for ephemeral ghcr.io DOCKER_CONFIG creds (trailing space included). */
     envPrefix?: string;
+    /** Incremental, already-sanitized operation log sink. */
+    onOutput?: (line: string) => void;
   },
   hostKey?: string,
 ): Promise<void> {
   const dockerContext = opts.dockerContext || ".";
-  const buildCmd = `cd ${opts.appDir} && ${opts.envPrefix ?? ""}docker build --label ${OCD_IMAGE_LABEL} -t ${opts.imageTag} -f ${opts.dockerfilePath} ${dockerContext}`;
+  const rawBuildCmd = `cd ${opts.appDir} && ${opts.envPrefix ?? ""}docker build --progress=plain --label ${OCD_IMAGE_LABEL} -t ${opts.imageTag} -f ${opts.dockerfilePath} ${dockerContext}`;
+  // Builds take a shared lease; prune paths take the exclusive side of the
+  // same host lock. Multiple builds remain concurrent, while GC can never
+  // remove image/cache state out from under an active build.
+  const buildCmd = withImageGcLease(rawBuildCmd);
   log("build", `Docker build command: ${buildCmd}`);
-  const result = await sshExec(ip, asUser(buildCmd), hostKey);
+  const result = await sshExecStreaming(ip, asUser(buildCmd), {
+    hostKey,
+    onLine: (line) => {
+      if (line.trim()) opts.onOutput?.(line);
+    },
+    onHeartbeat: (elapsedMs, outputLines) => {
+      opts.onOutput?.(
+        `Docker build still running (${Math.floor(elapsedMs / 1000)}s, ${outputLines} output lines)…`,
+      );
+    },
+  });
   if (result.exitCode !== 0) {
     log("build", `Docker build stderr: ${result.stderr.slice(0, 500)}`);
     throw new Error(describeFailure("Docker build failed", result));
@@ -208,6 +224,7 @@ export async function cloneAndBuild(
       dockerfilePath,
       dockerContext: opts.dockerContext,
       envPrefix: ghcrAuth?.envPrefix,
+      onOutput: emit,
     }, hostKey);
   } finally {
     // Wipe the ephemeral ghcr creds whether or not the build succeeded.

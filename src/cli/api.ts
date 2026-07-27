@@ -33,8 +33,8 @@ export async function get<T>(path: string): Promise<T> {
   return apiRequest<T>("GET", path);
 }
 
-export async function post<T>(path: string, body?: unknown): Promise<T> {
-  return apiRequest<T>("POST", path, body);
+export async function post<T>(path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {
+  return apiRequest<T>("POST", path, body, headers);
 }
 
 export async function put<T>(path: string, body?: unknown): Promise<T> {
@@ -135,6 +135,8 @@ export interface App {
   public?: boolean | number;
   container_port?: number;
   internal_protocol?: string;
+  deployed_commit?: string | null;
+  environment_stale?: boolean | number;
 }
 
 /** Where the app answers: its public domain, or the canonical internal

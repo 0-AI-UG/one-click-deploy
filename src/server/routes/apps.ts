@@ -28,6 +28,7 @@ export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
     auth_enabled: !!auth_password_hash,
     environment_id: app.environment_id ?? null,
     environment_name: envRow?.name ?? null,
+    deployed_commit: db.getDeployedCommit(app.id),
     public_address: app.public_port != null && panelIp ? `${panelIp}:${app.public_port}` : null,
   };
 }
@@ -121,7 +122,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
       kind: "deploy",
       resourceKeys: [`app:create:${req.app_name}`],
       input: req,
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "api",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });

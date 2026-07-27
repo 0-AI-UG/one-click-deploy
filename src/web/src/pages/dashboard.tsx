@@ -13,6 +13,7 @@ type AppData = {
   public: number; health_check: number;
   internal_protocol?: string;
   stack_id?: number | null;
+  environment_stale?: number;
   // Carried purely so per-app controls can be gated against an
   // environment-scoped grant as well as an app-scoped one.
   environment_id?: number | null;
@@ -308,7 +309,10 @@ export function DashboardPage() {
                 <span className="font-mono text-[8px] font-bold border border-fg px-1 uppercase">Private</span>
               </span>
             )}
-            <StatusBadge status={app.status} />
+            <StatusBadge
+              status={app.status}
+              subLabel={app.environment_stale ? "stale environment — redeploy required" : undefined}
+            />
             {app.webhook_enabled ? <span title="Webhook active"><GitBranch size={10} className="text-accent" /></span> : null}
             {app.desired_replicas > 1 && (
               <span className="font-mono text-[9px] font-bold border border-fg px-1">{app.desired_replicas}x</span>
@@ -598,7 +602,9 @@ export function DashboardPage() {
           </div>
           <Btn onClick={() => { load(); if (view === "graph") loadTopo(); }} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>
           <PermissionGate permission="apps.deploy">
-            <Btn onClick={() => { window.location.hash = "#/deploy"; }} variant="primary">Deploy New App</Btn>
+            <div className="font-mono text-[10px] text-muted">
+              Deploy your first app with <span className="font-bold text-fg">ocd deploy</span>.
+            </div>
           </PermissionGate>
         </div>
       </div>
