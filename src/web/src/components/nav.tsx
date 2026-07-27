@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
 import { useAuth, logout } from "../stores/auth.ts";
 import { Server, HardDrive, Users, LogOut, Terminal, Layers, TerminalSquare, Check, Cpu, Menu } from "lucide-react";
-import { NeoSelect } from "./neo-select.tsx";
-import { SKILL_AGENT_TARGETS } from "../../../shared/skill-agents.ts";
+import { SkillInstallMenu } from "./skill-install-menu.tsx";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
@@ -31,34 +30,6 @@ function CliCopyButton() {
   );
 }
 
-function SkillInstallButton() {
-  const [copied, setCopied] = useState(false);
-
-  const copyInstallCommand = (agent: string) => {
-    navigator.clipboard.writeText(`ocd skill install --agent ${agent}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div
-      className="w-24"
-      title="Choose an agent and copy its OCD skill install command"
-    >
-      <NeoSelect
-        compact
-        value=""
-        placeholder={copied ? "Copied" : "Skill"}
-        options={SKILL_AGENT_TARGETS.map((agent) => ({
-          value: agent.name,
-          label: agent.label,
-        }))}
-        onChange={copyInstallCommand}
-      />
-    </div>
-  );
-}
-
 function MobileMenu({ hash }: { hash: string }) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
@@ -66,7 +37,14 @@ function MobileMenu({ hash }: { hash: string }) {
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (
+        target instanceof Element &&
+        target.closest("[data-skill-install-menu]")
+      ) {
+        return;
+      }
+      if (ref.current && !ref.current.contains(target)) setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -115,7 +93,7 @@ function MobileMenu({ hash }: { hash: string }) {
           <div className="border-t border-fg/10 py-1">
             <div className="flex items-center">
               <CliCopyButton />
-              <SkillInstallButton />
+              <SkillInstallMenu />
             </div>
           </div>
           <div className="border-t border-fg/10 px-3 py-2 font-mono text-[10px] text-fg/70 flex items-center justify-between">
@@ -188,7 +166,7 @@ function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; 
       <div className="flex items-center gap-3">
         <div className="flex items-center">
           <CliCopyButton />
-          <SkillInstallButton />
+          <SkillInstallMenu />
         </div>
         <div className="h-5 w-0.5 bg-fg/30" />
         <a
