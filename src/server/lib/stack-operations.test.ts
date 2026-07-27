@@ -9,12 +9,12 @@ import {
   markOperationFinished,
   markOperationRunning,
 } from "../../shared/db/operations.ts";
-import { withOwningStackKeys } from "../ipc/enqueue.ts";
 import {
   findLatestRelatedStackOperation,
   isStackDestructionActiveForApp,
   stackLockKeys,
   suspendStackWebhookOperations,
+  withOwningStackKeys,
 } from "./stack-operations.ts";
 import { release, tryAcquire } from "../../engine/scheduler.ts";
 
