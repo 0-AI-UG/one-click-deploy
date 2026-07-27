@@ -5,7 +5,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { Bot, Check, ChevronDown, Copy } from "lucide-react";
+import { Check, ChevronDown, Copy, Sparkles } from "lucide-react";
 import { SKILL_AGENT_TARGETS } from "../../../shared/skill-agents.ts";
 import { portalAnchorRect } from "./ui.tsx";
 
@@ -116,7 +116,7 @@ export function SkillInstallMenu() {
         {copiedAgent ? (
           <Check size={13} className="text-green-700" />
         ) : (
-          <Bot size={13} />
+          <Sparkles size={13} />
         )}
         <span>{copiedAgent ? "Copied" : "Skill"}</span>
         {!copiedAgent && (
@@ -164,7 +164,7 @@ export function SkillInstallMenu() {
                     className="group flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-alt focus:bg-alt focus:outline-none"
                   >
                     <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-fg bg-bg-raised text-fg">
-                      <Bot size={11} />
+                      <Sparkles size={11} />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-mono text-[10px] font-bold text-fg">
