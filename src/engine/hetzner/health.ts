@@ -77,8 +77,9 @@ const RESTART_LOOP_WINDOW_MS = 5 * 60_000;
 
 /** Parse the tab-separated, single-line docker-inspect format used below. */
 export function parseContainerInspection(raw: string): ContainerInspection | null {
+  const normalized = raw.trim().replace(/\\t/g, "\t");
   const [status = "", runningRaw = "", restartingRaw = "", restartRaw = "", startedAtRaw = ""] =
-    raw.trim().split("\t");
+    normalized.split("\t");
   if (!status) return null;
   const restartCount = Number(restartRaw);
   return {

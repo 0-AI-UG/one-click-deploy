@@ -1,12 +1,14 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
+  pullImmutableImageAndRun, cloneAndBuild,
   probeAppHealth, startAppReplica,
   startContainer, containerExists,
 } from "../../shared/remote/index.ts";
 import { pushProxyForApp } from "./proxy-manager.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
+import { resolveGitHubToken } from "../../shared/github-token.ts";
 
 export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("wake", `Waking app ${appId}`);
@@ -52,15 +54,62 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     // cleanup on the tenant host.
     if (!startedFastPath) {
       const envVars = await resolveAppEnvVars(app);
-      const envFilePath = Object.keys(envVars).length > 0
-        ? `/home/deploy/apps/${app.name}/.env.deploy`
-        : undefined;
-      // The container provably doesn't exist here (fast path failed), so skip
-      // the rm -f round-trip.
-      await startAppReplica(server.ipv4, {
-        ...appReplicaRunOpts(app, server, { containerName, hostPort, envFilePath }),
-        removeExisting: false,
-      }, hostKey);
+      const githubPat = (await resolveGitHubToken(app.deployed_by)) || undefined;
+
+      if (app.source_mode === "image") {
+        if (app.image_ref) {
+          // Sleeping may have removed local tags, but immutable artifacts should
+          // still be recoverable. Pulling them and retagging to app.name:latest
+          // recreates the expected runtime assumptions without requiring local
+          // image history to be preserved.
+          await pullImmutableImageAndRun(server.ipv4, {
+            name: app.name,
+            imageRef: app.image_ref,
+            port: app.container_port,
+            hostPort,
+            envVars,
+            volumeMount: app.volume_mount || undefined,
+            extraVolumes: db.parseExtraVolumes(app.extra_volumes),
+            bindAddr,
+            memoryMb: app.memory_mb || undefined,
+            cpus: app.cpu_limit || undefined,
+            gitToken: githubPat,
+            hostKey,
+          });
+        } else {
+          const envFilePath = Object.keys(envVars).length > 0
+            ? `/home/deploy/apps/${app.name}/.env.deploy`
+            : undefined;
+          // Backward compatibility for legacy records that only have a local
+          // app.name:latest image tag.
+          await startAppReplica(server.ipv4, {
+            ...appReplicaRunOpts(app, server, { containerName, hostPort, envFilePath }),
+            removeExisting: false,
+          }, hostKey);
+        }
+      } else {
+        // For git-backed apps, rebuild from source as the wake fallback when no
+        // preserved container exists on disk.
+        if (!app.git_repo) {
+          throw new Error("Missing git repository for wake rebuild");
+        }
+        await cloneAndBuild(server.ipv4, {
+          name: app.name,
+          gitRepo: app.git_repo,
+          port: app.container_port,
+          hostPort,
+          envVars,
+          volumeMount: app.volume_mount || undefined,
+          extraVolumes: db.parseExtraVolumes(app.extra_volumes),
+          gitToken: githubPat,
+          gitBranch: app.git_branch || undefined,
+          bindAddr,
+          buildCacheRef: app.build_cache_ref || undefined,
+          memoryMb: app.memory_mb || undefined,
+          cpus: app.cpu_limit || undefined,
+          hostKey,
+        });
+      }
     }
 
     // Health check (running-only when the app opted out of the HTTP probe)
