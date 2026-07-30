@@ -67,6 +67,46 @@ export function SettingsTab({
   // concepts; raw-TCP internal routing can't carry them, so they only render
   // when the internal protocol is HTTP.
   const httpRouted = ingressForm.internal_protocol === "http";
+  const currentPublicProtocol = app.public_port != null ? (app.public_protocol === "udp" ? "udp" : "tcp") : "off";
+  const settingsPatch = (): Record<string, unknown> => {
+    const patch: Record<string, unknown> = {};
+    if (portEdit !== app.container_port) patch.container_port = portEdit;
+    if (isPublic !== !!app.public) patch.public = isPublic;
+    if (memEdit !== (app.memory_mb || 0)) patch.memory_mb = memEdit;
+    if (cpuEdit !== (app.cpu_limit || 0)) patch.cpu_limit = cpuEdit;
+    return patch;
+  };
+  const ingressPatch = (): Record<string, unknown> => {
+    const patch: Record<string, unknown> = {};
+    if (ingressForm.internal_protocol !== (app.internal_protocol === "tcp" ? "tcp" : "http")) {
+      patch.internal_protocol = ingressForm.internal_protocol;
+    }
+    if (ingressForm.auth_enabled !== !!app.auth_enabled) {
+      patch.auth_password = ingressForm.auth_enabled ? ingressForm.auth_password : "";
+    } else if (ingressForm.auth_enabled && ingressForm.auth_password) {
+      patch.auth_password = ingressForm.auth_password;
+    }
+    if (ingressForm.sticky !== !!app.sticky) patch.sticky = ingressForm.sticky;
+    if (ingressForm.rate_limit_rps !== (app.rate_limit_rps || 0)) patch.rate_limit_rps = ingressForm.rate_limit_rps;
+    if (ingressForm.ip_allowlist !== (app.ip_allowlist || "")) patch.ip_allowlist = ingressForm.ip_allowlist;
+    if (ingressForm.health_check_path !== (app.health_check_path || "")) patch.health_check_path = ingressForm.health_check_path;
+    if (ingressForm.health_check !== !!(app.health_check ?? 1)) patch.health_check = ingressForm.health_check;
+    if (ingressForm.compress !== !!app.compress) patch.compress = ingressForm.compress;
+    if (ingressForm.public_protocol === "off") {
+      if (app.public_port != null) patch.public_port = null;
+    } else {
+      const desiredPort = ingressForm.public_port ? parseInt(ingressForm.public_port, 10) : "auto";
+      if (currentPublicProtocol !== ingressForm.public_protocol) {
+        patch.public_protocol = ingressForm.public_protocol;
+      }
+      if (currentPublicProtocol === "off" || app.public_port === null) {
+        patch.public_port = desiredPort;
+      } else if (app.public_port !== desiredPort) {
+        patch.public_port = desiredPort;
+      }
+    }
+    return patch;
+  };
   return (
     <div className="space-y-4">
       <Card className="p-4">
@@ -133,20 +173,16 @@ export function SettingsTab({
           />
         </Field>
 
-        <PermissionGate permission="apps.redeploy" appId={appId} environmentId={app.environment_id}>
+        <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
           <div className="flex justify-end mt-3">
             <Btn
               size="sm"
               variant="primary"
               loading={actionLoading === "save-settings" || ops.isBusyWith("redeploy")}
-              disabled={!portEdit || ops.isBusy}
+              disabled={!portEdit || ops.isBusy || Object.keys(settingsPatch()).length === 0}
               onClick={() => action("save-settings", async () => {
-                const res = (await post(`/api/apps/${appId}/redeploy`, {
-                  container_port: portEdit,
-                  public: isPublic,
-                  memory_mb: memEdit,
-                  cpu_limit: cpuEdit,
-                })) as { op_id?: number };
+                const patch = settingsPatch();
+                const res = (await put(`/api/apps/${appId}/config`, patch)) as { op_id?: number };
                 if (res?.op_id) {
                   trackOperationInToast(res.op_id, "Saving & redeploying");
                   ops.track(res.op_id);
@@ -161,7 +197,7 @@ export function SettingsTab({
         <div className="flex items-center gap-2 mb-3">
           <Network size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Ingress</h3>
-          <InfoTip text="Applied to the proxy config immediately on save; no rebuild or redeploy." />
+          <InfoTip text="Ingress updates apply through the same redeploy path as code deploys." />
         </div>
 
         <Field
@@ -323,29 +359,9 @@ export function SettingsTab({
               size="sm"
               variant="primary"
               loading={actionLoading === "save-ingress"}
-              disabled={ops.isBusy}
+              disabled={ops.isBusy || Object.keys(ingressPatch()).length === 0}
               onClick={() => action("save-ingress", async () => {
-                // Password is write-only. Disabled → clear ("").  Enabled with a
-                // typed value → set it. Enabled but blank → omit (keep current).
-                const authField = !ingressForm.auth_enabled
-                  ? { auth_password: "" }
-                  : ingressForm.auth_password
-                    ? { auth_password: ingressForm.auth_password }
-                    : {};
-                await put(`/api/apps/${appId}/ingress`, {
-                  ...authField,
-                  internal_protocol: ingressForm.internal_protocol,
-                  sticky: ingressForm.sticky,
-                  rate_limit_rps: ingressForm.rate_limit_rps,
-                  ip_allowlist: ingressForm.ip_allowlist,
-                  health_check_path: ingressForm.health_check_path,
-                  health_check: ingressForm.health_check,
-                  compress: ingressForm.compress,
-                  public_port: ingressForm.public_protocol === "off"
-                    ? null
-                    : (parseInt(ingressForm.public_port, 10) || "auto"),
-                  ...(ingressForm.public_protocol !== "off" ? { public_protocol: ingressForm.public_protocol } : {}),
-                });
+                await put(`/api/apps/${appId}/config`, ingressPatch());
               })}
             >Save Ingress</Btn>
           </div>

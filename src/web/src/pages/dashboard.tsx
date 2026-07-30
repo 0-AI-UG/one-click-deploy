@@ -159,7 +159,17 @@ export function DashboardPage() {
     try {
       const res = action === "delete"
         ? await del(`/api/apps/${appId}`) as { op_id?: number }
-        : await post(`/api/apps/${appId}/${action}`, body) as { op_id?: number };
+        : action === "redeploy"
+          ? (() => {
+            const app = data.apps.find((a) => a.id === appId);
+            if (!app) throw new Error("App not found");
+            return post(`/api/apps/deploy`, {
+              app_name: app.name,
+              git_repo: app.git_repo,
+              container_port: app.container_port,
+            }) as { op_id?: number };
+          })()
+          : await post(`/api/apps/${appId}/${action}`, body) as { op_id?: number };
       if (res?.op_id) {
         trackOperationInToast(res.op_id, APP_OP_LABELS[action] || "Operation");
         ops.track(res.op_id);
@@ -358,7 +368,7 @@ export function DashboardPage() {
                 );
               })()}
             </PermissionGate>
-            <PermissionGate permission="apps.redeploy" appId={app.id} environmentId={app.environment_id}>
+            <PermissionGate permission="apps.deploy" appId={app.id} environmentId={app.environment_id}>
               {(() => {
                 const k = `redeploy-${app.id}`;
                 const armed = confirmKey === k;

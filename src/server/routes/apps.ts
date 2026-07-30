@@ -5,14 +5,14 @@ import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
-import { validateAppName, isValidMemoryMb, MIN_MEMORY_MB, MAX_MEMORY_MB, isValidCpuLimit, MIN_CPU_LIMIT, MAX_CPU_LIMIT, isPublicProtocol, isInternalProtocol, validateIngressFields } from "../../shared/validate.ts";
+import { validateAppName } from "../../shared/validate.ts";
 import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-manager.ts";
 import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
-import { applyAppConfig, diffAppConfig } from "../../shared/app-config.ts";
+import { applyAppConfig, diffAppConfig, mergeDeployRequestWithExistingApp } from "../../shared/app-config.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
@@ -116,7 +116,7 @@ export async function handleGetApps(request: Request): Promise<Response> {
 export async function handleDeploy(request: Request): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.deploy");
-    const req = await request.json() as DeployRequest;
+    const req = await request.json() as Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean };
     if (!req?.app_name || typeof req.app_name !== "string") {
       return Response.json({ ok: false, error: "app_name is required" }, { status: 400, headers: corsHeaders });
     }
@@ -125,6 +125,16 @@ export async function handleDeploy(request: Request): Promise<Response> {
     // to that app and then performs the same code-only redeploy used by the UI.
     const existing = db.getAppByName(req.app_name);
     if (existing) {
+      const merged = mergeDeployRequestWithExistingApp(existing, req);
+      const changes = diffAppConfig(existing, merged);
+      if (req.dry_run) {
+        return Response.json({
+          ok: true,
+          dry_run: true,
+          changes,
+          current_config_revision: existing.config_revision,
+        }, { headers: corsHeaders });
+      }
       const acq = tryAcquire([`app:${existing.id}`], NON_OP_HOLDER, "apply_config");
       if (!acq.ok) {
         return Response.json(
@@ -133,11 +143,20 @@ export async function handleDeploy(request: Request): Promise<Response> {
         );
       }
       try {
-        const changes = await applyAppConfig(existing.id, req, {
+        await applyAppConfig(existing.id, merged, {
           userId: payload.userId,
           log: (line) => db.appendDeployLog(existing.id, `[config] ${line}`),
         });
         await syncAppIngress(existing.id);
+        if (req.deploy === false) {
+          return Response.json({
+            ok: true,
+            applied: true,
+            changes,
+            config_revision: db.getApp(existing.id)?.config_revision,
+            op_id: null,
+          }, { headers: corsHeaders });
+        }
         const { opId } = enqueue({
           kind: "redeploy",
           resourceKeys: [`app:${existing.id}`],
@@ -145,7 +164,13 @@ export async function handleDeploy(request: Request): Promise<Response> {
           trigger: payload.client === "cli" ? "cli" : "api",
           triggeredBy: payload.userId,
         });
-        return Response.json({ op_id: opId, applied: true, changes }, { headers: corsHeaders });
+        return Response.json({
+          ok: true,
+          op_id: opId,
+          applied: true,
+          changes,
+          config_revision: db.getApp(existing.id)?.config_revision,
+        }, { headers: corsHeaders });
       } finally {
         release([`app:${existing.id}`]);
       }
@@ -153,7 +178,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
     const { opId } = enqueue({
       kind: "deploy",
       resourceKeys: [`app:create:${req.app_name}`],
-      input: req,
+      input: req as DeployRequest,
       trigger: payload.client === "cli" ? "cli" : "api",
       triggeredBy: payload.userId,
     });
@@ -169,10 +194,11 @@ export async function handleDeploy(request: Request): Promise<Response> {
 export async function handleApplyAppConfig(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.deploy", appScope(appId));
-    const body = await request.json() as DeployRequest & { dry_run?: boolean; deploy?: boolean };
+    const body = await request.json() as Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean };
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
-    const changes = diffAppConfig(app, body);
+    const merged = mergeDeployRequestWithExistingApp(app, body);
+    const changes = diffAppConfig(app, merged);
     if (body.dry_run) {
       return Response.json({
         ok: true,
@@ -190,7 +216,7 @@ export async function handleApplyAppConfig(request: Request, appId: number): Pro
       );
     }
     try {
-      await applyAppConfig(appId, body, {
+      await applyAppConfig(appId, merged, {
         userId: payload.userId,
         log: (line) => db.appendDeployLog(appId, `[config] ${line}`),
       });
@@ -251,136 +277,96 @@ export function handleUnpauseApp(request: Request, appId: number): Promise<Respo
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.redeploy", appScope(appId));
-    const body = (await request.json().catch(() => ({}))) as {
-      container_port?: number;
-      environment_id?: number | null;
-      public?: boolean;
-      memory_mb?: number;
-      cpu_limit?: number;
-    };
-
-    if (body.container_port !== undefined) {
-      const p = Number(body.container_port);
-      if (!Number.isInteger(p) || p < 1 || p > 65535) {
-        return Response.json({ ok: false, error: "Port must be an integer between 1 and 65535" }, { headers: corsHeaders });
-      }
-      body.container_port = p;
+    const body = (await request.json().catch(() => ({}))) as Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean };
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
+    const merged = mergeDeployRequestWithExistingApp(app, body);
+    const changes = diffAppConfig(app, merged);
+    if (body.dry_run) {
+      return Response.json({
+        ok: true,
+        dry_run: true,
+        changes,
+        current_config_revision: app.config_revision,
+      }, { headers: corsHeaders });
     }
 
-    if (body.memory_mb !== undefined) {
-      if (!isValidMemoryMb(body.memory_mb)) {
-        return Response.json({ ok: false, error: `Memory must be an integer 0 (default) or ${MIN_MEMORY_MB}–${MAX_MEMORY_MB} MB` }, { headers: corsHeaders });
-      }
-      db.updateAppMemory(appId, body.memory_mb);
+    const acq = tryAcquire([`app:${appId}`], NON_OP_HOLDER, "apply_config");
+    if (!acq.ok) {
+      return Response.json(
+        { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
+        { status: 409, headers: corsHeaders },
+      );
     }
-
-    if (body.cpu_limit !== undefined) {
-      if (!isValidCpuLimit(body.cpu_limit)) {
-        return Response.json({ ok: false, error: `CPU must be 0 (default) or a number ${MIN_CPU_LIMIT}–${MAX_CPU_LIMIT} cores` }, { headers: corsHeaders });
-      }
-      db.updateAppCpu(appId, body.cpu_limit);
-    }
-
-    if (body.environment_id !== undefined) {
-      db.updateAppEnvironment(appId, body.environment_id);
-    }
-
-    if (body.public !== undefined) {
-      db.updateAppPublic(appId, body.public);
-    }
-
-    const { opId } = enqueue({
-      kind: "redeploy",
-      resourceKeys: [`app:${appId}`],
-      input: {
-        appId,
-        container_port: body.container_port,
+    try {
+      await applyAppConfig(appId, merged, {
         userId: payload.userId,
-      },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
+        log: (line) => db.appendDeployLog(appId, `[config] ${line}`),
+      });
+      await syncAppIngress(appId);
+      if (body.deploy === false) {
+        return Response.json({
+          ok: true,
+          changes,
+          config_revision: db.getApp(appId)?.config_revision,
+          op_id: null,
+        }, { headers: corsHeaders });
+      }
+      const { opId } = enqueue({
+        kind: "redeploy",
+        resourceKeys: [`app:${appId}`],
+        input: {
+          appId,
+          userId: payload.userId,
+        },
+        trigger: "ui",
+        triggeredBy: payload.userId,
+      });
+      return Response.json({
+        ok: true,
+        changes,
+        config_revision: db.getApp(appId)?.config_revision,
+        op_id: opId,
+      }, { headers: corsHeaders });
+    } finally {
+      release([`app:${appId}`]);
+    }
   } catch (error) {
     return handleError(error);
   }
 }
 
 /**
- * Update the per-app ingress settings (password protection, sticky sessions,
- * rate limit, IP allowlist, health-check path, compression, raw TCP/UDP
- * exposure). These only change rendered Traefik config — no container rebuild —
- * so this persists and re-syncs the ingress directly instead of enqueueing a
- * redeploy op. Password protection lives here too: under basicAuth a password
- * change is a pure ingress-config change (hash swap), never a rebuild.
+ * Update per-app ingress settings through the same manifest+deploy path used by
+ * config updates: validate against the ingress schema in-app, persist to the
+ * manifest columns, sync ingress rendering, and (by default) enqueue a redeploy.
  */
 export async function handleUpdateIngressSettings(request: Request, appId: number): Promise<Response> {
   try {
-    const body = (await request.json().catch(() => ({}))) as {
-      /** Write-only plaintext. Omit = leave auth unchanged; "" = disable auth;
-       *  non-empty = enable/replace the password. Only the bcrypt hash is
-       *  stored (apps.auth_password_hash). */
-      auth_password?: string;
-      sticky?: boolean;
-      rate_limit_rps?: number;
-      ip_allowlist?: string;
-      health_check_path?: string;
-      compress?: boolean;
-      /** Post-deploy HTTP probe on/off; takes effect on the next (re)deploy/scale.
-       *  L7-only — forced off below whenever routing is TCP. */
-      health_check?: boolean;
-      /** null = unexpose, "auto" = lowest free pool port, number = specific pool port. */
-      public_port?: number | "auto" | null;
-      public_protocol?: string;
-      /** 'http' | 'tcp' — internal routing protocol. Omit = leave unchanged. */
-      internal_protocol?: string;
-    };
+    const body = (await request.json().catch(() => ({}))) as Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean };
 
     // Body first, then the checks: changing *public exposure* (publishing the
     // app on a fleet port, or unpublishing it) is strictly more dangerous than
     // the other ingress knobs, so it needs apps.expose on top of apps.ingress.
     // Key presence, not truthiness — `public_port: null` means "unexpose" and
     // must still be gated.
-    await requirePermission(request, "apps.ingress", appScope(appId));
+    const payload = await requirePermission(request, "apps.ingress", appScope(appId));
     if ("public_port" in body || "public_protocol" in body) {
       await requirePermission(request, "apps.expose", appScope(appId));
     }
 
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
-
-    // Effective raw-exposure protocol: an explicit body value wins, else keep
-    // the app's current pool. Fed to the shared validator so its range check
-    // matches what we persist below.
-    const effectivePublicProtocol = body.public_protocol !== undefined
-      ? body.public_protocol
-      : (app.public_protocol === "udp" ? "udp" : "tcp");
-
-    // Effective internal routing protocol: explicit body value wins, else keep
-    // the app's current one. Drives whether auth / health-check-path (HTTP
-    // router features) are permitted.
-    if (body.internal_protocol !== undefined && !isInternalProtocol(body.internal_protocol)) {
-      return Response.json({ ok: false, error: 'Internal protocol must be "http" or "tcp"' }, { status: 400, headers: corsHeaders });
+    const merged = mergeDeployRequestWithExistingApp(app, body);
+    const changes = diffAppConfig(app, merged);
+    if (body.dry_run) {
+      return Response.json({
+        ok: true,
+        dry_run: true,
+        changes,
+        current_config_revision: app.config_revision,
+      }, { headers: corsHeaders });
     }
-    const effectiveInternalProtocol = isInternalProtocol(body.internal_protocol)
-      ? body.internal_protocol
-      : (app.internal_protocol === "tcp" ? "tcp" : "http");
-
-    // One validator, shared with validateDeployRequest — auth/health-path/rate-
-    // limit/allowlist/public-port rules and their error strings live in one place.
-    const validation = validateIngressFields(
-      {
-        auth_password: body.auth_password,
-        rate_limit_rps: body.rate_limit_rps,
-        ip_allowlist: body.ip_allowlist,
-        health_check_path: body.health_check_path,
-        public_port: body.public_port,
-        public_protocol: (body.public_port !== undefined || body.public_protocol !== undefined) ? effectivePublicProtocol : undefined,
-      },
-      { httpRouted: effectiveInternalProtocol === "http" },
-    );
-    if (!validation.valid) return Response.json({ ok: false, error: validation.error }, { status: 400, headers: corsHeaders });
-    const norm = validation.value;
 
     // Serialize this direct ingress re-sync against engine operations on the
     // same app. A redeploy also re-renders this app's Traefik config, so the
@@ -395,65 +381,33 @@ export async function handleUpdateIngressSettings(request: Request, appId: numbe
       );
     }
     try {
-      const fields: Parameters<typeof db.updateAppIngressSettings>[1] = {};
-      if (body.sticky !== undefined) fields.sticky = !!body.sticky;
-      if (body.compress !== undefined) fields.compress = !!body.compress;
-      if (norm.rate_limit_rps !== undefined) fields.rate_limit_rps = norm.rate_limit_rps;
-      if (norm.ip_allowlist !== undefined) fields.ip_allowlist = norm.ip_allowlist;
-      if (norm.health_check_path !== undefined) fields.health_check_path = norm.health_check_path;
-
-      // Post-deploy HTTP probe. It's L7-only (a raw-TCP app can't answer it), so
-      // force it off whenever routing is TCP — matching the deploy form's
-      // protocol↔probe coupling — otherwise honor the explicit toggle. Unlike the
-      // other fields this only bites on the next (re)deploy/scale, not the live
-      // Traefik config.
-      if (effectiveInternalProtocol === "tcp") {
-        if (app.health_check) fields.health_check = false;
-      } else if (body.health_check !== undefined) {
-        fields.health_check = !!body.health_check;
-      }
-
-      // Password protection: write-only plaintext in, bcrypt hash stored. Empty
-      // string clears the hash (disables auth); a non-empty value enables/replaces.
-      if (norm.auth_password !== undefined) {
-        db.updateAppAuthPassword(appId, norm.auth_password);
-      }
-
-      // Public raw TCP/UDP exposure. Deliberately independent of `public`
-      // (HTTP publicness) — an HTTP-private app can still be TCP-exposed
-      // (e.g. a database). Pure Traefik-config change like the rest of this
-      // endpoint: expose/unexpose post-deploy, no rebuild. Range/protocol already
-      // validated above; only DB allocation/freeness is checked here.
-      if (body.public_port !== undefined) {
-        const protocol: "tcp" | "udp" = isPublicProtocol(effectivePublicProtocol) ? effectivePublicProtocol : "tcp";
-        if (body.public_port === null) {
-          db.updateAppPublicExposure(appId, null, protocol);
-        } else if (body.public_port === "auto") {
-          // Idempotent: keep the current port unless the protocol changed.
-          if (app.public_port == null || app.public_protocol !== protocol) {
-            db.updateAppPublicExposure(appId, db.allocatePublicPort(protocol), protocol);
-          }
-        } else {
-          const holder = db.getAppByPublicPort(body.public_port);
-          if (holder && holder.id !== appId) {
-            return Response.json({ ok: false, error: `Port ${body.public_port} is already used by "${holder.name}"` }, { status: 409, headers: corsHeaders });
-          }
-          db.updateAppPublicExposure(appId, body.public_port, protocol);
-        }
-      }
-
-      // Internal routing protocol: persisted here (pure routing change). The
-      // OCD_INTERNAL_URL scheme injected into the container only refreshes on the
-      // app's next (re)deploy — the routing itself flips immediately below.
-      if (isInternalProtocol(body.internal_protocol) && body.internal_protocol !== app.internal_protocol) {
-        db.updateAppInternalProtocol(appId, body.internal_protocol);
-      }
-
-      db.updateAppIngressSettings(appId, fields);
+      await applyAppConfig(appId, merged, {
+        userId: payload.userId,
+        log: (line) => db.appendDeployLog(appId, `[config] ${line}`),
+      });
       await syncAppIngress(appId);
-      const updated = db.getApp(appId);
+
+      if (body.deploy === false) {
+        return Response.json({
+          ok: true,
+          changes,
+          config_revision: db.getApp(appId)?.config_revision,
+          op_id: null,
+        }, { headers: corsHeaders });
+      }
+
+      const { opId } = enqueue({
+        kind: "redeploy",
+        resourceKeys: [`app:${appId}`],
+        input: {
+          appId,
+          userId: payload.userId,
+        },
+        trigger: "ui",
+        triggeredBy: payload.userId,
+      });
       return Response.json(
-        { ok: true, public_port: updated?.public_port ?? null, public_protocol: updated?.public_protocol ?? "tcp" },
+        { ok: true, changes, config_revision: db.getApp(appId)?.config_revision, op_id: opId },
         { headers: corsHeaders },
       );
     } finally {

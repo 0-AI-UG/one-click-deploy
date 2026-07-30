@@ -13,6 +13,71 @@ export type AppConfigChange = {
   after: unknown;
 };
 
+/** Build a full deploy request from an existing app row and a partial patch.
+ *
+ * This lets callers send only changed fields from the UI while preserving the
+ * current stored manifest values for everything else.
+ */
+export function mergeDeployRequestWithExistingApp(
+  app: AppRow,
+  patch: Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean },
+): DeployRequest {
+  const merged: DeployRequest = {
+    app_name: patch.app_name ?? app.name,
+    domain: patch.domain ?? app.domain,
+    git_repo: patch.git_repo ?? app.git_repo,
+    git_branch: patch.git_branch ?? app.git_branch,
+    dockerfile_path: patch.dockerfile_path ?? app.dockerfile_path || "Dockerfile",
+    docker_context: patch.docker_context ?? app.docker_context || ".",
+    image_ref: patch.image_ref ?? app.image_ref || "",
+    build_cache_ref: patch.build_cache_ref ?? app.build_cache_ref || "",
+    container_port: patch.container_port ?? app.container_port,
+    env_vars: patch.env_vars,
+    env_projection: patch.env_projection !== undefined ? patch.env_projection : db.parseAppEnvProjection(app),
+    public: patch.public !== undefined ? patch.public : !!app.public,
+    memory_mb: patch.memory_mb ?? (app.memory_mb ?? 0),
+    cpu_limit: patch.cpu_limit ?? (app.cpu_limit ?? 0),
+    auth_password: patch.auth_password,
+    health_check: patch.health_check ?? !!app.health_check,
+    health_check_mode: patch.health_check_mode ?? (app.health_check_mode || (app.health_check ? "http" : "container")),
+    health_check_command: patch.health_check_command ?? app.health_check_command,
+    health_check_file: patch.health_check_file ?? app.health_check_file,
+    health_check_max_age_seconds: patch.health_check_max_age_seconds ?? app.health_check_max_age_seconds,
+    environment_id: patch.environment_id ?? app.environment_id,
+    webhook_enabled: patch.webhook_enabled ?? !!app.webhook_enabled,
+    webhook_branch: patch.webhook_branch ?? app.webhook_branch || "main",
+    webhook_path: patch.webhook_path ?? app.webhook_path,
+    webhook_wait_for_ci: patch.webhook_wait_for_ci ?? !!app.webhook_wait_for_ci,
+    internal_protocol: patch.internal_protocol ?? (app.internal_protocol || "http"),
+    sticky: patch.sticky ?? !!app.sticky,
+    rate_limit_rps: patch.rate_limit_rps ?? app.rate_limit_rps,
+    ip_allowlist: patch.ip_allowlist ?? app.ip_allowlist,
+    health_check_path: patch.health_check_path ?? app.health_check_path,
+    compress: patch.compress ?? !!app.compress,
+    public_port: patch.public_port !== undefined ? patch.public_port : app.public_port ?? null,
+    public_protocol: patch.public_protocol ?? ((app.public_protocol as "tcp" | "udp") || "tcp"),
+    placement_pool: patch.placement_pool ?? app.placement_pool,
+    durability_class: patch.durability_class ?? app.durability_class,
+    max_per_host: patch.max_per_host ?? app.max_per_host,
+    min_locations: patch.min_locations ?? app.min_locations,
+    desired_replicas: patch.desired_replicas ?? app.desired_replicas,
+    min_replicas: patch.min_replicas ?? app.min_replicas,
+    max_replicas: patch.max_replicas ?? app.max_replicas,
+    scale_to_zero_after: patch.scale_to_zero_after ?? app.scale_to_zero_after,
+    target: patch.target ?? app.target,
+    target_of: patch.target_of ?? app.target_of,
+    volume_size: patch.volume_size,
+    volume_path: patch.volume_path,
+  };
+  if (patch.webhook_staging !== undefined) {
+    merged.webhook_staging = patch.webhook_staging;
+  }
+  if (patch.webhook_staging_environment_id !== undefined) {
+    merged.webhook_staging_environment_id = patch.webhook_staging_environment_id;
+  }
+  return merged;
+}
+
 function normalizedSpec(req: DeployRequest) {
   const durability = resolveDurability(req.durability_class, req.replicas);
   return {
