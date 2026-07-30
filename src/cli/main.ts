@@ -60,7 +60,7 @@ ${BOLD}Commands:${RESET}
   login <panel-url>      Log in to a panel
   status                 Dashboard overview
   apps                   List all apps
-  app <command>          Inspect or configure an existing app
+  app <command>          Inspect and manage an existing app
   logs <app> [--tail=N]  View app logs
   deploy [manifest]      Apply desired config, then deploy current Git code
   config diff [manifest] Preview manifest changes against stored config

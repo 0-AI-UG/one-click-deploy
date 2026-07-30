@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseAppFlags, parseIngressBody, parseSettingsBody } from "./app.ts";
+import { parseAppFlags } from "./app.ts";
 import { parseRollbackArgs } from "./rollback.ts";
 import { parsePolicyBody } from "./scale.ts";
 
@@ -9,42 +9,6 @@ describe("app runtime CLI parsing", () => {
     expect(parsed.positional).toEqual(["api"]);
     expect(parsed.values.get("port")).toBe("3000");
     expect(parsed.switches.has("disable-auth")).toBe(true);
-  });
-
-  test("builds a narrow app settings body", () => {
-    const body = parseSettingsBody(parseAppFlags([
-      "api",
-      "--public=false",
-      "--cpu=0.5",
-    ]));
-    expect(body).toEqual({ public: false, cpu_limit: 0.5 });
-  });
-
-  test("builds ingress values without adding unspecified fields", () => {
-    const body = parseIngressBody(parseAppFlags([
-      "api",
-      "--sticky=true",
-      "--public-port=off",
-      "--public-protocol=udp",
-    ]));
-    expect(body).toEqual({
-      sticky: true,
-      public_port: null,
-      public_protocol: "udp",
-    });
-  });
-
-  test("reads basic auth password from a named local environment value", () => {
-    process.env.OCD_TEST_AUTH_PASSWORD = "secret";
-    try {
-      const body = parseIngressBody(parseAppFlags([
-        "api",
-        "--auth-password-env=OCD_TEST_AUTH_PASSWORD",
-      ]));
-      expect(body).toEqual({ auth_password: "secret" });
-    } finally {
-      delete process.env.OCD_TEST_AUTH_PASSWORD;
-    }
   });
 
   test("parses a selected rollback deployment", () => {

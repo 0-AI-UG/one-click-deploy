@@ -313,105 +313,6 @@ async function staging(args: string[]): Promise<void> {
   ]);
 }
 
-export type SettingsBody = {
-  container_port?: number;
-  public?: boolean;
-  memory_mb?: number;
-  cpu_limit?: number;
-};
-
-export function parseSettingsBody(parsed: ParsedFlags): SettingsBody {
-  const body: SettingsBody = {};
-  const port = parsed.values.get("port");
-  const publicValue = parsed.values.get("public");
-  const memory = parsed.values.get("memory");
-  const cpu = parsed.values.get("cpu");
-  if (port !== undefined) body.container_port = parseNumber(port, "port", { integer: true, min: 1, max: 65535 });
-  if (publicValue !== undefined) body.public = parseBoolean(publicValue, "public");
-  if (memory !== undefined) body.memory_mb = parseNumber(memory, "memory", { integer: true, min: 0 });
-  if (cpu !== undefined) body.cpu_limit = parseNumber(cpu, "cpu", { min: 0 });
-  return body;
-}
-
-async function settings(args: string[]): Promise<void> {
-  const parsed = parseAppFlags(args);
-  const app = await resolveApp(requireAppName(parsed, "ocd app settings <app> [--port=N] [--public=true|false] [--memory=MB] [--cpu=CORES]"));
-  const body = parseSettingsBody(parsed);
-  if (Object.keys(body).length === 0) throw new Error("Provide at least one app setting");
-  const result = await post<{ ok: boolean; op_id?: number }>(`/api/apps/${app.id}/redeploy`, body);
-  await followNamedOp(result.op_id, `Updated and redeployed ${app.name}`, "Settings rollout failed");
-}
-
-export type IngressBody = {
-  auth_password?: string;
-  sticky?: boolean;
-  rate_limit_rps?: number;
-  ip_allowlist?: string;
-  health_check_path?: string;
-  health_check?: boolean;
-  compress?: boolean;
-  public_port?: number | "auto" | null;
-  public_protocol?: "tcp" | "udp";
-  internal_protocol?: "http" | "tcp";
-};
-
-export function parseIngressBody(parsed: ParsedFlags): IngressBody {
-  const body: IngressBody = {};
-  const value = (name: string) => parsed.values.get(name);
-  const protocol = value("internal-protocol");
-  if (protocol !== undefined) {
-    if (protocol !== "http" && protocol !== "tcp") throw new Error("--internal-protocol must be http or tcp");
-    body.internal_protocol = protocol;
-  }
-  if (parsed.switches.has("disable-auth")) body.auth_password = "";
-  const passwordEnv = value("auth-password-env");
-  if (passwordEnv !== undefined) {
-    if (body.auth_password !== undefined) throw new Error("Use only one of --auth-password-env and --disable-auth");
-    const password = process.env[passwordEnv];
-    if (!password) throw new Error(`Environment variable ${passwordEnv} is not set`);
-    body.auth_password = password;
-  }
-  const sticky = value("sticky");
-  if (sticky !== undefined) body.sticky = parseBoolean(sticky, "sticky");
-  const rate = value("rate-limit");
-  if (rate !== undefined) body.rate_limit_rps = parseNumber(rate, "rate-limit", { integer: true, min: 0, max: 1_000_000 });
-  const allowlist = value("allowlist");
-  if (allowlist !== undefined) body.ip_allowlist = allowlist;
-  const path = value("health-path");
-  if (path !== undefined) body.health_check_path = path;
-  const health = value("health-check");
-  if (health !== undefined) body.health_check = parseBoolean(health, "health-check");
-  const compress = value("compress");
-  if (compress !== undefined) body.compress = parseBoolean(compress, "compress");
-  const publicPort = value("public-port");
-  if (publicPort !== undefined) {
-    body.public_port = publicPort === "off" ? null
-      : publicPort === "auto" ? "auto"
-      : parseNumber(publicPort, "public-port", { integer: true, min: 1, max: 65535 });
-  }
-  const publicProtocol = value("public-protocol");
-  if (publicProtocol !== undefined) {
-    if (publicProtocol !== "tcp" && publicProtocol !== "udp") throw new Error("--public-protocol must be tcp or udp");
-    body.public_protocol = publicProtocol;
-  }
-  return body;
-}
-
-async function ingress(args: string[]): Promise<void> {
-  const parsed = parseAppFlags(args);
-  const app = await resolveApp(requireAppName(parsed, "ocd app ingress <app> [options]"));
-  const body = parseIngressBody(parsed);
-  if (Object.keys(body).length === 0) throw new Error("Provide at least one ingress setting");
-  const result = await put<{ ok: boolean; public_port: number | null; public_protocol: string }>(
-    `/api/apps/${app.id}/ingress`,
-    body,
-  );
-  console.log(`${GREEN}Updated ingress for ${app.name}${RESET}`);
-  if ("public_port" in body) {
-    console.log(`${DIM}Raw exposure: ${result.public_port == null ? "off" : `${result.public_protocol}/${result.public_port}`}${RESET}`);
-  }
-}
-
 type Environment = { id: number; name: string };
 
 async function resolveEnvironment(value: string): Promise<number> {
@@ -484,15 +385,8 @@ function usage(): void {
   availability <app>           Show trailing availability and placement
   scaling-events <app>         List recent manual/autoscale events
   staging <app>                Inspect the webhook staging sibling
-  settings <app> [options]     Update runtime settings and redeploy
-  ingress <app> [options]      Narrow ingress update; unspecified fields stay
   webhook <action> <app>       Status, enable, update, or disable webhook
 
-${DIM}Settings: --port=N --public=true|false --memory=MB --cpu=CORES
-Ingress: --internal-protocol=http|tcp --auth-password-env=KEY --disable-auth
-         --sticky=true|false --rate-limit=N --allowlist=CSV --health-path=/path
-         --health-check=true|false --compress=true|false
-         --public-port=off|auto|N --public-protocol=tcp|udp
 Webhook enable: --branch=NAME --path=PREFIX --wait-for-ci=true|false
 Webhook enable/set: --staging-env=<name|id|off>${RESET}`);
 }
@@ -515,8 +409,6 @@ export async function app(args: string[]): Promise<void> {
     case "scaling-events":
     case "events": return scalingEvents(rest);
     case "staging": return staging(rest);
-    case "settings": return settings(rest);
-    case "ingress": return ingress(rest);
     case "webhook": return webhook(rest);
     default: throw new Error(`Unknown app command: ${command}`);
   }

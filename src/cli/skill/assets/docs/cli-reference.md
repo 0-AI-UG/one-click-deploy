@@ -158,25 +158,6 @@ These expose app detail, deployment history, replica state, current/historical
 metrics, availability, scaling events, and webhook-staging state.
 
 ```bash
-ocd app settings <app> [--port=N] [--public=true|false] [--memory=MB] [--cpu=CORES]
-```
-
-Settings updates only supplied fields and then redeploys.
-
-```bash
-ocd app ingress <app> [options]
-```
-
-Ingress updates preserve unspecified stored fields. Options:
-
-- `--internal-protocol=http|tcp`
-- `--auth-password-env=KEY` or `--disable-auth`
-- `--sticky=true|false`, `--rate-limit=N`, `--allowlist=CSV`
-- `--health-path=/path`, `--health-check=true|false`
-- `--compress=true|false`
-- `--public-port=off|auto|N`, `--public-protocol=tcp|udp`
-
-```bash
 ocd app webhook status <app>
 ocd app webhook enable <app> [options]
 ocd app webhook set <app> [options]
