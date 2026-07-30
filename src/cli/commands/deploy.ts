@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { get, post, put } from "../api.ts";
+import { get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
 import { getGitRepo, readManifest, promptRequired, resolveAuthPassword, manifestHash } from "../manifest.ts";
@@ -271,10 +271,10 @@ ${BOLD}Options:${RESET}
       console.log(`\n${GREEN}Would create ${BOLD}${body.app_name}${RESET} from ${manifestPath}.`);
       return;
     }
-    const preview = await put<{
+    const preview = await post<{
       changes: Array<{ field: string; before: unknown; after: unknown }>;
       current_config_revision: number;
-    }>(`/api/apps/${existing.id}/config`, { ...body, dry_run: true });
+    }>("/api/apps/deploy", { ...body, dry_run: true });
     console.log(`\nConfiguration revision ${preview.current_config_revision}:`);
     if (preview.changes.length === 0) {
       console.log(`  ${DIM}No configuration changes.${RESET}`);
@@ -293,10 +293,10 @@ ${BOLD}Options:${RESET}
       console.error(`${RED}Cannot apply configuration only: app "${body.app_name}" does not exist.${RESET}`);
       process.exit(1);
     }
-    const applied = await put<{
+    const applied = await post<{
       changes: Array<{ field: string; before: unknown; after: unknown }>;
       config_revision: number;
-    }>(`/api/apps/${existing.id}/config`, { ...body, deploy: false });
+    }>("/api/apps/deploy", { ...body, deploy: false });
     console.log(`\n${GREEN}Configuration applied.${RESET} Revision ${applied.config_revision}.`);
     for (const change of applied.changes) {
       console.log(`  ${change.field}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`);

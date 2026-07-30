@@ -353,7 +353,7 @@ export function SettingsTab({
         </Field>
         </PermissionGate>
 
-        <PermissionGate permission="apps.ingress" appId={appId} environmentId={app.environment_id}>
+        <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
           <div className="flex justify-end mt-3">
             <Btn
               size="sm"

@@ -113,72 +113,112 @@ export async function handleGetApps(request: Request): Promise<Response> {
   }
 }
 
+type AppConfigPatch = Partial<DeployRequest> & {
+  dry_run?: boolean;
+  deploy?: boolean;
+};
+
+/**
+ * The single existing-app configuration path. Both a complete manifest apply
+ * and a partial UI patch merge into stored desired state here, synchronize
+ * ingress, and optionally enqueue the same code-only redeploy operation.
+ */
+async function applyExistingAppConfig(
+  app: AppRow,
+  patch: AppConfigPatch,
+  userId: number,
+  trigger: "api" | "cli" | "ui",
+): Promise<Response> {
+  const merged = mergeDeployRequestWithExistingApp(app, patch);
+  const changes = diffAppConfig(app, merged);
+  if (patch.dry_run) {
+    return Response.json({
+      ok: true,
+      dry_run: true,
+      changes,
+      current_config_revision: app.config_revision,
+    }, { headers: corsHeaders });
+  }
+
+  const resourceKeys = [`app:${app.id}`];
+  const acq = tryAcquire(resourceKeys, NON_OP_HOLDER, "apply_config");
+  if (!acq.ok) {
+    return Response.json(
+      { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
+      { status: 409, headers: corsHeaders },
+    );
+  }
+
+  try {
+    await applyAppConfig(app.id, merged, {
+      userId,
+      log: (line) => db.appendDeployLog(app.id, `[config] ${line}`),
+    });
+    await syncAppIngress(app.id);
+
+    const result = {
+      ok: true,
+      applied: true,
+      changes,
+      config_revision: db.getApp(app.id)?.config_revision,
+      op_id: null as number | null,
+    };
+    if (patch.deploy === false) {
+      return Response.json(result, { headers: corsHeaders });
+    }
+
+    const { opId } = enqueue({
+      kind: "redeploy",
+      resourceKeys,
+      input: { appId: app.id, userId },
+      trigger,
+      triggeredBy: userId,
+    });
+    return Response.json({ ...result, op_id: opId }, { headers: corsHeaders });
+  } finally {
+    release(resourceKeys);
+  }
+}
+
 export async function handleDeploy(request: Request): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.deploy");
-    const req = await request.json() as Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean };
+    const req = await request.json() as AppConfigPatch;
     if (!req?.app_name || typeof req.app_name !== "string") {
       return Response.json({ ok: false, error: "app_name is required" }, { status: 400, headers: corsHeaders });
     }
-    // `deploy` is an idempotent apply + rollout. Creation still uses the
-    // provisioning saga; an existing name applies the submitted desired spec
-    // to that app and then performs the same code-only redeploy used by the UI.
+
+    // `deploy` is an idempotent complete-manifest apply + rollout. Creation
+    // still uses the provisioning saga; existing apps share the same config
+    // apply and code-only redeploy implementation as UI patches.
     const existing = db.getAppByName(req.app_name);
     if (existing) {
-      const merged = mergeDeployRequestWithExistingApp(existing, req);
-      const changes = diffAppConfig(existing, merged);
-      if (req.dry_run) {
-        return Response.json({
-          ok: true,
-          dry_run: true,
-          changes,
-          current_config_revision: existing.config_revision,
-        }, { headers: corsHeaders });
-      }
-      const acq = tryAcquire([`app:${existing.id}`], NON_OP_HOLDER, "apply_config");
-      if (!acq.ok) {
-        return Response.json(
-          { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
-          { status: 409, headers: corsHeaders },
-        );
-      }
-      try {
-        await applyAppConfig(existing.id, merged, {
-          userId: payload.userId,
-          log: (line) => db.appendDeployLog(existing.id, `[config] ${line}`),
-        });
-        await syncAppIngress(existing.id);
-        if (req.deploy === false) {
-          return Response.json({
-            ok: true,
-            applied: true,
-            changes,
-            config_revision: db.getApp(existing.id)?.config_revision,
-            op_id: null,
-          }, { headers: corsHeaders });
-        }
-        const { opId } = enqueue({
-          kind: "redeploy",
-          resourceKeys: [`app:${existing.id}`],
-          input: { appId: existing.id, userId: payload.userId },
-          trigger: payload.client === "cli" ? "cli" : "api",
-          triggeredBy: payload.userId,
-        });
-        return Response.json({
-          ok: true,
-          op_id: opId,
-          applied: true,
-          changes,
-          config_revision: db.getApp(existing.id)?.config_revision,
-        }, { headers: corsHeaders });
-      } finally {
-        release([`app:${existing.id}`]);
-      }
+      return applyExistingAppConfig(
+        existing,
+        req,
+        payload.userId,
+        payload.client === "cli" ? "cli" : "api",
+      );
     }
+    if (req.dry_run) {
+      return Response.json(
+        { ok: true, dry_run: true, would_create: true, changes: [] },
+        { headers: corsHeaders },
+      );
+    }
+    if (req.deploy === false) {
+      return Response.json(
+        { ok: false, error: `Cannot apply configuration only: app "${req.app_name}" does not exist` },
+        { status: 404, headers: corsHeaders },
+      );
+    }
+    const deployRequest = { ...req };
+    delete deployRequest.dry_run;
+    delete deployRequest.deploy;
     const { opId } = enqueue({
       kind: "deploy",
       resourceKeys: [`app:create:${req.app_name}`],
-      input: req as DeployRequest,
+      input: deployRequest as DeployRequest,
       trigger: payload.client === "cli" ? "cli" : "api",
       triggeredBy: payload.userId,
     });
@@ -188,64 +228,15 @@ export async function handleDeploy(request: Request): Promise<Response> {
   }
 }
 
-/** Preview or explicitly apply a complete desired app spec. Applying config is
- * separate from a code rollout at the API level; callers may request a rollout
- * (the default) or use `deploy: false` for a config-only operation. */
+/** Apply a partial UI patch to stored desired configuration and optionally
+ * roll it out. Complete manifest reconciliation belongs to handleDeploy. */
 export async function handleApplyAppConfig(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.deploy", appScope(appId));
-    const body = await request.json() as Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean };
+    const body = await request.json() as AppConfigPatch;
     const app = db.getApp(appId);
     if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
-    const merged = mergeDeployRequestWithExistingApp(app, body);
-    const changes = diffAppConfig(app, merged);
-    if (body.dry_run) {
-      return Response.json({
-        ok: true,
-        dry_run: true,
-        changes,
-        current_config_revision: app.config_revision,
-      }, { headers: corsHeaders });
-    }
-
-    const acq = tryAcquire([`app:${appId}`], NON_OP_HOLDER, "apply_config");
-    if (!acq.ok) {
-      return Response.json(
-        { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
-        { status: 409, headers: corsHeaders },
-      );
-    }
-    try {
-      await applyAppConfig(appId, merged, {
-        userId: payload.userId,
-        log: (line) => db.appendDeployLog(appId, `[config] ${line}`),
-      });
-      await syncAppIngress(appId);
-    } finally {
-      release([`app:${appId}`]);
-    }
-
-    if (body.deploy === false) {
-      return Response.json({
-        ok: true,
-        changes,
-        config_revision: db.getApp(appId)?.config_revision,
-        op_id: null,
-      }, { headers: corsHeaders });
-    }
-    const { opId } = enqueue({
-      kind: "redeploy",
-      resourceKeys: [`app:${appId}`],
-      input: { appId, userId: payload.userId },
-      trigger: payload.client === "cli" ? "cli" : "api",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({
-      ok: true,
-      changes,
-      config_revision: db.getApp(appId)?.config_revision,
-      op_id: opId,
-    }, { headers: corsHeaders });
+    return applyExistingAppConfig(app, body, payload.userId, "ui");
   } catch (error) {
     return handleError(error);
   }
@@ -274,148 +265,14 @@ export function handleUnpauseApp(request: Request, appId: number): Promise<Respo
   return enqueueOp(request, { permission: "apps.pause", scope: appScope(appId), kind: "unpause_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }
 
-export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "apps.redeploy", appScope(appId));
-    const body = (await request.json().catch(() => ({}))) as Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean };
-    const app = db.getApp(appId);
-    if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
-    const merged = mergeDeployRequestWithExistingApp(app, body);
-    const changes = diffAppConfig(app, merged);
-    if (body.dry_run) {
-      return Response.json({
-        ok: true,
-        dry_run: true,
-        changes,
-        current_config_revision: app.config_revision,
-      }, { headers: corsHeaders });
-    }
-
-    const acq = tryAcquire([`app:${appId}`], NON_OP_HOLDER, "apply_config");
-    if (!acq.ok) {
-      return Response.json(
-        { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
-        { status: 409, headers: corsHeaders },
-      );
-    }
-    try {
-      await applyAppConfig(appId, merged, {
-        userId: payload.userId,
-        log: (line) => db.appendDeployLog(appId, `[config] ${line}`),
-      });
-      await syncAppIngress(appId);
-      if (body.deploy === false) {
-        return Response.json({
-          ok: true,
-          changes,
-          config_revision: db.getApp(appId)?.config_revision,
-          op_id: null,
-        }, { headers: corsHeaders });
-      }
-      const { opId } = enqueue({
-        kind: "redeploy",
-        resourceKeys: [`app:${appId}`],
-        input: {
-          appId,
-          userId: payload.userId,
-        },
-        trigger: "ui",
-        triggeredBy: payload.userId,
-      });
-      return Response.json({
-        ok: true,
-        changes,
-        config_revision: db.getApp(appId)?.config_revision,
-        op_id: opId,
-      }, { headers: corsHeaders });
-    } finally {
-      release([`app:${appId}`]);
-    }
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
-/**
- * Update per-app ingress settings through the same manifest+deploy path used by
- * config updates: validate against the ingress schema in-app, persist to the
- * manifest columns, sync ingress rendering, and (by default) enqueue a redeploy.
- */
-export async function handleUpdateIngressSettings(request: Request, appId: number): Promise<Response> {
-  try {
-    const body = (await request.json().catch(() => ({}))) as Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean };
-
-    // Body first, then the checks: changing *public exposure* (publishing the
-    // app on a fleet port, or unpublishing it) is strictly more dangerous than
-    // the other ingress knobs, so it needs apps.expose on top of apps.ingress.
-    // Key presence, not truthiness — `public_port: null` means "unexpose" and
-    // must still be gated.
-    const payload = await requirePermission(request, "apps.ingress", appScope(appId));
-    if ("public_port" in body || "public_protocol" in body) {
-      await requirePermission(request, "apps.expose", appScope(appId));
-    }
-
-    const app = db.getApp(appId);
-    if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
-    const merged = mergeDeployRequestWithExistingApp(app, body);
-    const changes = diffAppConfig(app, merged);
-    if (body.dry_run) {
-      return Response.json({
-        ok: true,
-        dry_run: true,
-        changes,
-        current_config_revision: app.config_revision,
-      }, { headers: corsHeaders });
-    }
-
-    // Serialize this direct ingress re-sync against engine operations on the
-    // same app. A redeploy also re-renders this app's Traefik config, so the
-    // two touching it concurrently could clobber each other. Hold the app lock
-    // for the DB writes + sync; if an op already holds it, tell the caller to
-    // retry (the UI also disables the button while an op is in flight).
-    const acq = tryAcquire([`app:${appId}`], NON_OP_HOLDER, "ingress_sync");
-    if (!acq.ok) {
-      return Response.json(
-        { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
-        { status: 409, headers: corsHeaders },
-      );
-    }
-    try {
-      await applyAppConfig(appId, merged, {
-        userId: payload.userId,
-        log: (line) => db.appendDeployLog(appId, `[config] ${line}`),
-      });
-      await syncAppIngress(appId);
-
-      if (body.deploy === false) {
-        return Response.json({
-          ok: true,
-          changes,
-          config_revision: db.getApp(appId)?.config_revision,
-          op_id: null,
-        }, { headers: corsHeaders });
-      }
-
-      const { opId } = enqueue({
-        kind: "redeploy",
-        resourceKeys: [`app:${appId}`],
-        input: {
-          appId,
-          userId: payload.userId,
-        },
-        trigger: "ui",
-        triggeredBy: payload.userId,
-      });
-      return Response.json(
-        { ok: true, changes, config_revision: db.getApp(appId)?.config_revision, op_id: opId },
-        { headers: corsHeaders },
-      );
-    } finally {
-      release([`app:${appId}`]);
-    }
-  } catch (error) {
-    return handleError(error);
-  }
+export function handleRedeployApp(request: Request, appId: number): Promise<Response> {
+  return enqueueOp(request, {
+    permission: "apps.redeploy",
+    scope: appScope(appId),
+    kind: "redeploy",
+    resourceKeys: [`app:${appId}`],
+    input: { appId },
+  });
 }
 
 export async function handleRenameApp(request: Request, appId: number): Promise<Response> {

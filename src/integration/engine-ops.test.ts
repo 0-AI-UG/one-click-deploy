@@ -585,7 +585,7 @@ d(
         const { syncAppIngress } = await import("../engine/scale/traefik-manager.ts");
 
         // Password protection is pure ingress config now (no rebuild): store the
-        // hash and re-sync the ingress, mirroring PUT /api/apps/:id/ingress.
+        // hash and re-sync the ingress, mirroring PUT /api/apps/:id/config.
         db.updateAppAuthPassword(ctx!.appId, "itest-secret");
         await syncAppIngress(ctx!.appId);
 

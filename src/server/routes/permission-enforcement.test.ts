@@ -105,7 +105,7 @@ import {
   handleGetContainerLogs,
   handleGetDeployments,
   handleGetDeployLog,
-  handleUpdateIngressSettings,
+  handleApplyAppConfig,
   handleGetDashboard,
 } from "./apps.ts";
 import {
@@ -340,8 +340,8 @@ describe("GUARD: the real permission layer is what the routes see", () => {
   test("a user with NO permissions is refused by a handler another suite stubs out", async () => {
     // apps-auth.test.ts drives this exact handler with auth bypassed.
     const ctx = await userWith([]);
-    const res = await handleUpdateIngressSettings(
-      req(`/api/apps/${appA}/ingress`, { method: "PUT", body: { sticky: true }, token: ctx.token }),
+    const res = await handleApplyAppConfig(
+      req(`/api/apps/${appA}/config`, { method: "PUT", body: { sticky: true }, token: ctx.token }),
       appA,
     );
     expect(res.status).toBe(403);
@@ -451,25 +451,11 @@ const CASES: Case[] = [
     call: (c) => handleGetDeployLog(req(`/api/apps/${appA}/deploy-log`, { token: c.token }), appA),
   },
   {
-    name: "apps: handleUpdateIngressSettings (ingress knobs)",
-    permission: "apps.ingress",
+    name: "apps: handleApplyAppConfig",
+    permission: "apps.deploy",
     call: (c) =>
-      handleUpdateIngressSettings(
-        req(`/api/apps/${appA}/ingress`, { method: "PUT", body: { sticky: true }, token: c.token }),
-        appA,
-      ),
-  },
-  {
-    name: "apps: handleUpdateIngressSettings (public_port)",
-    permission: "apps.expose",
-    extra: ["apps.ingress"],
-    call: (c) =>
-      handleUpdateIngressSettings(
-        req(`/api/apps/${appA}/ingress`, {
-          method: "PUT",
-          body: { public_port: null },
-          token: c.token,
-        }),
+      handleApplyAppConfig(
+        req(`/api/apps/${appA}/config`, { method: "PUT", body: { sticky: true, deploy: false }, token: c.token }),
         appA,
       ),
   },
@@ -1081,44 +1067,22 @@ describe("scope semantics through the real routes", () => {
 // ---------------------------------------------------------------------------
 
 describe("permission splits are enforced (the old coarse grant is not enough)", () => {
-  test("apps.redeploy does NOT allow changing ingress settings", async () => {
+  test("apps.redeploy does NOT allow changing stored configuration", async () => {
     const ctx = await userWith(["apps.redeploy"]);
-    const res = await handleUpdateIngressSettings(
-      req(`/api/apps/${appA}/ingress`, { method: "PUT", body: { sticky: true }, token: ctx.token }),
+    const res = await handleApplyAppConfig(
+      req(`/api/apps/${appA}/config`, { method: "PUT", body: { sticky: true }, token: ctx.token }),
       appA,
     );
     expect(res.status).toBe(403);
   });
 
-  test("apps.ingress does NOT allow setting public_port (needs apps.expose)", async () => {
+  test("apps.ingress does NOT allow changing stored configuration", async () => {
     const ctx = await userWith(["apps.ingress"]);
-
-    const knobs = await handleUpdateIngressSettings(
-      req(`/api/apps/${appA}/ingress`, { method: "PUT", body: { sticky: true }, token: ctx.token }),
+    const res = await handleApplyAppConfig(
+      req(`/api/apps/${appA}/config`, { method: "PUT", body: { sticky: true }, token: ctx.token }),
       appA,
     );
-    expect(knobs.status).not.toBe(403);
-
-    const expose = await handleUpdateIngressSettings(
-      req(`/api/apps/${appA}/ingress`, {
-        method: "PUT",
-        body: { public_port: "auto" },
-        token: ctx.token,
-      }),
-      appA,
-    );
-    expect(expose.status).toBe(403);
-
-    // `public_port: null` means "unexpose" and must be gated on key presence.
-    const unexpose = await handleUpdateIngressSettings(
-      req(`/api/apps/${appA}/ingress`, {
-        method: "PUT",
-        body: { public_port: null },
-        token: ctx.token,
-      }),
-      appA,
-    );
-    expect(unexpose.status).toBe(403);
+    expect(res.status).toBe(403);
   });
 
   test("apps.logs does NOT grant deploy history (needs deployments.view)", async () => {

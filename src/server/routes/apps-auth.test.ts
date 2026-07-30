@@ -18,7 +18,7 @@ mock.module("../lib/permissions.ts", () => ({
   requireAuthenticated: async () => ({ userId: seedTestAdmin(), username: "admin" }),
 }));
 
-// The ingress endpoint re-syncs Traefik; stub it out (no live proxy in tests).
+// The config endpoint re-syncs Traefik; stub it out (no live proxy in tests).
 const syncCalls: number[] = [];
 mock.module("../../engine/scale/traefik-manager.ts", () => ({
   syncAppIngress: async (appId: number) => { syncCalls.push(appId); },
@@ -26,7 +26,7 @@ mock.module("../../engine/scale/traefik-manager.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import { handleGetApps, handleUpdateIngressSettings } from "./apps.ts";
+import { handleApplyAppConfig, handleGetApps } from "./apps.ts";
 
 function makeApp(overrides: Partial<Parameters<typeof db.insertApp>[0]> = {}) {
   return db.insertApp({
@@ -41,9 +41,9 @@ function makeApp(overrides: Partial<Parameters<typeof db.insertApp>[0]> = {}) {
   });
 }
 
-const ingressReq = (appId: number, body: unknown) =>
-  handleUpdateIngressSettings(
-    new Request(`http://x/api/apps/${appId}/ingress`, { method: "PUT", body: JSON.stringify(body) }),
+const configReq = (appId: number, body: unknown) =>
+  handleApplyAppConfig(
+    new Request(`http://x/api/apps/${appId}/config`, { method: "PUT", body: JSON.stringify(body) }),
     appId,
   );
 
@@ -76,10 +76,10 @@ describe("app response scrubbing", () => {
   });
 });
 
-describe("ingress endpoint: password set/clear", () => {
+describe("config endpoint: password set/clear", () => {
   test("setting a password stores only the hash and enables auth", async () => {
     const app = makeApp();
-    const res = await ingressReq(app.id, { auth_password: "s3cret" });
+    const res = await configReq(app.id, { auth_password: "s3cret", deploy: false });
     expect(res.status).toBe(200);
 
     const row = db.getApp(app.id)!;
@@ -93,7 +93,7 @@ describe("ingress endpoint: password set/clear", () => {
     const app = makeApp({ auth_password: "hunter2" });
     expect(db.getApp(app.id)!.auth_password_hash).not.toBe("");
 
-    const res = await ingressReq(app.id, { auth_password: "" });
+    const res = await configReq(app.id, { auth_password: "", deploy: false });
     expect(res.status).toBe(200);
     expect(db.getApp(app.id)!.auth_password_hash).toBe("");
   });
@@ -101,14 +101,14 @@ describe("ingress endpoint: password set/clear", () => {
   test("omitting auth_password leaves the current password untouched", async () => {
     const app = makeApp({ auth_password: "hunter2" });
     const before = db.getApp(app.id)!.auth_password_hash;
-    const res = await ingressReq(app.id, { rate_limit_rps: 5 });
+    const res = await configReq(app.id, { rate_limit_rps: 5, deploy: false });
     expect(res.status).toBe(200);
     expect(db.getApp(app.id)!.auth_password_hash).toBe(before);
   });
 
   test("rejects a password on a raw-TCP-routed app (internal_protocol tcp), same rule as deploy", async () => {
     const app = makeApp({ internal_protocol: "tcp" });
-    const res = await ingressReq(app.id, { auth_password: "s3cret" });
+    const res = await configReq(app.id, { auth_password: "s3cret", deploy: false });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toMatch(/requires HTTP internal routing/i);
@@ -117,7 +117,7 @@ describe("ingress endpoint: password set/clear", () => {
 
   test("rejects a password when switching an app to internal_protocol tcp in the same request", async () => {
     const app = makeApp();
-    const res = await ingressReq(app.id, { internal_protocol: "tcp", auth_password: "s3cret" });
+    const res = await configReq(app.id, { internal_protocol: "tcp", auth_password: "s3cret", deploy: false });
     expect(res.status).toBe(400);
     expect(db.getApp(app.id)!.auth_password_hash).toBe("");
   });
@@ -125,7 +125,7 @@ describe("ingress endpoint: password set/clear", () => {
   test("persists internal_protocol changes and re-syncs ingress", async () => {
     const app = makeApp();
     expect(db.getApp(app.id)!.internal_protocol).toBe("http");
-    const res = await ingressReq(app.id, { internal_protocol: "tcp" });
+    const res = await configReq(app.id, { internal_protocol: "tcp", deploy: false });
     expect(res.status).toBe(200);
     expect(db.getApp(app.id)!.internal_protocol).toBe("tcp");
   });

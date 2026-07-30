@@ -304,7 +304,7 @@ const persistSettings: Step<RedeployInput, { ok: true }> = {
     if (!app) throw new Error("App not found");
     // Only the container port needs a rebuild path (the container binds it), so
     // it persists here before the fresh container starts. Password protection is
-    // pure ingress config now and lives on PUT /api/apps/:id/ingress instead.
+    // pure ingress config now and is persisted by the app config path instead.
     if (ctx.input.container_port !== undefined && ctx.input.container_port !== app.container_port) {
       db.updateAppContainerPort(ctx.input.appId, ctx.input.container_port);
     }

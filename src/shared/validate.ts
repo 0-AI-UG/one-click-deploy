@@ -291,7 +291,7 @@ export type NormalizedIngressFields = {
 
 /**
  * Single source of truth for the ingress-field rules shared by
- * `validateDeployRequest` and `handleUpdateIngressSettings`. Returns the
+ * manifest and partial app-config apply paths. Returns the
  * normalized values (or the first error) so both call sites agree on both the
  * rules and the error strings. `httpRouted` is whether the app is (or will be)
  * HTTP-routed (internal_protocol='http') — password protection and an active
