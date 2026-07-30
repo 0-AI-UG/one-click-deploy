@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { posix, resolve } from "node:path";
 import { get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
@@ -9,6 +9,10 @@ interface Environment {
   id: number;
   name: string;
   env_vars?: Array<{ key: string }>;
+}
+
+export function resolveDockerfilePath(context = ".", dockerfile = "Dockerfile"): string {
+  return context === "." ? dockerfile : posix.join(context, dockerfile);
 }
 
 async function resolveEnvironment(name: string): Promise<Environment> {
@@ -170,7 +174,10 @@ ${BOLD}Options:${RESET}
     container_port: port,
     domain: manifest.domain,
     git_branch: manifest.git_branch ?? "",
-    dockerfile_path: manifest.build?.dockerfile ?? "Dockerfile",
+    dockerfile_path: resolveDockerfilePath(
+      manifest.build?.context,
+      manifest.build?.dockerfile,
+    ),
     docker_context: manifest.build?.context ?? ".",
     image_ref: manifest.image?.ref ?? "",
     build_cache_ref: manifest.build?.cache_ref ?? "",
