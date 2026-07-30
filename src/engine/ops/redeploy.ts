@@ -18,7 +18,6 @@ import type { OpKindDefinition, Step } from "../types.ts";
 
 type RedeployInput = {
   appId: number;
-  container_port?: number;
   userId?: string;
   /** Immutable commit selected by a webhook. Manual redeploys follow git_branch. */
   gitSha?: string;
@@ -136,7 +135,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     const server = db.getServer(first.server_id);
     if (!server) throw new Error("Server not found");
 
-    const containerPort = ctx.input.container_port ?? app.container_port;
+    const containerPort = app.container_port;
     const envVars = await resolveAppEnvVars(app);
     const githubPat = (await resolveGitHubToken(ctx.input.userId)) || undefined;
     const bindAddr = replicaBindHost(server);
@@ -296,22 +295,6 @@ const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
   },
 };
 
-const persistSettings: Step<RedeployInput, { ok: true }> = {
-  name: "persist_settings",
-  label: "Persist settings",
-  async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
-    if (!app) throw new Error("App not found");
-    // Only the container port needs a rebuild path (the container binds it), so
-    // it persists here before the fresh container starts. Password protection is
-    // pure ingress config now and is persisted by the app config path instead.
-    if (ctx.input.container_port !== undefined && ctx.input.container_port !== app.container_port) {
-      db.updateAppContainerPort(ctx.input.appId, ctx.input.container_port);
-    }
-    return { ok: true };
-  },
-};
-
 const syncIngressStep: Step<RedeployInput, { ok: true }> = {
   name: "sync_ingress",
   label: "Configure ingress",
@@ -413,7 +396,6 @@ const redeployOp: OpKindDefinition<RedeployInput> = {
     setDeploying,
     pullAndBuild,
     rollExtraReplicas,
-    persistSettings,
     syncIngressStep,
     healthCheckStep,
     recordDeploymentHistory,

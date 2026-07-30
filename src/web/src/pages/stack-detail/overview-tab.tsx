@@ -1,26 +1,19 @@
 import { Card, StatusBadge, Table, EmptyState } from "../../components/ui.tsx";
-import { StackStagingRow } from "./staging-row.tsx";
 import { Boxes, Database, ExternalLink } from "lucide-react";
 import type { StackDetail, StackMemberApp, EnvironmentData } from "../../types.ts";
 
 /**
  * The whole stack on one page: what it is configured with and what it contains.
- * The staging environment is the only thing editable here.
- *
- * What a stack *contains* is declarative: it comes from `ocd-stack.json`. There
- * is no membership editing here — changing members means editing the manifest
- * and deploying the repo again, same as an app.
+ * Stack configuration is declarative and comes from `ocd-stack.json`.
  */
 export function OverviewTab({
   stack,
   memberApps,
   environments,
-  reload,
 }: {
   stack: StackDetail;
   memberApps: StackMemberApp[];
   environments: EnvironmentData[];
-  reload: () => void;
 }) {
   const envName = (id: number | null) =>
     id == null ? null : environments.find((e) => e.id === id)?.name ?? `#${id}`;
@@ -60,12 +53,10 @@ export function OverviewTab({
                 ? <a href="#/environments" className="text-fg font-bold hover:underline">{prodEnv}</a>
                 : <span className="text-fg-dim">none</span>}
             </div>
-            <StackStagingRow
-              stack={stack}
-              memberApps={memberApps}
-              environments={environments}
-              reload={reload}
-            />
+            <div className="flex justify-between">
+              <span className="text-muted">Staging Environment</span>
+              <span className="text-fg font-bold">{envName(stack.staging_environment_id) ?? "none"}</span>
+            </div>
           </div>
         </Card>
         <Card className="p-4 space-y-3">

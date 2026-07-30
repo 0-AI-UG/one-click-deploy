@@ -156,7 +156,7 @@ const volumeSchema = z.object(
 /** Auto-deploy webhook config. `staging: true` holds each pushed commit in the
  *  `<name>-staging` sibling for manual promotion instead of redeploying
  *  production directly — it requires a staging environment to be selected at
- *  deploy time (`ocd deploy --staging-env <name|id>`). */
+ *  deploy time through `webhook.staging_environment`. */
 const webhookSchema = z.object(
   {
     enabled: z.boolean({ error: "expected boolean" }).optional(),
@@ -164,9 +164,53 @@ const webhookSchema = z.object(
     path: z.string({ error: "expected string" }).optional(),
     wait_for_ci: z.boolean({ error: "expected boolean" }).optional(),
     staging: z.boolean({ error: "expected boolean" }).optional(),
+    staging_environment: z.union([
+      nonEmptyString("expected a non-empty environment name"),
+      z.null(),
+    ]).optional(),
   },
-  { error: "expected object { enabled?, branch?, path?, wait_for_ci?, staging? }" },
+  { error: "expected object { enabled?, branch?, path?, wait_for_ci?, staging?, staging_environment? }" },
 );
+
+const autoscalingSchema = z.object({
+  enabled: z.boolean({ error: "expected boolean" }).optional(),
+  min_replicas: guardedNumber(
+    "expected non-negative integer",
+    (v) => Number.isInteger(v) && v >= 0,
+  ).optional(),
+  max_replicas: guardedNumber(
+    "expected positive integer",
+    (v) => Number.isInteger(v) && v >= 1,
+  ).optional(),
+  cpu_threshold: guardedNumber(
+    "expected integer 1-100",
+    (v) => Number.isInteger(v) && v >= 1 && v <= 100,
+  ).optional(),
+  memory_threshold: guardedNumber(
+    "expected integer 1-100",
+    (v) => Number.isInteger(v) && v >= 1 && v <= 100,
+  ).optional(),
+  requests_per_minute: guardedNumber(
+    "expected non-negative integer",
+    (v) => Number.isInteger(v) && v >= 0,
+  ).optional(),
+  cooldown_seconds: guardedNumber(
+    "expected integer >= 30",
+    (v) => Number.isInteger(v) && v >= 30,
+  ).optional(),
+}, { error: "expected autoscaling object" }).strict().superRefine((value, ctx) => {
+  if (
+    value.min_replicas !== undefined &&
+    value.max_replicas !== undefined &&
+    value.max_replicas < value.min_replicas
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "must be greater than or equal to min_replicas",
+      path: ["max_replicas"],
+    });
+  }
+});
 
 /** Extra host→container bind mount. */
 const extraVolumeSchema = z.object(
@@ -255,12 +299,17 @@ export const DeployManifestSchema = z
         error: "expected array of { key, description?, default?, required?, secret? }",
       })
       .optional(),
+    /** Existing environment selected by name; null explicitly detaches it. */
+    environment: z.union([
+      nonEmptyString("expected a non-empty environment name"),
+      z.null(),
+    ]).optional(),
     volume: volumeSchema.optional(),
     webhook: webhookSchema.optional(),
     suggested_app_name: z.string({ error: "expected string" }).optional(),
-    /** Custom public domain. A --domain CLI flag overrides this value. */
+    /** Custom public domain. */
     domain: z.string({ error: "expected string" }).optional(),
-    /** Source branch used for manual deploy/redeploy. */
+    /** Source branch used for deploys. */
     git_branch: z.string({ error: "expected string" }).optional(),
     /** Limit a linked environment to selected keys. null/omit = all, [] = none. */
     env_projection: z.array(z.string({ error: "expected an environment key string" }), {
@@ -271,6 +320,7 @@ export const DeployManifestSchema = z
       "expected positive integer",
       (v) => Number.isInteger(v) && v >= 1,
     ).optional(),
+    autoscaling: autoscalingSchema.optional(),
     public: z.boolean({ error: "expected boolean" }).optional(),
     extra_volumes: z
       .array(extraVolumeSchema, {
@@ -332,6 +382,27 @@ export const DeployManifestSchema = z
         path: ["image"],
       });
     }
+    if (
+      value.autoscaling?.max_replicas !== undefined &&
+      value.replicas !== undefined &&
+      value.autoscaling.max_replicas < value.replicas
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "must be greater than or equal to replicas",
+        path: ["autoscaling", "max_replicas"],
+      });
+    }
+    if (
+      value.webhook?.staging_environment != null &&
+      value.webhook.enabled !== true
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "requires webhook.enabled to be true",
+        path: ["webhook", "staging_environment"],
+      });
+    }
   });
 
 export type DeployManifest = z.infer<typeof DeployManifestSchema>;
@@ -387,6 +458,13 @@ export const StackManifestSchema = z
     $schema: z.literal(1, { error: "expected 1" }).optional(),
     name: nonEmptyString("expected a non-empty string"),
     description: z.string({ error: "expected string" }).optional(),
+    /** Existing shared production environment selected by name. */
+    environment: nonEmptyString("expected a non-empty environment name").optional(),
+    /** Existing shared staging environment selected by name; null disables it. */
+    staging_environment: z.union([
+      nonEmptyString("expected a non-empty environment name"),
+      z.null(),
+    ]).optional(),
     services: z
       .record(z.string(), stackServiceSchema, { error: "expected object map of key -> service" })
       .optional(),

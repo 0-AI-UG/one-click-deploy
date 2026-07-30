@@ -1,4 +1,4 @@
-import { get, post, put, resolveApp, type App } from "../api.ts";
+import { get, put, resolveApp, type App } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RESET, table } from "../format.ts";
 
@@ -53,12 +53,6 @@ export function parseAppFlags(args: string[]): ParsedFlags {
     else values.set(arg.slice(2, eq), arg.slice(eq + 1));
   }
   return { positional, values, switches };
-}
-
-function parseBoolean(value: string, flag: string): boolean {
-  if (value === "true" || value === "on" || value === "1") return true;
-  if (value === "false" || value === "off" || value === "0") return false;
-  throw new Error(`--${flag} must be true or false`);
 }
 
 function parseNumber(value: string, flag: string, opts: { integer?: boolean; min?: number; max?: number } = {}): number {
@@ -313,65 +307,21 @@ async function staging(args: string[]): Promise<void> {
   ]);
 }
 
-type Environment = { id: number; name: string };
-
-async function resolveEnvironment(value: string): Promise<number> {
-  const environments = await get<Environment[]>("/api/environments");
-  const id = Number(value);
-  const match = Number.isInteger(id)
-    ? environments.find((env) => env.id === id)
-    : environments.find((env) => env.name.toLowerCase() === value.toLowerCase());
-  if (!match) throw new Error(`Environment not found: ${value}`);
-  return match.id;
-}
-
 async function webhook(args: string[]): Promise<void> {
   const parsed = parseAppFlags(args);
   const [action, appName] = parsed.positional;
-  if (!action || !appName) throw new Error("Usage: ocd app webhook <status|enable|set|disable> <app> [options]");
+  if (action !== "status" || !appName) {
+    throw new Error("Usage: ocd app webhook status <app>");
+  }
   const app = await resolveApp(appName) as AppDetail;
-  if (action === "status") {
-    await staging([appName]);
-    console.log();
-    table(["Webhook", "Value"], [
-      ["Status", app.webhook_enabled ? "enabled" : "disabled"],
-      ["Branch", app.webhook_branch || "main"],
-      ["Path", app.webhook_path || "-"],
-      ["Wait for CI", String(!!app.webhook_wait_for_ci)],
-    ]);
-    return;
-  }
-  if (action === "disable") {
-    await post(`/api/apps/${app.id}/webhook/disable`);
-    console.log(`${GREEN}Disabled webhook for ${app.name}${RESET}`);
-    return;
-  }
-
-  const stagingValue = parsed.values.get("staging-env");
-  const stagingEnvironmentId = stagingValue === undefined ? undefined
-    : (stagingValue === "off" || stagingValue === "none" ? null : await resolveEnvironment(stagingValue));
-  if (action === "enable") {
-    const wait = parsed.values.get("wait-for-ci");
-    await post(`/api/apps/${app.id}/webhook/enable`, {
-      branch: parsed.values.get("branch") || "main",
-      ...(parsed.values.has("path") ? { path: parsed.values.get("path") } : {}),
-      ...(wait !== undefined ? { wait_for_ci: parseBoolean(wait, "wait-for-ci") } : {}),
-      ...(stagingEnvironmentId !== undefined ? { staging_environment_id: stagingEnvironmentId } : {}),
-    });
-    console.log(`${GREEN}Enabled webhook for ${app.name}${RESET}`);
-    return;
-  }
-  if (action === "set") {
-    const wait = parsed.values.get("wait-for-ci");
-    const body: { wait_for_ci?: boolean; staging_environment_id?: number | null } = {};
-    if (wait !== undefined) body.wait_for_ci = parseBoolean(wait, "wait-for-ci");
-    if (stagingEnvironmentId !== undefined) body.staging_environment_id = stagingEnvironmentId;
-    if (Object.keys(body).length === 0) throw new Error("Provide --wait-for-ci or --staging-env");
-    await post(`/api/apps/${app.id}/webhook/settings`, body);
-    console.log(`${GREEN}Updated webhook for ${app.name}${RESET}`);
-    return;
-  }
-  throw new Error(`Unknown webhook action: ${action}`);
+  await staging([appName]);
+  console.log();
+  table(["Webhook", "Value"], [
+    ["Status", app.webhook_enabled ? "enabled" : "disabled"],
+    ["Branch", app.webhook_branch || "main"],
+    ["Path", app.webhook_path || "-"],
+    ["Wait for CI", String(!!app.webhook_wait_for_ci)],
+  ]);
 }
 
 function usage(): void {
@@ -385,10 +335,7 @@ function usage(): void {
   availability <app>           Show trailing availability and placement
   scaling-events <app>         List recent manual/autoscale events
   staging <app>                Inspect the webhook staging sibling
-  webhook <action> <app>       Status, enable, update, or disable webhook
-
-Webhook enable: --branch=NAME --path=PREFIX --wait-for-ci=true|false
-Webhook enable/set: --staging-env=<name|id|off>${RESET}`);
+  webhook status <app>         Inspect stored webhook configuration${RESET}`);
 }
 
 export async function app(args: string[]): Promise<void> {

@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission, appScope } from "../lib/permissions.ts";
+import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import * as github from "../../shared/github.ts";
@@ -109,109 +109,6 @@ export async function verifyGithubSignature(
   const b = Buffer.from(sigHeader);
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
-}
-
-export async function handleEnableWebhook(request: Request, appId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "webhooks.manage", appScope(appId));
-    const body = await request.json() as { branch?: string; path?: string; wait_for_ci?: boolean; staging_environment_id?: number | null };
-
-    const app = db.getApp(appId);
-    if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
-
-    const panel = db.getPanel();
-    if (!panel?.domain) {
-      return Response.json(
-        { ok: false, error: "Panel domain is not set. Set the panel's public domain before enabling webhooks." },
-        { status: 400, headers: corsHeaders },
-      );
-    }
-
-    const pat = await github.getGitHubPat(payload.userId);
-    if (!pat) return Response.json({ ok: false, error: "No GitHub token available. Link your GitHub account in Settings first." }, { status: 400, headers: corsHeaders });
-
-    const webhookBranch = body.branch || "main";
-    const webhookPath = normalizeWebhookPath(body.path || "");
-    const webhookSecret = crypto.randomUUID();
-
-    const url = `https://${panel.domain}/webhooks/github/${appId}`;
-    const created = await github.createWebhookAtUrl({
-      gitRepo: app.git_repo,
-      url,
-      webhookSecret,
-      token: pat,
-    });
-
-    db.updateAppWebhook(appId, true, webhookSecret, webhookBranch, String(created.id), webhookPath, !!body.wait_for_ci, false);
-    if (body.staging_environment_id != null) {
-      if (!db.getEnvironment(body.staging_environment_id)) {
-        return Response.json({ ok: false, error: "Staging environment not found" }, { status: 400, headers: corsHeaders });
-      }
-      db.updateAppWebhookStagingEnvironment(appId, body.staging_environment_id);
-    }
-    db.updateAppDeployedBy(appId, payload.userId);
-
-    return Response.json({ ok: true }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
-export async function handleUpdateWebhookSettings(request: Request, appId: number): Promise<Response> {
-  try {
-    await requirePermission(request, "webhooks.manage", appScope(appId));
-
-    const app = db.getApp(appId);
-    if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
-    if (!app.webhook_enabled) {
-      return Response.json({ ok: false, error: "Webhook is not enabled" }, { status: 400, headers: corsHeaders });
-    }
-
-    const body = await request.json() as { wait_for_ci?: boolean; staging_environment_id?: number | null };
-    if (body.wait_for_ci !== undefined) {
-      db.updateAppWebhookWaitForCi(appId, !!body.wait_for_ci);
-    }
-    if (body.staging_environment_id !== undefined) {
-      if (body.staging_environment_id != null && !db.getEnvironment(body.staging_environment_id)) {
-        return Response.json({ ok: false, error: "Staging environment not found" }, { status: 400, headers: corsHeaders });
-      }
-      db.updateAppWebhookStagingEnvironment(appId, body.staging_environment_id);
-    }
-
-    return Response.json({ ok: true }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
-export async function handleDisableWebhook(request: Request, appId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "webhooks.manage", appScope(appId));
-
-    const app = db.getApp(appId);
-    if (!app) return Response.json({ ok: false, error: "App not found" }, { headers: corsHeaders });
-
-    if (app.github_webhook_id) {
-      const pat = await github.getGitHubPat(payload.userId);
-      if (pat) {
-        try {
-          await github.deleteWebhook({
-            gitRepo: app.git_repo,
-            webhookId: app.github_webhook_id,
-            token: pat,
-          });
-        } catch (e) {
-          console.error("webhooks: failed to delete GitHub webhook for app:", e);
-        }
-      }
-    }
-
-    db.updateAppWebhook(appId, false, "", app.webhook_branch || "main", "", "");
-
-    return Response.json({ ok: true }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
 }
 
 // ── GitHub push webhook receiver ──

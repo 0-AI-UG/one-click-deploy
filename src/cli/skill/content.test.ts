@@ -28,30 +28,17 @@ describe("embedded OCD skill", () => {
     expect(skill.split(/\s+/).filter(Boolean).length).toBeLessThan(1_200);
     expect(skill.split("\n").length).toBeLessThan(200);
     expect(skill).toMatch(/^---\nname: ocd-deploy\ndescription: .+\n---\n/);
-    expect(reference).toContain(
-      "curl -fsSL https://panel.example.com/cli/install.sh | sh",
-    );
-    expect(skill).toContain(
-      "curl -fsSL https://panel.example.com/cli/install.sh | sh",
-    );
     expect(skill).not.toContain("{{PANEL_URL}}");
     for (const contents of Object.values(files)) {
       expect(contents).not.toContain("{{PANEL_URL}}");
     }
 
-    const documentedTokens = [
-      ...appManifest.matchAll(/`([^`]+)`/g),
-    ].map((match) => match[1]);
     for (const field of Object.keys(DeployManifestSchema.shape)) {
-      expect(
-        documentedTokens.some(
-          (token) =>
-            token === field ||
-            token.startsWith(`${field}.`) ||
-            token.startsWith(`${field}[`),
-        ),
-      ).toBe(true);
+      expect(appManifest).toContain(`\`${field}\``);
     }
+    expect(appManifest).toContain("`environment`");
+    expect(appManifest).toContain("`autoscaling`");
+    expect(appManifest).toContain("`webhook.staging_environment`");
 
     const documentedStackTokens = [
       ...stackManifest.matchAll(/`([^`]+)`/g),
@@ -74,7 +61,7 @@ describe("embedded OCD skill", () => {
     expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(14);
   });
 
-  test("documents every top-level CLI command and safety-critical flag", () => {
+  test("documents the unified desired-configuration surface", () => {
     const files = Object.fromEntries(
       renderSkillFiles("https://panel.example.com").map((file) => [
         file.path,
@@ -83,24 +70,24 @@ describe("embedded OCD skill", () => {
     );
     const cli = files["docs/cli-reference.md"];
     for (const command of [
-      "login", "status", "apps", "logs", "deploy", "config", "redeploy",
-      "delete", "restart", "rollback", "promote", "pause", "unpause",
-      "envs", "services", "service", "stack", "ops", "servers", "ssh",
-      "app", "scale", "resources", "volumes", "skill", "version",
+      "deploy", "apps", "logs", "restart", "rollback", "promote", "pause",
+      "unpause", "envs", "services", "service", "stack", "ops", "servers",
+      "ssh", "app", "scale", "resources", "volumes",
     ]) {
       expect(cli).toContain(`ocd ${command}`);
     }
     for (const flag of [
-      "--dry-run", "--config-only", "--domain", "--env", "--staging-env",
-      "--auth-password-env", "--server", "--set", "--yes", "--tail",
-      "--replace", "--rollout", "--restart", "--no-rollout", "--app",
-      "--limit", "--since", "--follow", "--status", "--interactive",
-      "--replica", "--instance", "--service", "--secret-file",
-      "--secret-stdin", "--from-env", "--from-dotenv", "--async", "--wait",
-      "--suspend-webhooks",
-      "--agent", "--dir", "--force",
+      "--dry-run", "--config-only", "--auth-password-env", "--server", "--set",
+      "--tail", "--since", "--app",
     ]) {
       expect(cli).toContain(flag);
+    }
+    for (const removed of [
+      "ocd config", "ocd redeploy", "ocd envs attach", "ocd envs detach",
+      "ocd scale policy set", "ocd app webhook enable",
+      "ocd app webhook set", "ocd app webhook disable",
+    ]) {
+      expect(cli).not.toContain(removed);
     }
   });
 

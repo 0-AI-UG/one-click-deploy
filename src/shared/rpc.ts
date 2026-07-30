@@ -112,6 +112,8 @@ export type EnvVarEntry = {
 };
 
 export type DeployRequest = {
+  /** Complete manifest reconciliation or partial desired-state patch. */
+  apply_mode?: "manifest" | "patch";
   app_name: string;
   domain?: string;
   git_repo: string;
@@ -119,7 +121,9 @@ export type DeployRequest = {
   git_sha?: string; // Immutable commit selected by a webhook; omit for branch HEAD
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
-  environment_id?: number; // Link to an existing environment instead of providing env_vars
+  /** Portable manifest selector. Resolved server-side when environment_id is omitted. */
+  environment?: string | null;
+  environment_id?: number | null; // Link to an existing environment; null explicitly detaches
   /** Limit this app to selected keys from its linked environment. null/omit =
    *  all keys (legacy); [] = platform OCD_INTERNAL_* variables only. */
   env_projection?: string[] | null;
@@ -132,6 +136,8 @@ export type DeployRequest = {
   webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
   webhook_wait_for_ci?: boolean; // Wait for CI checks to pass before deploying
   webhook_staging_environment_id?: number | null; // Environment the webhook staging sibling deploys with. Set = enable staging (pushes hold in <name>-staging for manual promotion). Requires webhook_enabled.
+  /** Portable manifest selector for the webhook staging environment. */
+  webhook_staging_environment?: string | null;
   /** The manifest's staging opt-in (`webhook.staging`) with no environment named.
    *  The deploy op then mints `<app>-staging-env` as a copy of the app's own
    *  environment — so the manifest field is self-sufficient, exactly as it is
@@ -139,6 +145,13 @@ export type DeployRequest = {
   webhook_staging?: boolean;
   auth_password?: string; // If set, the ingress enforces HTTP basic auth (username "admin"). Requires internal_protocol 'http' (the default)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
+  autoscale_enabled?: boolean;
+  min_replicas?: number;
+  max_replicas?: number;
+  autoscale_cpu_threshold?: number;
+  autoscale_mem_threshold?: number;
+  autoscale_req_threshold?: number;
+  autoscale_cooldown?: number;
   public?: boolean; // Whether the app is publicly accessible (default true)
   extra_volumes?: Array<{ host_path: string; container_path: string }>; // Additional volume mounts
   server_id?: number; // If set, deploy to this specific server instead of auto-selecting
@@ -230,7 +243,7 @@ export type { DeployManifest, StackManifest };
 export type StackDeployRequest = {
   name: string;
   environment_id?: number; // Reuse an existing environment instead of auto-creating one (only honored when the stack is first created)
-  /** The stack's SHARED staging environment (`--staging-env=<name|id>`) — the
+  /** The stack's shared staging environment from the stack manifest — the
    *  exact same model as `environment_id` above: one per stack, used by every
    *  member that opts into webhook staging, and NOT overridable per member.
    *  Omit to keep what the stack already has (auto-created as a copy of the

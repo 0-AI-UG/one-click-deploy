@@ -24,7 +24,7 @@ export async function promptRequired(
   if (missing.length === 0) return [];
   if (!process.stdin.isTTY) {
     console.error(`${RED}Missing required env vars: ${missing.map((e) => e.key).join(", ")}${RESET}`);
-    console.error(`Provide them with --set=KEY=VALUE or link an environment with --env=<name|id>.`);
+    console.error(`Provide them with --set=KEY=VALUE or declare manifest.environment.`);
     process.exit(1);
   }
   console.log(`\n${BOLD}${header}${RESET}`);
@@ -151,7 +151,7 @@ export async function collectEnvVars(
       console.error(
         `${RED}Missing required env vars: ${toPrompt.map((e) => e.key).join(", ")}${RESET}`,
       );
-      console.error(`Provide them with --set=KEY=VALUE or link an environment with --env=<name|id>.`);
+      console.error(`Provide them with --set=KEY=VALUE or declare manifest.environment.`);
       process.exit(1);
     }
     console.log(`\n${BOLD}${header}${RESET}`);

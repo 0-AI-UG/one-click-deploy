@@ -182,7 +182,11 @@ export function SettingsTab({
               disabled={!portEdit || ops.isBusy || Object.keys(settingsPatch()).length === 0}
               onClick={() => action("save-settings", async () => {
                 const patch = settingsPatch();
-                const res = (await put(`/api/apps/${appId}/config`, patch)) as { op_id?: number };
+                const res = (await post("/api/apps/deploy", {
+                  app_name: app.name,
+                  apply_mode: "patch",
+                  ...patch,
+                })) as { op_id?: number };
                 if (res?.op_id) {
                   trackOperationInToast(res.op_id, "Saving & redeploying");
                   ops.track(res.op_id);
@@ -317,9 +321,7 @@ export function SettingsTab({
           </>
         )}
 
-        {/* Publishing a raw public port is strictly more dangerous than the rest
-            of ingress, so it carries its own grant. */}
-        <PermissionGate permission="apps.expose" appId={appId} environmentId={app.environment_id}>
+        <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
         <Field
           label={<span className="flex items-center gap-2">Public TCP/UDP Port <InfoTip text="A raw public port straight to the app (game servers, databases, MQTT). Separate from the public domain. Blank = auto-assign." /></span>}
           hint={app.public_address
@@ -361,7 +363,12 @@ export function SettingsTab({
               loading={actionLoading === "save-ingress"}
               disabled={ops.isBusy || Object.keys(ingressPatch()).length === 0}
               onClick={() => action("save-ingress", async () => {
-                await put(`/api/apps/${appId}/config`, ingressPatch());
+                await post("/api/apps/deploy", {
+                  app_name: app.name,
+                  apply_mode: "patch",
+                  deploy: false,
+                  ...ingressPatch(),
+                });
               })}
             >Save Ingress</Btn>
           </div>

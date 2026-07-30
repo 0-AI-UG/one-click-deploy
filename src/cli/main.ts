@@ -4,7 +4,6 @@ import { status } from "./commands/status.ts";
 import { logs } from "./commands/logs.ts";
 import { deploy } from "./commands/deploy.ts";
 import { deleteCmd } from "./commands/delete.ts";
-import { redeploy } from "./commands/redeploy.ts";
 import { restart } from "./commands/restart.ts";
 import { rollback } from "./commands/rollback.ts";
 import { promote } from "./commands/promote.ts";
@@ -16,7 +15,6 @@ import { ops } from "./commands/ops.ts";
 import { servers } from "./commands/servers.ts";
 import { ssh } from "./commands/ssh.ts";
 import { skill } from "./commands/skill.ts";
-import { appConfig } from "./commands/app-config.ts";
 import { app } from "./commands/app.ts";
 import { scale } from "./commands/scale.ts";
 import { resources, volumes } from "./commands/resources.ts";
@@ -30,7 +28,6 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   logs,
   deploy,
   delete: deleteCmd,
-  redeploy,
   restart,
   rollback,
   promote,
@@ -44,7 +41,6 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   servers,
   ssh,
   skill,
-  config: appConfig,
   app,
   scale,
   resources,
@@ -63,19 +59,16 @@ ${BOLD}Commands:${RESET}
   app <command>          Inspect and manage an existing app
   logs <app> [--tail=N]  View app logs
   deploy [manifest]      Apply desired config, then deploy current Git code
-  config diff [manifest] Preview manifest changes against stored config
-  config apply [manifest] Apply manifest config without deploying code
   deploy stack [manifest]  Deploy a multi-app stack
   delete <app>           Destroy an app
   delete stack <name>    Destroy a stack and all its members
-  redeploy <app>         Deploy latest code with the stored configuration
   envs                   Manage environments and variables
   restart <app>          Restart an app
   rollback <app>         Roll back to previous deployment
   promote                Promote the webhook-staging sibling to production
   pause <app>            Pause an app
   unpause <app>          Unpause an app
-  scale <app> <count>    Scale, wake, set policy, or migrate replicas
+  scale <command>        Wake apps, inspect policy, or migrate replicas
   services               List managed services
   service catalog        List available managed-service types and defaults
   service create <name>  Create a standalone managed service

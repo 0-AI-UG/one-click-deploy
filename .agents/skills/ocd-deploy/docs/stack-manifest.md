@@ -30,6 +30,8 @@ runtime configuration into the stack manifest.
 | `$schema` | `1`, optional | Stack schema version. |
 | `name` | non-empty string, required | Stack identifier and resource-name prefix. |
 | `description` | string | Human metadata. |
+| `environment` | non-empty string | Existing shared production environment by name. Omit to retain it on later deploys or create one on first deploy. |
+| `staging_environment` | non-empty string or `null` | Existing shared webhook-staging environment by name. `null` disables it; omission retains it. |
 | `services` | object map, optional | Managed-service members keyed by the desired injection prefix. |
 | `services.<key>.type` | non-empty catalog key, required | Query `ocd service catalog`; use `postgresql`, not `postgres`. |
 | `services.<key>.version` | string | Catalog-supported image version/tag. |
@@ -64,9 +66,9 @@ member key.
 ## Shared environment and projections
 
 A stack has one production environment. OCD creates
-`<stack>-stack-env` when needed, or adopts the environment passed with
-`--env=<name|id>` on the first deploy. Later re-ups keep the remembered
-environment; `--env` is not used to silently switch it.
+`<stack>-stack-env` when needed, or adopts the environment named by
+`environment` on the first deploy. Later deploys keep the remembered
+environment when the field is omitted.
 
 All child manifest `env[]` declarations merge into this bag:
 
@@ -130,6 +132,8 @@ equivalent to destroying the old member and creating a new one.
   "$schema": 1,
   "name": "blog",
   "description": "Public web app and private API",
+  "environment": "production",
+  "staging_environment": "staging",
   "services": {
     "database": {
       "type": "postgresql",

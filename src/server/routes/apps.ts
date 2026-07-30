@@ -5,7 +5,7 @@ import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
-import { validateAppName } from "../../shared/validate.ts";
+import { validateAppName, validateDeployRequest } from "../../shared/validate.ts";
 import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-manager.ts";
 import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
@@ -113,25 +113,56 @@ export async function handleGetApps(request: Request): Promise<Response> {
   }
 }
 
-type AppConfigPatch = Partial<DeployRequest> & {
+type ApplyMode = "manifest" | "patch";
+
+type AppDeployRequest = Partial<DeployRequest> & {
+  apply_mode?: ApplyMode;
   dry_run?: boolean;
   deploy?: boolean;
 };
 
+const CONTROL_FIELDS = new Set(["app_name", "apply_mode", "dry_run", "deploy"]);
+
+function hasPatchFields(req: AppDeployRequest): boolean {
+  return Object.keys(req).some((key) => !CONTROL_FIELDS.has(key));
+}
+
+function manifestSpec(req: AppDeployRequest): DeployRequest {
+  const {
+    dry_run: _dryRun,
+    deploy: _deploy,
+    ...spec
+  } = req;
+  return spec as DeployRequest;
+}
+
 /**
- * The single existing-app configuration path. Both a complete manifest apply
- * and a partial UI patch merge into stored desired state here, synchronize
- * ingress, and optionally enqueue the same code-only redeploy operation.
+ * The single existing-app apply path. Callers normalize either a complete
+ * manifest or a partial patch before entering; this helper owns validation,
+ * locking, desired-state application, ingress sync, and optional rollout.
  */
 async function applyExistingAppConfig(
   app: AppRow,
-  patch: AppConfigPatch,
-  userId: number,
-  trigger: "api" | "cli" | "ui",
+  spec: DeployRequest,
+  controls: Pick<AppDeployRequest, "dry_run" | "deploy">,
+  applyConfig: boolean,
+  userId: string,
+  trigger: "api" | "cli",
 ): Promise<Response> {
-  const merged = mergeDeployRequestWithExistingApp(app, patch);
-  const changes = diffAppConfig(app, merged);
-  if (patch.dry_run) {
+  if (applyConfig) {
+    const validation = validateDeployRequest(spec);
+    if (!validation.valid) {
+      return Response.json(
+        { ok: false, error: validation.error },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+  }
+
+  const changes = applyConfig
+    ? diffAppConfig(app, spec)
+    : [];
+  if (controls.dry_run) {
     return Response.json({
       ok: true,
       dry_run: true,
@@ -150,20 +181,22 @@ async function applyExistingAppConfig(
   }
 
   try {
-    await applyAppConfig(app.id, merged, {
-      userId,
-      log: (line) => db.appendDeployLog(app.id, `[config] ${line}`),
-    });
+    if (applyConfig) {
+      await applyAppConfig(app.id, spec, {
+        userId,
+        log: (line) => db.appendDeployLog(app.id, `[config] ${line}`),
+      });
+    }
     await syncAppIngress(app.id);
 
     const result = {
       ok: true,
-      applied: true,
+      applied: applyConfig,
       changes,
       config_revision: db.getApp(app.id)?.config_revision,
       op_id: null as number | null,
     };
-    if (patch.deploy === false) {
+    if (controls.deploy === false) {
       return Response.json(result, { headers: corsHeaders });
     }
 
@@ -183,21 +216,44 @@ async function applyExistingAppConfig(
 export async function handleDeploy(request: Request): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.deploy");
-    const req = await request.json() as AppConfigPatch;
+    const req = await request.json() as AppDeployRequest;
     if (!req?.app_name || typeof req.app_name !== "string") {
       return Response.json({ ok: false, error: "app_name is required" }, { status: 400, headers: corsHeaders });
     }
+    if (req.apply_mode !== "manifest" && req.apply_mode !== "patch") {
+      return Response.json(
+        { ok: false, error: 'apply_mode must be "manifest" or "patch"' },
+        { status: 400, headers: corsHeaders },
+      );
+    }
 
-    // `deploy` is an idempotent complete-manifest apply + rollout. Creation
-    // still uses the provisioning saga; existing apps share the same config
-    // apply and code-only redeploy implementation as UI patches.
     const existing = db.getAppByName(req.app_name);
     if (existing) {
+      const patchHasFields = req.apply_mode === "patch" && hasPatchFields(req);
+      const spec = req.apply_mode === "manifest"
+        ? manifestSpec(req)
+        : mergeDeployRequestWithExistingApp(existing, req);
       return applyExistingAppConfig(
         existing,
+        spec,
         req,
+        req.apply_mode === "manifest" || patchHasFields,
         payload.userId,
         payload.client === "cli" ? "cli" : "api",
+      );
+    }
+    if (req.apply_mode !== "manifest") {
+      return Response.json(
+        { ok: false, error: `Patch target does not exist: "${req.app_name}". First deploy requires apply_mode "manifest".` },
+        { status: 404, headers: corsHeaders },
+      );
+    }
+    const deployRequest = manifestSpec(req);
+    const validation = validateDeployRequest(deployRequest);
+    if (!validation.valid) {
+      return Response.json(
+        { ok: false, error: validation.error },
+        { status: 400, headers: corsHeaders },
       );
     }
     if (req.dry_run) {
@@ -212,31 +268,14 @@ export async function handleDeploy(request: Request): Promise<Response> {
         { status: 404, headers: corsHeaders },
       );
     }
-    const deployRequest = { ...req };
-    delete deployRequest.dry_run;
-    delete deployRequest.deploy;
     const { opId } = enqueue({
       kind: "deploy",
       resourceKeys: [`app:create:${req.app_name}`],
-      input: deployRequest as DeployRequest,
+      input: deployRequest,
       trigger: payload.client === "cli" ? "cli" : "api",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
-/** Apply a partial UI patch to stored desired configuration and optionally
- * roll it out. Complete manifest reconciliation belongs to handleDeploy. */
-export async function handleApplyAppConfig(request: Request, appId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "apps.deploy", appScope(appId));
-    const body = await request.json() as AppConfigPatch;
-    const app = db.getApp(appId);
-    if (!app) return Response.json({ ok: false, error: "App not found" }, { status: 404, headers: corsHeaders });
-    return applyExistingAppConfig(app, body, payload.userId, "ui");
   } catch (error) {
     return handleError(error);
   }
@@ -263,16 +302,6 @@ export function handlePauseApp(request: Request, appId: number): Promise<Respons
 
 export function handleUnpauseApp(request: Request, appId: number): Promise<Response> {
   return enqueueOp(request, { permission: "apps.pause", scope: appScope(appId), kind: "unpause_app", resourceKeys: [`app:${appId}`], input: { appId } });
-}
-
-export function handleRedeployApp(request: Request, appId: number): Promise<Response> {
-  return enqueueOp(request, {
-    permission: "apps.redeploy",
-    scope: appScope(appId),
-    kind: "redeploy",
-    resourceKeys: [`app:${appId}`],
-    input: { appId },
-  });
 }
 
 export async function handleRenameApp(request: Request, appId: number): Promise<Response> {

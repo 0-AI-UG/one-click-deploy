@@ -159,6 +159,15 @@ export function DashboardPage() {
     try {
       const res = action === "delete"
         ? await del(`/api/apps/${appId}`) as { op_id?: number }
+        : action === "redeploy"
+          ? (() => {
+            const app = data.apps.find((candidate) => candidate.id === appId);
+            if (!app) throw new Error("App not found");
+            return post("/api/apps/deploy", {
+              app_name: app.name,
+              apply_mode: "patch",
+            }) as { op_id?: number };
+          })()
         : await post(`/api/apps/${appId}/${action}`, body) as { op_id?: number };
       if (res?.op_id) {
         trackOperationInToast(res.op_id, APP_OP_LABELS[action] || "Operation");
@@ -181,23 +190,6 @@ export function DashboardPage() {
         : await post(`/api/services/${svcId}/${action}`) as { op_id?: number };
       if (res?.op_id) {
         trackOperationInToast(res.op_id, SVC_OP_LABELS[action] || "Operation");
-        ops.track(res.op_id);
-      }
-      load();
-    } catch (err: any) {
-      showToast(err.message, "error");
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const stackRedeploy = async (stack: StackData) => {
-    const key = `stack-redeploy-${stack.id}`;
-    setActionLoading(key);
-    try {
-      const res = await post(`/api/stacks/${stack.id}/redeploy`) as { op_id?: number };
-      if (res?.op_id) {
-        trackOperationInToast(res.op_id, `Redeploying stack ${stack.name}`);
         ops.track(res.op_id);
       }
       load();
@@ -358,7 +350,7 @@ export function DashboardPage() {
                 );
               })()}
             </PermissionGate>
-            <PermissionGate permission="apps.redeploy" appId={app.id} environmentId={app.environment_id}>
+            <PermissionGate permission="apps.deploy" appId={app.id} environmentId={app.environment_id}>
               {(() => {
                 const k = `redeploy-${app.id}`;
                 const armed = confirmKey === k;
@@ -478,10 +470,6 @@ export function DashboardPage() {
       memberApps.some((a) => !!appBusyKind(a.id)) || memberSvcs.some((s) => !!svcBusyKind(s.id));
     const stackKind = stackBusyKind(stack.id);
     const busy = !!stackKind || memberBusy;
-    const redeploying =
-      actionLoading === `stack-redeploy-${stack.id}` ||
-      stackKind === "cascade_redeploy" ||
-      memberApps.some((a) => appBusyKind(a.id) === "redeploy");
     const promoting =
       actionLoading === `stack-promote-${stack.id}` || stackKind === "promote_stack";
     const stagingSiblings = stack.staging_sibling_count ?? 0;
@@ -517,11 +505,6 @@ export function DashboardPage() {
             <span className="font-mono text-[9px] text-muted hidden sm:inline">
               {new Date(stack.created_at.replace(" ", "T") + "Z").toLocaleDateString()}
             </span>
-            <PermissionGate permission="stacks.deploy" environmentId={stack.environment_id}>
-              <Btn size="xs" variant="ghost" title="Redeploy stack" loading={redeploying} disabled={busy} onClick={() => stackRedeploy(stack)}>
-                <RefreshCw size={12} />
-              </Btn>
-            </PermissionGate>
             {/* Only shown when there is something to promote — a stack with no
                 staging siblings has no use for the button at all. */}
             {stagingSiblings > 0 && (

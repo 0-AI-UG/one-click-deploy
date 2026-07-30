@@ -51,7 +51,12 @@ function StagingPanel({ app, appId, envs, actionLoading, action, ops }: Omit<Web
 
   const setEnv = (next: number | null) =>
     action("toggle-staging", async () => {
-      await post(`/api/apps/${appId}/webhook/settings`, { staging_environment_id: next });
+      await post("/api/apps/deploy", {
+        app_name: app.name,
+        apply_mode: "patch",
+        deploy: false,
+        webhook_staging_environment_id: next,
+      });
       await load();
     });
 
@@ -89,7 +94,7 @@ function StagingPanel({ app, appId, envs, actionLoading, action, ops }: Omit<Web
   return (
     <>
       <PermissionGate
-        permission="webhooks.manage"
+        permission="apps.deploy"
         appId={appId}
         environmentId={app.environment_id}
         fallback={
@@ -208,20 +213,30 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
           </>
         )}
       </div>
-      <PermissionGate permission="webhooks.manage" appId={appId} environmentId={app.environment_id}>
+      <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
         {app.webhook_enabled ? (
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-[10px] font-mono cursor-pointer">
               <input
                 type="checkbox"
                 checked={!!app.webhook_wait_for_ci}
-                onChange={(e) => action("update-webhook-ci", () => post(`/api/apps/${appId}/webhook/settings`, { wait_for_ci: e.target.checked }))}
+                onChange={(e) => action("update-webhook-ci", () => post("/api/apps/deploy", {
+                  app_name: app.name,
+                  apply_mode: "patch",
+                  deploy: false,
+                  webhook_wait_for_ci: e.target.checked,
+                }))}
                 className="accent-accent"
               />
               <span className="text-muted">Wait for CI checks before deploying</span>
             </label>
             <StagingPanel app={app} appId={appId} envs={envs} actionLoading={actionLoading} action={action} ops={ops} />
-            <Btn size="xs" variant="danger" loading={actionLoading === "disable-webhook"} onClick={() => action("disable-webhook", () => post(`/api/apps/${appId}/webhook/disable`))}>
+            <Btn size="xs" variant="danger" loading={actionLoading === "disable-webhook"} onClick={() => action("disable-webhook", () => post("/api/apps/deploy", {
+              app_name: app.name,
+              apply_mode: "patch",
+              deploy: false,
+              webhook_enabled: false,
+            }))}>
               Disable Webhook
             </Btn>
           </div>
@@ -262,7 +277,16 @@ export function WebhooksTab({ app, appId, webhookForm, setWebhookForm, actionLoa
                 onChange={(v) => setWebhookForm({ ...webhookForm, stagingEnvId: v ? parseInt(v, 10) : null })}
               />
             </Field>
-            <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post(`/api/apps/${appId}/webhook/enable`, { branch: webhookForm.branch || "main", path: webhookForm.path || undefined, wait_for_ci: webhookForm.waitForCi, staging_environment_id: webhookForm.stagingEnvId }))}>
+            <Btn size="xs" variant="primary" loading={actionLoading === "enable-webhook"} onClick={() => action("enable-webhook", () => post("/api/apps/deploy", {
+              app_name: app.name,
+              apply_mode: "patch",
+              deploy: false,
+              webhook_enabled: true,
+              webhook_branch: webhookForm.branch || "main",
+              webhook_path: webhookForm.path || "",
+              webhook_wait_for_ci: webhookForm.waitForCi,
+              webhook_staging_environment_id: webhookForm.stagingEnvId,
+            }))}>
               Enable Webhook
             </Btn>
           </div>

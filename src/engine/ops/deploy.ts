@@ -2,7 +2,10 @@ import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import dbInstance, * as db from "../../shared/db.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
 import { isNotFoundError } from "../../shared/providers/errors.ts";
-import { resolveDurability } from "../../shared/durability.ts";
+import {
+  normalizeAppScaling,
+  resolveDeployRequestEnvironmentIds,
+} from "../../shared/app-config.ts";
 import {
   sshExec,
   cloneRepo,
@@ -465,7 +468,8 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     return db.getApp(out.appId) === null;
   },
   async run(ctx, prior) {
-    const req = ctx.input;
+    const req = resolveDeployRequestEnvironmentIds(ctx.input);
+    Object.assign(ctx.input, req);
     const server = prior["pick_or_provision_server"] as ServerOut;
     const dns = prior["create_dns_record"] as DnsOut;
     const volume = prior["create_volume"] as VolumeOut;
@@ -529,13 +533,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
 
     // Durability policy -> concrete placement-spread + replica floors, applied
     // AT INSERT so the SLO/placement layer enforces them from the first tick.
-    const {
-      durabilityClass: durability,
-      maxPerHost,
-      minLocations,
-      minReplicas: durFloor,
-      desiredReplicas,
-    } = resolveDurability(req.durability_class, req.replicas);
+    const scaling = normalizeAppScaling(req);
     // Single atomic commit: app row + first replica + DNS record + volume
     // metadata. Without the transaction a mid-step crash could leave the DB
     // with an app but no DNS / volume / extra-volume rows.
@@ -569,9 +567,9 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           compress: req.compress,
           public_port: req.public_port,
           public_protocol: req.public_protocol,
-          durability_class: durability,
-          max_per_host: maxPerHost,
-          min_locations: minLocations,
+          durability_class: scaling.durability_class,
+          max_per_host: scaling.max_per_host,
+          min_locations: scaling.min_locations,
           placement_pool: req.placement_pool,
           target: targetTag,
           target_of: targetOf,
@@ -579,18 +577,17 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
         server.serverId,
       );
       if (ctx.triggeredBy) db.updateAppDeployedBy(result.app.id, ctx.triggeredBy);
-      // Durability floors the replica count; do it here (not just at finalize)
-      // so the floor holds even when the deploy asks for a single replica.
-      if (durability !== "none") {
-        db.updateAppScaling(result.app.id, {
-          desired_replicas: desiredReplicas,
-          min_replicas: durFloor,
-          max_replicas: Math.max(desiredReplicas, durFloor),
-        });
-      }
-      if (typeof req.scale_to_zero_after === "number") {
-        db.updateAppScaling(result.app.id, { scale_to_zero_after: req.scale_to_zero_after });
-      }
+      db.updateAppScaling(result.app.id, {
+        desired_replicas: scaling.desired_replicas,
+        min_replicas: scaling.min_replicas,
+        max_replicas: scaling.max_replicas,
+        autoscale_enabled: scaling.autoscale_enabled,
+        autoscale_cpu_threshold: scaling.autoscale_cpu_threshold,
+        autoscale_mem_threshold: scaling.autoscale_mem_threshold,
+        autoscale_req_threshold: scaling.autoscale_req_threshold,
+        autoscale_cooldown: scaling.autoscale_cooldown,
+        scale_to_zero_after: scaling.scale_to_zero_after,
+      });
       if (dns) {
         db.insertDnsRecord({
           app_id: result.app.id,
@@ -1027,7 +1024,9 @@ export function resolveStagingEnvironment(
   req: DeployInput,
   appId: number,
 ): number | null {
-  if (req.webhook_staging_environment_id != null) return req.webhook_staging_environment_id;
+  if (req.webhook_staging_environment_id !== undefined) {
+    return req.webhook_staging_environment_id;
+  }
   if (!req.webhook_staging) return null;
 
   let envName = `${req.app_name}-staging-env`;
@@ -1135,17 +1134,21 @@ const finalizeDeploy: Step<DeployInput, { ok: true }> = {
     // which every deployed app has (private apps via their internal
     // entrypoint, public apps via the panel), so the sole blocker is a public
     // app that somehow resolved to no domain at all.
-    const { minReplicas: durFloor, desiredReplicas: desired } = resolveDurability(
-      req.durability_class,
-      req.replicas,
-    );
-    if (req.replicas && req.replicas > 1 && !(req.public !== false && !appOut.domain)) {
-      db.updateAppScaling(appOut.appId, {
-        desired_replicas: desired,
-        min_replicas: durFloor,
-        max_replicas: desired,
-      });
-      db.appendDeployLog(appOut.appId, `[scale] Target ${desired} replicas — reconciler will converge`);
+    const scaling = normalizeAppScaling(req);
+    const canScale = !(req.public !== false && !appOut.domain);
+    db.updateAppScaling(appOut.appId, {
+      desired_replicas: canScale ? scaling.desired_replicas : 1,
+      min_replicas: scaling.min_replicas,
+      max_replicas: scaling.max_replicas,
+      autoscale_enabled: scaling.autoscale_enabled,
+      autoscale_cpu_threshold: scaling.autoscale_cpu_threshold,
+      autoscale_mem_threshold: scaling.autoscale_mem_threshold,
+      autoscale_req_threshold: scaling.autoscale_req_threshold,
+      autoscale_cooldown: scaling.autoscale_cooldown,
+      scale_to_zero_after: scaling.scale_to_zero_after,
+    });
+    if (scaling.desired_replicas > 1 && canScale) {
+      db.appendDeployLog(appOut.appId, `[scale] Target ${scaling.desired_replicas} replicas — reconciler will converge`);
     }
     if (req.manifest_path && req.manifest_hash) {
       db.recordAppManifestApplied(appOut.appId, req.manifest_path, req.manifest_hash);

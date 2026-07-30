@@ -230,8 +230,11 @@ export function AppDetailPage({ appId }: { appId: number }) {
               </Btn>
             )}
           </PermissionGate>
-          <PermissionGate permission="apps.redeploy" appId={appId} environmentId={app.environment_id}>
-            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", () => post(`/api/apps/${appId}/redeploy`))}>
+          <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
+            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", () => post("/api/apps/deploy", {
+              app_name: app.name,
+              apply_mode: "patch",
+            }))}>
               <RefreshCw size={12} /> Deploy latest code
             </Btn>
           </PermissionGate>

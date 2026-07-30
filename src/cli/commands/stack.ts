@@ -147,49 +147,9 @@ ${BOLD}Arguments:${RESET}
 ${BOLD}Options:${RESET}
   --set=<app>.KEY=VALUE      Set an env var for one app (repeatable)
   --set=KEY=VALUE            Set an env var for all apps as a fallback
-  --env=<name|id>            Reuse an existing environment when first creating
-                             the stack (auto-created otherwise). On re-ups the
-                             stack's linked environment is remembered, so --env
-                             is not needed to resume.
-  --staging-env=<name|id>    The stack's webhook-staging environment — one per
-                             stack, like --env. Every member whose own manifest
-                             sets "webhook": { "enabled": true, "staging": true }
-                             deploys its <name>-staging sibling with it.
-                             Optional: when a member opts in and the stack has
-                             no staging environment yet, one is auto-created as
-                             a copy of the stack's environment. Remembered
-                             across re-ups; --staging-env= (empty) clears it.`);
-}
 
-/**
- * Parse repeatable `--staging-env=` values into the stack's single staging
- * environment selection. Pure (no I/O, no exits) so it can be unit-tested; the
- * caller resolves the ref and reports `error` itself.
- *
- * Returns undefined when the flag is absent (the stack keeps its stored value),
- * null when explicitly cleared (`--staging-env=`), otherwise an environment
- * name or id to resolve.
- */
-export function parseStagingEnvFlags(
-  values: string[],
-): { ok: true; stagingEnv: string | null | undefined } | { ok: false; error: string } {
-  const show = (v: string | null) => (v === null ? "(cleared)" : `"${v}"`);
-  let stagingEnv: string | null | undefined;
-
-  for (const raw of values) {
-    const ref = raw.trim() === "" ? null : raw.trim();
-    if (stagingEnv !== undefined && stagingEnv !== ref) {
-      return {
-        ok: false,
-        error:
-          `--staging-env was given more than once with different values (${show(stagingEnv)} and ${show(ref)}) — ` +
-          `a stack has one staging environment.`,
-      };
-    }
-    stagingEnv = ref;
-  }
-
-  return { ok: true, stagingEnv };
+Select shared production and staging environments with the stack manifest's
+\`environment\` and \`staging_environment\` fields.`);
 }
 
 type ResolvedEnv = { id: number; name: string; env_vars?: Array<{ key: string }> };
@@ -224,19 +184,13 @@ async function findEnvironmentById(id: number): Promise<ResolvedEnv | undefined>
 
 export async function stackUp(args: string[]): Promise<void> {
   let manifestPath = "";
-  let envRef = "";
   const rawSets: string[] = [];
-  const rawStagingEnvs: string[] = [];
   for (const arg of args) {
     if (arg === "--help" || arg === "-h") {
       upUsage();
       process.exit(0);
     } else if (arg.startsWith("--set=")) {
       rawSets.push(arg.slice(6));
-    } else if (arg.startsWith("--staging-env=")) {
-      rawStagingEnvs.push(arg.slice(14));
-    } else if (arg.startsWith("--env=")) {
-      envRef = arg.slice(6);
     } else if (arg.startsWith("--")) {
       console.error(`${RED}Unknown option: ${arg}${RESET}`);
       process.exit(1);
@@ -263,13 +217,6 @@ export async function stackUp(args: string[]): Promise<void> {
   }
 
   const appKeys = new Set(Object.keys(manifest.apps));
-
-  const stagingParsed = parseStagingEnvFlags(rawStagingEnvs);
-  if (!stagingParsed.ok) {
-    console.error(`${RED}${stagingParsed.error}${RESET}`);
-    process.exit(1);
-  }
-  const stagingEnvRef = stagingParsed.stagingEnv;
 
   // Parse --set into per-app (<app>.KEY) and global (KEY) buckets. A plain
   // KEY is a fallback applied to any app that declares it; an <app>.KEY targets
@@ -331,10 +278,10 @@ export async function stackUp(args: string[]): Promise<void> {
   // Resolve the target environment (reused or, if omitted, auto-created) so we
   // know which keys already exist — existing values win over manifest defaults.
   const existingStack = await findStackByName(manifest.name);
-  let reused = envRef ? await resolveEnvironment(envRef) : undefined;
+  let reused = manifest.environment ? await resolveEnvironment(manifest.environment) : undefined;
   let resumed = false;
   // Resume: an already-created stack stays linked to its environment
-  // server-side, so even without --env we seed existing keys from that env —
+  // server-side, so when environment is omitted we seed existing keys from that env —
   // otherwise a re-up re-prompts for (and re-requires) vars already stored.
   if (!reused && existingStack?.environment_id != null) {
     reused = await findEnvironmentById(existingStack.environment_id);
@@ -345,18 +292,18 @@ export async function stackUp(args: string[]): Promise<void> {
   // --- webhook staging -----------------------------------------------------
   // Members declare the intent (webhook.staging in their own manifest, carried
   // here as `webhook_staging`); the environment is one per stack, exactly like
-  // the production --env. --staging-env is optional: when a member opts in and
+  // the production environment. staging_environment is optional: when a member opts in and
   // the stack has no staging env yet, the deploy op auto-creates
   // <stack>-stack-staging-env as a copy of the stack's environment.
   //
-  // Leave undefined when the flag is absent — the deploy op then preserves the
-  // stack's stored staging env. Only an explicit `--staging-env=` sends null.
+  // Leave undefined when the field is absent — the deploy op then preserves the
+  // stack's stored staging env. Only an explicit null sends null.
   let stagingEnvId: number | null | undefined;
   let stagingEnvName: string | undefined;
-  if (stagingEnvRef === null) {
+  if (manifest.staging_environment === null) {
     stagingEnvId = null;
-  } else if (stagingEnvRef !== undefined) {
-    const env = await resolveEnvironment(stagingEnvRef);
+  } else if (manifest.staging_environment !== undefined) {
+    const env = await resolveEnvironment(manifest.staging_environment);
     stagingEnvId = env.id;
     stagingEnvName = env.name;
   }
@@ -554,23 +501,6 @@ async function stackMemberLogs(args: string[]): Promise<void> {
   if (members.length === 0) console.log(`${DIM}(no readable member logs)${RESET}`);
 }
 
-async function stackRedeploy(args: string[]): Promise<void> {
-  const name = args.find((arg) => !arg.startsWith("-"));
-  if (!name) {
-    console.error(`Usage: ocd stack redeploy <name|id>`);
-    process.exit(1);
-  }
-  const stackRef = await resolveStack(name);
-  console.log(`Redeploying stack ${BOLD}${stackRef.name}${RESET} from stored configuration...`);
-  const { op_id } = await post<{ op_id: number }>(`/api/stacks/${stackRef.id}/redeploy`, {});
-  const result = await followOp(op_id);
-  if (!result.ok) {
-    console.error(`\n${RED}Stack redeploy failed: ${result.error || "unknown error"}${RESET}`);
-    process.exit(1);
-  }
-  console.log(`\n${GREEN}Stack redeployed.${RESET}`);
-}
-
 export async function stackDown(args: string[]): Promise<void> {
   let name = "";
   for (const arg of args) {
@@ -618,16 +548,15 @@ export async function stackDown(args: string[]): Promise<void> {
 }
 
 function usage(): void {
-  console.error(`${BOLD}Usage:${RESET} ocd stack <ls|status|logs|member-logs|redeploy> [args]
+  console.error(`${BOLD}Usage:${RESET} ocd stack <ls|status|logs|member-logs> [args]
 
 ${BOLD}Subcommands:${RESET}
   ls                   List all stacks
   status <name>        Show a stack's apps and services
   logs <name>          Print a stack's deploy log
   member-logs <name>   Print current container logs for every readable member
-  redeploy <name>      Redeploy every member from stored configuration
 
-${DIM}Deploy a stack with \`ocd deploy stack\`; destroy one with \`ocd delete stack\`.${RESET}`);
+${DIM}Deploy or redeploy a stack with \`ocd deploy stack\`; destroy one with \`ocd delete stack\`.${RESET}`);
 }
 
 export async function stack(args: string[]): Promise<void> {
@@ -650,9 +579,6 @@ export async function stack(args: string[]): Promise<void> {
     case "member-logs":
     case "members-logs":
       await stackMemberLogs(rest);
-      break;
-    case "redeploy":
-      await stackRedeploy(rest);
       break;
     case "down":
       console.error("`ocd stack down` has moved to `ocd delete stack`.");

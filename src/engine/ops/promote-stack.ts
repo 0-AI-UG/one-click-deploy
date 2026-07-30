@@ -50,7 +50,7 @@ export function planPromotions(
     if (member.target_of != null) continue;
     if (member.target === "staging" || member.target === "dev") continue;
     // Staging OFF: turning it off (dropping webhook.staging, or clearing the
-    // stack's --staging-env) nulls this column but LEAVES the sibling row and
+    // stack's staging_environment) nulls this column but LEAVES the sibling row and
     // its deployment history behind. Promoting from that stale sibling would
     // silently roll production back to whatever it last held, so an existing
     // sibling is not on its own a licence to promote.

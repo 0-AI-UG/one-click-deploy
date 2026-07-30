@@ -97,7 +97,6 @@ import {
   handleGetApps,
   handleDeploy,
   handleDestroyApp,
-  handleRedeployApp,
   handleRestartApp,
   handlePauseApp,
   handleRollbackApp,
@@ -105,17 +104,14 @@ import {
   handleGetContainerLogs,
   handleGetDeployments,
   handleGetDeployLog,
-  handleApplyAppConfig,
   handleGetDashboard,
 } from "./apps.ts";
 import {
   handleGetStacks,
   handleGetStack,
   handleDeployStack,
-  handleUpdateStack,
   handleDestroyStack,
   handlePromoteStack,
-  handleRedeployStack,
   handleGetStackLog,
 } from "./stacks.ts";
 import {
@@ -135,11 +131,9 @@ import {
   handleRestoreEnvironment,
   handlePurgeEnvironment,
   handleGetEnvironmentApps,
-  handleAttachAppToEnvironment,
 } from "./environments.ts";
 import {
-  handleScaleApp,
-  handleUpdateScalingPolicy,
+  handleWakeApp,
   handleMigrateReplica,
   handleGetReplicas,
 } from "./scaling.ts";
@@ -161,8 +155,6 @@ import {
 import { handleListOperations, handleCancelOperation } from "./operations.ts";
 import { handleGetPanel, handleRedeployPanel } from "./panel.ts";
 import {
-  handleUpdateWebhookSettings,
-  handleDisableWebhook,
   handleEnablePanelWebhook,
   handleDisablePanelWebhook,
 } from "./webhooks.ts";
@@ -338,12 +330,11 @@ describe("GUARD: the real permission layer is what the routes see", () => {
   });
 
   test("a user with NO permissions is refused by a handler another suite stubs out", async () => {
-    // apps-auth.test.ts drives this exact handler with auth bypassed.
     const ctx = await userWith([]);
-    const res = await handleApplyAppConfig(
-      req(`/api/apps/${appA}/config`, { method: "PUT", body: { sticky: true }, token: ctx.token }),
-      appA,
-    );
+    const res = await handleDeploy(req("/api/apps/deploy", {
+      body: { app_name: db.getApp(appA)!.name, apply_mode: "patch", sticky: true },
+      token: ctx.token,
+    }));
     expect(res.status).toBe(403);
   });
 });
@@ -387,19 +378,20 @@ const CASES: Case[] = [
   {
     name: "apps: handleDeploy",
     permission: "apps.deploy",
-    call: (c) => handleDeploy(req("/api/deploy", { body: {}, token: c.token })),
+    call: (c) => handleDeploy(req("/api/apps/deploy", {
+      body: {
+        app_name: db.getApp(appA)!.name,
+        apply_mode: "patch",
+        deploy: false,
+      },
+      token: c.token,
+    })),
   },
   {
     name: "apps: handleDestroyApp",
     permission: "apps.destroy",
     call: (c) =>
       handleDestroyApp(req(`/api/apps/${appA}`, { method: "DELETE", token: c.token }), appA),
-  },
-  {
-    name: "apps: handleRedeployApp",
-    permission: "apps.redeploy",
-    call: (c) =>
-      handleRedeployApp(req(`/api/apps/${appA}/redeploy`, { body: {}, token: c.token }), appA),
   },
   {
     name: "apps: handleRestartApp",
@@ -450,16 +442,6 @@ const CASES: Case[] = [
     permission: "deployments.view",
     call: (c) => handleGetDeployLog(req(`/api/apps/${appA}/deploy-log`, { token: c.token }), appA),
   },
-  {
-    name: "apps: handleApplyAppConfig",
-    permission: "apps.deploy",
-    call: (c) =>
-      handleApplyAppConfig(
-        req(`/api/apps/${appA}/config`, { method: "PUT", body: { sticky: true, deploy: false }, token: c.token }),
-        appA,
-      ),
-  },
-
   // --- stacks ---------------------------------------------------------------
   {
     name: "stacks: handleGetStacks",
@@ -480,24 +462,6 @@ const CASES: Case[] = [
     name: "stacks: handleDeployStack",
     permission: "stacks.deploy",
     call: (c) => handleDeployStack(req("/api/stacks/deploy", { body: {}, token: c.token })),
-  },
-  {
-    name: "stacks: handleRedeployStack",
-    permission: "stacks.deploy",
-    call: (c) =>
-      handleRedeployStack(
-        req(`/api/stacks/${stackA}/redeploy`, { body: {}, token: c.token }),
-        stackA,
-      ),
-  },
-  {
-    name: "stacks: handleUpdateStack",
-    permission: "stacks.settings",
-    call: (c) =>
-      handleUpdateStack(
-        req(`/api/stacks/${stackA}`, { method: "PATCH", body: {}, token: c.token }),
-        stackA,
-      ),
   },
   {
     name: "stacks: handleDestroyStack",
@@ -670,32 +634,13 @@ const CASES: Case[] = [
       999999,
     ),
   },
-  {
-    name: "environments: handleAttachAppToEnvironment",
-    permission: "environments.manage",
-    call: (c) =>
-      handleAttachAppToEnvironment(
-        req(`/api/environments/${envA}/apps`, { body: { app_id: appA }, token: c.token }),
-        envA,
-      ),
-  },
-
   // --- scaling --------------------------------------------------------------
   {
-    name: "scaling: handleScaleApp",
-    permission: "scaling.scale",
+    name: "scaling: handleWakeApp",
+    permission: "apps.deploy",
     call: (c) =>
-      handleScaleApp(
-        req(`/api/apps/${appA}/scale`, { body: { replicas: 1 }, token: c.token }),
-        appA,
-      ),
-  },
-  {
-    name: "scaling: handleUpdateScalingPolicy",
-    permission: "scaling.policy",
-    call: (c) =>
-      handleUpdateScalingPolicy(
-        req(`/api/apps/${appA}/scaling-policy`, { method: "PUT", body: {}, token: c.token }),
+      handleWakeApp(
+        req(`/api/apps/${appA}/wake`, { body: {}, token: c.token }),
         appA,
       ),
   },
@@ -887,24 +832,6 @@ const CASES: Case[] = [
 
   // --- webhooks -------------------------------------------------------------
   {
-    name: "webhooks: handleUpdateWebhookSettings",
-    permission: "webhooks.manage",
-    call: (c) =>
-      handleUpdateWebhookSettings(
-        req(`/api/apps/${appA}/webhook`, { method: "PUT", body: {}, token: c.token }),
-        appA,
-      ),
-  },
-  {
-    name: "webhooks: handleDisableWebhook",
-    permission: "webhooks.manage",
-    call: (c) =>
-      handleDisableWebhook(
-        req(`/api/apps/${appB}/webhook`, { method: "DELETE", token: c.token }),
-        appB,
-      ),
-  },
-  {
     name: "webhooks: handleEnablePanelWebhook",
     permission: "panel.manage",
     call: (c) => handleEnablePanelWebhook(req("/api/panel/webhook", { body: {}, token: c.token })),
@@ -1069,19 +996,19 @@ describe("scope semantics through the real routes", () => {
 describe("permission splits are enforced (the old coarse grant is not enough)", () => {
   test("apps.redeploy does NOT allow changing stored configuration", async () => {
     const ctx = await userWith(["apps.redeploy"]);
-    const res = await handleApplyAppConfig(
-      req(`/api/apps/${appA}/config`, { method: "PUT", body: { sticky: true }, token: ctx.token }),
-      appA,
-    );
+    const res = await handleDeploy(req("/api/apps/deploy", {
+      body: { app_name: db.getApp(appA)!.name, apply_mode: "patch", sticky: true },
+      token: ctx.token,
+    }));
     expect(res.status).toBe(403);
   });
 
   test("apps.ingress does NOT allow changing stored configuration", async () => {
     const ctx = await userWith(["apps.ingress"]);
-    const res = await handleApplyAppConfig(
-      req(`/api/apps/${appA}/config`, { method: "PUT", body: { sticky: true }, token: ctx.token }),
-      appA,
-    );
+    const res = await handleDeploy(req("/api/apps/deploy", {
+      body: { app_name: db.getApp(appA)!.name, apply_mode: "patch", sticky: true },
+      token: ctx.token,
+    }));
     expect(res.status).toBe(403);
   });
 
@@ -1107,14 +1034,18 @@ describe("permission splits are enforced (the old coarse grant is not enough)", 
     expect(deployLog.status).toBe(403);
   });
 
-  test("webhooks.manage does NOT allow panel webhook changes (needs panel.manage)", async () => {
+  test("webhooks.manage neither mutates app config nor changes the panel webhook", async () => {
     const ctx = await userWith(["webhooks.manage"]);
 
-    const appLevel = await handleUpdateWebhookSettings(
-      req(`/api/apps/${appA}/webhook`, { method: "PUT", body: {}, token: ctx.token }),
-      appA,
-    );
-    expect(appLevel.status).not.toBe(403);
+    const appLevel = await handleDeploy(req("/api/apps/deploy", {
+      body: {
+        app_name: db.getApp(appA)!.name,
+        apply_mode: "patch",
+        webhook_wait_for_ci: true,
+      },
+      token: ctx.token,
+    }));
+    expect(appLevel.status).toBe(403);
 
     const enable = await handleEnablePanelWebhook(
       req("/api/panel/webhook", { body: {}, token: ctx.token }),

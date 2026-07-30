@@ -127,64 +127,6 @@ export async function handleGetStack(request: Request, stackId: number): Promise
   }
 }
 
-// --- Settings ---
-
-// The only mutable stack-level setting: the shared staging environment. A stack
-// owns exactly ONE, and no member may override it (deploy_stack overwrites the
-// per-app column on every run), so re-pointing it here means re-pointing every
-// member that currently has staging on.
-//
-// Deliberately NOT settable: `name` (it prefixes every member app/service,
-// container and op resource key) and `environment_id` (members carry their own
-// copy; re-pointing it is a redeploy of the whole stack, which `deploy_stack`
-// already does properly via a re-up).
-export async function handleUpdateStack(request: Request, stackId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "stacks.settings", stackScope(stackId));
-    const stack = db.getStack(stackId);
-    if (!stack) {
-      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
-    }
-    const body = await request.json() as { staging_environment_id?: number | null };
-    if (!("staging_environment_id" in body)) {
-      return Response.json({ ok: false, error: "staging_environment_id is required" }, { status: 400, headers: corsHeaders });
-    }
-    const next = body.staging_environment_id ?? null;
-    if (next != null) {
-      if (typeof next !== "number" || !db.getEnvironment(next)) {
-        return Response.json({ ok: false, error: `Staging environment ${next} not found` }, { status: 400, headers: corsHeaders });
-      }
-      if (next === stack.environment_id) {
-        return Response.json(
-          { ok: false, error: "Staging environment must differ from the stack's production environment" },
-          { status: 400, headers: corsHeaders },
-        );
-      }
-    }
-    db.updateStackStagingEnvironment(stackId, next);
-    // Push down to members. Staging opt-in itself is manifest intent
-    // (webhook.staging) which we never persist, so we can only re-point members
-    // that ALREADY have staging on — clearing turns it off everywhere, and
-    // turning it on for a new member still requires a stack re-up.
-    let repointed = 0;
-    for (const app of db.getAppsByStackId(stackId)) {
-      if (app.target_of != null) continue; // staging siblings are not members in their own right
-      if ((app.webhook_staging_environment_id ?? null) == null) continue;
-      db.updateAppWebhookStagingEnvironment(app.id, next);
-      repointed++;
-    }
-    db.appendStackLog(
-      stackId,
-      next == null
-        ? `[settings] staging environment cleared — staging disabled on ${repointed} member(s)`
-        : `[settings] staging environment → ${next} (${repointed} member(s) re-pointed)`,
-    );
-    return Response.json({ ok: true, staging_environment_id: next, members_updated: repointed, updated_by: payload.userId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
 // --- Log ---
 
 export async function handleGetStackLog(request: Request, stackId: number): Promise<Response> {
@@ -329,37 +271,6 @@ export async function handlePromoteStack(request: Request, stackId: number): Pro
       // landed last production would sit on branch HEAD, not the promoted commit.
       resourceKeys: stackLockKeys(stack),
       input: { stackId, userId: payload.userId },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
-// Redeploy every app in the stack. A stack owns a shared environment, so this
-// reuses the existing cascade_redeploy op (fan-out of per-app redeploys keyed
-// on the environment) rather than introducing a stack-specific redeploy kind —
-// exactly the op handleUpdateEnvironment enqueues when env vars change.
-export async function handleRedeployStack(request: Request, stackId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "stacks.deploy", stackScope(stackId));
-    const stack = db.getStack(stackId);
-    if (!stack) {
-      return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
-    }
-    if (!stack.environment_id) {
-      return Response.json({ ok: false, error: "Stack has no environment to redeploy" }, { status: 400, headers: corsHeaders });
-    }
-    const apps = db.getAppsByStackId(stackId);
-    if (apps.length === 0) {
-      return Response.json({ ok: false, error: "Stack has no apps to redeploy" }, { status: 400, headers: corsHeaders });
-    }
-    const { opId } = enqueue({
-      kind: "cascade_redeploy",
-      resourceKeys: [...stackLockKeys(stack), `env:${stack.environment_id}`],
-      input: { environmentId: stack.environment_id },
       trigger: "ui",
       triggeredBy: payload.userId,
     });

@@ -31,21 +31,19 @@ Read permissions:
 
 App permissions:
 
-- `apps.deploy`, `apps.redeploy`, `apps.rollback`, `apps.restart`,
-  `apps.pause`, `apps.destroy`, `apps.logs`, `apps.rename`, `apps.promote`,
-  `apps.ingress`, `apps.expose`, `webhooks.manage`.
+- `apps.deploy`, `apps.rollback`, `apps.restart`, `apps.pause`, `apps.destroy`,
+  `apps.logs`, `apps.rename`, `apps.promote`.
 
 Service/stack/environment:
 
 - `services.deploy`, `services.manage`, `services.destroy`, `services.logs`,
   `services.link`;
-- `stacks.view`, `stacks.deploy`, `stacks.settings`, `stacks.promote`,
-  `stacks.destroy`;
+- `stacks.view`, `stacks.deploy`, `stacks.promote`, `stacks.destroy`;
 - `environments.manage`, `environments.secrets`.
 
 Scaling/infrastructure:
 
-- `scaling.scale`, `scaling.policy`, `scaling.migrate`;
+- `scaling.migrate`;
 - `servers.create`, `servers.manage`, `servers.delete`;
 - `volumes.create`, `volumes.attach`, `volumes.detach`, `volumes.resize`, `volumes.rename`,
   `volumes.delete`, `volumes.files.read`;
@@ -67,8 +65,8 @@ Scopes:
 
 ## Sensitive permissions
 
-- `apps.expose` is stricter than `apps.ingress`; raw public ports expose fleet
-  services to the internet.
+- Desired app settings, ingress, public ports, webhooks and scaling policy all
+  use `apps.deploy`.
 - `volumes.files.read` grants application-data access.
 - `terminal.host` is effectively root-equivalent infrastructure access.
 - `resources.delete`, `servers.delete`, and `volumes.delete` can remove

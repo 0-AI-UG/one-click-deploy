@@ -45,12 +45,14 @@ export function buildStackAppSpec(
   // overrides (domain/public) rather than duplicating that entire schema.
   const healthCheck = manifest.health_check;
   const spec: StackAppSpec = {
+    apply_mode: "manifest",
     key,
     app_name: key, // server derives <stack>-<key>; sent only to satisfy the type
     git_repo: repo,
     container_port: manifest.build?.container_port ?? 3000,
     declared_env_keys: [...new Set((manifest.env ?? []).map((entry) => entry.key))],
   };
+  if (manifest.environment !== undefined) spec.environment = manifest.environment;
   if (manifest.image) {
     spec.git_repo = "";
     spec.image_ref = manifest.image.ref;
@@ -95,10 +97,22 @@ export function buildStackAppSpec(
     // shared staging env and is resolved in the deploy_stack op, exactly like
     // env_vars.
     if (manifest.webhook.staging) spec.webhook_staging = true;
+    if (manifest.webhook.staging_environment !== undefined) {
+      spec.webhook_staging_environment = manifest.webhook.staging_environment;
+    }
   }
 
   const replicas = manifest.replicas;
   if (replicas) spec.replicas = replicas;
+  if (manifest.autoscaling) {
+    spec.autoscale_enabled = manifest.autoscaling.enabled ?? false;
+    spec.min_replicas = manifest.autoscaling.min_replicas ?? 1;
+    spec.max_replicas = manifest.autoscaling.max_replicas ?? 1;
+    spec.autoscale_cpu_threshold = manifest.autoscaling.cpu_threshold ?? 80;
+    spec.autoscale_mem_threshold = manifest.autoscaling.memory_threshold ?? 85;
+    spec.autoscale_req_threshold = manifest.autoscaling.requests_per_minute ?? 0;
+    spec.autoscale_cooldown = manifest.autoscaling.cooldown_seconds ?? 300;
+  }
   const isPublic = entry.public ?? manifest.public;
   if (isPublic !== undefined) spec.public = isPublic;
   const memoryMb = manifest.memory_mb;

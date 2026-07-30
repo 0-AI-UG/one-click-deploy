@@ -43,7 +43,6 @@ export const ALL_PERMISSIONS = [
 
   // --- Apps ------------------------------------------------------------
   "apps.deploy",
-  "apps.redeploy",
   "apps.rollback",
   "apps.restart",
   "apps.pause",
@@ -51,11 +50,6 @@ export const ALL_PERMISSIONS = [
   "apps.logs",
   "apps.rename",
   "apps.promote",
-  /** Auth password, sticky sessions, rate limit, IP allowlist, health check, compression. */
-  "apps.ingress",
-  /** Publishing an app on a public fleet port — strictly more dangerous than apps.ingress. */
-  "apps.expose",
-  "webhooks.manage",
 
   // --- Services --------------------------------------------------------
   "services.deploy",
@@ -67,7 +61,6 @@ export const ALL_PERMISSIONS = [
   // --- Stacks ----------------------------------------------------------
   "stacks.view",
   "stacks.deploy",
-  "stacks.settings",
   "stacks.promote",
   "stacks.destroy",
 
@@ -78,8 +71,6 @@ export const ALL_PERMISSIONS = [
   "environments.secrets",
 
   // --- Scaling ---------------------------------------------------------
-  "scaling.scale",
-  "scaling.policy",
   "scaling.migrate",
 
   // --- Servers ---------------------------------------------------------
@@ -140,21 +131,16 @@ export const PERMISSION_SCOPES: Readonly<Record<string, readonly ScopeType[]>> =
   // A stack has no environment of its own; stackScope() resolves it from the
   // members' shared environment, so only an environment grant can match.
   "stacks.view": ["environment"],
-  "stacks.deploy": ["environment"],
-  "stacks.settings": ["environment"],
   "stacks.promote": ["environment"],
   "stacks.destroy": ["environment"],
 
   // --- app-only: operations that only make sense against one app -----------
-  "scaling.scale": ["app"],
-  "scaling.policy": ["app"],
   "scaling.migrate": ["app"],
   "terminal.container": ["app"],
 
   // --- app or environment: checked via appScope(), which inherits the app's
   //     environment, so granting the environment covers every app inside it ---
   "apps.view": ["app", "environment"],
-  "apps.redeploy": ["app", "environment"],
   "apps.rollback": ["app", "environment"],
   "apps.restart": ["app", "environment"],
   "apps.pause": ["app", "environment"],
@@ -162,9 +148,6 @@ export const PERMISSION_SCOPES: Readonly<Record<string, readonly ScopeType[]>> =
   "apps.logs": ["app", "environment"],
   "apps.rename": ["app", "environment"],
   "apps.promote": ["app", "environment"],
-  "apps.ingress": ["app", "environment"],
-  "apps.expose": ["app", "environment"],
-  "webhooks.manage": ["app", "environment"],
   "deployments.view": ["app", "environment"],
   "metrics.view": ["app", "environment"],
 } as const;

@@ -18,9 +18,19 @@ const _deploy: DeployManifest = {
   domain: "web.example.com",
   git_branch: "release",
   env_projection: ["DATABASE_URL"],
+  environment: "production",
   auth: { enabled: true, password_env: "OCD_BASIC_AUTH_PASSWORD" },
   placement_pool: "production",
   scale_to_zero_after: 0,
+  autoscaling: {
+    enabled: true,
+    min_replicas: 1,
+    max_replicas: 4,
+    cpu_threshold: 80,
+    memory_threshold: 85,
+    requests_per_minute: 0,
+    cooldown_seconds: 300,
+  },
 };
 const _enabled: boolean | undefined = _deploy.health_check?.enabled;
 const _port: number | undefined = _deploy.build?.container_port;
@@ -177,6 +187,37 @@ describe("validateDeployManifest", () => {
         "a/.ocd-deploy.json",
       ),
     ).not.toThrow();
+  });
+
+  test("environment selectors and complete autoscaling policy validate", () => {
+    expect(() =>
+      validateDeployManifest({
+        name: "web",
+        environment: "production",
+        replicas: 2,
+        autoscaling: {
+          enabled: true,
+          min_replicas: 1,
+          max_replicas: 5,
+          cpu_threshold: 80,
+          memory_threshold: 85,
+          requests_per_minute: 100,
+          cooldown_seconds: 300,
+        },
+        webhook: {
+          enabled: true,
+          staging: true,
+          staging_environment: "staging",
+        },
+      }, "a/.ocd-deploy.json"),
+    ).not.toThrow();
+    expect(() =>
+      validateDeployManifest({
+        name: "web",
+        replicas: 3,
+        autoscaling: { max_replicas: 2 },
+      }, "a/.ocd-deploy.json"),
+    ).toThrow(/autoscaling\.max_replicas/);
   });
 
   test("wrong-typed webhook.staging fails", () => {

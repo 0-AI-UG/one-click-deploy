@@ -4,7 +4,7 @@ import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { TabBar } from "../../components/tab-bar.tsx";
 import { trackOperationInToast, useActiveOperations } from "../../hooks/useOperation.ts";
-import { ArrowLeft, RefreshCw, ArrowUpFromLine, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowUpFromLine, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
 import { StackLogsTab } from "./logs-tab.tsx";
 import type { StackDetail, EnvironmentData } from "../../types.ts";
@@ -19,15 +19,12 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
   const [tab, setTab] = useState<"overview" | "logs">("overview");
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  // Stack ops carry different keys depending on kind: `stack:<id>` (destroy,
-  // promote), `stack:<name>` (deploy) and `env:<id>` (redeploy, which fans out
-  // via cascade_redeploy on the shared environment). Match all three so any one
-  // of them greys out the others — and so a page reload mid-op recovers.
+  // Stack ops use an id for lifecycle actions and a name for manifest deploys.
   const ops = useActiveOperations(
     (op) =>
       !!op.resource_keys?.some((k) =>
         k === `stack:${stackId}` ||
-        (stack != null && (k === `stack:${stack.name}` || (stack.environment_id != null && k === `env:${stack.environment_id}`))),
+        (stack != null && k === `stack:${stack.name}`),
       ),
     { rehydrateToasts: true },
   );
@@ -36,7 +33,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
     try {
       setStack(await get(`/api/stacks/${stackId}`));
       // The op filter above depends on the stack's name + environment, which we
-      // only learn here — re-prime so a reload mid-redeploy finds its op.
+      // only learn here, so re-prime after loading it.
       ops.refresh();
     } catch (err) {
       showToast(errMessage(err), "error");
@@ -79,10 +76,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
   const memberApps = stack.apps.filter((a) => a.target_of == null);
   const promotable = memberApps.filter((a) => (a.webhook_staging_environment_id ?? null) != null).length;
 
-  // A stack has no settings of its own beyond the staging environment: name and
-  // environment are fixed at deploy time, membership comes from the manifest,
-  // and redeploy/promote/destroy are in the header. So the staging control lives
-  // on Overview and there is no Settings tab.
+  // Stack configuration and membership come exclusively from ocd-stack.json.
   const tabs = [
     { key: "overview", label: "Overview" },
     { key: "logs", label: "Logs" },
@@ -108,14 +102,6 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
           )}
         </div>
         <div className="flex gap-1">
-          <PermissionGate permission="stacks.deploy" environmentId={stack.environment_id}>
-            <Btn
-              size="xs"
-              loading={actionLoading === "redeploy" || ops.isBusyWith("cascade_redeploy")}
-              disabled={ops.isBusy}
-              onClick={() => action("redeploy", () => post(`/api/stacks/${stackId}/redeploy`))}
-            ><RefreshCw size={12} /> Redeploy</Btn>
-          </PermissionGate>
           {/* Promote only exists when there is something to promote — a stack
               with no staging siblings has no use for the button at all. */}
           {promotable > 0 && (
@@ -167,7 +153,6 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
           stack={stack}
           memberApps={memberApps}
           environments={environments}
-          reload={load}
         />
       )}
 

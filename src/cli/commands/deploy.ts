@@ -4,7 +4,6 @@ import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
 import { getGitRepo, readManifest, promptRequired, resolveAuthPassword, manifestHash } from "../manifest.ts";
 import { mergeEnv } from "../../shared/env-merge.ts";
-import type { DeployRequest } from "../../shared/rpc.ts";
 
 interface Environment {
   id: number;
@@ -12,29 +11,19 @@ interface Environment {
   env_vars?: Array<{ key: string }>;
 }
 
-async function resolveEnvironment(nameOrId: string): Promise<Environment> {
+async function resolveEnvironment(name: string): Promise<Environment> {
   const list = await get<Environment[]>("/api/environments");
-
-  const id = parseInt(nameOrId, 10);
-  if (!isNaN(id)) {
-    const env = list.find((e) => e.id === id);
-    if (env) return env;
-  }
-
-  const lower = nameOrId.toLowerCase();
+  const lower = name.toLowerCase();
   const env = list.find((e) => e.name.toLowerCase() === lower);
   if (env) return env;
 
-  console.error(`Environment not found: ${nameOrId}`);
+  console.error(`Environment not found: ${name}`);
   console.error(`Available: ${list.map((e) => e.name).join(", ") || "(none)"}`);
   process.exit(1);
 }
 
 function parseFlags(args: string[]): {
   manifestPath: string;
-  domain?: string;
-  envName?: string;
-  stagingEnvName?: string;
   authPasswordEnv?: string;
   serverId?: number;
   sets: Record<string, string>;
@@ -43,9 +32,6 @@ function parseFlags(args: string[]): {
   configOnly: boolean;
 } {
   let manifestPath = "";
-  let domain: string | undefined;
-  let envName: string | undefined;
-  let stagingEnvName: string | undefined;
   let authPasswordEnv: string | undefined;
   let serverId: number | undefined;
   const sets: Record<string, string> = {};
@@ -54,13 +40,7 @@ function parseFlags(args: string[]): {
   let configOnly = false;
 
   for (const arg of args) {
-    if (arg.startsWith("--domain=")) {
-      domain = arg.slice(9);
-    } else if (arg.startsWith("--env=")) {
-      envName = arg.slice(6);
-    } else if (arg.startsWith("--staging-env=")) {
-      stagingEnvName = arg.slice(14);
-    } else if (arg.startsWith("--set=")) {
+    if (arg.startsWith("--set=")) {
       const pair = arg.slice(6);
       const eq = pair.indexOf("=");
       if (eq < 1) {
@@ -93,7 +73,7 @@ function parseFlags(args: string[]): {
 
   if (!manifestPath) manifestPath = ".ocd-deploy.json";
 
-  return { manifestPath, domain, envName, stagingEnvName, authPasswordEnv, serverId, sets, help, dryRun, configOnly };
+  return { manifestPath, authPasswordEnv, serverId, sets, help, dryRun, configOnly };
 }
 
 export async function deploy(args: string[]): Promise<void> {
@@ -103,7 +83,7 @@ export async function deploy(args: string[]): Promise<void> {
     return;
   }
 
-  const { manifestPath, domain, envName, stagingEnvName, authPasswordEnv, serverId, sets, help, dryRun, configOnly } = parseFlags(args);
+  const { manifestPath, authPasswordEnv, serverId, sets, help, dryRun, configOnly } = parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
@@ -114,24 +94,17 @@ Run from inside a git repo with an "origin" remote.
 Env vars from the manifest's env[] section are included automatically:
 defaults are sent as-is, --set overrides or adds values, and required
 vars without a value are prompted for (hidden input when secret).
-With --env, the linked environment supplies all variables instead.
+The manifest's environment field links an environment by name. Use null to
+detach; omission retains an existing app's link.
 
 ${BOLD}Arguments:${RESET}
   [manifest]                 Path to manifest (default: .ocd-deploy.json)
 
 ${BOLD}Subcommands:${RESET}
   stack [manifest]           Deploy a multi-app stack (default: ocd-stack.json)
-                             Takes --env, --set=<app>.KEY=VALUE and
-                             --staging-env (one per stack) — see
-                             \`ocd deploy stack --help\`.
+                             See \`ocd deploy stack --help\`.
 
 ${BOLD}Options:${RESET}
-  --domain=<domain>          Custom domain
-  --env=<name|id>            Link an existing environment (env-var bag) by
-                             name or id
-  --staging-env=<name|id>    Enable webhook staging: pushes deploy to the
-                             <name>-staging sibling (with this environment) and
-                             hold for manual promotion. Requires webhook.enabled.
   --auth-password-env=<key>  Read the basic-auth password from a local
                              environment variable (never stored in the manifest)
   --server=<id>              Pin this one deploy to a server ID. This is an
@@ -152,118 +125,117 @@ ${BOLD}Options:${RESET}
   const name = manifest.suggested_app_name ||
     (manifest.image ? manifest.image.ref.split("/").pop()!.split("@")[0] : repo.replace(/.*\//, ""));
   const port = manifest.build?.container_port ?? 3000;
+  const authPassword = await resolveAuthPassword(manifest.auth, authPasswordEnv);
+  const environment = typeof manifest.environment === "string"
+    ? await resolveEnvironment(manifest.environment)
+    : null;
+  if (environment) console.log(`${DIM}Env:${RESET}      ${environment.name}`);
 
-  const body: DeployRequest = {
+  const webhookEnabled = manifest.webhook?.enabled ?? false;
+  let webhookStaging = manifest.webhook?.staging ?? false;
+  let webhookStagingEnvironmentId: number | null | undefined;
+  const stagingEnvironmentName = manifest.webhook?.staging_environment;
+  if (typeof stagingEnvironmentName === "string") {
+    if (!webhookEnabled) {
+      console.error(`${RED}webhook.staging_environment requires webhook.enabled.${RESET}`);
+      process.exit(1);
+    }
+    const stagingEnvironment = await resolveEnvironment(stagingEnvironmentName);
+    webhookStaging = true;
+    webhookStagingEnvironmentId = stagingEnvironment.id;
+    console.log(`${DIM}Staging:${RESET}  ${stagingEnvironment.name}`);
+  } else if (stagingEnvironmentName === null) {
+    webhookStaging = false;
+    webhookStagingEnvironmentId = null;
+  }
+  if (webhookStaging && !webhookEnabled) {
+    console.error(`${RED}webhook.staging requires webhook.enabled.${RESET}`);
+    process.exit(1);
+  }
+  if (webhookStaging && webhookStagingEnvironmentId === undefined) {
+    console.log(`${DIM}Staging:${RESET}  ${name}-staging-env ${DIM}(auto-created)${RESET}`);
+  }
+
+  const desiredReplicas = manifest.replicas ?? 1;
+  const autoscaling = manifest.autoscaling;
+  const minReplicas = autoscaling?.min_replicas ?? 1;
+  const maxReplicas = autoscaling?.max_replicas ?? Math.max(desiredReplicas, minReplicas);
+  const healthMode = manifest.health_check?.mode ??
+    (manifest.health_check?.enabled === false ? "container" : "http");
+
+  const body = {
+    apply_mode: "manifest" as const,
     app_name: name,
     git_repo: repo,
     container_port: port,
+    domain: manifest.domain,
+    git_branch: manifest.git_branch ?? "",
+    dockerfile_path: manifest.build?.dockerfile ?? "Dockerfile",
+    docker_context: manifest.build?.context ?? ".",
+    image_ref: manifest.image?.ref ?? "",
+    build_cache_ref: manifest.build?.cache_ref ?? "",
+    env_projection: manifest.env_projection ?? null,
+    environment_id: environment?.id ??
+      (manifest.environment === null ? null : undefined),
+    auth_password: authPassword ?? "",
+    public: manifest.public ?? true,
+    memory_mb: manifest.memory_mb ?? 0,
+    cpu_limit: manifest.cpu_limit ?? 0,
+    health_check: healthMode === "http",
+    health_check_mode: healthMode,
+    health_check_path: healthMode === "http" ? (manifest.health_check?.path ?? "") : "",
+    health_check_command: manifest.health_check?.command ?? "",
+    health_check_file: manifest.health_check?.file ?? "",
+    health_check_max_age_seconds: manifest.health_check?.max_age_seconds ?? 0,
+    internal_protocol: manifest.internal_protocol ?? "http",
+    sticky: manifest.sticky ?? false,
+    rate_limit_rps: manifest.rate_limit_rps ?? 0,
+    ip_allowlist: manifest.ip_allowlist ?? "",
+    compress: manifest.compress ?? false,
+    public_port: manifest.public_port ?? null,
+    public_protocol: manifest.public_protocol ?? "tcp",
+    replicas: desiredReplicas,
+    durability_class: manifest.durability_class ?? "none",
+    placement_pool: manifest.placement_pool ?? "general",
+    scale_to_zero_after: manifest.scale_to_zero_after ?? 0,
+    volume_size: manifest.volume?.size ?? 0,
+    volume_path: manifest.volume?.path ?? "/data",
+    extra_volumes: manifest.extra_volumes ?? [],
+    webhook_enabled: webhookEnabled,
+    webhook_branch: manifest.webhook?.branch ?? "main",
+    webhook_path: manifest.webhook?.path ?? "",
+    webhook_wait_for_ci: manifest.webhook?.wait_for_ci ?? false,
+    webhook_staging: webhookStaging,
+    webhook_staging_environment_id: webhookStagingEnvironmentId,
+    autoscale_enabled: autoscaling?.enabled ?? false,
+    min_replicas: minReplicas,
+    max_replicas: maxReplicas,
+    autoscale_cpu_threshold: autoscaling?.cpu_threshold ?? 80,
+    autoscale_mem_threshold: autoscaling?.memory_threshold ?? 85,
+    autoscale_req_threshold: autoscaling?.requests_per_minute ?? 0,
+    autoscale_cooldown: autoscaling?.cooldown_seconds ?? 300,
     manifest_path: manifestPath,
     manifest_hash: manifestHash(resolve(manifestPath)),
+    ...(serverId !== undefined ? { server_id: serverId } : {}),
+    env_vars: [] as Array<{ key: string; value: string; secret?: boolean }>,
   };
 
-  if (manifest.domain) body.domain = manifest.domain;
-  if (domain) body.domain = domain;
-  if (manifest.git_branch) body.git_branch = manifest.git_branch;
-  if (manifest.env_projection !== undefined) body.env_projection = manifest.env_projection;
-  const authPassword = await resolveAuthPassword(manifest.auth, authPasswordEnv);
-  if (authPassword !== undefined) body.auth_password = authPassword;
-  if (serverId !== undefined) body.server_id = serverId;
-  if (manifest.build?.dockerfile) body.dockerfile_path = manifest.build.dockerfile;
-  if (manifest.build?.context) body.docker_context = manifest.build.context;
-  if (manifest.build?.cache_ref) body.build_cache_ref = manifest.build.cache_ref;
-  if (manifest.image) body.image_ref = manifest.image.ref;
-
-  if (manifest.webhook?.enabled) {
-    body.webhook_enabled = true;
-    body.webhook_branch = manifest.webhook.branch || "main";
-    if (manifest.webhook.path) body.webhook_path = manifest.webhook.path;
-    if (manifest.webhook.wait_for_ci) body.webhook_wait_for_ci = true;
-  }
-
-  // Webhook staging is opt-in via the manifest (`webhook.staging`). Naming an
-  // environment is OPTIONAL: with --staging-env we link that one, otherwise the
-  // deploy op mints `<app>-staging-env` as a copy of the app's environment —
-  // the same deal the app's production environment gets when --env is omitted.
-  if (stagingEnvName) {
-    if (!body.webhook_enabled) {
-      console.error(`${RED}--staging-env requires webhooks — set "webhook": { "enabled": true } in the manifest.${RESET}`);
-      process.exit(1);
-    }
-    const stagingEnv = await resolveEnvironment(stagingEnvName);
-    body.webhook_staging_environment_id = stagingEnv.id;
-    console.log(`${DIM}Staging:${RESET}  ${stagingEnv.name}`);
-  } else if (manifest.webhook?.staging && body.webhook_enabled) {
-    body.webhook_staging = true;
-    console.log(`${DIM}Staging:${RESET}  ${name}-staging-env ${DIM}(auto-created)${RESET}`);
-  } else if (manifest.webhook?.staging) {
-    // Only reachable with staging on and the webhook off. Staging holds PUSHED
-    // commits, so without the webhook nothing would ever reach it.
-    console.error(`${RED}webhook.staging requires webhooks — set "webhook": { "enabled": true } in the manifest.${RESET}`);
-    process.exit(1);
-  }
-
-  if (manifest.replicas) body.replicas = manifest.replicas;
-  if (manifest.public !== undefined) body.public = manifest.public;
-  if (manifest.memory_mb) body.memory_mb = manifest.memory_mb;
-  if (manifest.cpu_limit) body.cpu_limit = manifest.cpu_limit;
-  // health_check is one nested object in the manifest; the wire request stays
-  // flat. Only send the path when the probe isn't disabled, so a contradictory
-  // { enabled: false, path } can't reach (and be rejected by) the server.
-  if (manifest.health_check?.enabled === false) body.health_check = false;
-  if (manifest.health_check?.mode) body.health_check_mode = manifest.health_check.mode;
-  if (manifest.health_check?.mode) body.health_check = manifest.health_check.mode === "http";
-  if (manifest.health_check?.command) body.health_check_command = manifest.health_check.command;
-  if (manifest.health_check?.file) body.health_check_file = manifest.health_check.file;
-  if (manifest.health_check?.max_age_seconds)
-    body.health_check_max_age_seconds = manifest.health_check.max_age_seconds;
-  if (manifest.internal_protocol) body.internal_protocol = manifest.internal_protocol;
-  if (manifest.sticky) body.sticky = true;
-  if (manifest.rate_limit_rps !== undefined) body.rate_limit_rps = manifest.rate_limit_rps;
-  if (manifest.ip_allowlist) body.ip_allowlist = manifest.ip_allowlist;
-  if (manifest.health_check?.enabled !== false && manifest.health_check?.path)
-    body.health_check_path = manifest.health_check.path;
-  if (manifest.compress) body.compress = true;
-  if (manifest.public_port !== undefined) body.public_port = manifest.public_port;
-  if (manifest.public_protocol) body.public_protocol = manifest.public_protocol;
-
-  if (manifest.volume?.size) {
-    body.volume_size = manifest.volume.size;
-    body.volume_path = manifest.volume.path || "/data";
-  }
-
-  if (manifest.extra_volumes?.length) body.extra_volumes = manifest.extra_volumes;
-
-  // Durability policy applies to every path.
-  if (manifest.durability_class) body.durability_class = manifest.durability_class;
-  if (manifest.placement_pool) body.placement_pool = manifest.placement_pool;
-  if (manifest.scale_to_zero_after !== undefined)
-    body.scale_to_zero_after = manifest.scale_to_zero_after;
-
-  // Unified env resolution: manifest defaults + --set, layered on top of a
-  // linked environment when one is given. Existing env values win; --set
-  // overrides everything.
-  let existingKeys = new Set<string>();
   const existingApps = await get<Array<{ id: number; name: string; environment_id?: number | null; config_revision?: number }>>("/api/apps");
   const existingApp = existingApps.find((a) => a.name === body.app_name);
-
-  if (envName) {
-    const env = await resolveEnvironment(envName);
-    body.environment_id = env.id;
-    existingKeys = new Set((env.env_vars || []).map((v) => v.key));
-    console.log(`${DIM}Env:${RESET}      ${env.name}`);
-  } else if (existingApp?.environment_id != null) {
-    // A repeated `ocd deploy` applies manifest defaults to the app's existing
-    // environment with existing values winning. This mirrors stack re-ups and
-    // prevents a harmless code deploy from silently replacing a UI-edited env
-    // value with its old manifest default. Explicit --set still wins.
+  let valueEnvironment = environment;
+  if (manifest.environment === undefined && existingApp?.environment_id != null) {
     const environments = await get<Environment[]>("/api/environments");
-    const current = environments.find((env) => env.id === existingApp.environment_id);
-    existingKeys = new Set((current?.env_vars || []).map((v) => v.key));
+    valueEnvironment = environments.find((candidate) =>
+      candidate.id === existingApp.environment_id
+    ) ?? null;
   }
+  const existingKeys = new Set(
+    (valueEnvironment?.env_vars || []).map((value) => value.key),
+  );
 
   const merged = mergeEnv([{ app: body.app_name, defs: manifest.env || [] }], sets, existingKeys);
   const entries = [...merged.entries, ...(await promptRequired(merged.requiredMissing))];
-  if (entries.length > 0) body.env_vars = entries;
+  body.env_vars = entries;
 
   if (dryRun) {
     const existing = existingApp;

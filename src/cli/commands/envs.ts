@@ -1,4 +1,4 @@
-import { get, post, put, del, resolveApp } from "../api.ts";
+import { get, post, put, del } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, YELLOW, table } from "../format.ts";
 import { webConfirm } from "../confirm.ts";
@@ -202,31 +202,6 @@ async function renameEnv(nameOrId: string, newName: string): Promise<void> {
   const env = await resolveEnv(nameOrId);
   await put(`/api/environments/${env.id}`, { name: newName });
   console.log(`${GREEN}Renamed ${BOLD}${env.name}${RESET}${GREEN} → ${BOLD}${newName}${RESET}`);
-}
-
-async function attachApp(nameOrId: string, appRef: string): Promise<void> {
-  const env = await resolveEnv(nameOrId);
-  const app = await resolveApp(appRef);
-  const result = await post<{ ok: boolean; op_id: number | null }>(
-    `/api/environments/${env.id}/apps`,
-    { app_id: app.id },
-  );
-  console.log(`${GREEN}Attached ${BOLD}${app.name}${RESET}${GREEN} to ${BOLD}${env.name}${RESET}`);
-  if (result.op_id != null) {
-    console.log(`${YELLOW}Redeploying ${app.name} with the environment…${RESET}`);
-    const op = await followOp(result.op_id);
-    if (!op.ok) throw new Error(op.error || "Environment attach redeploy failed");
-  }
-}
-
-async function detachApp(nameOrId: string, appRef: string): Promise<void> {
-  const env = await resolveEnv(nameOrId);
-  const app = await resolveApp(appRef);
-  await post(`/api/environments/${env.id}/apps/detach`, { app_id: app.id });
-  console.log(
-    `${GREEN}Detached ${BOLD}${app.name}${RESET}${GREEN} from ${BOLD}${env.name}${RESET}. ` +
-      `${DIM}The running container keeps its current values until it is recreated.${RESET}`,
-  );
 }
 
 async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
@@ -463,24 +438,6 @@ export async function envs(args: string[]): Promise<void> {
     return;
   }
 
-  if (sub === "attach") {
-    if (!args[1] || !args[2]) {
-      console.error("Usage: ocd envs attach <name|id> <app>");
-      process.exit(1);
-    }
-    await attachApp(args[1], args[2]);
-    return;
-  }
-
-  if (sub === "detach") {
-    if (!args[1] || !args[2]) {
-      console.error("Usage: ocd envs detach <name|id> <app>");
-      process.exit(1);
-    }
-    await detachApp(args[1], args[2]);
-    return;
-  }
-
   if (sub === "set") {
     if (!args[1]) {
       console.error("Usage: ocd envs set <name|id> KEY=VALUE [--secret KEY=VALUE] ... [--replace]");
@@ -581,8 +538,6 @@ ${BOLD}Commands:${RESET}
   create <name> [vars...]    Create a new environment
   copy <name|id> <new-name>  Duplicate an environment (secrets included)
   rename <name|id> <new-name> Rename an environment without changing variables
-  attach <name|id> <app>     Move an app to this environment and redeploy it
-  detach <name|id> <app>     Remove the app's environment link (no rollout)
   set <name|id> [vars...]    Merge variables into env
   unset <name|id> KEY...     Remove variables from env
   deleted                    List recoverable deleted environments

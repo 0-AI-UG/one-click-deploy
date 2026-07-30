@@ -3,7 +3,11 @@ useTempDataDir();
 
 import { describe, expect, test } from "bun:test";
 import * as db from "./db.ts";
-import { applyAppConfig, diffAppConfig } from "./app-config.ts";
+import {
+  applyAppConfig,
+  diffAppConfig,
+  mergeDeployRequestWithExistingApp,
+} from "./app-config.ts";
 import { serializeEnvVars } from "./env-crypto.ts";
 
 function seedApp() {
@@ -46,6 +50,14 @@ describe("desired app configuration", () => {
       scale_to_zero_after: 300,
       manifest_path: ".ocd-deploy.json",
       manifest_hash: "abc123",
+      apply_mode: "manifest" as const,
+      autoscale_enabled: true,
+      min_replicas: 2,
+      max_replicas: 5,
+      autoscale_cpu_threshold: 70,
+      autoscale_mem_threshold: 75,
+      autoscale_req_threshold: 100,
+      autoscale_cooldown: 180,
     };
 
     expect(diffAppConfig(app, req).map((c) => c.field)).toContain("git_repo");
@@ -63,6 +75,13 @@ describe("desired app configuration", () => {
     expect(updated.desired_replicas).toBe(2);
     expect(updated.durability_class).toBe("standard");
     expect(updated.placement_pool).toBe("workers");
+    expect(updated.autoscale_enabled).toBe(1);
+    expect(updated.min_replicas).toBe(2);
+    expect(updated.max_replicas).toBe(5);
+    expect(updated.autoscale_cpu_threshold).toBe(70);
+    expect(updated.autoscale_mem_threshold).toBe(75);
+    expect(updated.autoscale_req_threshold).toBe(100);
+    expect(updated.autoscale_cooldown).toBe(180);
     expect(updated.last_manifest_path).toBe(".ocd-deploy.json");
     expect(updated.last_manifest_hash).toBe("abc123");
     expect(updated.last_manifest_config_revision).toBe(updated.config_revision);
@@ -78,6 +97,69 @@ describe("desired app configuration", () => {
     });
     expect(db.getApp(app.id)?.environment_id).toBe(env.id);
     expect(db.getEnvironment(env.id)).not.toBeNull();
+  });
+
+  test("patch mode preserves scaling, bind mounts, and environment", () => {
+    const { app, env } = seedApp();
+    db.updateAppScaling(app.id, {
+      desired_replicas: 2,
+      min_replicas: 0,
+      max_replicas: 6,
+      autoscale_enabled: true,
+      autoscale_cpu_threshold: 65,
+      autoscale_mem_threshold: 70,
+      autoscale_req_threshold: 90,
+      autoscale_cooldown: 120,
+      scale_to_zero_after: 600,
+    });
+    db.updateAppExtraVolumes(app.id, ["/srv/data:/data"]);
+    const current = db.getApp(app.id)!;
+    const merged = mergeDeployRequestWithExistingApp(current, {
+      apply_mode: "patch",
+      app_name: app.name,
+      public: false,
+    });
+    expect(merged.replicas).toBe(2);
+    expect(merged.min_replicas).toBe(0);
+    expect(merged.max_replicas).toBe(6);
+    expect(merged.autoscale_enabled).toBe(true);
+    expect(merged.extra_volumes).toEqual([
+      { host_path: "/srv/data", container_path: "/data" },
+    ]);
+    expect(merged.environment_id).toBe(env.id);
+  });
+
+  test("manifest mode resets omitted fields and supports explicit detach", async () => {
+    const { app } = seedApp();
+    db.updateAppScaling(app.id, {
+      desired_replicas: 3,
+      min_replicas: 2,
+      max_replicas: 8,
+      autoscale_enabled: true,
+      autoscale_cpu_threshold: 60,
+    });
+    db.updateAppExtraVolumes(app.id, ["/srv/data:/data"]);
+    await applyAppConfig(app.id, {
+      apply_mode: "manifest",
+      app_name: app.name,
+      git_repo: app.git_repo,
+      container_port: 3000,
+      environment_id: null,
+      health_check: false,
+    });
+    const updated = db.getApp(app.id)!;
+    expect(updated.environment_id).toBeNull();
+    expect(updated.health_check).toBe(0);
+    expect(updated.health_check_mode).toBe("container");
+    expect(updated.desired_replicas).toBe(1);
+    expect(updated.min_replicas).toBe(1);
+    expect(updated.max_replicas).toBe(1);
+    expect(updated.autoscale_enabled).toBe(0);
+    expect(updated.autoscale_cpu_threshold).toBe(80);
+    expect(updated.autoscale_mem_threshold).toBe(85);
+    expect(updated.autoscale_req_threshold).toBe(0);
+    expect(updated.autoscale_cooldown).toBe(300);
+    expect(db.parseExtraVolumes(updated.extra_volumes)).toEqual([]);
   });
 
   test("editing a linked environment advances the desired-config revision", () => {

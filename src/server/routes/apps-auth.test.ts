@@ -26,7 +26,7 @@ mock.module("../../engine/scale/traefik-manager.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import { handleApplyAppConfig, handleGetApps } from "./apps.ts";
+import { handleDeploy, handleGetApps } from "./apps.ts";
 
 function makeApp(overrides: Partial<Parameters<typeof db.insertApp>[0]> = {}) {
   return db.insertApp({
@@ -42,9 +42,15 @@ function makeApp(overrides: Partial<Parameters<typeof db.insertApp>[0]> = {}) {
 }
 
 const configReq = (appId: number, body: unknown) =>
-  handleApplyAppConfig(
-    new Request(`http://x/api/apps/${appId}/config`, { method: "PUT", body: JSON.stringify(body) }),
-    appId,
+  handleDeploy(
+    new Request("http://x/api/apps/deploy", {
+      method: "POST",
+      body: JSON.stringify({
+        ...(body as Record<string, unknown>),
+        app_name: db.getApp(appId)!.name,
+        apply_mode: "patch",
+      }),
+    }),
   );
 
 describe("app response scrubbing", () => {
@@ -76,7 +82,7 @@ describe("app response scrubbing", () => {
   });
 });
 
-describe("config endpoint: password set/clear", () => {
+describe("unified deploy endpoint: patch-mode password set/clear", () => {
   test("setting a password stores only the hash and enables auth", async () => {
     const app = makeApp();
     const res = await configReq(app.id, { auth_password: "s3cret", deploy: false });
@@ -128,5 +134,79 @@ describe("config endpoint: password set/clear", () => {
     const res = await configReq(app.id, { internal_protocol: "tcp", deploy: false });
     expect(res.status).toBe(200);
     expect(db.getApp(app.id)!.internal_protocol).toBe("tcp");
+  });
+});
+
+describe("unified deploy endpoint contract", () => {
+  test("requires an explicit apply_mode", async () => {
+    const app = makeApp();
+    const res = await handleDeploy(new Request("http://x/api/apps/deploy", {
+      method: "POST",
+      body: JSON.stringify({ app_name: app.name }),
+    }));
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toMatchObject({
+      error: 'apply_mode must be "manifest" or "patch"',
+    });
+  });
+
+  test("requires manifest mode for a first deploy", async () => {
+    const res = await handleDeploy(new Request("http://x/api/apps/deploy", {
+      method: "POST",
+      body: JSON.stringify({
+        app_name: `missing-${Math.random().toString(36).slice(2, 8)}`,
+        apply_mode: "patch",
+      }),
+    }));
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: string }).error).toMatch(/First deploy requires apply_mode "manifest"/);
+  });
+
+  test("a partial patch preserves omitted scaling bounds and bind mounts", async () => {
+    const app = makeApp();
+    db.updateAppScaling(app.id, {
+      desired_replicas: 2,
+      min_replicas: 0,
+      max_replicas: 5,
+    });
+    db.updateAppExtraVolumes(app.id, ["/srv/app-cache:/cache"]);
+
+    const res = await configReq(app.id, { rate_limit_rps: 7, deploy: false });
+    expect(res.status).toBe(200);
+    const updated = db.getApp(app.id)!;
+    expect(updated.rate_limit_rps).toBe(7);
+    expect(updated.desired_replicas).toBe(2);
+    expect(updated.min_replicas).toBe(0);
+    expect(updated.max_replicas).toBe(5);
+    expect(db.parseExtraVolumes(updated.extra_volumes)).toEqual(["/srv/app-cache:/cache"]);
+  });
+
+  test("manifest mode applies complete defaults instead of patch preservation", async () => {
+    const app = makeApp({ sticky: true });
+    db.updateAppMemory(app.id, 1024);
+    const res = await handleDeploy(new Request("http://x/api/apps/deploy", {
+      method: "POST",
+      body: JSON.stringify({
+        app_name: app.name,
+        apply_mode: "manifest",
+        git_repo: app.git_repo,
+        container_port: app.container_port,
+        deploy: false,
+      }),
+    }));
+    expect(res.status).toBe(200);
+    const updated = db.getApp(app.id)!;
+    expect(updated.sticky).toBe(0);
+    expect(updated.memory_mb).toBe(0);
+  });
+
+  test("an empty patch enqueues a code-only redeploy without applying config", async () => {
+    const app = makeApp();
+    const res = await configReq(app.id, {});
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { applied: boolean; changes: unknown[]; op_id: number | null };
+    expect(body.applied).toBe(false);
+    expect(body.changes).toEqual([]);
+    expect(body.op_id).toBeNumber();
   });
 });

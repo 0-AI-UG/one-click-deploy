@@ -1,12 +1,11 @@
-import { useEffect, useState } from "react";
-import { get, post, put } from "../../api/client.ts";
+import { useState } from "react";
+import { get, post } from "../../api/client.ts";
 import { Card, Btn, Checkbox, Spinner, Table, Field, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { NeoSelect } from "../../components/neo-select.tsx";
 import { Zap, Gauge, History } from "lucide-react";
 import { InfoTip } from "./shared.tsx";
 import { trackOperationInToast, humanizeStep, type ResourceOpsResult } from "../../hooks/useOperation.ts";
-import type { AppData, ReplicaData, ScalingEvent, ResourceServer } from "../../types.ts";
+import type { AppData, ReplicaData, ScalingEvent } from "../../types.ts";
 
 interface ScalingPolicy {
   autoscale_enabled: boolean;
@@ -39,26 +38,15 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
   // HTTP-routed apps (raw-TCP apps have none). Matches the engine predicate.
   const httpRouted = app.internal_protocol !== "tcp";
   const volumeLockedReason = "Apps with persistent storage cannot scale above 1 replica; a cloud volume can only be attached to a single server at a time.";
-  // No custom-domain requirement: the panel is the sole public ingress and
-  // load-balances across replicas over the private network, so nip.io
-  // auto-domains scale just like custom domains. Only volumes lock an app to
-  // a single replica.
-  const [selectedServer, setSelectedServer] = useState<string>("");
-  const [servers, setServers] = useState<ResourceServer[]>([]);
-
-  // Fetch available servers for the server picker
-  useEffect(() => {
-    get("/api/resources")
-      .then((res: any) => {
-        setServers((res.servers || []).filter((s: any) => s.status === "ready"));
-      })
-      .catch(() => {});
-  }, []);
-
   const runScale = async (target: number): Promise<void> => {
-    const body: { replicas: number; server_id?: number } = { replicas: target };
-    if (selectedServer) body.server_id = parseInt(selectedServer, 10);
-    const res = (await post(`/api/apps/${appId}/scale`, body)) as { op_id: number | null };
+    const res = (app.status === "sleeping" || app.status === "waking") && target >= 1
+      ? (await post(`/api/apps/${appId}/wake`)) as { op_id: number | null }
+      : (await post("/api/apps/deploy", {
+          app_name: app.name,
+          apply_mode: "patch",
+          deploy: false,
+          replicas: target,
+        })) as { op_id: number | null };
 
     // Waking a sleeping app still runs as a tracked operation.
     if (res.op_id) {
@@ -131,27 +119,7 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
                 ))}
               </div>
             )}
-            {servers.length >= 2 && (
-              <div className="w-36 mr-1">
-                <NeoSelect
-                  value={selectedServer}
-                  onChange={setSelectedServer}
-                  options={[
-                    { value: "", label: "Auto" },
-                    ...servers.map((s) => ({
-                      value: String(s.id),
-                      label: `${s.name.replace(/^ocd-/, "")}${
-                        s.cpu_percent != null && s.cpu_cores
-                          ? ` ${((s.cpu_percent / 100) * s.cpu_cores).toFixed(1)}/${s.cpu_cores} vCPU`
-                          : s.cpu_percent != null ? ` ${s.cpu_percent}%` : ""
-                      }`,
-                    })),
-                  ]}
-                  compact
-                />
-              </div>
-            )}
-        <PermissionGate permission="scaling.scale" appId={appId} environmentId={app.environment_id}>
+        <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
           <div className="flex gap-1">
             {app.status === "sleeping" && (
               <Btn
@@ -302,14 +270,26 @@ export function ScalingTab({ app, appId, replicas, scalingEvents, policy, setPol
               )}
             </div>
 
-            <PermissionGate permission="scaling.policy" appId={appId} environmentId={app.environment_id}>
+            <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
               <div className="flex justify-end">
                 <Btn
                   size="sm"
                   variant="primary"
                   loading={actionLoading === "policy"}
                   onClick={() => action("policy", async () => {
-                    await put(`/api/apps/${appId}/scaling-policy`, policy);
+                    await post("/api/apps/deploy", {
+                      app_name: app.name,
+                      apply_mode: "patch",
+                      deploy: false,
+                      autoscale_enabled: policy.autoscale_enabled,
+                      min_replicas: policy.min_replicas,
+                      max_replicas: policy.max_replicas,
+                      autoscale_cpu_threshold: policy.cpu_threshold,
+                      autoscale_mem_threshold: policy.mem_threshold,
+                      autoscale_req_threshold: policy.req_threshold,
+                      autoscale_cooldown: policy.cooldown,
+                      scale_to_zero_after: policy.scale_to_zero_after,
+                    });
                     await load();
                   })}
                 >Save Policy</Btn>

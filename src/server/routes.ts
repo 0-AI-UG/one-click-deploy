@@ -22,8 +22,6 @@ import {
   handleRestartApp,
   handlePauseApp,
   handleUnpauseApp,
-  handleRedeployApp,
-  handleApplyAppConfig,
   handleRenameApp,
   handleGetContainerLogs,
   handleGetDeployLog,
@@ -38,12 +36,9 @@ import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./r
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail, handleRenameVolume, handleGetVolumeDeletionAudit } from "./routes/resources.ts";
 import { handleGetTopology } from "./routes/topology.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
-import { handleScaleApp, handleUpdateScalingPolicy, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
+import { handleWakeApp, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
 import { handleGetAvailability } from "./routes/availability.ts";
 import {
-  handleEnableWebhook,
-  handleUpdateWebhookSettings,
-  handleDisableWebhook,
   handleGithubWebhook,
   handlePanelGithubWebhook,
   handleEnablePanelWebhook,
@@ -75,8 +70,6 @@ import {
   handleRestoreEnvironment,
   handlePurgeEnvironment,
   handleGetEnvironmentApps,
-  handleAttachAppToEnvironment,
-  handleDetachAppFromEnvironment,
 } from "./routes/environments.ts";
 import {
   handleListOperations,
@@ -109,9 +102,7 @@ import {
   handleGetStackLog,
   handleGetStackMemberLogs,
   handleDestroyStack,
-  handleRedeployStack,
   handlePromoteStack,
-  handleUpdateStack,
 } from "./routes/stacks.ts";
 import { VERSION } from "../shared/version.ts";
 
@@ -272,8 +263,6 @@ export const apiRoutes = {
   "/api/apps/:appId/restart": { POST: (req: Request) => handleRestartApp(req, appIdFrom(req)) },
   "/api/apps/:appId/pause": { POST: (req: Request) => handlePauseApp(req, appIdFrom(req)) },
   "/api/apps/:appId/unpause": { POST: (req: Request) => handleUnpauseApp(req, appIdFrom(req)) },
-  "/api/apps/:appId/redeploy": { POST: (req: Request) => handleRedeployApp(req, appIdFrom(req)) },
-  "/api/apps/:appId/config": { PUT: (req: Request) => handleApplyAppConfig(req, appIdFrom(req)) },
   "/api/apps/:appId/rename": { PUT: (req: Request) => handleRenameApp(req, appIdFrom(req)) },
   "/api/apps/:appId/logs": { GET: (req: Request) => handleGetContainerLogs(req, appIdFrom(req)) },
   "/api/apps/:appId/deploy-log": { GET: (req: Request) => handleGetDeployLog(req, appIdFrom(req)) },
@@ -282,19 +271,13 @@ export const apiRoutes = {
   "/api/apps/:appId/staging": { GET: (req: Request) => handleGetAppStaging(req, appIdFrom(req)) },
 
   // Scaling
-  "/api/apps/:appId/scale": { POST: (req: Request) => handleScaleApp(req, appIdFrom(req)) },
-  "/api/apps/:appId/scaling-policy": { PUT: (req: Request) => handleUpdateScalingPolicy(req, appIdFrom(req)) },
+  "/api/apps/:appId/wake": { POST: (req: Request) => handleWakeApp(req, appIdFrom(req)) },
   "/api/apps/:appId/replicas": { GET: (req: Request) => handleGetReplicas(req, appIdFrom(req)) },
   "/api/apps/:appId/replicas/:replicaId/migrate": { POST: (req: Request) => handleMigrateReplica(req, appIdFrom(req), replicaIdFrom(req)) },
   "/api/apps/:appId/scaling-events": { GET: (req: Request) => handleGetScalingEvents(req, appIdFrom(req)) },
   "/api/apps/:appId/metrics": { GET: (req: Request) => handleGetAppMetrics(req, appIdFrom(req)) },
   "/api/apps/:appId/metrics/history": { GET: (req: Request) => handleGetAppMetricsHistory(req, appIdFrom(req)) },
   "/api/apps/:appId/availability": { GET: (req: Request) => handleGetAvailability(req, appIdFrom(req)) },
-
-  // Webhooks
-  "/api/apps/:appId/webhook/enable": { POST: (req: Request) => handleEnableWebhook(req, appIdFrom(req)) },
-  "/api/apps/:appId/webhook/settings": { POST: (req: Request) => handleUpdateWebhookSettings(req, appIdFrom(req)) },
-  "/api/apps/:appId/webhook/disable": { POST: (req: Request) => handleDisableWebhook(req, appIdFrom(req)) },
 
   // Public GitHub webhook receiver for the panel itself (HMAC verified)
   "/webhooks/github/panel": {
@@ -314,8 +297,8 @@ export const apiRoutes = {
 
   // (Wake is now transparent: sleeping apps' Traefik routers point at the
   // in-process hold-and-forward waker — see src/engine/scale/waker.ts. There is
-  // no browser wake page or token dance. The dashboard "wake" button just scales
-  // a sleeping app up, which routes through the wake op via handleScaleApp.)
+  // no browser wake page or token dance. Explicit wake actions use the
+  // dedicated operational endpoint and never mutate desired app config.)
 
   // --- Admin: Settings ---
   "/api/admin/settings": {
@@ -421,10 +404,6 @@ export const apiRoutes = {
   },
   "/api/environments/:id/apps": {
     GET: (req: Request) => handleGetEnvironmentApps(req, environmentIdFrom(req)),
-    POST: (req: Request) => handleAttachAppToEnvironment(req, environmentIdFrom(req)),
-  },
-  "/api/environments/:id/apps/detach": {
-    POST: (req: Request) => handleDetachAppFromEnvironment(req, environmentIdFrom(req)),
   },
 
   // --- Stacks ---
@@ -434,11 +413,7 @@ export const apiRoutes = {
   },
   "/api/stacks/:id": {
     GET: (req: Request) => handleGetStack(req, stackIdFrom(req)),
-    PATCH: (req: Request) => handleUpdateStack(req, stackIdFrom(req)),
     DELETE: (req: Request) => handleDestroyStack(req, stackIdFrom(req)),
-  },
-  "/api/stacks/:id/redeploy": {
-    POST: (req: Request) => handleRedeployStack(req, stackIdFrom(req)),
   },
   "/api/stacks/:id/promote": {
     POST: (req: Request) => handlePromoteStack(req, stackIdFrom(req)),

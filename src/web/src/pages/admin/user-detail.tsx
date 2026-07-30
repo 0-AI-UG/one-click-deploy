@@ -33,7 +33,6 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
     label: "Apps",
     permissions: [
       { key: "apps.deploy", label: "Deploy new apps" },
-      { key: "apps.redeploy", label: "Redeploy existing apps" },
       { key: "apps.rollback", label: "Rollback deployments" },
       { key: "apps.restart", label: "Restart containers" },
       { key: "apps.pause", label: "Pause/unpause apps" },
@@ -41,9 +40,6 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
       { key: "apps.logs", label: "View app logs" },
       { key: "apps.rename", label: "Rename apps" },
       { key: "apps.promote", label: "Promote staging to production" },
-      { key: "apps.ingress", label: "Auth, sticky, rate limit, allowlist, health check" },
-      { key: "apps.expose", label: "Publish an app on a public fleet port" },
-      { key: "webhooks.manage", label: "Enable/disable deploy webhooks" },
     ],
   },
   {
@@ -61,7 +57,6 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
     permissions: [
       { key: "stacks.view", label: "View stacks" },
       { key: "stacks.deploy", label: "Deploy/redeploy stacks" },
-      { key: "stacks.settings", label: "Edit stack settings (staging environment)" },
       { key: "stacks.promote", label: "Promote a stack's staging members" },
       { key: "stacks.destroy", label: "Destroy stacks" },
     ],
@@ -76,8 +71,6 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
   {
     label: "Scaling",
     permissions: [
-      { key: "scaling.scale", label: "Manual scale and wake" },
-      { key: "scaling.policy", label: "Edit the autoscaling policy" },
       { key: "scaling.migrate", label: "Migrate replicas between servers" },
     ],
   },

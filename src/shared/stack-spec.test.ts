@@ -14,6 +14,7 @@ describe("buildStackAppSpec", () => {
         container_port: 8080,
       },
       env_projection: ["DATABASE_URL"],
+      environment: "production",
       replicas: 3,
       public: true,
       memory_mb: 1024,
@@ -29,6 +30,15 @@ describe("buildStackAppSpec", () => {
       durability_class: "high",
       placement_pool: "production",
       scale_to_zero_after: 0,
+      autoscaling: {
+        enabled: true,
+        min_replicas: 2,
+        max_replicas: 6,
+        cpu_threshold: 75,
+        memory_threshold: 80,
+        requests_per_minute: 120,
+        cooldown_seconds: 180,
+      },
       volume: { size: 20, path: "/var/lib/app" },
       extra_volumes: [{ host_path: "/srv/shared", container_path: "/shared" }],
       webhook: {
@@ -37,6 +47,7 @@ describe("buildStackAppSpec", () => {
         path: "services/api",
         wait_for_ci: true,
         staging: true,
+        staging_environment: "staging",
       },
     };
     const entry: StackManifest["apps"][string] = {
@@ -57,6 +68,7 @@ describe("buildStackAppSpec", () => {
 
     expect(spec).toMatchObject({
       key: "api",
+      apply_mode: "manifest",
       needs: ["database"],
       domain: "stack.example.com",
       git_branch: "release",
@@ -64,6 +76,7 @@ describe("buildStackAppSpec", () => {
       docker_context: "services/api",
       container_port: 8080,
       env_projection: ["DATABASE_URL", "JWT_SECRET"],
+      environment: "production",
       replicas: 3,
       public: false,
       memory_mb: 1024,
@@ -79,6 +92,13 @@ describe("buildStackAppSpec", () => {
       durability_class: "high",
       placement_pool: "production",
       scale_to_zero_after: 0,
+      autoscale_enabled: true,
+      min_replicas: 2,
+      max_replicas: 6,
+      autoscale_cpu_threshold: 75,
+      autoscale_mem_threshold: 80,
+      autoscale_req_threshold: 120,
+      autoscale_cooldown: 180,
       volume_size: 20,
       volume_path: "/var/lib/app",
       extra_volumes: [{ host_path: "/srv/shared", container_path: "/shared" }],
@@ -87,6 +107,7 @@ describe("buildStackAppSpec", () => {
       webhook_path: "services/api",
       webhook_wait_for_ci: true,
       webhook_staging: true,
+      webhook_staging_environment: "staging",
     });
   });
 

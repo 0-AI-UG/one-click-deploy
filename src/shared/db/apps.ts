@@ -744,7 +744,7 @@ export function updateAppWebhookStagingEnvironment(id: number, environmentId: nu
     .run(environmentId, environmentId != null ? 1 : 0, id);
 }
 
-export function updateAppScaling(id: number, fields: {
+export type AppScalingUpdate = {
   desired_replicas?: number;
   min_replicas?: number;
   max_replicas?: number;
@@ -755,7 +755,9 @@ export function updateAppScaling(id: number, fields: {
   autoscale_req_threshold?: number;
   scale_to_zero_after?: number;
   last_scale_at?: string;
-}): void {
+};
+
+export function updateAppScaling(id: number, fields: AppScalingUpdate): void {
   const sets: string[] = [];
   const values: (string | number)[] = [];
   if (fields.desired_replicas !== undefined) { sets.push("desired_replicas = ?"); values.push(fields.desired_replicas); }

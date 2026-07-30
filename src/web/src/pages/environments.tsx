@@ -129,7 +129,13 @@ export function EnvironmentsPage() {
 
   const attachApp = async (envId: number, appId: number) => {
     try {
-      await post(`/api/environments/${envId}/apps`, { app_id: appId });
+      const app = allApps.find((candidate) => candidate.id === appId);
+      if (!app) throw new Error("App not found");
+      await post("/api/apps/deploy", {
+        app_name: app.name,
+        apply_mode: "patch",
+        environment_id: envId,
+      });
       showToast("App attached, redeploying", "success");
       load();
     } catch (err: any) {
@@ -139,8 +145,14 @@ export function EnvironmentsPage() {
 
   const detachApp = async (envId: number, appId: number) => {
     try {
-      await post(`/api/environments/${envId}/apps/detach`, { app_id: appId });
-      showToast("App detached", "success");
+      const app = allApps.find((candidate) => candidate.id === appId);
+      if (!app) throw new Error("App not found");
+      await post("/api/apps/deploy", {
+        app_name: app.name,
+        apply_mode: "patch",
+        environment_id: null,
+      });
+      showToast("App detached, redeploying", "success");
       load();
     } catch (err: any) {
       showToast(err.message || "Failed to detach", "error");

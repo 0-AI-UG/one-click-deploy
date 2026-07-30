@@ -1771,10 +1771,10 @@ export const migrations: Migration[] = [
         ["servers.delete", ["servers.delete", "servers.manage"]],
         ["resources.create", ["servers.create"]],
         ["apps.deploy", ["apps.deploy", "apps.rename", "apps.promote"]],
-        ["apps.redeploy", ["apps.redeploy", "apps.ingress", "apps.expose", "panel.manage"]],
+        ["apps.redeploy", ["apps.deploy", "panel.manage"]],
         ["apps.logs", ["apps.logs", "deployments.view", "panel.view"]],
-        ["stacks.deploy", ["stacks.deploy", "stacks.settings", "stacks.promote"]],
-        ["scaling.manage", ["scaling.scale", "scaling.policy", "scaling.migrate"]],
+        ["stacks.deploy", ["stacks.deploy", "stacks.promote"]],
+        ["scaling.manage", ["apps.deploy", "scaling.migrate"]],
         ["volumes.manage", ["volumes.attach", "volumes.detach", "volumes.resize"]],
         ["terminal.access", ["terminal.container", "terminal.host"]],
         ["environments.manage", ["environments.manage", "environments.secrets"]],
@@ -1797,7 +1797,15 @@ export const migrations: Migration[] = [
       );
 
       // Names that no longer exist in ALL_PERMISSIONS.
-      const retired = ["servers.view", "apps.env", "scaling.manage", "volumes.manage", "terminal.access", "resources.create"];
+      const retired = [
+        "servers.view",
+        "apps.env",
+        "apps.redeploy",
+        "scaling.manage",
+        "volumes.manage",
+        "terminal.access",
+        "resources.create",
+      ];
       for (const perm of retired) {
         db.run("DELETE FROM user_permissions WHERE permission = ?", [perm]);
       }
@@ -1956,6 +1964,45 @@ export const migrations: Migration[] = [
         BEGIN
           UPDATE apps SET config_revision = config_revision + 1 WHERE id = NEW.id;
         END`);
+    },
+  },
+  {
+    version: 92,
+    description:
+      "Remove obsolete app settings, ingress, webhook, scaling-policy, manual-scale, and stack-settings grants after consolidating desired configuration under deploy.",
+    up: (db) => {
+      db.run(
+        `INSERT OR IGNORE INTO user_permissions (user_id, permission, scope_type, scope_id)
+         SELECT user_id, 'apps.deploy', 'global', NULL
+         FROM user_permissions
+         WHERE scope_type = 'global'
+           AND permission IN (
+             'apps.redeploy',
+             'apps.ingress',
+             'apps.expose',
+             'webhooks.manage',
+             'scaling.scale',
+             'scaling.policy'
+           )`,
+      );
+      db.run(
+        `INSERT OR IGNORE INTO user_permissions (user_id, permission, scope_type, scope_id)
+         SELECT user_id, 'stacks.deploy', 'global', NULL
+         FROM user_permissions
+         WHERE scope_type = 'global' AND permission = 'stacks.settings'`,
+      );
+      db.run(
+        `DELETE FROM user_permissions
+         WHERE permission IN (
+           'apps.redeploy',
+           'apps.ingress',
+           'apps.expose',
+           'webhooks.manage',
+           'scaling.scale',
+           'scaling.policy',
+           'stacks.settings'
+         )`,
+      );
     },
   },
 ];

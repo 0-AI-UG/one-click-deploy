@@ -446,7 +446,7 @@ const plan: Step<DeployStackInput, PlanOut> = {
     // stack owns exactly ONE staging environment, every staging member uses it,
     // and no member can override it. An explicit value wins (null clears it),
     // otherwise the stack keeps what it already had — so a re-up needn't
-    // re-pass --staging-env, exactly like --env.
+    // repeat the staging_environment field, exactly like environment.
     //
     // Runs AFTER the env-var write so an auto-created copy inherits them.
     const wantsStaging = req.apps.some((a) => a.webhook_staging);
@@ -746,7 +746,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
         // child `deploy` above already carries it for NEW members, but reused
         // members took the `redeploy` path (which never touches webhook config),
         // so this is what actually reconciles them — and what turns staging OFF
-        // when a re-up drops webhook.staging or clears --staging-env.
+        // when a deploy drops webhook.staging or clears staging_environment.
         let desiredStagingEnv = stagingEnvFor(key);
         // Staging is driven by the webhook, and only the `deploy` path registers
         // one — `redeploy` (the path every pre-existing member takes) touches no
