@@ -13,10 +13,15 @@ export async function handleGetPanel(request: Request): Promise<Response> {
     if (!panel) {
       return Response.json({ panel: null }, { headers: corsHeaders });
     }
+    const {
+      env_vars: _envVars,
+      webhook_secret: _webhookSecret,
+      ...safePanel
+    } = panel;
     const server = db.getServer(panel.server_id);
     return Response.json(
       {
-        panel,
+        panel: safePanel,
         server: server || null,
         deploy_log: db.getPanelDeployLog(),
       },
