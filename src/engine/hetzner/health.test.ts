@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   assessContainerInspection,
   assessMarkerFreshness,
+  dockerExecScriptCommand,
   parseContainerInspection,
 } from "./health.ts";
 
@@ -62,6 +63,22 @@ describe("docker container state health", () => {
       restartCount: 7,
       startedAt: "2026-07-27T10:00:00Z",
     }, now).runnable).toBe(true);
+  });
+});
+
+describe("service exec command transport", () => {
+  test("preserves scripts containing nested single and double quotes", () => {
+    const script = `psql -c "DO \\$\\$ BEGIN RAISE NOTICE 'ready'; END \\$\\$;"`;
+    const command = dockerExecScriptCommand("foody-postgres", script);
+    const encoded = Buffer.from(script, "utf8").toString("base64");
+
+    expect(command).toContain(encoded);
+    expect(command).not.toContain(script);
+    expect(Buffer.from(encoded, "base64").toString("utf8")).toBe(script);
+  });
+
+  test("rejects unsafe container names", () => {
+    expect(() => dockerExecScriptCommand("db; reboot", "true")).toThrow("Invalid container name");
   });
 });
 

@@ -20,6 +20,10 @@ import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
 import { applyAppConfig } from "../../shared/app-config.ts";
+import { validateDeployRequest, assertSafeHostPath, validateRepoBuildPath } from "../../shared/validate.ts";
+import { cloneRepo, findDockerfile, sshExec } from "../../shared/remote/index.ts";
+import { resolveGitHubToken } from "../../shared/github-token.ts";
+import type { Server } from "../../shared/rpc.ts";
 
 type DeployStackInput = StackDeployRequest;
 
@@ -52,6 +56,7 @@ type PlanOut = {
 };
 
 type EnqueueChildrenOut = { childIds: number[] };
+type PreflightOut = { checkedApps: string[]; skippedRemoteApps: string[] };
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -284,7 +289,7 @@ async function teardownNewApps(ctx: OpContext<DeployStackInput>): Promise<void> 
     const op = enqueueOperation({
       kind: "destroy_app",
       resourceKeys: [`app:${app.id}`],
-      input: { appId: app.id },
+      input: { appId: app.id, retentionClass: "provisional" },
       trigger: "stack",
       triggeredBy: ctx.triggeredBy,
       parentId: ctx.opId,
@@ -322,7 +327,7 @@ async function teardownNewServices(
     const op = enqueueOperation({
       kind: "destroy_service",
       resourceKeys: [`service:${row.id}`],
-      input: { serviceId: row.id },
+      input: { serviceId: row.id, retentionClass: "provisional" },
       trigger: "stack",
       triggeredBy: ctx.triggeredBy,
       parentId: ctx.opId,
@@ -545,6 +550,131 @@ const plan: Step<DeployStackInput, PlanOut> = {
     if (out.createdStagingEnv && out.stagingEnvironmentId != null) {
       db.deleteEnvironment(out.stagingEnvironmentId);
     }
+  },
+};
+
+/**
+ * Validate every child before a managed service can allocate persistent
+ * storage. When a ready build host exists, also clone each Git source into an
+ * operation-scoped scratch directory and verify its Dockerfile/context. This
+ * catches repository, branch and monorepo path mistakes without creating any
+ * service volume. Scratch checkouts are always removed in the same attempt.
+ */
+const preflightApps: Step<DeployStackInput, PreflightOut> = {
+  name: "preflight_apps",
+  label: "Validate app sources",
+  async run(ctx, prior) {
+    const req = ctx.input;
+    const { stackId } = prior["plan"] as PlanOut;
+    const checkedApps: string[] = [];
+    const skippedRemoteApps: string[] = [];
+    let githubToken: string | null | undefined;
+
+    for (const appReq of req.apps) {
+      const name = memberName(req.name, appReq.key);
+      const validation = validateDeployRequest({ ...appReq, app_name: name });
+      if (!validation.valid) throw new Error(`App "${appReq.key}": ${validation.error}`);
+      for (const volume of appReq.extra_volumes ?? []) {
+        assertSafeHostPath(volume.host_path, name);
+      }
+      if (appReq.image_ref) {
+        checkedApps.push(appReq.key);
+        continue;
+      }
+
+      let server: Server | undefined;
+      if (appReq.server_id) {
+        const target = db.getServer(appReq.server_id) as Server | null;
+        if (!target || target.status !== "ready") {
+          throw new Error(`App "${appReq.key}": target server not found or not ready`);
+        }
+        server = target;
+      } else {
+        server = db.getServers().find((candidate: Server) => candidate.status === "ready") as Server | undefined;
+      }
+      if (!server) {
+        skippedRemoteApps.push(appReq.key);
+        ctx.log(`${appReq.key}: source check deferred because no build server is ready`);
+        continue;
+      }
+
+      if (githubToken === undefined) {
+        githubToken = await resolveGitHubToken(ctx.triggeredBy || undefined);
+      }
+
+      const scratchName = `preflight-${ctx.opId}-${name}`;
+      const scratchDir = `/home/deploy/apps/${scratchName}`;
+      let preflightFailure: unknown;
+      try {
+        await cloneRepo(
+          server.ipv4,
+          scratchName,
+          appReq.git_repo,
+          githubToken || undefined,
+          (line) => ctx.log(`[preflight:${appReq.key}] ${line}`),
+          appReq.git_branch,
+          server.ssh_host_key || undefined,
+        );
+        if (appReq.git_sha) {
+          const checkout = await sshExec(
+            server.ipv4,
+            `su - deploy -c ${JSON.stringify(`cd ${scratchDir} && git checkout --detach ${appReq.git_sha}`)}`,
+            server.ssh_host_key || undefined,
+          );
+          if (checkout.exitCode !== 0) {
+            throw new Error(`Git commit ${appReq.git_sha} is not available in the repository`);
+          }
+        }
+
+        let dockerfile = appReq.dockerfile_path;
+        if (dockerfile) {
+          const pathResult = validateRepoBuildPath(dockerfile, "Dockerfile");
+          if (!pathResult.valid) throw new Error(pathResult.error);
+          dockerfile = pathResult.value;
+        } else {
+          dockerfile = await findDockerfile(server.ipv4, scratchDir, server.ssh_host_key || undefined);
+        }
+        if (!dockerfile) throw new Error("No Dockerfile found in the repository");
+        const discoveredPath = validateRepoBuildPath(dockerfile, "Dockerfile");
+        if (!discoveredPath.valid) throw new Error(discoveredPath.error);
+        dockerfile = discoveredPath.value;
+        const contextResult = validateRepoBuildPath(appReq.docker_context || ".", "Docker context");
+        if (!contextResult.valid) throw new Error(contextResult.error);
+        const paths = await sshExec(
+          server.ipv4,
+          `su - deploy -c ${JSON.stringify(
+            `cd ${scratchDir} && test -f ${dockerfile} && test -d ${contextResult.value}`,
+          )}`,
+          server.ssh_host_key || undefined,
+        );
+        if (paths.exitCode !== 0) {
+          throw new Error(
+            `Dockerfile "${dockerfile}" or build context "${contextResult.value}" does not exist in the repository`,
+          );
+        }
+        checkedApps.push(appReq.key);
+      } catch (error) {
+        preflightFailure = error;
+      }
+      const cleanup = await sshExec(
+        server.ipv4,
+        `su - deploy -c ${JSON.stringify(`rm -rf ${scratchDir}`)}`,
+        server.ssh_host_key || undefined,
+      );
+      if (cleanup.exitCode !== 0) {
+        const original = preflightFailure
+          ? `; original preflight error: ${preflightFailure instanceof Error ? preflightFailure.message : String(preflightFailure)}`
+          : "";
+        throw new Error(`Could not remove preflight checkout ${scratchDir}${original}`);
+      }
+      if (preflightFailure) throw preflightFailure;
+    }
+    db.appendStackLog(
+      stackId,
+      `[preflight] validated ${checkedApps.length} app(s)` +
+        (skippedRemoteApps.length ? `; remote source deferred for ${skippedRemoteApps.join(", ")}` : ""),
+    );
+    return { checkedApps, skippedRemoteApps };
   },
 };
 
@@ -863,7 +993,7 @@ const deployStackOp: OpKindDefinition<DeployStackInput> = {
   kind: "deploy_stack",
   label: "Deploy stack",
   resourceKeys: (input) => [`stack:${input.name}`],
-  steps: [plan, reconcileServices, deployApps, reconcileRemovals, finalize],
+  steps: [plan, preflightApps, reconcileServices, deployApps, reconcileRemovals, finalize],
 };
 
 registerOp(deployStackOp as OpKindDefinition<any>);

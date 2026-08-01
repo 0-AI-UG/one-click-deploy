@@ -90,7 +90,12 @@ export {
   PUBLIC_UDP_PORT_COUNT,
 } from "./apps.ts";
 export type { RetiredVolumeRow } from "./retired-volumes.ts";
-export { retireVolume, getRetiredVolumes, deleteRetiredVolume } from "./retired-volumes.ts";
+export {
+  retireVolume,
+  getRetiredVolumes,
+  getExpiredProvisionalVolumes,
+  deleteRetiredVolume,
+} from "./retired-volumes.ts";
 export type { VolumeDeletionAuditRow } from "./volume-audit.ts";
 export { beginVolumeDeletionAudit, finishVolumeDeletionAudit, getVolumeDeletionAudit } from "./volume-audit.ts";
 export type { ReplicaRow, MetricSampleRow, ScalingEventRow } from "./replicas.ts";

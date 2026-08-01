@@ -7,7 +7,11 @@ import { registerOp } from "./registry.ts";
 import { softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
-type DestroyServiceInput = { serviceId: number };
+type DestroyServiceInput = {
+  serviceId: number;
+  /** Failed-deploy cleanup may expire automatically after the recovery window. */
+  retentionClass?: "user" | "provisional";
+};
 
 const removeEnvFromLinkedEnvironments: Step<DestroyServiceInput, { ok: true }> = {
   name: "remove_env_vars_from_linked_environments",
@@ -88,6 +92,7 @@ const deleteVolumes: Step<DestroyServiceInput, { failed: boolean }> = {
             formerResourceId: ctx.input.serviceId,
             formerResourceName: service?.name ?? `service-${ctx.input.serviceId}`,
             reason: `service destroy operation #${ctx.opId}`,
+            retentionClass: ctx.input.retentionClass ?? "user",
           });
           ctx.log(`Detached volume ${inst.volume_id}; retained for recovery for 7 days`);
         }

@@ -2005,6 +2005,14 @@ export const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 93,
+    description:
+      "Classify retained volumes so expired failed-deploy artifacts can be cleaned automatically without touching user-retained data.",
+    up: (db) => {
+      db.run("ALTER TABLE retired_volumes ADD COLUMN retention_class TEXT NOT NULL DEFAULT 'user'");
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

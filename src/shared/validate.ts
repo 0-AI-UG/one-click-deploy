@@ -105,6 +105,26 @@ export function validateGitBranch(branch: string): ValidationResult<string> {
   return { valid: true, value: trimmed };
 }
 
+/** Build inputs are interpolated into remote Docker commands, so keep them
+ * repo-relative and shell-safe. `.` is valid for a build context. */
+export function validateRepoBuildPath(
+  path: string,
+  label: "Dockerfile" | "Docker context",
+): ValidationResult<string> {
+  const trimmed = path.trim();
+  if (!trimmed) return { valid: false, error: `${label} path is required` };
+  if (trimmed.startsWith("/")) {
+    return { valid: false, error: `${label} path must be relative to the repository root` };
+  }
+  if (trimmed.split("/").includes("..")) {
+    return { valid: false, error: `${label} path must not contain '..'` };
+  }
+  if (!/^[A-Za-z0-9._/-]+$/.test(trimmed)) {
+    return { valid: false, error: `${label} path contains invalid characters` };
+  }
+  return { valid: true, value: trimmed.replace(/^\.\//, "") };
+}
+
 export function validateDomain(domain: string): ValidationResult<string> {
   const trimmed = domain.trim().toLowerCase();
   if (!trimmed) return { valid: false, error: "Domain is required" };
@@ -498,6 +518,9 @@ export function validateDeployRequest(req: {
   image_ref?: string;
   build_cache_ref?: string;
   git_branch?: string;
+  git_sha?: string;
+  dockerfile_path?: string;
+  docker_context?: string;
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   environment?: string | null;
@@ -550,6 +573,17 @@ export function validateDeployRequest(req: {
   if (req.git_branch) {
     const branchResult = validateGitBranch(req.git_branch);
     if (!branchResult.valid) return { valid: false, error: `Git branch: ${branchResult.error}` };
+  }
+  if (req.git_sha && !/^[0-9a-f]{7,64}$/i.test(req.git_sha)) {
+    return { valid: false, error: "Git commit SHA must contain 7-64 hexadecimal characters" };
+  }
+  if (req.dockerfile_path) {
+    const pathResult = validateRepoBuildPath(req.dockerfile_path, "Dockerfile");
+    if (!pathResult.valid) return pathResult;
+  }
+  if (req.docker_context) {
+    const contextResult = validateRepoBuildPath(req.docker_context, "Docker context");
+    if (!contextResult.valid) return contextResult;
   }
 
   if (req.domain) {

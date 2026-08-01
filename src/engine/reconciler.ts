@@ -9,6 +9,7 @@ import { ingestServerRequestMetrics } from "./scale/request-metrics.ts";
 import { collectServerMetrics } from "./metrics-parse.ts";
 import { checkReplicaHealth, checkServiceInstanceHealth, HEALTH_EXEMPT_STATUSES } from "./health.ts";
 import { sweepStuckStates } from "./stuck-sweep.ts";
+import { sweepExpiredProvisionalVolumes } from "./provisional-volume-sweep.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -342,6 +343,11 @@ async function tick(): Promise<void> {
     // --- Periodic Docker prune (stopped containers, old images, build cache) ---
     tickCount++;
     if (tickCount % PRUNE_EVERY_N_TICKS === 0) {
+      try {
+        await sweepExpiredProvisionalVolumes();
+      } catch (err) {
+        log("volume-sweep", `failed: ${err}`);
+      }
       for (const work of serverWork.values()) {
         pruneServer(work.server.ipv4, work.server.ssh_host_key || undefined).catch((err) => {
           log("prune", `server ${work.server.ipv4}: ${err}`);

@@ -15,6 +15,7 @@ import {
   validatePublicPort,
   isPublicProtocol,
   validateIngressFields,
+  validateRepoBuildPath,
 } from "./validate.ts";
 
 describe("assertSafeHostPath", () => {
@@ -83,6 +84,22 @@ describe("validateAppName", () => {
     expect(validateAppName("my_app").valid).toBe(false);
     expect(validateAppName("my app").valid).toBe(false);
     expect(validateAppName("my.app").valid).toBe(false);
+  });
+});
+
+describe("validateRepoBuildPath", () => {
+  test("accepts repository-relative Docker paths", () => {
+    expect(validateRepoBuildPath("apps/api/Dockerfile", "Dockerfile")).toEqual({
+      valid: true,
+      value: "apps/api/Dockerfile",
+    });
+    expect(validateRepoBuildPath(".", "Docker context").valid).toBe(true);
+  });
+
+  test("rejects absolute, traversing, and shell-unsafe paths", () => {
+    expect(validateRepoBuildPath("/etc/passwd", "Dockerfile").valid).toBe(false);
+    expect(validateRepoBuildPath("apps/../Dockerfile", "Dockerfile").valid).toBe(false);
+    expect(validateRepoBuildPath("Dockerfile;reboot", "Dockerfile").valid).toBe(false);
   });
 });
 
@@ -242,6 +259,12 @@ describe("validateDeployRequest", () => {
 
   test("rejects invalid git repo", () => {
     expect(validateDeployRequest({ ...validRequest, git_repo: "not-a-url" }).valid).toBe(false);
+  });
+
+  test("rejects unsafe build paths and malformed immutable commits", () => {
+    expect(validateDeployRequest({ ...validRequest, dockerfile_path: "../Dockerfile" }).valid).toBe(false);
+    expect(validateDeployRequest({ ...validRequest, docker_context: "/tmp" }).valid).toBe(false);
+    expect(validateDeployRequest({ ...validRequest, git_sha: "not-a-sha" }).valid).toBe(false);
   });
 
   test("rejects invalid port", () => {

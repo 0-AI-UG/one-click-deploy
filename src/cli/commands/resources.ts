@@ -12,6 +12,7 @@ type ResourceServer = {
 type ResourceVolume = {
   id: string; name: string; size: number; location: string; server_name: string;
   app_name: string; retired_state: string; retired_from: string; purge_after: string;
+  retention_class: "user" | "provisional" | "";
   monthly_eur: number | null;
 };
 type ResourceInventory = {
@@ -65,7 +66,9 @@ async function listResources(): Promise<void> {
       volume.id,
       volume.name,
       volume.retired_state
-        ? `retained${volume.purge_after ? ` until ${volume.purge_after.slice(0, 10)}` : ""}`
+        ? volume.retention_class === "provisional"
+          ? `provisional${volume.purge_after ? ` until ${volume.purge_after.slice(0, 10)}` : ""}`
+          : `retained${volume.purge_after ? `; review ${volume.purge_after.slice(0, 10)}` : ""}`
         : "attached",
       `${volume.size} GB`,
       volume.location,

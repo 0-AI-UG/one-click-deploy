@@ -5,6 +5,8 @@ import {
   sshExec,
   pullAndRunService,
   serviceHealthCheck,
+  containerRunningCheck,
+  getContainerLogs,
 } from "../../shared/remote/index.ts";
 import { provisionServer } from "../provision-server.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -25,6 +27,7 @@ import type { EnvVarEntry } from "../../shared/env-crypto.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 import type { Server } from "../../shared/rpc.ts";
+import { createMasker } from "../../shared/mask.ts";
 
 // Public request shape for the `deploy_service` engine op — consumed by the
 // HTTP route that enqueues the op and by the op implementation itself.
@@ -301,6 +304,7 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
       formerResourceId: 0,
       formerResourceName: ctx.input.name,
       reason: `deployment operation #${ctx.opId} compensated`,
+      retentionClass: "provisional",
     });
     ctx.log(`Retained detached volume ${out.volumeId} for recovery until its purge-after date`);
   },
@@ -490,6 +494,21 @@ const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
     const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
     if (!server || !svc) return;
+    try {
+      const mask = createMasker(Object.values(svc.envVars));
+      const logs = await getContainerLogs(
+        server.serverIp,
+        svc.containerName,
+        200,
+        server.serverHostKey || undefined,
+      );
+      for (const rawLine of logs.split(/\r?\n/)) {
+        if (!rawLine.trim()) continue;
+        ctx.log(mask(`[failed-container] ${rawLine}`));
+      }
+    } catch (err) {
+      ctx.log(`Could not capture failed container logs: ${err}`);
+    }
     // `docker rm -f ... || true` tolerates an already-removed container
     // (idempotent), so the remote command exits 0 for docker's own errors. A
     // nonzero exit here is therefore an SSH transport failure — i.e. we could
@@ -634,14 +653,29 @@ const healthCheckStep: Step<DeployServiceInput, { healthy: boolean }> = {
       }
     }
     if (health.healthy) {
+      const stability = await containerRunningCheck(
+        server.serverIp,
+        svc.containerName,
+        10,
+        server.serverHostKey || undefined,
+      );
+      if (!stability.healthy) {
+        health = {
+          healthy: false,
+          error: stability.error || "Container did not remain stable after startup",
+        };
+      }
+    }
+    if (health.healthy) {
       db.updateServiceInstanceStatus(svc.instanceId, "running");
       db.updateServiceStatus(svc.serviceId, "running");
       ctx.log("Service is healthy");
     } else {
-      // Soft-fail: persist warning but do not throw.
       db.updateServiceInstanceStatus(svc.instanceId, "unhealthy");
       db.updateServiceStatus(svc.serviceId, "unhealthy");
-      ctx.log(`Health check warning: ${health.error || "service may still be starting"}`);
+      const error = health.error || "service did not become healthy";
+      ctx.log(`Health check failed: ${error}`);
+      throw new Error(error);
     }
     return { healthy: health.healthy };
   },

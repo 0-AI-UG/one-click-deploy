@@ -208,6 +208,7 @@ export type ResourceVolume = {
   retired_state?: string;
   retired_from?: string;
   purge_after?: string;
+  retention_class?: "user" | "provisional";
   monthly_eur?: number;
 };
 

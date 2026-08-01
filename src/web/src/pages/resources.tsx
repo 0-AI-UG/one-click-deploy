@@ -322,7 +322,9 @@ export function ResourcesPage() {
                 </td>
                 <td className="py-2 px-3 text-fg-dim">
                   {v.retired_state
-                    ? `retained until ${String(v.purge_after || "").slice(0, 10)} (${v.retired_from})`
+                    ? v.retention_class === "provisional"
+                      ? `provisional until ${String(v.purge_after || "").slice(0, 10)}; auto-cleanup (${v.retired_from})`
+                      : `retained; review ${String(v.purge_after || "").slice(0, 10)} (${v.retired_from})`
                     : "attached"}
                 </td>
                 <td className="py-2 px-3 text-fg-dim">{v.size} GB</td>

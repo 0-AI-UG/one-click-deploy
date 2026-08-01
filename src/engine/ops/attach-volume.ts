@@ -98,6 +98,7 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
       formerResourceId: ctx.input.appId,
       formerResourceName: app?.name ?? `app-${ctx.input.appId}`,
       reason: `attach-volume operation #${ctx.opId} compensated`,
+      retentionClass: "provisional",
     });
     ctx.log(`Retained detached volume ${out.volumeId} for recovery`);
   },

@@ -283,8 +283,10 @@ export async function containerRunningCheck(
   maxAttempts = 5,
   hostKey?: string
 ): Promise<HealthResult> {
+  let stableInspections = 0;
+  let observedRestartCount: number | undefined;
   return runHealthProbe(
-    `HTTP probe disabled for ${containerName} on ${ip}; verifying container is running`,
+    `HTTP probe disabled for ${containerName} on ${ip}; verifying container remains running`,
     maxAttempts,
     async (i) => {
       const inspect = await inspectContainer(ip, containerName, hostKey);
@@ -294,9 +296,44 @@ export async function containerRunningCheck(
         error: "Container does not exist",
       };
       if (assessment.runnable) {
+        if (maxAttempts === 1) {
+          return {
+            done: true,
+            log: "HTTP probe disabled; container is running",
+            result: {
+              healthy: true,
+              running: true,
+              ready: true,
+              containerStatus: inspect.state?.status,
+              restartCount: inspect.state?.restartCount,
+            },
+          };
+        }
+        const restartCount = inspect.state?.restartCount ?? 0;
+        if (observedRestartCount === undefined || restartCount === observedRestartCount) {
+          stableInspections++;
+        } else {
+          stableInspections = 1;
+        }
+        observedRestartCount = restartCount;
+        if (stableInspections < maxAttempts) {
+          const error = `Container has remained running for ${stableInspections}/${maxAttempts} stability checks`;
+          return {
+            done: false,
+            retryLog: error,
+            finalResult: {
+              healthy: false,
+              running: true,
+              ready: false,
+              error: `Container did not remain stable for ${maxAttempts} consecutive checks`,
+              containerStatus: inspect.state?.status,
+              restartCount,
+            },
+          };
+        }
         return {
           done: true,
-          log: `HTTP probe disabled; container is running`,
+          log: `HTTP probe disabled; container remained stable for ${maxAttempts} checks`,
           result: {
             healthy: true,
             running: true,
@@ -320,6 +357,19 @@ export async function containerRunningCheck(
       };
     },
   );
+}
+
+/**
+ * Pass a script to `docker exec ... sh` over stdin instead of nesting it in
+ * several shell quote layers. This preserves catalog commands containing both
+ * quote styles (notably PostgreSQL's post-start SQL command).
+ */
+export function dockerExecScriptCommand(containerName: string, script: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(containerName)) {
+    throw new Error("Invalid container name for health command");
+  }
+  const encoded = Buffer.from(script, "utf8").toString("base64");
+  return asUser(`printf '%s' '${encoded}' | base64 -d | docker exec -i ${containerName} sh 2>&1`);
 }
 
 /**
@@ -470,7 +520,7 @@ export async function serviceHealthCheck(
       // Run health check command inside container
       const result = await sshExec(
         ip,
-        `su - deploy -c "docker exec ${containerName} sh -c '${healthCmd.replace(/'/g, "'\\''")}'  2>&1"`,
+        dockerExecScriptCommand(containerName, healthCmd),
         hostKey
       );
 

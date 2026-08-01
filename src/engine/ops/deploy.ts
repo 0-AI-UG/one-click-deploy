@@ -17,6 +17,7 @@ import {
   containerExists,
   containerRunning,
   probeAppHealth,
+  getContainerLogs,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress, syncAllTraefik } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -108,7 +109,7 @@ export function appVolumeName(appName: string, opId: number): string {
   return `ocd-${appName}-op${opId}`;
 }
 
-async function buildMasker(input: DeployInput, userId: string) {
+async function buildMasker(input: DeployInput, userId: string, additionalSecrets: string[] = []) {
   const providerToken = await getProviderToken();
   const resolvedGitToken = await resolveGitHubToken(userId || undefined);
   const githubPat = resolvedGitToken || undefined;
@@ -121,6 +122,7 @@ async function buildMasker(input: DeployInput, userId: string) {
     providerToken,
     ...(githubPat ? [githubPat] : []),
     ...envVarValues,
+    ...additionalSecrets,
   ];
   return { mask: createMasker(secretValues), githubPat };
 }
@@ -417,6 +419,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       formerResourceId: 0,
       formerResourceName: ctx.input.app_name || "unknown-app",
       reason: `deployment operation #${ctx.opId} compensated`,
+      retentionClass: "provisional",
     });
     ctx.log(`Retained detached volume ${out.volumeId} for recovery`);
   },
@@ -715,7 +718,11 @@ const cloneRepoStep: Step<DeployInput, CloneOut> = {
     }
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
-    const { mask, githubPat } = await buildMasker(req, ctx.triggeredBy);
+    const { mask, githubPat } = await buildMasker(
+      req,
+      ctx.triggeredBy,
+      Object.values(appOut.flatEnvVars),
+    );
     await cloneRepo(server.serverIp, req.app_name, req.git_repo, githubPat, (line) => {
       db.appendDeployLog(appOut.appId, mask(`[clone] ${line}`));
       ctx.log(`[clone] ${mask(line)}`);
@@ -784,7 +791,11 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     const volume = prior["create_volume"] as VolumeOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
 
-    const { mask, githubPat } = await buildMasker(req, ctx.triggeredBy);
+    const { mask, githubPat } = await buildMasker(
+      req,
+      ctx.triggeredBy,
+      Object.values(appOut.flatEnvVars),
+    );
     const maskedLog = (line: string) => db.appendDeployLog(appOut.appId, mask(line));
 
     const tenantServerRow = db.getServer(server.serverId);
@@ -847,6 +858,27 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
     if (!server || !appOut) return;
+    try {
+      const { mask } = await buildMasker(
+        ctx.input,
+        ctx.triggeredBy,
+        Object.values(appOut.flatEnvVars),
+      );
+      const logs = await getContainerLogs(
+        server.serverIp,
+        appOut.containerName,
+        200,
+        server.serverHostKey || undefined,
+      );
+      for (const rawLine of logs.split(/\r?\n/)) {
+        if (!rawLine.trim()) continue;
+        const line = mask(`[failed-container] ${rawLine}`);
+        ctx.log(line);
+        db.appendDeployLog(appOut.appId, line);
+      }
+    } catch (err) {
+      ctx.log(`Could not capture failed container logs: ${err}`);
+    }
     // Let a genuine failure to remove the container PROPAGATE so a leaked
     // container surfaces as `compensation_failed` rather than a false-clean
     // `compensated`. probeCompensated short-circuits this step once the

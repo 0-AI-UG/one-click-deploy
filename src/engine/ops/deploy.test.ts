@@ -27,10 +27,12 @@ const containerRunningCheckMock = mock(async () => ({ healthy: true }));
 const cloneAndBuildMock = mock(async () => ({ imageTag: "app:latest" }));
 const containerRunningMock = mock(async () => false);
 const containerExistsMock = mock(async () => false);
+const getContainerLogsMock = mock(async () => "");
+const removeContainerMock = mock(async () => {});
 mock.module("../../shared/remote/index.ts", () => ({
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
   cloneAndBuild: cloneAndBuildMock,
-  removeContainer: mock(async () => {}),
+  removeContainer: removeContainerMock,
   healthCheck: healthCheckMock,
   containerRunningCheck: containerRunningCheckMock,
   // probeAppHealth dispatches to healthCheck/containerRunningCheck by app.health_check.
@@ -42,6 +44,7 @@ mock.module("../../shared/remote/index.ts", () => ({
   ),
   containerRunning: containerRunningMock,
   containerExists: containerExistsMock,
+  getContainerLogs: getContainerLogsMock,
 }));
 mock.module("../scale/traefik-manager.ts", () => ({
   syncAppIngress: mock(async () => {}),
@@ -103,6 +106,9 @@ beforeEach(() => {
   containerRunningMock.mockImplementation(async () => false);
   containerExistsMock.mockClear();
   containerExistsMock.mockImplementation(async () => false);
+  getContainerLogsMock.mockClear();
+  getContainerLogsMock.mockImplementation(async () => "");
+  removeContainerMock.mockClear();
 });
 
 const baseReq = (name: string) => ({
@@ -498,7 +504,7 @@ describe("deploy step: create_volume", () => {
     await step.compensate!(ctx, { volumeId: "v-abc", volumeMount: "/mnt/x:/data", containerPath: "/data" }, {});
     expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
-    expect(db.getRetiredVolumes().some((v) => v.provider_volume_id === "v-abc")).toBe(true);
+    expect(db.getRetiredVolumes().find((v) => v.provider_volume_id === "v-abc")?.retention_class).toBe("provisional");
   });
 
   test("compensation surfaces detach failure and does not claim retirement", async () => {
@@ -890,6 +896,21 @@ describe("deploy step: build_and_run_container probe (resume robustness)", () =>
     expect(adopted!.imageTag).toBe(`${name}:latest`);
     // Adoption means run() (and thus cloneAndBuild) is never invoked.
     expect(cloneAndBuildMock).not.toHaveBeenCalled();
+  });
+
+  test("captures and masks container logs before compensation removes it", async () => {
+    const { prior, app, name } = setupDeployedApp(true);
+    const secret = "super-secret-value";
+    prior.insert_app_row.flatEnvVars = { DATABASE_PASSWORD: secret };
+    getContainerLogsMock.mockImplementationOnce(async () => `booting\npassword=${secret}`);
+    const { ctx, logLines } = makeCtx(baseReq(name));
+
+    await step.compensate!(ctx, { imageTag: `${name}:latest` }, prior);
+
+    expect(removeContainerMock).toHaveBeenCalledTimes(1);
+    expect(logLines.join("\n")).toContain("[failed-container] booting");
+    expect(logLines.join("\n")).not.toContain(secret);
+    expect(db.getDeployLog(app.id)).toContain("password=***");
   });
 });
 

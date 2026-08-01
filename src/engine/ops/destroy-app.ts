@@ -12,7 +12,11 @@ import { registerOp } from "./registry.ts";
 import { softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
-type DestroyInput = { appId: number };
+type DestroyInput = {
+  appId: number;
+  /** Failed-deploy cleanup may expire automatically after the recovery window. */
+  retentionClass?: "user" | "provisional";
+};
 
 /**
  * Tear down the app's hidden `<name>-staging` sibling first, as a child
@@ -56,7 +60,10 @@ const destroyStagingSibling: Step<DestroyInput, { ok: boolean; childIds: number[
       childId = enqueueOperation({
         kind: "destroy_app",
         resourceKeys: [`app:${sibling.id}`],
-        input: { appId: sibling.id },
+        input: {
+          appId: sibling.id,
+          ...(ctx.input.retentionClass ? { retentionClass: ctx.input.retentionClass } : {}),
+        },
         trigger: "cascade",
         triggeredBy: ctx.triggeredBy,
         parentId: ctx.opId,
@@ -180,6 +187,7 @@ const deleteVolume: Step<DestroyInput, { ok: boolean; error?: string }> = {
           formerResourceId: app.id,
           formerResourceName: app.name,
           reason: `app destroy operation #${ctx.opId}`,
+          retentionClass: ctx.input.retentionClass ?? "user",
         });
         ctx.log(`Detached volume ${app.volume_id}; retained for recovery for 7 days`);
       }

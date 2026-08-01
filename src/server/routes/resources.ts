@@ -110,6 +110,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
       retired_state: string;
       retired_from: string;
       purge_after: string;
+      retention_class: "user" | "provisional" | "";
       monthly_eur: number | null;
     }
 
@@ -137,6 +138,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
             ? `${retired.former_resource_type}:${retired.former_resource_name}`
             : "",
           purge_after: retired?.purge_after ?? "",
+          retention_class: retired?.retention_class ?? "",
           monthly_eur: volumePerGbMonth != null ? volumePerGbMonth * v.sizeGb : null,
         };
       });

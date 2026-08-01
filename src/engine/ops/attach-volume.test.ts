@@ -134,7 +134,7 @@ describe("attach_volume: create_volume", () => {
     await step.compensate!(ctx, { volumeId: "v-abc", hostMountPath: "/mnt/x", volName: "x" }, {});
     expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
-    expect(db.getRetiredVolumes().some((v) => v.provider_volume_id === "v-abc")).toBe(true);
+    expect(db.getRetiredVolumes().find((v) => v.provider_volume_id === "v-abc")?.retention_class).toBe("provisional");
   });
 
   test("does not silently adopt a retained same-name volume", async () => {

@@ -39,6 +39,7 @@ function makeCtx(input: StackDeployRequest): OpContext<StackDeployRequest> {
 const planStep = deployStackOp.steps.find((s) => s.name === "plan")!;
 const deployAppsStep = deployStackOp.steps.find((s) => s.name === "deploy_apps")!;
 const reconcileServicesStep = deployStackOp.steps.find((s) => s.name === "reconcile_services")!;
+const preflightAppsStep = deployStackOp.steps.find((s) => s.name === "preflight_apps")!;
 
 function app(key: string, needs?: string[]) {
   return { key, needs, app_name: key, git_repo: "https://github.com/x/y", container_port: 3000 };
@@ -252,6 +253,21 @@ describe("deploy_stack plan step", () => {
     await planStep.compensate!(makeCtx(freshInput), freshOut, {});
     expect(db.getEnvironment(freshOut.environmentId)).toBeNull();
     expect(db.getStackByName(freshInput.name)).toBeNull();
+  });
+});
+
+describe("deploy_stack app preflight", () => {
+  test("runs before service deployment and rejects unsafe build inputs", async () => {
+    expect(deployStackOp.steps.indexOf(preflightAppsStep)).toBeLessThan(
+      deployStackOp.steps.indexOf(reconcileServicesStep),
+    );
+    const input = {
+      ...req(`pre-${randomSuffix()}`, [app("api")]),
+      apps: [{ ...app("api"), dockerfile_path: "../Dockerfile" }],
+    } as StackDeployRequest;
+    await expect(preflightAppsStep.run(makeCtx(input), {
+      plan: { stackId: 1 },
+    })).rejects.toThrow(/Dockerfile path must not contain/i);
   });
 });
 
