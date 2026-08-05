@@ -88,6 +88,20 @@ describe("runMigrations", () => {
     expect(row.version).toBeGreaterThan(0);
   });
 
+  test("migration 94 persists revision attestations, endpoint state, attempts, and port claims", () => {
+    const db = freshDb();
+    runMigrations(db);
+    const replicaCols = (db.query("PRAGMA table_info(replicas)").all() as any[]).map((c) => c.name);
+    expect(replicaCols).toContain("desired_image_digest");
+    expect(replicaCols).toContain("env_hash");
+    expect(replicaCols).toContain("attested_at");
+    const appCols = (db.query("PRAGMA table_info(apps)").all() as any[]).map((c) => c.name);
+    expect(appCols).toContain("public_endpoint_status");
+    const logCols = (db.query("PRAGMA table_info(operation_logs)").all() as any[]).map((c) => c.name);
+    expect(logCols).toContain("attempt");
+    expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='port_reservations'").get()).toBeTruthy();
+  });
+
   test("migration 14 drops apps.server_id and apps.host_port cleanly with migration-8 data", () => {
     const db = freshDb();
     // Pre-seed an app at the legacy schema before any migrations have run.

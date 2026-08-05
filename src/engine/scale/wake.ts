@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  pullImmutableImageAndRun, cloneAndBuild,
+  pullImmutableImageAndRun, sshExec,
   probeAppHealth, startAppReplica,
   startContainer, containerExists,
 } from "../../shared/remote/index.ts";
@@ -9,6 +9,7 @@ import { pushProxyForApp } from "./proxy-manager.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
 
 export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("wake", `Waking app ${appId}`);
@@ -29,13 +30,27 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
 
     const hostKey = server.ssh_host_key || undefined;
     const containerName = app.name;
+    const bindAddr = replicaBindHost(server);
+    const envVars = await resolveAppEnvVars(app);
+    const desiredImage = latestDesiredImage(app);
+    const desiredEnvHash = hashEnvironment(envVars);
+    const preserved = db
+      .getReplicasByServer(serverId)
+      .find((r) => r.app_id === appId && r.container_name === containerName);
+    const preservedMatches = Boolean(
+      preserved?.attested_at &&
+      preserved.desired_image_digest === desiredImage &&
+      preserved.env_hash === desiredEnvHash &&
+      preserved.config_revision === app.config_revision &&
+      !preserved.attestation_error
+    );
 
     // Prefer the fast path: if the replica was preserved on disk by
     // scale-down (Phase 0), the container still exists and we can bring it
     // back up with `docker start` in ~1s instead of a fresh `docker run`
     // that has to (re)create everything.
     let startedFastPath = false;
-    if (await containerExists(server.ipv4, containerName, hostKey)) {
+    if (preservedMatches && await containerExists(server.ipv4, containerName, hostKey)) {
       try {
         const ok = await startContainer(server.ipv4, containerName, hostKey);
         if (ok) {
@@ -47,13 +62,9 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
       }
     }
 
-    const bindAddr = replicaBindHost(server);
-
-    // Slow path: full re-run. Only taken when the container is not on disk —
-    // e.g. a pre-Phase-0 sleep where scale-down did `docker rm -f`, or manual
-    // cleanup on the tenant host.
+    // Slow path: full re-run when the container is absent or its attested
+    // image/config no longer matches desired state.
     if (!startedFastPath) {
-      const envVars = await resolveAppEnvVars(app);
       const githubPat = (await resolveGitHubToken(app.deployed_by)) || undefined;
 
       if (app.source_mode === "image") {
@@ -75,40 +86,31 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
             cpus: app.cpu_limit || undefined,
             gitToken: githubPat,
             hostKey,
+            configRevision: app.config_revision,
+            envHash: hashEnvironment(envVars),
           });
         } else {
-          const envFilePath = Object.keys(envVars).length > 0
-            ? `/home/deploy/apps/${app.name}/.env.deploy`
-            : undefined;
           // Backward compatibility for legacy records that only have a local
           // app.name:latest image tag.
           await startAppReplica(server.ipv4, {
-            ...appReplicaRunOpts(app, server, { containerName, hostPort, envFilePath }),
-            removeExisting: false,
+            ...appReplicaRunOpts(app, server, { containerName, hostPort, envVars }),
           }, hostKey);
         }
       } else {
-        // For git-backed apps, rebuild from source as the wake fallback when no
-        // preserved container exists on disk.
-        if (!app.git_repo) {
-          throw new Error("Missing git repository for wake rebuild");
-        }
-        await cloneAndBuild(server.ipv4, {
-          name: app.name,
-          gitRepo: app.git_repo,
-          port: app.container_port,
-          hostPort,
-          envVars,
-          volumeMount: app.volume_mount || undefined,
-          extraVolumes: db.parseExtraVolumes(app.extra_volumes),
-          gitToken: githubPat,
-          gitBranch: app.git_branch || undefined,
-          bindAddr,
-          buildCacheRef: app.build_cache_ref || undefined,
-          memoryMb: app.memory_mb || undefined,
-          cpus: app.cpu_limit || undefined,
+        // A wake is not a source deployment. Reuse the recorded immutable
+        // revision; rebuilding a moving branch here could silently wake a
+        // different commit under the old deployment record.
+        const present = await sshExec(
+          server.ipv4,
+          `su - deploy -c ${JSON.stringify(`docker image inspect ${desiredImage} >/dev/null 2>&1 && echo yes || echo no`)}`,
           hostKey,
-        });
+        );
+        if (present.stdout.trim() !== "yes") {
+          throw new Error(`Immutable image ${desiredImage} is missing; run a full deploy to restore this revision`);
+        }
+        await startAppReplica(server.ipv4, {
+          ...appReplicaRunOpts(app, server, { containerName, hostPort, envVars }),
+        }, hostKey);
       }
     }
 
@@ -118,23 +120,30 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     // Upsert the replica row. On the fast path a preserved row already
     // exists (status = 'stopped') — flip it back to running. On the slow
     // path (no preserved row) insert fresh.
-    const preserved = db
-      .getReplicasByServer(serverId)
-      .find((r) => r.app_id === appId && r.container_name === containerName);
+    const activeReplica = preserved ?? db.insertReplica({
+      app_id: appId,
+      server_id: serverId,
+      host_port: hostPort,
+      container_name: containerName,
+      status: health.healthy ? "attesting" : "unhealthy",
+    });
     if (preserved) {
       if (health.healthy) {
-        db.markReplicaRunning(preserved.id);
+        db.updateReplicaStatus(preserved.id, "attesting");
       } else {
         db.updateReplicaStatus(preserved.id, "unhealthy");
       }
-    } else {
-      db.insertReplica({
-        app_id: appId,
-        server_id: serverId,
-        host_port: hostPort,
-        container_name: containerName,
-        status: health.healthy ? "running" : "unhealthy",
+    }
+    if (health.healthy) {
+      const attestation = await attestReplica(app, activeReplica, server, {
+        imageDigest: desiredImage,
+        envHash: desiredEnvHash,
+        configRevision: app.config_revision,
       });
+      if (!attestation.ok) throw new Error(`Woken replica attestation failed: ${attestation.error}`);
+      db.markReplicaRunning(activeReplica.id);
+    } else {
+      throw new Error("Woken replica did not become healthy");
     }
 
     // Clear sleeping state

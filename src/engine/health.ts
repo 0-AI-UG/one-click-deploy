@@ -14,6 +14,7 @@ import { resolveAppEnvVars } from "../shared/env-crypto.ts";
 import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { replicaBindHost, appReplicaRunOpts } from "./scale/types.ts";
 import { currentHolder } from "./scheduler.ts";
+import { attestReplica, hashEnvironment, latestDesiredImage } from "./revision.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -25,9 +26,8 @@ const UNHEALTHY_RESTART_THRESHOLD = 2;
  * Last-resort recovery when `docker restart` can't bring a replica back — the
  * container was removed out-of-band, or it's wedged in a state containerd
  * can't kill ("tried to kill container, but did not receive an exit event").
- * Force-remove it and re-run from the existing `:latest` image. Requires the
- * image to still be present; a genuinely missing image needs a full redeploy
- * from source, so we surface that as an error rather than silently failing.
+ * Force-remove it and re-run from the recorded immutable deployment image.
+ * The image must still be present; health recovery never rebuilds source.
  */
 async function recreateReplica(
   server: ServerRow,
@@ -36,19 +36,18 @@ async function recreateReplica(
   hostKey: string | undefined,
 ): Promise<void> {
   const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
-  const image = `${app.name}:latest`;
+  const image = latestDesiredImage(app);
   const present = await sshExec(server.ipv4, asUser(`docker image inspect ${image} >/dev/null 2>&1 && echo yes || echo no`), hostKey);
   if (present.stdout.trim() !== "yes") {
     throw new Error(`image ${image} not present — redeploy required`);
   }
   const envVars = await resolveAppEnvVars(app);
-  const envFilePath = Object.keys(envVars).length > 0 ? `/home/deploy/apps/${app.name}/.env.deploy` : undefined;
   // rm -f (startAppReplica's default) clears both the missing-container and
   // wedged-container cases before re-running. If the wedged container also
   // resists removal, the run fails on the name/port conflict and we surface
   // it (dockerd-level intervention).
   await startAppReplica(server.ipv4, {
-    ...appReplicaRunOpts(app, server, { containerName: replica.container_name, hostPort: replica.host_port, envFilePath }),
+    ...appReplicaRunOpts(app, server, { containerName: replica.container_name, hostPort: replica.host_port, envVars }),
   }, hostKey);
   log("health", `recreated ${replica.container_name} from ${image}`);
 }
@@ -93,6 +92,27 @@ export async function checkReplicaHealth(
     if (currentHolder(`app:${app.id}`)) return;
 
     if (check.healthy) {
+      const envVars = await resolveAppEnvVars(app);
+      const expected = {
+        imageDigest: latestDesiredImage(app),
+        envHash: hashEnvironment(envVars),
+        configRevision: app.config_revision,
+      };
+      const attested = Boolean(
+        current.attested_at &&
+        current.desired_image_digest === expected.imageDigest &&
+        current.env_hash === expected.envHash &&
+        current.config_revision === expected.configRevision &&
+        !current.attestation_error
+      );
+      if (!attested) {
+        db.updateReplicaStatus(replica.id, "attesting");
+        const result = await attestReplica(app, current, server, expected);
+        if (!result.ok) {
+          log("health", `replica ${replica.container_name} is healthy but divergent: ${result.error}`);
+          return;
+        }
+      }
       db.updateReplicaStatus(replica.id, "running");
       db.touchReplicaHealth(replica.id);
       db.resetUnhealthyTicks(replica.id);

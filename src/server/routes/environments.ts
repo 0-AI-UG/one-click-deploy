@@ -80,12 +80,19 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
       env_vars?: Array<{ key: string; value: string; secret: boolean }>;
       rollout?: "redeploy" | "restart" | "none";
       app_ids?: number[];
+      dry_run?: boolean;
     };
     const { name, env_vars } = body;
     const rollout = body.rollout ?? "redeploy";
     if (!["redeploy", "restart", "none"].includes(rollout)) {
       return Response.json(
         { ok: false, error: "rollout must be redeploy, restart, or none" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    if (body.dry_run !== undefined && typeof body.dry_run !== "boolean") {
+      return Response.json(
+        { ok: false, error: "dry_run must be a boolean" },
         { status: 400, headers: corsHeaders },
       );
     }
@@ -128,19 +135,33 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
       );
     }
     const envVarsChanged = newSerialized !== existing.env_vars;
+    // Calculate the impact before mutating desired state. A null projection is
+    // the legacy "all keys" behavior; explicit projections prevent unrelated
+    // stack members from becoming stale.
+    const staleAppRows = envVarsChanged ? attachedApps
+      .filter((app) => {
+        const projection = db.parseAppEnvProjection(app);
+        return projection === null || projection.some((key) => changedKeys.includes(key));
+      }) : [];
+    const affectedApps = staleAppRows.filter((app) => !requestedIds || requestedIds.has(app.id));
+    const appSummary = (app: typeof attachedApps[number]) => ({ id: app.id, name: app.name });
+
+    if (body.dry_run) {
+      return Response.json({
+        ok: true,
+        dry_run: true,
+        rollout,
+        changed_keys: changedKeys,
+        stale_apps: staleAppRows.map(appSummary),
+        affected_apps: affectedApps.map(appSummary),
+        warnings: warnings.map((key) => `${key} looked sensitive and would be stored as an encrypted secret automatically.`),
+      }, { headers: corsHeaders });
+    }
+
     db.updateEnvironment(id, name || existing.name, newSerialized);
     const staleApps = envVarsChanged
       ? db.markAppsEnvironmentStaleForKeys(id, changedKeys)
       : 0;
-
-    // Roll out only to linked apps that consume at least one changed key. A
-    // null projection is the legacy "all keys" behavior.
-    const affectedApps = attachedApps
-      .filter((app) => !requestedIds || requestedIds.has(app.id))
-      .filter((app) => {
-        const projection = db.parseAppEnvProjection(app);
-        return projection === null || projection.some((key) => changedKeys.includes(key));
-      });
     let opId: number | null = null;
     if (envVarsChanged && rollout !== "none" && affectedApps.length > 0) {
       const r = enqueue({
@@ -163,6 +184,8 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
       redeploying: envVarsChanged && rollout === "redeploy" ? affectedApps.length : 0,
       restarting: envVarsChanged && rollout === "restart" ? affectedApps.length : 0,
       affected: envVarsChanged ? affectedApps.length : 0,
+      affected_apps: envVarsChanged ? affectedApps.map(appSummary) : [],
+      stale_app_details: envVarsChanged ? staleAppRows.map(appSummary) : [],
       stale_apps: staleApps,
       rollout,
       changed_keys: changedKeys,

@@ -1,4 +1,4 @@
-import { get, put, resolveApp, type App } from "../api.ts";
+import { get, post, put, resolveApp, type App } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RESET, table } from "../format.ts";
 
@@ -129,6 +129,16 @@ async function renameApp(args: string[]): Promise<void> {
     { name: newName },
   );
   await followNamedOp(result.op_id, `Renamed ${app.name} to ${newName}`, "Rename failed");
+}
+
+async function reloadEnvironment(args: string[]): Promise<void> {
+  const parsed = parseAppFlags(args);
+  const app = await resolveApp(requireAppName(parsed, "ocd app reload-env <app> --force"));
+  if (!parsed.switches.has("force")) {
+    throw new Error("Environment reload is explicit and disruptive; pass --force to continue");
+  }
+  const result = await post<{ op_id: number }>(`/api/apps/${app.id}/reload-env`, { force: true });
+  await followNamedOp(result.op_id, `Reloaded environment for ${app.name}`, "Environment reload failed");
 }
 
 type Deployment = {
@@ -335,7 +345,8 @@ function usage(): void {
   availability <app>           Show trailing availability and placement
   scaling-events <app>         List recent manual/autoscale events
   staging <app>                Inspect the webhook staging sibling
-  webhook status <app>         Inspect stored webhook configuration${RESET}`);
+  webhook status <app>         Inspect stored webhook configuration
+  reload-env <app> --force     Recreate only this app from its immutable image${RESET}`);
 }
 
 export async function app(args: string[]): Promise<void> {
@@ -357,6 +368,7 @@ export async function app(args: string[]): Promise<void> {
     case "events": return scalingEvents(rest);
     case "staging": return staging(rest);
     case "webhook": return webhook(rest);
+    case "reload-env": return reloadEnvironment(rest);
     default: throw new Error(`Unknown app command: ${command}`);
   }
 }

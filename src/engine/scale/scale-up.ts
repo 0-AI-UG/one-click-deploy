@@ -8,6 +8,7 @@ import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 import { pickTargetServer } from "./server-picker.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
+import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
 
 export async function scaleUp(
   app: App,
@@ -15,12 +16,16 @@ export async function scaleUp(
   currentCount: number,
   targetCount: number,
   emit: ProgressFn,
-  targetServerId?: number
+  targetServerId?: number,
+  preReservedPort?: { id: number; server_id: number; bind_address: string; host_port: number },
 ) {
   const settings = db.getSettings();
   const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
   // The "primary" is just whichever server hosts the first (oldest) replica.
   const firstReplica = currentReplicas[0];
+  if (!firstReplica) {
+    throw new Error("Replica convergence incomplete: no source replica is available for scale-up");
+  }
   const primaryServer = db.getServer(firstReplica.server_id);
   if (!primaryServer) throw new Error("First replica's server not found");
   const primaryHostPort = firstReplica.host_port;
@@ -48,10 +53,43 @@ export async function scaleUp(
     // never touched for inter-server app traffic. Fails fast if the
     // target isn't yet attached to the shared network.
     const replicaBindAddr = replicaBindHost(targetServer);
+    const containerName = `${app.name}-r${replicaNum}`;
 
-    // Transfer image to target server
-    emit("scale", `Transferring image to ${targetServer.name}...`);
-    const imageName = `${app.name}:latest`;
+    // Claim and verify the complete bind tuple before image transfer. The DB
+    // reservation serializes OCD operations; the Docker probe catches an
+    // orphan or out-of-band workload unknown to the DB.
+    const ownsReservation = !preReservedPort;
+    const reservation = preReservedPort ?? db.reserveHostPort({
+        serverId: targetServer.id,
+        bindAddress: replicaBindAddr,
+        hostPort,
+        protocol: "tcp",
+        ownerType: "replica",
+        ownerId: `${app.id}:${containerName}`,
+      });
+    if (
+      reservation.server_id !== targetServer.id ||
+      reservation.bind_address !== replicaBindAddr ||
+      reservation.host_port !== hostPort
+    ) throw new Error("Pre-reserved port tuple does not match selected target");
+    try {
+      const bindProbe = await sshExec(
+        targetServer.ipv4,
+        `su - deploy -c ${JSON.stringify(`docker ps --filter publish=${hostPort} --format '{{.Names}}'`)}`,
+        targetHostKey,
+      );
+      const conflicts = bindProbe.stdout.split(/\r?\n/).map((v) => v.trim()).filter(Boolean)
+        .filter((name) => name !== containerName);
+      if (bindProbe.exitCode !== 0 || conflicts.length > 0) {
+        throw new Error(
+          `Port preflight failed for ${replicaBindAddr}:${hostPort}/tcp` +
+            (conflicts.length ? `; held by ${conflicts.join(", ")}` : `; Docker probe failed`),
+        );
+      }
+
+    // Transfer the immutable deployed image, never a mutable convenience tag.
+    emit("scale", `Ensuring image revision on ${targetServer.name}...`);
+    const imageName = latestDesiredImage(app);
 
     const scaleExtraVols = db.parseExtraVolumes(app.extra_volumes);
     // Set when transferImage fails and we successfully rebuild from git on the
@@ -64,7 +102,12 @@ export async function scaleUp(
         targetServer.ipv4,
         imageName,
         primaryServer.ssh_host_key || undefined,
-        targetHostKey
+        targetHostKey,
+        {
+          registryRef: app.build_cache_ref || undefined,
+          registryToken: githubPat,
+          onProgress: (line) => emit("transfer", line),
+        },
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -82,13 +125,14 @@ export async function scaleUp(
     }
 
     if (rebuildFallback) {
-      const containerNameForBuild = `${app.name}-r${replicaNum}`;
+      const containerNameForBuild = containerName;
+      const rebuildEnv = await resolveAppEnvVars(app);
       const buildOpts = {
         name: app.name,
         gitRepo: app.git_repo,
         port: app.container_port,
         hostPort,
-        envVars: await resolveAppEnvVars(app),
+        envVars: rebuildEnv,
         volumeMount: app.volume_mount || undefined,
         extraVolumes: scaleExtraVols,
         gitToken: githubPat,
@@ -98,6 +142,8 @@ export async function scaleUp(
         memoryMb: app.memory_mb || undefined,
         cpus: app.cpu_limit || undefined,
         hostKey: targetHostKey,
+        configRevision: app.config_revision,
+        envHash: hashEnvironment(rebuildEnv),
       };
       const logLine = (line: string) => emit("scale", line);
       if (app.source_mode === "image") {
@@ -115,16 +161,15 @@ export async function scaleUp(
       }
     }
 
-    const containerName = `${app.name}-r${replicaNum}`;
-
     // On the transfer (non-rebuild) path we start the replica ourselves.
     // startAppReplica force-removes any same-named squatter first: a previous
     // failed scale-up or migration may have left one holding the private-IP
     // host port, which would make the run fail with "port already allocated".
     // Skipped on rebuildFallback: cloneAndBuild already started the container.
+    const resolvedEnv = await resolveAppEnvVars(app);
     if (!rebuildFallback) {
       await startAppReplica(targetServer.ipv4, {
-        ...appReplicaRunOpts(app, targetServer, { containerName, hostPort, envVars: await resolveAppEnvVars(app) }),
+        ...appReplicaRunOpts(app, targetServer, { containerName, hostPort, envVars: resolvedEnv }),
       }, targetHostKey);
     }
 
@@ -134,19 +179,37 @@ export async function scaleUp(
 
     // Insert replica record BEFORE syncing ingress so the upstream pool
     // built from the DB actually includes the new replica.
-    db.insertReplica({
+    const inserted = db.insertReplica({
       app_id: app.id,
       server_id: targetServer.id,
       host_port: hostPort,
       container_name: containerName,
-      status: health.healthy ? "running" : "unhealthy",
+      status: health.healthy ? "attesting" : "unhealthy",
     });
+
+    if (!health.healthy) {
+      throw new Error(`Replica ${containerName} did not become healthy and will not be attached to ingress`);
+    }
+    const desiredDeployment = db.getDeployments(app.id).find((d) => d.status === "deployed");
+    const expected = {
+      imageDigest: desiredDeployment?.image_digest || app.image_ref || imageName,
+      envHash: hashEnvironment(resolvedEnv),
+      configRevision: app.config_revision,
+    };
+    const attestation = await attestReplica(app, inserted, targetServer, expected);
+    if (!attestation.ok) {
+      throw new Error(`Replica ${inserted.id} revision attestation failed: ${attestation.error}`);
+    }
+    db.updateReplicaStatus(inserted.id, "running");
 
     // Push the updated upstream pool to the fleet ingress. One re-render per
     // replica is fine — dynamic config writes are atomic (tmp+mv).
     await syncAppIngress(app.id);
 
     emit("scale", `Replica ${replicaNum} deployed on ${targetServer.name}`);
+    } finally {
+      if (ownsReservation) db.releaseHostPortReservation(reservation.id);
+    }
   }
 }
 

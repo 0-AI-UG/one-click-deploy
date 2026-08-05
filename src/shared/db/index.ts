@@ -30,6 +30,7 @@ export {
   hasRunningReplicas,
   hasAnyReplicas,
   updateAppStatus,
+  updateAppPublicEndpointStatus,
   updateAppSleepingState,
   clearAppSleepingState,
   touchAppLastRequest,
@@ -105,6 +106,8 @@ export {
   getReplica,
   getReplicasByServer,
   updateReplicaStatus,
+  recordReplicaAttestation,
+  clearReplicaAttestation,
   markReplicaStopped,
   markReplicaRunning,
   updateReplicaMetrics,
@@ -120,6 +123,11 @@ export {
   insertScalingEvent,
   getScalingEvents,
 } from "./replicas.ts";
+export {
+  reserveHostPort,
+  releaseHostPortReservation,
+  releaseHostPortReservations,
+} from "./port-reservations.ts";
 export type { DeploymentRow } from "./deployments.ts";
 export {
   insertDeployment,

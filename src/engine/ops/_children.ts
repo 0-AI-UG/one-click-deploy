@@ -62,6 +62,16 @@ export async function awaitChildren(
             try { requestCancel(c.id); } catch (err) { ctx.log(`requestCancel #${c.id} failed: ${err}`); }
           }
         }
+        const outstanding = children.filter((c) => !TERMINAL.has(c.status));
+        if (outstanding.length > 0) {
+          ctx.log(
+            `cancellation requested; waiting for child compensation: ` +
+              outstanding.map((c) => `#${c.id} ${c.kind}=${c.status}`).join(", "),
+          );
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
+        ctx.log("all child operations reached terminal state after cancellation request");
         throw new Error("cancelled");
       }
       const allDone = children.length > 0 && children.every((c) => TERMINAL.has(c.status));

@@ -153,7 +153,7 @@ export async function sshExec(
     const exitCode = await proc.exited;
     const elapsed = Date.now() - start;
     if (exitCode !== 0) {
-      log("ssh", `FAILED (exit=${exitCode}) in ${elapsed}ms: ${stderr.trim().slice(0, 200)}`);
+      log("ssh", `command exited non-zero (exit=${exitCode}) in ${elapsed}ms: ${stderr.trim().slice(0, 200)}`);
     } else {
       log("ssh", `OK in ${elapsed}ms (stdout=${stdout.trim().length} bytes)`);
     }

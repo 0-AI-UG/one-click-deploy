@@ -55,6 +55,11 @@ interface StackDetail {
   resource_status_reason?: string;
   apps: Array<{ id: number; name: string; status: string; domain: string; public?: number | boolean; environment_stale?: number | boolean }>;
   services: Array<{ id: number; name: string; service_type: string; version: string; status: string }>;
+  public_endpoints?: Array<{
+    app_name: string; domain: string; managed: boolean; expectedTarget: string;
+    resolved: string[]; ready: boolean; tlsReady: boolean; httpStatus?: number; tlsError?: string;
+  }>;
+  acme_errors?: string[];
 }
 
 function readStackManifest(path: string): StackManifest {
@@ -387,7 +392,7 @@ async function stackStatus(args: string[]): Promise<void> {
     process.exit(1);
   }
   const stackRef = await resolveStack(name);
-  const detail = await get<StackDetail>(`/api/stacks/${stackRef.id}`);
+  const detail = await get<StackDetail>(`/api/stacks/${stackRef.id}?validate_endpoints=1`);
 
   console.log(`${BOLD}${detail.name}${RESET}  ${colorStatus(detail.status)}`);
   if (detail.resource_status_reason) {
@@ -408,6 +413,23 @@ async function stackStatus(args: string[]): Promise<void> {
     ["NAME", "TYPE", "VERSION", "STATUS"],
     (detail.services || []).map((s) => [s.name, s.service_type, s.version || "-", colorStatus(s.status)]),
   );
+  if ((detail.public_endpoints || []).length > 0) {
+    console.log(`\n${BOLD}Public endpoints${RESET}`);
+    table(
+      ["APP", "DOMAIN", "DNS", "EXPECTED", "TLS"],
+      detail.public_endpoints!.map((endpoint) => [
+        endpoint.app_name,
+        endpoint.domain,
+        endpoint.ready ? endpoint.resolved.join(",") : `degraded (${endpoint.resolved.join(",") || "NXDOMAIN"})`,
+        endpoint.expectedTarget,
+        endpoint.tlsReady ? `ready${endpoint.httpStatus ? ` (${endpoint.httpStatus})` : ""}` : `degraded: ${endpoint.tlsError || "not ready"}`,
+      ]),
+    );
+    if ((detail.acme_errors || []).length > 0) {
+      console.log(`\n${BOLD}Recent ACME errors${RESET}`);
+      for (const line of detail.acme_errors!) console.log(`  ${line}`);
+    }
+  }
 
   console.log(`\n${BOLD}Apps${RESET}`);
   table(

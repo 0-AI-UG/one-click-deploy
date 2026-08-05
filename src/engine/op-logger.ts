@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { inspect } from "node:util";
 import db from "../shared/db/connection.ts";
 
-type OpStore = { opId: number };
+type OpStore = { opId: number; attempt: number };
 
 const als = new AsyncLocalStorage<OpStore>();
 
@@ -12,21 +12,22 @@ export type OpLogRow = {
   ts: string;
   level: string;
   message: string;
+  attempt: number;
 };
 
-export function withOpContext<T>(opId: number, fn: () => Promise<T>): Promise<T> {
-  return als.run({ opId }, fn);
+export function withOpContext<T>(opId: number, attempt: number, fn: () => Promise<T>): Promise<T> {
+  return als.run({ opId, attempt }, fn);
 }
 
 export function currentOpId(): number | null {
   return als.getStore()?.opId ?? null;
 }
 
-export function appendOpLog(opId: number, level: string, message: string): void {
+export function appendOpLog(opId: number, level: string, message: string, attempt = 1): void {
   try {
     db.run(
-      "INSERT INTO operation_logs (op_id, level, message) VALUES (?, ?, ?)",
-      [opId, level, message.length > 8000 ? message.slice(0, 8000) + "…[truncated]" : message],
+      "INSERT INTO operation_logs (op_id, level, message, attempt) VALUES (?, ?, ?, ?)",
+      [opId, level, message.length > 8000 ? message.slice(0, 8000) + "…[truncated]" : message, attempt],
     );
   } catch {
     // Never let log persistence break the engine.
@@ -36,7 +37,7 @@ export function appendOpLog(opId: number, level: string, message: string): void 
 export function getOpLogs(opId: number, sinceId = 0, limit = 1000): OpLogRow[] {
   return db
     .query(
-      `SELECT id, op_id, ts, level, message FROM operation_logs
+      `SELECT id, op_id, ts, level, message, attempt FROM operation_logs
         WHERE op_id = ? AND id > ?
         ORDER BY id ASC
         LIMIT ?`,
@@ -84,7 +85,7 @@ export function patchConsoleForOpLogs(): void {
   function emit(level: string, args: unknown[]): void {
     const store = als.getStore();
     if (!store) return;
-    appendOpLog(store.opId, level, formatLine(args));
+    appendOpLog(store.opId, level, formatLine(args), store.attempt);
   }
 
   console.log = (...args: unknown[]) => { orig.log(...args); emit("info", args); };

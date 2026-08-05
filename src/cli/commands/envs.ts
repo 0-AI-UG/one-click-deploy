@@ -19,6 +19,23 @@ interface LinkedApp {
 }
 
 type RolloutMode = "redeploy" | "restart" | "none";
+type EnvironmentImpact = {
+  changed_keys: string[];
+  stale_apps: Array<{ id: number; name: string }>;
+  affected_apps: Array<{ id: number; name: string }>;
+};
+
+function printImpact(impact: EnvironmentImpact): void {
+  if (impact.changed_keys.length === 0) {
+    console.log(`${DIM}No projected environment values will change.${RESET}`);
+    return;
+  }
+  const names = impact.stale_apps.map((app) => `${app.name} (#${app.id})`);
+  console.log(
+    `${YELLOW}Environment change will mark ${names.length} app(s) stale:${RESET} ` +
+      (names.join(", ") || "none"),
+  );
+}
 
 async function rolloutOptions(
   envId: number,
@@ -220,10 +237,19 @@ async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
   // so we have to send everything we want to keep. Use `--replace` to opt out.
   const env_vars = replace ? incoming : mergeWithExisting(env.env_vars || [], incoming);
 
-  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string; op_id: number | null }>(`/api/environments/${env.id}`, {
+  const requestBody = {
     env_vars,
     rollout: options.rollout,
     app_ids: options.app_ids,
+  };
+  const impact = await put<EnvironmentImpact>(`/api/environments/${env.id}`, {
+    ...requestBody,
+    dry_run: true,
+  });
+  if (!options.json) printImpact(impact);
+
+  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string; op_id: number | null }>(`/api/environments/${env.id}`, {
+    ...requestBody,
   });
 
   if (!options.json) {
@@ -238,6 +264,7 @@ async function setVars(nameOrId: string, varArgs: string[]): Promise<void> {
       changed_keys: incoming.map((v) => v.key),
       rollout: result.rollout,
       affected: result.affected,
+      stale_apps: impact.stale_apps,
       op_id: result.op_id,
       status: terminal.status,
       error: terminal.error ?? null,
@@ -275,11 +302,13 @@ async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
     return;
   }
 
-  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string; op_id: number | null }>(`/api/environments/${env.id}`, {
-    env_vars: kept,
-    rollout: options.rollout,
-    app_ids: options.app_ids,
+  const requestBody = { env_vars: kept, rollout: options.rollout, app_ids: options.app_ids };
+  const impact = await put<EnvironmentImpact>(`/api/environments/${env.id}`, {
+    ...requestBody,
+    dry_run: true,
   });
+  if (!options.json) printImpact(impact);
+  const result = await put<{ ok: boolean; redeploying: number; restarting: number; affected: number; rollout: string; op_id: number | null }>(`/api/environments/${env.id}`, requestBody);
 
   const changedKeys = options.args.filter((k) => !missing.includes(k));
   if (!options.json) {
@@ -294,6 +323,7 @@ async function unsetVars(nameOrId: string, keys: string[]): Promise<void> {
       changed_keys: changedKeys,
       rollout: result.rollout,
       affected: result.affected,
+      stale_apps: impact.stale_apps,
       op_id: result.op_id,
       status: terminal.status,
       error: terminal.error ?? null,

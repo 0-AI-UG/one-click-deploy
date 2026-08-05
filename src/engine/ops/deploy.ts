@@ -32,6 +32,8 @@ import { provisionServer } from "../provision-server.ts";
 import { resolve4 } from "node:dns/promises";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
+import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
+import { scaleUp } from "../scale/scale-up.ts";
 
 type DeployInput = DeployRequest;
 
@@ -138,7 +140,14 @@ export function resolveAppDomain(
   ingressIp: string,
 ): { domain: string; managedDns: boolean } {
   if (req.public === false) return { domain: "", managedDns: false };
-  if (req.domain) return { domain: req.domain, managedDns: !!settings.dns_zone_id };
+  if (req.domain) {
+    const zone = (settings.dns_zone_name || "").replace(/\.$/, "").toLowerCase();
+    const domain = req.domain.replace(/\.$/, "").toLowerCase();
+    return {
+      domain: req.domain,
+      managedDns: !!settings.dns_zone_id && !!zone && (domain === zone || domain.endsWith(`.${zone}`)),
+    };
+  }
   if (settings.dns_zone_id && settings.dns_zone_name) {
     return { domain: `${req.app_name}.${settings.dns_zone_name}`, managedDns: true };
   }
@@ -279,34 +288,30 @@ const createDnsRecord: Step<DeployInput, DnsOut> = {
 
     // Record name: an auto-domain is always a direct child of the zone;
     // explicit domains keep the strip-the-last-two-labels behavior.
-    let subdomain = req.app_name;
-    if (req.domain) {
-      const parts = req.domain.split(".");
-      subdomain = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
+    const zoneName = (server.zoneName || db.getSettings().dns_zone_name || "").replace(/\.$/, "");
+    const normalizedDomain = domain.replace(/\.$/, "");
+    if (!zoneName || !(normalizedDomain === zoneName || normalizedDomain.endsWith(`.${zoneName}`))) {
+      throw new Error(`Refusing managed DNS write: ${domain} is outside configured zone ${zoneName || "<unknown>"}`);
     }
+    const subdomain = normalizedDomain === zoneName
+      ? "@"
+      : normalizedDomain.slice(0, -(zoneName.length + 1));
 
     // Idempotency: check provider for existing record.
     const dns = hetznerDns;
-    try {
-      const record = await dns.createRecord({
+    const record = await dns.createRecord({
         zoneId: dnsZoneId,
         name: subdomain,
         type: "A",
         value: server.ingressIp,
       });
-      return {
+    return {
         recordId: record.id,
         zoneId: dnsZoneId,
         name: subdomain,
         type: "A",
         value: server.ingressIp,
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // DNS creation is best-effort — log and proceed without a managed record.
-      ctx.log(`DNS record creation failed (continuing): ${msg}`);
-      return null;
-    }
+    };
   },
   async compensate(ctx, out) {
     if (!out) return;
@@ -827,6 +832,8 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         memoryMb: req.memory_mb || undefined,
         cpus: req.cpu_limit || undefined,
         hostKey: server.serverHostKey || undefined,
+        configRevision: appRow?.config_revision ?? 1,
+        envHash: hashEnvironment(envVars),
     };
     const result = req.image_ref
       ? await pullImmutableImageAndRun(server.serverIp, {
@@ -954,6 +961,21 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
     );
 
     if (health.healthy) {
+      const build = prior["build_and_run_container"] as BuildOut | undefined;
+      const replica = db.getReplica(appOut.replicaId);
+      if (!replica) throw new Error("Replica row missing during attestation");
+      db.updateReplicaStatus(replica.id, "attesting");
+      const envVars = await import("../../shared/env-crypto.ts").then(({ resolveAppEnvVars }) => resolveAppEnvVars(app));
+      const expected = {
+        imageDigest: build?.imageDigest || req.image_ref || build?.imageTag || latestDesiredImage(app),
+        envHash: hashEnvironment(envVars),
+        configRevision: app.config_revision,
+      };
+      const attestation = await attestReplica(app, replica, tenantServerRow, expected);
+      if (!attestation.ok) {
+        db.updateAppStatus(appOut.appId, "unhealthy");
+        throw new Error(`Replica ${replica.id} revision attestation failed: ${attestation.error}`);
+      }
       db.appendDeployLog(
         appOut.appId,
         app.health_check_mode === "container" || !app.health_check
@@ -1019,6 +1041,7 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
       app_id: appOut.appId,
       image_tag: build.imageTag,
       image_digest: build.imageDigest || req.image_ref,
+      env_hash: hashEnvironment(await import("../../shared/env-crypto.ts").then(({ resolveAppEnvVars }) => resolveAppEnvVars(db.getApp(appOut.appId)!))),
       git_commit: gitCommit,
       config_revision: db.getApp(appOut.appId)?.config_revision ?? 1,
     });
@@ -1166,21 +1189,23 @@ const finalizeDeploy: Step<DeployInput, { ok: true }> = {
     // which every deployed app has (private apps via their internal
     // entrypoint, public apps via the panel), so the sole blocker is a public
     // app that somehow resolved to no domain at all.
-    const scaling = normalizeAppScaling(req);
-    const canScale = !(req.public !== false && !appOut.domain);
-    db.updateAppScaling(appOut.appId, {
-      desired_replicas: canScale ? scaling.desired_replicas : 1,
-      min_replicas: scaling.min_replicas,
-      max_replicas: scaling.max_replicas,
-      autoscale_enabled: scaling.autoscale_enabled,
-      autoscale_cpu_threshold: scaling.autoscale_cpu_threshold,
-      autoscale_mem_threshold: scaling.autoscale_mem_threshold,
-      autoscale_req_threshold: scaling.autoscale_req_threshold,
-      autoscale_cooldown: scaling.autoscale_cooldown,
-      scale_to_zero_after: scaling.scale_to_zero_after,
-    });
-    if (scaling.desired_replicas > 1 && canScale) {
-      db.appendDeployLog(appOut.appId, `[scale] Target ${scaling.desired_replicas} replicas — reconciler will converge`);
+    const app = db.getApp(appOut.appId);
+    if (!app) throw new Error("App disappeared before replica convergence");
+    const current = db.getReplicas(app.id);
+    const desired = app.volume_id ? 1 : app.desired_replicas;
+    if (desired > current.length) {
+      db.appendDeployLog(app.id, `[scale] Converging ${current.length} → ${desired} replicas before success`);
+      await scaleUp(app, current, current.length, desired, (phase, detail) => {
+        ctx.log(`[${phase}] ${detail}`);
+        db.appendDeployLog(app.id, `[${phase}] ${detail}`);
+      });
+    }
+    const finalReplicas = db.getReplicas(app.id);
+    const divergent = finalReplicas.filter((replica) => replica.status !== "running" || !replica.attested_at);
+    if (finalReplicas.length !== desired || divergent.length > 0) {
+      throw new Error(
+        `Replica convergence incomplete: desired=${desired}, actual=${finalReplicas.length}, unattested=${divergent.map((r) => r.id).join(",") || "none"}`,
+      );
     }
     if (req.manifest_path && req.manifest_hash) {
       db.recordAppManifestApplied(appOut.appId, req.manifest_path, req.manifest_hash);

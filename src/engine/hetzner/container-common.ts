@@ -70,6 +70,8 @@ export type DockerRunOpts = {
   restart?: string;
   /** Optional trailing command/args (already shell-escaped by caller). */
   cmd?: string;
+  /** Deterministic workload identity labels used for replica attestation. */
+  labels?: Record<string, string>;
 };
 
 function parseVolumeSpec(spec: string): { host: string; container: string } | null {
@@ -102,6 +104,12 @@ export function buildDockerRunArgs(opts: DockerRunOpts): string {
     `--restart ${restart}`,
   ];
   if (network) parts.push(`--network ${network}`);
+  for (const [key, value] of Object.entries(opts.labels ?? {})) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(key) || /[\r\n]/.test(value)) {
+      throw new Error(`Invalid Docker label: ${key}`);
+    }
+    parts.push(`--label ${JSON.stringify(`${key}=${value}`)}`);
+  }
   for (const host of opts.extraHosts ?? []) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(host.hostname)) {
       throw new Error(`Invalid extra host name: ${host.hostname}`);

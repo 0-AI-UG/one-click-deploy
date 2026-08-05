@@ -4,6 +4,8 @@ import { syncAppIngress } from "./traefik-manager.ts";
 import { scaleUp } from "./scale-up.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
 import { hetzner } from "../../shared/providers/index.ts";
+import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import { hashEnvironment, latestDesiredImage } from "../revision.ts";
 
 const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
@@ -18,7 +20,7 @@ const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
  * volume can only be attached to one server at a time.
  */
 export type MigrateResult =
-  | { ok: true; sourceServerName: string; targetServerName: string; fromCount: number; toCount: number; withVolume?: boolean }
+  | { ok: true; sourceServerName: string; targetServerName: string; fromCount: number; toCount: number; replicaId: number; withVolume?: boolean }
   | { ok: false; error: string };
 
 // Populated by migrateWithVolume as it advances so the saga's compensate hook
@@ -86,6 +88,7 @@ export async function migrateReplica(
           targetServerName: targetServer.name,
           fromCount: count,
           toCount: count,
+          replicaId: onTarget[0].id,
           withVolume: !!app.volume_id,
         };
       }
@@ -99,10 +102,38 @@ export async function migrateReplica(
     const sourceServer = db.getServer(replica.server_id);
     if (!sourceServer) throw new Error("Source server not found");
 
-    if (app.volume_id) {
-      return await migrateWithVolume(app, replica, allReplicas, sourceServer, targetServer, emit, rollbackCtx);
+    const bindAddress = replicaBindHost(targetServer);
+    const reservation = db.reserveHostPort({
+      serverId: targetServer.id,
+      bindAddress,
+      hostPort: replica.host_port,
+      protocol: "tcp",
+      ownerType: "migration",
+      ownerId: `${app.id}:${replica.id}`,
+    });
+    const targetHostKey = targetServer.ssh_host_key || undefined;
+    try {
+      const probe = await sshExec(
+        targetServer.ipv4,
+        asUser(`docker ps --filter publish=${replica.host_port} --format '{{.Names}}'`),
+        targetHostKey,
+      );
+      const conflicts = probe.stdout.split(/\r?\n/).map((v) => v.trim()).filter(Boolean)
+        .filter((name) => name !== `${app.name}-r${allReplicas.length + 1}`);
+      if (probe.exitCode !== 0 || conflicts.length > 0) {
+        throw new Error(
+          `Port preflight failed for ${bindAddress}:${replica.host_port}/tcp` +
+            (conflicts.length ? `; held by ${conflicts.join(", ")}` : "; Docker probe failed"),
+        );
+      }
+
+      if (app.volume_id) {
+        return await migrateWithVolume(app, replica, allReplicas, sourceServer, targetServer, emit, rollbackCtx, reservation);
+      }
+      return await migrateStateless(app, replica, allReplicas, sourceServer, targetServer, emit, reservation);
+    } finally {
+      db.releaseHostPortReservation(reservation.id);
     }
-    return await migrateStateless(app, replica, allReplicas, sourceServer, targetServer, emit);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log("migrate", `Failed to migrate replica ${replicaId}: ${msg}`);
@@ -117,13 +148,18 @@ async function migrateStateless(
   sourceServer: ReturnType<typeof db.getServer>,
   targetServer: ReturnType<typeof db.getServer>,
   emit: ProgressFn,
+  reservation: { id: number; server_id: number; bind_address: string; host_port: number },
 ): Promise<MigrateResult> {
   if (!sourceServer || !targetServer) throw new Error("Server not found");
   const currentCount = allReplicas.length;
   const hostKey = sourceServer.ssh_host_key || undefined;
 
   emit("migrate", `Creating new replica on ${targetServer.name}...`);
-  await scaleUp(app, allReplicas, currentCount, currentCount + 1, emit, targetServer.id);
+  await scaleUp(app, allReplicas, currentCount, currentCount + 1, emit, targetServer.id, reservation);
+  const targetReplica = db.getReplicas(app.id).find((candidate) =>
+    candidate.server_id === targetServer.id && candidate.id !== replica.id
+  );
+  if (!targetReplica) throw new Error("Target replica row missing after scale-up");
 
   emit("migrate", `Draining old replica ${replica.container_name}...`);
   db.updateReplicaStatus(replica.id, "draining");
@@ -158,7 +194,14 @@ async function migrateStateless(
   }
 
   emit("migrate", `Migration complete — replica now on ${targetServer.name}`);
-  return { ok: true, sourceServerName: sourceServer.name, targetServerName: targetServer.name, fromCount: currentCount, toCount: currentCount };
+  return {
+    ok: true,
+    sourceServerName: sourceServer.name,
+    targetServerName: targetServer.name,
+    fromCount: currentCount,
+    toCount: currentCount,
+    replicaId: targetReplica.id,
+  };
 }
 
 async function migrateWithVolume(
@@ -169,6 +212,7 @@ async function migrateWithVolume(
   targetServer: NonNullable<ReturnType<typeof db.getServer>>,
   emit: ProgressFn,
   rollbackCtx?: VolumeMigrationContext,
+  reservation?: { id: number; server_id: number; bind_address: string; host_port: number },
 ): Promise<MigrateResult> {
   if (sourceServer.location !== targetServer.location) {
     throw new Error(
@@ -333,7 +377,7 @@ async function migrateWithVolume(
   } else {
     emit("migrate", `Starting ${app.name} on ${targetServer.name}...`);
     try {
-      await scaleUp(app, allReplicas, currentCount, currentCount + 1, emit, targetServer.id);
+      await scaleUp(app, allReplicas, currentCount, currentCount + 1, emit, targetServer.id, reservation);
     } catch (scaleErr) {
       log("migrate", `Failed to start replica on target after volume move: ${scaleErr}`);
       throw scaleErr;
@@ -342,6 +386,10 @@ async function migrateWithVolume(
 
   // Phase E — Drop old replica row if it's still around.
   const replicasAfterScale = db.getReplicas(app.id);
+  const targetReplica = replicasAfterScale.find((candidate) =>
+    candidate.server_id === targetServer.id && candidate.id !== replica.id
+  );
+  if (!targetReplica) throw new Error("Target replica row missing after volume migration");
   if (replicasAfterScale.some((r) => r.id === replica.id)) {
     db.deleteReplica(replica.id);
   } else {
@@ -362,7 +410,15 @@ async function migrateWithVolume(
   }
 
   emit("migrate", `Migration complete — replica and volume now on ${targetServer.name}`);
-  return { ok: true, sourceServerName: sourceServer.name, targetServerName: targetServer.name, fromCount: currentCount, toCount: currentCount, withVolume: true };
+  return {
+    ok: true,
+    sourceServerName: sourceServer.name,
+    targetServerName: targetServer.name,
+    fromCount: currentCount,
+    toCount: currentCount,
+    replicaId: targetReplica.id,
+    withVolume: true,
+  };
 }
 
 // Best-effort reversal of a partially-completed migrateWithVolume. Used by the
@@ -422,10 +478,11 @@ export async function rollbackMigrateWithVolume(
   // existing local image. We don't trigger a rebuild here — that's a redeploy.
   if (rb.sourceContainerDestroyed) {
     try {
-      const probe = `su - deploy -c ${JSON.stringify(`docker image inspect ${app.name}:latest >/dev/null 2>&1`)}`;
+      const desiredImage = latestDesiredImage(app);
+      const probe = `su - deploy -c ${JSON.stringify(`docker image inspect ${desiredImage} >/dev/null 2>&1`)}`;
       const res = await sshExec(sourceServer.ipv4, probe, sourceHostKey);
       if (res.exitCode !== 0) {
-        logLine(`MANUAL RECOVERY NEEDED: source container destroyed and image '${app.name}:latest' missing — redeploy required`);
+        logLine(`MANUAL RECOVERY NEEDED: source container destroyed and immutable image '${desiredImage}' missing — redeploy required`);
       } else {
         try {
           await restartSourceReplica(rb, logLine);
@@ -460,9 +517,8 @@ async function restartSourceReplica(
   const containerName = replica.container_name;
   const hostPort = replica.host_port;
 
-  const envFilePathOnHost = `/home/deploy/apps/${app.name}/.env.deploy`;
-  const probe = await sshExec(sourceServer.ipv4, asUser(`test -f ${envFilePathOnHost}`), sourceHostKey);
-  const envFilePath = probe.exitCode === 0 ? envFilePathOnHost : undefined;
+  const envVars = await resolveAppEnvVars(app);
+  const desiredImage = latestDesiredImage(app);
 
   // startAppReplica removes any stale same-named container first (best-effort),
   // then runs on ocd-net (default — the source was already on the shared
@@ -470,12 +526,14 @@ async function restartSourceReplica(
   // the volume has been re-attached to source.
   await startAppReplica(sourceServer.ipv4, {
     containerName,
-    image: `${app.name}:latest`,
+    image: desiredImage,
     appName: app.name,
     bindAddr,
     hostPort,
     containerPort: app.container_port,
-    envFilePath,
+    envVars,
+    configRevision: app.config_revision,
+    envHash: hashEnvironment(envVars),
     volumeMount: rb.originalVolumeMount || undefined,
     extraVolumes: db.parseExtraVolumes(app.extra_volumes),
     memoryMb: app.memory_mb || undefined,

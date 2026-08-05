@@ -24,6 +24,7 @@ import { validateDeployRequest, assertSafeHostPath, validateRepoBuildPath } from
 import { cloneRepo, findDockerfile, sshExec } from "../../shared/remote/index.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import type { Server } from "../../shared/rpc.ts";
+import { getCatalogEntry } from "../../shared/services/catalog.ts";
 
 type DeployStackInput = StackDeployRequest;
 
@@ -690,9 +691,14 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
       const name = memberName(req.name, svc.key);
       const existing = db.getServiceByName(name);
       if (existing) {
-        if (existing.service_type !== svc.type) {
+        const desiredVersion = svc.version || getCatalogEntry(svc.type)?.versions[0] || "";
+        if (existing.service_type !== svc.type || existing.version !== desiredVersion) {
           throw new Error(
-            `Existing service "${name}" has type ${existing.service_type}, expected ${svc.type}; refusing unsafe adoption`,
+            `Immutable managed-service drift for "${name}": running ` +
+              `${existing.service_type}:${existing.version}, manifest requires ${svc.type}:${desiredVersion}. ` +
+              `Replacement plan: preserve/verify the service volume, destroy service #${existing.id}, ` +
+              `then recreate it as ${svc.type}:${desiredVersion}. Confirmation is required; ` +
+              `the stack is not reconciled and will not be marked successful.`,
           );
         }
         db.setServiceStack(existing.id, stackId);

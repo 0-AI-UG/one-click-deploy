@@ -1,6 +1,7 @@
 import { sshExec, describeFailure } from "./ssh.ts";
 import { asUser, log, buildDockerRunArgs, withImageGcLease } from "./container-common.ts";
 import * as db from "../../shared/db.ts";
+import { REVISION_LABELS } from "../revision.ts";
 
 /**
  * Write `<baseDir>/<appName>/.env.deploy` from resolved env vars — single-quote
@@ -129,6 +130,8 @@ export type StartAppReplicaOpts = {
   /** `docker rm -f` any same-named container first. Default true; wake's slow
    *  path passes false (the container provably does not exist). */
   removeExisting?: boolean;
+  configRevision?: number;
+  envHash?: string;
 };
 
 /** Resolve the current single-instance service names to their private fleet
@@ -183,7 +186,43 @@ export async function startAppReplica(
     envFilePath = await writeEnvDeployFile(ip, opts.appName, opts.envVars, hostKey, opts.baseDir);
   }
 
+  const imageInspect = await sshExec(
+    ip,
+    asUser(`docker image inspect --format '{{.Id}}' ${opts.image}`),
+    hostKey,
+  );
+  if (imageInspect.exitCode !== 0 || !imageInspect.stdout.trim()) {
+    throw new Error(describeFailure(`Unable to resolve immutable image ${opts.image}`, imageInspect));
+  }
+  const imageId = imageInspect.stdout.trim();
+  const labels = {
+    [REVISION_LABELS.app]: opts.appName,
+    [REVISION_LABELS.configRevision]: String(opts.configRevision ?? 0),
+    [REVISION_LABELS.envHash]: opts.envHash ?? "",
+    [REVISION_LABELS.imageRef]: opts.image,
+    [REVISION_LABELS.imageId]: imageId,
+    [REVISION_LABELS.bindAddress]: opts.bindAddr,
+    [REVISION_LABELS.hostPort]: String(opts.hostPort),
+  };
+
   if (opts.removeExisting !== false) {
+    // Crash-resume adoption: keep an already-running exact revision. A stale
+    // or mismatched namesake is removed so retry is deterministic.
+    const existing = await sshExec(
+      ip,
+      asUser(`docker inspect --format '{{json .Config.Labels}}|{{.State.Running}}|{{.Id}}' ${opts.containerName} 2>/dev/null || true`),
+      hostKey,
+    );
+    const [rawLabels, running, existingId] = existing.stdout.trim().split("|");
+    let same = false;
+    try {
+      const current = JSON.parse(rawLabels || "{}");
+      same = running === "true" && Object.entries(labels).every(([key, value]) => current?.[key] === value);
+    } catch { /* remove malformed/legacy container */ }
+    if (same) {
+      log("run", `Adopted existing attested container ${opts.containerName}`);
+      return { containerId: existingId || opts.containerName };
+    }
     await sshExec(ip, asUser(`docker rm -f ${opts.containerName} 2>/dev/null || true`), hostKey);
   }
 
@@ -216,6 +255,7 @@ export async function startAppReplica(
     extraVolumes: opts.extraVolumes,
     memoryMb: opts.memoryMb,
     cpus: opts.cpus,
+    labels,
   });
   // Keep GC out while Docker resolves the image tag and creates the container.
   // The build path takes the same shared lease, while every prune takes the

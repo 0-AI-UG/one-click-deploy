@@ -278,7 +278,7 @@ describe("deploy_stack service adoption", () => {
     const service = db.insertService({
       name: `${name}-db`,
       service_type: "postgresql",
-      version: "17",
+      version: "17-alpine",
       port: 5432,
       env_vars: "{}",
       credentials: JSON.stringify({
@@ -302,6 +302,24 @@ describe("deploy_stack service adoption", () => {
     expect(
       listChildOperations(ctx.opId).filter((op) => op.kind === "deploy_service"),
     ).toHaveLength(0);
+  });
+
+  test("rejects immutable managed-service version drift instead of reporting success", async () => {
+    const name = `drift-${randomSuffix()}`;
+    const input = req(name, [], [{ key: "db", type: "postgresql", version: "17-pgmq" } as any]);
+    db.insertService({
+      name: `${name}-db`,
+      service_type: "postgresql",
+      version: "17-alpine",
+      port: 5432,
+      env_vars: "{}",
+      credentials: "{}",
+    });
+    const ctx = makeCtx(input);
+    const planOut = await planStep.run(ctx, {}) as any;
+
+    await expect(reconcileServicesStep.run(ctx, { plan: planOut }))
+      .rejects.toThrow(/immutable managed-service drift.*17-alpine.*17-pgmq.*confirmation is required/i);
   });
 });
 

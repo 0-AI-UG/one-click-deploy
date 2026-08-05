@@ -70,6 +70,7 @@ function toJsonRow(op: ReturnType<typeof getOperation> & {}) {
   const resourceLabels = resourceKeys.map(labelForResourceKey);
   const input = redact(safeParse(op.input_json, {}));
   const error = op.error_json ? safeParse(op.error_json, null) : null;
+  const cancelRequested = Boolean((error as { cancel_requested?: unknown } | null)?.cancel_requested);
   return {
     id: op.id,
     kind: op.kind,
@@ -78,6 +79,7 @@ function toJsonRow(op: ReturnType<typeof getOperation> & {}) {
     resource_labels: resourceLabels,
     input,
     status: op.status,
+    cancel_requested: cancelRequested,
     parent_id: op.parent_id,
     attempt: op.attempt,
     scheduled_for: op.scheduled_for,
@@ -146,8 +148,20 @@ export async function handleGetOperation(request: Request, id: number): Promise<
     if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     const steps = getSteps(id, 0).map(mapStep);
     const children = listChildOperations(id).map(toJsonRow);
+    const outstandingChildren = children.filter((child) =>
+      !["done", "failed", "cancelled", "compensated", "compensation_failed"].includes(child.status)
+    );
     return Response.json(
-      { ...toJsonRow(op), steps, children, compensation_preview: previewCompensation(op) },
+      {
+        ...toJsonRow(op),
+        steps,
+        children,
+        outstanding_children: outstandingChildren,
+        cancellation_phase: op.error_json && safeParse<{ cancel_requested?: unknown }>(op.error_json, {}).cancel_requested
+          ? (outstandingChildren.length > 0 ? "waiting_for_children" : "requested")
+          : null,
+        compensation_preview: previewCompensation(op),
+      },
       { headers: corsHeaders },
     );
   } catch (err) {
@@ -173,12 +187,17 @@ export async function handleOperationEvents(request: Request, id: number): Promi
       // every step's final state instead of a frozen "started".
       const steps = terminal ? getSteps(id, 0) : getSteps(id, since);
       if (steps.length > 0 || terminal) {
+        const nextCursor = steps.reduce((max, step) => Math.max(max, step.seq), since);
+        const children = listChildOperations(id).map(toJsonRow);
         return Response.json(
           {
             status: op.status,
             last_step: op.last_step,
             error: op.error_json ? safeParse(op.error_json, null) : null,
             steps: steps.map(mapStep),
+            next_cursor: nextCursor,
+            resumable: true,
+            children,
           },
           { headers: corsHeaders },
         );
@@ -188,7 +207,7 @@ export async function handleOperationEvents(request: Request, id: number): Promi
     // Timed out with no new events — client re-polls.
     const op = getOperation(id)!;
     return Response.json(
-      { status: op.status, last_step: op.last_step, steps: [] },
+      { status: op.status, last_step: op.last_step, steps: [], next_cursor: since, resumable: true },
       { headers: corsHeaders },
     );
   } catch (err) {
@@ -213,19 +232,21 @@ export async function handleGetOperationLogs(request: Request, id: number): Prom
         const cur = getOperation(id)!;
         const terminal = ["done", "failed", "cancelled", "compensated", "compensation_failed"].includes(cur.status);
         if (logs.length > 0 || terminal) {
+          const nextCursor = logs.reduce((max, row) => Math.max(max, row.id), since);
           return Response.json(
-            { status: cur.status, logs },
+            { status: cur.status, logs, next_cursor: nextCursor, resumable: true },
             { headers: corsHeaders },
           );
         }
         await new Promise((r) => setTimeout(r, 500));
       }
       const cur = getOperation(id)!;
-      return Response.json({ status: cur.status, logs: [] }, { headers: corsHeaders });
+      return Response.json({ status: cur.status, logs: [], next_cursor: since, resumable: true }, { headers: corsHeaders });
     }
 
     const logs = getOpLogs(id, since, 1000);
-    return Response.json({ status: op.status, logs }, { headers: corsHeaders });
+    const nextCursor = logs.reduce((max, row) => Math.max(max, row.id), since);
+    return Response.json({ status: op.status, logs, next_cursor: nextCursor, resumable: true }, { headers: corsHeaders });
   } catch (err) {
     return handleError(err);
   }

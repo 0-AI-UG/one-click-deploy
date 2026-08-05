@@ -5,17 +5,17 @@ import { sshExec, healthCheck, containerRunningCheck } from "../../shared/remote
 import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
+import { latestDesiredImage } from "../revision.ts";
 
 type MigrateInput = { appId: number; replicaId: number; targetServerId: number };
 
 // migrateReplica() is the core routine: it pulls the image, starts on target,
 // stops on source, swaps replica rows, and (for volume apps) detaches/attaches
-// the Hetzner volume with its own internal rollback. We bracket it with
-// `mark_draining` and `record_event` steps so those bookkeeping concerns are
-// visible in the audit log; the transfer itself stays atomic.
+// the Hetzner volume with its own internal rollback. Port reservation and
+// draining happen inside that routine so no traffic is removed before the
+// complete target bind tuple has passed preflight.
 
 type ValidateOut = { sourceServerId: number };
-type DrainOut = { ok: true };
 type TransferOut = Extract<MigrateResult, { ok: true }>;
 type PreflightOut = { ok: true };
 
@@ -54,33 +54,15 @@ const preflightImage: Step<MigrateInput, PreflightOut> = {
     if (!replica) throw new Error("Replica not found");
     const sourceServer = db.getServer(replica.server_id);
     if (!sourceServer) throw new Error("Source server not found");
-    const probe = `su - deploy -c ${JSON.stringify(`docker image inspect ${app.name}:latest >/dev/null 2>&1`)}`;
+    const image = latestDesiredImage(app);
+    const probe = `su - deploy -c ${JSON.stringify(`docker image inspect ${image} >/dev/null 2>&1`)}`;
     const res = await sshExec(sourceServer.ipv4, probe, sourceServer.ssh_host_key || undefined);
     if (res.exitCode !== 0) {
       throw new Error(
-        `Cannot migrate volume-backed app: image '${app.name}:latest' is missing on source server '${sourceServer.name}' and no git_repo is configured for rebuild. Redeploy first.`,
+        `Cannot migrate volume-backed app: immutable image '${image}' is missing on source server '${sourceServer.name}' and no git_repo is configured for rebuild. Redeploy first.`,
       );
     }
     return { ok: true };
-  },
-};
-
-const markDraining: Step<MigrateInput, DrainOut> = {
-  name: "mark_draining",
-  label: "Drain replica",
-  async run(ctx) {
-    db.updateReplicaStatus(ctx.input.replicaId, "draining");
-    try {
-      await syncAppIngress(ctx.input.appId);
-    } catch (err) {
-      ctx.log(`Ingress sync during drain failed (continuing): ${err}`);
-    }
-    return { ok: true };
-  },
-  async compensate(ctx) {
-    // Best-effort: if the transfer failed, restore the replica's routing.
-    try { db.updateReplicaStatus(ctx.input.replicaId, "running"); } catch { /* ignore */ }
-    try { await syncAppIngress(ctx.input.appId); } catch { /* ignore */ }
   },
 };
 
@@ -124,10 +106,11 @@ const performMigration: Step<MigrateInput, TransferOut> = {
 const verifyReplicaHealthy: Step<MigrateInput, { ok: true; healthy: boolean }> = {
   name: "verify_replica_healthy",
   label: "Verify replica healthy",
-  async run(ctx) {
+  async run(ctx, prior) {
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
-    const replica = db.getReplicas(ctx.input.appId).find((r) => r.id === ctx.input.replicaId);
+    const migrated = prior["perform_migration"] as TransferOut | undefined;
+    const replica = db.getReplicas(ctx.input.appId).find((r) => r.id === migrated?.replicaId);
     if (!replica) throw new Error("Replica not found after migration");
     const server = db.getServer(replica.server_id);
     if (!server) throw new Error("Target server not found after migration");
@@ -197,7 +180,7 @@ const migrateOp: OpKindDefinition<MigrateInput> = {
   kind: "migrate",
   label: "Migrate replica",
   resourceKeys: (input) => [`app:${input.appId}`],
-  steps: [loadAndValidate, preflightImage, markDraining, performMigration, verifyReplicaHealthy, syncIngressStep, recordEvent, gcEmptyServers],
+  steps: [loadAndValidate, preflightImage, performMigration, verifyReplicaHealthy, syncIngressStep, recordEvent, gcEmptyServers],
 };
 
 registerOp(migrateOp as OpKindDefinition<any>);

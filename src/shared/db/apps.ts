@@ -71,6 +71,9 @@ export type AppRow = {
    *  deployed before migration 84 — treat NULL as "no known edges". */
   stack_needs: string | null;
   public: number;
+  public_endpoint_status: string;
+  public_endpoint_error: string;
+  public_endpoint_checked_at: string | null;
   extra_volumes: string; // JSON array of "host:container" strings
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
   cpu_limit: number; // per-container CPU ceiling in cores (fractional allowed); 0 = platform default
@@ -475,6 +478,12 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
 
 export function updateAppStatus(id: number, status: string): void {
   db.query("UPDATE apps SET status = ? WHERE id = ?").run(status, id);
+}
+
+export function updateAppPublicEndpointStatus(id: number, status: string, error = ""): void {
+  db.query(
+    "UPDATE apps SET public_endpoint_status = ?, public_endpoint_error = ?, public_endpoint_checked_at = datetime('now') WHERE id = ?",
+  ).run(status, error, id);
 }
 
 export function updateAppSleepingState(id: number, serverId: number, hostPort: number): void {

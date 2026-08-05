@@ -16,6 +16,12 @@ export type ReplicaRow = {
   unhealthy_ticks: number;
   last_health_at: string | null;
   stopped_at: string | null;
+  image_digest: string;
+  desired_image_digest: string;
+  env_hash: string;
+  config_revision: number;
+  attested_at: string | null;
+  attestation_error: string;
   created_at: string;
 };
 
@@ -76,6 +82,39 @@ export function getReplicasByServer(serverId: number): ReplicaRow[] {
 
 export function updateReplicaStatus(id: number, status: string): void {
   health.updateStatus("replicas", id, status);
+}
+
+export function recordReplicaAttestation(
+  id: number,
+  attestation: {
+    imageDigest: string;
+    desiredImageDigest?: string;
+    envHash: string;
+    configRevision: number;
+    error?: string;
+  },
+): void {
+  db.query(
+    `UPDATE replicas SET image_digest = ?, desired_image_digest = ?, env_hash = ?, config_revision = ?,
+       attested_at = CASE WHEN ? = '' THEN datetime('now') ELSE NULL END,
+       attestation_error = ?, status = CASE WHEN ? = '' THEN status ELSE 'divergent' END
+     WHERE id = ?`,
+  ).run(
+    attestation.imageDigest,
+    attestation.desiredImageDigest ?? attestation.imageDigest,
+    attestation.envHash,
+    attestation.configRevision,
+    attestation.error || "",
+    attestation.error || "",
+    attestation.error || "",
+    id,
+  );
+}
+
+export function clearReplicaAttestation(id: number): void {
+  db.query(
+    "UPDATE replicas SET image_digest = '', desired_image_digest = '', env_hash = '', config_revision = 0, attested_at = NULL, attestation_error = '' WHERE id = ?",
+  ).run(id);
 }
 
 export function markReplicaStopped(id: number): void {

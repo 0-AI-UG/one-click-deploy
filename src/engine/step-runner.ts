@@ -58,7 +58,7 @@ function buildContext(op: OperationRow, input: unknown, phase: "forward" | "comp
  * compensate step throws — the reconciler will retry with backoff.
  */
 export async function runOperation(op: OperationRow, def: AnyOpKind): Promise<void> {
-  return withOpContext(op.id, () => runOperationInner(op, def));
+  return withOpContext(op.id, op.attempt + 1, () => runOperationInner(op, def));
 }
 
 async function runOperationInner(op: OperationRow, def: AnyOpKind): Promise<void> {

@@ -10,6 +10,7 @@ import { collectServerMetrics } from "./metrics-parse.ts";
 import { checkReplicaHealth, checkServiceInstanceHealth, HEALTH_EXEMPT_STATUSES } from "./health.ts";
 import { sweepStuckStates } from "./stuck-sweep.ts";
 import { sweepExpiredProvisionalVolumes } from "./provisional-volume-sweep.ts";
+import { reconcileAllAppDns } from "./dns-reconciler.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -193,6 +194,11 @@ async function tick(): Promise<void> {
     for (const server of allServers) {
       if (server.ipv4) ensureServer(server.id);
     }
+
+    // DNS is a level-triggered desired-state resource, not a one-shot deploy
+    // side effect. Run it independently of server telemetry so an unreachable
+    // worker cannot prevent a missing public record from being repaired.
+    await reconcileAllAppDns();
 
     // --- Process all servers in parallel ---
     await Promise.all(

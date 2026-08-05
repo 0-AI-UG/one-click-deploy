@@ -9,10 +9,14 @@ import {
   unpauseContainer,
   probeAppHealth,
   startAppReplica,
+  transferImage,
+  pullImmutableImage,
 } from "../../shared/remote/index.ts";
 import { syncAllTraefik, syncAppIngress } from "../scale/traefik-manager.ts";
 import { replicaBindHost, appReplicaRunOpts } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
+import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
+import { resolveGitHubToken } from "../../shared/github-token.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [deploy:${context}]`, ...args);
@@ -183,10 +187,10 @@ export async function restartApp(appId: number): Promise<{ ok: boolean; error?: 
 }
 
 /**
- * Recreate every replica from its existing :latest image with freshly resolved
- * environment variables. This applies config changes without cloning/building
- * source and keeps the ordinary restart command's lighter docker-restart
- * semantics separate.
+ * Recreate every replica from its recorded immutable image with freshly
+ * resolved environment variables. This applies config changes without
+ * cloning/building source and keeps the ordinary restart command's lighter
+ * docker-restart semantics separate.
  */
 export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean; error?: string }> {
   log("reloadAppEnvironment", `Reloading app id=${appId} from existing image`);
@@ -196,6 +200,17 @@ export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean
     const replicas = db.getReplicas(appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
     const envVars = await resolveAppEnvVars(app);
+    const desiredImage = latestDesiredImage(app);
+    const desiredDeployment = db.getDeployments(app.id).find((d) => d.status === "deployed");
+    if (!desiredDeployment?.image_digest && !app.image_ref) {
+      throw new Error("No immutable deployed image is recorded; run a full deploy once before reloading the environment");
+    }
+    const expected = {
+      imageDigest: desiredDeployment?.image_digest || app.image_ref,
+      envHash: hashEnvironment(envVars),
+      configRevision: app.config_revision,
+    };
+    const registryToken = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
     let allHealthy = true;
 
     for (const replica of replicas) {
@@ -207,6 +222,38 @@ export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean
       if (replicas.length > 1) {
         db.updateReplicaStatus(replica.id, "draining");
         await syncAppIngress(appId).catch(() => {});
+      }
+      const present = await sshExec(
+        server.ipv4,
+        `su - deploy -c ${JSON.stringify(`docker image inspect ${desiredImage} >/dev/null 2>&1 && echo yes || echo no`)}`,
+        server.ssh_host_key || undefined,
+      );
+      if (present.stdout.trim() !== "yes") {
+        if (desiredImage.includes("@sha256:")) {
+          await pullImmutableImage(server.ipv4, {
+            name: app.name,
+            imageRef: desiredImage,
+            gitToken: registryToken,
+            hostKey: server.ssh_host_key || undefined,
+          });
+        } else {
+          const source = replicas
+            .map((candidate) => ({ candidate, host: db.getServer(candidate.server_id) }))
+            .find(({ host }) => host && host.id !== server.id);
+          if (!source?.host) throw new Error(`Immutable image ${desiredImage} is missing and no replica can supply it`);
+          await transferImage(
+            source.host.ipv4,
+            server.ipv4,
+            desiredImage,
+            source.host.ssh_host_key || undefined,
+            server.ssh_host_key || undefined,
+            {
+              registryRef: app.build_cache_ref || undefined,
+              registryToken,
+              onProgress: (line) => log("reloadAppEnvironment", line),
+            },
+          );
+        }
       }
       await startAppReplica(
         server.ipv4,
@@ -227,12 +274,19 @@ export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean
         5,
         server.ssh_host_key || undefined,
       );
-      db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
-      if (!health.healthy) allHealthy = false;
+      if (!health.healthy) {
+        db.updateReplicaStatus(replica.id, "unhealthy");
+        allHealthy = false;
+      } else {
+        db.updateReplicaStatus(replica.id, "attesting");
+        const attestation = await attestReplica(app, replica, server, expected);
+        if (!attestation.ok) allHealthy = false;
+        else db.updateReplicaStatus(replica.id, "running");
+      }
       await syncAppIngress(appId).catch(() => {});
     }
     db.updateAppStatus(appId, allHealthy ? "running" : "unhealthy");
-    if (!allHealthy) throw new Error("One or more replicas were unhealthy after environment reload");
+    if (!allHealthy) throw new Error("One or more replicas were unhealthy or divergent after environment reload");
     db.markAppEnvironmentFresh(appId);
     return { ok: true };
   } catch (err) {
@@ -261,9 +315,7 @@ export async function recreateAppContainer(
     const bindAddr = replicaBindHost(server);
 
     const envVars = await resolveAppEnvVars(app);
-    const envFilePath = Object.keys(envVars).length > 0
-      ? `/home/deploy/apps/${app.name}/.env.deploy`
-      : undefined;
+    const desiredImage = latestDesiredImage(app);
 
     // Recreate through the shared hardened path. The previous hand-built
     // `docker run` here skipped cap-drop / no-new-privileges / mem-cpu-pids
@@ -271,14 +323,16 @@ export async function recreateAppContainer(
     // buildDockerRunArgs (via startAppReplica) applies all of them. Use the
     // same ocd-net attachment as initial deploys and environment reloads.
     await startAppReplica(server.ipv4, {
-      containerName: app.name,
-      image: `${app.name}:latest`,
+      containerName: firstReplica.container_name,
+      image: desiredImage,
       appName: app.name,
       network: "ocd-net",
       bindAddr,
       hostPort,
       containerPort: app.container_port,
-      envFilePath,
+      envVars,
+      configRevision: app.config_revision,
+      envHash: hashEnvironment(envVars),
       volumeMount: volumeMount || undefined,
       extraVolumes: extraVolumes || [],
       memoryMb: app.memory_mb || undefined,
@@ -286,9 +340,22 @@ export async function recreateAppContainer(
     }, hostKey);
 
     // Health check (running-only when the app opted out of the HTTP probe)
-    const health = await probeAppHealth(app, server.ipv4, app.name, bindAddr, hostPort, 5, hostKey);
-    db.updateAppStatus(appId, health.healthy ? "running" : "unhealthy");
-    db.updateReplicaStatus(firstReplica.id, health.healthy ? "running" : "unhealthy");
+    const health = await probeAppHealth(app, server.ipv4, firstReplica.container_name, bindAddr, hostPort, 5, hostKey);
+    if (!health.healthy) {
+      db.updateAppStatus(appId, "unhealthy");
+      db.updateReplicaStatus(firstReplica.id, "unhealthy");
+      throw new Error("Recreated container did not become healthy");
+    }
+    db.updateReplicaStatus(firstReplica.id, "attesting");
+    const expected = {
+      imageDigest: desiredImage,
+      envHash: hashEnvironment(envVars),
+      configRevision: app.config_revision,
+    };
+    const attestation = await attestReplica(app, firstReplica, server, expected);
+    if (!attestation.ok) throw new Error(`Recreated container attestation failed: ${attestation.error}`);
+    db.updateAppStatus(appId, "running");
+    db.updateReplicaStatus(firstReplica.id, "running");
 
     log("recreateContainer", `App id=${appId} recreated successfully`);
     return { ok: true };

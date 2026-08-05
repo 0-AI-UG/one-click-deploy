@@ -247,6 +247,8 @@ export function deriveStackResourceState(stack: db.StackRow): StackResourceState
   const services = db.getServicesByStackId(stack.id);
   const unhealthy = [
     ...apps.filter((app) => !APP_READY.has(app.status)).map((app) => `${app.name}:${app.status}`),
+    ...apps.filter((app) => app.public && app.public_endpoint_status === "degraded")
+      .map((app) => `${app.name}:public-endpoint(${app.public_endpoint_error || "not ready"})`),
     ...services.filter((service) => !SERVICE_READY.has(service.status)).map((service) => `${service.name}:${service.status}`),
     ...memberInstanceIssues(apps, services),
   ];

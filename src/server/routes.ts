@@ -20,6 +20,7 @@ import {
   handleDeploy,
   handleDestroyApp,
   handleRestartApp,
+  handleReloadAppEnvironment,
   handlePauseApp,
   handleUnpauseApp,
   handleRenameApp,
@@ -261,6 +262,7 @@ export const apiRoutes = {
   // App-specific
   "/api/apps/:appId": { DELETE: (req: Request) => handleDestroyApp(req, appIdFrom(req)) },
   "/api/apps/:appId/restart": { POST: (req: Request) => handleRestartApp(req, appIdFrom(req)) },
+  "/api/apps/:appId/reload-env": { POST: (req: Request) => handleReloadAppEnvironment(req, appIdFrom(req)) },
   "/api/apps/:appId/pause": { POST: (req: Request) => handlePauseApp(req, appIdFrom(req)) },
   "/api/apps/:appId/unpause": { POST: (req: Request) => handleUnpauseApp(req, appIdFrom(req)) },
   "/api/apps/:appId/rename": { PUT: (req: Request) => handleRenameApp(req, appIdFrom(req)) },

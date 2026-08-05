@@ -29,8 +29,23 @@ const containerRunningMock = mock(async () => false);
 const containerExistsMock = mock(async () => false);
 const getContainerLogsMock = mock(async () => "");
 const removeContainerMock = mock(async () => {});
+let attestationAppName = "";
+let attestationEnvHash = "";
 mock.module("../../shared/remote/index.ts", () => ({
-  sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+  sshExec: mock(async (_ip: string, command: string) => ({
+    exitCode: 0,
+    stdout: command.includes("{{json .}}") ? JSON.stringify({
+      Image: "sha256:test-image",
+      Config: { Labels: {
+        "ocd.app": attestationAppName,
+        "ocd.config-revision": "1",
+        "ocd.env-hash": attestationEnvHash,
+        "ocd.image-ref": "app:latest",
+        "ocd.image-id": "sha256:test-image",
+      } },
+    }) : "",
+    stderr: "",
+  })),
   cloneAndBuild: cloneAndBuildMock,
   removeContainer: removeContainerMock,
   healthCheck: healthCheckMock,
@@ -90,6 +105,13 @@ function stepByName(name: string) {
   const step = deployOp.steps.find((s) => s.name === name);
   if (!step) throw new Error(`step ${name} not found`);
   return step;
+}
+
+async function primeAttestation(app: db.AppRow): Promise<void> {
+  const { resolveAppEnvVars } = await import("../../shared/env-crypto.ts");
+  const { hashEnvironment } = await import("../revision.ts");
+  attestationAppName = app.name;
+  attestationEnvHash = hashEnvironment(await resolveAppEnvVars(app));
 }
 
 beforeEach(() => {
@@ -270,6 +292,7 @@ describe("deploy step: create_dns_record", () => {
 
   test("creates record with @ subdomain for a 2-label domain (example.com)", async () => {
     db.saveSetting("dns_zone_id", "zone-123");
+    db.saveSetting("dns_zone_name", "example.com");
     const { ctx } = makeCtx({ ...baseReq("x"), domain: "example.com" });
     const prior = {
       pick_or_provision_server: {
@@ -278,6 +301,7 @@ describe("deploy step: create_dns_record", () => {
         serverHostKey: "",
         provisioned: false,
         ingressIp: "4.4.4.4",
+        zoneName: "example.com",
       },
     };
     const out = (await step.run(ctx, prior)) as { recordId: string; name: string; value: string };
@@ -288,6 +312,7 @@ describe("deploy step: create_dns_record", () => {
 
   test("creates record with subdomain for app.example.com", async () => {
     db.saveSetting("dns_zone_id", "zone-xyz");
+    db.saveSetting("dns_zone_name", "example.com");
     const { ctx } = makeCtx({ ...baseReq("x"), domain: "my.app.example.com" });
     const prior = {
       pick_or_provision_server: {
@@ -296,6 +321,7 @@ describe("deploy step: create_dns_record", () => {
         serverHostKey: "",
         provisioned: false,
         ingressIp: "7.7.7.7",
+        zoneName: "example.com",
       },
     };
     const out = (await step.run(ctx, prior)) as { name: string };
@@ -308,12 +334,13 @@ describe("deploy step: create_dns_record", () => {
     });
   });
 
-  test("DNS failure is swallowed (best-effort) — returns null", async () => {
+  test("DNS failure is visible and fails the deployment", async () => {
     db.saveSetting("dns_zone_id", "zone-ok");
+    db.saveSetting("dns_zone_name", "example.com");
     dns._mocks.createRecord.mockImplementationOnce(async () => {
       throw new Error("dns 500");
     });
-    const { ctx, logLines } = makeCtx({ ...baseReq("x"), domain: "app.example.com" });
+    const { ctx } = makeCtx({ ...baseReq("x"), domain: "app.example.com" });
     const prior = {
       pick_or_provision_server: {
         serverId: 1,
@@ -321,11 +348,10 @@ describe("deploy step: create_dns_record", () => {
         serverHostKey: "",
         provisioned: false,
         ingressIp: "8.8.8.8",
+        zoneName: "example.com",
       },
     };
-    const out = await step.run(ctx, prior);
-    expect(out).toBeNull();
-    expect(logLines.some((l) => /DNS record creation failed/i.test(l))).toBe(true);
+    await expect(step.run(ctx, prior)).rejects.toThrow(/dns 500/i);
   });
 
   test("auto-domain: creates an A record named after the app", async () => {
@@ -562,7 +588,9 @@ function setupDeployedApp(healthCheckFlag: boolean) {
       flatEnvVars: {},
       dockerfilePath: "Dockerfile",
     },
+    build_and_run_container: { imageTag: "app:latest" },
   };
+  attestationAppName = name;
   return { server, app, replica, prior, name };
 }
 
@@ -578,6 +606,7 @@ describe("deploy step: health_check", () => {
 
   test("health_check:false skips the HTTP probe and marks the app running", async () => {
     const { app, replica, prior, name } = setupDeployedApp(false);
+    await primeAttestation(app);
     const { ctx } = makeCtx({ ...baseReq(name), container_port: 5432, health_check: false });
     const out = (await step.run(ctx, prior)) as { healthy: boolean };
     expect(out.healthy).toBe(true);
@@ -602,7 +631,8 @@ describe("deploy step: health_check", () => {
   });
 
   test("default (health_check omitted) still runs the HTTP probe", async () => {
-    const { prior, name } = setupDeployedApp(true);
+    const { app, prior, name } = setupDeployedApp(true);
+    await primeAttestation(app);
     const { ctx } = makeCtx(baseReq(name));
     await step.run(ctx, prior);
     expect(healthCheckMock).toHaveBeenCalledTimes(1);
@@ -615,8 +645,9 @@ describe("redeploy step: health_check", () => {
 
   test("honors the stored health_check=0 flag (skips HTTP probe)", async () => {
     const { app } = setupDeployedApp(false);
+    await primeAttestation(app);
     const { ctx } = makeCtx({ appId: app.id });
-    const out = (await step.run(ctx, {})) as { healthy: boolean };
+    const out = (await step.run(ctx, { pull_and_build: { imageTag: "app:latest" } })) as { healthy: boolean };
     expect(out.healthy).toBe(true);
     expect(containerRunningCheckMock).toHaveBeenCalledTimes(1);
     expect(healthCheckMock).not.toHaveBeenCalled();
@@ -626,8 +657,9 @@ describe("redeploy step: health_check", () => {
 
   test("keeps the HTTP probe for apps with health_check=1", async () => {
     const { app } = setupDeployedApp(true);
+    await primeAttestation(app);
     const { ctx } = makeCtx({ appId: app.id });
-    await step.run(ctx, {});
+    await step.run(ctx, { pull_and_build: { imageTag: "app:latest" } });
     expect(healthCheckMock).toHaveBeenCalledTimes(1);
     expect(containerRunningCheckMock).not.toHaveBeenCalled();
     expect(db.getApp(app.id)!.status).toBe("running");
@@ -647,8 +679,8 @@ describe("resolveAppDomain", () => {
     )).toEqual({ domain: "", managedDns: false });
   });
 
-  test("explicit domain is kept; managedDns follows dns_zone_id", () => {
-    expect(resolveAppDomain({ app_name: "a", domain: "a.example.com" }, { dns_zone_id: "z1" }, "1.2.3.4"))
+  test("explicit domain is managed only when it belongs to the configured zone", () => {
+    expect(resolveAppDomain({ app_name: "a", domain: "a.example.com" }, { dns_zone_id: "z1", dns_zone_name: "example.com" }, "1.2.3.4"))
       .toEqual({ domain: "a.example.com", managedDns: true });
     expect(resolveAppDomain({ app_name: "a", domain: "a.example.com" }, {}, "1.2.3.4"))
       .toEqual({ domain: "a.example.com", managedDns: false });
@@ -659,7 +691,7 @@ describe("resolveAppDomain", () => {
       { app_name: "a", domain: "custom.other.org" },
       { dns_zone_id: "z1", dns_zone_name: "example.com" },
       "1.2.3.4",
-    )).toEqual({ domain: "custom.other.org", managedDns: true });
+    )).toEqual({ domain: "custom.other.org", managedDns: false });
   });
 
   test("auto-domain <app>.<zone> when a zone is configured and no domain given", () => {
@@ -762,8 +794,18 @@ describe("deploy: private apps", () => {
     expect(flat).toEqual({ KEEP: "orig", ADDED: "new" });
   });
 
-  test("finalize_deploy sets desired_replicas for private apps with replicas > 1", async () => {
+  test("finalize_deploy succeeds only after every desired replica is attested", async () => {
     const name = `priv-${randomSuffix()}`;
+    const server = db.insertServer({
+      name: `srv-${randomSuffix()}`,
+      provider_id: `h-${randomSuffix()}`,
+      ipv4: "10.0.0.10",
+      private_ipv4: "10.0.0.10",
+      ipv6: "",
+      type: "cx22",
+      location: "fsn1",
+      status: "ready",
+    });
     const app = db.insertApp({
       name,
       domain: "",
@@ -773,14 +815,28 @@ describe("deploy: private apps", () => {
       env_vars: "{}",
       public: false,
     });
+    db.updateAppScaling(app.id, { desired_replicas: 2, min_replicas: 2, max_replicas: 2 });
+    for (let i = 1; i <= 2; i++) {
+      const replica = db.insertReplica({
+        app_id: app.id,
+        server_id: server.id,
+        host_port: 10_000 + i,
+        container_name: `${name}-r${i}`,
+        status: "running",
+      });
+      db.recordReplicaAttestation(replica.id, {
+        imageDigest: "sha256:test-image",
+        envHash: "test-env",
+        configRevision: app.config_revision,
+      });
+    }
     const step = stepByName("finalize_deploy");
     const { ctx } = makeCtx({ app_name: name, git_repo: "https://github.com/x/y", container_port: 3000, public: false, replicas: 2 });
     await step.run(ctx, { insert_app_row: { appId: app.id } });
-    // No child op is enqueued — the reconciler converges to desired_replicas.
     expect(db.getApp(app.id)!.desired_replicas).toBe(2);
   });
 
-  test("finalize_deploy leaves desired_replicas at 1 for public apps without a domain", async () => {
+  test("finalize_deploy rejects a missing desired replica instead of reporting success", async () => {
     const name = `pub-${randomSuffix()}`;
     const app = db.insertApp({
       name,
@@ -793,7 +849,8 @@ describe("deploy: private apps", () => {
     });
     const step = stepByName("finalize_deploy");
     const { ctx } = makeCtx({ app_name: name, git_repo: "https://github.com/x/y", container_port: 3000, replicas: 2 });
-    await step.run(ctx, { insert_app_row: { appId: app.id, domain: "" } });
+    await expect(step.run(ctx, { insert_app_row: { appId: app.id, domain: "" } }))
+      .rejects.toThrow(/replica convergence incomplete|first replica/i);
     expect(db.getApp(app.id)!.desired_replicas).toBe(1);
   });
 });

@@ -22,6 +22,8 @@ export interface OperationEventPoll {
     started_at?: string | null;
     finished_at?: string | null;
   }>;
+  next_cursor?: number;
+  resumable?: boolean;
 }
 
 interface OperationFallbackPoll {
@@ -158,6 +160,7 @@ export async function followOp(
         `/api/operations/${opId}/events?since=${lastSeq}&wait=15000`,
       );
       resetFollowRetryState(retry);
+      if (typeof poll.next_cursor === "number") lastSeq = Math.max(lastSeq, poll.next_cursor);
     } catch (err) {
       if (err instanceof ApiError && err.isTransient) {
         let fallback: OperationFallbackPoll | null = null;

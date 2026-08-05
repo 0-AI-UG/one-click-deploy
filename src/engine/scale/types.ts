@@ -1,5 +1,6 @@
 import * as db from "../../shared/db.ts";
 import type { AppRow, ReplicaRow, ServerRow } from "../../shared/db.ts";
+import { hashEnvironment, latestDesiredImage } from "../revision.ts";
 
 export type ProgressFn = (step: string, detail: string) => void;
 
@@ -32,7 +33,7 @@ export function appReplicaRunOpts(
 ) {
   return {
     containerName: opts.containerName,
-    image: `${app.name}:latest`,
+    image: latestDesiredImage(app),
     appName: app.name,
     // Initial deploys use startAppReplica's canonical ocd-net default. Keep
     // every reload/scale/recreate path on the same network.
@@ -42,6 +43,8 @@ export function appReplicaRunOpts(
     containerPort: app.container_port,
     envFilePath: opts.envFilePath,
     envVars: opts.envVars,
+    configRevision: app.config_revision,
+    envHash: opts.envVars ? hashEnvironment(opts.envVars) : undefined,
     volumeMount: app.volume_mount || undefined,
     extraVolumes: db.parseExtraVolumes(app.extra_volumes),
     memoryMb: app.memory_mb || undefined,

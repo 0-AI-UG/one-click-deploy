@@ -2013,6 +2013,36 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE retired_volumes ADD COLUMN retention_class TEXT NOT NULL DEFAULT 'user'");
     },
   },
+  {
+    version: 94,
+    description:
+      "Persist per-replica deployment attestations, environment hashes, operation-log attempts, and transactional host-port reservations.",
+    up: (db) => {
+      db.run("ALTER TABLE deployment_history ADD COLUMN env_hash TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE replicas ADD COLUMN image_digest TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE replicas ADD COLUMN desired_image_digest TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE replicas ADD COLUMN env_hash TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE replicas ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE replicas ADD COLUMN attested_at TEXT");
+      db.run("ALTER TABLE replicas ADD COLUMN attestation_error TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE operation_logs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1");
+      db.run("ALTER TABLE apps ADD COLUMN public_endpoint_status TEXT NOT NULL DEFAULT 'unknown'");
+      db.run("ALTER TABLE apps ADD COLUMN public_endpoint_error TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE apps ADD COLUMN public_endpoint_checked_at TEXT");
+      db.run(`CREATE TABLE port_reservations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        bind_address TEXT NOT NULL,
+        host_port INTEGER NOT NULL,
+        protocol TEXT NOT NULL DEFAULT 'tcp',
+        owner_type TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(server_id, bind_address, host_port, protocol)
+      )`);
+      db.run("CREATE INDEX idx_port_reservations_owner ON port_reservations(owner_type, owner_id)");
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

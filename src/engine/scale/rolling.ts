@@ -5,10 +5,13 @@ import {
 } from "../../shared/remote/index.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { type ProgressFn, log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
+import { attestReplica } from "../revision.ts";
+import { resolveGitHubToken } from "../../shared/github-token.ts";
 
 export async function rollingRedeploy(
   appId: number,
-  onProgress?: ProgressFn
+  onProgress?: ProgressFn,
+  expectedRevision?: { imageDigest: string; envHash: string; configRevision: number },
 ): Promise<{ ok: boolean; error?: string }> {
   const emit = onProgress || (() => {});
 
@@ -25,7 +28,8 @@ export async function rollingRedeploy(
     const primaryServer = db.getServer(replicas[0].server_id);
     if (!primaryServer) throw new Error("First replica's server not found");
 
-    const imageName = `${app.name}:latest`;
+    const imageName = expectedRevision?.imageDigest || `${app.name}:latest`;
+    const registryToken = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
 
     for (let i = 0; i < replicas.length; i++) {
       const replica = replicas[i];
@@ -42,7 +46,12 @@ export async function rollingRedeploy(
           server.ipv4,
           imageName,
           primaryServer.ssh_host_key || undefined,
-          hostKey
+          hostKey,
+          {
+            registryRef: app.build_cache_ref || undefined,
+            registryToken,
+            onProgress: (line) => emit("transfer", line),
+          },
         );
       }
 
@@ -63,18 +72,30 @@ export async function rollingRedeploy(
       // the ingress proxy (also on the private network) can reach this replica.
       const replicaBindAddr = replicaBindHost(server);
 
+      // Rewrite the projected environment on every target. Reusing an
+      // existing .env.deploy file here is what allowed replicas on different
+      // servers to retain different revisions.
       const envVars = await resolveAppEnvVars(app);
-      const envFilePath = Object.keys(envVars).length > 0
-        ? `/home/deploy/apps/${app.name}/.env.deploy`
-        : undefined;
       await startAppReplica(server.ipv4, {
-        ...appReplicaRunOpts(app, server, { containerName: replica.container_name, hostPort: replica.host_port, envFilePath }),
+        ...appReplicaRunOpts(app, server, { containerName: replica.container_name, hostPort: replica.host_port, envVars }),
+        image: imageName,
+        configRevision: expectedRevision?.configRevision ?? app.config_revision,
+        envHash: expectedRevision?.envHash,
       }, hostKey);
 
       // Health check (running-only when the app opted out of the HTTP probe)
       const health = await probeAppHealth(app, server.ipv4, replica.container_name, replicaBindAddr, replica.host_port, 5, hostKey);
 
-      db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
+      if (!health.healthy) {
+        db.updateReplicaStatus(replica.id, "unhealthy");
+        throw new Error(`Replica ${replica.id} failed health verification`);
+      }
+      db.updateReplicaStatus(replica.id, "attesting");
+      if (expectedRevision) {
+        const attestation = await attestReplica(app, replica, server, expectedRevision);
+        if (!attestation.ok) throw new Error(`Replica ${replica.id} attestation failed: ${attestation.error}`);
+      }
+      db.updateReplicaStatus(replica.id, "running");
 
       // Re-admit this replica to the ingress upstream pool.
       try {

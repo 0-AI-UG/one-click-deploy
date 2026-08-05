@@ -296,6 +296,28 @@ export function handleRestartApp(request: Request, appId: number): Promise<Respo
   return enqueueOp(request, { permission: "apps.restart", scope: appScope(appId), kind: "restart_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }
 
+export async function handleReloadAppEnvironment(request: Request, appId: number): Promise<Response> {
+  try {
+    await requirePermission(request, "apps.restart", appScope(appId));
+    const body = await request.clone().json().catch(() => ({})) as { force?: boolean };
+    if (body.force !== true) {
+      return Response.json(
+        { error: "Environment reload is explicit and disruptive; force=true is required" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    return enqueueOp(request, {
+      permission: "apps.restart",
+      scope: appScope(appId),
+      kind: "reload_app",
+      resourceKeys: [`app:${appId}`],
+      input: { appId, force: true },
+    });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
 export function handlePauseApp(request: Request, appId: number): Promise<Response> {
   return enqueueOp(request, { permission: "apps.pause", scope: appScope(appId), kind: "pause_app", resourceKeys: [`app:${appId}`], input: { appId } });
 }

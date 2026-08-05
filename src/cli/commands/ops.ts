@@ -56,6 +56,7 @@ interface OpLog {
   ts: string;
   level: string;
   message: string;
+  attempt: number;
 }
 
 const TERMINAL = new Set(["done", "failed", "cancelled", "compensated", "compensation_failed"]);
@@ -224,7 +225,7 @@ async function opsShow(id: number): Promise<void> {
 
 function printLog(log: OpLog): void {
   const ts = (log.ts || "").replace("T", " ").slice(0, 19);
-  console.log(`${DIM}${ts}${RESET} ${log.level} ${log.message}`);
+  console.log(`${DIM}${ts}${RESET} ${log.level} ${DIM}[attempt ${log.attempt || 1}]${RESET} ${log.message}`);
 }
 
 async function opsLogs(args: string[]): Promise<void> {
@@ -261,9 +262,9 @@ async function opsLogs(args: string[]): Promise<void> {
   let cursor = since;
   const retry = newFollowRetryState();
   while (true) {
-    let data: { status: string; logs: OpLog[] };
+    let data: { status: string; logs: OpLog[]; next_cursor?: number };
     try {
-      data = await get<{ status: string; logs: OpLog[] }>(
+      data = await get<{ status: string; logs: OpLog[]; next_cursor?: number }>(
         `/api/operations/${id}/logs?since=${cursor}&wait=15000`,
       );
       resetFollowRetryState(retry);
@@ -280,6 +281,7 @@ async function opsLogs(args: string[]): Promise<void> {
       printLog(log);
       if (log.id > cursor) cursor = log.id;
     }
+    if (typeof data.next_cursor === "number") cursor = Math.max(cursor, data.next_cursor);
 
     if (TERMINAL.has(data.status)) {
       console.log(`\n${colorOpStatus(data.status)}`);

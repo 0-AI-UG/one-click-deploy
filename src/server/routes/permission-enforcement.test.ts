@@ -987,6 +987,28 @@ describe("scope semantics through the real routes", () => {
     );
     expect(res.status).toBe(403);
   });
+
+  test("environment dry-run reports stale consumers before mutating desired state", async () => {
+    const ctx = await userWith([grant("environments.secrets", "environment", envA)]);
+    const before = db.getEnvironment(envA)!.env_vars;
+    const res = await handleUpdateEnvironment(
+      req(`/api/environments/${envA}`, {
+        method: "PUT",
+        body: {
+          env_vars: [{ key: "PREVIEW_ONLY", value: "1", secret: false }],
+          rollout: "none",
+          dry_run: true,
+        },
+        token: ctx.token,
+      }),
+      envA,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.dry_run).toBe(true);
+    expect(body.stale_apps.map((app: any) => app.id)).toContain(appA);
+    expect(db.getEnvironment(envA)!.env_vars).toBe(before);
+  });
 });
 
 // ---------------------------------------------------------------------------

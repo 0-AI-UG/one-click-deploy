@@ -15,6 +15,8 @@ import { syncAppIngress } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
+import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
+import { reconcileAppDns } from "../dns-reconciler.ts";
 
 type RedeployInput = {
   appId: number;
@@ -193,6 +195,8 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       memoryMb: app.memory_mb || undefined,
       cpus: app.cpu_limit || undefined,
       hostKey: server.ssh_host_key || undefined,
+      configRevision: app.config_revision,
+      envHash: hashEnvironment(envVars),
     };
     const logLine = (line: string) => {
       db.appendDeployLog(appId, `[redeploy] ${line}`);
@@ -255,9 +259,9 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
     db.appendDeployLog(ctx.input.appId, `[rollback] Restored previous image after failed redeploy (healthy=${health.healthy})`);
     ctx.log(`Rolled back to previous image ${snap.image} (healthy=${health.healthy})`);
-    // Drop the rollback tag now that it's the live image again; leaving it
-    // would pin the image and defeat the periodic prune. Best-effort.
-    await sshExec(server.ipv4, asUser(`docker rmi ${snap.image} 2>/dev/null || true`), hostKey).catch(() => {});
+    // Keep the rollback tag pinned. The next redeploy replaces it with the
+    // then-current revision, and environment-only reloads can safely recover
+    // without relying on a mutable :latest tag.
     // The restore ran but the app still isn't serving — escalate. An
     // `inconclusive` probe (couldn't reach the host over SSH) is not proof of
     // failure, so don't escalate on that alone.
@@ -270,11 +274,23 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
 const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
   name: "roll_extra_replicas",
   label: "Roll extra replicas",
-  async run(ctx) {
+  async run(ctx, prior) {
     const replicas = db.getReplicas(ctx.input.appId);
     if (replicas.length <= 1) return { ok: true };
-    const rolling = await rollingRedeploy(ctx.input.appId, (step, detail) => ctx.log(`[${step}] ${detail}`));
-    if (!rolling.ok) db.appendDeployLog(ctx.input.appId, `[redeploy] Rolling update warning: ${rolling.error}`);
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App not found");
+    const build = prior["pull_and_build"] as BuildOut;
+    const envVars = await resolveAppEnvVars(app);
+    const rolling = await rollingRedeploy(
+      ctx.input.appId,
+      (step, detail) => ctx.log(`[${step}] ${detail}`),
+      {
+        imageDigest: build.imageDigest || build.imageTag,
+        envHash: hashEnvironment(envVars),
+        configRevision: app.config_revision,
+      },
+    );
+    if (!rolling.ok) throw new Error(`Rolling update failed: ${rolling.error}`);
     return { ok: true };
   },
   async compensate(ctx) {
@@ -299,12 +315,8 @@ const syncIngressStep: Step<RedeployInput, { ok: true }> = {
   name: "sync_ingress",
   label: "Configure ingress",
   async run(ctx) {
-    try {
-      await syncAppIngress(ctx.input.appId);
-    } catch (err) {
-      db.appendDeployLog(ctx.input.appId, `[redeploy] Ingress sync warning: ${err}`);
-      ctx.log(`Ingress sync warning: ${err}`);
-    }
+    await reconcileAppDns(ctx.input.appId);
+    await syncAppIngress(ctx.input.appId);
     return { ok: true };
   },
 };
@@ -317,31 +329,38 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
     if (!app) throw new Error("App not found");
     const replicas = db.getReplicas(ctx.input.appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
-    const first = replicas[0];
-    const server = db.getServer(first.server_id);
-    if (!server) throw new Error("Server not found");
-    const bindAddr = replicaBindHost(server);
-    const hostKey = server.ssh_host_key || undefined;
-    // Generous window (10 attempts) so a slow-booting app isn't failed
-    // prematurely — but if it never comes up, throw so the op fails and
-    // pull_and_build's compensate rolls back to the previous image.
-    const health = await probeAppHealth(app, server.ipv4, first.container_name, bindAddr, first.host_port, 10, hostKey);
-    if (health.healthy) {
-      db.appendDeployLog(
-        ctx.input.appId,
-        app.health_check_mode === "container" || !app.health_check
-          ? "[health] HTTP probe disabled; container is running"
-          : `[health] ${app.health_check_mode || "http"} readiness passed`,
-      );
+    const build = prior["pull_and_build"] as BuildOut | undefined;
+    const envVars = await resolveAppEnvVars(app);
+    const expected = {
+      imageDigest: build?.imageDigest || build?.imageTag || latestDesiredImage(app),
+      envHash: hashEnvironment(envVars),
+      configRevision: app.config_revision,
+    };
+    let lastStatus: number | undefined;
+    for (const replica of replicas) {
+      const server = db.getServer(replica.server_id);
+      if (!server) throw new Error(`Server ${replica.server_id} not found`);
+      const bindAddr = replicaBindHost(server);
+      const health = await probeAppHealth(app, server.ipv4, replica.container_name, bindAddr, replica.host_port, 10, server.ssh_host_key || undefined);
+      lastStatus = health.statusCode;
+      if (!health.healthy) {
+        db.updateReplicaStatus(replica.id, "unhealthy");
+        throw new Error(`Replica ${replica.id} did not become healthy after redeploy: ${health.error || `HTTP ${health.statusCode ?? "no response"}`}`);
+      }
+      db.updateReplicaStatus(replica.id, "attesting");
+      const attestation = await attestReplica(app, replica, server, expected);
+      if (!attestation.ok) throw new Error(`Replica ${replica.id} revision attestation failed: ${attestation.error}`);
+      db.updateReplicaStatus(replica.id, "running");
     }
-    db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
-    if (!health.healthy) {
-      const detail = health.error || `HTTP ${health.statusCode ?? "no response"}`;
-      db.appendDeployLog(ctx.input.appId, `[health] ${detail}`);
-      throw new Error(`App did not become healthy after redeploy: ${detail}`);
-    }
+    db.appendDeployLog(
+      ctx.input.appId,
+      app.health_check_mode === "container" || !app.health_check
+        ? `[health] all ${replicas.length} replica(s) healthy and attested; HTTP probe disabled; container is running`
+        : `[health] all ${replicas.length} replica(s) passed ${app.health_check_mode || "http"} readiness and attestation`,
+    );
+    db.updateAppStatus(ctx.input.appId, "running");
     db.markAppEnvironmentFresh(ctx.input.appId);
-    return { healthy: health.healthy, statusCode: health.statusCode };
+    return { healthy: true, statusCode: lastStatus };
   },
 };
 
@@ -367,16 +386,12 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
       } catch (err) {
         ctx.log(`Failed to capture git commit: ${err}`);
       }
-      // Redeploy succeeded — drop the rollback tag so it stops pinning the old
-      // image and the periodic prune can reclaim it.
-      if (build?.rollback) {
-        await sshExec(server.ipv4, asUser(`docker rmi ${build.rollback.image} 2>/dev/null || true`), server.ssh_host_key || undefined).catch(() => {});
-      }
     }
     const row = db.insertDeployment({
       app_id: ctx.input.appId,
       image_tag: build.imageTag,
       image_digest: build.imageDigest || app.image_ref || "",
+      env_hash: hashEnvironment(await resolveAppEnvVars(app)),
       git_commit: gitCommit,
       config_revision: app.config_revision ?? 1,
       source: ctx.trigger === "ui" ? "manual" : ctx.trigger,

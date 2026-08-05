@@ -14,8 +14,26 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 import * as realRemote from "../../shared/remote/index.ts";
 import * as realTraefikManager from "./traefik-manager.ts";
 
-const sshExec = mock(async (_host: string, _cmd: string, _hostKey?: string) => {
-  return { exitCode: 0, stdout: "", stderr: "" };
+let attestationTarget: { name: string; configRevision: number; envHash: string } | null = null;
+
+const sshExec = mock(async (_host: string, cmd: string, _hostKey?: string) => {
+  let stdout = "";
+  if (cmd.includes("docker image inspect")) stdout = "yes\n";
+  if (cmd.includes("docker inspect")) {
+    stdout = JSON.stringify({
+      Image: "sha256:test-image",
+      Config: {
+        Labels: {
+          "ocd.app": attestationTarget?.name || "",
+          "ocd.image-id": "sha256:test-image",
+          "ocd.image-ref": attestationTarget ? `${attestationTarget.name}:latest` : "",
+          "ocd.env-hash": attestationTarget?.envHash || "",
+          "ocd.config-revision": String(attestationTarget?.configRevision || 0),
+        },
+      },
+    });
+  }
+  return { exitCode: 0, stdout, stderr: "" };
 });
 mock.module("../../shared/remote/index.ts", () => ({
   ...realRemote,
@@ -35,6 +53,8 @@ mock.module("./traefik-manager.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
+import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import { hashEnvironment } from "../revision.ts";
 import { wakeApp } from "./wake.ts";
 import { scaleDown } from "./scale-down.ts";
 
@@ -52,7 +72,7 @@ function makeServer() {
 }
 
 function makeApp() {
-  return db.insertApp({
+  const app = db.insertApp({
     name: `tp-app-${randomSuffix()}`,
     domain: "",
     git_repo: "https://x.git",
@@ -60,6 +80,8 @@ function makeApp() {
     container_port: 3000,
     env_vars: "{}",
   });
+  attestationTarget = { name: app.name, configRevision: app.config_revision, envHash: "" };
+  return app;
 }
 
 beforeEach(() => {
@@ -94,6 +116,7 @@ describe("contract: P3a topology-changing ops push proxy config immediately", ()
     try {
       const server = makeServer();
       const app = makeApp();
+      attestationTarget!.envHash = hashEnvironment(await resolveAppEnvVars(app));
       db.updateAppSleepingState(app.id, server.id, 10801);
       db.updateAppStatus(app.id, "sleeping");
 

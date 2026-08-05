@@ -14,10 +14,11 @@ mock.module("./ssh.ts", () => ({
     return { exitCode: 0, stdout: "abc123def456", stderr: "" };
   }),
   getSshKeyPath: () => "/tmp/key",
+  buildSshArgs: () => ({ args: [], tmpKnownHostsPath: null }),
   describeFailure: (msg: string) => msg,
 }));
 
-const { startAppReplica } = await import("./containers.ts");
+const { startAppReplica } = await import("./docker-run.ts");
 
 beforeEach(() => {
   calls.length = 0;

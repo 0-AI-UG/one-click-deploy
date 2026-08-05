@@ -6,13 +6,14 @@ import type { StackDeployRequest } from "../../shared/rpc.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
-import { getContainerLogs } from "../../shared/remote/index.ts";
+import { getContainerLogs, sshExec } from "../../shared/remote/index.ts";
 import { deriveStackResourceState } from "../../engine/resource-state.ts";
 import {
   findLatestRelatedStackOperation,
   stackLockKeys,
   suspendStackWebhookOperations,
 } from "../lib/stack-operations.ts";
+import { validatePublicEndpoint } from "../../engine/dns-reconciler.ts";
 
 const TERMINAL_OPERATION_STATUSES = new Set([
   "done",
@@ -114,13 +115,57 @@ export async function handleGetStack(request: Request, stackId: number): Promise
       return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
     }
     const resourceState = deriveStackResourceState(stack);
+    const apps = db.getAppsByStackId(stackId);
+    const validateEndpoints = new URL(request.url).searchParams.get("validate_endpoints") === "1";
+    const publicEndpoints = validateEndpoints
+      ? await Promise.all(apps.filter((app) => app.public && app.domain).map(async (app) => {
+          try {
+            return {
+              app_id: app.id,
+              app_name: app.name,
+              ...(await validatePublicEndpoint(app.id)),
+            };
+          } catch (err) {
+            const current = db.getApp(app.id);
+            return {
+              app_id: app.id,
+              app_name: app.name,
+              domain: app.domain,
+              managed: false,
+              expectedTarget: "",
+              resolved: [] as string[],
+              ready: false,
+              tlsReady: false,
+              tlsError: current?.public_endpoint_error || (err instanceof Error ? err.message : String(err)),
+            };
+          }
+        }))
+      : [];
+    const endpointDegraded = publicEndpoints.some((endpoint) => !endpoint.ready || !endpoint.tlsReady);
+    let acme_errors: string[] = [];
+    if (validateEndpoints && endpointDegraded) {
+      const panel = db.getPanel();
+      const server = panel ? db.getServer(panel.server_id) : null;
+      if (server) {
+        const logs = await sshExec(
+          server.ipv4,
+          "journalctl -u ocd-traefik -n 250 --no-pager 2>/dev/null | grep -iE 'acme|certificate|challenge' | tail -20 || true",
+          server.ssh_host_key || undefined,
+        ).catch(() => null);
+        acme_errors = logs?.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) ?? [];
+      }
+    }
     return Response.json({
       ...stack,
-      status: resourceState.status,
-      resource_status_reason: resourceState.reason,
+      status: endpointDegraded && resourceState.status === "running" ? "degraded" : resourceState.status,
+      resource_status_reason: endpointDegraded
+        ? `${resourceState.reason}; one or more public endpoints are not HTTPS-ready`
+        : resourceState.reason,
       ...operationFields(stack, resourceState),
-      apps: db.getAppsByStackId(stackId),
+      apps,
       services: db.getServicesByStackId(stackId),
+      public_endpoints: publicEndpoints,
+      acme_errors,
     }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

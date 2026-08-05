@@ -183,6 +183,8 @@ export async function cloneAndBuild(
     hostKey?: string;
     /** Registry-backed BuildKit cache shared between build hosts. */
     buildCacheRef?: string;
+    configRevision?: number;
+    envHash?: string;
   },
   onLog?: (line: string) => void
 ) {
@@ -213,6 +215,25 @@ export async function cloneAndBuild(
     log("build", `Found Dockerfile: ${dockerfilePath}`);
     emit(`Found Dockerfile at: ${dockerfilePath}`);
   }
+  const resolvedContext = (opts.dockerContext || ".").replace(/^\/+/, "");
+  const pathPreflight = await sshExec(
+    ip,
+    asUser(
+      `test -d ${appDir}/${resolvedContext} && test -f ${appDir}/${dockerfilePath} && ` +
+        `printf 'repo=%s\\ncontext=%s\\ndockerfile=%s\\n' ${appDir} ${appDir}/${resolvedContext} ${appDir}/${dockerfilePath}`,
+    ),
+    hostKey,
+  );
+  if (pathPreflight.exitCode !== 0) {
+    throw new Error(
+      `Build path preflight failed: repository root=${appDir}, context=${appDir}/${resolvedContext}, ` +
+        `Dockerfile=${appDir}/${dockerfilePath}`,
+    );
+  }
+  emit(
+    `Resolved build paths: repository root=${appDir}; context=${appDir}/${resolvedContext}; ` +
+      `Dockerfile=${appDir}/${dockerfilePath}`,
+  );
 
   // Authenticate with ghcr.io if a GitHub token is available (needed for
   // private base images in FROM directives). Credentials live in a per-deploy
@@ -267,6 +288,8 @@ export async function cloneAndBuild(
     memoryMb: opts.memoryMb || undefined,
     cpus: opts.cpus || undefined,
     envVars: opts.envVars,
+    configRevision: opts.configRevision,
+    envHash: opts.envHash,
   }, hostKey);
   log("build", `Container started: ${containerId.slice(0, 12)}... Total build time: ${((Date.now() - buildStart) / 1000).toFixed(1)}s`);
 
@@ -298,6 +321,8 @@ export async function pullImmutableImageAndRun(
     cpus?: number;
     gitToken?: string;
     hostKey?: string;
+    configRevision?: number;
+    envHash?: string;
   },
   onLog?: (line: string) => void,
 ): Promise<{ containerId: string; imageTag: string; imageDigest: string }> {
@@ -322,6 +347,8 @@ export async function pullImmutableImageAndRun(
     memoryMb: opts.memoryMb,
     cpus: opts.cpus,
     envVars: opts.envVars,
+    configRevision: opts.configRevision,
+    envHash: opts.envHash,
   }, hostKey);
   return { containerId, imageTag: opts.imageRef, imageDigest: opts.imageRef };
 }
