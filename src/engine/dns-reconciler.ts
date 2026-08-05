@@ -1,6 +1,7 @@
 import { resolve4 } from "node:dns/promises";
 import * as db from "../shared/db.ts";
 import { hetznerDns } from "../shared/providers/index.ts";
+import { getOrResolveZoneName } from "../shared/dns-zone.ts";
 import { getPanelIngressIpv4 } from "./scale/traefik-manager.ts";
 
 export type DnsReadiness = {
@@ -47,17 +48,9 @@ export async function reconcileAppDns(appId: number): Promise<DnsReadiness> {
   const zoneId = settings.dns_zone_id || "";
   let zoneName = settings.dns_zone_name || "";
   if (zoneId && !zoneName) {
-    try {
-      const normalizedSelector = zoneId.replace(/\.$/, "").toLowerCase();
-      const zone = (await hetznerDns.listZones()).find(
-        (candidate: { id: string; name: string }) =>
-          candidate.id === zoneId || candidate.name.replace(/\.$/, "").toLowerCase() === normalizedSelector,
-      );
-      if (!zone?.name) throw new Error(`configured DNS zone ${zoneId} was not found`);
-      zoneName = zone.name.replace(/\.$/, "");
-      db.saveSetting("dns_zone_name", zoneName);
-    } catch (err) {
-      const error = `DNS zone resolution failed for ${zoneId}: ${err instanceof Error ? err.message : err}`;
+    zoneName = await getOrResolveZoneName();
+    if (!zoneName) {
+      const error = `DNS zone resolution failed: configured zone ${zoneId} was not found`;
       db.updateAppPublicEndpointStatus(app.id, "degraded", error);
       throw new Error(error);
     }

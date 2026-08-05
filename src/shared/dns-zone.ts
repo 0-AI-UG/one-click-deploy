@@ -5,6 +5,16 @@
 import * as db from "./db.ts";
 import { hetznerDns } from "./providers/index.ts";
 
+/** A configured selector may be either an opaque provider id or the canonical
+ * zone name itself. A DNS name already provides the suffix needed for safe
+ * ownership validation; the provider write remains the authority check. */
+export function zoneNameFromSelector(selector: string): string {
+  const normalized = selector.replace(/\.$/, "").toLowerCase();
+  return normalized.includes(".") && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(normalized)
+    ? normalized
+    : "";
+}
+
 /** Resolve the name of `zoneId` via the DNS provider and cache it in the
  *  `dns_zone_name` setting. Best-effort: an unknown zone id or a provider
  *  error clears the cached name and returns "" — callers fall back to nip.io.
@@ -15,7 +25,11 @@ export async function syncZoneNameSetting(zoneId: string): Promise<string> {
     db.saveSetting("dns_zone_name", "");
     return "";
   }
-  let name = "";
+  let name = zoneNameFromSelector(zoneId);
+  if (name) {
+    db.saveSetting("dns_zone_name", name);
+    return name;
+  }
   try {
     const zones = await hetznerDns.listZones();
     name = zones.find((z: { id: string; name: string }) => z.id === zoneId)?.name ?? "";

@@ -101,6 +101,7 @@ describe("DNS desired-state reconciliation", () => {
     const result = await reconcileAppDns(app.id);
 
     expect(result.managed).toBe(true);
+    expect(listZones).not.toHaveBeenCalled();
     expect(db.getSettings().dns_zone_name).toBe("example.com");
     expect(createRecord).toHaveBeenCalledWith(expect.objectContaining({
       zoneId: "example.com",
