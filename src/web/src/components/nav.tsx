@@ -130,7 +130,7 @@ function MobileNav({ hash }: { hash: string }) {
   return (
     <>
       <header className="sticky top-0 z-50 border-b-2 border-fg bg-accent pt-[env(safe-area-inset-top)]">
-        <div className="flex h-13 items-center justify-between px-4">
+        <div className="flex h-[52px] items-center justify-between px-4">
           <a href="#/" className="flex h-11 items-center gap-2 font-mono font-bold tracking-wider text-fg" aria-label="OCD dashboard">
             <span className="grid h-8 w-8 place-items-center border-2 border-fg bg-fg text-accent"><Terminal size={17} /></span>
             <span>OCD</span>
