@@ -106,6 +106,7 @@ export async function scaleUp(
         {
           registryRef: app.build_cache_ref || undefined,
           registryToken: githubPat,
+          allowArchiveFallback: db.getSettings().allow_archive_image_transfer === "1",
           onProgress: (line) => emit("transfer", line),
         },
       );

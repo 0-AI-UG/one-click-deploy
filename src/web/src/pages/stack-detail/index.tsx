@@ -95,10 +95,17 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
             {memberApps.length} app{memberApps.length !== 1 ? "s" : ""} · {stack.services.length} service{stack.services.length !== 1 ? "s" : ""}
           </div>
           {stack.last_operation_id != null && (
-            <div className={`font-mono text-[9px] mt-0.5 ${stack.last_operation_failed ? "text-danger" : "text-muted"}`}>
-              Last operation #{stack.last_operation_id}: {stack.last_operation_status}
-              {stack.operation_in_progress ? " (in progress)" : ""}
-            </div>
+            <>
+              <div className={`font-mono text-[9px] mt-0.5 ${stack.last_operation_failed ? "text-danger" : "text-muted"}`}>
+                Last stack operation #{stack.last_operation_id}: {stack.last_operation_status}
+                {stack.operation_in_progress ? " (in progress)" : ""}
+              </div>
+              {(stack.last_operation_children || []).length > 0 && (
+                <div className="font-mono text-[9px] text-muted mt-0.5">
+                  Children: {stack.last_operation_children!.map((child) => `#${child.id} ${child.status}`).join(", ")}
+                </div>
+              )}
+            </>
           )}
         </div>
         <div className="flex gap-1">

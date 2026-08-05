@@ -1,3 +1,6 @@
+import { useEffect, useRef } from "react";
+import { useMobileLayout } from "../hooks/use-mobile-layout.ts";
+
 export function TabBar<K extends string>({
   tabs,
   active,
@@ -7,6 +10,36 @@ export function TabBar<K extends string>({
   active: K;
   onChange: (key: K) => void;
 }) {
+  const isMobile = useMobileLayout();
+  const activeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (isMobile) activeRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+  }, [active, isMobile]);
+
+  if (isMobile) {
+    return (
+      <div className="sticky top-[52px] z-30 -mx-4 mb-4 border-y-2 border-fg bg-bg/95 px-3 py-2 backdrop-blur">
+        <div className="flex gap-2 overflow-x-auto" role="tablist" aria-label="Page sections">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              ref={active === tab.key ? activeRef : undefined}
+              onClick={() => onChange(tab.key)}
+              role="tab"
+              aria-selected={active === tab.key}
+              className={`min-h-10 shrink-0 border-2 border-fg px-4 font-mono text-[10px] font-bold uppercase tracking-wide shadow-neo-sm ${
+                active === tab.key ? "bg-accent text-fg" : "bg-bg-raised text-muted"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex border-b-2 border-fg mb-4">
       {tabs.map((t) => (

@@ -158,7 +158,10 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
       }
     }
 
-    const existingReady = db.getServers().find((s: Server) => s.status === "ready");
+    const panelServerId = db.getPanel()?.server_id;
+    const existingReady = db.getServers().find((s) =>
+      s.status === "ready" && s.id !== panelServerId && s.pool === "general"
+    );
     if (existingReady) {
       return {
         serverId: existingReady.id,

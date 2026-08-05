@@ -44,7 +44,11 @@
     },
     "8b6ab41a-1f74-49ea-82ce-b6495fb49250": {
       "type": "terminal",
-      "title": "Terminal 1"
+      "title": "Codex 2"
+    },
+    "0ebb98ae-ca11-4816-96e0-68b9f6873702": {
+      "type": "terminal",
+      "title": "Terminal 2"
     },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
@@ -63,9 +67,9 @@
           },
           "size": {
             "width": 640,
-            "height": 459.797400607109
+            "height": 499.797400607109
           },
-          "zOrder": 833,
+          "zOrder": 857,
           "creationIndex": 16,
           "animationState": "idle",
           "dockLayout": {
@@ -87,7 +91,7 @@
             "width": 639.9999999999998,
             "height": 399.9999999999999
           },
-          "zOrder": 831,
+          "zOrder": 856,
           "creationIndex": 17,
           "animationState": "idle",
           "dockLayout": {
@@ -98,12 +102,34 @@
             ],
             "activeIndex": 0
           }
+        },
+        "5a98ccd5-d801-4fae-8570-0a99f74f9e17": {
+          "id": "5a98ccd5-d801-4fae-8570-0a99f74f9e17",
+          "origin": {
+            "x": 1580,
+            "y": 1340
+          },
+          "size": {
+            "width": 639.9999999999998,
+            "height": 499.7974006071089
+          },
+          "zOrder": 854,
+          "creationIndex": 18,
+          "animationState": "idle",
+          "dockLayout": {
+            "type": "tabs",
+            "id": "54d29827-c56c-409b-bfa2-ae97fd84c26f",
+            "panelIds": [
+              "0ebb98ae-ca11-4816-96e0-68b9f6873702"
+            ],
+            "activeIndex": 0
+          }
         }
       },
-      "zoomLevel": 0.8662755946915208,
+      "zoomLevel": 0.9056887897949276,
       "viewportOffset": {
-        "x": -1284.3788180729537,
-        "y": -620.6146696915207
+        "x": -1226.5508881103624,
+        "y": -501.95342977445466
       }
     }
   }

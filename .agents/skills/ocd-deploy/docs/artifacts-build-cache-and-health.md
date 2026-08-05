@@ -52,9 +52,20 @@ Git source builds can opt into registry-backed cache:
 
 With `cache_ref`, OCD uses `docker buildx build --load` plus registry
 `--cache-from` and `--cache-to` with `mode=max`. This makes cache state explicit
-and shareable across build hosts. Without it, OCD uses the host-local Docker
-builder/cache. The registry identity needs pull and push permission. Build
-cache configuration is stored desired config and advances `config_revision`.
+and shareable across build hosts. The same repository is the normal
+content-addressed distribution path for multi-host replicas: OCD publishes an
+immutable image-ID tag and targets pull only missing layers. Without it, OCD
+uses the host-local Docker builder/cache and cannot perform normal multi-host
+distribution. The gzip/SCP archive path is emergency-only and must be enabled
+explicitly in Admin settings. The registry identity needs pull and push
+permission. Build cache configuration is stored desired config and advances
+`config_revision`.
+
+Before a source build or emergency transfer, OCD runs bounded OCD-owned garbage
+collection and verifies source and destination root-disk capacity. The budget
+includes candidate/expanded layers, current and rollback protection, archive
+and import workspace, plus a fixed host reserve. A failure is reported during
+preflight rather than after the build or SCP retries.
 
 ## Readiness is a workload contract
 
@@ -66,7 +77,7 @@ selected readiness contract.
 | Mode | Ready when | Required fields | Typical workload |
 |---|---|---|---|
 | `http` | configured path returns HTTP 2xx–4xx | optional `path` | web/API |
-| `container` | stable Docker process is running | none | process-only legacy worker |
+| `container` | one authoritative Docker process-state check passes | none | process-only legacy worker |
 | `exec` | configured command exits 0 inside container | `command` | queue consumer with dependency/self-test |
 | `heartbeat` | marker file mtime is no older than maximum | `file`, `max_age_seconds` | continuously progressing worker |
 | `periodic_job` | last-success marker mtime is no older than schedule tolerance | `file`, `max_age_seconds` | cron/scheduled job |

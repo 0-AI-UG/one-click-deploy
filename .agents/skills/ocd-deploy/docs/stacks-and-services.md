@@ -122,8 +122,9 @@ Stack status is resource-derived and displayed separately from last operation:
 - last operation answers what the most recent saga did;
 - `operation_in_progress` indicates ongoing mutation.
 
-If a first deploy fails and compensation removes the stack row, `stack logs`
-falls back to the matching operation log so failure details remain accessible.
+If a deploy fails, OCD retains the stack row, environments, and every successful
+member as durable reconciliation checkpoints. `stack logs` continues to resolve
+the parent operation and its child operations by stack name.
 
 ## Reconciliation and failure
 
@@ -131,10 +132,14 @@ Re-running a stack is not a partial add operation. The submitted manifest
 defines desired membership:
 
 - missing recorded members are destroyed;
-- existing apps are config-applied and redeployed;
+- existing apps are config-applied and redeployed only when their desired state differs;
 - existing services are reconciled/reused according to ownership;
-- newly created resources are compensated when later steps fail;
-- reused resources survive stale compensation;
+- each failed child compensates only its own incomplete side effects;
+- successful new and reused resources survive for retry;
+- retry skips an app when commit/image digest, configuration revision,
+  environment hash, replica count, links, and replica attestations match;
+- declared managed-service volumes are reconciled grow-only and provider size
+  confirmation is required before the stack becomes ready;
 - environments survive every member/stack destruction;
 - managed volumes are retained on destroy.
 

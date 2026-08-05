@@ -113,6 +113,26 @@
     }
     .group:hover .flame-flicker { animation: flame-flicker 0.18s ease-in-out infinite; transform-origin: top center; }
     .group:hover .smoke-puff    { animation: smoke-drift 0.9s ease-out infinite; }
+
+    /* Phone UI has its own component tree. These rules provide the native-feeling
+       viewport, safe areas and input sizing that the mobile components build on. */
+    @media (max-width: 767px) {
+      html { zoom: 1; }
+      body {
+        font-size: 14px;
+        padding-bottom: calc(62px + env(safe-area-inset-bottom));
+        overscroll-behavior-y: none;
+      }
+      button, a { -webkit-tap-highlight-color: transparent; }
+      input[type="text"], input[type="email"], input[type="password"], input[type="number"], select, textarea {
+        min-height: 44px;
+        padding: 10px 12px;
+        font-size: 16px;
+      }
+      input[type="checkbox"] { width: 22px; height: 22px; min-width: 22px; }
+      input[type="checkbox"]:checked::after { top: 3px; left: 3px; width: 12px; height: 12px; }
+      ::-webkit-scrollbar { display: none; }
+    }
   </style>
 </head>
 <body class="font-sans antialiased min-h-screen">

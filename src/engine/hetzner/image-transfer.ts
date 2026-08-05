@@ -3,6 +3,7 @@ import { tmpdir } from "os";
 import { sshExec, sshExecStreaming, getSshKeyPath, describeFailure } from "./ssh.ts";
 import { log } from "./container-common.ts";
 import { dockerLoginGhcr } from "./registry.ts";
+import { preflightTransferDiskSpace } from "./disk-space.ts";
 
 export type ImageTransferProgress = (line: string) => void;
 
@@ -11,6 +12,14 @@ function artifactRef(cacheRef: string, imageId: string): string {
   const lastColon = cacheRef.lastIndexOf(":");
   const repo = lastColon > lastSlash ? cacheRef.slice(0, lastColon) : cacheRef;
   return `${repo}:ocd-${imageId.replace(/^sha256:/, "").slice(0, 32)}`;
+}
+
+function protectedImageRefs(imageName: string): string[] {
+  if (imageName.startsWith("sha256:") || imageName.includes("@sha256:")) return [imageName];
+  const lastSlash = imageName.lastIndexOf("/");
+  const lastColon = imageName.lastIndexOf(":");
+  const repository = lastColon > lastSlash ? imageName.slice(0, lastColon) : imageName;
+  return [imageName, `${repository}:rollback`];
 }
 
 function transferProgress(label: string, bytes: number, total: number, started: number): string {
@@ -65,21 +74,45 @@ export async function transferImage(
   imageName: string,
   sourceHostKey?: string,
   targetHostKey?: string,
-  opts: { registryRef?: string; registryToken?: string; onProgress?: ImageTransferProgress; attempt?: number } = {},
+  opts: {
+    registryRef?: string;
+    registryToken?: string;
+    onProgress?: ImageTransferProgress;
+    attempt?: number;
+    /** Emergency-only escape hatch. Normal multi-host distribution requires
+     * a registry so retries use immutable, content-addressed layers. */
+    allowArchiveFallback?: boolean;
+  } = {},
 ): Promise<void> {
   const emit = opts.onProgress ?? (() => {});
   const attempt = opts.attempt ?? 1;
   log("transfer", `attempt ${attempt}: ensuring image ${imageName} from ${sourceIp} on ${targetIp}`);
   emit(`Image transfer attempt ${attempt}: ${imageName}`);
 
+  const sourceInspect = await sshExec(
+    sourceIp,
+    `su - deploy -c ${JSON.stringify(`docker image inspect --format '{{.Id}} {{.Size}}' ${imageName}`)}`,
+    sourceHostKey,
+  );
+  const [expectedImageId = "", imageSizeRaw = ""] = sourceInspect.stdout.trim().split(/\s+/);
+  const imageBytes = Number(imageSizeRaw) || 0;
+  if (sourceInspect.exitCode !== 0 || !expectedImageId || imageBytes <= 0) {
+    throw new Error(describeFailure("Image distribution preflight failed", sourceInspect));
+  }
+  const alreadyPresent = await sshExec(
+    targetIp,
+    `su - deploy -c ${JSON.stringify(`docker image inspect --format '{{.Id}}' ${expectedImageId}`)}`,
+    targetHostKey,
+  );
+  if (alreadyPresent.exitCode === 0 && alreadyPresent.stdout.trim() === expectedImageId) {
+    emit(`Target already has expected image ${expectedImageId}; transfer skipped`);
+    return;
+  }
+
   // A configured registry cache is also the distribution repository. Docker
   // push/pull is content-addressed, so replicas transfer only missing layers.
   if (opts.registryRef) {
-    const inspect = await sshExec(sourceIp, `su - deploy -c ${JSON.stringify(`docker image inspect --format '{{.Id}}' ${imageName}`)}`, sourceHostKey);
-    if (inspect.exitCode !== 0 || !inspect.stdout.trim()) {
-      throw new Error(describeFailure("Image distribution preflight failed", inspect));
-    }
-    const ref = artifactRef(opts.registryRef, inspect.stdout.trim());
+    const ref = artifactRef(opts.registryRef, expectedImageId);
     emit(`Registry distribution ${ref} (content-addressed missing-layer pull)`);
     let sourceAuth: Awaited<ReturnType<typeof dockerLoginGhcr>> | null = null;
     let targetAuth: Awaited<ReturnType<typeof dockerLoginGhcr>> | null = null;
@@ -116,6 +149,16 @@ export async function transferImage(
         );
         if (tagged.exitCode !== 0) throw new Error(describeFailure("Registry image retag failed", tagged));
       }
+      const verified = await sshExec(
+        targetIp,
+        `su - deploy -c ${JSON.stringify(`docker image inspect --format '{{.Id}}' ${expectedImageId}`)}`,
+        targetHostKey,
+      );
+      if (verified.exitCode !== 0 || verified.stdout.trim() !== expectedImageId) {
+        throw new Error(
+          `Registry image verification failed: expected ${expectedImageId}, observed ${verified.stdout.trim() || "missing"}`,
+        );
+      }
       emit(`Registry distribution complete; Docker reused already-present layers`);
       return;
     } finally {
@@ -123,12 +166,41 @@ export async function transferImage(
       await targetAuth?.cleanup();
     }
   }
+  if (!opts.allowArchiveFallback) {
+    throw new Error(
+      "No image distribution registry is configured. Multi-host archive transfer is emergency-only; " +
+        "configure build.cache_ref for this app, or explicitly enable the emergency archive fallback.",
+    );
+  }
   const keyPath = getSshKeyPath();
   const ts = Date.now();
   const tmpFile = `/tmp/ocd-image-${ts}.tar.gz`;
   const localTmp = `${tmpdir()}/ocd-image-transfer-${ts}.tar.gz`;
 
   try {
+    // Conservative preflight before compression: a gzip archive can approach
+    // the image's expanded size for already-compressed/binary-heavy layers.
+    await preflightTransferDiskSpace({
+      ip: sourceIp,
+      label: "source archive",
+      imageBytes,
+      archiveBytes: imageBytes,
+      includeExpandedImage: false,
+      protectedImageRefs: protectedImageRefs(imageName),
+      hostKey: sourceHostKey,
+      onProgress: emit,
+    });
+    await preflightTransferDiskSpace({
+      ip: targetIp,
+      label: "destination import",
+      imageBytes,
+      archiveBytes: imageBytes,
+      includeExpandedImage: true,
+      protectedImageRefs: protectedImageRefs(imageName),
+      hostKey: targetHostKey,
+      onProgress: emit,
+    });
+
     // Save and compress on source (as deploy user who owns docker).
     // `set -o pipefail` is critical: without it, a failed `docker save` (e.g.
     // image missing on source) returns 0 because gzip happily emits an empty
@@ -154,6 +226,20 @@ export async function transferImage(
       throw new Error(`Exported image archive is suspiciously small (${archiveBytes} bytes) — image ${imageName} may not exist on the source server`);
     }
     emit(`[archive] size ${(archiveBytes / 1024 / 1024).toFixed(1)} MiB`);
+
+    // Recheck the destination with the exact archive size before transferring
+    // a byte. The earlier conservative estimate catches obvious failures before
+    // source compression; this check avoids retrying SCP into a full disk.
+    await preflightTransferDiskSpace({
+      ip: targetIp,
+      label: "destination import",
+      imageBytes,
+      archiveBytes,
+      includeExpandedImage: true,
+      protectedImageRefs: protectedImageRefs(imageName),
+      hostKey: targetHostKey,
+      onProgress: emit,
+    });
 
     // Download to local
     try { unlinkSync(localTmp); } catch { /* no prior partial */ }
@@ -183,19 +269,45 @@ export async function transferImage(
       throw new Error(`Image upload exhausted retries: ${err instanceof Error ? err.message : err}`);
     });
 
-    // Load on target — run docker load as deploy, but file is owned by root
-    // So: gunzip as root, pipe to deploy's docker load
-    const loadResult = await sshExecStreaming(
-      targetIp,
-      `gunzip -c ${tmpFile} | su - deploy -c "docker load"`,
-      {
-        hostKey: targetHostKey,
-        onLine: (line) => line.trim() && emit(`[archive load] ${line}`),
-        onHeartbeat: (ms) => emit(`[archive load] still running (${Math.floor(ms / 1000)}s)`),
-      },
-    );
-    if (loadResult.exitCode !== 0) {
-      throw new Error(describeFailure("Failed to import Docker image on target server", loadResult));
+    // Import retry is deliberately separate from transfer retry. A dropped SSH
+    // session can outlive the remote docker load, so reconnect and inspect the
+    // expected content id before deciding anything failed. If absent, replay
+    // docker load from the already-uploaded archive; never rebuild/retransfer
+    // while that operation-scoped archive is still usable.
+    const importAttempts = 3;
+    let lastImportError = "";
+    for (let importAttempt = 1; importAttempt <= importAttempts; importAttempt++) {
+      emit(`[archive load] attempt ${importAttempt}/${importAttempts}`);
+      const loadResult = await sshExecStreaming(
+        targetIp,
+        `set -o pipefail; gunzip -c ${tmpFile} | su - deploy -c "docker load"`,
+        {
+          hostKey: targetHostKey,
+          onLine: (line) => line.trim() && emit(`[archive load] ${line}`),
+          onHeartbeat: (ms) => emit(`[archive load] still running (${Math.floor(ms / 1000)}s)`),
+        },
+      );
+      if (loadResult.exitCode !== 0) {
+        lastImportError = describeFailure("Docker load failed", loadResult);
+        emit(`[archive load] transport/command ended non-zero; reconnecting to verify ${expectedImageId}`);
+      }
+      const verified = await sshExec(
+        targetIp,
+        `su - deploy -c ${JSON.stringify(`docker image inspect --format '{{.Id}}' ${expectedImageId}`)}`,
+        targetHostKey,
+      );
+      if (verified.exitCode === 0 && verified.stdout.trim() === expectedImageId) {
+        emit(`[archive load] verified expected image ${expectedImageId}`);
+        lastImportError = "";
+        break;
+      }
+      lastImportError ||= `expected image ${expectedImageId} is absent after docker load`;
+      if (importAttempt < importAttempts) {
+        emit(`[archive load] image absent; retrying import from retained archive`);
+      }
+    }
+    if (lastImportError) {
+      throw new Error(`Failed to import Docker image after ${importAttempts} attempts: ${lastImportError}`);
     }
 
     log("transfer", `Image ${imageName} transferred successfully`);

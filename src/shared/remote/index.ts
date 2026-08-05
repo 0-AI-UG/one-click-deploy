@@ -45,4 +45,5 @@ export {
   serviceHealthCheck,
   deployConfigFile,
   pruneServer,
+  ensureHostLogPolicy,
 } from "../../engine/hetzner/containers.ts";

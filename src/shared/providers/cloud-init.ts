@@ -74,6 +74,18 @@ APT::Periodic::Unattended-Upgrade "1";
 AUTOUPGRADE
 systemctl enable unattended-upgrades
 
+# Bound host logs so application deployment space cannot be consumed by an
+# unbounded journal. The reconciler re-applies this drop-in to older hosts.
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/60-ocd-retention.conf <<'JOURNALD'
+[Journal]
+SystemMaxUse=500M
+SystemKeepFree=1G
+RuntimeMaxUse=100M
+MaxRetentionSec=7day
+JOURNALD
+systemctl restart systemd-journald
+
 # Signal ready
 touch /root/.provisioned
 `;

@@ -14,8 +14,19 @@ mock.module("../../shared/remote/index.ts", () => ({
   sshExec: mock(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
 }));
 
-const resizeVolume = mock(async () => {});
+const resizeVolume = mock(async (_id: string, _size: number) => {});
 compute.volumes.resize = resizeVolume as any;
+let observedVolumeSize = 10;
+compute.volumes.get = mock(async (id: string) => ({
+  providerId: id,
+  name: "v",
+  sizeGb: observedVolumeSize,
+  location: "fsn1",
+  serverId: null,
+})) as any;
+resizeVolume.mockImplementation(async (_id: string, size: number) => {
+  observedVolumeSize = size;
+});
 
 import * as db from "../../shared/db.ts";
 import detachVolumeOp from "./detach-volume.ts";
@@ -53,6 +64,7 @@ function makeAppWithVolume(volumeId: string | null) {
 }
 
 beforeEach(() => {
+  observedVolumeSize = 10;
   compute._mocks.volumeDetach.mockClear();
   resizeVolume.mockClear();
   recreateAppContainer.mockClear();

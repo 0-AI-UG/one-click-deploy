@@ -416,7 +416,10 @@ export async function probeAppHealth(
       hostKey,
     );
   }
-  return containerRunningCheck(ip, containerName, maxAttempts, hostKey);
+  // `container` is an explicit opt-out from readiness probing. A single
+  // docker-inspect (which still rejects restarting/exited/restart-loop state)
+  // is authoritative and avoids turning final bookkeeping into a 30s+ wait.
+  return containerRunningCheck(ip, containerName, 1, hostKey);
 }
 
 /** Pure marker assessment used by probes and unit tests. */

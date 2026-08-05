@@ -5,7 +5,7 @@ import * as db from "../../shared/db.ts";
 import type { StackDeployRequest } from "../../shared/rpc.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
-import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
+import { findActiveOperationByResourceKey, listChildOperations } from "../../shared/db/operations.ts";
 import { getContainerLogs, sshExec } from "../../shared/remote/index.ts";
 import { deriveStackResourceState } from "../../engine/resource-state.ts";
 import {
@@ -31,6 +31,7 @@ function operationFields(stack: db.StackRow, fallback: ReturnType<typeof deriveS
       last_operation_status: fallback.lastOperationStatus,
       last_operation_failed: fallback.lastOperationFailed,
       operation_in_progress: fallback.operationInProgress,
+      last_operation_children: [],
     };
   }
   return {
@@ -38,6 +39,11 @@ function operationFields(stack: db.StackRow, fallback: ReturnType<typeof deriveS
     last_operation_status: latest.status,
     last_operation_failed: ["failed", "compensated", "compensation_failed"].includes(latest.status),
     operation_in_progress: !TERMINAL_OPERATION_STATUSES.has(latest.status),
+    last_operation_children: listChildOperations(latest.id).map((child) => ({
+      id: child.id,
+      kind: child.kind,
+      status: child.status,
+    })),
   };
 }
 

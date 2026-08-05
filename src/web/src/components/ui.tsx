@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, type ReactNode } from "react";
 import { X, AlertTriangle, Loader2, Copy, Check } from "lucide-react";
+import { useMobileLayout } from "../hooks/use-mobile-layout.ts";
 
 // --- Toast system ---
 type Toast = {
@@ -57,6 +58,7 @@ export function showLiveToast(init: { message: string; subtitle?: string; type?:
 
 export function Toasts() {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const isMobile = useMobileLayout();
 
   useEffect(() => {
     toastListeners.push(setToasts);
@@ -64,11 +66,11 @@ export function Toasts() {
   }, []);
 
   return (
-    <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
+    <div className={isMobile ? "pointer-events-none fixed inset-x-3 top-[calc(62px+env(safe-area-inset-top))] z-[100] flex flex-col gap-2" : "fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none"}>
       {toasts.map((t) => (
         <div
           key={t.id}
-          className={`pointer-events-auto animate-slide-up font-mono text-[10px] font-bold uppercase tracking-wider px-4 py-2.5 border-2 border-fg max-w-sm shadow-neo-sm ${
+          className={`pointer-events-auto animate-slide-up font-mono text-[10px] font-bold uppercase tracking-wider px-4 py-2.5 border-2 border-fg ${isMobile ? "w-full" : "max-w-sm"} shadow-neo-sm ${
             t.type === "success" ? "bg-accent text-fg" :
             t.type === "error" ? "bg-accent-red text-white" :
             "bg-accent-blue text-white"
@@ -111,6 +113,7 @@ export function confirm(title: string, message: string, danger = false): Promise
 
 export function ConfirmDialog() {
   const [state, setState] = useState<ConfirmState>({ open: false, title: "", message: "" });
+  const isMobile = useMobileLayout();
 
   useEffect(() => {
     confirmListeners.push(setState);
@@ -126,8 +129,9 @@ export function ConfirmDialog() {
   };
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-fg/40 animate-fade-in">
-      <div className="bg-bg-raised border-2 border-fg shadow-neo p-6 max-w-md w-full mx-4 animate-slide-up">
+    <div className={`fixed inset-0 z-[90] flex bg-fg/40 animate-fade-in ${isMobile ? "items-end" : "items-center justify-center"}`}>
+      <div className={isMobile ? "w-full rounded-t-[22px] border-2 border-b-0 border-fg bg-bg-raised px-5 pb-[calc(20px+env(safe-area-inset-bottom))] pt-4 shadow-[0_-5px_0_#1A1A1A] animate-slide-up" : "bg-bg-raised border-2 border-fg shadow-neo p-6 max-w-md w-full mx-4 animate-slide-up"}>
+        {isMobile && <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-fg/25" />}
         <div className="flex items-start gap-3 mb-4">
           {state.danger && <AlertTriangle size={20} className="text-accent-red mt-0.5 flex-shrink-0" />}
           <div>
@@ -135,13 +139,13 @@ export function ConfirmDialog() {
             <p className="text-xs text-fg-dim mt-1">{state.message}</p>
           </div>
         </div>
-        <div className="flex gap-2 justify-end">
-          <button onClick={() => close(false)} className="font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg bg-bg-raised text-fg-dim px-3 py-1.5 shadow-neo-sm hover:bg-alt transition-all active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none">
+        <div className={`flex gap-2 justify-end ${isMobile ? "mt-5" : ""}`}>
+          <button onClick={() => close(false)} className={`font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg bg-bg-raised text-fg-dim shadow-neo-sm hover:bg-alt transition-all active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none ${isMobile ? "min-h-12 flex-1 px-4" : "px-3 py-1.5"}`}>
             Cancel
           </button>
           <button
             onClick={() => close(true)}
-            className={`font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg px-3 py-1.5 shadow-neo-sm transition-all active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none ${
+            className={`font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg shadow-neo-sm transition-all active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none ${isMobile ? "min-h-12 flex-1 px-4" : "px-3 py-1.5"} ${
               state.danger
                 ? "bg-accent-red text-white"
                 : "bg-accent text-fg"
@@ -250,8 +254,11 @@ export function Btn({
   className?: string;
   title?: string;
 }) {
+  const isMobile = useMobileLayout();
   const base = "inline-flex items-center gap-1.5 font-mono font-bold uppercase tracking-wider border-2 border-fg cursor-pointer transition-all disabled:opacity-35 disabled:cursor-not-allowed disabled:shadow-neo-sm disabled:translate-x-0 disabled:translate-y-0";
-  const sizes = size === "xs" ? "px-2 py-1 text-[9px]" : "px-3 py-1.5 text-[10px]";
+  const sizes = isMobile
+    ? (size === "xs" ? "min-h-11 px-3 py-2 text-[9px]" : "min-h-11 px-4 py-2 text-[10px]")
+    : (size === "xs" ? "px-2 py-1 text-[9px]" : "px-3 py-1.5 text-[10px]");
 
   const variants = {
     default: "bg-bg-raised text-fg shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none",
@@ -315,6 +322,34 @@ function replaceFirstIconWithSpinner(node: ReactNode): { node: ReactNode; found:
 
 // --- Table ---
 export function Table({ headers, children }: { headers: string[]; children: ReactNode }) {
+  const isMobile = useMobileLayout();
+
+  if (isMobile) {
+    return (
+      <div className="space-y-3">
+        {React.Children.toArray(children).map((row, rowIndex) => {
+          if (!React.isValidElement(row)) return row;
+          const cells = React.Children.toArray((row.props as { children?: ReactNode }).children);
+          return (
+            <div key={row.key ?? rowIndex} className="border-2 border-fg bg-bg-raised px-4 py-2 shadow-neo-sm">
+              {cells.map((cell, cellIndex) => {
+                if (!React.isValidElement(cell)) return null;
+                const content = (cell.props as { children?: ReactNode }).children;
+                const label = headers[cellIndex] || "";
+                return (
+                  <div key={cell.key ?? cellIndex} className={`flex min-h-10 items-center gap-3 border-b border-fg/10 py-2 last:border-b-0 ${label ? "justify-between" : "justify-end"}`}>
+                    {label && <span className="shrink-0 font-mono text-[8px] font-bold uppercase tracking-wider text-muted">{label}</span>}
+                    <div className="min-w-0 text-right font-mono text-[10px] text-fg">{content}</div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs font-mono">
@@ -374,7 +409,21 @@ export function Field({
   divider?: boolean;
   htmlFor?: string;
 }) {
+  const isMobile = useMobileLayout();
   const col = wide ? "w-[min(75%,34rem)]" : "w-[min(62%,20rem)]";
+  if (isMobile) {
+    return (
+      <div className={`py-3 ${divider ? "border-b-2 border-fg/10 last:border-b-0" : ""} ${className}`}>
+        {(label || hint) && (
+          <div className="mb-2">
+            {label && <label htmlFor={htmlFor} className="block font-mono text-[9px] font-bold uppercase tracking-wider text-fg">{label}</label>}
+            {hint && <div className="mt-1 font-mono text-[9px] leading-snug text-muted">{hint}</div>}
+          </div>
+        )}
+        <div className="w-full">{children}</div>
+      </div>
+    );
+  }
   return (
     <div
       className={`flex ${align === "start" ? "items-start" : "items-center"} justify-between gap-4 py-3 ${

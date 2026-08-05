@@ -1,0 +1,13 @@
+{
+  "$schema": 1,
+  "name": "API Server",
+  "description": "REST API backend. In a stack it reads DATABASE_URL and REDIS_URL from the shared environment (injected by the `database` and `redis` services), so those are NOT declared here.",
+  "build": { "dockerfile": "Dockerfile", "context": ".", "container_port": 8080 },
+  "env": [
+    { "key": "JWT_SECRET", "description": "Signing key for auth tokens; supply at deploy time", "required": true, "secret": true },
+    { "key": "LOG_LEVEL", "default": "info" }
+  ],
+  "health_check": { "path": "/health" },
+  "webhook": { "enabled": true, "branch": "main", "path": "services/api" },
+  "suggested_app_name": "myapp-api"
+}

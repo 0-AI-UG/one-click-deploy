@@ -13,11 +13,15 @@ import { ScalingTab } from "./scaling-tab.tsx";
 import { WebhooksTab } from "./webhooks-tab.tsx";
 import { SettingsTab, type IngressForm } from "./settings-tab.tsx";
 import type { AppData, ServerData, ReplicaData, MetricSample, ScalingEvent, DeploymentRecord } from "../../types.ts";
+import { useMobileLayout } from "../../hooks/use-mobile-layout.ts";
+import { MobileActionSheet, MobileSheetAction } from "../../components/mobile-action-sheet.tsx";
+import { MoreHorizontal } from "lucide-react";
 
 const errMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
 export function AppDetailPage({ appId }: { appId: number }) {
+  const isMobile = useMobileLayout();
   const [app, setApp] = useState<AppData | null>(null);
   const [server, setServer] = useState<ServerData | null>(null);
   const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
@@ -50,6 +54,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [tail, setTail] = useState(100);
   const [selectedReplicaId, setSelectedReplicaId] = useState<number | null>(null);
   const [webhookForm, setWebhookForm] = useState<{ branch: string; path: string; waitForCi: boolean; stagingEnvId: number | null }>({ branch: "main", path: "", waitForCi: false, stagingEnvId: null });
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
 
   const load = async () => {
     try {
@@ -196,7 +201,28 @@ export function AppDetailPage({ appId }: { appId: number }) {
   ] as const;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
+    <div className={isMobile ? "px-4 pb-5 pt-4 animate-fade-in" : "max-w-4xl mx-auto px-4 py-6 animate-fade-in"}>
+      {isMobile ? (
+        <div className="mb-5">
+          <div className="flex items-start gap-3">
+            <button onClick={() => { window.location.hash = "#/"; }} aria-label="Back to dashboard" className="grid h-11 w-11 shrink-0 place-items-center border-2 border-fg bg-bg-raised shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"><ArrowLeft size={18} /></button>
+            <div className="min-w-0 flex-1 pt-0.5">
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-muted">App</p>
+              <h1 className="mt-0.5 truncate font-mono text-lg font-bold uppercase text-fg">{app.name}</h1>
+              <div className="mt-1"><StatusBadge status={app.status} subLabel={app.environment_stale ? "config changed" : badgeSubLabel} /></div>
+            </div>
+            <button onClick={() => setMobileActionsOpen(true)} aria-label="App actions" className="grid h-11 w-11 shrink-0 place-items-center rounded-full active:bg-alt"><MoreHorizontal size={23} /></button>
+          </div>
+          {server && <p className="ml-14 mt-2 truncate font-mono text-[9px] text-muted">{server.name} · {server.ipv4}</p>}
+          <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
+            <button
+              disabled={ops.isBusy || actionLoading === "redeploy"}
+              onClick={() => action("redeploy", () => post("/api/apps/deploy", { app_name: app.name, apply_mode: "patch" }))}
+              className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 border-2 border-fg bg-accent px-4 font-mono text-[11px] font-bold uppercase tracking-wide shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 active:shadow-none disabled:opacity-40"
+            ><RefreshCw size={17} className={actionLoading === "redeploy" || ops.isBusyWith("redeploy") ? "animate-spin" : ""} />{actionLoading === "redeploy" || ops.isBusyWith("redeploy") ? "Deploying…" : "Deploy latest code"}</button>
+          </PermissionGate>
+        </div>
+      ) : (
       <div className="flex items-center gap-3 mb-6">
         <Btn variant="ghost" onClick={() => { window.location.hash = "#/"; }}><ArrowLeft size={14} /></Btn>
         <div className="flex-1">
@@ -253,6 +279,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           </PermissionGate>
         </div>
       </div>
+      )}
 
       {app.status === "paused" && (
         <PausedBanner message="App is paused; containers are frozen and not serving traffic">
@@ -350,6 +377,24 @@ export function AppDetailPage({ appId }: { appId: number }) {
           ops={ops}
         />
       )}
+
+      <MobileActionSheet open={isMobile && mobileActionsOpen} onClose={() => setMobileActionsOpen(false)} title={app.name} subtitle={`App · ${app.status}`}>
+        <PermissionGate permission="apps.restart" appId={appId} environmentId={app.environment_id}>
+          <MobileSheetAction icon={<RotateCcw size={19} />} label="Restart" detail="Restart all running replicas" loading={actionLoading === "restart" || ops.isBusyWith("restart_app")} disabled={ops.isBusy} onClick={() => { setMobileActionsOpen(false); action("restart", () => post(`/api/apps/${appId}/restart`)); }} />
+        </PermissionGate>
+        <PermissionGate permission="apps.pause" appId={appId} environmentId={app.environment_id}>
+          <MobileSheetAction icon={app.status === "paused" ? <Play size={19} /> : <Pause size={19} />} label={app.status === "paused" ? "Unpause" : "Pause"} detail={app.status === "paused" ? "Resume serving traffic" : "Stop serving traffic without destroying the app"} disabled={ops.isBusy} onClick={() => { const next = app.status === "paused" ? "unpause" : "pause"; setMobileActionsOpen(false); action(next, () => post(`/api/apps/${appId}/${next}`)); }} />
+        </PermissionGate>
+        <PermissionGate permission="apps.destroy" appId={appId} environmentId={app.environment_id}>
+          <MobileSheetAction icon={<Trash2 size={19} />} label="Destroy app" detail="Remove containers, DNS records and webhooks" danger loading={actionLoading === "destroy" || ops.isBusyWith("destroy_app")} disabled={ops.isBusy} onClick={async () => {
+            if (await confirm("Destroy App", `Permanently destroy "${app.name}"?`, true)) {
+              setMobileActionsOpen(false);
+              await action("destroy", () => del(`/api/apps/${appId}`));
+              window.location.hash = "#/";
+            }
+          }} />
+        </PermissionGate>
+      </MobileActionSheet>
     </div>
   );
 }

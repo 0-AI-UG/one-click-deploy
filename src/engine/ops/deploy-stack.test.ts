@@ -12,11 +12,15 @@ import deployStackOp, {
   dependencyProjectionKeys,
   leastPrivilegeProjection,
   suspiciousUnrelatedProjectionKeys,
+  stackAppAlreadyConverged,
   topoLevels,
   portCapacityExceeded,
 } from "./deploy-stack.ts";
 import type { StackDeployRequest } from "../../shared/rpc.ts";
 import type { OpContext } from "../types.ts";
+import { hetzner } from "../../shared/providers/index.ts";
+import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import { hashEnvironment } from "../revision.ts";
 
 // Minimal OpContext for exercising a step's run() directly against a real
 // temp-dir DB (mirrors src/engine/ops/deploy.test.ts's makeCtx).
@@ -154,6 +158,62 @@ describe("portCapacityExceeded", () => {
   });
 });
 
+describe("stack member convergence checkpoints", () => {
+  test("recognizes an unchanged, fully attested immutable member", async () => {
+    const digest = `ghcr.io/example/renderer@sha256:${"a".repeat(64)}`;
+    const server = db.insertServer({
+      name: `checkpoint-server-${randomSuffix()}`,
+      provider_id: `checkpoint-provider-${randomSuffix()}`,
+      ipv4: "10.0.0.20", ipv6: "", type: "cx22", location: "fsn1", status: "ready",
+    });
+    const insertedApp = db.insertApp({
+      name: `checkpoint-${randomSuffix()}`,
+      domain: "",
+      git_repo: "",
+      dockerfile_path: "",
+      container_port: 3000,
+      env_vars: "{}",
+    });
+    db.updateAppStatus(insertedApp.id, "running");
+    db.updateAppArtifactAndHealth(insertedApp.id, {
+      imageRef: digest,
+      buildCacheRef: "",
+      healthMode: "container",
+      healthCommand: "",
+      healthFile: "",
+      healthMaxAgeSeconds: 0,
+    });
+    const appRow = db.getApp(insertedApp.id)!;
+    const replica = db.insertReplica({
+      app_id: appRow.id,
+      server_id: server.id,
+      host_port: 10000,
+      container_name: appRow.name,
+      status: "running",
+    });
+    const envHash = hashEnvironment(await resolveAppEnvVars(appRow));
+    db.insertDeployment({
+      app_id: appRow.id,
+      image_tag: digest,
+      image_digest: digest,
+      env_hash: envHash,
+      git_commit: "artifact",
+      config_revision: appRow.config_revision,
+    });
+    db.recordReplicaAttestation(replica.id, {
+      imageDigest: `sha256:${"b".repeat(64)}`,
+      desiredImageDigest: digest,
+      envHash,
+      configRevision: appRow.config_revision,
+    });
+
+    expect(await stackAppAlreadyConverged(appRow, `artifact:${digest}`)).toEqual({
+      converged: true,
+      reason: "source, config, environment, replicas, and links match",
+    });
+  });
+});
+
 describe("deploy_stack plan step", () => {
   test("rejects an invalid stack name", async () => {
     const ctx = makeCtx(req("Bad Name", [app("web")]));
@@ -238,21 +298,21 @@ describe("deploy_stack plan step", () => {
     await expect(planStep.run(makeCtx(input), {})).rejects.toThrow(/not found/i);
   });
 
-  test("compensation preserves a reused environment but destroys a self-created one", async () => {
+  test("compensation retains stack environments as resumable desired state", async () => {
     const existing = db.insertEnvironment(`shared-${randomSuffix()}`, "");
     // Reuse: env must survive rollback.
     const reuseInput = { ...req(`s-${randomSuffix()}`, [app("web")]), environment_id: existing.id };
     const reuseOut = (await planStep.run(makeCtx(reuseInput), {})) as any;
     await planStep.compensate!(makeCtx(reuseInput), reuseOut, {});
     expect(db.getEnvironment(existing.id)).not.toBeNull();
-    expect(db.getStackByName(reuseInput.name)).toBeNull();
+    expect(db.getStackByName(reuseInput.name)?.status).toBe("failed");
 
-    // Auto-created: env is torn down with the stack.
+    // Auto-created desired state is also retained for the next reconcile.
     const freshInput = req(`s-${randomSuffix()}`, [app("web")]);
     const freshOut = (await planStep.run(makeCtx(freshInput), {})) as any;
     await planStep.compensate!(makeCtx(freshInput), freshOut, {});
-    expect(db.getEnvironment(freshOut.environmentId)).toBeNull();
-    expect(db.getStackByName(freshInput.name)).toBeNull();
+    expect(db.getEnvironment(freshOut.environmentId)).not.toBeNull();
+    expect(db.getStackByName(freshInput.name)?.status).toBe("failed");
   });
 });
 
@@ -321,6 +381,57 @@ describe("deploy_stack service adoption", () => {
     await expect(reconcileServicesStep.run(ctx, { plan: planOut }))
       .rejects.toThrow(/immutable managed-service drift.*17-alpine.*17-pgmq.*confirmation is required/i);
   });
+
+  test("grows a declared existing service volume and waits for provider confirmation", async () => {
+    const name = `resize-${randomSuffix()}`;
+    const input = req(name, [], [{ key: "db", type: "postgresql", volume_size: 30 } as any]);
+    const server = db.insertServer({
+      name: `${name}-server`, provider_id: `provider-${name}`, ipv4: "10.0.0.8", ipv6: "",
+      type: "cx22", location: "fsn1", status: "ready",
+    });
+    const service = db.insertService({
+      name: `${name}-db`, service_type: "postgresql", version: "17-alpine", port: 5432,
+      env_vars: "{}", credentials: "{}",
+    });
+    db.insertServiceInstance({
+      service_id: service.id,
+      server_id: server.id,
+      role: "primary",
+      container_name: `${name}-db`,
+      host_port: 15000,
+      volume_id: "vol-resize",
+      volume_mount: "/mnt/db:/var/lib/postgresql/data",
+      status: "running",
+    });
+    const ctx = makeCtx(input);
+    const parent = enqueueOperation({
+      kind: "deploy_stack", resourceKeys: [`stack:${name}`], input, trigger: "test",
+    });
+    ctx.opId = parent.id;
+    const planOut = await planStep.run(ctx, {}) as any;
+    const originalGet = hetzner.volumes.get;
+    let observedSize = 10;
+    hetzner.volumes.get = (async (id: string) => ({
+      providerId: id, name: "db", sizeGb: observedSize, location: "fsn1", serverId: server.provider_id,
+    })) as typeof hetzner.volumes.get;
+    const poll = setInterval(() => {
+      const resize = listChildOperations(parent.id).find((child) => child.kind === "resize_volume");
+      if (resize && resize.status !== "done") {
+        observedSize = 30;
+        markOperationFinished(resize.id, "done");
+      }
+    }, 5);
+    try {
+      await reconcileServicesStep.run(ctx, { plan: planOut });
+    } finally {
+      clearInterval(poll);
+      hetzner.volumes.get = originalGet;
+    }
+    const resize = listChildOperations(parent.id).find((child) => child.kind === "resize_volume");
+    expect(resize).not.toBeUndefined();
+    expect(JSON.parse(resize!.input_json)).toEqual({ volumeId: "vol-resize", sizeGb: 30 });
+    expect(observedSize).toBe(30);
+  });
 });
 
 // Simulate the reported bug: member A (postgres) deploys & is left RUNNING, then
@@ -328,7 +439,7 @@ describe("deploy_stack service adoption", () => {
 // replayed as compensable, `deploy_apps`' own compensator never runs — so the
 // authoritative member teardown lives in `plan`'s compensator, which always
 // runs. These tests assert the succeeded member A is reaped either way.
-describe("deploy_stack compensation reaps already-deployed members", () => {
+describe("deploy_stack compensation retains already-deployed members", () => {
   // Seed the post-failure state: A deployed new & tagged, its `deploy` child
   // 'done'; B's `deploy` child self-compensated with no surviving app row. The
   // parent op is a real row so child `parent_id` FKs resolve.
@@ -363,7 +474,7 @@ describe("deploy_stack compensation reaps already-deployed members", () => {
     try { await fn(); } finally { clearInterval(poll); }
   }
 
-  test("plan.compensate destroys member A when B fails inside deploy_apps", async () => {
+  test("plan.compensate retains member A when B fails inside deploy_apps", async () => {
     const { name, ctx, opId } = seedPartialFailure();
     const planOut = (await planStep.run(ctx, {})) as {
       stackId: number; environmentId: number; createdStack: boolean;
@@ -390,16 +501,15 @@ describe("deploy_stack compensation reaps already-deployed members", () => {
 
     await driveWithSimulatedDestroys(opId, () => planStep.compensate!(ctx, planOut, {}));
 
-    // Member A's already-running app is torn down ...
+    // Member A is a durable checkpoint; no destructive child is enqueued.
     const destroys = listChildOperations(opId).filter((c) => c.kind === "destroy_app");
-    expect(destroys.length).toBe(1);
-    expect(JSON.parse(destroys[0].input_json).appId).toBe(appA.id);
-    // ... and no stack row / self-created env is left behind.
-    expect(db.getStackByName(name)).toBeNull();
-    expect(db.getEnvironment(planOut.environmentId)).toBeNull();
+    expect(destroys.length).toBe(0);
+    expect(db.getApp(appA.id)).not.toBeNull();
+    expect(db.getStackByName(name)?.status).toBe("failed");
+    expect(db.getEnvironment(planOut.environmentId)).not.toBeNull();
   });
 
-  test("teardown is idempotent: deploy_apps.compensate + plan.compensate don't double-destroy", async () => {
+  test("repeated compensation preserves the same successful checkpoint", async () => {
     const { name, ctx, opId } = seedPartialFailure();
     const planOut = (await planStep.run(ctx, {})) as { stackId: number; environmentId: number };
 
@@ -416,33 +526,19 @@ describe("deploy_stack compensation reaps already-deployed members", () => {
       trigger: "stack", parentId: opId, idempotencyKey: `stack:${opId}:app:postgres`,
     });
 
-    // First compensator (deploy_apps) enqueues + completes the destroy. Simulate
-    // the engine actually removing the app row so the second pass probes it gone.
-    const poll = setInterval(() => {
-      for (const c of listChildOperations(opId)) {
-        if (c.kind === "destroy_app" && c.status !== "done") {
-          markOperationFinished(c.id, "done");
-          db.deleteApp(appA.id);
-        }
-      }
-    }, 20);
-    try {
-      await deployAppsStep.compensate!(ctx, undefined, {});
-      // plan.compensate runs next in the reverse walk — must NOT enqueue a 2nd destroy.
-      await planStep.compensate!(ctx, planOut, {});
-    } finally {
-      clearInterval(poll);
-    }
+    await planStep.compensate!(ctx, planOut, {});
+    await planStep.compensate!(ctx, planOut, {});
 
     const destroys = listChildOperations(opId).filter((c) => c.kind === "destroy_app");
-    expect(destroys.length).toBe(1);
-    expect(db.getStackByName(name)).toBeNull();
+    expect(destroys.length).toBe(0);
+    expect(db.getApp(appA.id)).not.toBeNull();
+    expect(db.getStackByName(name)?.status).toBe("failed");
   });
 });
 
 // Rollback must reap ONLY what this deploy newly created; anything reused
 // (a caller-supplied environment, a pre-existing managed service) survives.
-describe("deploy_stack compensation preserves reused resources", () => {
+describe("deploy_stack compensation preserves reconciliation checkpoints", () => {
   async function driveWithSimulatedDestroys(opId: number, fn: () => Promise<void>) {
     const poll = setInterval(() => {
       for (const c of listChildOperations(opId)) {
@@ -459,7 +555,7 @@ describe("deploy_stack compensation preserves reused resources", () => {
     try { await fn(); } finally { clearInterval(poll); }
   }
 
-  test("reused env + reused service survive; new member + new service are torn down", async () => {
+  test("reused and newly-successful resources survive for retry", async () => {
     const existingEnv = db.insertEnvironment(`shared-${randomSuffix()}`, "");
     const name = `s-${randomSuffix()}`;
     // A managed service that ALREADY exists before this stack deploy (reused).
@@ -530,27 +626,23 @@ describe("deploy_stack compensation preserves reused resources", () => {
 
     await driveWithSimulatedDestroys(opId, () => planStep.compensate!(ctx, planOut, {}));
 
-    // Newly-created member + service ARE torn down ...
+    // New and reused members are all retained as resume checkpoints.
     const appDestroys = listChildOperations(opId).filter((c) => c.kind === "destroy_app");
-    expect(appDestroys.length).toBe(1);
-    expect(JSON.parse(appDestroys[0].input_json).appId).toBe(appA.id);
+    expect(appDestroys.length).toBe(0);
     const svcDestroys = listChildOperations(opId).filter((c) => c.kind === "destroy_service");
-    expect(svcDestroys.length).toBe(1);
-    expect(JSON.parse(svcDestroys[0].input_json).serviceId).toBe(newSvc.id);
-    expect(db.getServiceByName(`${name}-queue`)).toBeNull();
+    expect(svcDestroys.length).toBe(0);
+    expect(db.getApp(appA.id)).not.toBeNull();
+    expect(db.getService(newSvc.id)).not.toBeNull();
 
     // ... while the REUSED env + REUSED service survive the rollback.
     expect(db.getEnvironment(existingEnv.id)).not.toBeNull();
     const survivingCache = db.getServiceByName(`${name}-cache`);
     expect(survivingCache).not.toBeNull();
-    // ... and the surviving reused service is UNTAGGED (its stack_id no longer
-    // dangles at the now-deleted stack row).
-    expect(survivingCache!.stack_id).toBeNull();
-    // Stack row (created this run) is gone.
-    expect(db.getStackByName(name)).toBeNull();
+    expect(survivingCache!.stack_id).toBe(planOut.stackId);
+    expect(db.getStackByName(name)?.status).toBe("failed");
   });
 
-  test("first-up rollback untags a reused service but destroys a newly-created one", async () => {
+  test("first-up failure retains reused and newly-created successful services", async () => {
     const name = `s-${randomSuffix()}`;
     // A managed service that ALREADY exists (reused on this first up).
     const reusedSvc = db.insertService({
@@ -589,17 +681,15 @@ describe("deploy_stack compensation preserves reused resources", () => {
 
     await driveWithSimulatedDestroys(opId, () => planStep.compensate!(ctx, planOut, {}));
 
-    // Newly-created service is destroyed.
-    expect(db.getServiceByName(`${name}-queue`)).toBeNull();
-    // Reused service survives AND is untagged (stack_id cleared to null).
+    // Both successful services survive and remain stack-owned for retry.
+    expect(db.getServiceByName(`${name}-queue`)).not.toBeNull();
     const cache = db.getServiceByName(`${name}-cache`);
     expect(cache).not.toBeNull();
-    expect(cache!.stack_id).toBeNull();
-    // Stack row (created this run) is gone.
-    expect(db.getStackByName(name)).toBeNull();
+    expect(cache!.stack_id).toBe(planOut.stackId);
+    expect(db.getStackByName(name)?.status).toBe("failed");
   });
 
-  test("reconcile_services.compensate skips a reused service", async () => {
+  test("reconcile_services has no destructive compensation", async () => {
     const name = `s-${randomSuffix()}`;
     const reusedSvc = db.insertService({
       name: `${name}-cache`, service_type: "redis", version: "7", port: 6379,
@@ -616,7 +706,7 @@ describe("deploy_stack compensation preserves reused resources", () => {
     expect(planOut.reusedServiceKeys).toEqual(["cache"]);
 
     const reconcileServicesStep = deployStackOp.steps.find((s) => s.name === "reconcile_services")!;
-    await reconcileServicesStep.compensate!(ctx, { childIds: [] }, { plan: planOut });
+    expect(reconcileServicesStep.compensate).toBeUndefined();
 
     // No destroy enqueued for the reused service; it still exists.
     expect(listChildOperations(parent.id).filter((c) => c.kind === "destroy_service")).toHaveLength(0);

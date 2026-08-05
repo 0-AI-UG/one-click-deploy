@@ -60,6 +60,7 @@ export class ApiError extends Error {
     public readonly method: string,
     public readonly path: string,
     message: string,
+    public readonly transportKind?: PanelTransportFailureKind,
   ) {
     super(message);
     this.name = "ApiError";
@@ -67,8 +68,85 @@ export class ApiError extends Error {
 
   /** Transient gateway / network conditions worth retrying a poll through. */
   get isTransient(): boolean {
-    return this.status === 0 || this.status === 502 || this.status === 503 || this.status === 504;
+    return (
+      (this.status === 0 && this.transportKind !== "certificate_validation" && this.transportKind !== "local_trust_store") ||
+      this.status === 502 || this.status === 503 || this.status === 504
+    );
   }
+}
+
+export type PanelTransportFailureKind =
+  | "certificate_validation"
+  | "local_trust_store"
+  | "tls_transport_reset"
+  | "panel_unavailable"
+  | "dns_failure"
+  | "timeout"
+  | "transport_failure";
+
+function errorChain(err: unknown): { text: string; codes: string[] } {
+  const texts: string[] = [];
+  const codes: string[] = [];
+  let current: unknown = err;
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 5 && current && !seen.has(current); depth++) {
+    seen.add(current);
+    if (current instanceof Error) texts.push(current.message);
+    else texts.push(String(current));
+    if (typeof current === "object") {
+      const row = current as { code?: unknown; cause?: unknown };
+      if (row.code) codes.push(String(row.code));
+      current = row.cause;
+    } else break;
+  }
+  return { text: texts.filter(Boolean).join(": "), codes };
+}
+
+/** Classify Bun/fetch transport errors without collapsing TLS trust failures
+ * into the same message as an unavailable panel. */
+export function describePanelTransportError(
+  err: unknown,
+  panelUrl: string,
+): { kind: PanelTransportFailureKind; message: string } {
+  const chain = errorChain(err);
+  const raw = `${chain.text} ${chain.codes.join(" ")}`.trim();
+  const lower = raw.toLowerCase();
+  const code = chain.codes[0] ? ` [${chain.codes.join(" → ")}]` : "";
+  let kind: PanelTransportFailureKind;
+  let label: string;
+  if (/unknown certificate verification|unable_to_get_issuer_cert_locally|cert_untrusted|local issuer/.test(lower)) {
+    kind = "local_trust_store";
+    label = "local trust store could not build a trusted certificate chain";
+  } else if (/certificate|self[_ -]?signed|unable_to_verify_leaf|cert_has_expired|hostname.*match/.test(lower)) {
+    kind = "certificate_validation";
+    label = "TLS certificate validation failed";
+  } else if (/connection reset|econnreset|tls.*(reset|closed)|socket.*closed|unexpected eof|handshake/.test(lower)) {
+    kind = "tls_transport_reset";
+    label = "TLS transport was reset during connection/handshake";
+  } else if (/enotfound|eai_again|name or service not known|dns/.test(lower)) {
+    kind = "dns_failure";
+    label = "panel hostname could not be resolved";
+  } else if (/timeout|timed out|abort/.test(lower)) {
+    kind = "timeout";
+    label = "panel request timed out";
+  } else if (/econnrefused|connection refused|host unreachable|network unreachable/.test(lower)) {
+    kind = "panel_unavailable";
+    label = "panel is unavailable or refusing connections";
+  } else {
+    kind = "transport_failure";
+    label = "panel transport failed";
+  }
+  let chainHint = "";
+  if (kind === "certificate_validation" || kind === "local_trust_store") {
+    try {
+      const url = new URL(panelUrl);
+      const port = url.port || "443";
+      chainHint =
+        `; inspect the served chain with: openssl s_client -showcerts ` +
+        `-connect ${url.hostname}:${port} -servername ${url.hostname}`;
+    } catch { /* retain classification without a command hint */ }
+  }
+  return { kind, message: `${label}${code}: ${chain.text || String(err)}${chainHint}` };
 }
 
 async function apiRequest<T>(
@@ -80,21 +158,35 @@ async function apiRequest<T>(
   const config = requireConfig();
   const url = `${config.panel_url}${path}`;
 
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        "Authorization": `Bearer ${config.token}`,
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-        ...(headers || {}),
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-  } catch (err) {
-    // Transport-level failure (panel unreachable, connection reset, DNS, …).
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new ApiError(0, method, path, `${method} ${path} — could not reach panel: ${detail}`);
+  let res: Response | undefined;
+  let lastTransport: ReturnType<typeof describePanelTransportError> | undefined;
+  // GETs are safe to replay and comprise operation streams/status polling.
+  // Keep POST/PUT/PATCH/DELETE single-shot so a dropped response cannot create
+  // duplicate side effects (their operation IDs remain recoverable server-side).
+  const attempts = method === "GET" ? 3 : 1;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          "Authorization": `Bearer ${config.token}`,
+          "Connection": "keep-alive",
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+          ...(headers || {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      break;
+    } catch (err) {
+      lastTransport = describePanelTransportError(err, config.panel_url);
+      const retryable = lastTransport.kind !== "certificate_validation" && lastTransport.kind !== "local_trust_store";
+      if (!retryable || attempt === attempts) break;
+      await Bun.sleep(250 * 2 ** (attempt - 1));
+    }
+  }
+  if (!res) {
+    const detail = lastTransport ?? describePanelTransportError("unknown transport failure", config.panel_url);
+    throw new ApiError(0, method, path, `${method} ${path} — ${detail.message}`, detail.kind);
   }
 
   checkBackendVersion(res);

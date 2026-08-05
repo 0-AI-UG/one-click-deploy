@@ -41,6 +41,7 @@ interface StackListItem {
   last_operation_status?: string | null;
   last_operation_failed?: boolean;
   operation_in_progress?: boolean;
+  last_operation_children?: Array<{ id: number; kind: string; status: string }>;
 }
 
 interface StackDetail {
@@ -52,6 +53,7 @@ interface StackDetail {
   last_operation_status?: string | null;
   last_operation_failed?: boolean;
   operation_in_progress?: boolean;
+  last_operation_children?: Array<{ id: number; kind: string; status: string }>;
   resource_status_reason?: string;
   apps: Array<{ id: number; name: string; status: string; domain: string; public?: number | boolean; environment_stale?: number | boolean }>;
   services: Array<{ id: number; name: string; service_type: string; version: string; status: string }>;
@@ -406,6 +408,12 @@ async function stackStatus(args: string[]): Promise<void> {
           `${detail.operation_in_progress ? " (in progress)" : ""}`
         : "none"),
   );
+  if ((detail.last_operation_children || []).length > 0) {
+    console.log(
+      `${DIM}Child operations:${RESET} ` +
+        detail.last_operation_children!.map((child) => `#${child.id} ${child.kind}=${child.status}`).join(", "),
+    );
+  }
   console.log(`${DIM}Created:${RESET} ${(detail.created_at || "").replace("T", " ").slice(0, 16)}\n`);
 
   console.log(`${BOLD}Services${RESET}`);

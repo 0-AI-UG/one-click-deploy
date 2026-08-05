@@ -89,6 +89,26 @@ describe("stack operation association and locking", () => {
     expect(findLatestRelatedStackOperation(stack)?.status).toBe("failed");
   });
 
+  test("a stack child resolves to its parent operation for stack status", () => {
+    const { stack, app } = fixture();
+    const parent = enqueueOperation({
+      kind: "deploy_stack",
+      resourceKeys: stackLockKeys(stack),
+      input: { name: stack.name },
+      trigger: "test",
+    });
+    const child = enqueueOperation({
+      kind: "redeploy",
+      resourceKeys: [`app:${app.id}`],
+      input: { appId: app.id },
+      trigger: "stack",
+      parentId: parent.id,
+    });
+    markOperationFinished(child.id, "failed", { message: "renderer failed" });
+
+    expect(findLatestRelatedStackOperation(stack)?.id).toBe(parent.id);
+  });
+
   test("stack destroy drops queued webhook work and requests cancellation of running work", () => {
     const { stack, app } = fixture();
     const pending = enqueueOperation(withOwningStackKeys({

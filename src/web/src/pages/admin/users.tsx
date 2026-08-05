@@ -7,7 +7,10 @@ import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-se
 import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check } from "lucide-react";
 import type { PanelApp, DeploymentRecord } from "../../types.ts";
 
-function GitHubOAuthSettings({ form, setS }: { form: Record<string, string>; setS: (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => void }) {
+function GitHubOAuthSettings({ form, setS }: {
+  form: { github_oauth_client_id: string; github_oauth_client_secret: string };
+  setS: (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => void;
+}) {
   const [copied, setCopied] = useState(false);
   const callbackUrl = `${window.location.origin}/api/auth/github/callback`;
 
@@ -58,6 +61,7 @@ export function UsersPage() {
     provider_token: "",
     github_oauth_client_id: "", github_oauth_client_secret: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
+    allow_archive_image_transfer: false,
   });
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -101,6 +105,7 @@ export function UsersPage() {
           dns_zone_id: s.dns_zone_id ?? "",
           default_server_type: s.default_server_type ?? "",
           default_location: s.default_location ?? "",
+          allow_archive_image_transfer: s.allow_archive_image_transfer === true,
         });
       })
       .catch(() => {})
@@ -236,6 +241,17 @@ export function UsersPage() {
               value={settingsForm.default_location}
               onChange={(v) => setSettingsForm((f) => ({ ...f, default_location: v }))}
               options={locationOptions(serverTypes, settingsForm.default_server_type)}
+            />
+          </Field>
+          <Field
+            label="Emergency archive transfer"
+            align="start"
+            hint="Off by default. Enable only when a registry-backed build.cache_ref cannot be used; archive transfers require substantially more disk."
+          >
+            <input
+              type="checkbox"
+              checked={settingsForm.allow_archive_image_transfer}
+              onChange={(e) => setSettingsForm((f) => ({ ...f, allow_archive_image_transfer: e.target.checked }))}
             />
           </Field>
         </div>

@@ -4,6 +4,7 @@ import { dockerLoginGhcr, type GhcrAuth } from "./registry.ts";
 import { startAppReplica } from "./docker-run.ts";
 import { ensureOcdNetwork } from "./lifecycle.ts";
 import { pruneAfterBuild } from "./prune.ts";
+import { preflightBuildDiskSpace } from "./disk-space.ts";
 
 /**
  * Conventional Dockerfile probe: prefer ./Dockerfile, then ./docker/Dockerfile,
@@ -183,6 +184,9 @@ export async function cloneAndBuild(
     hostKey?: string;
     /** Registry-backed BuildKit cache shared between build hosts. */
     buildCacheRef?: string;
+    /** Reserve space for the explicitly-enabled emergency archive path when
+     * this build will immediately fan out to another host. */
+    reserveArchiveSpace?: boolean;
     configRevision?: number;
     envHash?: string;
   },
@@ -234,6 +238,18 @@ export async function cloneAndBuild(
     `Resolved build paths: repository root=${appDir}; context=${appDir}/${resolvedContext}; ` +
       `Dockerfile=${appDir}/${dockerfilePath}`,
   );
+
+  // Fail before an expensive build if the source host cannot safely hold the
+  // new expanded image and (when no registry is configured) its fallback
+  // transfer archive. This also performs bounded OCD-only GC first.
+  await preflightBuildDiskSpace({
+    ip,
+    appName: opts.name,
+    contextPath: `${appDir}/${resolvedContext}`,
+    registryBacked: !!opts.buildCacheRef || !opts.reserveArchiveSpace,
+    hostKey,
+    onProgress: emit,
+  });
 
   // Authenticate with ghcr.io if a GitHub token is available (needed for
   // private base images in FROM directives). Credentials live in a per-deploy

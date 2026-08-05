@@ -13,8 +13,23 @@ const resize: Step<ResizeVolumeInput, { ok: true }> = {
   name: "resize_volume",
   label: "Resize volume",
   async run(ctx) {
-    await hetzner.volumes.resize(ctx.input.volumeId, ctx.input.sizeGb);
-    ctx.log(`Resized volume ${ctx.input.volumeId} to ${ctx.input.sizeGb}GB`);
+    const before = await hetzner.volumes.get(ctx.input.volumeId);
+    if (ctx.input.sizeGb < before.sizeGb) {
+      throw new Error(
+        `Refusing to shrink volume ${ctx.input.volumeId} from ${before.sizeGb}GB to ${ctx.input.sizeGb}GB; provider volumes are grow-only`,
+      );
+    }
+    if (ctx.input.sizeGb > before.sizeGb) {
+      await hetzner.volumes.resize(ctx.input.volumeId, ctx.input.sizeGb);
+    }
+    const confirmed = await hetzner.volumes.get(ctx.input.volumeId);
+    if (confirmed.sizeGb < ctx.input.sizeGb) {
+      throw new Error(
+        `Provider did not confirm volume ${ctx.input.volumeId} resize: ` +
+          `${confirmed.sizeGb}GB observed, ${ctx.input.sizeGb}GB requested`,
+      );
+    }
+    ctx.log(`Volume ${ctx.input.volumeId} confirmed at ${confirmed.sizeGb}GB`);
     return { ok: true };
   },
 };

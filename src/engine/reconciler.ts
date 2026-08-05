@@ -1,6 +1,6 @@
 import * as db from "../shared/db.ts";
 import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } from "../shared/db.ts";
-import { pruneServer } from "../shared/remote/index.ts";
+import { ensureHostLogPolicy, pruneServer } from "../shared/remote/index.ts";
 import { evaluateAutoScale, convergeAppReplicas } from "./scale/index.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
 import { reconcileProxy } from "./scale/proxy-manager.ts";
@@ -355,9 +355,15 @@ async function tick(): Promise<void> {
         log("volume-sweep", `failed: ${err}`);
       }
       for (const work of serverWork.values()) {
-        pruneServer(work.server.ipv4, work.server.ssh_host_key || undefined).catch((err) => {
-          log("prune", `server ${work.server.ipv4}: ${err}`);
-        });
+        const hostKey = work.server.ssh_host_key || undefined;
+        const activeAppNames = db.getApps(work.server.id).map((app) => app.name);
+        const panel = db.getPanel();
+        if (panel?.server_id === work.server.id) activeAppNames.push(panel.name);
+        ensureHostLogPolicy(work.server.ipv4, hostKey)
+          .then(() => pruneServer(work.server.ipv4, hostKey, activeAppNames))
+          .catch((err) => {
+            log("maintenance", `server ${work.server.ipv4}: ${err}`);
+          });
       }
     }
 

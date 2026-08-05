@@ -1,5 +1,26 @@
 import { sshExec } from "./ssh.ts";
 import { asUser, log, OCD_IMAGE_LABEL, withExclusiveImageGc } from "./container-common.ts";
+import { runDeploymentPreflightGc } from "./disk-space.ts";
+
+const JOURNALD_LIMITS = `[Journal]\nSystemMaxUse=500M\nSystemKeepFree=1G\nRuntimeMaxUse=100M\nMaxRetentionSec=7day\n`;
+
+/** Converge bounded system-log retention on both new and existing hosts. */
+export async function ensureHostLogPolicy(ip: string, hostKey?: string): Promise<void> {
+  const encoded = Buffer.from(JOURNALD_LIMITS, "utf8").toString("base64");
+  const command =
+    `ocd_journal_tmp=/tmp/ocd-journald-policy-$$ && ` +
+    `trap 'rm -f "$ocd_journal_tmp"' EXIT && ` +
+    `printf '%s' '${encoded}' | base64 -d > "$ocd_journal_tmp" && ` +
+    `mkdir -p /etc/systemd/journald.conf.d && ` +
+    `(cmp -s "$ocd_journal_tmp" /etc/systemd/journald.conf.d/60-ocd-retention.conf || { ` +
+    `install -m 0644 "$ocd_journal_tmp" /etc/systemd/journald.conf.d/60-ocd-retention.conf && ` +
+    `systemctl restart systemd-journald && journalctl --vacuum-size=500M >/dev/null; }) && ` +
+    `(command -v logrotate >/dev/null && logrotate --debug /etc/logrotate.conf >/dev/null 2>&1 || true)`;
+  const result = await sshExec(ip, command, hostKey);
+  if (result.exitCode !== 0) {
+    throw new Error(`Could not converge host log retention on ${ip}: ${result.stderr.trim() || `exit ${result.exitCode}`}`);
+  }
+}
 
 // Never use `docker image prune -a` here. It removes tagged but currently
 // unreferenced images, which includes the desired image during a container
@@ -53,7 +74,10 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
  * leaving the app unable to wake. OCD removes its own containers explicitly
  * (see scaleDown), so the blanket prune only needs to clear foreign junk.
  */
-export async function pruneServer(ip: string, hostKey?: string) {
+export async function pruneServer(ip: string, hostKey?: string, activeAppNames: string[] = []) {
+  // Clear abandoned operation archives and old reconstructible builder state
+  // before the ordinary pressure-based pass below.
+  await runDeploymentPreflightGc(ip, hostKey);
   // Probe disk usage on the root fs (where /var/lib/docker lives).
   const usage = await sshExec(ip, `df -P / | awk 'NR==2 {gsub("%",""); print $5}'`, hostKey);
   const usedPct = parseInt(usage.stdout.trim(), 10) || 0;
@@ -76,6 +100,18 @@ export async function pruneServer(ip: string, hostKey?: string) {
         `docker image prune -f 2>&1 | tail -1`,
         `docker builder prune -af 2>&1 | tail -1`,
       ];
+  if (activeAppNames.length > 0) {
+    const keep = activeAppNames.map((name) => `${name}:*`).join("|");
+    steps.unshift(
+      `for ref in $(docker images --filter label=${OCD_IMAGE_LABEL} --format '{{.Repository}}:{{.Tag}}'); do ` +
+        `case "$ref" in ${keep}) ;; *) docker image rm "$ref" >/dev/null 2>&1 || true ;; esac; done`,
+    );
+  } else {
+    steps.unshift(
+      `docker images --filter label=${OCD_IMAGE_LABEL} --format '{{.Repository}}:{{.Tag}}' | ` +
+        `xargs -r docker image rm >/dev/null 2>&1 || true`,
+    );
+  }
   const result = await sshExec(ip, asUser(withExclusiveImageGc(steps.join("; "))), hostKey);
   const tag = underPressure ? "prune(pressure)" : "prune";
   log(tag, `Server ${ip} (disk ${usedPct}%): ${result.stdout.trim().replace(/\n/g, " | ")}`);

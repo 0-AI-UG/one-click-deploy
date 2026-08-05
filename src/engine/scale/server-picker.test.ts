@@ -74,6 +74,7 @@ const noopEmit = () => {};
 beforeEach(() => {
   const { default: conn } = require("../../shared/db/connection.ts");
   // Wipe everything that pickTargetServer reads to keep cases isolated.
+  db.deletePanel();
   conn.run("DELETE FROM replicas");
   conn.run("DELETE FROM server_metrics_samples");
   conn.run("DELETE FROM servers");
@@ -149,6 +150,25 @@ describe("pickTargetServer", () => {
 
     const picked = await pickTargetServer(app, {}, noopEmit);
     expect(picked.id).toBe(fresh.id);
+  });
+
+  test("automatic placement excludes the control-plane host", async () => {
+    const panelServer = makeServer("panel");
+    db.insertPanel({
+      server_id: panelServer.id,
+      name: "ocd-panel",
+      domain: "panel.example.com",
+      git_repo: "https://github.com/example/panel",
+      container_port: 3000,
+      host_port: 3000,
+    });
+    const worker = makeServer("worker");
+    setServerMetrics(panelServer.id, 1, 1);
+    setServerMetrics(worker.id, 70, 70);
+    const app = makeApp("off-panel");
+
+    const picked = await pickTargetServer(app, {}, noopEmit);
+    expect(picked.id).toBe(worker.id);
   });
 
   test("all servers full -> provisions a new one; inherits location from existing replica", async () => {

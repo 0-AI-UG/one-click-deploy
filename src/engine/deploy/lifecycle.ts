@@ -250,6 +250,7 @@ export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean
             {
               registryRef: app.build_cache_ref || undefined,
               registryToken,
+              allowArchiveFallback: db.getSettings().allow_archive_image_transfer === "1",
               onProgress: (line) => log("reloadAppEnvironment", line),
             },
           );

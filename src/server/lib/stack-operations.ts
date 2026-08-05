@@ -1,6 +1,7 @@
 import * as db from "../../shared/db.ts";
 import dbConn from "../../shared/db/connection.ts";
 import {
+  getOperation,
   requestCancel,
   type EnqueueInput,
   type OperationRow,
@@ -75,7 +76,20 @@ export function relatedStackResourceKeys(stack: db.StackRow): Set<string> {
 export function findLatestRelatedStackOperation(stack: db.StackRow): OperationRow | null {
   const related = relatedStackResourceKeys(stack);
   const rows = dbConn.query("SELECT * FROM operations ORDER BY id DESC").all() as OperationRow[];
-  return rows.find((op) => parseKeys(op).some((key) => related.has(key))) ?? null;
+  const latest = rows.find((op) => parseKeys(op).some((key) => related.has(key))) ?? null;
+  if (!latest) return null;
+  // A child is inserted after its stack operation, so ordering by id alone
+  // made `stack status` replace parent #1810 with child #1815. Walk to the
+  // durable root operation while retaining child detail separately in routes.
+  let root = latest;
+  const seen = new Set<number>();
+  while (root.parent_id != null && !seen.has(root.parent_id)) {
+    seen.add(root.parent_id);
+    const parent = getOperation(root.parent_id);
+    if (!parent) break;
+    root = parent;
+  }
+  return root;
 }
 
 function owningStackForApp(appId: number): db.StackRow | null {

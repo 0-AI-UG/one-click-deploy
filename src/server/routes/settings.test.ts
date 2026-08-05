@@ -204,6 +204,18 @@ describe("handleSaveSettings: plain db settings", () => {
     await handleSaveSettings(req({ require_2fa: false }));
     expect(db.getSettings().require_2fa).toBe("0");
   });
+
+  test("archive image transfer is an explicit emergency opt-in", async () => {
+    await handleSaveSettings(req({ allow_archive_image_transfer: true }));
+    expect(db.getSettings().allow_archive_image_transfer).toBe("1");
+    const enabled = (await (await handleGetSettings(req())).json()) as {
+      allow_archive_image_transfer: boolean;
+    };
+    expect(enabled.allow_archive_image_transfer).toBe(true);
+
+    await handleSaveSettings(req({ allow_archive_image_transfer: false }));
+    expect(db.getSettings().allow_archive_image_transfer).toBe("0");
+  });
 });
 
 describe("handleGetServerTypes", () => {

@@ -137,6 +137,12 @@ Stack failure commonly:
 This provisional-deploy rollback is distinct from explicit app/stack deletion.
 Explicit deletion never deletes linked environments.
 
+Before stateful services are provisioned, stack deployment validates every app
+request. When a ready build host exists, it also clones each Git source into an
+operation-scoped scratch directory and verifies the selected branch/commit,
+Dockerfile, and build context. The scratch checkout is removed in the same
+attempt.
+
 ## App/stack cleanup failure
 
 App destruction uses best-effort cleanup for webhook, containers, DNS, volume
@@ -183,8 +189,16 @@ After validation, recreate/redeploy linked apps so they use current credentials.
 
 ## Volume recovery
 
-Destroyed app/service volumes are detached and retained. They remain billable.
-The seven-day review date is not automatic deletion.
+Destroyed app/service volumes are detached and retained as user-owned data.
+They remain billable, and their seven-day review date is not automatic
+deletion.
+
+Volumes created only by a failed deployment are retained as provisional for
+the same seven-day recovery window. After that date, the reconciler permanently
+deletes them only when no app, service, or panel references the volume and the
+provider reports it detached. Automated deletion is written to the permanent
+volume audit. Adopting the volume before expiry removes it from provisional
+retention.
 
 Recovery:
 

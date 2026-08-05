@@ -213,6 +213,8 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
           dockerfilePath: app.dockerfile_path || undefined,
           dockerContext: app.docker_context || undefined,
           buildCacheRef: app.build_cache_ref || undefined,
+          reserveArchiveSpace:
+            app.desired_replicas > 1 && db.getSettings().allow_archive_image_transfer === "1",
         }, logLine);
     if (r.imageTag) imageTag = r.imageTag;
 
@@ -254,6 +256,17 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       memoryMb: snap.memoryMb ?? undefined,
       cpus: snap.cpus ?? undefined,
     }, hostKey);
+    // The failed candidate still owns :latest. Restore the convenience tag to
+    // the known-good image and let Docker discard candidate-only layers.
+    await sshExec(
+      server.ipv4,
+      asUser(
+        `docker image rm ${app.name}:latest 2>/dev/null || true; ` +
+          `docker tag ${snap.image} ${app.name}:latest; ` +
+          `docker image prune -f --filter label=ocd.managed=true >/dev/null 2>&1 || true`,
+      ),
+      hostKey,
+    );
     const health = await probeAppHealth(app, server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey);
     if (first) db.updateReplicaStatus(first.id, health.healthy ? "running" : "unhealthy");
     db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");

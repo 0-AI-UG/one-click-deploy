@@ -1,6 +1,6 @@
 import * as db from "../shared/db.ts";
 import { hetzner } from "../shared/providers/index.ts";
-import { getOrCreateLocalKeyPair, waitForServer, captureHostKey } from "../shared/remote/index.ts";
+import { getOrCreateLocalKeyPair, waitForServer, captureHostKey, ensureHostLogPolicy } from "../shared/remote/index.ts";
 import { sshExec } from "../shared/remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "./network.ts";
 import type { ProgressFn, Server } from "./scale/types.ts";
@@ -107,6 +107,10 @@ export async function provisionServer(opts: {
     db.updateServerHostKey(dbServer.id, hostKey);
     log("provision", "SSH host key captured and stored");
   }
+
+  // Bound journal growth immediately; the reconciler also repairs this policy
+  // periodically for hosts provisioned by older OCD releases.
+  await ensureHostLogPolicy(serverIp, hostKey || undefined);
 
   db.updateServerStatus(dbServer.id, "ready");
   emit("provision", `Server ${serverName} ready`);

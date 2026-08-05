@@ -9,6 +9,8 @@ import {
   serializeEnvVars,
   processIncomingEnvVars,
   platformEnvVars,
+  resolveAppEnvVars,
+  resolveEnvVarsForDeploy,
   encryptValue,
   isSuspiciousSecretKey,
   type EnvVarEntry,
@@ -25,6 +27,8 @@ import { cloneRepo, findDockerfile, sshExec } from "../../shared/remote/index.ts
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import type { Server } from "../../shared/rpc.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
+import { hetzner } from "../../shared/providers/index.ts";
+import { allReplicasAttested, hashEnvironment } from "../revision.ts";
 
 type DeployStackInput = StackDeployRequest;
 
@@ -57,7 +61,12 @@ type PlanOut = {
 };
 
 type EnqueueChildrenOut = { childIds: number[] };
-type PreflightOut = { checkedApps: string[]; skippedRemoteApps: string[] };
+type PreflightOut = {
+  checkedApps: string[];
+  skippedRemoteApps: string[];
+  /** Git short SHA, or `artifact:<immutable-ref>` for image-mode members. */
+  sourceRevisionByKey: Record<string, string>;
+};
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -241,6 +250,15 @@ async function injectExistingServiceCredentials(
   if (credentials.password) pairs.push([`${prefix}_PASSWORD`, String(credentials.password)]);
   if (credentials.database) pairs.push([`${prefix}_NAME`, String(credentials.database)]);
 
+  const env = db.getEnvironment(environmentId);
+  if (!env) throw new Error(`Environment ${environmentId} not found`);
+  const current = await resolveEnvVarsForDeploy(env.env_vars);
+  const valuesChanged = pairs.some(([key, value]) => current[key] !== value);
+  if (!valuesChanged) {
+    db.insertServiceLink(service.id, environmentId, prefix);
+    return;
+  }
+
   const entries: EnvVarEntry[] = [];
   for (const [key, value] of pairs) {
     if (secretKeys.has(key)) {
@@ -250,93 +268,11 @@ async function injectExistingServiceCredentials(
       entries.push({ key, value, secret: false, updated_at: now });
     }
   }
-  const env = db.getEnvironment(environmentId);
-  if (!env) throw new Error(`Environment ${environmentId} not found`);
   const keys = new Set(entries.map((entry) => entry.key));
   const retained = parseEnvVars(env.env_vars).entries.filter((entry) => !keys.has(entry.key));
   db.updateEnvironment(environmentId, env.name, serializeEnvVars([...retained, ...entries]));
   db.insertServiceLink(service.id, environmentId, prefix);
   db.markAppsEnvironmentStaleForKeys(environmentId, entries.map((entry) => entry.key));
-}
-
-/**
- * Roll back every app this op deployed as NEW (child kind `deploy`) that is
- * still present, and wait for the teardowns. A member's own failure aborts the
- * `deploy_apps` step *mid-flight*, so members from earlier levels (or earlier in
- * the same level) have already succeeded and are left RUNNING — this reaps them
- * so a partial stack deploy is all-or-nothing.
- *
- * Probe-then-destroy so it is idempotent and resume-safe: an app already gone
- * (its child self-compensated, or a prior compensate attempt already destroyed
- * it) has `getAppByName === null` and is skipped; a prior destroy child is
- * re-adopted by idempotency key rather than duplicated. `redeploy` children
- * (pre-existing members reconciled in place) are intentionally left alone.
- */
-async function teardownNewApps(ctx: OpContext<DeployStackInput>): Promise<void> {
-  const children = listChildOperations(ctx.opId);
-  const byKey = new Map(children.map((c) => [c.idempotency_key ?? "", c]));
-  const childIds: number[] = [];
-  const appPrefix = `stack:${ctx.opId}:app:`;
-  for (const c of children) {
-    if (c.kind !== "deploy") continue;
-    if (!(c.idempotency_key ?? "").startsWith(appPrefix)) continue;
-    let appName: string;
-    try { appName = JSON.parse(c.input_json).app_name; } catch { continue; }
-    const app = db.getAppByName(appName);
-    if (!app) continue;
-    const idk = `stack:${ctx.opId}:app-destroy:${app.id}`;
-    const prev = byKey.get(idk);
-    if (prev) { childIds.push(prev.id); continue; }
-    const op = enqueueOperation({
-      kind: "destroy_app",
-      resourceKeys: [`app:${app.id}`],
-      input: { appId: app.id, retentionClass: "provisional" },
-      trigger: "stack",
-      triggeredBy: ctx.triggeredBy,
-      parentId: ctx.opId,
-      idempotencyKey: idk,
-    });
-    childIds.push(op.id);
-  }
-  if (childIds.length > 0) await awaitChildren(ctx, { childIds });
-}
-
-/**
- * Roll back every managed service this op CREATED (i.e. one not in
- * `reusedServiceKeys`) that is still present, and wait for the teardowns. Like
- * `teardownNewApps`, a service's own failure can abort `reconcile_services`
- * mid-flight while sibling services already succeeded — this reaps those. A
- * reused/pre-existing service (present before this op began) is left untouched,
- * so its container + data survive a failed re-up. Idempotent and resume-safe:
- * a service already gone is skipped; a prior destroy child is re-adopted by key.
- */
-async function teardownNewServices(
-  ctx: OpContext<DeployStackInput>,
-  reusedServiceKeys: string[],
-): Promise<void> {
-  const req = ctx.input;
-  const reused = new Set(reusedServiceKeys);
-  const byKey = childByKey(ctx.opId);
-  const childIds: number[] = [];
-  for (const svc of req.services) {
-    if (reused.has(svc.key)) continue; // reused/pre-existing → must survive
-    const row = db.getServiceByName(memberName(req.name, svc.key));
-    if (!row) continue;
-    const idk = `stack:${ctx.opId}:svc-destroy:${svc.key}`;
-    const prev = byKey.get(idk);
-    if (prev) { childIds.push(prev.id); continue; }
-    const op = enqueueOperation({
-      kind: "destroy_service",
-      resourceKeys: [`service:${row.id}`],
-      input: { serviceId: row.id, retentionClass: "provisional" },
-      trigger: "stack",
-      triggeredBy: ctx.triggeredBy,
-      parentId: ctx.opId,
-      idempotencyKey: idk,
-    });
-    childIds.push(op.id);
-  }
-  if (childIds.length > 0) await awaitChildren(ctx, { childIds });
 }
 
 // --- Steps -----------------------------------------------------------------
@@ -365,8 +301,9 @@ const plan: Step<DeployStackInput, PlanOut> = {
     // Topo-sort (also detects cycles) before touching any state.
     const levels = topoLevels(req.apps);
 
-    // Snapshot which managed services already exist BEFORE we create anything —
-    // these are reused and must survive a rollback (see PlanOut.reusedServiceKeys).
+    // Snapshot which managed services already exist before reconciliation for
+    // durable plan/audit output. Both reused and newly successful services are
+    // retained as checkpoints when a later child fails.
     const reusedServiceKeys = req.services
       .filter((s) => db.getServiceByName(memberName(req.name, s.key)))
       .map((s) => s.key);
@@ -506,51 +443,16 @@ const plan: Step<DeployStackInput, PlanOut> = {
   },
   async compensate(ctx, out) {
     if (!out) return;
-    // `plan` is the first step, so its compensator ALWAYS runs on rollback —
-    // whereas a step's OWN compensator is SKIPPED when the failure happens
-    // *inside* that step (a failed forward step isn't replayed as compensable by
-    // the step-runner). So the authoritative teardown of every member this run
-    // created lives here, guaranteeing no orphaned apps/services (and their
-    // containers/volumes/DNS) survive a partial stack deploy. Only NEWLY-created
-    // members are reaped: reused apps (`redeploy` children) and reused services
-    // (`reusedServiceKeys`) are left running so a failed re-up preserves them.
-    // Awaits the destroys; a failure throws, keeping the op in 'compensating' for
-    // retry rather than deleting the stack row over orphans.
-    await teardownNewApps(ctx);
-    await teardownNewServices(ctx, out.reusedServiceKeys);
-
-    if (!out.createdStack) {
-      // Reconcile of a pre-existing stack failed: we didn't create the stack
-      // (or its env) this run, so we leave both in place — but mark the stack
-      // 'failed' so a rolled-back re-up doesn't silently linger as 'running'
-      // or stuck 'deploying'. The stack row + log survive for `ocd stack logs`.
-      // A staging env minted by THIS run is still ours to reap, though: unlink
-      // it from the surviving stack first so we don't delete a referenced row.
-      if (out.createdStagingEnv && out.stagingEnvironmentId != null) {
-        db.updateStackStagingEnvironment(out.stackId, null);
-        db.deleteEnvironment(out.stagingEnvironmentId);
-      }
-      db.updateStackStatus(out.stackId, "failed");
-      return;
-    }
-    // First-time creation failed: DB teardown of the stack + environment
-    // created this run. Deleting an already-gone row is a no-op (so retry is
-    // safe); let a genuine failure PROPAGATE rather than orphan the stack/env
-    // rows behind a clean `compensated`. A reused environment is left in place —
-    // we didn't create it, so we don't destroy it.
-    //
-    // First untag any surviving members this run tagged with the stack but did
-    // NOT create (reused services, and reused apps if any). The teardown above
-    // already deleted every member we created, so whatever still references this
-    // stack is a survivor — clearing its stack_id keeps it from dangling at the
-    // stack row we're about to delete.
-    for (const svc of db.getServicesByStackId(out.stackId)) db.setServiceStack(svc.id, null);
-    for (const appRow of db.getAppsByStackId(out.stackId)) db.setAppStack(appRow.id, null);
-    db.deleteStack(out.stackId);
-    if (out.createdEnv) db.deleteEnvironment(out.environmentId);
-    if (out.createdStagingEnv && out.stagingEnvironmentId != null) {
-      db.deleteEnvironment(out.stagingEnvironmentId);
-    }
+    // Stack deploy is level-triggered convergence, not an all-or-nothing
+    // transaction. Successful children are durable checkpoints and are kept so
+    // a retry can skip them; a failing child compensates only its own partial
+    // resources. Retain the stack/environments even on a first deploy and make
+    // the incomplete state explicit.
+    db.updateStackStatus(out.stackId, "failed");
+    db.appendStackLog(
+      out.stackId,
+      `[failed] reconcile operation #${ctx.opId} stopped; successful members were retained for resume`,
+    );
   },
 };
 
@@ -569,6 +471,7 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
     const { stackId } = prior["plan"] as PlanOut;
     const checkedApps: string[] = [];
     const skippedRemoteApps: string[] = [];
+    const sourceRevisionByKey: Record<string, string> = {};
     let githubToken: string | null | undefined;
 
     for (const appReq of req.apps) {
@@ -580,6 +483,7 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
       }
       if (appReq.image_ref) {
         checkedApps.push(appReq.key);
+        sourceRevisionByKey[appReq.key] = `artifact:${appReq.image_ref}`;
         continue;
       }
 
@@ -591,7 +495,10 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
         }
         server = target;
       } else {
-        server = db.getServers().find((candidate: Server) => candidate.status === "ready") as Server | undefined;
+        const panelServerId = db.getPanel()?.server_id;
+        server = db.getServers().find((candidate: Server) =>
+          candidate.status === "ready" && candidate.id !== panelServerId
+        ) as Server | undefined;
       }
       if (!server) {
         skippedRemoteApps.push(appReq.key);
@@ -653,6 +560,15 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
             `Dockerfile "${dockerfile}" or build context "${contextResult.value}" does not exist in the repository`,
           );
         }
+        const revision = await sshExec(
+          server.ipv4,
+          `su - deploy -c ${JSON.stringify(`cd ${scratchDir} && git rev-parse --short HEAD`)}`,
+          server.ssh_host_key || undefined,
+        );
+        if (revision.exitCode !== 0 || !revision.stdout.trim()) {
+          throw new Error(`Could not resolve checked-out Git revision for ${appReq.key}`);
+        }
+        sourceRevisionByKey[appReq.key] = revision.stdout.trim();
         checkedApps.push(appReq.key);
       } catch (error) {
         preflightFailure = error;
@@ -675,7 +591,7 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
       `[preflight] validated ${checkedApps.length} app(s)` +
         (skippedRemoteApps.length ? `; remote source deferred for ${skippedRemoteApps.join(", ")}` : ""),
     );
-    return { checkedApps, skippedRemoteApps };
+    return { checkedApps, skippedRemoteApps, sourceRevisionByKey };
   },
 };
 
@@ -700,6 +616,51 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
               `then recreate it as ${svc.type}:${desiredVersion}. Confirmation is required; ` +
               `the stack is not reconciled and will not be marked successful.`,
           );
+        }
+        // Managed-service adoption must include its provider volume, not just
+        // the DB/container row. Reconcile declared sizes grow-only and wait for
+        // provider confirmation before publishing credentials or reporting the
+        // stack ready.
+        if (svc.volume_size != null && getCatalogEntry(svc.type)?.volumePath) {
+          const instance = db.getPrimaryInstance(existing.id);
+          if (!instance?.volume_id) {
+            throw new Error(
+              `Service "${name}" declares a ${svc.volume_size}GB volume but has no recorded provider volume`,
+            );
+          }
+          let providerVolume = await hetzner.volumes.get(instance.volume_id);
+          if (providerVolume.sizeGb < svc.volume_size) {
+            const resizeKey = `stack:${ctx.opId}:svc-volume-resize:${svc.key}:${svc.volume_size}`;
+            const prev = byKey.get(resizeKey);
+            const resize = prev ?? enqueueOperation({
+              kind: "resize_volume",
+              resourceKeys: [`volume:${instance.volume_id}`],
+              input: { volumeId: instance.volume_id, sizeGb: svc.volume_size },
+              trigger: "stack",
+              triggeredBy: ctx.triggeredBy,
+              parentId: ctx.opId,
+              idempotencyKey: resizeKey,
+            });
+            childIds.push(resize.id);
+            db.appendStackLog(
+              stackId,
+              `[services] growing ${name} volume ${instance.volume_id} ` +
+                `${providerVolume.sizeGb}GB → ${svc.volume_size}GB`,
+            );
+            await awaitChildren(ctx, { childIds: [resize.id] });
+            providerVolume = await hetzner.volumes.get(instance.volume_id);
+            if (providerVolume.sizeGb < svc.volume_size) {
+              throw new Error(
+                `Provider did not confirm volume ${instance.volume_id} resize: ` +
+                  `${providerVolume.sizeGb}GB observed, ${svc.volume_size}GB declared`,
+              );
+            }
+          } else if (providerVolume.sizeGb > svc.volume_size) {
+            ctx.log(
+              `${name}: provider volume is ${providerVolume.sizeGb}GB; declared ` +
+                `${svc.volume_size}GB is smaller and volumes are grow-only, leaving it unchanged`,
+            );
+          }
         }
         db.setServiceStack(existing.id, stackId);
         await injectExistingServiceCredentials(existing, environmentId, envPrefix(svc.key));
@@ -731,7 +692,7 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
       childIds.push(row.id);
     }
     if (childIds.length > 0) {
-      db.appendStackLog(stackId, `[services] deploying ${childIds.length} service(s)`);
+      db.appendStackLog(stackId, `[services] waiting for ${childIds.length} reconcile operation(s)`);
       await awaitChildren(ctx, { childIds });
     }
     // Tag each created service with this stack (child injected its creds itself).
@@ -741,15 +702,59 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
     }
     return { childIds };
   },
-  // Only runs when `reconcile_services` COMPLETED and a later step failed; when
-  // the failure is inside `reconcile_services` itself this compensator is skipped
-  // and `plan`'s compensator does the teardown instead (both share
-  // `teardownNewServices`, which is idempotent). Reused services are excluded.
-  async compensate(ctx, _out, prior) {
-    const reused = (prior["plan"] as PlanOut | undefined)?.reusedServiceKeys ?? [];
-    await teardownNewServices(ctx, reused);
-  },
+  // No compensation: successful services are resume checkpoints. A failed
+  // deploy_service child compensates its own incomplete container/volume.
 };
+
+export async function stackAppAlreadyConverged(
+  app: AppRow,
+  desiredSourceRevision: string | undefined,
+): Promise<{ converged: boolean; reason: string }> {
+  if (!desiredSourceRevision) return { converged: false, reason: "source revision was not preflighted" };
+  if (app.status !== "running") return { converged: false, reason: `status is ${app.status}` };
+  if (app.environment_stale) return { converged: false, reason: "linked environment is stale" };
+  const replicas = db.getReplicas(app.id);
+  if (replicas.length !== app.desired_replicas) {
+    return {
+      converged: false,
+      reason: `replicas ${replicas.length}/${app.desired_replicas}`,
+    };
+  }
+  const deployment = db.getDeployments(app.id).find((row) => row.status === "deployed");
+  if (!deployment) return { converged: false, reason: "no successful deployment identity" };
+  if (desiredSourceRevision.startsWith("artifact:")) {
+    const desiredRef = desiredSourceRevision.slice("artifact:".length);
+    if (deployment.image_digest !== desiredRef) {
+      return { converged: false, reason: "immutable image digest changed" };
+    }
+  } else if (deployment.git_commit !== desiredSourceRevision) {
+    return {
+      converged: false,
+      reason: `commit ${deployment.git_commit || "unknown"} != ${desiredSourceRevision}`,
+    };
+  }
+  const envHash = hashEnvironment(await resolveAppEnvVars(app));
+  if (deployment.env_hash !== envHash) {
+    return { converged: false, reason: "environment hash changed" };
+  }
+  if (deployment.config_revision !== app.config_revision) {
+    return {
+      converged: false,
+      reason: `config r${deployment.config_revision} != r${app.config_revision}`,
+    };
+  }
+  const imageDigest = deployment.image_digest || app.image_ref;
+  if (!imageDigest) return { converged: false, reason: "missing immutable image identity" };
+  const attested = allReplicasAttested(app.id, {
+    imageDigest,
+    envHash,
+    configRevision: app.config_revision,
+  });
+  if (!attested.ok) {
+    return { converged: false, reason: `${attested.divergent.length} replica(s) not attested` };
+  }
+  return { converged: true, reason: "source, config, environment, replicas, and links match" };
+}
 
 const deployApps: Step<DeployStackInput, { ok: true }> = {
   name: "deploy_apps",
@@ -760,6 +765,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
       prior["plan"] as PlanOut;
     const appByKey = new Map(req.apps.map((a) => [a.key, a]));
     const byKey = childByKey(ctx.opId);
+    const preflight = prior["preflight_apps"] as PreflightOut | undefined;
 
     /** The environment a member's staging sibling deploys with, resolved in
      *  `plan` (override > shared > stored). null = staging off for this member. */
@@ -822,6 +828,16 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
           });
           await syncAllTraefik();
           db.appendStackLog(stackId, `[apps] ${key}: desired configuration applied`);
+          const convergence = await stackAppAlreadyConverged(
+            db.getApp(existingApp.id) || existingApp,
+            preflight?.sourceRevisionByKey[key],
+          );
+          if (convergence.converged) {
+            db.appendStackLog(stackId, `[apps] ${key}: already reconciled; skipped rollout`);
+            ctx.log(`${key}: already reconciled; skipped rollout`);
+            continue;
+          }
+          ctx.log(`${key}: rollout required (${convergence.reason})`);
           row = enqueueOperation({
             kind: "redeploy",
             resourceKeys: [`app:${existingApp.id}`],
@@ -864,10 +880,19 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
         levelChildIds.push(row.id);
       }
 
-      db.appendStackLog(stackId, `[apps] deploying level: ${level.join(", ")}`);
-      ctx.log(`deploying level: ${level.join(", ")}`);
+      db.appendStackLog(
+        stackId,
+        levelChildIds.length > 0
+          ? `[apps] deploying level: ${level.join(", ")}`
+          : `[apps] level already reconciled: ${level.join(", ")}`,
+      );
+      ctx.log(
+        levelChildIds.length > 0
+          ? `deploying level: ${level.join(", ")}`
+          : `level already reconciled: ${level.join(", ")}`,
+      );
       // Readiness gate: children reach terminal-success only once healthy.
-      await awaitChildren(ctx, { childIds: levelChildIds });
+      if (levelChildIds.length > 0) await awaitChildren(ctx, { childIds: levelChildIds });
 
       // Tag members + publish each app's URL so the next level inherits it.
       for (const key of level) {
@@ -917,13 +942,8 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
     }
     return { ok: true };
   },
-  // Only runs when `deploy_apps` COMPLETED and a later step failed; when the
-  // failure is inside `deploy_apps` itself this compensator is skipped and
-  // `plan`'s compensator does the teardown instead (both share `teardownNewApps`,
-  // which is idempotent, so a double invocation is a no-op).
-  async compensate(ctx) {
-    await teardownNewApps(ctx);
-  },
+  // No compensation: successful app children are retained and attested so a
+  // later stack retry can skip them.
 };
 
 const reconcileRemovals: Step<DeployStackInput, { removed: number }> = {

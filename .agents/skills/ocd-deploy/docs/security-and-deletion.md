@@ -96,8 +96,11 @@ Invariant:
 
 - stack deletion always requires actual web UI approval;
 - environment deletion always requires actual web UI approval;
-- permanent provider-volume deletion always requires web UI approval and typing
-  the exact provider volume ID;
+- user-initiated permanent provider-volume deletion always requires web UI
+  approval and typing the exact provider volume ID;
+- the only unattended exception is an expired failed-deploy provisional volume;
+  the reconciler rechecks that it has no live OCD owner and is provider-detached,
+  then records the deletion in the permanent audit;
 - legacy/current `--yes` automation tokens are rejected server-side for all
   three.
 

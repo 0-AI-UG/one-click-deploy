@@ -3,9 +3,11 @@ import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
-import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box, Boxes, ChevronDown, ChevronRight, Table2, Share2, ArrowUpFromLine } from "lucide-react";
+import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box, Boxes, ChevronDown, ChevronRight, Table2, Share2, ArrowUpFromLine, MoreVertical, Settings2 } from "lucide-react";
 import { TopologyGraph, type TopologyData } from "../components/topology-graph.tsx";
 import { serverConfirmedDelete } from "../api/server-confirmation.ts";
+import { useMobileLayout } from "../hooks/use-mobile-layout.ts";
+import { MobileActionSheet, MobileSheetAction } from "../components/mobile-action-sheet.tsx";
 
 type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
@@ -71,6 +73,7 @@ const SVC_ACTION_TO_KIND: Record<string, string> = {
 };
 
 export function DashboardPage() {
+  const isMobile = useMobileLayout();
   const [data, setData] = useState<DashboardData>({ apps: [], services: [] });
   const [stacks, setStacks] = useState<StackData[]>([]);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
@@ -82,6 +85,10 @@ export function DashboardPage() {
   const [view, setView] = useState<"table" | "graph">("table");
   const [topo, setTopo] = useState<TopologyData | null>(null);
   const [topoLoading, setTopoLoading] = useState(false);
+  const [mobileFilter, setMobileFilter] = useState<"all" | "apps" | "services">("all");
+  const [mobileSelection, setMobileSelection] = useState<
+    { kind: "app" | "service" | "stack"; id: number } | null
+  >(null);
 
   const loadTopo = async () => {
     setTopoLoading(true);
@@ -563,6 +570,188 @@ export function DashboardPage() {
 
   const nothingDeployed = apps.length === 0 && services.length === 0 && stacks.length === 0;
   const showAppsCard = standaloneApps.length > 0 || stacks.length > 0;
+
+  if (isMobile) {
+    const selectedApp = mobileSelection?.kind === "app" ? apps.find((app) => app.id === mobileSelection.id) : undefined;
+    const selectedService = mobileSelection?.kind === "service" ? services.find((service) => service.id === mobileSelection.id) : undefined;
+    const selectedStack = mobileSelection?.kind === "stack" ? stacks.find((stack) => stack.id === mobileSelection.id) : undefined;
+    const selectedTitle = selectedApp?.name ?? selectedService?.name ?? selectedStack?.name ?? "Actions";
+    const selectedSubtitle = selectedApp
+      ? `App · ${selectedApp.status}`
+      : selectedService
+        ? `${selectedService.service_type} · ${selectedService.status}`
+        : selectedStack
+          ? `Stack · ${selectedStack.status}`
+          : undefined;
+
+    const appCard = (app: AppData, nested = false) => {
+      const busy = !!appBusyKind(app.id);
+      return (
+        <article
+          key={`mobile-app-${app.id}`}
+          onClick={() => { window.location.hash = `#/apps/${app.id}`; }}
+          className={`border-2 border-fg bg-bg-raised p-4 shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 active:shadow-none ${nested ? "ml-4" : ""} ${app.status === "paused" ? "opacity-60" : ""}`}
+        >
+          <div className="flex items-start gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center border-2 border-fg bg-alt"><Box size={18} /></div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h3 className="truncate font-mono text-[12px] font-bold uppercase text-fg">{app.name}</h3>
+                {app.desired_replicas > 1 && <span className="shrink-0 border border-fg px-1 font-mono text-[9px] font-bold">{app.desired_replicas}x</span>}
+              </div>
+              <div className="mt-1"><StatusBadge status={busy ? "working" : app.status} subLabel={app.environment_stale ? "config changed" : undefined} /></div>
+            </div>
+            <button
+              aria-label={`Actions for ${app.name}`}
+              onClick={(event) => { event.stopPropagation(); setMobileSelection({ kind: "app", id: app.id }); }}
+              className="-mr-2 -mt-2 grid h-11 w-11 shrink-0 place-items-center rounded-full active:bg-alt"
+            ><MoreVertical size={20} /></button>
+          </div>
+          <div className="mt-3 border-t border-fg/10 pt-3 font-mono text-[10px] text-muted">
+            {app.domain ? (
+              <span className="flex min-w-0 items-center gap-1.5"><Globe size={12} className="shrink-0" /><span className="truncate">{app.domain}</span></span>
+            ) : (
+              <span className="flex min-w-0 items-center gap-1.5"><Globe size={12} className="shrink-0" /><span className="truncate">{app.name}.ocd.internal</span><span className="ml-auto border border-fg px-1 text-[8px] font-bold uppercase text-fg">Private</span></span>
+            )}
+          </div>
+        </article>
+      );
+    };
+
+    const serviceCard = (service: ServiceData, nested = false) => {
+      const busy = !!svcBusyKind(service.id);
+      return (
+        <article
+          key={`mobile-service-${service.id}`}
+          onClick={() => { window.location.hash = `#/services/${service.id}`; }}
+          className={`border-2 border-fg bg-bg-raised p-4 shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 active:shadow-none ${nested ? "ml-4" : ""} ${service.status === "paused" ? "opacity-60" : ""}`}
+        >
+          <div className="flex items-start gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center border-2 border-fg bg-alt"><Database size={18} /></div>
+            <div className="min-w-0 flex-1">
+              <h3 className="truncate font-mono text-[12px] font-bold uppercase text-fg">{service.name}</h3>
+              <div className="mt-1"><StatusBadge status={busy ? "working" : service.status} /></div>
+            </div>
+            <button
+              aria-label={`Actions for ${service.name}`}
+              onClick={(event) => { event.stopPropagation(); setMobileSelection({ kind: "service", id: service.id }); }}
+              className="-mr-2 -mt-2 grid h-11 w-11 shrink-0 place-items-center rounded-full active:bg-alt"
+            ><MoreVertical size={20} /></button>
+          </div>
+          <div className="mt-3 flex items-center gap-2 border-t border-fg/10 pt-3 font-mono text-[10px] text-muted">
+            <span className="border border-fg px-1.5 py-0.5 text-[8px] font-bold uppercase text-fg">{service.service_type}</span>
+            <span>{service.version}</span>
+            {service.linked_environments.length > 0 && <span className="ml-auto">{service.linked_environments.length} env</span>}
+          </div>
+        </article>
+      );
+    };
+
+    const stackCard = (stack: StackData) => {
+      const memberApps = appsByStack.get(stack.id) ?? [];
+      const memberServices = svcsByStack.get(stack.id) ?? [];
+      const open = expanded.has(stack.id);
+      return (
+        <section key={`mobile-stack-${stack.id}`} className="border-2 border-fg bg-alt/40 shadow-neo-sm">
+          <div onClick={() => toggleStack(stack.id)} className="flex min-h-16 items-center gap-3 p-4 active:bg-alt">
+            <div className="grid h-10 w-10 shrink-0 place-items-center border-2 border-fg bg-accent"><Boxes size={18} /></div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2"><h3 className="truncate font-mono text-[12px] font-bold uppercase">{stack.name}</h3><StatusBadge status={stack.status} /></div>
+              <p className="mt-1 font-mono text-[9px] text-muted">{memberApps.length} app{memberApps.length === 1 ? "" : "s"} · {memberServices.length} service{memberServices.length === 1 ? "" : "s"}</p>
+            </div>
+            <button aria-label={`Actions for ${stack.name}`} onClick={(event) => { event.stopPropagation(); setMobileSelection({ kind: "stack", id: stack.id }); }} className="grid h-11 w-11 shrink-0 place-items-center rounded-full active:bg-bg-raised"><MoreVertical size={20} /></button>
+            <ChevronDown size={18} className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+          </div>
+          {open && (
+            <div className="space-y-3 border-t-2 border-fg bg-bg p-3">
+              {memberServices.map((service) => serviceCard(service, true))}
+              {memberApps.map((app) => appCard(app, true))}
+              {memberApps.length + memberServices.length === 0 && <p className="p-3 text-center font-mono text-[10px] text-muted">No members</p>}
+            </div>
+          )}
+        </section>
+      );
+    };
+
+    const closeAnd = (run: () => void) => {
+      setMobileSelection(null);
+      run();
+    };
+
+    return (
+      <main className="animate-fade-in px-4 pb-5 pt-5">
+        <div className="mb-5 flex items-start justify-between gap-3">
+          <div>
+            <p className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-muted">Your infrastructure</p>
+            <h1 className="mt-1 font-mono text-xl font-bold uppercase text-fg">Dashboard</h1>
+            <p className="mt-1 font-mono text-[10px] text-muted">{apps.length} apps · {services.length} services · {stacks.length} stacks</p>
+          </div>
+          <button onClick={() => { load(); if (view === "graph") loadTopo(); }} aria-label="Refresh dashboard" className="grid h-11 w-11 shrink-0 place-items-center border-2 border-fg bg-bg-raised shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"><RefreshCw size={18} /></button>
+        </div>
+
+        {!nothingDeployed && (
+          <div className="mb-5 grid grid-cols-3 border-2 border-fg bg-bg-raised p-1 shadow-neo-sm">
+            {(["all", "apps", "services"] as const).map((filter) => (
+              <button key={filter} onClick={() => { setMobileFilter(filter); setView("table"); }} className={`min-h-10 px-2 font-mono text-[9px] font-bold uppercase ${view === "table" && mobileFilter === filter ? "bg-fg text-accent" : "text-muted"}`}>{filter}</button>
+            ))}
+          </div>
+        )}
+
+        {nothingDeployed ? (
+          <div className="mt-12"><EmptyState message="Nothing deployed yet. Deploy your first app or service to get started." icon={Box} /></div>
+        ) : (
+          <div className="space-y-5">
+            {(mobileFilter === "all" || mobileFilter === "apps") && (
+              <section>
+                <div className="mb-3 flex items-center justify-between">
+                  <h2 className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider"><Box size={15} /> Apps & stacks <span className="text-muted">{standaloneApps.length + stacks.length}</span></h2>
+                  <button onClick={() => setView(view === "graph" ? "table" : "graph")} className="flex min-h-10 items-center gap-1.5 px-2 font-mono text-[9px] font-bold uppercase text-muted"><Share2 size={14} />{view === "graph" ? "Cards" : "Topology"}</button>
+                </div>
+                {view === "graph" ? (
+                  topoLoading && !topo ? <div className="flex justify-center py-16"><Spinner /></div> : topo ? <div className="overflow-x-auto border-2 border-fg bg-bg-raised p-2 shadow-neo-sm"><div className="min-w-[680px]"><TopologyGraph data={topo} /></div></div> : <EmptyState message="No topology data yet." icon={Share2} />
+                ) : (
+                  <div className="space-y-3">{standaloneApps.map((app) => appCard(app))}{stacks.map(stackCard)}</div>
+                )}
+              </section>
+            )}
+            {view === "table" && (mobileFilter === "all" || mobileFilter === "services") && standaloneServices.length > 0 && (
+              <section>
+                <h2 className="mb-3 flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider"><Database size={15} /> Services <span className="text-muted">{standaloneServices.length}</span></h2>
+                <div className="space-y-3">{standaloneServices.map((service) => serviceCard(service))}</div>
+              </section>
+            )}
+          </div>
+        )}
+
+        <MobileActionSheet open={mobileSelection != null} onClose={() => setMobileSelection(null)} title={selectedTitle} subtitle={selectedSubtitle}>
+          {selectedApp && (
+            <>
+              <MobileSheetAction icon={<Settings2 size={19} />} label="Open app" detail="Metrics, logs, deployments and settings" primary onClick={() => closeAnd(() => { window.location.hash = `#/apps/${selectedApp.id}`; })} />
+              <PermissionGate permission="apps.restart" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<RotateCcw size={19} />} label="Restart" loading={isAppActionLoading(selectedApp.id, "restart")} disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction("restart", selectedApp.id))} /></PermissionGate>
+              <PermissionGate permission="apps.pause" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={selectedApp.status === "paused" ? <Play size={19} /> : <Pause size={19} />} label={selectedApp.status === "paused" ? "Unpause" : "Pause"} disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction(selectedApp.status === "paused" ? "unpause" : "pause", selectedApp.id))} /></PermissionGate>
+              <PermissionGate permission="apps.deploy" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<RefreshCw size={19} />} label="Deploy latest code" primary disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction("redeploy", selectedApp.id))} /></PermissionGate>
+              <PermissionGate permission="apps.destroy" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<Trash2 size={19} />} label="Destroy app" danger disabled={!!appBusyKind(selectedApp.id)} onClick={async () => { if (await confirm("Destroy App", `Permanently destroy "${selectedApp.name}"? This removes all containers, DNS records, and webhooks.`, true)) closeAnd(() => appAction("delete", selectedApp.id)); }} /></PermissionGate>
+            </>
+          )}
+          {selectedService && (
+            <>
+              <MobileSheetAction icon={<Settings2 size={19} />} label="Open service" detail="Connection info, instances and logs" primary onClick={() => closeAnd(() => { window.location.hash = `#/services/${selectedService.id}`; })} />
+              <PermissionGate permission="services.manage"><MobileSheetAction icon={<RotateCcw size={19} />} label="Restart" disabled={!!svcBusyKind(selectedService.id)} onClick={() => closeAnd(() => svcAction("restart", selectedService.id))} /></PermissionGate>
+              <PermissionGate permission="services.manage"><MobileSheetAction icon={selectedService.status === "paused" ? <Play size={19} /> : <Pause size={19} />} label={selectedService.status === "paused" ? "Unpause" : "Pause"} disabled={!!svcBusyKind(selectedService.id)} onClick={() => closeAnd(() => svcAction(selectedService.status === "paused" ? "unpause" : "pause", selectedService.id))} /></PermissionGate>
+              <PermissionGate permission="services.destroy"><MobileSheetAction icon={<Trash2 size={19} />} label="Destroy service" danger disabled={!!svcBusyKind(selectedService.id)} onClick={async () => { if (await confirm("Destroy Service", `Permanently destroy "${selectedService.name}"? This removes all containers, volumes, and data.`, true)) closeAnd(() => svcAction("delete", selectedService.id)); }} /></PermissionGate>
+            </>
+          )}
+          {selectedStack && (
+            <>
+              <MobileSheetAction icon={<Settings2 size={19} />} label="Open stack" detail="Members, configuration and logs" primary onClick={() => closeAnd(() => { window.location.hash = `#/stacks/${selectedStack.id}`; })} />
+              {(selectedStack.staging_sibling_count ?? 0) > 0 && <PermissionGate permission="stacks.promote" environmentId={selectedStack.environment_id}><MobileSheetAction icon={<ArrowUpFromLine size={19} />} label="Promote staging" disabled={!!stackBusyKind(selectedStack.id)} onClick={() => closeAnd(() => stackPromote(selectedStack))} /></PermissionGate>}
+              <PermissionGate permission="stacks.destroy" environmentId={selectedStack.environment_id}><MobileSheetAction icon={<Trash2 size={19} />} label="Destroy stack" danger disabled={!!stackBusyKind(selectedStack.id)} onClick={() => closeAnd(() => stackDestroy(selectedStack))} /></PermissionGate>
+            </>
+          )}
+        </MobileActionSheet>
+      </main>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-6 animate-fade-in">

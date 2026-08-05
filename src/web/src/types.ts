@@ -243,6 +243,7 @@ export type Stack = {
   last_operation_status?: string | null;
   last_operation_failed?: boolean;
   operation_in_progress?: boolean;
+  last_operation_children?: Array<{ id: number; kind: string; status: string }>;
   resource_status_reason?: string;
 };
 
@@ -284,6 +285,7 @@ export type StackDetail = {
   last_operation_status?: string | null;
   last_operation_failed?: boolean;
   operation_in_progress?: boolean;
+  last_operation_children?: Array<{ id: number; kind: string; status: string }>;
   resource_status_reason?: string;
   apps: StackMemberApp[];
   services: StackMemberService[];

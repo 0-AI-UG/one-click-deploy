@@ -24,6 +24,7 @@ export async function pickTargetServer(
   // Capacity-aware placement: score each server by load + affinity and pick
   // the best candidate. Servers above 85% combined load are skipped.
   const allServers = db.getServers();
+  const panelServerId = db.getPanel()?.server_id;
   const serverById = new Map(allServers.map((s) => [s.id, s] as const));
   const appReplicas = db.getReplicas(app.id);
   const replicasByServer = new Map<number, number>();
@@ -69,6 +70,9 @@ export async function pickTargetServer(
   let bestScore = Infinity;
   for (const server of allServers) {
     if (server.status !== "ready") continue;
+    // The control-plane host is a reserved failure domain. Explicit placement
+    // above may still opt into it, but automatic scheduling never does.
+    if (server.id === panelServerId) continue;
     // Pool filter: an app only schedules onto servers in its placement pool.
     // Default apps and servers both live in 'general', so this is a no-op there.
     if (server.pool !== app.placement_pool) continue;

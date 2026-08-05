@@ -224,7 +224,12 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
         zoneName,
       };
     }
-    const existingReady = db.getServers().find((s: Server) => s.status === "ready");
+    const desiredPool = req.placement_pool || "general";
+    const existingReady = db.getServers().find((s) =>
+      s.status === "ready" &&
+      s.id !== panel?.server_id &&
+      s.pool === desiredPool
+    );
     if (existingReady) {
       const ingressIp = panelServerRow?.ipv4 || existingReady.ipv4;
       return {
@@ -245,6 +250,7 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
       serverType,
       location,
       name: `ocd-${req.app_name}-${Date.now()}`,
+      pool: desiredPool,
       emit: (step, detail) => ctx.log(`[${step}] ${detail}`),
     });
     const ingressIp = panelServerRow?.ipv4 || newServer.ipv4;
@@ -850,6 +856,8 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         ...common,
         gitRepo: req.git_repo,
         buildCacheRef: req.build_cache_ref,
+        reserveArchiveSpace:
+          (req.replicas ?? 1) > 1 && db.getSettings().allow_archive_image_transfer === "1",
       },
       (line) => {
         maskedLog(`[build] ${line}`);
@@ -891,6 +899,17 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     // `compensated`. probeCompensated short-circuits this step once the
     // container is gone, so re-running the compensate is safe.
     await removeContainer(server.serverIp, appOut.containerName, server.serverHostKey || undefined);
+    // The app row/container are operation-owned and are being compensated, so
+    // its local convenience/candidate tags are reconstructible. Removing them
+    // prevents failed first deploys from permanently consuming host disk.
+    await sshExec(
+      server.serverIp,
+      `su - deploy -c ${JSON.stringify(
+        `docker image rm ${ctx.input.app_name}:latest ${ctx.input.app_name}:rollback 2>/dev/null || true; ` +
+          `docker image prune -f --filter label=ocd.managed=true >/dev/null 2>&1 || true`,
+      )}`,
+      server.serverHostKey || undefined,
+    );
   },
 };
 
