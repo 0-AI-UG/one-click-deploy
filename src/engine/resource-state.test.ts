@@ -11,6 +11,7 @@ import {
 import {
   assessOperationResources,
   deriveStackResourceState,
+  reconcileStaleAppStates,
 } from "./resource-state.ts";
 
 describe("resource-derived stack state", () => {
@@ -143,5 +144,90 @@ describe("resource-derived stack state", () => {
 
     expect(state.status).toBe("degraded");
     expect(state.reason).toContain("unhealthy");
+  });
+});
+
+describe("stale app state reconciliation", () => {
+  function makeDeployingApp() {
+    const name = `stale-app-${randomSuffix()}`;
+    const server = db.insertServer({
+      name: `${name}-server`,
+      provider_id: `provider-${randomSuffix()}`,
+      ipv4: "192.0.2.30",
+      ipv6: "",
+      type: "cx22",
+      location: "fsn1",
+      status: "ready",
+    });
+    const app = db.insertApp({
+      name,
+      domain: "",
+      git_repo: "https://github.com/example/web",
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+    });
+    const imageDigest = `sha256:${randomSuffix()}`;
+    const envHash = `sha256:${randomSuffix()}`;
+    const replica = db.insertReplica({
+      app_id: app.id,
+      server_id: server.id,
+      host_port: 3100,
+      container_name: name,
+      status: "running",
+    });
+    db.recordReplicaAttestation(replica.id, {
+      imageDigest,
+      desiredImageDigest: imageDigest,
+      envHash,
+      configRevision: app.config_revision,
+    });
+    db.touchReplicaHealth(replica.id);
+    db.insertDeployment({
+      app_id: app.id,
+      image_tag: `${name}:latest`,
+      image_digest: imageDigest,
+      env_hash: envHash,
+      git_commit: "abcdef0",
+      status: "deployed",
+      config_revision: app.config_revision,
+    });
+    return { app, replica };
+  }
+
+  test("heals a terminally stale deploying app from fresh attested replicas", () => {
+    const { app } = makeDeployingApp();
+
+    const healed = reconcileStaleAppStates();
+
+    expect(healed).toContainEqual({ id: app.id, name: app.name });
+    expect(db.getApp(app.id)?.status).toBe("running");
+  });
+
+  test("does not interfere with an active app operation", () => {
+    const { app } = makeDeployingApp();
+    enqueueOperation({
+      kind: "redeploy",
+      resourceKeys: [`app:${app.id}`],
+      input: { appId: app.id },
+      trigger: "test",
+    });
+
+    reconcileStaleAppStates();
+
+    expect(db.getApp(app.id)?.status).toBe("deploying");
+  });
+
+  test("does not heal an unattested or stale revision", () => {
+    const { app, replica } = makeDeployingApp();
+    const { default: conn } = require("../shared/db/connection.ts");
+    conn.run(
+      "UPDATE replicas SET config_revision = config_revision - 1, last_health_at = datetime('now', '-10 minutes') WHERE id = ?",
+      [replica.id],
+    );
+
+    reconcileStaleAppStates();
+
+    expect(db.getApp(app.id)?.status).toBe("deploying");
   });
 });

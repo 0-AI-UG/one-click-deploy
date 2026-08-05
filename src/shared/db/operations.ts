@@ -162,9 +162,25 @@ export function findSupersedingOperation(op: OperationRow): OperationRow | null 
     )
     .all(op.id) as OperationRow[];
   for (const row of rows) {
-    if ([...expandedResourceKeys(row)].some((key) => owned.has(key))) return row;
+    const candidate = expandedResourceKeys(row);
+    const ownedMemberKeys = memberResourceKeys(owned);
+    const candidateMemberKeys = memberResourceKeys(candidate);
+    // Stack keys on member operations are coordination locks, not ownership
+    // claims over every sibling. Two webhook deploys for different members of
+    // one stack must not fence each other's compensation merely because both
+    // serialize through the same stack key. A genuinely stack-wide operation
+    // still supersedes through that shared key, and two operations for the
+    // same member still intersect on app/service identity.
+    const superseded = ownedMemberKeys.size > 0 && candidateMemberKeys.size > 0
+      ? [...candidateMemberKeys].some((key) => ownedMemberKeys.has(key))
+      : [...candidate].some((key) => owned.has(key));
+    if (superseded) return row;
   }
   return null;
+}
+
+function memberResourceKeys(keys: Set<string>): Set<string> {
+  return new Set([...keys].filter((key) => key.startsWith("app:") || key.startsWith("service:")));
 }
 
 /** Destructive children spawned by a parent's compensation inherit the

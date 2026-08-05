@@ -9,7 +9,7 @@ import type { OperationRow } from "../shared/db/operations.ts";
 import { getOperation, markOperationFinished } from "../shared/db/operations.ts";
 import { requeueForCompensation } from "./engine.ts";
 import { currentHolder } from "./scheduler.ts";
-import { reconcileStaleStackStates } from "./resource-state.ts";
+import { reconcileStaleAppStates, reconcileStaleStackStates } from "./resource-state.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -121,6 +121,13 @@ export function sweepStuckStates(): void {
     }
   } catch (err) {
     log("sweep", `sleep-state correction failed: ${err}`);
+  }
+  try {
+    for (const app of reconcileStaleAppStates()) {
+      log("sweep", `app#${app.id} (${app.name}) was stale in 'deploying' after its operation finished — flipped to running`);
+    }
+  } catch (err) {
+    log("sweep", `app-state reconciliation failed: ${err}`);
   }
   try {
     reconcileStaleStackStates();

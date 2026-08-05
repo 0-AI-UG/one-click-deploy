@@ -254,6 +254,23 @@ describe("reconciler: health checks respect paused state", () => {
     expect(getReplica(replica.id)!.status).toBe("paused");
   });
 
+  test("healthy liveness does not erase a revision attestation failure", async () => {
+    const { server, app, replica } = makeHealthFixture();
+    db.recordReplicaAttestation(replica.id, {
+      imageDigest: "sha256:observed",
+      desiredImageDigest: "sha256:desired",
+      envHash: "sha256:env",
+      configRevision: app.config_revision,
+      error: "image mismatch",
+    });
+    healthCheckMock.mockImplementationOnce(async () => ({ healthy: true }));
+
+    await checkReplicaHealth(replica, app, server);
+
+    expect(getReplica(replica.id)!.status).toBe("divergent");
+    expect(getReplica(replica.id)!.attestation_error).toBe("image mismatch");
+  });
+
   test("no auto-restart at threshold when the app is paused", async () => {
     const { server, app, replica } = makeHealthFixture("paused");
     restartContainerMock.mockClear();

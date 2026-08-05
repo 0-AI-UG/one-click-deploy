@@ -96,7 +96,12 @@ export async function checkReplicaHealth(
       // redeploy, scale, migrate, wake, and reload verify before routing or
       // success. This periodic loop owns liveness only and must not reinterpret
       // unrelated healthy containers outside an operation.
-      db.updateReplicaStatus(replica.id, "running");
+      // In particular, a healthy process may still be serving the wrong image
+      // or configuration. Preserve an explicit attestation failure until an
+      // operation successfully re-attests the replica.
+      if (current.status !== "divergent" && !current.attestation_error) {
+        db.updateReplicaStatus(replica.id, "running");
+      }
       db.touchReplicaHealth(replica.id);
       db.resetUnhealthyTicks(replica.id);
     } else {

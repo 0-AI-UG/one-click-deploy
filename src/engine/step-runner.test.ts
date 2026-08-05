@@ -146,6 +146,38 @@ describe("step-runner: compensation on failure", () => {
     expect(fenced?.detail).toContain("adopted by newer operation");
   });
 
+  test("a newer sibling operation sharing only stack locks does not fence compensation", async () => {
+    const compensate = mock(async () => {});
+    const old = enqueueOperation({
+      kind: "redeploy",
+      resourceKeys: ["app:132", "stack:29", "stack:foody"],
+      input: { appId: 132 },
+      trigger: "webhook",
+    });
+    const def = makeDef([
+      { name: "candidate", run: async () => ({ image: "candidate" }), compensate },
+      {
+        name: "fail",
+        run: async () => {
+          const sibling = enqueueOperation({
+            kind: "redeploy",
+            resourceKeys: ["app:134", "stack:29", "stack:foody"],
+            input: { appId: 134 },
+            trigger: "webhook",
+          });
+          markOperationFinished(sibling.id, "done");
+          throw new Error("DNS reconciliation failed");
+        },
+      },
+    ]);
+
+    await runOperation(getOperation(old.id)!, def);
+
+    expect(compensate).toHaveBeenCalledTimes(1);
+    expect(getOperation(old.id)!.status).toBe("compensated");
+    expect(getSteps(old.id).find((step) => step.phase === "compensate")?.status).toBe("ok");
+  });
+
   test("an already-enqueued destructive child inherits the superseded parent fence", async () => {
     const parent = enqueueOperation({
       kind: "deploy_stack",

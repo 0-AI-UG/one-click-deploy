@@ -240,6 +240,78 @@ function operationHasStackKey(op: OperationRow, stackId: number, name: string): 
   }
 }
 
+function operationHasAnyResourceKey(op: OperationRow, resourceKeys: Set<string>): boolean {
+  try {
+    const keys = JSON.parse(op.resource_keys);
+    return Array.isArray(keys) && keys.some((key) => resourceKeys.has(String(key).toLowerCase()));
+  } catch {
+    return false;
+  }
+}
+
+function appHasActiveOperation(app: NonNullable<ReturnType<typeof db.getApp>>): boolean {
+  const resourceKeys = new Set([
+    `app:${app.id}`,
+    `app:${app.name}`.toLowerCase(),
+    `app:create:${app.name}`.toLowerCase(),
+  ]);
+  if (app.stack_id != null) {
+    resourceKeys.add(`stack:${app.stack_id}`);
+    const stack = db.getStack(app.stack_id);
+    if (stack) resourceKeys.add(`stack:${stack.name}`.toLowerCase());
+  }
+  const active = dbConn
+    .query("SELECT * FROM operations WHERE status IN ('pending','running','compensating')")
+    .all() as OperationRow[];
+  return active.some((op) => operationHasAnyResourceKey(op, resourceKeys));
+}
+
+export type HealedAppState = { id: number; name: string };
+
+/**
+ * Heal an app whose operation finished after leaving the aggregate row in the
+ * transitional `deploying` state. This is deliberately stricter than normal
+ * health propagation: a running container alone may still be the old revision
+ * during a rollout, so every replica must have a fresh health result and an
+ * attestation matching the latest successful deployment and desired config.
+ */
+export function reconcileStaleAppStates(): HealedAppState[] {
+  const healed: HealedAppState[] = [];
+  for (const app of db.getApps().filter((candidate) => candidate.status === "deploying")) {
+    if (appHasActiveOperation(app) || app.environment_stale) continue;
+
+    const replicas = db.getReplicas(app.id);
+    const desiredReplicas = app.volume_id ? 1 : app.desired_replicas;
+    if (desiredReplicas <= 0 || replicas.length !== desiredReplicas) continue;
+
+    const deployed = db.getDeployments(app.id).find((deployment) => deployment.status === "deployed");
+    if (
+      !deployed ||
+      deployed.config_revision !== app.config_revision ||
+      !deployed.image_digest ||
+      !deployed.env_hash
+    ) {
+      continue;
+    }
+
+    const converged = replicas.every((replica) =>
+      replica.status === "running" &&
+      !!replica.last_health_at &&
+      !healthTimestampIsStale(replica.last_health_at) &&
+      !!replica.attested_at &&
+      !replica.attestation_error &&
+      replica.config_revision === app.config_revision &&
+      replica.desired_image_digest === deployed.image_digest &&
+      replica.env_hash === deployed.env_hash
+    );
+    if (!converged) continue;
+
+    db.updateAppStatus(app.id, "running");
+    healed.push({ id: app.id, name: app.name });
+  }
+  return healed;
+}
+
 /** Stack health is derived from current members. Operation outcome remains a
  * separate diagnostic signal and never overwrites a healthy reality. */
 export function deriveStackResourceState(stack: db.StackRow): StackResourceState {
