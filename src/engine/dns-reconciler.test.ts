@@ -8,10 +8,11 @@ const createRecord = mock(async (opts: { name: string; type: string; value: stri
   ...opts,
 }));
 const deleteRecord = mock(async () => {});
+const listZones = mock(async () => [{ id: "zone-1", name: "example.com" }]);
 let answers: string[] = [];
 
 mock.module("../shared/providers/index.ts", () => ({
-  hetznerDns: { createRecord, deleteRecord },
+  hetznerDns: { createRecord, deleteRecord, listZones },
 }));
 mock.module("./scale/traefik-manager.ts", () => ({
   getPanelIngressIpv4: () => "203.0.113.10",
@@ -43,6 +44,7 @@ beforeEach(() => {
     ...opts,
   }));
   deleteRecord.mockClear();
+  listZones.mockClear();
   db.saveSetting("dns_zone_id", "zone-1");
   db.saveSetting("dns_zone_name", "example.com");
 });
@@ -77,6 +79,18 @@ describe("DNS desired-state reconciliation", () => {
 
     await reconcileAppDns(app.id);
     expect(createRecord).toHaveBeenCalledTimes(1);
+  });
+
+  test("resolves and caches a configured zone name by id on upgraded panels", async () => {
+    db.saveSetting("dns_zone_name", "");
+    const app = makeApp("upgrade.example.com");
+
+    const result = await reconcileAppDns(app.id);
+
+    expect(result.managed).toBe(true);
+    expect(listZones).toHaveBeenCalledTimes(1);
+    expect(db.getSettings().dns_zone_name).toBe("example.com");
+    expect(createRecord).toHaveBeenCalledWith(expect.objectContaining({ name: "upgrade" }));
   });
 
   test("never writes an explicit domain outside the configured zone", async () => {

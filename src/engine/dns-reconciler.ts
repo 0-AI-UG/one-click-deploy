@@ -45,7 +45,21 @@ export async function reconcileAppDns(appId: number): Promise<DnsReadiness> {
   }
   const settings = db.getSettings();
   const zoneId = settings.dns_zone_id || "";
-  const zoneName = settings.dns_zone_name || "";
+  let zoneName = settings.dns_zone_name || "";
+  if (zoneId && !zoneName) {
+    try {
+      const zone = (await hetznerDns.listZones()).find(
+        (candidate: { id: string; name: string }) => candidate.id === zoneId,
+      );
+      if (!zone?.name) throw new Error(`configured DNS zone ${zoneId} was not found`);
+      zoneName = zone.name.replace(/\.$/, "");
+      db.saveSetting("dns_zone_name", zoneName);
+    } catch (err) {
+      const error = `DNS zone resolution failed for ${zoneId}: ${err instanceof Error ? err.message : err}`;
+      db.updateAppPublicEndpointStatus(app.id, "degraded", error);
+      throw new Error(error);
+    }
+  }
   const managed = !!zoneId && withinZone(app.domain, zoneName);
   let resolved = await resolvedIps(app.domain);
   const name = managed ? recordName(app.domain, zoneName) : "";
