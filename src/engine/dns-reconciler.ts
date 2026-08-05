@@ -48,8 +48,10 @@ export async function reconcileAppDns(appId: number): Promise<DnsReadiness> {
   let zoneName = settings.dns_zone_name || "";
   if (zoneId && !zoneName) {
     try {
+      const normalizedSelector = zoneId.replace(/\.$/, "").toLowerCase();
       const zone = (await hetznerDns.listZones()).find(
-        (candidate: { id: string; name: string }) => candidate.id === zoneId,
+        (candidate: { id: string; name: string }) =>
+          candidate.id === zoneId || candidate.name.replace(/\.$/, "").toLowerCase() === normalizedSelector,
       );
       if (!zone?.name) throw new Error(`configured DNS zone ${zoneId} was not found`);
       zoneName = zone.name.replace(/\.$/, "");

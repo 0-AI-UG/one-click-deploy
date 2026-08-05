@@ -93,6 +93,21 @@ describe("DNS desired-state reconciliation", () => {
     expect(createRecord).toHaveBeenCalledWith(expect.objectContaining({ name: "upgrade" }));
   });
 
+  test("accepts a canonical zone name as the provider selector", async () => {
+    db.saveSetting("dns_zone_id", "example.com");
+    db.saveSetting("dns_zone_name", "");
+    const app = makeApp("named.example.com");
+
+    const result = await reconcileAppDns(app.id);
+
+    expect(result.managed).toBe(true);
+    expect(db.getSettings().dns_zone_name).toBe("example.com");
+    expect(createRecord).toHaveBeenCalledWith(expect.objectContaining({
+      zoneId: "example.com",
+      name: "named",
+    }));
+  });
+
   test("never writes an explicit domain outside the configured zone", async () => {
     const app = makeApp("docs.other.example");
     const result = await reconcileAppDns(app.id);
