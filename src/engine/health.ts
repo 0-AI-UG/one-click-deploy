@@ -14,7 +14,7 @@ import { resolveAppEnvVars } from "../shared/env-crypto.ts";
 import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { replicaBindHost, appReplicaRunOpts } from "./scale/types.ts";
 import { currentHolder } from "./scheduler.ts";
-import { attestReplica, hashEnvironment, latestDesiredImage } from "./revision.ts";
+import { latestDesiredImage } from "./revision.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -92,27 +92,10 @@ export async function checkReplicaHealth(
     if (currentHolder(`app:${app.id}`)) return;
 
     if (check.healthy) {
-      const envVars = await resolveAppEnvVars(app);
-      const expected = {
-        imageDigest: latestDesiredImage(app),
-        envHash: hashEnvironment(envVars),
-        configRevision: app.config_revision,
-      };
-      const attested = Boolean(
-        current.attested_at &&
-        current.desired_image_digest === expected.imageDigest &&
-        current.env_hash === expected.envHash &&
-        current.config_revision === expected.configRevision &&
-        !current.attestation_error
-      );
-      if (!attested) {
-        db.updateReplicaStatus(replica.id, "attesting");
-        const result = await attestReplica(app, current, server, expected);
-        if (!result.ok) {
-          log("health", `replica ${replica.container_name} is healthy but divergent: ${result.error}`);
-          return;
-        }
-      }
+      // Revision attestation is a deployment transaction gate: deploy,
+      // redeploy, scale, migrate, wake, and reload verify before routing or
+      // success. This periodic loop owns liveness only and must not reinterpret
+      // unrelated healthy containers outside an operation.
       db.updateReplicaStatus(replica.id, "running");
       db.touchReplicaHealth(replica.id);
       db.resetUnhealthyTicks(replica.id);
