@@ -101,6 +101,29 @@ function pruneSupersededProxyBinaries(keepPath: string, arch: "x64" | "arm64"): 
   }
 }
 
+/** True for an OCD proxy cache artifact from a different source revision.
+ * Unknown files are never candidates. */
+export function isSupersededProxyBinary(file: string, desiredVersion: string): boolean {
+  const match = /^ocd-proxy-([0-9a-f]{12})-linux-(x64|arm64)$/.exec(file);
+  return match !== null && match[1] !== desiredVersion;
+}
+
+/** Steady-state cleanup matters because a fully converged fleet never calls
+ * buildProxyBinary, so cleanup tied only to cache hits/builds leaves every
+ * historical ~100 MB binary on the persistent panel volume forever. */
+async function pruneProxyBuildCache(): Promise<void> {
+  const desiredVersion = await desiredProxyVersion();
+  try {
+    for (const file of readdirSync(BUILD_CACHE_DIR)) {
+      if (isSupersededProxyBinary(file, desiredVersion)) {
+        rmSync(path.join(BUILD_CACHE_DIR, file), { force: true });
+      }
+    }
+  } catch {
+    // Cache cleanup is best-effort and must not block topology convergence.
+  }
+}
+
 export async function buildProxyBinary(arch: "x64" | "arm64"): Promise<string> {
   const version = await desiredProxyVersion();
   const key = `${version}-${arch}`;
@@ -486,6 +509,7 @@ async function convergeAndTrackLocked(server: ServerAccess, rendered: string): P
  * retry next tick.
  */
 export async function reconcileProxy(): Promise<void> {
+  await pruneProxyBuildCache();
   const state = collectDesiredState();
   const rendered = renderProxyConfigJson(state);
   await Promise.all(getAllServerAccess().map((server) => convergeAndTrackLocked(server, rendered)));

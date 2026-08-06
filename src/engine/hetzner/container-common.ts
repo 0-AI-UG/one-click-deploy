@@ -25,11 +25,11 @@ export const IMAGE_GC_LOCK_PATH = "/tmp/ocd-image-gc.lock";
 /** Coordinate image consumers with host-wide garbage collection. Builds and
  * docker-run take shared leases; pruning takes the exclusive side. */
 export function withImageGcLease(command: string, waitSeconds = 600): string {
-  return `flock -s -w ${waitSeconds} ${IMAGE_GC_LOCK_PATH} -c ${JSON.stringify(command)}`;
+  return `flock -s -w ${waitSeconds} ${IMAGE_GC_LOCK_PATH} -c ${shellSingleQuote(command)}`;
 }
 
 export function withExclusiveImageGc(command: string, waitSeconds = 60): string {
-  return `flock -x -w ${waitSeconds} ${IMAGE_GC_LOCK_PATH} -c ${JSON.stringify(command)}`;
+  return `flock -x -w ${waitSeconds} ${IMAGE_GC_LOCK_PATH} -c ${shellSingleQuote(command)}`;
 }
 
 // Default per-container resource ceilings. Applied to every app/replica unless

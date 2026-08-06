@@ -133,5 +133,8 @@ describe("image GC coordination", () => {
     expect(prune).toContain("flock -x");
     expect(build).toContain("/tmp/ocd-image-gc.lock");
     expect(prune).toContain("/tmp/ocd-image-gc.lock");
+    expect(withExclusiveImageGc(`echo "$name" $(date)`)).toBe(
+      `flock -x -w 60 /tmp/ocd-image-gc.lock -c 'echo "$name" $(date)'`,
+    );
   });
 });

@@ -28,9 +28,16 @@ import {
   probeServerProxy,
   reconcileProxy,
   desiredProxyVersion,
+  isSupersededProxyBinary,
   isProxyReady,
   type ServerAccess,
 } from "./proxy-manager.ts";
+
+test("proxy cache cleanup only targets versioned binaries from old revisions", () => {
+  expect(isSupersededProxyBinary("ocd-proxy-aaaaaaaaaaaa-linux-x64", "bbbbbbbbbbbb")).toBe(true);
+  expect(isSupersededProxyBinary("ocd-proxy-bbbbbbbbbbbb-linux-arm64", "bbbbbbbbbbbb")).toBe(false);
+  expect(isSupersededProxyBinary("operator-backup", "bbbbbbbbbbbb")).toBe(false);
+});
 
 function makeServer(ipv4: string, privateIpv4: string) {
   return db.insertServer({
