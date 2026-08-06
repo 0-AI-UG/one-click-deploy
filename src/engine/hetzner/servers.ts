@@ -1,4 +1,5 @@
 import { hetznerApi } from "./api.ts";
+import { isNotFoundError } from "../../shared/providers/errors.ts";
 import {
   PUBLIC_TCP_PORT_BASE,
   PUBLIC_TCP_PORT_COUNT,
@@ -128,6 +129,24 @@ export async function ensureFirewall(): Promise<number> {
   return fwCreateData.firewall.id;
 }
 
+/** Ensure the fleet firewall is attached to an existing server. Provisioning
+ * supplies it at create time; this repairs detachments and newly recreated
+ * firewalls. Hetzner reports an already-applied relationship as a conflict,
+ * which is a successful idempotent outcome here. */
+export async function ensureFirewallAttached(firewallId: string | number, serverId: string | number): Promise<void> {
+  try {
+    await hetznerApi(`/firewalls/${firewallId}/actions/apply_to_resources`, {
+      method: "POST",
+      body: JSON.stringify({
+        apply_to: [{ type: "server", server: { id: Number(serverId) } }],
+      }),
+    });
+  } catch (error) {
+    if (/already applied|already assigned|conflict/i.test(error instanceof Error ? error.message : String(error))) return;
+    throw error;
+  }
+}
+
 // --- Server Management ---
 
 export async function createServer(opts: {
@@ -190,7 +209,11 @@ export async function waitForServerRunning(
 }
 
 export async function deleteHetznerServer(serverId: string) {
-  await hetznerApi(`/servers/${serverId}`, { method: "DELETE" });
+  try {
+    await hetznerApi(`/servers/${serverId}`, { method: "DELETE" });
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+  }
 }
 
 export async function listHetznerServers(): Promise<HetznerServer[]> {

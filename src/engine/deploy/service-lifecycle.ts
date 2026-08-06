@@ -28,6 +28,7 @@ export async function destroyServiceCore(serviceId: number): Promise<{ ok: boole
   try {
     const service = db.getService(serviceId);
     if (!service) throw new Error("Service not found");
+    db.markServiceDeletionRequested(service.id);
 
     let cleanupFailed = false;
     const affectedServerIds = new Set<number>();
@@ -55,6 +56,7 @@ export async function destroyServiceCore(serviceId: number): Promise<{ ok: boole
     // Destroy all instances
     const instances = db.getServiceInstances(serviceId);
     for (const instance of instances) {
+      let instanceFailed = false;
       affectedServerIds.add(instance.server_id);
       const server = db.getServer(instance.server_id);
       if (server) {
@@ -68,6 +70,7 @@ export async function destroyServiceCore(serviceId: number): Promise<{ ok: boole
         } catch (err) {
           log("destroy", `Failed to remove container ${instance.container_name}: ${err}`);
           cleanupFailed = true;
+          instanceFailed = true;
         }
         // Clean up service directory
         try {
@@ -96,10 +99,11 @@ export async function destroyServiceCore(serviceId: number): Promise<{ ok: boole
         } catch (err) {
           log("destroy", `Failed to retire volume ${instance.volume_id}: ${err}`);
           cleanupFailed = true;
+          instanceFailed = true;
         }
       }
 
-      db.deleteServiceInstance(instance.id);
+      if (!instanceFailed) db.deleteServiceInstance(instance.id);
     }
 
     // Remove the panel ingress route for HTTP-facing services. Best-effort —

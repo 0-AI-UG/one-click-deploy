@@ -22,6 +22,7 @@ const sshExec = mock(async (_host: string, cmd: string, _hostKey?: string) => {
   if (cmd.includes("docker inspect")) {
     stdout = JSON.stringify({
       Image: "sha256:test-image",
+      State: { Running: true },
       Config: {
         Labels: {
           "ocd.app": attestationTarget?.name || "",

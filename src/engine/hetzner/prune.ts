@@ -74,7 +74,84 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
  * leaving the app unable to wake. OCD removes its own containers explicitly
  * (see scaleDown), so the blanket prune only needs to clear foreign junk.
  */
-export async function pruneServer(ip: string, hostKey?: string, activeAppNames: string[] = []) {
+export type PruneServerOptions = {
+  activeAppNames?: string[];
+  /** Every DB-backed app/service/panel container on this server, including
+   * sleeping stopped anchors. Managed stopped containers absent from this set
+   * are interrupted-deploy or stale-placement debris and may be removed. */
+  protectedContainerNames?: string[];
+  /** The panel container whose GHCR repository should retain only the current
+   * image plus one previous revision. Panel images are registry-built and do
+   * not carry the ocd.managed label used by app image GC. */
+  panelContainerName?: string;
+};
+
+function safeNames(names: string[]): string[] {
+  const unique = [...new Set(names)];
+  const unsafe = unique.find((name) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name));
+  if (unsafe) {
+    // Silently dropping a DB-backed protection name would turn malformed
+    // state into authorization to delete its stopped container. Fail closed:
+    // maintenance can retry after the bad row is repaired.
+    throw new Error(`Unsafe Docker name in prune protection set: ${JSON.stringify(unsafe)}`);
+  }
+  return unique;
+}
+
+export function buildServerPruneSteps(opts: PruneServerOptions = {}): string[] {
+  const activeAppNames = safeNames(opts.activeAppNames ?? []);
+  const protectedContainerNames = safeNames(opts.protectedContainerNames ?? []);
+  const protectedContainers = protectedContainerNames.join("|");
+  const steps: string[] = [
+    // OCD-managed stopped containers are normally sleeping anchors, but an
+    // interrupted scale/deploy can leave a created/exited container after its
+    // replica row is gone. Remove only non-running containers absent from the
+    // complete DB-backed protection set; never kill an untracked running one.
+    `for name in $(docker ps -a --filter label=${OCD_IMAGE_LABEL} --format '{{.Names}}'); do ` +
+      `state=$(docker inspect --format '{{.State.Status}}' "$name" 2>/dev/null || true); ` +
+      `case "$state" in created|exited|dead) ` +
+      (protectedContainers
+        ? `case "$name" in ${protectedContainers}) ;; *) docker container rm -f "$name" >/dev/null 2>&1 || true ;; esac`
+        : `docker container rm -f "$name" >/dev/null 2>&1 || true`) +
+      ` ;; esac; done`,
+  ];
+
+  if (activeAppNames.length > 0) {
+    const keep = activeAppNames.map((name) => `${name}:*`).join("|");
+    steps.push(
+      `for ref in $(docker images --filter label=${OCD_IMAGE_LABEL} --format '{{.Repository}}:{{.Tag}}'); do ` +
+        `case "$ref" in ${keep}) ;; *) docker image rm "$ref" >/dev/null 2>&1 || true ;; esac; done`,
+    );
+  } else {
+    steps.push(
+      `docker images --filter label=${OCD_IMAGE_LABEL} --format '{{.Repository}}:{{.Tag}}' | ` +
+        `xargs -r docker image rm >/dev/null 2>&1 || true`,
+    );
+  }
+
+  const panelContainerName = safeNames(opts.panelContainerName ? [opts.panelContainerName] : [])[0];
+  if (panelContainerName) {
+    steps.push(
+      `current_ref=$(docker inspect --format '{{.Config.Image}}' ${panelContainerName} 2>/dev/null || true); ` +
+        `repo=${"${current_ref%:*}"}; previous_kept=0; ` +
+        `if [ -n "$current_ref" ] && [ "$repo" != "$current_ref" ]; then ` +
+        `docker images "$repo" --format '{{.Repository}}:{{.Tag}}' | while read -r ref; do ` +
+        `[ -z "$ref" ] && continue; [ "$ref" = "$current_ref" ] && continue; ` +
+        `if docker ps -aq --filter ancestor="$ref" | grep -q .; then continue; fi; ` +
+        `if [ "$previous_kept" = "0" ]; then previous_kept=1; continue; fi; ` +
+        `docker image rm "$ref" >/dev/null 2>&1 || true; done; fi`,
+    );
+  }
+
+  steps.push(
+    `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
+    `docker image prune -f 2>&1 | tail -1`,
+    `docker builder prune -af 2>&1 | tail -1`,
+  );
+  return steps;
+}
+
+export async function pruneServer(ip: string, hostKey?: string, opts: PruneServerOptions = {}) {
   // Clear abandoned operation archives and old reconstructible builder state
   // before the ordinary pressure-based pass below.
   await runDeploymentPreflightGc(ip, hostKey);
@@ -83,35 +160,7 @@ export async function pruneServer(ip: string, hostKey?: string, activeAppNames: 
   const usedPct = parseInt(usage.stdout.trim(), 10) || 0;
   const underPressure = usedPct >= 75;
 
-  // Build the prune pipeline. Each step's output is trimmed to its summary
-  // line so the log entry stays one line per server.
-  const steps = underPressure
-    ? [
-        // Preserve all tagged revision images even under pressure. Per-app
-        // post-build cleanup bounds old OCD tags.
-        `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
-        `docker image prune -f 2>&1 | tail -1`,
-        `docker builder prune -af 2>&1 | tail -1`,
-      ]
-    : [
-        // Dangling layers, foreign stopped containers, and all build cache.
-        // Excludes OCD-managed containers so sleeping anchors are never swept.
-        `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
-        `docker image prune -f 2>&1 | tail -1`,
-        `docker builder prune -af 2>&1 | tail -1`,
-      ];
-  if (activeAppNames.length > 0) {
-    const keep = activeAppNames.map((name) => `${name}:*`).join("|");
-    steps.unshift(
-      `for ref in $(docker images --filter label=${OCD_IMAGE_LABEL} --format '{{.Repository}}:{{.Tag}}'); do ` +
-        `case "$ref" in ${keep}) ;; *) docker image rm "$ref" >/dev/null 2>&1 || true ;; esac; done`,
-    );
-  } else {
-    steps.unshift(
-      `docker images --filter label=${OCD_IMAGE_LABEL} --format '{{.Repository}}:{{.Tag}}' | ` +
-        `xargs -r docker image rm >/dev/null 2>&1 || true`,
-    );
-  }
+  const steps = buildServerPruneSteps(opts);
   const result = await sshExec(ip, asUser(withExclusiveImageGc(steps.join("; "))), hostKey);
   const tag = underPressure ? "prune(pressure)" : "prune";
   log(tag, `Server ${ip} (disk ${usedPct}%): ${result.stdout.trim().replace(/\n/g, " | ")}`);

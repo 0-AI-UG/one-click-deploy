@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { buildDockerRunArgs, DEFAULT_MEM_MB, DEFAULT_CPUS, DEFAULT_PIDS } from "./containers.ts";
+import { DEFAULT_LOG_MAX_FILES, DEFAULT_LOG_MAX_SIZE } from "./container-common.ts";
 import { withExclusiveImageGc, withImageGcLease } from "./container-common.ts";
 
 describe("buildDockerRunArgs", () => {
@@ -18,6 +19,8 @@ describe("buildDockerRunArgs", () => {
     expect(cmd).toContain(`--pids-limit ${DEFAULT_PIDS}`);
     expect(cmd).toContain("--network ocd-net");
     expect(cmd).toContain("--restart unless-stopped");
+    expect(cmd).toContain(`--log-opt max-size=${DEFAULT_LOG_MAX_SIZE}`);
+    expect(cmd).toContain(`--log-opt max-file=${DEFAULT_LOG_MAX_FILES}`);
     expect(cmd).toContain("-p 127.0.0.1:8080:3000");
     expect(cmd.endsWith(" myapp:latest")).toBe(true);
   });

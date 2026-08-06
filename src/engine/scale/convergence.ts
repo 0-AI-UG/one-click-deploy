@@ -37,12 +37,15 @@ export async function convergeAppReplicas(appId: number): Promise<void> {
   const effectiveMax = app.volume_id ? 1 : Infinity;
   const desired = Math.max(0, Math.min(app.desired_replicas, effectiveMax));
 
-  const currentReplicas = db.getReplicas(appId);
+  const allReplicas = db.getReplicas(appId);
+  const currentReplicas = allReplicas.filter((replica) => db.getServer(replica.server_id)?.status === "ready");
+  const strandedReplicas = allReplicas.filter((replica) => !currentReplicas.some((active) => active.id === replica.id));
   const currentCount = currentReplicas.length;
-  if (currentCount === desired) return;
-  // A running app with zero replica rows is a job for health/recreate or a
-  // fresh deploy, not for scale convergence.
-  if (currentCount === 0) return;
+  if (currentCount === desired && strandedReplicas.length === 0) return;
+  // A persistent volume is single-writer state. Never reschedule it across
+  // hosts automatically; the volume reconciler only repairs attachment to the
+  // already-recorded host and surfaces ambiguous placement for an operator.
+  if (currentCount === 0 && app.volume_id) return;
 
   // Serialize against saga ops (deploy child, migrate, redeploy, rollback)
   // mutating the same app. Non-blocking: if a real op holds the app lock we
@@ -64,6 +67,18 @@ export async function convergeAppReplicas(appId: number): Promise<void> {
       }
     } else {
       await scaleDown(app, currentReplicas, currentCount, desired, emit);
+    }
+    // Only provider-confirmed absence permits forgetting a row. A merely
+    // stopped/unavailable server can return; retaining its row lets the next
+    // pass remove the resulting excess container through normal scale-down
+    // instead of silently orphaning it.
+    if (db.getReplicas(appId).filter((replica) => db.getServer(replica.server_id)?.status === "ready").length >= desired) {
+      for (const replica of strandedReplicas) {
+        const server = db.getServer(replica.server_id);
+        if (server && server.provider_status !== "missing") continue;
+        db.deleteReplica(replica.id);
+        await db.gcServerIfEmpty(replica.server_id);
+      }
     }
     log("converge", `app ${appId}: converged ${currentCount} -> ${desired}`);
   } catch (err) {

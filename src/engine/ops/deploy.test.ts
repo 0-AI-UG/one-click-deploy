@@ -36,6 +36,7 @@ mock.module("../../shared/remote/index.ts", () => ({
     exitCode: 0,
     stdout: command.includes("{{json .}}") ? JSON.stringify({
       Image: "sha256:test-image",
+      State: { Running: true },
       Config: { Labels: {
         "ocd.app": attestationAppName,
         "ocd.config-revision": "1",
@@ -290,7 +291,7 @@ describe("deploy step: create_dns_record", () => {
     expect(out).toBeNull();
   });
 
-  test("creates record with @ subdomain for a 2-label domain (example.com)", async () => {
+  test("managed apex DNS is declared without a one-shot provider mutation", async () => {
     db.saveSetting("dns_zone_id", "zone-123");
     db.saveSetting("dns_zone_name", "example.com");
     const { ctx } = makeCtx({ ...baseReq("x"), domain: "example.com" });
@@ -304,13 +305,11 @@ describe("deploy step: create_dns_record", () => {
         zoneName: "example.com",
       },
     };
-    const out = (await step.run(ctx, prior)) as { recordId: string; name: string; value: string };
-    expect(out.name).toBe("@");
-    expect(out.value).toBe("4.4.4.4");
-    expect(dns._mocks.createRecord).toHaveBeenCalledTimes(1);
+    expect(await step.run(ctx, prior)).toBeNull();
+    expect(dns._mocks.createRecord).not.toHaveBeenCalled();
   });
 
-  test("creates record with subdomain for app.example.com", async () => {
+  test("managed subdomain DNS is declared without a one-shot provider mutation", async () => {
     db.saveSetting("dns_zone_id", "zone-xyz");
     db.saveSetting("dns_zone_name", "example.com");
     const { ctx } = makeCtx({ ...baseReq("x"), domain: "my.app.example.com" });
@@ -324,17 +323,11 @@ describe("deploy step: create_dns_record", () => {
         zoneName: "example.com",
       },
     };
-    const out = (await step.run(ctx, prior)) as { name: string };
-    expect(out.name).toBe("my.app");
-    expect(dns._mocks.createRecord.mock.calls[0][0]).toMatchObject({
-      zoneId: "zone-xyz",
-      name: "my.app",
-      type: "A",
-      value: "7.7.7.7",
-    });
+    expect(await step.run(ctx, prior)).toBeNull();
+    expect(dns._mocks.createRecord).not.toHaveBeenCalled();
   });
 
-  test("DNS failure is visible and fails the deployment", async () => {
+  test("provider availability does not affect the DNS intent step", async () => {
     db.saveSetting("dns_zone_id", "zone-ok");
     db.saveSetting("dns_zone_name", "example.com");
     dns._mocks.createRecord.mockImplementationOnce(async () => {
@@ -351,10 +344,10 @@ describe("deploy step: create_dns_record", () => {
         zoneName: "example.com",
       },
     };
-    await expect(step.run(ctx, prior)).rejects.toThrow(/dns 500/i);
+    expect(await step.run(ctx, prior)).toBeNull();
   });
 
-  test("auto-domain: creates an A record named after the app", async () => {
+  test("auto-domain is also left to the reconciler", async () => {
     db.saveSetting("dns_zone_id", "zone-auto");
     db.saveSetting("dns_zone_name", "example.com");
     try {
@@ -369,15 +362,8 @@ describe("deploy step: create_dns_record", () => {
           zoneName: "example.com",
         },
       };
-      const out = (await step.run(ctx, prior)) as { name: string; value: string; zoneId: string };
-      expect(out.name).toBe("myapp");
-      expect(out.value).toBe("6.6.6.6");
-      expect(dns._mocks.createRecord.mock.calls[0][0]).toMatchObject({
-        zoneId: "zone-auto",
-        name: "myapp",
-        type: "A",
-        value: "6.6.6.6",
-      });
+      expect(await step.run(ctx, prior)).toBeNull();
+      expect(dns._mocks.createRecord).not.toHaveBeenCalled();
     } finally {
       db.saveSetting("dns_zone_id", "");
       db.saveSetting("dns_zone_name", "");
@@ -407,22 +393,8 @@ describe("deploy step: create_dns_record", () => {
     }
   });
 
-  test("compensation deletes the previously created record", async () => {
-    const out = {
-      recordId: "rec-1",
-      zoneId: "zone-x",
-      name: "sub",
-      type: "A",
-      value: "1.2.3.4",
-    };
-    const { ctx } = makeCtx({});
-    await step.compensate!(ctx, out, {});
-    expect(dns._mocks.deleteRecord).toHaveBeenCalledTimes(1);
-    expect(dns._mocks.deleteRecord.mock.calls[0][0]).toMatchObject({
-      zoneId: "zone-x",
-      name: "sub",
-      type: "A",
-    });
+  test("has no provider compensation because no provider side effect happened", () => {
+    expect(step.compensate).toBeUndefined();
   });
 });
 
@@ -850,7 +822,7 @@ describe("deploy: private apps", () => {
     const step = stepByName("finalize_deploy");
     const { ctx } = makeCtx({ app_name: name, git_repo: "https://github.com/x/y", container_port: 3000, replicas: 2 });
     await expect(step.run(ctx, { insert_app_row: { appId: app.id, domain: "" } }))
-      .rejects.toThrow(/replica convergence incomplete|first replica/i);
+      .rejects.toThrow(/replica convergence incomplete|first replica|private_ipv4/i);
     expect(db.getApp(app.id)!.desired_replicas).toBe(1);
   });
 });

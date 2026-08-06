@@ -23,15 +23,14 @@ export async function scaleUp(
   const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
   // The "primary" is just whichever server hosts the first (oldest) replica.
   const firstReplica = currentReplicas[0];
-  if (!firstReplica) {
-    throw new Error("Replica convergence incomplete: no source replica is available for scale-up");
-  }
-  const primaryServer = db.getServer(firstReplica.server_id);
-  if (!primaryServer) throw new Error("First replica's server not found");
-  const primaryHostPort = firstReplica.host_port;
+  const primaryServer = firstReplica ? db.getServer(firstReplica.server_id) : null;
+  if (firstReplica && !primaryServer) throw new Error("First replica's server not found");
+  const primaryHostPort = firstReplica?.host_port;
 
   for (let i = currentCount; i < targetCount; i++) {
-    const replicaNum = i + 1;
+    let replicaNum = i + 1;
+    const existingNames = new Set(db.getReplicas(app.id).map((replica) => replica.container_name));
+    while (existingNames.has(`${app.name}-r${replicaNum}`)) replicaNum++;
     emit("scale", `Provisioning replica ${replicaNum}/${targetCount}...`);
 
     // Pick target server: user-specified, least-loaded existing, or newly
@@ -46,7 +45,7 @@ export async function scaleUp(
     // list derives upstream ports from the replica row, and using a
     // stable hostPort keeps the cross-server container layout easy to
     // reason about.
-    const hostPort = primaryHostPort;
+    const hostPort = primaryHostPort ?? db.nextReplicaHostPort(targetServer.id);
 
     // Bind the replica on the target server's private IPv4. Traffic from
     // the ingress layer uses the private network, so the public NIC is
@@ -97,6 +96,7 @@ export async function scaleUp(
     // manual env-file/docker-run block below is skipped.
     let rebuildFallback = false;
     try {
+      if (!primaryServer) throw new Error("no healthy source replica is available");
       await transferImage(
         primaryServer.ipv4,
         targetServer.ipv4,

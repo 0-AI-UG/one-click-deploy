@@ -33,22 +33,27 @@ export async function destroyAppCore(appId: number): Promise<{ ok: boolean; erro
       log("destroyApp", `App id=${appId} not found`);
       throw new Error("App not found");
     }
+    db.markAppDeletionRequested(app.id);
 
     let cleanupFailed = false;
 
     // Clean up GitHub webhook if enabled
-    if (app.webhook_enabled && app.github_webhook_id) {
+    if (app.github_webhook_id) {
       try {
         const pat = await github.getGitHubPat(app.deployed_by || undefined);
-        if (pat) {
-          await github.deleteWebhook({
-            gitRepo: app.git_repo,
-            webhookId: app.github_webhook_id,
-            token: pat,
-          });
-        }
+        if (!pat) throw new Error("GitHub token unavailable; refusing to orphan the configured webhook");
+        await github.deleteWebhook({
+          gitRepo: app.github_webhook_repo || app.git_repo,
+          webhookId: app.github_webhook_id,
+          token: pat,
+        });
+        db.updateAppWebhook(
+          app.id, false, "", app.webhook_branch, "", app.webhook_path,
+          !!app.webhook_wait_for_ci, !!app.webhook_staging,
+        );
       } catch (err) {
         log("destroyApp", `Failed to delete GitHub webhook: ${err instanceof Error ? err.message : err}`);
+        cleanupFailed = true;
       }
     }
 
@@ -56,6 +61,7 @@ export async function destroyAppCore(appId: number): Promise<{ ok: boolean; erro
     const replicas = db.getReplicas(appId);
     const affectedServerIds = new Set<number>();
     for (const replica of replicas) {
+      let replicaFailed = false;
       affectedServerIds.add(replica.server_id);
       const replicaServer = db.getServer(replica.server_id);
       if (replicaServer) {
@@ -65,6 +71,7 @@ export async function destroyAppCore(appId: number): Promise<{ ok: boolean; erro
         } catch (err) {
           log("destroyApp", `Failed to remove replica ${replica.container_name}: ${err}`);
           cleanupFailed = true;
+          replicaFailed = true;
         }
         // App directories live on the tenant server. Ingress routes are
         // removed from the panel server once, after this loop.
@@ -74,7 +81,7 @@ export async function destroyAppCore(appId: number): Promise<{ ok: boolean; erro
           log("destroyApp", `Failed to remove app directory: ${err}`);
         }
       }
-      db.deleteReplica(replica.id);
+      if (!replicaFailed) db.deleteReplica(replica.id);
     }
 
     // Re-render the fleet ingress config: with the replica rows gone above the

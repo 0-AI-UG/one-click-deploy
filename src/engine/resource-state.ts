@@ -46,6 +46,7 @@ function memberInstanceIssues(
   for (const app of apps) {
     if (app.status === "paused" || app.status === "sleeping") continue;
     for (const replica of db.getReplicas(app.id)) {
+      if (db.getServer(replica.server_id)?.status !== "ready") continue;
       if (replica.status !== "running") {
         issues.push(`${app.name}/replica-${replica.id}:${replica.status}`);
       } else if (healthTimestampIsStale(replica.last_health_at)) {
@@ -194,6 +195,7 @@ export function assessOperationResources(op: OperationRow): ResourceAssessment {
     case "unpause_app":
       return assessApp(Number(input.appId ?? input.destAppId));
     case "restart_service":
+    case "repair_service":
     case "pause_service":
     case "unpause_service":
       return assessService(Number(input.serviceId));

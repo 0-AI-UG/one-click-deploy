@@ -342,8 +342,10 @@ async function migrateOne(item: Item): Promise<void> {
     serverIp: item.serverIpv4,
     hostKey: item.serverHostKey || undefined,
     hostMountPath: item.hostPath,
+    expectedVolumeId: item.volumeId,
+    blockName: item.blockName,
   });
-  if (status.sourceDevice === hc) {
+  if (status.matchesExpectedVolume) {
     log0("already migrated (bind in place)");
     setItem(key, { status: "done", lastStep: "already-bound" });
     return;

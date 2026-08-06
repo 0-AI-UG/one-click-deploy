@@ -189,7 +189,11 @@ describe("reattach_volume: full rollback to source when the target fails", () =>
 describe("reattach_volume: op structure", () => {
   test("kind, resource keys and step order", () => {
     expect(reattachVolumeOp.kind).toBe("reattach_volume");
-    expect(reattachVolumeOp.resourceKeys({ fromAppId: 3, toAppId: 8 } as any)).toEqual(["app:3", "app:8"]);
+    expect(reattachVolumeOp.resourceKeys({ volumeId: "v-3", fromAppId: 3, toAppId: 8 } as any)).toEqual([
+      "app:3",
+      "app:8",
+      "volume:v-3",
+    ]);
     expect(reattachVolumeOp.steps.map((s) => s.name)).toEqual([
       "validate", "detach_from_source", "attach_to_target",
     ]);

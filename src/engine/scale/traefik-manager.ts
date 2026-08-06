@@ -14,6 +14,7 @@
 import * as db from "../../shared/db.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { hetznerApiToken } from "../hetzner/api.ts";
+import { tryAcquire, release, NON_OP_HOLDER } from "../scheduler.ts";
 import {
   collectDesiredState,
   renderDynamicConfig,
@@ -22,12 +23,14 @@ import {
 import {
   traefikEnvFile,
   traefikInstallScript,
+  traefikLogrotateConfig,
   traefikStaticConfig,
   traefikSystemdUnit,
 } from "./traefik-provision.ts";
 import {
   TRAEFIK_DYNAMIC_CONFIG_PATH,
   TRAEFIK_ENV_PATH,
+  TRAEFIK_LOGROTATE_PATH,
   TRAEFIK_PANEL_CONFIG_PATH,
   TRAEFIK_STATIC_CONFIG_PATH,
   TRAEFIK_UNIT_PATH,
@@ -245,6 +248,7 @@ type RemoteProbe = {
   dynamicSha: string;
   panelSha: string;
   envSha: string;
+  logrotateSha: string;
 };
 
 /** One SSH round-trip that reports everything convergence needs: binary
@@ -254,16 +258,16 @@ async function probeServerTraefik(server: ServerAccess): Promise<RemoteProbe> {
     `V=$(/usr/local/bin/traefik version 2>/dev/null | awk '/Version:/{print $2; exit}')`,
     `A=$(systemctl is-active ocd-traefik 2>/dev/null || true)`,
     `sha() { sha256sum "$1" 2>/dev/null | cut -d" " -f1; }`,
-    `echo "$V|$A|$(sha ${TRAEFIK_STATIC_CONFIG_PATH})|$(sha ${TRAEFIK_UNIT_PATH})|$(sha ${TRAEFIK_DYNAMIC_CONFIG_PATH})|$(sha ${TRAEFIK_PANEL_CONFIG_PATH})|$(sha ${TRAEFIK_ENV_PATH})"`,
+    `echo "$V|$A|$(sha ${TRAEFIK_STATIC_CONFIG_PATH})|$(sha ${TRAEFIK_UNIT_PATH})|$(sha ${TRAEFIK_DYNAMIC_CONFIG_PATH})|$(sha ${TRAEFIK_PANEL_CONFIG_PATH})|$(sha ${TRAEFIK_ENV_PATH})|$(sha ${TRAEFIK_LOGROTATE_PATH})"`,
   ].join("\n");
   const result = await sshExec(server.ipv4, cmd, server.hostKey);
   if (result.exitCode !== 0) {
     throw new Error(`probe failed on ${server.name}: ${result.stderr || result.stdout}`);
   }
   const line = result.stdout.trim().split("\n").pop() ?? "";
-  const [version = "", active = "", staticSha = "", unitSha = "", dynamicSha = "", panelSha = "", envSha = ""] =
+  const [version = "", active = "", staticSha = "", unitSha = "", dynamicSha = "", panelSha = "", envSha = "", logrotateSha = ""] =
     line.split("|");
-  return { version, active, staticSha, unitSha, dynamicSha, panelSha, envSha };
+  return { version, active, staticSha, unitSha, dynamicSha, panelSha, envSha, logrotateSha };
 }
 
 /** Desired content of the panel server's ${TRAEFIK_ENV_PATH}: the Hetzner
@@ -356,6 +360,16 @@ export async function convergeServerTraefik(
   const probe = await probeServerTraefik(server);
   const panel = getPanelAccess();
   const isPanel = panel !== null && panel.ipv4 === server.ipv4;
+
+  // Log retention is independent of the Traefik binary/unit. Older hosts can
+  // have a healthy current binary but no logrotate file because the policy was
+  // added later; converge it directly and without a service restart.
+  await convergeRemoteFile(
+    server,
+    TRAEFIK_LOGROTATE_PATH,
+    traefikLogrotateConfig(),
+    probe.logrotateSha,
+  );
 
   // The ACME env file (HETZNER_API_KEY for the letsencrypt-dns resolver) is
   // converged on the panel server ONLY — the sole server with public routers
@@ -459,10 +473,17 @@ async function teardownWorkerTraefik(server: ServerAccess): Promise<void> {
 export async function reconcileWorkerTeardown(): Promise<void> {
   await Promise.all(
     getReadyNonPanelServers().map(async (server) => {
+      const serverId = db.getServers().find((row) => row.ipv4 === server.ipv4)?.id;
+      if (serverId === undefined) return;
+      const keys = [`server:${serverId}`];
+      const lock = tryAcquire(keys, NON_OP_HOLDER, "reconcile:worker-traefik");
+      if (!lock.ok) return;
       try {
         await teardownWorkerTraefik(server);
       } catch (err) {
         log("reconcile", `traefik teardown failed on ${server.name}: ${err}`);
+      } finally {
+        release(keys);
       }
     }),
   );

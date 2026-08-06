@@ -11,28 +11,39 @@ async function githubApi(
 ): Promise<Record<string, unknown> | null> {
   const method = options.method || "GET";
   log("api", `${method} ${path}`);
-  const res = await fetch(`https://api.github.com${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...options.headers,
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    log("api", `${method} ${path} FAILED ${res.status}: ${body}`);
-    const friendly = res.status === 401 ? "GitHub token is invalid or expired — update it in Settings"
-      : res.status === 403 ? "GitHub access denied — check your token has the required scopes"
-      : res.status === 404 ? "GitHub repository or resource not found — check the URL and token permissions"
-      : res.status === 422 ? "GitHub rejected the request — the resource may already exist"
-      : res.status >= 500 ? "GitHub is experiencing issues — try again shortly"
-      : `GitHub error (HTTP ${res.status})`;
-    throw new Error(friendly);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  const abort = () => controller.abort();
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) controller.abort();
+  try {
+    const res = await fetch(`https://api.github.com${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...options.headers,
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      log("api", `${method} ${path} FAILED ${res.status}: ${body}`);
+      const friendly = res.status === 401 ? "GitHub token is invalid or expired — update it in Settings"
+        : res.status === 403 ? "GitHub access denied — check your token has the required scopes"
+        : res.status === 404 ? "GitHub repository or resource not found — check the URL and token permissions"
+        : res.status === 422 ? "GitHub rejected the request — the resource may already exist"
+        : res.status >= 500 ? "GitHub is experiencing issues — try again shortly"
+        : `GitHub error (HTTP ${res.status})`;
+      throw new Error(friendly);
+    }
+    if (res.status === 204) return null;
+    return await res.json();
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abort);
   }
-  if (res.status === 204) return null;
-  return res.json();
 }
 
 export function parseGitHubRepo(url: string): { owner: string; repo: string; ref?: string } {
@@ -129,6 +140,41 @@ export async function deleteWebhook(opts: {
     { method: "DELETE" }
   );
   log("webhook", `Webhook ${opts.webhookId} deleted`);
+}
+
+export type GitHubWebhook = {
+  id: number;
+  active: boolean;
+  config: { url?: string; content_type?: string; insecure_ssl?: string };
+};
+
+export async function listWebhooks(opts: { gitRepo: string; token: string }): Promise<GitHubWebhook[]> {
+  const { owner, repo } = parseGitHubRepo(opts.gitRepo);
+  const data = await githubApi(`/repos/${owner}/${repo}/hooks?per_page=100`, opts.token);
+  return Array.isArray(data) ? data as unknown as GitHubWebhook[] : [];
+}
+
+export async function updateWebhookAtUrl(opts: {
+  gitRepo: string;
+  webhookId: string;
+  url: string;
+  webhookSecret: string;
+  token: string;
+}): Promise<void> {
+  const { owner, repo } = parseGitHubRepo(opts.gitRepo);
+  await githubApi(`/repos/${owner}/${repo}/hooks/${opts.webhookId}`, opts.token, {
+    method: "PATCH",
+    body: JSON.stringify({
+      active: true,
+      events: ["push"],
+      config: {
+        url: opts.url,
+        content_type: "json",
+        secret: opts.webhookSecret,
+        insecure_ssl: "0",
+      },
+    }),
+  });
 }
 
 // ── Commit CI status ──

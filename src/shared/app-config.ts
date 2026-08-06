@@ -4,8 +4,6 @@ import type { DeployRequest } from "./rpc.ts";
 import { parseEnvVars, processIncomingEnvVars, serializeEnvVars } from "./env-crypto.ts";
 import { resolveDurability } from "./durability.ts";
 import { validateDeployRequest } from "./validate.ts";
-import * as github from "./github.ts";
-import { resolveGitHubToken } from "./github-token.ts";
 
 export type AppConfigChange = {
   field: string;
@@ -387,49 +385,33 @@ async function applyEnvironment(app: AppRow, req: DeployRequest): Promise<void> 
 async function applyWebhook(
   app: AppRow,
   req: DeployRequest,
-  userId?: string,
+  _userId?: string,
   log: (line: string) => void = () => {},
 ): Promise<void> {
   const desired = normalizedSpec(req);
-  const token = (await resolveGitHubToken(userId)) || undefined;
   if (!desired.webhook_enabled) {
-    if (app.github_webhook_id && token) {
-      try {
-        await github.deleteWebhook({
-          gitRepo: app.git_repo,
-          webhookId: app.github_webhook_id,
-          token,
-        });
-      } catch (err) {
-        log(`warning: could not remove GitHub webhook ${app.github_webhook_id}: ${err}`);
-      }
-    }
-    db.updateAppWebhook(app.id, false, "", desired.webhook_branch, "", desired.webhook_path, desired.webhook_wait_for_ci);
+    // Preserve the remote id until the webhook reconciler confirms deletion;
+    // clearing it here would turn a transient GitHub failure into an orphan.
+    db.updateAppWebhook(
+      app.id,
+      false,
+      app.webhook_secret,
+      desired.webhook_branch,
+      app.github_webhook_id,
+      desired.webhook_path,
+      desired.webhook_wait_for_ci,
+    );
     db.updateAppWebhookStagingEnvironment(app.id, null);
     return;
   }
 
-  let secret = app.webhook_secret;
-  let webhookId = app.github_webhook_id;
-  if (!webhookId) {
-    if (!token) throw new Error("A linked GitHub account is required to enable the manifest webhook");
-    const panel = db.getPanel();
-    if (!panel?.domain) throw new Error("Panel domain is not set; cannot register webhook URL");
-    secret = crypto.randomUUID();
-    const created = await github.createWebhookAtUrl({
-      gitRepo: req.git_repo,
-      url: `https://${panel.domain}/webhooks/github/${app.id}`,
-      webhookSecret: secret,
-      token,
-    });
-    webhookId = String(created.id);
-  }
+  const secret = app.webhook_secret || crypto.randomUUID();
   db.updateAppWebhook(
     app.id,
     true,
     secret,
     desired.webhook_branch,
-    webhookId,
+    app.github_webhook_id,
     desired.webhook_path,
     desired.webhook_wait_for_ci,
   );
@@ -453,6 +435,7 @@ async function applyWebhook(
   if (!req.webhook_staging && req.webhook_staging_environment_id === undefined) stagingId = null;
   if (stagingId != null && !db.getEnvironment(stagingId)) throw new Error("Staging environment not found");
   db.updateAppWebhookStagingEnvironment(app.id, stagingId ?? null);
+  log("webhook desired state recorded; provider reconciliation is asynchronous");
 }
 
 /** Apply a complete normalized desired spec to an existing app. It never

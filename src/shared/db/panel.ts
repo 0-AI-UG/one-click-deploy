@@ -22,6 +22,8 @@ export type PanelRow = {
   webhook_secret: string;
   webhook_enabled: number;
   github_webhook_id: string;
+  webhook_owner_user_id: string;
+  github_webhook_repo: string;
 };
 
 export type PanelDeploymentRow = {
@@ -92,10 +94,31 @@ export function updatePanelWebhook(
   enabled: boolean,
   secret: string,
   githubWebhookId: string,
+  ownerUserId?: string,
 ): void {
   db.query(
-    "UPDATE panel SET webhook_enabled = ?, webhook_secret = ?, github_webhook_id = ? WHERE id = 1",
-  ).run(enabled ? 1 : 0, secret, githubWebhookId);
+    `UPDATE panel SET webhook_enabled = ?, webhook_secret = ?, github_webhook_id = ?,
+       webhook_owner_user_id = COALESCE(?, webhook_owner_user_id) WHERE id = 1`,
+  ).run(enabled ? 1 : 0, secret, githubWebhookId, ownerUserId ?? null);
+}
+
+export function updatePanelWebhookProviderIdentity(repo: string, webhookId?: string): void {
+  if (webhookId === undefined) {
+    db.query("UPDATE panel SET github_webhook_repo = ? WHERE id = 1").run(repo);
+  } else {
+    db.query(
+      "UPDATE panel SET github_webhook_repo = ?, github_webhook_id = ? WHERE id = 1",
+    ).run(repo, webhookId);
+  }
+}
+
+/** Clear provider identity only after the reconciler confirmed remote absence. */
+export function finalizePanelWebhookDisabled(): void {
+  db.query(
+    `UPDATE panel SET webhook_secret = '', github_webhook_id = '',
+       github_webhook_repo = '', webhook_owner_user_id = ''
+     WHERE id = 1 AND webhook_enabled = 0`,
+  ).run();
 }
 
 export function updatePanelDnsRecord(rec: {
@@ -107,6 +130,12 @@ export function updatePanelDnsRecord(rec: {
   db.query(
     "UPDATE panel SET dns_zone_id = ?, dns_name = ?, dns_type = ?, dns_value = ? WHERE id = 1",
   ).run(rec.zone_id, rec.name, rec.type, rec.value);
+}
+
+export function clearPanelDnsRecord(): void {
+  db.query(
+    "UPDATE panel SET dns_zone_id = '', dns_name = '', dns_type = '', dns_value = '' WHERE id = 1",
+  ).run();
 }
 
 export function deletePanel(): void {

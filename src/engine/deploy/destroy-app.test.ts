@@ -43,6 +43,8 @@ mock.module("../../shared/github.ts", () => ({
 
 import * as db from "../../shared/db.ts";
 import { destroyApp } from "./lifecycle.ts";
+import { destroyServiceCore } from "./service-lifecycle.ts";
+import { listChildOperations, markOperationFinished } from "../../shared/db/operations.ts";
 import destroyServerOp from "../ops/destroy-server.ts";
 
 // destroyServer() (the imperative lifecycle helper) was removed; the destroy
@@ -67,7 +69,22 @@ async function destroyServer(serverId: number): Promise<{ ok: boolean; error?: s
   const prior: Record<string, unknown> = {};
   try {
     for (const step of destroyServerOp.steps) {
-      prior[step.name] = await step.run(ctx, prior);
+      const running = step.run(ctx, prior);
+      if (step.name === "destroy_apps_on_server" || step.name === "destroy_services_on_server") {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        for (const child of listChildOperations(ctx.opId).filter((op) => op.status === "pending")) {
+          const input = JSON.parse(child.input_json) as { appId?: number; serviceId?: number };
+          const result = child.kind === "destroy_app"
+            ? await destroyApp(input.appId!)
+            : await destroyServiceCore(input.serviceId!);
+          markOperationFinished(
+            child.id,
+            result.ok ? "done" : "failed",
+            result.ok ? undefined : { message: result.error || "child destroy failed" },
+          );
+        }
+      }
+      prior[step.name] = await running;
     }
     return { ok: true };
   } catch (err) {
@@ -174,14 +191,16 @@ describe("destroyApp: happy path", () => {
     expect(deleteGithubWebhook.mock.calls[0][0]).toMatchObject({ webhookId: "123" });
   });
 
-  test("skips GitHub webhook call when no PAT is available", async () => {
+  test("retains deletion state when no PAT is available rather than orphaning the webhook", async () => {
     const server = freshServer();
     const app = freshApp();
     attachReplica(app.id, server.id, app.name);
     db.updateAppWebhook(app.id, true, "wh", "main", "456");
     getGitHubPat.mockImplementationOnce(async () => null);
-    await destroyApp(app.id);
+    const result = await destroyApp(app.id);
     expect(deleteGithubWebhook).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(db.getApp(app.id)?.deletion_requested_at).toBeTruthy();
   });
 });
 
@@ -291,17 +310,14 @@ describe("destroyApp: multi-server GC", () => {
     attachReplica(app.id, s1.id, app.name);
     attachReplica(app.id, s2.id, `${app.name}-r2`);
 
-    // Spy on gcServerIfEmpty indirectly: after destroy, the (now-empty)
-    // servers should be deleted because no replicas remain and they are not
-    // the panel.
+    // gcServerIfEmpty records durable intent; the infrastructure controller
+    // performs provider deletion in a separate retryable pass.
     db.deletePanel();
     await destroyApp(app.id);
 
-    // Both servers gone, because each became empty and the mocked provider's
-    // deleteServer succeeds.
-    expect(db.getServer(s1.id)).toBeFalsy();
-    expect(db.getServer(s2.id)).toBeFalsy();
-    expect(compute._mocks.deleteServer).toHaveBeenCalledTimes(2);
+    expect(db.getServer(s1.id)?.gc_requested_at).toBeTruthy();
+    expect(db.getServer(s2.id)?.gc_requested_at).toBeTruthy();
+    expect(compute._mocks.deleteServer).not.toHaveBeenCalled();
   });
 
   test("does NOT delete the panel's own server, even when it becomes empty", async () => {

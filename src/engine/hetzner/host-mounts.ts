@@ -88,9 +88,11 @@ export async function ensureVolumeBindMount(opts: EnsureOpts): Promise<void> {
   //    race the caller can't otherwise recover from.
   const deadline = Date.now() + MOUNT_WAIT_MS;
   let attempts = 0;
+  let hcSource = "";
   for (;;) {
     const probe = await exec(serverIp, hostKey, `findmnt -no SOURCE ${hc} || true`);
-    if (probe.stdout.trim()) break;
+    hcSource = probe.stdout.trim();
+    if (hcSource) break;
     if (Date.now() >= deadline) {
       throw new Error(
         `Hetzner volume not mounted at ${hc} on ${serverIp} after ${MOUNT_WAIT_MS / 1000}s ` +
@@ -119,14 +121,41 @@ export async function ensureVolumeBindMount(opts: EnsureOpts): Promise<void> {
   // we're done with the runtime mount.
   const current = await exec(serverIp, hostKey, `findmnt -no SOURCE ${hostMountPath} || true`);
   const currentSrc = current.stdout.trim();
-  const alreadyBound = currentSrc.length > 0 && (currentSrc === hc || currentSrc.startsWith(`${hc}[`));
+  // findmnt normally resolves both sides of a bind to the backing block
+  // device (for example /dev/sdc), not to the friendly HC mount path. Compare
+  // both resolved sources; retain the path comparison for test doubles and
+  // distributions that report the bind origin instead.
+  const alreadyBound = currentSrc.length > 0 && (
+    currentSrc === hcSource || currentSrc === hc || currentSrc.startsWith(`${hc}[`)
+  );
   if (alreadyBound) {
     log(`bind already in place: ${hostMountPath} -> ${hc}`);
   } else {
     if (currentSrc.length > 0) {
-      // Different device mounted there — log it and proceed; mount --bind will
-      // stack on top, which is what we want.
-      log(`warning: ${hostMountPath} already has source ${currentSrc}; stacking bind from ${hc}`);
+      // Never stack a desired volume on top of another live mount. Doing so
+      // hides the existing data and makes the next container restart appear
+      // to have lost its state. An operator must reconcile the two sources
+      // explicitly.
+      throw new Error(
+        `Refusing to bind ${hc} over ${hostMountPath}: target is already mounted from ${currentSrc}`,
+      );
+    }
+
+    // Historical OCD releases created the friendly /mnt/ocd-*-data directory
+    // without binding the attached Hetzner device onto it. Docker then wrote
+    // live data to the root filesystem. A blind mount here would hide that
+    // data behind an empty volume. Fail closed and let a migration-aware path
+    // stop the workload, rsync + verify the data, and only then install the
+    // bind. Fresh deploy targets are empty and continue automatically.
+    const legacyProbe = await exec(
+      serverIp,
+      hostKey,
+      `find ${hostMountPath} -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null`,
+    );
+    if (legacyProbe.stdout.trim()) {
+      throw new Error(
+        `Legacy data migration required before binding ${hc} over non-empty ${hostMountPath}`,
+      );
     }
     const bind = await exec(serverIp, hostKey, `mount --bind ${hc} ${hostMountPath}`);
     if (bind.exitCode !== 0) {
@@ -211,12 +240,15 @@ export type StatusOpts = {
   serverIp: string;
   hostKey?: string;
   hostMountPath: string;
+  expectedVolumeId?: string | number;
+  blockName?: string;
 };
 
 export type BindStatus = {
   mounted: boolean;
   sourceDevice: string | null;
   fstabPresent: boolean;
+  matchesExpectedVolume: boolean | null;
 };
 
 /**
@@ -229,12 +261,24 @@ export async function bindMountStatus(opts: StatusOpts): Promise<BindStatus> {
   const mountProbe = await exec(serverIp, hostKey, `findmnt -no SOURCE ${hostMountPath} 2>/dev/null || true`);
   const sourceDevice = mountProbe.stdout.trim() || null;
 
-  const fstabProbe = await exec(serverIp, hostKey, `grep -q "# BEGIN ocd-bind" /etc/fstab && echo yes || echo no`);
+  const marker = opts.blockName ? `# BEGIN ocd-bind ${opts.blockName}` : "# BEGIN ocd-bind";
+  const fstabProbe = await exec(serverIp, hostKey, `grep -q ${JSON.stringify(marker)} /etc/fstab && echo yes || echo no`);
   const fstabPresent = fstabProbe.stdout.trim() === "yes";
+
+  let matchesExpectedVolume: boolean | null = null;
+  if (opts.expectedVolumeId !== undefined) {
+    const hc = hetznerMountPath(opts.expectedVolumeId);
+    const expectedProbe = await exec(serverIp, hostKey, `findmnt -no SOURCE ${hc} 2>/dev/null || true`);
+    const expectedSource = expectedProbe.stdout.trim();
+    matchesExpectedVolume = !!sourceDevice && !!expectedSource && (
+      sourceDevice === expectedSource || sourceDevice === hc || sourceDevice.startsWith(`${hc}[`)
+    );
+  }
 
   return {
     mounted: sourceDevice !== null,
     sourceDevice,
     fstabPresent,
+    matchesExpectedVolume,
   };
 }

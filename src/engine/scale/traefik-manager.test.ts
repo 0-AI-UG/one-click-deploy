@@ -33,6 +33,7 @@ import {
 import {
   traefikStaticConfig,
   traefikSystemdUnit,
+  traefikLogrotateConfig,
 } from "./traefik-provision.ts";
 import {
   TRAEFIK_ENV_PATH,
@@ -168,7 +169,7 @@ describe("convergeServerTraefik ACME env file convergence", () => {
             : "";
         const staticSha = remoteSha(traefikStaticConfig());
         const unitSha = remoteSha(traefikSystemdUnit());
-        const line = `${TRAEFIK_VERSION}|active|${staticSha}|${unitSha}|${dynSha}|${panelSha}|${envShaByHost[host] ?? ""}`;
+        const line = `${TRAEFIK_VERSION}|active|${staticSha}|${unitSha}|${dynSha}|${panelSha}|${envShaByHost[host] ?? ""}|${remoteSha(traefikLogrotateConfig())}`;
         return { exitCode: 0, stdout: line, stderr: "" };
       }
       return { exitCode: 0, stdout: "", stderr: "" };

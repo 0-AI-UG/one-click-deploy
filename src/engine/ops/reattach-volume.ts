@@ -218,7 +218,11 @@ const attachToTarget: Step<ReattachVolumeInput, { ok: true }> = {
 const reattachVolumeOp: OpKindDefinition<ReattachVolumeInput> = {
   kind: "reattach_volume",
   label: "Reattach volume",
-  resourceKeys: (input) => [`app:${input.fromAppId}`, `app:${input.toAppId}`],
+  resourceKeys: (input) => [
+    `app:${input.fromAppId}`,
+    `app:${input.toAppId}`,
+    `volume:${input.volumeId}`,
+  ],
   steps: [validate, detachFromSource, attachToTarget],
 };
 

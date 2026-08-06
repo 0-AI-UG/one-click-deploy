@@ -32,6 +32,8 @@ export function withExclusiveImageGc(command: string, waitSeconds = 60): string 
 export const DEFAULT_MEM_MB = 512;
 export const DEFAULT_CPUS = 1;
 export const DEFAULT_PIDS = 512;
+export const DEFAULT_LOG_MAX_SIZE = "20m";
+export const DEFAULT_LOG_MAX_FILES = 3;
 
 export type DockerRunVolume = { host: string; container: string };
 
@@ -102,6 +104,8 @@ export function buildDockerRunArgs(opts: DockerRunOpts): string {
     "docker run -d",
     `--name ${opts.name}`,
     `--restart ${restart}`,
+    `--log-opt max-size=${DEFAULT_LOG_MAX_SIZE}`,
+    `--log-opt max-file=${DEFAULT_LOG_MAX_FILES}`,
   ];
   if (network) parts.push(`--network ${network}`);
   for (const [key, value] of Object.entries(opts.labels ?? {})) {

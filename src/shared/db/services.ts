@@ -13,6 +13,7 @@ export type ServiceRow = {
   credentials: string;
   desired_instances: number;
   stack_id: number | null;
+  deletion_requested_at: string | null;
   created_at: string;
 };
 
@@ -82,6 +83,10 @@ export function updateServiceStatus(id: number, status: string): void {
   db.query("UPDATE services SET status = ? WHERE id = ?").run(status, id);
 }
 
+export function markServiceDeletionRequested(id: number): void {
+  db.query("UPDATE services SET deletion_requested_at = COALESCE(deletion_requested_at, datetime('now')) WHERE id = ?").run(id);
+}
+
 export function updateServiceCredentials(id: number, credentials: string): void {
   db.query("UPDATE services SET credentials = ? WHERE id = ?").run(credentials, id);
 }
@@ -144,6 +149,10 @@ export function getServiceInstancesByServer(serverId: number): ServiceInstanceRo
 
 export function updateServiceInstanceStatus(id: number, status: string): void {
   health.updateStatus("service_instances", id, status);
+}
+
+export function updateServiceInstancePlacement(id: number, serverId: number, hostPort: number): void {
+  db.query("UPDATE service_instances SET server_id = ?, host_port = ? WHERE id = ?").run(serverId, hostPort, id);
 }
 
 export function updateServiceInstanceMetrics(

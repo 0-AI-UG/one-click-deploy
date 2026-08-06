@@ -14,7 +14,7 @@ export async function createDnsRecord(opts: {
   type: string;
   value: string;
   ttl?: number;
-}): Promise<{ id: string; name: string; type: string; value: string }> {
+}, api: typeof hetznerApi = hetznerApi): Promise<{ id: string; name: string; type: string; value: string }> {
   const body: { name: string; type: string; records: Array<{ value: string }>; ttl?: number } = {
     name: opts.name,
     type: opts.type,
@@ -22,24 +22,33 @@ export async function createDnsRecord(opts: {
   };
   if (opts.ttl != null) body.ttl = opts.ttl;
 
-  // Idempotency: if the rrset already contains an exact (value) match, no-op.
+  // Idempotency requires the complete RRSet to match. Merely containing the
+  // desired value is not convergence: an extra stale value still round-robins
+  // traffic to the wrong host.
+  let rrsetExists = false;
   try {
-    const existing = await hetznerApi(rrsetPath(opts.zone_id, opts.name, opts.type)) as { rrset?: { records?: Array<{ value: string }> } };
+    const existing = await api(rrsetPath(opts.zone_id, opts.name, opts.type)) as { rrset?: { records?: Array<{ value: string }> } };
     const records = existing?.rrset?.records ?? [];
-    if (records.some((r) => r.value === opts.value)) {
+    if (records.length === 1 && records[0]?.value === opts.value) {
       return { id: `${opts.name}/${opts.type}/${opts.value}`, name: opts.name, type: opts.type, value: opts.value };
     }
-  } catch {
-    // rrset doesn't exist yet — fall through to create.
+    rrsetExists = true;
+  } catch (error) {
+    // Only absence permits a create. A timeout/auth/provider failure must not
+    // be reinterpreted as absence and followed by a destructive replacement.
+    if (!/not found/i.test(error instanceof Error ? error.message : String(error))) throw error;
   }
 
   const postRrset = () =>
-    hetznerApi(`/zones/${encodeURIComponent(opts.zone_id)}/rrsets`, {
+    api(`/zones/${encodeURIComponent(opts.zone_id)}/rrsets`, {
       method: "POST",
       body: JSON.stringify(body),
     });
 
-  try {
+  if (rrsetExists) {
+    await api(rrsetPath(opts.zone_id, opts.name, opts.type), { method: "DELETE" });
+    await postRrset();
+  } else try {
     await postRrset();
   } catch (err: unknown) {
     // RRSet already exists. For OCD's use case an app "owns" its (name,type)
@@ -49,9 +58,7 @@ export async function createDnsRecord(opts: {
     // which broke Let's Encrypt validation and served the wrong backend.
     const msg = err instanceof Error ? err.message : String(err);
     if (/already exists|uniqueness|conflict/i.test(msg)) {
-      await hetznerApi(rrsetPath(opts.zone_id, opts.name, opts.type), {
-        method: "DELETE",
-      }).catch(() => { /* ignore if the record vanished between calls */ });
+      await api(rrsetPath(opts.zone_id, opts.name, opts.type), { method: "DELETE" });
       await postRrset();
     } else {
       throw err;

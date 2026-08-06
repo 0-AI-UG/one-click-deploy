@@ -16,7 +16,6 @@ import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
-import { reconcileAppDns } from "../dns-reconciler.ts";
 
 type RedeployInput = {
   appId: number;
@@ -328,7 +327,6 @@ const syncIngressStep: Step<RedeployInput, { ok: true }> = {
   name: "sync_ingress",
   label: "Configure ingress",
   async run(ctx) {
-    await reconcileAppDns(ctx.input.appId);
     await syncAppIngress(ctx.input.appId);
     return { ok: true };
   },
@@ -409,6 +407,7 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
       config_revision: app.config_revision ?? 1,
       source: ctx.trigger === "ui" ? "manual" : ctx.trigger,
     });
+    db.clearAppRolloutRequest(ctx.input.appId, app.config_revision);
     db.appendDeployLog(ctx.input.appId, `[done] Redeployed successfully`);
     return { deploymentId: row.id, gitCommit };
   },

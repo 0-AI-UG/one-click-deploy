@@ -115,6 +115,10 @@ export type AppRow = {
   last_manifest_hash: string | null;
   last_manifest_applied_at: string | null;
   last_manifest_config_revision: number | null;
+  rollout_requested_revision: number;
+  rollout_requested_after_deployment_id: number;
+  deletion_requested_at: string | null;
+  github_webhook_repo: string;
 };
 
 /** Internal ingress port block: every app owns one port in
@@ -449,35 +453,63 @@ export function hasAnyReplicas(serverId: number): boolean {
 }
 
 export async function gcServerIfEmpty(serverId: number): Promise<void> {
-  // A server is gc-eligible iff it has *zero* replica rows. Stopped replicas
-  // (light-sleep anchors) count as "present" — those servers stay
-  // materialized so the next wake is a `docker start` away.
-  if (hasAnyReplicas(serverId)) return;
-  if (getApps(serverId).length > 0) return;
+  // This function records intent only. Provider deletion is owned by the
+  // infrastructure reconciler so a transient provider error never makes the
+  // DB forget a still-live server. Stopped replicas count as present because
+  // they anchor the light-sleep fast wake path.
+  const { clearServerGcRequest, requestServerGc } = await import("./servers.ts");
+  if (hasAnyReplicas(serverId)) {
+    clearServerGcRequest(serverId);
+    return;
+  }
+  const { getServiceInstancesByServer } = await import("./services.ts");
+  if (getServiceInstancesByServer(serverId).length > 0) {
+    clearServerGcRequest(serverId);
+    return;
+  }
   const { getPanel } = await import("./panel.ts");
-  if (getPanel()?.server_id === serverId) return;
+  if (getPanel()?.server_id === serverId) {
+    clearServerGcRequest(serverId);
+    return;
+  }
   const sleepingRow = db.query("SELECT COUNT(*) as c FROM apps WHERE sleeping_server_id = ?").get(serverId) as { c: number } | null;
   const sleepingCount = sleepingRow?.c ?? 0;
-  if (sleepingCount > 0) return;
-  const { getServer, deleteServer } = await import("./servers.ts");
-  const server = getServer(serverId);
-  if (!server) return;
-  const { hetzner } = await import("../providers/index.ts");
-  if (server.provider_id) {
-    try {
-      await hetzner.deleteServer(server.provider_id);
-    } catch (err) {
-      console.error(
-        `[db:gcServerIfEmpty] failed to delete server ${server.provider_id}:`,
-        err,
-      );
-    }
+  if (sleepingCount > 0) {
+    clearServerGcRequest(serverId);
+    return;
   }
-  deleteServer(serverId);
+  requestServerGc(serverId);
 }
 
 export function updateAppStatus(id: number, status: string): void {
   db.query("UPDATE apps SET status = ? WHERE id = ?").run(status, id);
+}
+
+export function requestAppRollout(id: number, revision?: number): void {
+  db.query(
+    `UPDATE apps SET
+       rollout_requested_revision = COALESCE(?, config_revision),
+       rollout_requested_after_deployment_id = COALESCE(
+         (SELECT MAX(id) FROM deployment_history WHERE app_id = apps.id),
+         0
+       )
+     WHERE id = ?`,
+  ).run(revision ?? null, id);
+}
+
+export function clearAppRolloutRequest(id: number, throughRevision: number): void {
+  db.query(
+    `UPDATE apps SET
+       rollout_requested_revision = 0,
+       rollout_requested_after_deployment_id = 0
+     WHERE id = ? AND rollout_requested_revision <= ?`,
+  ).run(id, throughRevision);
+}
+
+export function markAppDeletionRequested(id: number): void {
+  db.query(
+    "UPDATE apps SET deletion_requested_at = COALESCE(deletion_requested_at, datetime('now')), status = 'destroying' WHERE id = ?",
+  ).run(id);
 }
 
 export function updateAppPublicEndpointStatus(id: number, status: string, error = ""): void {
@@ -739,6 +771,19 @@ export function updateAppWebhook(
   db.query(
     "UPDATE apps SET webhook_enabled = ?, webhook_secret = ?, webhook_branch = ?, webhook_path = ?, github_webhook_id = ?, webhook_wait_for_ci = ?, webhook_staging = ? WHERE id = ?"
   ).run(enabled ? 1 : 0, secret, branch, path, githubWebhookId, waitForCi ? 1 : 0, staging ? 1 : 0, id);
+}
+
+/** Persist the repository before touching GitHub so a crash between remote
+ * creation and id persistence still leaves enough ownership information for
+ * the next pass to find and converge the hook. */
+export function updateAppWebhookProviderIdentity(id: number, repo: string, webhookId?: string): void {
+  if (webhookId === undefined) {
+    db.query("UPDATE apps SET github_webhook_repo = ? WHERE id = ?").run(repo, id);
+  } else {
+    db.query(
+      "UPDATE apps SET github_webhook_repo = ?, github_webhook_id = ? WHERE id = ?",
+    ).run(repo, webhookId, id);
+  }
 }
 
 export function updateAppWebhookWaitForCi(id: number, waitForCi: boolean): void {

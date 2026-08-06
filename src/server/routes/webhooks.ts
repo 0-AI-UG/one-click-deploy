@@ -2,7 +2,6 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
-import * as github from "../../shared/github.ts";
 import { redeployPanel } from "../../engine/deploy/panel.ts";
 import { isStackDestructionActiveForApp } from "../lib/stack-operations.ts";
 import { enqueue } from "../ipc/enqueue.ts";
@@ -264,31 +263,8 @@ export async function handleEnablePanelWebhook(request: Request): Promise<Respon
     if (!panel) {
       return Response.json({ ok: false, error: "Panel is not configured" }, { headers: corsHeaders });
     }
-    if (!panel.domain) {
-      return Response.json(
-        { ok: false, error: "Panel domain is not set. Set the panel's public domain before enabling the webhook." },
-        { status: 400, headers: corsHeaders },
-      );
-    }
-
-    const pat = await github.getGitHubPat(payload.userId);
-    if (!pat) {
-      return Response.json(
-        { ok: false, error: "No GitHub token available. Link your GitHub account first." },
-        { headers: corsHeaders },
-      );
-    }
-
-    const webhookSecret = crypto.randomUUID();
-    const url = `https://${panel.domain}/webhooks/github/panel`;
-    const created = await github.createWebhookAtUrl({
-      gitRepo: panel.git_repo,
-      url,
-      webhookSecret,
-      token: pat,
-    });
-
-    db.updatePanelWebhook(true, webhookSecret, String(created.id));
+    const webhookSecret = panel.webhook_secret || crypto.randomUUID();
+    db.updatePanelWebhook(true, webhookSecret, panel.github_webhook_id, payload.userId);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {
@@ -305,22 +281,8 @@ export async function handleDisablePanelWebhook(request: Request): Promise<Respo
       return Response.json({ ok: false, error: "Panel is not configured" }, { headers: corsHeaders });
     }
 
-    if (panel.github_webhook_id) {
-      const pat = await github.getGitHubPat(payload.userId);
-      if (pat) {
-        try {
-          await github.deleteWebhook({
-            gitRepo: panel.git_repo,
-            webhookId: panel.github_webhook_id,
-            token: pat,
-          });
-        } catch (e) {
-          console.error("webhooks: failed to delete GitHub webhook for panel:", e);
-        }
-      }
-    }
-
-    db.updatePanelWebhook(false, "", "");
+    // Preserve provider id/owner until the reconciler confirms remote absence.
+    db.updatePanelWebhook(false, panel.webhook_secret, panel.github_webhook_id, payload.userId);
 
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {

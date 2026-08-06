@@ -139,6 +139,20 @@ WantedBy=multi-user.target
 `;
 }
 
+/** Bounded retention for Traefik's host-level access log. Kept as a rendered
+ * artifact so reconciliation can repair a missing policy without reinstalling
+ * or restarting Traefik. */
+export function traefikLogrotateConfig(): string {
+  return `${TRAEFIK_ACCESS_LOG_PATH} {
+  daily
+  rotate 7
+  compress
+  missingok
+  notifempty
+  copytruncate
+}`;
+}
+
 /**
  * Idempotent bash script that installs the pinned Traefik release and brings
  * the `ocd-traefik` service up. Run on the PANEL only — by the panel bootstrap
@@ -165,14 +179,7 @@ fi
 mkdir -p ${TRAEFIK_DYNAMIC_DIR}
 mkdir -p ${TRAEFIK_ACCESS_LOG_PATH.substring(0, TRAEFIK_ACCESS_LOG_PATH.lastIndexOf("/"))}
 cat > ${TRAEFIK_LOGROTATE_PATH} <<'OCD_TRAEFIK_LOGROTATE'
-${TRAEFIK_ACCESS_LOG_PATH} {
-  daily
-  rotate 7
-  compress
-  missingok
-  notifempty
-  copytruncate
-}
+${traefikLogrotateConfig()}
 OCD_TRAEFIK_LOGROTATE
 cat > ${TRAEFIK_STATIC_CONFIG_PATH} <<'OCD_TRAEFIK_STATIC'
 ${traefikStaticConfig()}

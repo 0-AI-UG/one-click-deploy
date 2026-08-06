@@ -966,7 +966,10 @@ const reconcileRemovals: Step<DeployStackInput, { removed: number }> = {
       if (prev) { childIds.push(prev.id); continue; }
       const op = enqueueOperation({
         kind: "destroy_app",
-        resourceKeys: [`app:${app.id}`],
+        resourceKeys: [
+          `app:${app.id}`,
+          ...(app.volume_id ? [`volume:${app.volume_id}`] : []),
+        ],
         input: { appId: app.id },
         trigger: "stack",
         triggeredBy: ctx.triggeredBy,
@@ -983,7 +986,12 @@ const reconcileRemovals: Step<DeployStackInput, { removed: number }> = {
       if (prev) { childIds.push(prev.id); continue; }
       const op = enqueueOperation({
         kind: "destroy_service",
-        resourceKeys: [`service:${svc.id}`],
+        resourceKeys: [
+          `service:${svc.id}`,
+          ...db.getServiceInstances(svc.id)
+            .filter((instance) => !!instance.volume_id)
+            .map((instance) => `volume:${instance.volume_id}`),
+        ],
         input: { serviceId: svc.id },
         trigger: "stack",
         triggeredBy: ctx.triggeredBy,

@@ -7,6 +7,7 @@ import {
   deleteHetznerServer,
   listHetznerServers,
   ensureFirewall,
+  ensureFirewallAttached,
 } from "../../engine/hetzner/servers.ts";
 import {
   createVolume,
@@ -77,6 +78,10 @@ export const hetzner = {
   async ensureFirewall() {
     const id = await ensureFirewall();
     return String(id);
+  },
+
+  async ensureFirewallAttached(firewallId: string, serverId: string) {
+    await ensureFirewallAttached(firewallId, serverId);
   },
 
   async listServerTypes() {

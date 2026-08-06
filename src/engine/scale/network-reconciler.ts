@@ -1,7 +1,5 @@
 import * as db from "../../shared/db.ts";
-import { hetzner } from "../../shared/providers/index.ts";
 import { sshExec } from "../../shared/remote/index.ts";
-import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../scheduler.ts";
 import { wasProxyEverReady } from "./proxy-manager.ts";
 import { appHostsLine } from "./proxy-render.ts";
@@ -11,63 +9,11 @@ function log(context: string, ...args: unknown[]) {
 }
 
 /**
- * Reconciler pass that drags every server onto the shared private network
- * and keeps each server's /etc/hosts in sync with the `<app>.ocd.internal`
- * convention used by intra-app traffic. Each server runs its own
- * Traefik with internal entrypoints that reverse-proxy to the replica pool
- * over the private network, so app entries point at the server itself.
- *
- * Runs inside the main reconciler tick, after replica/health work. Completes
- * in a few provider calls per new server and skips fast when everything is
- * already up to date.
+ * Reconcile host-local name resolution. Provider network attachment and the
+ * authoritative private address are owned by infrastructure-reconciler; this
+ * controller only consumes ready server state and writes /etc/hosts.
  */
 export async function reconcileNetwork(): Promise<void> {
-  const compute = hetzner;
-  if (!compute.networks) return; // provider doesn't support private networking
-
-  let networkId: string;
-  try {
-    networkId = await ensureSharedNetwork();
-  } catch (err) {
-    log("ensure", `failed to ensure network: ${err}`);
-    return;
-  }
-  if (!networkId) return;
-
-  // Attach any server that isn't on the network yet.
-  const servers = db.getServers().filter((s) => s.provider_id);
-  for (const server of servers) {
-    if (server.private_ipv4) continue;
-    // Serialize the attach + private_ipv4 write against engine ops on this
-    // server (provision_server / destroy_server / migrate). Without the lock we
-    // could attach — or stamp a private IP onto — a server an op is concurrently
-    // tearing down. Non-blocking: skip a busy server and retry next tick.
-    const lock = tryAcquire([`server:${server.id}`], NON_OP_HOLDER, "net_attach");
-    if (!lock.ok) {
-      log("attach", `server ${server.name}: held by ${lock.heldBy.kind}#${lock.heldBy.opId} — skip`);
-      continue;
-    }
-    try {
-      log("attach", `Attaching server ${server.name} (${server.provider_id})`);
-      await compute.networks.attachServer(server.provider_id, networkId);
-      const privateIp = await compute.networks.getPrivateIpv4(server.provider_id, networkId);
-      if (privateIp) {
-        db.updateServer(server.id, { private_ipv4: privateIp });
-        log("attach", `Server ${server.name} private_ipv4=${privateIp}`);
-      } else {
-        log("attach", `Server ${server.name} attached but no private IPv4 yet`);
-      }
-    } catch (err) {
-      log("attach", `Failed to attach ${server.name}: ${err}`);
-    } finally {
-      release([`server:${server.id}`]);
-    }
-  }
-
-  // Sync /etc/hosts for `<app>.ocd.internal` on every server. Each server
-  // runs its own Traefik, so app entries point at the server itself;
-  // service entries still point at the service host's private IP. Best-
-  // effort — the next tick retries any server that's unreachable now.
   try {
     await syncInternalHosts();
   } catch (err) {
@@ -105,28 +51,38 @@ export async function syncInternalHosts(): Promise<void> {
   const apps = db.getApps();
   const serviceLines: string[] = [];
   for (const service of db.getServices()) {
+    if (service.status !== "running" || service.deletion_requested_at) continue;
     const instance = db.getServiceInstances(service.id)[0];
-    if (!instance) continue;
+    if (!instance || instance.status !== "running") continue;
     const host = db.getServer(instance.server_id);
-    if (!host || !host.private_ipv4) continue;
+    if (!host || host.status !== "ready" || !host.private_ipv4) continue;
     serviceLines.push(`${host.private_ipv4} ${service.name}.svc.ocd.internal`);
   }
 
-  const servers = db.getServers().filter((s) => s.ipv4);
-  for (const server of servers) {
-    const lines: string[] = [];
-    if (server.private_ipv4) {
-      const everReady = wasProxyEverReady(server.ipv4);
-      for (const app of apps) {
-        const line = appHostsLine(app, server.private_ipv4, everReady);
-        if (line) lines.push(line);
-      }
-    }
-    lines.push(...serviceLines);
+  const servers = db.getServers().filter((s) => s.ipv4 && s.status === "ready");
+  for (const snapshot of servers) {
+    const keys = [`server:${snapshot.id}`];
+    const lock = tryAcquire(keys, NON_OP_HOLDER, "reconcile:hosts");
+    if (!lock.ok) continue;
     try {
-      await writeHostsBlock(server.ipv4, lines.join("\n"), server.ssh_host_key || undefined);
-    } catch (err) {
-      log("hosts", `Failed to update /etc/hosts on ${server.name}: ${err}`);
+      const server = db.getServer(snapshot.id);
+      if (!server?.ipv4 || server.status !== "ready") continue;
+      const lines: string[] = [];
+      if (server.private_ipv4) {
+        const everReady = wasProxyEverReady(server.ipv4);
+        for (const app of apps) {
+          const line = appHostsLine(app, server.private_ipv4, everReady);
+          if (line) lines.push(line);
+        }
+      }
+      lines.push(...serviceLines);
+      try {
+        await writeHostsBlock(server.ipv4, lines.join("\n"), server.ssh_host_key || undefined);
+      } catch (err) {
+        log("hosts", `Failed to update /etc/hosts on ${server.name}: ${err}`);
+      }
+    } finally {
+      release(keys);
     }
   }
 }

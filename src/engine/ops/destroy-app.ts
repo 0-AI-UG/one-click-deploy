@@ -7,7 +7,8 @@ import {
 } from "../../shared/remote/index.ts";
 import { awaitChildren } from "./_children.ts";
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
-import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
+import { reconcileAppDns } from "../dns-reconciler.ts";
 import { registerOp } from "./registry.ts";
 import { softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -16,6 +17,15 @@ type DestroyInput = {
   appId: number;
   /** Failed-deploy cleanup may expire automatically after the recovery window. */
   retentionClass?: "user" | "provisional";
+};
+
+const markDeleting: Step<DestroyInput, { ok: true }> = {
+  name: "mark_deleting",
+  label: "Mark deletion intent",
+  async run(ctx) {
+    if (db.getApp(ctx.input.appId)) db.markAppDeletionRequested(ctx.input.appId);
+    return { ok: true };
+  },
 };
 
 /**
@@ -59,7 +69,10 @@ const destroyStagingSibling: Step<DestroyInput, { ok: boolean; childIds: number[
 
       childId = enqueueOperation({
         kind: "destroy_app",
-        resourceKeys: [`app:${sibling.id}`],
+        resourceKeys: [
+          `app:${sibling.id}`,
+          ...(sibling.volume_id ? [`volume:${sibling.volume_id}`] : []),
+        ],
         input: {
           appId: sibling.id,
           ...(ctx.input.retentionClass ? { retentionClass: ctx.input.retentionClass } : {}),
@@ -89,16 +102,22 @@ const removeGithubWebhook: Step<DestroyInput, { ok: boolean; error?: string }> =
   async run(ctx) {
     const app = db.getApp(ctx.input.appId);
     if (!app) return { ok: true };
-    if (!app.webhook_enabled || !app.github_webhook_id) return { ok: true };
+    if (!app.github_webhook_id) return { ok: true };
     const r = await softStep(ctx, "remove_github_webhook", async () => {
       const pat = await github.getGitHubPat(app.deployed_by || undefined);
-      if (!pat) return;
+      if (!pat) throw new Error("GitHub token unavailable; refusing to orphan the configured webhook");
       await github.deleteWebhook({
-        gitRepo: app.git_repo,
+        gitRepo: app.github_webhook_repo || app.git_repo,
         webhookId: app.github_webhook_id,
         token: pat,
       });
     });
+    if (r.ok) {
+      db.updateAppWebhook(
+        app.id, false, "", app.webhook_branch, "", app.webhook_path,
+        !!app.webhook_wait_for_ci, !!app.webhook_staging,
+      );
+    }
     return r.ok ? { ok: true } : { ok: false, error: r.error };
   },
 };
@@ -148,22 +167,10 @@ const deleteDnsRecords: Step<DestroyInput, { ok: boolean; failed: boolean }> = {
   name: "delete_dns_records",
   label: "Delete DNS records",
   async run(ctx) {
-    const records = db.getDnsRecords(ctx.input.appId);
-    if (records.length === 0) return { ok: true, failed: false };
-    const dns = hetznerDns;
-    let failed = false;
-    for (const record of records) {
-      const r = await softStep(ctx, `delete_dns ${record.name}/${record.type}`, async () => {
-        await dns.deleteRecord({
-          zoneId: record.zone_id,
-          name: record.name,
-          type: record.type,
-          value: record.value,
-        });
-      });
-      if (!r.ok) failed = true;
-    }
-    return { ok: !failed, failed };
+    const result = await softStep(ctx, "delete_dns_records", async () => {
+      await reconcileAppDns(ctx.input.appId, { alreadyLocked: true });
+    });
+    return { ok: result.ok, failed: !result.ok };
   },
 };
 
@@ -226,8 +233,12 @@ const gcEmptyServers = makeGcEmptyServersStep<DestroyInput>("stop_and_remove_con
 const destroyAppOp: OpKindDefinition<DestroyInput> = {
   kind: "destroy_app",
   label: "Destroy app",
-  resourceKeys: (input) => [`app:${input.appId}`],
+  resourceKeys: (input) => {
+    const volumeId = db.getApp(input.appId)?.volume_id;
+    return [`app:${input.appId}`, ...(volumeId ? [`volume:${volumeId}`] : [])];
+  },
   steps: [
+    markDeleting,
     destroyStagingSibling,
     removeGithubWebhook,
     stopAndRemoveContainers,

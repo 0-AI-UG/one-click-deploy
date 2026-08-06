@@ -51,7 +51,7 @@ describe("buildPanelRebuildScript", () => {
   test("runs the new container on the same loopback port Traefik targets", () => {
     const script = buildPanelRebuildScript(base);
     expect(script).toContain(
-      "docker run -d --name ocd-panel --restart unless-stopped -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef",
+      "docker run -d --name ocd-panel --restart unless-stopped --log-opt max-size=20m --log-opt max-file=3 -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef",
     );
     // Old container is removed only after a successful pull (pull-then-swap).
     expect(script).toContain("docker rm -f ocd-panel");
@@ -81,7 +81,7 @@ describe("buildPanelRebuildScript", () => {
 
     test("restarts the previous image when the new one never becomes healthy", () => {
       const script = buildPanelRebuildScript(base);
-      expect(script).toContain('docker run -d --name ocd-panel --restart unless-stopped -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data $PREV_IMAGE');
+      expect(script).toContain('docker run -d --name ocd-panel --restart unless-stopped --log-opt max-size=20m --log-opt max-file=3 -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data $PREV_IMAGE');
       expect(script).toContain("rolling back to $PREV_IMAGE");
     });
 
@@ -122,6 +122,58 @@ describe("buildPanelRebuildScript", () => {
     expect(script).not.toContain("21200-21399");
   });
 
+  test("migrates historical panel data before swapping containers", () => {
+    const script = buildPanelRebuildScript({
+      ...base,
+      volumeHostPath: "/mnt/ocd-ocd-panel-data",
+      volumeDevicePath: "/mnt/HC_Volume_105361466",
+    });
+
+    const stop = script.indexOf("docker stop ocd-panel");
+    const copy = script.indexOf("rsync -aHAX --numeric-ids");
+    const bind = script.indexOf("mount --bind /mnt/HC_Volume_105361466 /mnt/ocd-ocd-panel-data");
+    const run = script.indexOf("docker run -d --name ocd-panel");
+    expect(stop).toBeGreaterThan(-1);
+    expect(copy).toBeGreaterThan(stop);
+    expect(bind).toBeGreaterThan(copy);
+    expect(run).toBeGreaterThan(bind);
+    expect(script).toContain("rsync verification failed");
+    expect(script).toContain("# BEGIN ocd-bind panel");
+    expect(script).toContain("docker start ocd-panel");
+  });
+
+  test("removes the legacy root-disk copy only after the replacement is healthy", () => {
+    const script = buildPanelRebuildScript({
+      ...base,
+      volumeHostPath: "/mnt/ocd-ocd-panel-data",
+      volumeDevicePath: "/mnt/HC_Volume_105361466",
+    });
+    const healthy = script.indexOf('if [ "$healthy" = "1" ]');
+    const removePreflip = script.indexOf('rm -rf -- "$MIGRATED_PREFLIP"');
+    expect(removePreflip).toBeGreaterThan(healthy);
+  });
+
+  test("caps panel container logs on both forward and rollback runs", () => {
+    const script = buildPanelRebuildScript(base);
+    expect(script.match(/--log-opt max-size=20m/g)?.length).toBe(2);
+    expect(script.match(/--log-opt max-file=3/g)?.length).toBe(2);
+  });
+
+  test("emits syntactically valid bash with the migration path enabled", async () => {
+    const script = buildPanelRebuildScript({
+      ...base,
+      volumeHostPath: "/mnt/ocd-ocd-panel-data",
+      volumeDevicePath: "/mnt/HC_Volume_105361466",
+    });
+    const proc = Bun.spawn(["bash", "-n"], { stdin: "pipe", stderr: "pipe" });
+    proc.stdin.write(script);
+    proc.stdin.end();
+    const exit = await proc.exited;
+    const stderr = await new Response(proc.stderr).text();
+    expect(stderr).toBe("");
+    expect(exit).toBe(0);
+  });
+
   test("omits the waker port when the private IP is unknown", () => {
     const script = buildPanelRebuildScript({ ...base, privateIpv4: "" });
     expect(script).not.toContain(":8896:8896");
@@ -144,6 +196,6 @@ describe("buildPanelRebuildScript", () => {
     const script = buildPanelRebuildScript({ ...base, ghcrEnvPrefix: "", ghcrConfigDir: "" });
     expect(script).toContain("su - deploy -c \"docker pull ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef\"");
     expect(script).not.toContain("DOCKER_CONFIG=");
-    expect(script).not.toContain("rm -rf");
+    expect(script).not.toContain("rm -rf /home/deploy/.docker-ocd-");
   });
 });

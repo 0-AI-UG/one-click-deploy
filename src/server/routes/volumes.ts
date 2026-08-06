@@ -56,7 +56,7 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
 
     const { opId } = enqueue({
       kind: "attach_existing_volume",
-      resourceKeys: [`app:${app_id}`],
+      resourceKeys: [`app:${app_id}`, `volume:${volume_id}`],
       input: { appId: app_id, volumeId: volume_id, mountPath: mount_path },
       trigger: "ui",
       triggeredBy: payload.userId,
@@ -78,7 +78,7 @@ export async function handleDetachVolume(request: Request): Promise<Response> {
 
     const { opId } = enqueue({
       kind: "detach_volume",
-      resourceKeys: [`app:${app_id}`],
+      resourceKeys: [`app:${app_id}`, `volume:${app.volume_id}`],
       input: { appId: app_id },
       trigger: "ui",
       triggeredBy: payload.userId,
@@ -104,7 +104,7 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
 
     const { opId } = enqueue({
       kind: "reattach_volume",
-      resourceKeys: [`app:${from_app_id}`, `app:${to_app_id}`],
+      resourceKeys: [`app:${from_app_id}`, `app:${to_app_id}`, `volume:${volume_id}`],
       input: { volumeId: volume_id, fromAppId: from_app_id, toAppId: to_app_id, mountPath: mount_path },
       trigger: "ui",
       triggeredBy: payload.userId,

@@ -22,7 +22,7 @@ mock.module("node:dns/promises", () => ({
 }));
 
 import * as db from "../shared/db.ts";
-const { reconcileAppDns } = await import("./dns-reconciler.ts");
+const { reconcileAppDns, reconcilePanelDns } = await import("./dns-reconciler.ts");
 
 function makeApp(domain: string) {
   return db.insertApp({
@@ -125,5 +125,61 @@ describe("DNS desired-state reconciliation", () => {
     await expect(reconcileAppDns(app.id)).rejects.toThrow(/provider unavailable/i);
     expect(db.getApp(app.id)?.public_endpoint_status).toBe("degraded");
     expect(db.getApp(app.id)?.public_endpoint_error).toMatch(/provider unavailable/i);
+  });
+
+  test("removes a tracked record when an app becomes private", async () => {
+    const app = makeApp("private.example.com");
+    await reconcileAppDns(app.id);
+    createRecord.mockClear();
+
+    db.updateAppPublic(app.id, false);
+    const result = await reconcileAppDns(app.id);
+
+    expect(result.ready).toBe(true);
+    expect(deleteRecord).toHaveBeenCalledTimes(1);
+    expect(createRecord).not.toHaveBeenCalled();
+    expect(db.getDnsRecords(app.id)).toHaveLength(0);
+  });
+
+  test("removes a tracked record after deletion intent is recorded", async () => {
+    const app = makeApp("delete.example.com");
+    await reconcileAppDns(app.id);
+    createRecord.mockClear();
+
+    db.markAppDeletionRequested(app.id);
+    await reconcileAppDns(app.id);
+
+    expect(deleteRecord).toHaveBeenCalledTimes(1);
+    expect(createRecord).not.toHaveBeenCalled();
+  });
+
+  test("repairs panel DNS after bootstrap without a one-shot record", async () => {
+    const server = db.insertServer({
+      name: `panel-${randomSuffix()}`,
+      provider_id: `provider-${randomSuffix()}`,
+      ipv4: "203.0.113.20",
+      ipv6: "",
+      type: "cx23",
+      location: "nbg1",
+      status: "ready",
+    });
+    db.deletePanel();
+    db.insertPanel({
+      server_id: server.id,
+      name: "ocd-panel",
+      domain: "panel.example.com",
+      git_repo: "https://github.com/example/ocd",
+      container_port: 3000,
+      host_port: 3001,
+    });
+
+    await reconcilePanelDns();
+
+    expect(createRecord).toHaveBeenCalledWith(expect.objectContaining({
+      name: "panel",
+      value: "203.0.113.20",
+    }));
+    expect(db.getPanel()?.dns_value).toBe("203.0.113.20");
+    db.deletePanel();
   });
 });

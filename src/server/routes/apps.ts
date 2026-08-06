@@ -181,6 +181,9 @@ async function applyExistingAppConfig(
   }
 
   try {
+    // Persist rollout intent before any config write. Migration 95's revision
+    // triggers advance this marker with every revision created by the apply.
+    if (controls.deploy !== false) db.requestAppRollout(app.id, app.config_revision);
     if (applyConfig) {
       await applyAppConfig(app.id, spec, {
         userId,
@@ -285,7 +288,14 @@ export async function handleDestroyApp(request: Request, appId: number): Promise
   try {
     const payload = await requirePermission(request, "apps.destroy", appScope(appId));
     await enforceConfirmation(request, payload, "delete_app", "app", String(appId));
-    const { opId } = enqueue({ kind: "destroy_app", resourceKeys: [`app:${appId}`], input: { appId }, trigger: "ui", triggeredBy: payload.userId });
+    const volumeId = db.getApp(appId)?.volume_id;
+    const { opId } = enqueue({
+      kind: "destroy_app",
+      resourceKeys: [`app:${appId}`, ...(volumeId ? [`volume:${volumeId}`] : [])],
+      input: { appId },
+      trigger: "ui",
+      triggeredBy: payload.userId,
+    });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

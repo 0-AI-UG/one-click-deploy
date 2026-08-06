@@ -28,9 +28,15 @@ const destroyMembers: Step<DestroyStackInput, { childIds: number[] }> = {
     ) => {
       const prev = byKey.get(idk);
       if (prev) { childIds.push(prev.id); return; }
+      const resourceId = Number(Object.values(input)[0]);
+      const volumeKeys = kind === "destroy_app"
+        ? (db.getApp(resourceId)?.volume_id ? [`volume:${db.getApp(resourceId)!.volume_id}`] : [])
+        : db.getServiceInstances(resourceId)
+          .filter((instance) => !!instance.volume_id)
+          .map((instance) => `volume:${instance.volume_id}`);
       const op: OperationRow = enqueueOperation({
         kind,
-        resourceKeys: [resourceKey],
+        resourceKeys: [resourceKey, ...volumeKeys],
         input,
         trigger: "stack",
         triggeredBy: ctx.triggeredBy,

@@ -51,22 +51,34 @@ export async function hetznerApi(
     const method = options.method || "GET";
     log("api", `${method} ${apiPath}`);
     const start = Date.now();
-    const res = await fetch(`https://api.hetzner.cloud/v1${apiPath}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
-    });
-    const elapsed = Date.now() - start;
-    if (!res.ok) {
-      const body = await res.text();
-      log("api", `${method} ${apiPath} FAILED ${res.status} in ${elapsed}ms: ${body}`);
-      throw new Error(friendlyHetznerError(res.status, body, method, apiPath));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    const abort = () => controller.abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) controller.abort();
+    try {
+      const res = await fetch(`https://api.hetzner.cloud/v1${apiPath}`, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          ...options.headers,
+        },
+      });
+      const elapsed = Date.now() - start;
+      if (!res.ok) {
+        const body = await res.text();
+        log("api", `${method} ${apiPath} FAILED ${res.status} in ${elapsed}ms: ${body}`);
+        throw new Error(friendlyHetznerError(res.status, body, method, apiPath));
+      }
+      const data = await res.json() as Record<string, any>;
+      log("api", `${method} ${apiPath} OK ${res.status} in ${elapsed}ms`);
+      return data;
+    } finally {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abort);
     }
-    log("api", `${method} ${apiPath} OK ${res.status} in ${elapsed}ms`);
-    return res.json();
   }, { retryOn: isRetryableHttpError });
 }
 

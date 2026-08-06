@@ -139,11 +139,11 @@ describe("destroyService", () => {
 
     expect(result.ok).toBe(false);
     expect(db.getService(service.id)?.status).toBe("cleanup_failed");
-    // Even in failure, the instance row is deleted in this lifecycle (note: it
-    // happens BEFORE the cleanupFailed short-circuit). This test pins the
-    // current behaviour so future refactors are explicit.
+    // Preserve provider identity and placement so the deletion finalizer can
+    // retry without orphaning the volume.
     const remaining = db.getServiceInstances(service.id);
-    expect(remaining).toEqual([]);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].volume_id).toBe("v-err");
   });
 
   test("strips linked-app env vars with the matching prefix on destroy", async () => {

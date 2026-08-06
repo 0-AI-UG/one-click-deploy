@@ -84,7 +84,7 @@ export function updateDeploymentConfigRevision(id: number, configRevision: numbe
 export function getDeployments(appId: number): DeploymentRow[] {
   return db
     .query(
-      "SELECT * FROM deployment_history WHERE app_id = ? ORDER BY created_at DESC"
+      "SELECT * FROM deployment_history WHERE app_id = ? ORDER BY created_at DESC, id DESC"
     )
     .all(appId) as DeploymentRow[];
 }

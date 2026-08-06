@@ -97,7 +97,7 @@ export function recordReplicaAttestation(
   db.query(
     `UPDATE replicas SET image_digest = ?, desired_image_digest = ?, env_hash = ?, config_revision = ?,
        attested_at = CASE WHEN ? = '' THEN datetime('now') ELSE NULL END,
-       attestation_error = ?, status = CASE WHEN ? = '' THEN status ELSE 'divergent' END
+       attestation_error = ?, status = CASE WHEN ? = '' THEN 'running' ELSE 'divergent' END
      WHERE id = ?`,
   ).run(
     attestation.imageDigest,

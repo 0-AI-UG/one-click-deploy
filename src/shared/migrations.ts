@@ -2043,6 +2043,70 @@ export const migrations: Migration[] = [
       db.run("CREATE INDEX idx_port_reservations_owner ON port_reservations(owner_type, owner_id)");
     },
   },
+  {
+    version: 95,
+    description:
+      "Persist reconciler observations, deferred GC/rollout/deletion intents, and panel webhook ownership.",
+    up: (db) => {
+      db.run("ALTER TABLE servers ADD COLUMN provider_status TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE servers ADD COLUMN last_observed_at TEXT");
+      db.run("ALTER TABLE servers ADD COLUMN unavailable_ticks INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE servers ADD COLUMN gc_requested_at TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN rollout_requested_revision INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE apps ADD COLUMN rollout_requested_after_deployment_id INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE apps ADD COLUMN deletion_requested_at TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN github_webhook_repo TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE services ADD COLUMN deletion_requested_at TEXT");
+      db.run("ALTER TABLE panel ADD COLUMN webhook_owner_user_id TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE panel ADD COLUMN github_webhook_repo TEXT NOT NULL DEFAULT ''");
+      db.run("UPDATE apps SET github_webhook_repo = git_repo WHERE github_webhook_id <> ''");
+      db.run("UPDATE panel SET github_webhook_repo = git_repo WHERE github_webhook_id <> ''");
+      // When a caller declares rollout intent before applying configuration,
+      // keep that intent pointed at the newest revision produced by the apply.
+      // This closes the apply->enqueue crash window without making deploy=false
+      // configuration changes roll out implicitly.
+      db.run("DROP TRIGGER apps_bump_config_revision");
+      db.run(`CREATE TRIGGER apps_bump_config_revision
+        AFTER UPDATE OF
+          domain, git_repo, git_branch, dockerfile_path, docker_context,
+          source_mode, image_ref, build_cache_ref,
+          container_port, auth_password_hash, environment_id, env_projection,
+          public, health_check, health_check_mode, health_check_command,
+          health_check_file, health_check_max_age_seconds,
+          internal_protocol, sticky, rate_limit_rps,
+          ip_allowlist, health_check_path, compress, public_port,
+          public_protocol, desired_replicas, min_replicas, max_replicas,
+          autoscale_enabled, autoscale_cpu_threshold, autoscale_mem_threshold,
+          autoscale_cooldown, autoscale_req_threshold, scale_to_zero_after,
+          volume_id, volume_mount, extra_volumes, memory_mb, cpu_limit,
+          webhook_enabled, webhook_branch, webhook_path, webhook_wait_for_ci,
+          webhook_staging_environment_id, durability_class, max_per_host,
+          min_locations, placement_pool
+        ON apps
+        BEGIN
+          UPDATE apps SET
+            config_revision = config_revision + 1,
+            rollout_requested_revision = CASE
+              WHEN rollout_requested_revision > 0 THEN config_revision + 1
+              ELSE 0
+            END
+          WHERE id = NEW.id;
+        END`);
+      db.run("DROP TRIGGER environments_bump_linked_app_config_revision");
+      db.run(`CREATE TRIGGER environments_bump_linked_app_config_revision
+        AFTER UPDATE OF env_vars ON environments
+        BEGIN
+          UPDATE apps SET
+            config_revision = config_revision + 1,
+            rollout_requested_revision = CASE
+              WHEN rollout_requested_revision > 0 THEN config_revision + 1
+              ELSE 0
+            END
+          WHERE environment_id = NEW.id
+             OR webhook_staging_environment_id = NEW.id;
+        END`);
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

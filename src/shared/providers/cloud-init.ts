@@ -11,6 +11,7 @@ export function cloudInitScript(opts?: {
 }): string {
   const packages = [
     "unattended-upgrades",
+    "rsync",
     ...(opts?.extraPackages ?? []),
     "fail2ban",
   ];

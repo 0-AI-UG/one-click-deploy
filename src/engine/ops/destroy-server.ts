@@ -1,7 +1,7 @@
 import * as db from "../../shared/db.ts";
 import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
-import { destroyAppCore } from "../deploy/lifecycle.ts";
-import { destroyServiceCore } from "../deploy/service-lifecycle.ts";
+import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
+import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import { softStep, runDbCleanupGate } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -26,15 +26,31 @@ const destroyAppsOnServer: Step<DestroyServerInput, { appIds: number[]; failed: 
   label: "Destroy apps on server",
   async run(ctx) {
     const apps = db.getApps(ctx.input.serverId);
-    let failed = false;
+    const existing = new Map(
+      listChildOperations(ctx.opId).map((child) => [child.idempotency_key ?? "", child]),
+    );
+    const childIds: number[] = [];
     for (const app of apps) {
-      const r = await softStep(ctx, `destroy_app ${app.name}`, async () => {
-        const result = await destroyAppCore(app.id);
-        if (!result.ok) throw new Error(result.error || "destroyApp returned ok=false");
+      const idempotencyKey = `destroy_server:${ctx.opId}:app:${app.id}`;
+      const prior = existing.get(idempotencyKey);
+      const child = prior ?? enqueueOperation({
+        kind: "destroy_app",
+        resourceKeys: [
+          `app:${app.id}`,
+          ...(app.volume_id ? [`volume:${app.volume_id}`] : []),
+        ],
+        input: { appId: app.id },
+        trigger: "cascade",
+        triggeredBy: ctx.triggeredBy,
+        parentId: ctx.opId,
+        idempotencyKey,
       });
-      if (!r.ok) failed = true;
+      childIds.push(child.id);
     }
-    return { appIds: apps.map((a) => a.id), failed };
+    const result = await softStep(ctx, "destroy app children", async () => {
+      await awaitChildren(ctx, { childIds });
+    });
+    return { appIds: apps.map((app) => app.id), failed: !result.ok };
   },
 };
 
@@ -43,15 +59,31 @@ const destroyServicesOnServer: Step<DestroyServerInput, { serviceIds: number[]; 
   label: "Destroy services on server",
   async run(ctx) {
     const services = db.getServicesOnServer(ctx.input.serverId);
-    let failed = false;
+    const existing = new Map(
+      listChildOperations(ctx.opId).map((child) => [child.idempotency_key ?? "", child]),
+    );
+    const childIds: number[] = [];
     for (const svc of services) {
-      const r = await softStep(ctx, `destroy_service ${svc.name}`, async () => {
-        const result = await destroyServiceCore(svc.id);
-        if (!result.ok) throw new Error(result.error || "destroyService returned ok=false");
+      const idempotencyKey = `destroy_server:${ctx.opId}:service:${svc.id}`;
+      const prior = existing.get(idempotencyKey);
+      const volumeKeys = db.getServiceInstances(svc.id)
+        .filter((instance) => !!instance.volume_id)
+        .map((instance) => `volume:${instance.volume_id}`);
+      const child = prior ?? enqueueOperation({
+        kind: "destroy_service",
+        resourceKeys: [`service:${svc.id}`, ...volumeKeys],
+        input: { serviceId: svc.id },
+        trigger: "cascade",
+        triggeredBy: ctx.triggeredBy,
+        parentId: ctx.opId,
+        idempotencyKey,
       });
-      if (!r.ok) failed = true;
+      childIds.push(child.id);
     }
-    return { serviceIds: services.map((s) => s.id), failed };
+    const result = await softStep(ctx, "destroy service children", async () => {
+      await awaitChildren(ctx, { childIds });
+    });
+    return { serviceIds: services.map((service) => service.id), failed: !result.ok };
   },
 };
 

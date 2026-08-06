@@ -10,6 +10,7 @@ import "./wake.ts";
 import "./deploy-service.ts";
 import "./destroy-service.ts";
 import "./restart-service.ts";
+import "./repair-service.ts";
 import "./pause-service.ts";
 import "./unpause-service.ts";
 import "./provision-server.ts";

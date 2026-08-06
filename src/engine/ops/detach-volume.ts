@@ -106,7 +106,10 @@ const recreateContainer: Step<DetachVolumeInput, { ok: boolean }> = {
 const detachVolumeOp: OpKindDefinition<DetachVolumeInput> = {
   kind: "detach_volume",
   label: "Detach volume",
-  resourceKeys: (input) => [`app:${input.appId}`],
+  resourceKeys: (input) => {
+    const volumeId = db.getApp(input.appId)?.volume_id;
+    return [`app:${input.appId}`, ...(volumeId ? [`volume:${volumeId}`] : [])];
+  },
   steps: [validate, removeBindMount, detachVolume, clearAppVolume, recreateContainer],
 };
 

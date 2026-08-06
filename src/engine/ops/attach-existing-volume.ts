@@ -163,7 +163,7 @@ const recreateContainer: Step<AttachExistingVolumeInput, { ok: true }> = {
 const attachExistingVolumeOp: OpKindDefinition<AttachExistingVolumeInput> = {
   kind: "attach_existing_volume",
   label: "Attach existing volume",
-  resourceKeys: (input) => [`app:${input.appId}`],
+  resourceKeys: (input) => [`app:${input.appId}`, `volume:${input.volumeId}`],
   steps: [validate, attachVolume, bindMount, attachToApp, recreateContainer],
 };
 

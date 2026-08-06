@@ -16,7 +16,7 @@
 //     if the panel container is destroyed seconds later.
 import { resolve4 } from "node:dns/promises";
 import * as db from "../../shared/db.ts";
-import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
   cloneAndBuild, healthCheck, getContainerLogs,
@@ -28,6 +28,7 @@ import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
 import { dockerLoginGhcr } from "../hetzner/registry.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { DEFAULT_LOG_MAX_FILES, DEFAULT_LOG_MAX_SIZE } from "../hetzner/container-common.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
 
@@ -122,10 +123,8 @@ export async function bootstrapPanel(
   let providerServerId: string | undefined;
   let dbServerId: number | undefined;
   let volumeId: string | undefined;
-  let dnsRecordKey: { zoneId: string; name: string; type: string; value: string } | undefined;
 
   const compute = hetzner;
-  const dns = hetznerDns;
 
   try {
     // 0. Guard against duplicate provisioning. The bootstrap DB is ephemeral
@@ -221,24 +220,11 @@ export async function bootstrapPanel(
     if (hostKey) db.updateServerHostKey(dbServer.id, hostKey);
     db.updateServerStatus(dbServer.id, "ready");
 
-    // 5. DNS (best-effort). Skipped for an auto-derived nip.io domain — it
-    //    resolves via public wildcard DNS and isn't in the user's zone.
+    // 5. DNS is durable desired state. The hosted controller creates and
+    //    repairs the panel record after the DB handoff; bootstrap does not
+    //    perform an untracked one-shot provider mutation.
     if (opts.dnsZoneId && opts.domain) {
-      try {
-        const parts = domain.split(".");
-        const sub = parts.length > 2 ? parts.slice(0, -2).join(".") : "@";
-        await dns.createRecord({
-          zoneId: opts.dnsZoneId,
-          name: sub,
-          type: "A",
-          value: serverIp,
-        });
-        dnsRecordKey = { zoneId: opts.dnsZoneId, name: sub, type: "A", value: serverIp };
-        onProgress("dns", `DNS A record created: ${domain} → ${serverIp}`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        onProgress("dns", `DNS creation failed (continuing): ${msg}`);
-      }
+      onProgress("dns", `DNS A record declared: ${domain} → ${serverIp} (controller will converge it)`);
     }
 
     // 6. Create + mount volume
@@ -293,18 +279,6 @@ export async function bootstrapPanel(
       source: "bootstrap",
     });
     db.appendPanelDeployLog(`[bootstrap] Panel deployed to ${domain}`);
-
-    // Persist the DNS record on the panel row so destroyServer can clean it
-    // up later (the panel lives outside the apps table, so dns_records keyed
-    // by app_id wouldn't catch it).
-    if (dnsRecordKey) {
-      db.updatePanelDnsRecord({
-        zone_id: dnsRecordKey.zoneId,
-        name: dnsRecordKey.name,
-        type: dnsRecordKey.type,
-        value: dnsRecordKey.value,
-      });
-    }
 
     // 8. Handoff: snapshot bootstrap DB onto the mounted volume BEFORE the
     //    hosted container starts (so it opens the handed-off DB on first
@@ -411,7 +385,7 @@ export async function bootstrapPanel(
       ok: true,
       domain: domain,
       serverIp,
-      dnsAutoCreated: !!dnsRecordKey,
+      dnsAutoCreated: false,
       dnsResolved,
       internalTls: useInternalTls,
     };
@@ -421,13 +395,6 @@ export async function bootstrapPanel(
     onProgress("error", msg);
 
     // Rollback
-    if (dnsRecordKey) {
-      try {
-        await dns.deleteRecord(dnsRecordKey);
-      } catch (e) {
-        log("error", `Rollback: failed to delete DNS record: ${e}`);
-      }
-    }
     if (volumeId) {
       try {
         await compute.volumes?.delete(volumeId);
@@ -503,6 +470,11 @@ export function buildPanelRebuildScript(opts: {
   envFilePath: string;
   /** "-v src:dst" or "". */
   volumeFlag: string;
+  /** Friendly host bind path and attached Hetzner mount used to migrate
+   * historical root-disk panel data during the stopped swap. Both empty means
+   * no persistent volume migration is needed. */
+  volumeHostPath?: string;
+  volumeDevicePath?: string;
   /** "DOCKER_CONFIG=<dir> " (trailing space) or "" for anonymous pulls. */
   ghcrEnvPrefix: string;
   /** Ephemeral DOCKER_CONFIG dir to remove when done, or "". */
@@ -527,6 +499,14 @@ export function buildPanelRebuildScript(opts: {
   const cleanup = ghcrConfigDir
     ? `su - deploy -c "rm -rf ${ghcrConfigDir}" 2>/dev/null || true`
     : `true`;
+  const logFlags = `--log-opt max-size=${DEFAULT_LOG_MAX_SIZE} --log-opt max-file=${DEFAULT_LOG_MAX_FILES}`;
+  const migrationLines = opts.volumeHostPath && opts.volumeDevicePath
+    ? buildPanelVolumeMigrationLines({
+        containerName,
+        hostPath: opts.volumeHostPath,
+        devicePath: opts.volumeDevicePath,
+      })
+    : [];
   // NB: no `set -e` — a failed pull attempt must not abort the retry loop.
   return [
     `#!/usr/bin/env bash`,
@@ -548,9 +528,11 @@ export function buildPanelRebuildScript(opts: {
     // `--restart unless-stopped` would otherwise crash-loop the panel forever.
     `PREV_IMAGE=$(docker inspect --format '{{.Config.Image}}' ${containerName} 2>/dev/null || echo "")`,
     `echo "[panel-redeploy] current image: ${"$"}{PREV_IMAGE:-none}"`,
+    `MIGRATED_PREFLIP=""`,
+    ...migrationLines,
     // Swap on the SAME loopback port that Traefik's panel.yml already targets.
     `docker rm -f ${containerName} 2>/dev/null || true`,
-    `su - deploy -c "docker run -d --name ${containerName} --restart unless-stopped -p 127.0.0.1:${hostPort}:${containerPort}${wakerFlags} --env-file ${envFilePath} ${volumeFlag} ${image}"`,
+    `su - deploy -c "docker run -d --name ${containerName} --restart unless-stopped ${logFlags} -p 127.0.0.1:${hostPort}:${containerPort}${wakerFlags} --env-file ${envFilePath} ${volumeFlag} ${image}"`,
     // Health gate. A container that exits immediately never answers /api/health,
     // so this catches both a crash-loop and a process that starts but is unwell.
     `healthy=0`,
@@ -560,6 +542,10 @@ export function buildPanelRebuildScript(opts: {
     `done`,
     `if [ "$healthy" = "1" ]; then`,
     `  echo "[panel-redeploy] new image healthy"`,
+    `  if [ -n "$MIGRATED_PREFLIP" ]; then`,
+    `    echo "[panel-redeploy] verified volume migration; removing root-disk preflip $MIGRATED_PREFLIP"`,
+    `    rm -rf -- "$MIGRATED_PREFLIP"`,
+    `  fi`,
     `  ${cleanup}`,
     `  exit 0`,
     `fi`,
@@ -572,10 +558,102 @@ export function buildPanelRebuildScript(opts: {
     `fi`,
     `echo "[panel-redeploy] rolling back to $PREV_IMAGE"`,
     `docker rm -f ${containerName} 2>/dev/null || true`,
-    `su - deploy -c "docker run -d --name ${containerName} --restart unless-stopped -p 127.0.0.1:${hostPort}:${containerPort}${wakerFlags} --env-file ${envFilePath} ${volumeFlag} $PREV_IMAGE"`,
+    `su - deploy -c "docker run -d --name ${containerName} --restart unless-stopped ${logFlags} -p 127.0.0.1:${hostPort}:${containerPort}${wakerFlags} --env-file ${envFilePath} ${volumeFlag} $PREV_IMAGE"`,
     `${cleanup}`,
     `exit 1`,
   ].join("\n");
+}
+
+/**
+ * A stopped, fail-closed migration for panels created before OCD installed a
+ * bind from /mnt/HC_Volume_* onto /mnt/ocd-*-data. The old container is kept
+ * (stopped) until rsync verification and fstab installation finish, so every
+ * failure path can expose the legacy directory again and docker-start it.
+ */
+function buildPanelVolumeMigrationLines(opts: {
+  containerName: string;
+  hostPath: string;
+  devicePath: string;
+}): string[] {
+  const { containerName, hostPath, devicePath } = opts;
+  const begin = "# BEGIN ocd-bind panel";
+  const end = "# END ocd-bind panel";
+  const fstabLine = `${devicePath}  ${hostPath}  none  bind,nofail,x-systemd.requires=${devicePath}  0 0`;
+  return [
+    `HC_SOURCE=$(findmnt -no SOURCE ${devicePath} 2>/dev/null || true)`,
+    `TARGET_SOURCE=$(findmnt -no SOURCE ${hostPath} 2>/dev/null || true)`,
+    `if [ -z "$HC_SOURCE" ]; then`,
+    `  echo "[panel-redeploy] attached panel volume is not mounted at ${devicePath}; leaving current container running"`,
+    `  exit 1`,
+    `fi`,
+    `if [ "$TARGET_SOURCE" != "$HC_SOURCE" ]; then`,
+    `  echo "[panel-redeploy] migrating legacy panel data ${hostPath} -> ${devicePath}"`,
+    `  docker stop ${containerName} >/dev/null 2>&1 || true`,
+    `  if [ -n "$TARGET_SOURCE" ]; then`,
+    `    echo "[panel-redeploy] refusing migration: ${hostPath} is mounted from unexpected $TARGET_SOURCE"`,
+    `    docker start ${containerName} >/dev/null 2>&1 || true`,
+    `    exit 1`,
+    `  fi`,
+    `  LEGACY_ENTRY=$(find ${hostPath} -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)`,
+    `  VOLUME_ENTRY=$(find ${devicePath} -mindepth 1 -maxdepth 1 ! -name lost+found -print -quit 2>/dev/null || true)`,
+    `  if [ -n "$LEGACY_ENTRY" ] && [ -n "$VOLUME_ENTRY" ]; then`,
+    `    if rsync -aHAXn --delete --exclude=/lost+found --itemize-changes ${hostPath}/ ${devicePath}/ | grep -q .; then`,
+    `      echo "[panel-redeploy] refusing migration: legacy path and attached volume both contain different data"`,
+    `      docker start ${containerName} >/dev/null 2>&1 || true`,
+    `      exit 1`,
+    `    fi`,
+    `  elif [ -n "$LEGACY_ENTRY" ]; then`,
+    `    if ! rsync -aHAX --numeric-ids --exclude=/lost+found ${hostPath}/ ${devicePath}/; then`,
+    `      echo "[panel-redeploy] rsync failed; restarting previous container on legacy data"`,
+    `      docker start ${containerName} >/dev/null 2>&1 || true`,
+    `      exit 1`,
+    `    fi`,
+    `    VERIFY_DIFF=$(rsync -aHAXn --delete --exclude=/lost+found --itemize-changes ${hostPath}/ ${devicePath}/)`,
+    `    if [ -n "$VERIFY_DIFF" ]; then`,
+    `      echo "[panel-redeploy] rsync verification failed; restarting previous container on legacy data"`,
+    `      docker start ${containerName} >/dev/null 2>&1 || true`,
+    `      exit 1`,
+    `    fi`,
+    `  fi`,
+    `  sync`,
+    `  PREFLIP=${hostPath}.preflip.$(date -u +%Y%m%d-%H%M%S)`,
+    `  if ! mv ${hostPath} "$PREFLIP" || ! mkdir -p ${hostPath} || ! mount --bind ${devicePath} ${hostPath}; then`,
+    `    echo "[panel-redeploy] bind setup failed; restoring legacy path"`,
+    `    umount ${hostPath} >/dev/null 2>&1 || true`,
+    `    rmdir ${hostPath} >/dev/null 2>&1 || true`,
+    `    [ -d "$PREFLIP" ] && mv "$PREFLIP" ${hostPath}`,
+    `    docker start ${containerName} >/dev/null 2>&1 || true`,
+    `    exit 1`,
+    `  fi`,
+    `  FSTAB_TMP=$(mktemp)`,
+    `  FSTAB_BACKUP=$(mktemp)`,
+    `  if ! cp -p /etc/fstab "$FSTAB_BACKUP"; then`,
+    `    echo "[panel-redeploy] could not back up fstab; restoring legacy path"`,
+    `    rm -f "$FSTAB_TMP" "$FSTAB_BACKUP"`,
+    `    umount ${hostPath} >/dev/null 2>&1 || true`,
+    `    rmdir ${hostPath} >/dev/null 2>&1 || true`,
+    `    mv "$PREFLIP" ${hostPath}`,
+    `    docker start ${containerName} >/dev/null 2>&1 || true`,
+    `    exit 1`,
+    `  fi`,
+    `  awk '$0=="${begin}" {skip=1; next} $0=="${end}" && skip {skip=0; next} !skip {print}' /etc/fstab > "$FSTAB_TMP"`,
+    `  printf '%s\n%s\n%s\n' '${begin}' '${fstabLine}' '${end}' >> "$FSTAB_TMP"`,
+    `  if ! install -m 0644 "$FSTAB_TMP" /etc/fstab || ! systemctl daemon-reload; then`,
+    `    echo "[panel-redeploy] fstab update failed; restoring legacy path"`,
+    `    install -m 0644 "$FSTAB_BACKUP" /etc/fstab >/dev/null 2>&1 || true`,
+    `    systemctl daemon-reload >/dev/null 2>&1 || true`,
+    `    rm -f "$FSTAB_TMP" "$FSTAB_BACKUP"`,
+    `    umount ${hostPath} >/dev/null 2>&1 || true`,
+    `    rmdir ${hostPath} >/dev/null 2>&1 || true`,
+    `    mv "$PREFLIP" ${hostPath}`,
+    `    docker start ${containerName} >/dev/null 2>&1 || true`,
+    `    exit 1`,
+    `  fi`,
+    `  rm -f "$FSTAB_TMP" "$FSTAB_BACKUP"`,
+    `  MIGRATED_PREFLIP="$PREFLIP"`,
+    `  echo "[panel-redeploy] panel data copied, verified, and bind-mounted"`,
+    `fi`,
+  ];
 }
 
 /**
@@ -679,6 +757,8 @@ export async function redeployPanel(
     const appDir = `/home/deploy/apps/${panel.name}`;
     const envFilePath = `${appDir}/.env.deploy`;
     const volumeFlag = panel.volume_mount ? `-v ${panel.volume_mount}` : "";
+    const volumeHostPath = panel.volume_mount?.split(":")[0] || "";
+    const volumeDevicePath = panel.volume_id ? `/mnt/HC_Volume_${panel.volume_id}` : "";
     // A webhook redeploy waits for CI (~15 min): retry ~30 min. A manual
     // redeploy pulls an already-built tag: retry briefly for registry blips.
     const pullRetries = gitSha ? 90 : 12;
@@ -691,6 +771,8 @@ export async function redeployPanel(
       privateIpv4: server.private_ipv4 || "",
       envFilePath,
       volumeFlag,
+      volumeHostPath,
+      volumeDevicePath,
       ghcrEnvPrefix,
       ghcrConfigDir,
       pullRetries,

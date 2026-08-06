@@ -1,6 +1,6 @@
 import type { DeployRequest, Server } from "../../shared/rpc.ts";
 import dbInstance, * as db from "../../shared/db.ts";
-import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import { isNotFoundError } from "../../shared/providers/errors.ts";
 import {
   normalizeAppScaling,
@@ -21,7 +21,6 @@ import {
 } from "../../shared/remote/index.ts";
 import { syncAppIngress, syncAllTraefik } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
-import * as github from "../../shared/github.ts";
 import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
 import { createMasker } from "../../shared/mask.ts";
 import { processIncomingEnvVars, serializeEnvVars, parseEnvVars, platformEnvVars, projectEnvVars } from "../../shared/env-crypto.ts";
@@ -29,7 +28,6 @@ import { getProviderToken } from "../../shared/secret-store.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { provisionServer } from "../provision-server.ts";
-import { resolve4 } from "node:dns/promises";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
@@ -85,17 +83,6 @@ type BuildOut = {
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [engine:deploy:${context}]`, ...args);
-}
-
-async function resolveDomainIps(domain: string, timeoutMs = 3000): Promise<string[]> {
-  try {
-    return await Promise.race([
-      resolve4(domain),
-      new Promise<string[]>((_, rej) => setTimeout(() => rej(new Error("dns timeout")), timeoutMs)),
-    ]);
-  } catch {
-    return [];
-  }
 }
 
 async function findVolumeByName(name: string) {
@@ -274,65 +261,10 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
   },
 };
 
-// Note: no probe()/probeCompensated() here — both DNS providers' createRecord
-// and deleteRecord are naturally idempotent (match by name+type+value), so
-// safe to re-run after a crash without any explicit adopt-skip.
 const createDnsRecord: Step<DeployInput, DnsOut> = {
   name: "create_dns_record",
-  label: "Create DNS record",
-  async run(ctx, prior) {
-    const req = ctx.input;
-    const server = prior["pick_or_provision_server"] as ServerOut;
-    const dnsZoneId = db.getSettings().dns_zone_id;
-    if (req.public === false) return null; // private apps have no public ingress
-    if (!dnsZoneId) return null;
-
-    // Same resolution as insert_app_row — covers explicit domains and
-    // auto-domains (<app>.<zone>); nip.io fallbacks get no managed record.
-    const { domain, managedDns } = resolveAppDomain(req, domainSettings(server), server.ingressIp);
-    if (!domain || !managedDns) return null;
-
-    // Record name: an auto-domain is always a direct child of the zone;
-    // explicit domains keep the strip-the-last-two-labels behavior.
-    const zoneName = (server.zoneName || db.getSettings().dns_zone_name || "").replace(/\.$/, "");
-    const normalizedDomain = domain.replace(/\.$/, "");
-    if (!zoneName || !(normalizedDomain === zoneName || normalizedDomain.endsWith(`.${zoneName}`))) {
-      throw new Error(`Refusing managed DNS write: ${domain} is outside configured zone ${zoneName || "<unknown>"}`);
-    }
-    const subdomain = normalizedDomain === zoneName
-      ? "@"
-      : normalizedDomain.slice(0, -(zoneName.length + 1));
-
-    // Idempotency: check provider for existing record.
-    const dns = hetznerDns;
-    const record = await dns.createRecord({
-        zoneId: dnsZoneId,
-        name: subdomain,
-        type: "A",
-        value: server.ingressIp,
-      });
-    return {
-        recordId: record.id,
-        zoneId: dnsZoneId,
-        name: subdomain,
-        type: "A",
-        value: server.ingressIp,
-    };
-  },
-  async compensate(ctx, out) {
-    if (!out) return;
-    // deleteRecord matches by name+type+value and is idempotent (a missing
-    // record is a no-op — see the forward-step note), so let a genuine failure
-    // PROPAGATE rather than orphan an A record that points at a server for an
-    // app that no longer exists behind a clean `compensated`.
-    const dns = hetznerDns;
-    await dns.deleteRecord({
-      zoneId: out.zoneId,
-      name: out.name,
-      type: out.type,
-      value: out.value,
-    });
-  },
+  label: "Declare DNS intent",
+  async run() { return null; },
 };
 
 const createVolume: Step<DeployInput, VolumeOut> = {
@@ -658,6 +590,7 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
     if (!volume) return { ok: true };
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
+
     const hostMountPath = volume.volumeMount.split(":")[0];
     const { ensureVolumeBindMount } = await import("../hetzner/host-mounts.ts");
     // Hetzner's automount can lag a few seconds after volume create; retry
@@ -916,27 +849,8 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
 const syncIngressStep: Step<DeployInput, { domain: string }> = {
   name: "sync_ingress",
   label: "Configure ingress",
-  async run(ctx, prior) {
-    const req = ctx.input;
-    const server = prior["pick_or_provision_server"] as ServerOut;
-    const dns = prior["create_dns_record"] as DnsOut;
+  async run(_ctx, prior) {
     const appOut = prior["insert_app_row"] as InsertAppOut;
-
-    // Private apps have no public domain — nothing to resolve.
-    if (req.public !== false && req.domain && !appOut.useInternalTls && !dns) {
-      const resolved = await resolveDomainIps(req.domain);
-      if (resolved.length === 0) {
-        throw new Error(
-          `DNS lookup for ${req.domain} returned no A records. Create an A record pointing to ${server.ingressIp} and retry (DNS can take a few minutes to propagate).`,
-        );
-      }
-      if (!resolved.includes(server.ingressIp)) {
-        throw new Error(
-          `Domain ${req.domain} resolves to ${resolved.join(", ")} but the ingress server is ${server.ingressIp}. Update the A record to ${server.ingressIp} (Let's Encrypt will fail to issue a certificate otherwise) and retry.`,
-        );
-      }
-    }
-
     await syncAppIngress(appOut.appId);
     db.appendDeployLog(
       appOut.appId,
@@ -1138,28 +1052,16 @@ const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webho
     if (!req.webhook_enabled) return { ok: true };
     const appOut = prior["insert_app_row"] as InsertAppOut;
 
-    const { githubPat } = await buildMasker(req, ctx.triggeredBy);
-    if (!githubPat) return { ok: false, error: "No GitHub token" };
-
     try {
-      const panel = db.getPanel();
-      if (!panel?.domain) throw new Error("Panel domain is not set; cannot register webhook URL");
       const webhookBranch = req.webhook_branch || "main";
       const webhookPath = (req.webhook_path || "").trim().replace(/^\/+/, "").replace(/\/+$/, "");
       const webhookSecret = crypto.randomUUID();
-      const url = `https://${panel.domain}/webhooks/github/${appOut.appId}`;
-      const created = await github.createWebhookAtUrl({
-        gitRepo: req.git_repo,
-        url,
-        webhookSecret,
-        token: githubPat,
-      });
       db.updateAppWebhook(
         appOut.appId,
         true,
         webhookSecret,
         webhookBranch,
-        String(created.id),
+        "",
         webhookPath,
         !!req.webhook_wait_for_ci,
       );
@@ -1169,29 +1071,13 @@ const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webho
         db.updateAppWebhookStagingEnvironment(appOut.appId, stagingEnvId);
         db.appendDeployLog(appOut.appId, `[webhook] Staging enabled — pushes hold in ${req.app_name}-staging for manual promotion`);
       }
-      return { ok: true, webhookId: String(created.id) };
+      ctx.log("Webhook desired state recorded; provider reconciliation is asynchronous");
+      return { ok: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       db.appendDeployLog(appOut.appId, `[webhook] Warning: failed to set up webhook: ${msg}`);
       ctx.log(`Webhook setup failed (non-fatal): ${msg}`);
       return { ok: false, error: msg };
-    }
-  },
-  async compensate(ctx, out) {
-    const webhookId = (out as { webhookId?: string } | null)?.webhookId;
-    if (!webhookId) return;
-    const req = ctx.input;
-    const { githubPat } = await buildMasker(req, ctx.triggeredBy);
-    if (!githubPat) return;
-    // Deliberately best-effort: webhook setup is a non-fatal forward step (it
-    // returns ok:false instead of throwing), and GitHub's DELETE is NOT
-    // idempotent — a resumed compensate would 404 on an already-deleted hook
-    // and falsely escalate. A stray webhook is low-stakes (it targets a deleted
-    // app's endpoint), so we don't block the rollback on it.
-    try {
-      await github.deleteWebhook({ gitRepo: req.git_repo, webhookId, token: githubPat });
-    } catch (err) {
-      ctx.log(`Failed to delete webhook ${webhookId}: ${err}`);
     }
   },
 };

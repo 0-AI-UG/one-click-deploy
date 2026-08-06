@@ -13,6 +13,15 @@ type DestroyServiceInput = {
   retentionClass?: "user" | "provisional";
 };
 
+const markDeleting: Step<DestroyServiceInput, { ok: true }> = {
+  name: "mark_deleting",
+  label: "Mark service for deletion",
+  async run(ctx) {
+    db.markServiceDeletionRequested(ctx.input.serviceId);
+    return { ok: true };
+  },
+};
+
 const removeEnvFromLinkedEnvironments: Step<DestroyServiceInput, { ok: true }> = {
   name: "remove_env_vars_from_linked_environments",
   label: "Remove env vars from linked environments",
@@ -145,8 +154,14 @@ const gcEmptyServers = makeGcEmptyServersStep<DestroyServiceInput>("stop_and_rem
 const destroyServiceOp: OpKindDefinition<DestroyServiceInput> = {
   kind: "destroy_service",
   label: "Destroy service",
-  resourceKeys: (input) => [`service:${input.serviceId}`],
+  resourceKeys: (input) => [
+    `service:${input.serviceId}`,
+    ...db.getServiceInstances(input.serviceId)
+      .filter((instance) => !!instance.volume_id)
+      .map((instance) => `volume:${instance.volume_id}`),
+  ],
   steps: [
+    markDeleting,
     removeEnvFromLinkedEnvironments,
     stopAndRemoveContainers,
     deleteVolumes,

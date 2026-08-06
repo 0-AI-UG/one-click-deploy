@@ -23,6 +23,7 @@ import { DATA_DIR } from "../../shared/paths.ts";
 import { sshExec, getSshKeyPath } from "../../shared/remote/index.ts";
 import { STATUS_PORT as PROXY_STATUS_PORT } from "../../proxy/status.ts";
 import { collectDesiredState, type DesiredState } from "./traefik-render.ts";
+import { tryAcquire, release, NON_OP_HOLDER } from "../scheduler.ts";
 import { renderProxyConfigJson } from "./proxy-render.ts";
 import { ingestProxyActivity } from "./request-metrics.ts";
 import {
@@ -88,6 +89,18 @@ export async function desiredProxyVersion(): Promise<string> {
 // the fleet share one compile. Failed builds are evicted for retry.
 const builds = new Map<string, Promise<string>>();
 
+function pruneSupersededProxyBinaries(keepPath: string, arch: "x64" | "arm64"): void {
+  try {
+    for (const file of readdirSync(BUILD_CACHE_DIR)) {
+      if (!file.startsWith("ocd-proxy-") || !file.endsWith(`-linux-${arch}`)) continue;
+      const candidate = path.join(BUILD_CACHE_DIR, file);
+      if (candidate !== keepPath) rmSync(candidate, { force: true });
+    }
+  } catch {
+    // Cache cleanup is best-effort; a valid current binary must still ship.
+  }
+}
+
 export async function buildProxyBinary(arch: "x64" | "arm64"): Promise<string> {
   const version = await desiredProxyVersion();
   const key = `${version}-${arch}`;
@@ -122,7 +135,10 @@ async function fileSha256(file: string): Promise<string> {
 
 async function compileProxy(version: string, arch: "x64" | "arm64"): Promise<string> {
   const outfile = path.join(BUILD_CACHE_DIR, `ocd-proxy-${version}-linux-${arch}`);
-  if (await isValidElf(outfile)) return outfile;
+  if (await isValidElf(outfile)) {
+    pruneSupersededProxyBinaries(outfile, arch);
+    return outfile;
+  }
   rmSync(outfile, { force: true });
   mkdirSync(BUILD_CACHE_DIR, { recursive: true });
   // bun 1.3.x `--compile` silently writes an all-zero file when --outfile
@@ -169,6 +185,7 @@ async function compileProxy(version: string, arch: "x64" | "arm64"): Promise<str
       throw new Error(`ocd-proxy build copy into cache did not match the source (filesystem copy bug?)`);
     }
     renameSync(partial, outfile);
+    pruneSupersededProxyBinaries(outfile, arch);
     return outfile;
   } finally {
     rmSync(tmpfile, { force: true });
@@ -451,6 +468,18 @@ async function convergeAndTrack(server: ServerAccess, rendered: string): Promise
   }
 }
 
+async function convergeAndTrackLocked(server: ServerAccess, rendered: string): Promise<void> {
+  if (server.id === undefined) return convergeAndTrack(server, rendered);
+  const keys = [`server:${server.id}`];
+  const lock = tryAcquire(keys, NON_OP_HOLDER, "reconcile:proxy");
+  if (!lock.ok) return;
+  try {
+    await convergeAndTrack(server, rendered);
+  } finally {
+    release(keys);
+  }
+}
+
 /**
  * Reconciler entrypoint: render once, converge every ready server in
  * parallel. Per-server failures are logged, mark the server not-ready, and
@@ -459,7 +488,7 @@ async function convergeAndTrack(server: ServerAccess, rendered: string): Promise
 export async function reconcileProxy(): Promise<void> {
   const state = collectDesiredState();
   const rendered = renderProxyConfigJson(state);
-  await Promise.all(getAllServerAccess().map((server) => convergeAndTrack(server, rendered)));
+  await Promise.all(getAllServerAccess().map((server) => convergeAndTrackLocked(server, rendered)));
 }
 
 // --- Immediate topology push -------------------------------------------------
@@ -491,7 +520,7 @@ export async function pushProxyForApp(appId: number): Promise<void> {
     const servers = getAllServerAccess().filter((s) => s.id !== undefined && serverIds.has(s.id));
     if (servers.length === 0) return;
     const rendered = renderProxyConfigJson(collectDesiredState());
-    await Promise.all(servers.map((server) => convergeAndTrack(server, rendered)));
+    await Promise.all(servers.map((server) => convergeAndTrackLocked(server, rendered)));
   } catch (err) {
     log("push", `proxy push for app ${appId} failed: ${err}`);
   }

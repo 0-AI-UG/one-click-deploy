@@ -78,6 +78,7 @@ export async function attestReplica(
     configRevision: Number(labels[REVISION_LABELS.configRevision] || 0),
   };
   const errors: string[] = [];
+  if (inspected?.State?.Running !== true) errors.push("container is not running");
   if (labels[REVISION_LABELS.app] !== app.name) errors.push("app label mismatch");
   if (!imageId || observed.imageDigest !== imageId) errors.push("image id label mismatch");
   // Source-built revisions are Docker content ids. Registry manifest digests

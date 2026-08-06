@@ -108,7 +108,15 @@ export async function handleDeployService(request: Request): Promise<Response> {
 // --- Lifecycle ---
 
 export function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
-  return enqueueOp(request, { permission: "services.destroy", kind: "destroy_service", resourceKeys: [`service:${serviceId}`], input: { serviceId } });
+  const volumeKeys = db.getServiceInstances(serviceId)
+    .filter((instance) => !!instance.volume_id)
+    .map((instance) => `volume:${instance.volume_id}`);
+  return enqueueOp(request, {
+    permission: "services.destroy",
+    kind: "destroy_service",
+    resourceKeys: [`service:${serviceId}`, ...volumeKeys],
+    input: { serviceId },
+  });
 }
 
 export function handleRestartService(request: Request, serviceId: number): Promise<Response> {

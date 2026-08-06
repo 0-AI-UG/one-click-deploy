@@ -11,6 +11,17 @@ import { checkReplicaHealth, checkServiceInstanceHealth, HEALTH_EXEMPT_STATUSES 
 import { sweepStuckStates } from "./stuck-sweep.ts";
 import { sweepExpiredProvisionalVolumes } from "./provisional-volume-sweep.ts";
 import { reconcileAllAppDns } from "./dns-reconciler.ts";
+import { reconcilePanelDns } from "./dns-reconciler.ts";
+import { startController, stopControllers } from "./controller-runtime.ts";
+import {
+  reconcileActiveVolumes,
+  reconcileFirewall,
+  reconcileServerGc,
+  reconcileServersAndNetwork,
+} from "./infrastructure-reconciler.ts";
+import { reconcileServiceInstances } from "./service-reconciler.ts";
+import { reconcileAppRuntime } from "./app-runtime-reconciler.ts";
+import { reconcileWebhooks } from "./webhook-reconciler.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -21,15 +32,6 @@ const METRICS_RETENTION_SEC = 24 * 60 * 60;
 const AVAILABILITY_RETENTION_SEC = 7 * 24 * 60 * 60;
 
 let running = false;
-let timer: ReturnType<typeof setInterval> | null = null;
-let tickCount = 0;
-const PRUNE_EVERY_N_TICKS = 10; // ~5 minutes at 30s/tick
-
-// Whether the fleet firewall's rule set has been converged this process.
-// ensureFirewall otherwise only runs during provisioning, so an existing
-// fleet would never pick up newly added base rules (e.g. the public TCP/UDP
-// port blocks). One-shot per engine process — a failure retries next tick.
-let firewallConverged = false;
 
 // ---------------------------------------------------------------------------
 // Main tick
@@ -194,16 +196,21 @@ async function tick(): Promise<void> {
     for (const server of allServers) {
       if (server.ipv4) ensureServer(server.id);
     }
-
-    // DNS is a level-triggered desired-state resource, not a one-shot deploy
-    // side effect. Run it independently of server telemetry so an unreachable
-    // worker cannot prevent a missing public record from being repaired.
-    await reconcileAllAppDns();
+    // Replica convergence is level-triggered, so apps with zero materialized
+    // rows must still participate (for example after confirmed server loss).
+    for (const app of db.getApps()) {
+      if (!byApp.has(app.id)) byApp.set(app.id, []);
+    }
 
     // --- Process all servers in parallel ---
-    await Promise.all(
-      Array.from(serverWork.values()).map((work) => processServer(work)),
-    );
+    const workItems = Array.from(serverWork.values());
+    const serverResults = await Promise.allSettled(workItems.map((work) => processServer(work)));
+    for (const [index, result] of serverResults.entries()) {
+      if (result.status === "rejected") {
+        const server = workItems[index]?.server;
+        log("server", `${server?.name ?? index}: ${result.reason}`);
+      }
+    }
 
     // --- Status propagation (app + service level) ---
     for (const [appId, list] of byApp) {
@@ -213,7 +220,11 @@ async function tick(): Promise<void> {
       if (app.status === "running" || app.status === "unhealthy") {
         const freshReplicas = list
           .map((r) => db.getReplica(r.id))
-          .filter((r): r is NonNullable<typeof r> => r !== null && !HEALTH_EXEMPT_STATUSES.has(r.status));
+          .filter((r): r is NonNullable<typeof r> =>
+            r !== null &&
+            db.getServer(r.server_id)?.status === "ready" &&
+            !HEALTH_EXEMPT_STATUSES.has(r.status)
+          );
         const allHealthy = freshReplicas.length > 0 && freshReplicas.every((r) => r.status === "running");
         const newStatus = allHealthy ? "running" : "unhealthy";
         if (newStatus !== app.status) {
@@ -301,71 +312,10 @@ async function tick(): Promise<void> {
       }
     }
 
-    // --- VIP proxy convergence: install/upgrade ocd-proxy on every ready
-    // server and ship the rendered config. Runs before reconcileNetwork so
-    // /etc/hosts flips an app to its VIP at earliest one tick after that
-    // server's proxy is confirmed live ---
-    try {
-      await reconcileProxy();
-    } catch (err) {
-      log("proxy", `reconcile failed: ${err}`);
-    }
-
-    // --- Network reconciliation ---
-    try {
-      await reconcileNetwork();
-    } catch (err) {
-      log("network", `reconcile failed: ${err}`);
-    }
-
-    // --- Ingress drift repair: install Traefik on any ready server missing
-    // it, then desired-state sync every server's dynamic config ---
-    try {
-      await reconcileTraefik();
-    } catch (err) {
-      log("ingress", `reconcile failed: ${err}`);
-    }
-
-    // --- One-shot firewall rule convergence (only meaningful when the fleet
-    // has provider-managed servers; ensureFirewall is idempotent) ---
-    if (!firewallConverged && db.getServers().some((s) => s.provider_id)) {
-      try {
-        const { hetzner } = await import("../shared/providers/index.ts");
-        await hetzner.ensureFirewall();
-        firewallConverged = true;
-      } catch (err) {
-        log("firewall", `converge failed: ${err}`);
-      }
-    }
-
-    // --- Stuck-state sweep (surfaces cleanup_failed + stuck ops to op-logger) ---
-    sweepStuckStates();
-
     // --- Cleanup ---
     db.pruneOldMetrics(METRICS_RETENTION_SEC);
     db.pruneOldServerMetrics(METRICS_RETENTION_SEC);
     db.pruneOldAvailabilitySamples(AVAILABILITY_RETENTION_SEC);
-
-    // --- Periodic Docker prune (stopped containers, old images, build cache) ---
-    tickCount++;
-    if (tickCount % PRUNE_EVERY_N_TICKS === 0) {
-      try {
-        await sweepExpiredProvisionalVolumes();
-      } catch (err) {
-        log("volume-sweep", `failed: ${err}`);
-      }
-      for (const work of serverWork.values()) {
-        const hostKey = work.server.ssh_host_key || undefined;
-        const activeAppNames = db.getApps(work.server.id).map((app) => app.name);
-        const panel = db.getPanel();
-        if (panel?.server_id === work.server.id) activeAppNames.push(panel.name);
-        ensureHostLogPolicy(work.server.ipv4, hostKey)
-          .then(() => pruneServer(work.server.ipv4, hostKey, activeAppNames))
-          .catch((err) => {
-            log("maintenance", `server ${work.server.ipv4}: ${err}`);
-          });
-      }
-    }
 
     log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps, ${serviceCount} services, ${serverWork.size} servers)`);
   } catch (err) {
@@ -376,16 +326,74 @@ async function tick(): Promise<void> {
 }
 
 export function startReconciler(): void {
-  if (timer) return;
-  log("start", `reconciler starting (tick=${TICK_MS}ms)`);
-  // Delay first tick so server finishes booting
-  setTimeout(() => { void tick(); }, 5_000);
-  timer = setInterval(() => { void tick(); }, TICK_MS);
+  log("start", "starting isolated desired-state controllers");
+  startController({ name: "workloads", intervalMs: TICK_MS, timeoutMs: 25_000, run: tick });
+  startController({
+    name: "dns",
+    intervalMs: 30_000,
+    timeoutMs: 25_000,
+    run: async () => {
+      const results = await Promise.allSettled([reconcileAllAppDns(), reconcilePanelDns()]);
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length > 0) throw new Error(`DNS branches failed: ${failures.map((result) => result.reason).join("; ")}`);
+    },
+  });
+  startController({ name: "proxy", intervalMs: 30_000, timeoutMs: 25_000, run: reconcileProxy });
+  startController({
+    name: "network",
+    intervalMs: 30_000,
+    timeoutMs: 25_000,
+    run: async () => { await reconcileServersAndNetwork(); await reconcileNetwork(); },
+  });
+  startController({ name: "ingress", intervalMs: 30_000, timeoutMs: 25_000, run: reconcileTraefik });
+  startController({ name: "service-runtime", intervalMs: 30_000, timeoutMs: 25_000, run: reconcileServiceInstances });
+  startController({ name: "app-runtime", intervalMs: 60_000, timeoutMs: 50_000, run: reconcileAppRuntime });
+  startController({ name: "server-gc", intervalMs: 30_000, timeoutMs: 25_000, run: reconcileServerGc });
+  startController({ name: "volumes", intervalMs: 120_000, timeoutMs: 90_000, run: reconcileActiveVolumes });
+  startController({ name: "firewall", intervalMs: 300_000, timeoutMs: 60_000, run: reconcileFirewall });
+  startController({ name: "webhooks", intervalMs: 300_000, timeoutMs: 120_000, run: reconcileWebhooks });
+  startController({ name: "stuck-operations", intervalMs: 30_000, run: sweepStuckStates });
+  startController({ name: "maintenance", intervalMs: 300_000, timeoutMs: 240_000, run: maintenanceTick });
 }
 
 export function stopReconciler(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
+  stopControllers();
+}
+
+async function maintenanceTick(): Promise<void> {
+  let sweepError: unknown = null;
+  try {
+    await sweepExpiredProvisionalVolumes();
+  } catch (error) {
+    sweepError = error;
+  }
+  const results = await Promise.allSettled(db.getServers().filter((server) => server.ipv4 && server.status === "ready").map(async (server) => {
+    const hostKey = server.ssh_host_key || undefined;
+    const activeAppNames = db.getApps(server.id).map((app) => app.name);
+    const protectedContainerNames = [
+      ...db.getReplicasByServer(server.id).map((replica) => replica.container_name),
+      ...db.getServiceInstancesByServer(server.id).map((instance) => instance.container_name),
+    ];
+    const panel = db.getPanel();
+    const panelContainerName = panel?.server_id === server.id ? panel.name : undefined;
+    if (panelContainerName) {
+      activeAppNames.push(panelContainerName);
+      protectedContainerNames.push(panelContainerName);
+    }
+    await ensureHostLogPolicy(server.ipv4, hostKey);
+    await pruneServer(server.ipv4, hostKey, {
+      activeAppNames,
+      protectedContainerNames,
+      panelContainerName,
+    });
+  }));
+  const failures = results.filter((result) => result.status === "rejected");
+  if (sweepError || failures.length > 0) {
+    throw new Error([
+      sweepError ? `volume sweep: ${sweepError}` : "",
+      failures.length > 0
+        ? `${failures.length} server(s): ${failures.map((result) => result.reason).join("; ")}`
+        : "",
+    ].filter(Boolean).join("; "));
   }
 }

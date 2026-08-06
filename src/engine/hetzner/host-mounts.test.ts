@@ -200,6 +200,42 @@ describe("ensureVolumeBindMount", () => {
     ]);
   });
 
+  test("refuses to hide legacy root-disk data behind an attached volume", async () => {
+    state.findmnt.set("/mnt/HC_Volume_42", "/dev/sdb");
+    __setSshExecForTest(async (ip: string, command: string, key?: string) => {
+      if (command.startsWith("find /mnt/ocd-x-data ")) {
+        return { stdout: "/mnt/ocd-x-data/deploy.db\n", stderr: "", exitCode: 0 };
+      }
+      return defaultSshExec(ip, command, key);
+    });
+
+    await expect(
+      ensureVolumeBindMount({
+        serverIp: "1.2.3.4",
+        hetznerVolumeId: 42,
+        hostMountPath: "/mnt/ocd-x-data",
+        blockName: "panel",
+      }),
+    ).rejects.toThrow(/Legacy data migration required/);
+
+    expect(state.commands.some((command) => command.startsWith("mount --bind"))).toBe(false);
+    expect(state.fstab).toEqual([]);
+  });
+
+  test("refuses to stack over an unrelated mounted filesystem", async () => {
+    state.findmnt.set("/mnt/HC_Volume_42", "/dev/sdb");
+    state.findmnt.set("/mnt/ocd-x-data", "/dev/sdc");
+
+    await expect(
+      ensureVolumeBindMount({
+        serverIp: "1.2.3.4",
+        hetznerVolumeId: 42,
+        hostMountPath: "/mnt/ocd-x-data",
+        blockName: "app-7",
+      }),
+    ).rejects.toThrow(/already mounted from \/dev\/sdc/);
+  });
+
   test("is idempotent — running twice yields identical fstab and a single bind", async () => {
     state.findmnt.set("/mnt/HC_Volume_42", "/dev/sdb");
 
@@ -263,7 +299,7 @@ describe("removeVolumeBindMount", () => {
 describe("bindMountStatus", () => {
   test("absent: no mount, no fstab", async () => {
     const s = await bindMountStatus({ serverIp: "1.2.3.4", hostMountPath: "/mnt/ocd-x-data" });
-    expect(s).toEqual({ mounted: false, sourceDevice: null, fstabPresent: false });
+    expect(s).toEqual({ mounted: false, sourceDevice: null, fstabPresent: false, matchesExpectedVolume: null });
   });
 
   test("mounted + fstab present", async () => {
@@ -277,6 +313,26 @@ describe("bindMountStatus", () => {
     const s = await bindMountStatus({ serverIp: "1.2.3.4", hostMountPath: "/mnt/ocd-x-data" });
     expect(s.mounted).toBe(true);
     expect(s.sourceDevice).toBe("/mnt/HC_Volume_42");
+    expect(s.fstabPresent).toBe(true);
+    expect(s.matchesExpectedVolume).toBeNull();
+  });
+
+  test("matches a bind by resolved block-device source", async () => {
+    state.findmnt.set("/mnt/HC_Volume_42", "/dev/sdb");
+    state.findmnt.set("/mnt/ocd-x-data", "/dev/sdb");
+    state.fstab.push(
+      "# BEGIN ocd-bind panel",
+      "/mnt/HC_Volume_42 /mnt/ocd-x-data none bind 0 0",
+      "# END ocd-bind panel",
+    );
+
+    const s = await bindMountStatus({
+      serverIp: "1.2.3.4",
+      hostMountPath: "/mnt/ocd-x-data",
+      expectedVolumeId: 42,
+      blockName: "panel",
+    });
+    expect(s.matchesExpectedVolume).toBe(true);
     expect(s.fstabPresent).toBe(true);
   });
 
