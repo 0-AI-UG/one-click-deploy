@@ -1,7 +1,13 @@
 import { describe, test, expect } from "bun:test";
 import { buildDockerRunArgs, DEFAULT_MEM_MB, DEFAULT_CPUS, DEFAULT_PIDS } from "./containers.ts";
 import { DEFAULT_LOG_MAX_FILES, DEFAULT_LOG_MAX_SIZE } from "./container-common.ts";
-import { withExclusiveImageGc, withImageGcLease } from "./container-common.ts";
+import { asUser, withExclusiveImageGc, withImageGcLease } from "./container-common.ts";
+
+test("asUser preserves variables, substitutions, and single quotes for the deploy shell", () => {
+  expect(asUser(`printf '%s' "$name" 'literal' $(date)`)).toBe(
+    `su - deploy -c 'printf '"'"'%s'"'"' "$name" '"'"'literal'"'"' $(date)'`,
+  );
+});
 
 describe("buildDockerRunArgs", () => {
   test("always emits hardening flags", () => {

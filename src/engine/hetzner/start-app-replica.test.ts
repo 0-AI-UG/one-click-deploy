@@ -84,7 +84,9 @@ describe("startAppReplica", () => {
     // Image runs as a named user; `id` reports the numeric ids. postgres-alpine = 70:70.
     stubs = [
       { match: "{{.Config.User}}", stdout: "postgres" },
-      { match: "--entrypoint '' postgres-pg:latest id", stdout: "uid=70(postgres) gid=70(postgres) groups=70(postgres)" },
+      // The shared deploy-user wrapper safely shell-quotes the empty entrypoint,
+      // so match the stable image/id portion rather than its outer quoting.
+      { match: "postgres-pg:latest id", stdout: "uid=70(postgres) gid=70(postgres) groups=70(postgres)" },
     ];
     await startAppReplica("1.2.3.4", {
       containerName: "pg",
@@ -95,10 +97,10 @@ describe("startAppReplica", () => {
       containerPort: 5432,
       volumeMount: "/mnt/ocd-pg-data:/var/lib/postgresql/data",
     });
-    const chown = calls.find((c) => c.startsWith("chown "));
-    expect(chown).toBe("chown 70:70 /mnt/ocd-pg-data");
+    const chown = calls.find((c) => c.includes("chown 70:70 /mnt/ocd-pg-data"));
+    expect(chown).toContain("chown 70:70 /mnt/ocd-pg-data");
     // The chown must precede the run that mounts the volume.
-    const chownIdx = calls.findIndex((c) => c.startsWith("chown "));
+    const chownIdx = calls.findIndex((c) => c.includes("chown 70:70 /mnt/ocd-pg-data"));
     const runIdx = calls.findIndex((c) => c.includes("docker run -d"));
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(chownIdx).toBeLessThan(runIdx);
@@ -115,7 +117,7 @@ describe("startAppReplica", () => {
       containerPort: 3000,
       volumeMount: "/mnt/ocd-rootapp-data:/data",
     });
-    expect(calls.some((c) => c.startsWith("chown "))).toBe(false);
+    expect(calls.some((c) => c.includes("chown "))).toBe(false);
   });
 
   test("no volume → no inspect, no chown", async () => {
@@ -128,7 +130,7 @@ describe("startAppReplica", () => {
       containerPort: 3000,
     });
     expect(calls.some((c) => c.includes("{{.Config.User}}"))).toBe(false);
-    expect(calls.some((c) => c.startsWith("chown "))).toBe(false);
+    expect(calls.some((c) => c.includes("chown "))).toBe(false);
   });
 
   test("rejects a volume host path outside the allowlist", async () => {

@@ -5,9 +5,15 @@ export function log(context: string, ...args: unknown[]) {
 }
 
 // Wrap a shell command so it runs as the unprivileged `deploy` user (the uid
-// that owns docker). JSON.stringify double-quotes and escapes the command so
-// arbitrary content survives the `su -c` hop.
-export const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
+// that owns docker). The outer SSH shell must receive a single-quoted value:
+// JSON.stringify uses double quotes, which lets the outer shell expand `$var`
+// and `$(...)` before `su` sees them. That silently broke GC loops and any
+// other command whose variables were meant for the deploy user's shell.
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+export const asUser = (cmd: string) => `su - deploy -c ${shellSingleQuote(cmd)}`;
 
 // Label applied to every image built or managed by OCD. Used by `pruneServer`
 // to scope aggressive image cleanup so we never touch images that belong to
