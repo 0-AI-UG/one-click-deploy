@@ -100,7 +100,6 @@ import {
   handleRestartApp,
   handlePauseApp,
   handleRollbackApp,
-  handleRenameApp,
   handleGetContainerLogs,
   handleGetDeployments,
   handleGetDeployLog,
@@ -332,7 +331,7 @@ describe("GUARD: the real permission layer is what the routes see", () => {
   test("a user with NO permissions is refused by a handler another suite stubs out", async () => {
     const ctx = await userWith([]);
     const res = await handleDeploy(req("/api/apps/deploy", {
-      body: { app_name: db.getApp(appA)!.name, apply_mode: "patch", sticky: true },
+      body: { app_name: db.getApp(appA)!.name, apply_mode: "manifest", git_repo: db.getApp(appA)!.git_repo, container_port: 3000 },
       token: ctx.token,
     }));
     expect(res.status).toBe(403);
@@ -350,6 +349,8 @@ type Case = {
   permission: string;
   /** Grants also needed to *reach* this gate (earlier checks in the handler). */
   extra?: string[];
+  /** The route intentionally accepts only CLI-minted tokens. */
+  cli?: boolean;
   call: (ctx: Ctx) => Promise<Response>;
   /**
    * Set when the allow-path cannot be reached without live infrastructure
@@ -378,10 +379,14 @@ const CASES: Case[] = [
   {
     name: "apps: handleDeploy",
     permission: "apps.deploy",
+    extra: ["cli.access"],
+    cli: true,
     call: (c) => handleDeploy(req("/api/apps/deploy", {
       body: {
         app_name: db.getApp(appA)!.name,
-        apply_mode: "patch",
+        apply_mode: "manifest",
+        git_repo: db.getApp(appA)!.git_repo,
+        container_port: db.getApp(appA)!.container_port,
         deploy: false,
       },
       token: c.token,
@@ -409,20 +414,6 @@ const CASES: Case[] = [
     permission: "apps.rollback",
     call: (c) =>
       handleRollbackApp(req(`/api/apps/${appA}/rollback`, { body: {}, token: c.token }), appA),
-  },
-  {
-    name: "apps: handleRenameApp",
-    permission: "apps.rename",
-    // Renaming to the app's own name short-circuits before any op is enqueued.
-    call: (c) =>
-      handleRenameApp(
-        req(`/api/apps/${appA}/rename`, {
-          method: "PUT",
-          body: { name: db.getApp(appA)!.name },
-          token: c.token,
-        }),
-        appA,
-      ),
   },
   {
     name: "apps: handleGetContainerLogs",
@@ -461,6 +452,8 @@ const CASES: Case[] = [
   {
     name: "stacks: handleDeployStack",
     permission: "stacks.deploy",
+    extra: ["cli.access"],
+    cli: true,
     call: (c) => handleDeployStack(req("/api/stacks/deploy", { body: {}, token: c.token })),
   },
   {
@@ -501,6 +494,8 @@ const CASES: Case[] = [
   {
     name: "services: handleDeployService",
     permission: "services.deploy",
+    extra: ["cli.access"],
+    cli: true,
     call: (c) => handleDeployService(req("/api/services", { body: {}, token: c.token })),
   },
   {
@@ -637,7 +632,7 @@ const CASES: Case[] = [
   // --- scaling --------------------------------------------------------------
   {
     name: "scaling: handleWakeApp",
-    permission: "apps.deploy",
+    permission: "apps.restart",
     call: (c) =>
       handleWakeApp(
         req(`/api/apps/${appA}/wake`, { body: {}, token: c.token }),
@@ -892,26 +887,26 @@ describe.each(CASES.map((c) => [c.name, c] as const))("%s", (_name, c) => {
   });
 
   test(`403 for an authenticated user holding no permissions [${c.name}]`, async () => {
-    const ctx = await userWith([]);
+    const ctx = await userWith([], { cli: c.cli });
     const res = await c.call(ctx);
     expect(res.status).toBe(403);
   });
 
   test(`403 holding every permission EXCEPT ${c.permission} [${c.name}]`, async () => {
-    const ctx = await userWith(everyPermissionExcept(c));
+    const ctx = await userWith(everyPermissionExcept(c), { cli: c.cli });
     const res = await c.call(ctx);
     expect(res.status).toBe(403);
   });
 
   if (!c.denyOnly) {
     test(`NOT 403 once ${c.permission} is granted [${c.name}]`, async () => {
-      const ctx = await userWith([c.permission, ...(c.extra ?? [])]);
+      const ctx = await userWith([c.permission, ...(c.extra ?? [])], { cli: c.cli });
       const res = await c.call(ctx);
       expect(res.status).not.toBe(403);
     });
 
     test(`NOT 403 for an admin holding no grants at all [${c.name}]`, async () => {
-      const ctx = await userWith([], { admin: true });
+      const ctx = await userWith([], { admin: true, cli: c.cli });
       const res = await c.call(ctx);
       expect(res.status).not.toBe(403);
     });
@@ -1017,18 +1012,18 @@ describe("scope semantics through the real routes", () => {
 
 describe("permission splits are enforced (the old coarse grant is not enough)", () => {
   test("apps.redeploy does NOT allow changing stored configuration", async () => {
-    const ctx = await userWith(["apps.redeploy"]);
+    const ctx = await userWith(["apps.redeploy", "cli.access"], { cli: true });
     const res = await handleDeploy(req("/api/apps/deploy", {
-      body: { app_name: db.getApp(appA)!.name, apply_mode: "patch", sticky: true },
+      body: { app_name: db.getApp(appA)!.name, apply_mode: "manifest", git_repo: db.getApp(appA)!.git_repo, container_port: 3000, sticky: true },
       token: ctx.token,
     }));
     expect(res.status).toBe(403);
   });
 
   test("apps.ingress does NOT allow changing stored configuration", async () => {
-    const ctx = await userWith(["apps.ingress"]);
+    const ctx = await userWith(["apps.ingress", "cli.access"], { cli: true });
     const res = await handleDeploy(req("/api/apps/deploy", {
-      body: { app_name: db.getApp(appA)!.name, apply_mode: "patch", sticky: true },
+      body: { app_name: db.getApp(appA)!.name, apply_mode: "manifest", git_repo: db.getApp(appA)!.git_repo, container_port: 3000, sticky: true },
       token: ctx.token,
     }));
     expect(res.status).toBe(403);
@@ -1057,12 +1052,14 @@ describe("permission splits are enforced (the old coarse grant is not enough)", 
   });
 
   test("webhooks.manage neither mutates app config nor changes the panel webhook", async () => {
-    const ctx = await userWith(["webhooks.manage"]);
+    const ctx = await userWith(["webhooks.manage", "cli.access"], { cli: true });
 
     const appLevel = await handleDeploy(req("/api/apps/deploy", {
       body: {
         app_name: db.getApp(appA)!.name,
-        apply_mode: "patch",
+        apply_mode: "manifest",
+        git_repo: db.getApp(appA)!.git_repo,
+        container_port: 3000,
         webhook_wait_for_ci: true,
       },
       token: ctx.token,
@@ -1150,6 +1147,26 @@ describe("permission splits are enforced (the old coarse grant is not enough)", 
 // ---------------------------------------------------------------------------
 // cli.access
 // ---------------------------------------------------------------------------
+
+describe("deploy entry points are CLI-only", () => {
+  test("a browser token cannot apply a stack manifest", async () => {
+    const ctx = await userWith(["stacks.deploy"]);
+    const res = await handleDeployStack(
+      req("/api/stacks/deploy", { body: {}, token: ctx.token }),
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toMatch(/only available through the ocd CLI/i);
+  });
+
+  test("a browser token cannot deploy a managed service", async () => {
+    const ctx = await userWith(["services.deploy"]);
+    const res = await handleDeployService(
+      req("/api/services", { body: {}, token: ctx.token }),
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toMatch(/only available through the ocd CLI/i);
+  });
+});
 
 describe("cli.access gates CLI-minted tokens on every route", () => {
   test("a CLI token is refused even when the user holds the needed permission", async () => {

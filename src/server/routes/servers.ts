@@ -36,7 +36,7 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
       kind: "destroy_server",
       resourceKeys: keys,
       input: { serverId },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });

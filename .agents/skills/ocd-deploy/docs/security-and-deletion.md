@@ -32,7 +32,7 @@ Read permissions:
 App permissions:
 
 - `apps.deploy`, `apps.rollback`, `apps.restart`, `apps.pause`, `apps.destroy`,
-  `apps.logs`, `apps.rename`, `apps.promote`.
+  `apps.logs`, `apps.promote`.
 
 Service/stack/environment:
 
@@ -66,7 +66,7 @@ Scopes:
 ## Sensitive permissions
 
 - Desired app settings, ingress, public ports, webhooks and scaling policy all
-  use `apps.deploy`.
+  use `apps.deploy`, and deployment endpoints additionally require a CLI token.
 - `volumes.files.read` grants application-data access.
 - `terminal.host` is effectively root-equivalent infrastructure access.
 - `resources.delete`, `servers.delete`, and `volumes.delete` can remove

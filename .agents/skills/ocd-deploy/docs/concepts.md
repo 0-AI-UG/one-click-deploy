@@ -19,9 +19,10 @@ server state from surviving a complete manifest application.
 | Apply desired state and deploy code | `ocd deploy` |
 | Apply desired state without code deployment | `ocd deploy --config-only` |
 
-The web UI patches only user-edited fields into the same stored manifest and
-then calls the same deploy path. It does not maintain an independent settings
-or ingress configuration model.
+The web UI cannot create apps, redeploy code, or mutate manifest-owned app
+configuration. It renders desired configuration read-only and exposes only
+operational actions. The server accepts manifest applications only from
+CLI-minted tokens.
 
 ## Desired versus operational state
 

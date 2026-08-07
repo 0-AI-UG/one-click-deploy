@@ -23,14 +23,12 @@ import {
   handleReloadAppEnvironment,
   handlePauseApp,
   handleUnpauseApp,
-  handleRenameApp,
   handleGetContainerLogs,
   handleGetDeployLog,
   handleGetDeployments,
   handleRollbackApp,
   handlePromoteApp,
   handleGetAppStaging,
-  handleIntrospectRepo,
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers, handleSetServerPool } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
@@ -59,7 +57,6 @@ import {
 import { handleDeviceCode, handleDeviceToken, handleDeviceConfirm } from "./routes/device-auth.ts";
 import { handleCreateConfirmation, handlePollConfirmation, handleLookupConfirmation, handleConfirmConfirmation, handleDenyConfirmation } from "./routes/confirmations.ts";
 import { handleCliInstallSh, handleCliDownload } from "./routes/cli.ts";
-import { handleGetDeploySession, handleSaveDeploySession, handleDeleteDeploySession } from "./routes/deploy-sessions.ts";
 import {
   handleGetEnvironments,
   handleGetDeletedEnvironments,
@@ -251,12 +248,6 @@ export const apiRoutes = {
   "/api/apps": { GET: (req: Request) => handleGetApps(req) },
   "/api/apps/deploy": { POST: (req: Request) => handleDeploy(req) },
   "/api/apps/promote": { POST: (req: Request) => handlePromoteApp(req) },
-  "/api/repos/introspect": { GET: (req: Request) => handleIntrospectRepo(req) },
-  "/api/deploy-session": {
-    GET: (req: Request) => handleGetDeploySession(req),
-    POST: (req: Request) => handleSaveDeploySession(req),
-    DELETE: (req: Request) => handleDeleteDeploySession(req),
-  },
 
   // App-specific
   "/api/apps/:appId": { DELETE: (req: Request) => handleDestroyApp(req, appIdFrom(req)) },
@@ -264,7 +255,6 @@ export const apiRoutes = {
   "/api/apps/:appId/reload-env": { POST: (req: Request) => handleReloadAppEnvironment(req, appIdFrom(req)) },
   "/api/apps/:appId/pause": { POST: (req: Request) => handlePauseApp(req, appIdFrom(req)) },
   "/api/apps/:appId/unpause": { POST: (req: Request) => handleUnpauseApp(req, appIdFrom(req)) },
-  "/api/apps/:appId/rename": { PUT: (req: Request) => handleRenameApp(req, appIdFrom(req)) },
   "/api/apps/:appId/logs": { GET: (req: Request) => handleGetContainerLogs(req, appIdFrom(req)) },
   "/api/apps/:appId/deploy-log": { GET: (req: Request) => handleGetDeployLog(req, appIdFrom(req)) },
   "/api/apps/:appId/deployments": { GET: (req: Request) => handleGetDeployments(req, appIdFrom(req)) },

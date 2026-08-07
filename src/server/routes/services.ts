@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission, envScope } from "../lib/permissions.ts";
+import { requirePermission, requireCliPermission, envScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { parseEnvVars, serializeEnvVars, encryptValue } from "../../shared/env-crypto.ts";
@@ -87,7 +87,7 @@ export async function handleGetService(request: Request, serviceId: number): Pro
 
 export async function handleDeployService(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "services.deploy");
+    const payload = await requireCliPermission(request, "services.deploy");
     const req: ServiceDeployRequest = await request.json();
     if (!req?.name || typeof req.name !== "string") {
       return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });
@@ -96,7 +96,7 @@ export async function handleDeployService(request: Request): Promise<Response> {
       kind: "deploy_service",
       resourceKeys: [`service:create:${req.name}`],
       input: req,
-      trigger: payload.client === "cli" ? "cli" : "api",
+      trigger: "cli",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });

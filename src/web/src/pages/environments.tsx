@@ -5,8 +5,8 @@ import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { Layers, Plus, Trash2, Copy, ChevronDown, ChevronRight, Key, X } from "lucide-react";
-import type { EnvironmentData, AppData } from "../types.ts";
+import { Layers, Plus, Trash2, Copy, ChevronDown, ChevronRight, Key } from "lucide-react";
+import type { EnvironmentData } from "../types.ts";
 import { serverConfirmedDelete } from "../api/server-confirmation.ts";
 
 type AttachedApp = { id: number; name: string; status: string; domain: string };
@@ -18,10 +18,9 @@ export function EnvironmentsPage() {
   const [expanded, setExpanded] = useState<number | "new" | null>(null);
   const [editName, setEditName] = useState("");
   const [editVars, setEditVars] = useState<EnvVarRow[]>([]);
-  const [rollout, setRollout] = useState<"redeploy" | "restart" | "none">("redeploy");
+  const [rollout, setRollout] = useState<"restart" | "none">("restart");
   const [loading, setLoading] = useState(false);
   const [attachedApps, setAttachedApps] = useState<Record<number, AttachedApp[]>>({});
-  const [allApps, setAllApps] = useState<AppData[]>([]);
   // Inline "copy an environment" bar (source picker + new-name input), opened
   // from the header Copy button. null = closed.
   const [copy, setCopy] = useState<{ sourceId: number | null; name: string } | null>(null);
@@ -50,7 +49,6 @@ export function EnvironmentsPage() {
   const load = () => {
     get("/api/environments").then(setEnvironments).catch(() => {});
     get("/api/environments/deleted").then(setDeletedEnvironments).catch(() => {});
-    get("/api/apps").then(setAllApps).catch(() => {});
   };
 
   useEffect(load, []);
@@ -73,7 +71,7 @@ export function EnvironmentsPage() {
       setExpanded(env.id);
       setEditName(env.name);
       setEditVars(env.env_vars.map((e) => ({ key: e.key, value: e.value, secret: e.secret })));
-      setRollout("redeploy");
+      setRollout("restart");
     }
   };
 
@@ -81,7 +79,7 @@ export function EnvironmentsPage() {
     setExpanded("new");
     setEditName("");
     setEditVars([]);
-    setRollout("redeploy");
+    setRollout("restart");
   };
 
   const save = async (id: number | "new") => {
@@ -99,10 +97,8 @@ export function EnvironmentsPage() {
         const activeApps = apps.filter((a) => a.status !== "stopped" && a.status !== "destroying");
         if (activeApps.length > 0 && rollout !== "none") {
           const ok = await confirm(
-            rollout === "restart" ? "Reload Apps" : "Redeploy Apps",
-            rollout === "restart"
-              ? `Saving will recreate ${activeApps.length} app(s) from existing images: ${activeApps.map((a) => a.name).join(", ")}`
-              : `Saving will redeploy ${activeApps.length} app(s): ${activeApps.map((a) => a.name).join(", ")}`,
+            "Reload Apps",
+            `Saving will recreate ${activeApps.length} app(s) from their existing immutable images: ${activeApps.map((a) => a.name).join(", ")}`,
             true,
           );
           if (!ok) { setLoading(false); return; }
@@ -110,8 +106,7 @@ export function EnvironmentsPage() {
         const res = await put(`/api/environments/${id}`, { name: editName, env_vars: vars, rollout }) as EnvironmentMutationResult;
         const rolling = (res?.redeploying ?? 0) + (res?.restarting ?? 0);
         if (rolling > 0 && res?.op_id) {
-          const action = rollout === "restart" ? "Reloading" : "Redeploying";
-          trackOperationInToast(res.op_id, `${action} ${rolling} app${rolling !== 1 ? "s" : ""}`);
+          trackOperationInToast(res.op_id, `Reloading ${rolling} app${rolling !== 1 ? "s" : ""}`);
           ops.track(res.op_id);
         } else {
           showToast("Environment updated", "success");
@@ -124,38 +119,6 @@ export function EnvironmentsPage() {
       showToast(err.message || "Failed to save", "error");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const attachApp = async (envId: number, appId: number) => {
-    try {
-      const app = allApps.find((candidate) => candidate.id === appId);
-      if (!app) throw new Error("App not found");
-      await post("/api/apps/deploy", {
-        app_name: app.name,
-        apply_mode: "patch",
-        environment_id: envId,
-      });
-      showToast("App attached, redeploying", "success");
-      load();
-    } catch (err: any) {
-      showToast(err.message || "Failed to attach", "error");
-    }
-  };
-
-  const detachApp = async (envId: number, appId: number) => {
-    try {
-      const app = allApps.find((candidate) => candidate.id === appId);
-      if (!app) throw new Error("App not found");
-      await post("/api/apps/deploy", {
-        app_name: app.name,
-        apply_mode: "patch",
-        environment_id: null,
-      });
-      showToast("App detached, redeploying", "success");
-      load();
-    } catch (err: any) {
-      showToast(err.message || "Failed to detach", "error");
     }
   };
 
@@ -192,12 +155,6 @@ export function EnvironmentsPage() {
     }
   };
 
-  // Apps not yet attached to this environment
-  const unattachedApps = (envId: number) => {
-    const attached = new Set((attachedApps[envId] || []).map((a) => a.id));
-    return allApps.filter((a) => !attached.has(a.id));
-  };
-
   const renderEditor = (id: number | "new") => {
     const envBusy = typeof id === "number" && !!ops.byResourceKey(`env:${id}`);
     return (
@@ -230,11 +187,10 @@ export function EnvironmentsPage() {
               compact
               value={rollout}
               options={[
-                { value: "redeploy", label: "Redeploy (build)" },
                 { value: "restart", label: "Reload existing image" },
                 { value: "none", label: "No rollout" },
               ]}
-              onChange={(value) => setRollout((value || "redeploy") as typeof rollout)}
+              onChange={(value) => setRollout((value || "restart") as typeof rollout)}
             />
           </div>
         )}
@@ -307,7 +263,6 @@ export function EnvironmentsPage() {
             {environments.map((env) => {
               const isOpen = expanded === env.id;
               const apps = attachedApps[env.id] || [];
-              const available = unattachedApps(env.id);
               return (
                 <div key={env.id}>
                   <div
@@ -366,35 +321,16 @@ export function EnvironmentsPage() {
                   </div>
                   {isOpen && (
                     <>
-                      {/* Attached apps with detach */}
+                      {/* Environment linkage is manifest-owned and read-only here. */}
                       <div className="px-4 py-2 ml-7 flex items-center gap-2 flex-wrap">
                         <span className="font-mono text-[9px] text-muted uppercase">Apps:</span>
                         {apps.map((a) => (
                           <span key={a.id} className="inline-flex items-center gap-1 font-mono text-[9px] px-1.5 py-0.5 bg-alt text-fg">
                             <a href={`#/apps/${a.id}`} className="hover:underline">{a.name}</a>
-                            <button
-                              onClick={() => detachApp(env.id, a.id)}
-                              className="text-muted hover:text-accent-red transition-colors"
-                              title="Detach"
-                            >
-                              <X size={9} />
-                            </button>
                           </span>
                         ))}
-                        {available.length > 0 && (
-                          <div className="w-32">
-                            <NeoSelect
-                              compact
-                              value=""
-                              placeholder="+ attach app"
-                              options={available.map((a) => ({ value: String(a.id), label: a.name }))}
-                              onChange={(v) => { if (v) attachApp(env.id, parseInt(v)); }}
-                            />
-                          </div>
-                        )}
-                        {apps.length === 0 && available.length === 0 && (
-                          <span className="font-mono text-[9px] text-muted">no apps</span>
-                        )}
+                        {apps.length === 0 && <span className="font-mono text-[9px] text-muted">no apps</span>}
+                        <span className="font-mono text-[9px] text-muted">linkage is controlled by app manifests</span>
                       </div>
                       {renderEditor(env.id)}
                     </>

@@ -48,7 +48,6 @@ export const ALL_PERMISSIONS = [
   "apps.pause",
   "apps.destroy",
   "apps.logs",
-  "apps.rename",
   "apps.promote",
 
   // --- Services --------------------------------------------------------
@@ -67,7 +66,7 @@ export const ALL_PERMISSIONS = [
   // --- Environments ----------------------------------------------------
   "environments.manage",
   /** Reading/writing env var values, which are secrets. Separate from the
-   *  lifecycle grant so someone can attach apps without seeing credentials. */
+   *  environment lifecycle grant so credentials can be restricted. */
   "environments.secrets",
 
   // --- Scaling ---------------------------------------------------------
@@ -146,7 +145,6 @@ export const PERMISSION_SCOPES: Readonly<Record<string, readonly ScopeType[]>> =
   "apps.pause": ["app", "environment"],
   "apps.destroy": ["app", "environment"],
   "apps.logs": ["app", "environment"],
-  "apps.rename": ["app", "environment"],
   "apps.promote": ["app", "environment"],
   "deployments.view": ["app", "environment"],
   "metrics.view": ["app", "environment"],

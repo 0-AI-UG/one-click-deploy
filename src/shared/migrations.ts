@@ -1770,7 +1770,7 @@ export const migrations: Migration[] = [
         ["servers.view", ["fleet.view", "apps.view", "services.view", "environments.view", "metrics.view", "operations.view"]],
         ["servers.delete", ["servers.delete", "servers.manage"]],
         ["resources.create", ["servers.create"]],
-        ["apps.deploy", ["apps.deploy", "apps.rename", "apps.promote"]],
+        ["apps.deploy", ["apps.deploy", "apps.promote"]],
         ["apps.redeploy", ["apps.deploy", "panel.manage"]],
         ["apps.logs", ["apps.logs", "deployments.view", "panel.view"]],
         ["stacks.deploy", ["stacks.deploy", "stacks.promote"]],
@@ -2105,6 +2105,20 @@ export const migrations: Migration[] = [
           WHERE environment_id = NEW.id
              OR webhook_staging_environment_id = NEW.id;
         END`);
+    },
+  },
+  {
+    version: 96,
+    description:
+      "Enforce CLI-only manifest deployment by removing obsolete browser deploy drafts and app rename authorization.",
+    up: (db) => {
+      db.run("DROP TABLE IF EXISTS deploy_sessions");
+      db.run("DELETE FROM user_permissions WHERE permission = 'apps.rename'");
+      db.run(`UPDATE operations
+        SET status = 'failed',
+            error_json = '{"message":"App rename was removed; app identity is manifest-owned"}',
+            finished_at = datetime('now')
+        WHERE kind = 'rename_app' AND status IN ('pending', 'running', 'compensating')`);
     },
   },
 ];

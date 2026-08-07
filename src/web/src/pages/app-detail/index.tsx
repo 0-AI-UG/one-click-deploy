@@ -5,13 +5,13 @@ import { PermissionGate } from "../../components/permission-gate.tsx";
 import { TabBar } from "../../components/tab-bar.tsx";
 import { PausedBanner } from "../../components/paused-banner.tsx";
 import { trackOperationInToast, useResourceOperations } from "../../hooks/useOperation.ts";
-import { ArrowLeft, RefreshCw, Play, Pause, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, Play, Pause, RotateCcw, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
 import { LogsTab } from "./logs-tab.tsx";
 import { DeploymentsTab } from "./deployments-tab.tsx";
 import { ScalingTab } from "./scaling-tab.tsx";
 import { WebhooksTab } from "./webhooks-tab.tsx";
-import { SettingsTab, type IngressForm } from "./settings-tab.tsx";
+import { SettingsTab } from "./settings-tab.tsx";
 import type { AppData, ServerData, ReplicaData, MetricSample, ScalingEvent, DeploymentRecord } from "../../types.ts";
 import { useMobileLayout } from "../../hooks/use-mobile-layout.ts";
 import { MobileActionSheet, MobileSheetAction } from "../../components/mobile-action-sheet.tsx";
@@ -25,35 +25,18 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const [app, setApp] = useState<AppData | null>(null);
   const [server, setServer] = useState<ServerData | null>(null);
   const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
-  const [nameEdit, setNameEdit] = useState("");
-  const [isPublic, setIsPublic] = useState(true);
-  const [portEdit, setPortEdit] = useState<number>(0);
-  const [memEdit, setMemEdit] = useState<number>(0);
-  const [cpuEdit, setCpuEdit] = useState<number>(0);
   const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
-  const [ingressForm, setIngressForm] = useState<IngressForm>({ sticky: false, rate_limit_rps: 0, ip_allowlist: "", health_check_path: "", compress: false, public_protocol: "off", public_port: "", auth_enabled: false, auth_password: "", internal_protocol: "http", health_check: true });
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
   const [replicas, setReplicas] = useState<ReplicaData[]>([]);
   const [metricsHistory, setMetricsHistory] = useState<MetricSample[]>([]);
   const [scalingEvents, setScalingEvents] = useState<ScalingEvent[]>([]);
   const [allServers, setAllServers] = useState<ServerData[]>([]);
-  const [policy, setPolicy] = useState<{
-    autoscale_enabled: boolean;
-    min_replicas: number;
-    max_replicas: number;
-    cpu_threshold: number;
-    mem_threshold: number;
-    cooldown: number;
-    scale_to_zero_after: number;
-    req_threshold: number;
-  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const ops = useResourceOperations(`app:${appId}`, { rehydrateToasts: true });
   const [tail, setTail] = useState(100);
   const [selectedReplicaId, setSelectedReplicaId] = useState<number | null>(null);
-  const [webhookForm, setWebhookForm] = useState<{ branch: string; path: string; waitForCi: boolean; stagingEnvId: number | null }>({ branch: "main", path: "", waitForCi: false, stagingEnvId: null });
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
 
   const load = async () => {
@@ -108,45 +91,10 @@ export function AppDetailPage({ appId }: { appId: number }) {
   };
 
   useEffect(() => {
-    if (tab === "scaling" && app && !policy) {
-      setPolicy({
-        autoscale_enabled: !!app.autoscale_enabled,
-        min_replicas: app.min_replicas ?? 1,
-        max_replicas: app.max_replicas ?? 3,
-        cpu_threshold: app.autoscale_cpu_threshold ?? 70,
-        mem_threshold: app.autoscale_mem_threshold ?? 80,
-        cooldown: app.autoscale_cooldown ?? 300,
-        scale_to_zero_after: app.scale_to_zero_after ?? 300,
-        req_threshold: app.autoscale_req_threshold ?? 0,
-      });
-    }
-  }, [tab, app]);
-
-  useEffect(() => {
     if (tab === "logs") { loadReplicas(); loadLogs(); }
     if (tab === "deployments") loadDeployments();
     if (tab === "overview" || tab === "scaling") loadReplicas();
     if (tab === "settings" && app) {
-      setNameEdit(app.name || "");
-      setIsPublic(!!app.public);
-      setPortEdit(app.container_port || 0);
-      setMemEdit(app.memory_mb || 0);
-      setCpuEdit(app.cpu_limit || 0);
-      setIngressForm({
-        sticky: !!app.sticky,
-        rate_limit_rps: app.rate_limit_rps || 0,
-        ip_allowlist: app.ip_allowlist || "",
-        health_check_path: app.health_check_path || "",
-        compress: !!app.compress,
-        public_protocol: app.public_port != null ? (app.public_protocol === "udp" ? "udp" : "tcp") : "off",
-        public_port: app.public_port != null ? String(app.public_port) : "",
-        // Password is write-only: we only know whether auth is on, never the
-        // value. Blank field + enabled = keep current password.
-        auth_enabled: !!app.auth_enabled,
-        auth_password: "",
-        internal_protocol: app.internal_protocol === "tcp" ? "tcp" : "http",
-        health_check: !!(app.health_check ?? 1),
-      });
       if (app.volume_mount) {
         const parts = String(app.volume_mount).split(":");
         setVolumeForm((f) => ({ ...f, mount_path: parts[1] || "/data" }));
@@ -209,18 +157,11 @@ export function AppDetailPage({ appId }: { appId: number }) {
             <div className="min-w-0 flex-1 pt-0.5">
               <p className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-muted">App</p>
               <h1 className="mt-0.5 truncate font-mono text-lg font-bold uppercase text-fg">{app.name}</h1>
-              <div className="mt-1"><StatusBadge status={app.status} subLabel={app.environment_stale ? "config changed" : badgeSubLabel} /></div>
+              <div className="mt-1"><StatusBadge status={app.status} subLabel={app.environment_stale ? "run ocd deploy" : badgeSubLabel} /></div>
             </div>
             <button onClick={() => setMobileActionsOpen(true)} aria-label="App actions" className="grid h-11 w-11 shrink-0 place-items-center rounded-full active:bg-alt"><MoreHorizontal size={23} /></button>
           </div>
           {server && <p className="ml-14 mt-2 truncate font-mono text-[9px] text-muted">{server.name} · {server.ipv4}</p>}
-          <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
-            <button
-              disabled={ops.isBusy || actionLoading === "redeploy"}
-              onClick={() => action("redeploy", () => post("/api/apps/deploy", { app_name: app.name, apply_mode: "patch" }))}
-              className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 border-2 border-fg bg-accent px-4 font-mono text-[11px] font-bold uppercase tracking-wide shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 active:shadow-none disabled:opacity-40"
-            ><RefreshCw size={17} className={actionLoading === "redeploy" || ops.isBusyWith("redeploy") ? "animate-spin" : ""} />{actionLoading === "redeploy" || ops.isBusyWith("redeploy") ? "Deploying…" : "Deploy latest code"}</button>
-          </PermissionGate>
         </div>
       ) : (
       <div className="flex items-center gap-3 mb-6">
@@ -230,7 +171,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
             <h1 className="font-mono font-bold text-sm text-fg uppercase">{app.name}</h1>
             <StatusBadge
               status={app.status}
-              subLabel={app.environment_stale ? "stale environment — redeploy required" : badgeSubLabel}
+              subLabel={app.environment_stale ? "stale environment — run ocd deploy" : badgeSubLabel}
             />
           </div>
           {server && (
@@ -255,14 +196,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
                 <Pause size={12} /> Pause
               </Btn>
             )}
-          </PermissionGate>
-          <PermissionGate permission="apps.deploy" appId={appId} environmentId={app.environment_id}>
-            <Btn size="xs" variant="primary" loading={actionLoading === "redeploy" || ops.isBusyWith("redeploy")} disabled={ops.isBusy} onClick={() => action("redeploy", () => post("/api/apps/deploy", {
-              app_name: app.name,
-              apply_mode: "patch",
-            }))}>
-              <RefreshCw size={12} /> Deploy latest code
-            </Btn>
           </PermissionGate>
           <PermissionGate permission="apps.destroy" appId={appId} environmentId={app.environment_id}>
             <Btn
@@ -332,12 +265,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
           appId={appId}
           replicas={replicas}
           scalingEvents={scalingEvents}
-          policy={policy}
-          setPolicy={setPolicy}
           actionLoading={actionLoading}
           action={action}
-          loadReplicas={loadReplicas}
-          load={load}
           ops={ops}
         />
       )}
@@ -346,9 +275,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
         <WebhooksTab
           app={app}
           appId={appId}
-          webhookForm={webhookForm}
-          setWebhookForm={setWebhookForm}
-          actionLoading={actionLoading}
           action={action}
           ops={ops}
         />
@@ -358,20 +284,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
         <SettingsTab
           app={app}
           appId={appId}
-          nameEdit={nameEdit}
-          setNameEdit={setNameEdit}
-          isPublic={isPublic}
-          setIsPublic={setIsPublic}
-          portEdit={portEdit}
-          setPortEdit={setPortEdit}
-          memEdit={memEdit}
-          setMemEdit={setMemEdit}
-          cpuEdit={cpuEdit}
-          setCpuEdit={setCpuEdit}
           volumeForm={volumeForm}
           setVolumeForm={setVolumeForm}
-          ingressForm={ingressForm}
-          setIngressForm={setIngressForm}
           actionLoading={actionLoading}
           action={action}
           ops={ops}

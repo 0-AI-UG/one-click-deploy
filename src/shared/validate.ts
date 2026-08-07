@@ -511,7 +511,7 @@ function fieldValueAt(root: unknown, path: readonly PropertyKey[]): unknown {
 
 
 export function validateDeployRequest(req: {
-  apply_mode?: "manifest" | "patch";
+  apply_mode?: "manifest";
   app_name: string;
   domain?: string;
   git_repo: string;
@@ -602,14 +602,13 @@ export function validateDeployRequest(req: {
     if (!envResult.valid) return { valid: false, error: envResult.error };
   }
 
-  const minimumDesiredReplicas = req.apply_mode === "patch" ? 0 : 1;
   if (
     req.replicas !== undefined &&
-    (!Number.isInteger(req.replicas) || req.replicas < minimumDesiredReplicas)
+    (!Number.isInteger(req.replicas) || req.replicas < 1)
   ) {
     return {
       valid: false,
-      error: `Replicas must be an integer >= ${minimumDesiredReplicas}`,
+      error: "Replicas must be an integer >= 1",
     };
   }
   if (req.min_replicas !== undefined && (!Number.isInteger(req.min_replicas) || req.min_replicas < 0)) {

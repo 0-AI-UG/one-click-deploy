@@ -6,7 +6,6 @@ import * as db from "./db.ts";
 import {
   applyAppConfig,
   diffAppConfig,
-  mergeDeployRequestWithExistingApp,
 } from "./app-config.ts";
 import { serializeEnvVars } from "./env-crypto.ts";
 
@@ -97,36 +96,6 @@ describe("desired app configuration", () => {
     });
     expect(db.getApp(app.id)?.environment_id).toBe(env.id);
     expect(db.getEnvironment(env.id)).not.toBeNull();
-  });
-
-  test("patch mode preserves scaling, bind mounts, and environment", () => {
-    const { app, env } = seedApp();
-    db.updateAppScaling(app.id, {
-      desired_replicas: 2,
-      min_replicas: 0,
-      max_replicas: 6,
-      autoscale_enabled: true,
-      autoscale_cpu_threshold: 65,
-      autoscale_mem_threshold: 70,
-      autoscale_req_threshold: 90,
-      autoscale_cooldown: 120,
-      scale_to_zero_after: 600,
-    });
-    db.updateAppExtraVolumes(app.id, ["/srv/data:/data"]);
-    const current = db.getApp(app.id)!;
-    const merged = mergeDeployRequestWithExistingApp(current, {
-      apply_mode: "patch",
-      app_name: app.name,
-      public: false,
-    });
-    expect(merged.replicas).toBe(2);
-    expect(merged.min_replicas).toBe(0);
-    expect(merged.max_replicas).toBe(6);
-    expect(merged.autoscale_enabled).toBe(true);
-    expect(merged.extra_volumes).toEqual([
-      { host_path: "/srv/data", container_path: "/data" },
-    ]);
-    expect(merged.environment_id).toBe(env.id);
   });
 
   test("manifest mode resets omitted fields and supports explicit detach", async () => {

@@ -205,7 +205,7 @@ export async function handleDeleteResource(request: Request, type: string, id: s
           kind: "destroy_server",
           resourceKeys: keys,
           input: { serverId: server.id },
-          trigger: "ui",
+          trigger: payload.client === "cli" ? "cli" : "ui",
           triggeredBy: payload.userId,
         });
         return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
@@ -716,7 +716,7 @@ export async function handleCreateServer(request: Request): Promise<Response> {
         location: body.location,
         name: body.name,
       },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
 

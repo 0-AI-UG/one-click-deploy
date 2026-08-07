@@ -155,7 +155,7 @@ be treated as security-sensitive.
 
 ## Configuration timing
 
-Ingress-only UI/apply changes are rendered immediately. Container-injected
+Ingress-only manifest applications are rendered immediately. Container-injected
 values such as `OCD_INTERNAL_URL` update only when a container is recreated.
 
 Examples:

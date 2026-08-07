@@ -6,7 +6,7 @@ import { enqueue } from "../ipc/enqueue.ts";
 
 export async function handleWakeApp(request: Request, appId: number): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.deploy");
+    const payload = await requirePermission(request, "apps.restart", appScope(appId));
     const app = db.getApp(appId);
     if (!app) {
       return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
@@ -21,7 +21,7 @@ export async function handleWakeApp(request: Request, appId: number): Promise<Re
       kind: "wake",
       resourceKeys: [`app:${appId}`],
       input: { appId },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
       idempotencyKey: `wake:${appId}`,
     });
@@ -91,7 +91,7 @@ export async function handleMigrateReplica(request: Request, appId: number, repl
       kind: "migrate",
       resourceKeys: [`app:${appId}`],
       input: { appId, replicaId, targetServerId: body.target_server_id },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });

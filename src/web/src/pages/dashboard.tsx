@@ -49,7 +49,6 @@ const APP_OP_LABELS: Record<string, string> = {
   restart: "Restarting app",
   pause: "Pausing app",
   unpause: "Unpausing app",
-  redeploy: "Redeploying app",
   delete: "Destroying app",
 };
 const SVC_OP_LABELS: Record<string, string> = {
@@ -62,7 +61,6 @@ const APP_ACTION_TO_KIND: Record<string, string> = {
   restart: "restart_app",
   pause: "pause_app",
   unpause: "unpause_app",
-  redeploy: "redeploy",
   delete: "destroy_app",
 };
 const SVC_ACTION_TO_KIND: Record<string, string> = {
@@ -147,15 +145,6 @@ export function DashboardPage() {
     try {
       const res = action === "delete"
         ? await del(`/api/apps/${appId}`) as { op_id?: number }
-        : action === "redeploy"
-          ? (() => {
-            const app = data.apps.find((candidate) => candidate.id === appId);
-            if (!app) throw new Error("App not found");
-            return post("/api/apps/deploy", {
-              app_name: app.name,
-              apply_mode: "patch",
-            }) as { op_id?: number };
-          })()
         : await post(`/api/apps/${appId}/${action}`, body) as { op_id?: number };
       if (res?.op_id) {
         trackOperationInToast(res.op_id, APP_OP_LABELS[action] || "Operation");
@@ -281,7 +270,7 @@ export function DashboardPage() {
           <div className="flex min-w-0 flex-1 items-center gap-4 overflow-hidden">
             <a href={`#/apps/${app.id}`} className="shrink-0 font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{app.name}</a>
             {app.domain && (
-              <span className="flex w-[300px] min-w-0 max-w-[300px] flex-1 items-center gap-1 text-[9px] font-mono text-muted" title={app.domain}>
+              <span className="flex min-w-0 max-w-[300px] items-center gap-1 text-[9px] font-mono text-muted" title={app.domain}>
                 <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="flex min-w-0 items-center gap-1 hover:text-fg transition-colors">
                   <Globe size={10} className="shrink-0" /><span className="truncate whitespace-nowrap">{app.domain}</span><ExternalLink size={8} className="shrink-0" />
                 </a>
@@ -289,7 +278,7 @@ export function DashboardPage() {
               </span>
             )}
             {!app.public && !app.domain && (
-              <span className="flex w-[300px] min-w-0 max-w-[300px] flex-1 items-center gap-1 text-[9px] font-mono text-muted" title={app.internal_protocol === "tcp" ? `${app.name}.ocd.internal:${app.container_port}` : `${app.name}.ocd.internal`}>
+              <span className="flex min-w-0 max-w-[300px] items-center gap-1 text-[9px] font-mono text-muted" title={app.internal_protocol === "tcp" ? `${app.name}.ocd.internal:${app.container_port}` : `${app.name}.ocd.internal`}>
                 <Globe size={10} className="shrink-0" /><span className="truncate whitespace-nowrap">{app.internal_protocol === "tcp" ? `${app.name}.ocd.internal:${app.container_port}` : `${app.name}.ocd.internal`}</span>
                 <CopyButton text={app.internal_protocol === "tcp" ? `tcp://${app.name}.ocd.internal:${app.container_port}` : `http://${app.name}.ocd.internal`} size={10} />
                 <span className="shrink-0 font-mono text-[8px] font-bold border border-fg px-1 uppercase">Private</span>
@@ -297,7 +286,7 @@ export function DashboardPage() {
             )}
             <span className="shrink-0"><StatusBadge
               status={app.status}
-              subLabel={app.environment_stale ? "stale environment — redeploy required" : undefined}
+              subLabel={app.environment_stale ? "stale environment — run ocd deploy" : undefined}
             /></span>
             {app.webhook_enabled ? <span className="shrink-0" title="Webhook active"><GitBranch size={10} className="text-accent" /></span> : null}
             {app.desired_replicas > 1 && (
@@ -330,15 +319,6 @@ export function DashboardPage() {
                 const armed = confirmKey === k;
                 return (
                   <ContextActionItem icon={armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />} label={armed ? "Confirm pause" : "Pause"} loading={isAppActionLoading(app.id, "pause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("pause", app.id), close)} />
-                );
-              })()}
-              </PermissionGate>
-              <PermissionGate permission="apps.deploy" appId={app.id} environmentId={app.environment_id}>
-              {(() => {
-                const k = `redeploy-${app.id}`;
-                const armed = confirmKey === k;
-                return (
-                  <ContextActionItem icon={armed ? <Check size={12} className="text-accent-blue" /> : <RefreshCw size={12} />} label={armed ? "Confirm redeploy" : "Deploy latest code"} loading={isAppActionLoading(app.id, "redeploy")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("redeploy", app.id), close)} />
                 );
               })()}
               </PermissionGate>
@@ -673,7 +653,7 @@ export function DashboardPage() {
         )}
 
         {nothingDeployed ? (
-          <div className="mt-12"><EmptyState message="Nothing deployed yet. Deploy your first app or service to get started." icon={Box} /></div>
+          <div className="mt-12"><EmptyState message="Nothing deployed yet. Run ocd deploy from an app repository." icon={Box} /></div>
         ) : (
           <div className="space-y-5">
             {(mobileFilter === "all" || mobileFilter === "apps") && (
@@ -697,7 +677,6 @@ export function DashboardPage() {
               <MobileSheetAction icon={<Settings2 size={19} />} label="Open app" detail="Metrics, logs, deployments and settings" primary onClick={() => closeAnd(() => { window.location.hash = `#/apps/${selectedApp.id}`; })} />
               <PermissionGate permission="apps.restart" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<RotateCcw size={19} />} label="Restart" loading={isAppActionLoading(selectedApp.id, "restart")} disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction("restart", selectedApp.id))} /></PermissionGate>
               <PermissionGate permission="apps.pause" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={selectedApp.status === "paused" ? <Play size={19} /> : <Pause size={19} />} label={selectedApp.status === "paused" ? "Unpause" : "Pause"} disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction(selectedApp.status === "paused" ? "unpause" : "pause", selectedApp.id))} /></PermissionGate>
-              <PermissionGate permission="apps.deploy" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<RefreshCw size={19} />} label="Deploy latest code" primary disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction("redeploy", selectedApp.id))} /></PermissionGate>
               <PermissionGate permission="apps.destroy" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<Trash2 size={19} />} label="Destroy app" danger disabled={!!appBusyKind(selectedApp.id)} onClick={async () => { if (await confirm("Destroy App", `Permanently destroy "${selectedApp.name}"? This removes all containers, DNS records, and webhooks.`, true)) closeAnd(() => appAction("delete", selectedApp.id)); }} /></PermissionGate>
             </>
           )}
@@ -736,7 +715,7 @@ export function DashboardPage() {
       </div>
 
       {nothingDeployed ? (
-        <EmptyState message="Nothing deployed yet. Deploy your first app or service to get started." icon={Box} />
+        <EmptyState message="Nothing deployed yet. Run ocd deploy from an app repository." icon={Box} />
       ) : (
         <>
           {/* Apps + stacks */}

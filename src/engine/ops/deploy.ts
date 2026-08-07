@@ -1122,9 +1122,6 @@ const finalizeDeploy: Step<DeployInput, { ok: true }> = {
     }
 
     db.appendDeployLog(appOut.appId, `[done] App deployed successfully`);
-    if (ctx.triggeredBy) {
-      try { db.deleteDeploySession(ctx.triggeredBy); } catch { /* best-effort */ }
-    }
     log("done", `op#${ctx.opId} completed for app ${appOut.containerName}`);
     return { ok: true };
   },

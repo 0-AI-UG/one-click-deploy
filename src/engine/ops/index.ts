@@ -23,7 +23,6 @@ import "./restart-app.ts";
 import "./reload-app.ts";
 import "./pause-app.ts";
 import "./unpause-app.ts";
-import "./rename-app.ts";
 import "./attach-volume.ts";
 import "./attach-existing-volume.ts";
 import "./detach-volume.ts";

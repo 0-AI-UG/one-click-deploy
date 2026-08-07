@@ -22,6 +22,11 @@ For image deployments, set `image.ref`; a Git remote is then unnecessary.
 
 The same sequence handles first deploys and later deploys.
 
+App deployment and desired-configuration application are CLI-only. The web UI
+cannot submit this endpoint; it shows the last applied manifest and current
+runtime state, plus operational controls such as restart, rollback, wake,
+pause, promotion, and replica migration.
+
 ## Preview changes
 
 ```bash
@@ -57,4 +62,4 @@ desired settings belong in the manifest.
 ## Repeated deploys
 
 Run `ocd deploy` again after changing code or desired configuration. There is
-no separate redeploy command and no separate config/settings/ingress mutation.
+no UI redeploy command and no separate config/settings/ingress mutation.

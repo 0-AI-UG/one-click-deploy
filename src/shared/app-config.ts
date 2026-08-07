@@ -36,11 +36,6 @@ export type AppScalingSpec = {
   min_locations: number;
 };
 
-function isManifestApply(req: Partial<DeployRequest>): boolean {
-  return req.apply_mode === "manifest" ||
-    (req.apply_mode === undefined && !!req.manifest_hash);
-}
-
 function environmentIdByName(name: string): number {
   const normalized = name.trim().toLowerCase();
   const environment = db.getEnvironments().find((candidate) =>
@@ -110,124 +105,88 @@ export function normalizeAppScaling(req: DeployRequest): AppScalingSpec {
   };
 }
 
-/** Build a full deploy request from an existing app row and a partial patch.
+/** Normalize a complete manifest application for an existing app.
  *
- * This lets callers send only changed fields from the UI while preserving the
- * current stored manifest values for everything else.
+ * Runtime-assigned identity (the generated domain), explicit environment
+ * linkage omitted by the manifest, stack ownership, and attached-volume state
+ * are retained. Every manifest-owned scalar uses its documented default.
  */
 export function mergeDeployRequestWithExistingApp(
   app: AppRow,
-  patch: Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean },
+  manifest: Partial<DeployRequest> & { dry_run?: boolean; deploy?: boolean },
 ): DeployRequest {
-  const manifest = isManifestApply(patch);
   const supplied = resolveDeployRequestEnvironmentIds({
-    ...patch,
-    app_name: patch.app_name ?? app.name,
-    git_repo: patch.git_repo ?? app.git_repo,
-    container_port: patch.container_port ?? app.container_port,
+    ...manifest,
+    app_name: manifest.app_name ?? app.name,
+    git_repo: manifest.git_repo ?? app.git_repo,
+    container_port: manifest.container_port ?? app.container_port,
   });
   const publicApp = supplied.public !== undefined
     ? supplied.public
-    : manifest ? true : !!app.public;
+    : true;
   const merged: DeployRequest = {
-    apply_mode: manifest ? "manifest" : "patch",
+    apply_mode: "manifest",
     app_name: supplied.app_name,
     domain: publicApp ? supplied.domain ?? app.domain : "",
     git_repo: supplied.git_repo,
-    git_branch: supplied.git_branch ?? (manifest ? "" : app.git_branch),
-    dockerfile_path: supplied.dockerfile_path ??
-      (manifest ? "Dockerfile" : app.dockerfile_path || "Dockerfile"),
-    docker_context: supplied.docker_context ??
-      (manifest ? "." : app.docker_context || "."),
-    image_ref: supplied.image_ref ?? (manifest ? "" : app.image_ref || ""),
-    build_cache_ref: supplied.build_cache_ref ??
-      (manifest ? "" : app.build_cache_ref || ""),
+    git_branch: supplied.git_branch ?? "",
+    dockerfile_path: supplied.dockerfile_path ?? "Dockerfile",
+    docker_context: supplied.docker_context ?? ".",
+    image_ref: supplied.image_ref ?? "",
+    build_cache_ref: supplied.build_cache_ref ?? "",
     container_port: supplied.container_port,
     env_vars: supplied.env_vars,
-    env_projection: supplied.env_projection !== undefined
-      ? supplied.env_projection
-      : manifest ? null : db.parseAppEnvProjection(app),
+    env_projection: supplied.env_projection ?? null,
     public: publicApp,
-    memory_mb: supplied.memory_mb ?? (manifest ? 0 : app.memory_mb ?? 0),
-    cpu_limit: supplied.cpu_limit ?? (manifest ? 0 : app.cpu_limit ?? 0),
-    auth_password: supplied.auth_password ?? (manifest ? "" : undefined),
-    health_check: supplied.health_check ??
-      (manifest ? true : !!app.health_check),
+    memory_mb: supplied.memory_mb ?? 0,
+    cpu_limit: supplied.cpu_limit ?? 0,
+    auth_password: supplied.auth_password ?? "",
+    health_check: supplied.health_check ?? true,
     health_check_mode: supplied.health_check_mode ??
       (supplied.health_check !== undefined
         ? supplied.health_check ? "http" : "container"
-        : manifest
-          ? "http"
-          : (app.health_check_mode as DeployRequest["health_check_mode"]) ||
-            (app.health_check ? "http" : "container")),
-    health_check_command: supplied.health_check_command ??
-      (manifest ? "" : app.health_check_command),
-    health_check_file: supplied.health_check_file ??
-      (manifest ? "" : app.health_check_file),
-    health_check_max_age_seconds: supplied.health_check_max_age_seconds ??
-      (manifest ? 0 : app.health_check_max_age_seconds),
+        : "http"),
+    health_check_command: supplied.health_check_command ?? "",
+    health_check_file: supplied.health_check_file ?? "",
+    health_check_max_age_seconds: supplied.health_check_max_age_seconds ?? 0,
     environment: supplied.environment,
     environment_id: supplied.environment_id !== undefined
       ? supplied.environment_id
       : app.environment_id,
-    webhook_enabled: supplied.webhook_enabled ??
-      (manifest ? false : !!app.webhook_enabled),
-    webhook_branch: supplied.webhook_branch ??
-      (manifest ? "main" : app.webhook_branch || "main"),
-    webhook_path: supplied.webhook_path ?? (manifest ? "" : app.webhook_path),
-    webhook_wait_for_ci: supplied.webhook_wait_for_ci ??
-      (manifest ? false : !!app.webhook_wait_for_ci),
-    webhook_staging: supplied.webhook_staging ??
-      (manifest ? false : app.webhook_staging_environment_id != null),
+    webhook_enabled: supplied.webhook_enabled ?? false,
+    webhook_branch: supplied.webhook_branch ?? "main",
+    webhook_path: supplied.webhook_path ?? "",
+    webhook_wait_for_ci: supplied.webhook_wait_for_ci ?? false,
+    webhook_staging: supplied.webhook_staging ?? false,
     webhook_staging_environment: supplied.webhook_staging_environment,
     webhook_staging_environment_id:
       supplied.webhook_staging_environment_id !== undefined
         ? supplied.webhook_staging_environment_id
         : supplied.webhook_staging === true
           ? undefined
-          : manifest ? null : app.webhook_staging_environment_id,
-    internal_protocol: supplied.internal_protocol ??
-      (manifest ? "http" : ((app.internal_protocol as "http" | "tcp") || "http")),
-    sticky: supplied.sticky ?? (manifest ? false : !!app.sticky),
-    rate_limit_rps: supplied.rate_limit_rps ?? (manifest ? 0 : app.rate_limit_rps),
-    ip_allowlist: supplied.ip_allowlist ?? (manifest ? "" : app.ip_allowlist),
-    health_check_path: supplied.health_check_path ??
-      (manifest ? "" : app.health_check_path),
-    compress: supplied.compress ?? (manifest ? false : !!app.compress),
+          : null,
+    internal_protocol: supplied.internal_protocol ?? "http",
+    sticky: supplied.sticky ?? false,
+    rate_limit_rps: supplied.rate_limit_rps ?? 0,
+    ip_allowlist: supplied.ip_allowlist ?? "",
+    health_check_path: supplied.health_check_path ?? "",
+    compress: supplied.compress ?? false,
     public_port: supplied.public_port !== undefined
       ? supplied.public_port
-      : manifest ? null : app.public_port ?? null,
-    public_protocol: supplied.public_protocol ??
-      (manifest ? "tcp" : ((app.public_protocol as "tcp" | "udp") || "tcp")),
-    placement_pool: supplied.placement_pool ??
-      (manifest ? "general" : app.placement_pool),
-    durability_class: supplied.durability_class ??
-      (manifest ? "none" : app.durability_class as "none" | "standard" | "high"),
-    replicas: supplied.replicas ?? (manifest ? 1 : app.desired_replicas),
-    min_replicas: supplied.min_replicas ?? (manifest ? 1 : app.min_replicas),
-    max_replicas: supplied.max_replicas ?? (manifest ? 1 : app.max_replicas),
-    autoscale_enabled: supplied.autoscale_enabled ??
-      (manifest ? AUTOSCALE_DEFAULTS.enabled : !!app.autoscale_enabled),
-    autoscale_cpu_threshold: supplied.autoscale_cpu_threshold ??
-      (manifest ? AUTOSCALE_DEFAULTS.cpuThreshold : app.autoscale_cpu_threshold),
-    autoscale_mem_threshold: supplied.autoscale_mem_threshold ??
-      (manifest ? AUTOSCALE_DEFAULTS.memoryThreshold : app.autoscale_mem_threshold),
-    autoscale_req_threshold: supplied.autoscale_req_threshold ??
-      (manifest ? AUTOSCALE_DEFAULTS.requestsPerMinute : app.autoscale_req_threshold),
-    autoscale_cooldown: supplied.autoscale_cooldown ??
-      (manifest ? AUTOSCALE_DEFAULTS.cooldownSeconds : app.autoscale_cooldown),
-    scale_to_zero_after: supplied.scale_to_zero_after ??
-      (manifest ? 0 : app.scale_to_zero_after),
-    extra_volumes: supplied.extra_volumes ??
-      (manifest
-        ? []
-        : db.parseExtraVolumes(app.extra_volumes).map((mount) => {
-            const separator = mount.indexOf(":");
-            return {
-              host_path: mount.slice(0, separator),
-              container_path: mount.slice(separator + 1),
-            };
-          })),
+      : null,
+    public_protocol: supplied.public_protocol ?? "tcp",
+    placement_pool: supplied.placement_pool ?? "general",
+    durability_class: supplied.durability_class ?? "none",
+    replicas: supplied.replicas ?? 1,
+    min_replicas: supplied.min_replicas ?? 1,
+    max_replicas: supplied.max_replicas ?? 1,
+    autoscale_enabled: supplied.autoscale_enabled ?? AUTOSCALE_DEFAULTS.enabled,
+    autoscale_cpu_threshold: supplied.autoscale_cpu_threshold ?? AUTOSCALE_DEFAULTS.cpuThreshold,
+    autoscale_mem_threshold: supplied.autoscale_mem_threshold ?? AUTOSCALE_DEFAULTS.memoryThreshold,
+    autoscale_req_threshold: supplied.autoscale_req_threshold ?? AUTOSCALE_DEFAULTS.requestsPerMinute,
+    autoscale_cooldown: supplied.autoscale_cooldown ?? AUTOSCALE_DEFAULTS.cooldownSeconds,
+    scale_to_zero_after: supplied.scale_to_zero_after ?? 0,
+    extra_volumes: supplied.extra_volumes ?? [],
     target: supplied.target ?? app.target,
     target_of: supplied.target_of ?? app.target_of ?? undefined,
     volume_size: supplied.volume_size,

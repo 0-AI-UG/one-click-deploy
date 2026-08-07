@@ -59,7 +59,7 @@ Prefer bash? Copy `example.panel.json` to `panel.json` and run `./scripts/bootst
 Managed PostgreSQL recovery: [clean and empty-target restore workflows](docs/postgresql-restore.md).
 Retained volume recovery: [grace-period and reattachment workflow](docs/volume-recovery.md).
 
-## CLI-first deployments
+## CLI-only deployments
 
 ```bash
 ocd login https://panel.example.com
@@ -68,6 +68,11 @@ ocd deploy stack ocd-stack.json
 ocd logs my-app --tail=200
 ocd ssh my-app -i
 ```
+
+Apps and stacks are created and configured only through versioned manifests
+applied by the `ocd` CLI. The web panel is read-only for manifest-owned app
+configuration and exposes operational controls such as restart, rollback,
+pause, wake, promotion, migration, and recovery.
 
 The single-app `.ocd-deploy.json` schema is also used by every app entry in
 `ocd-stack.json`, so moving an app into or out of a stack does not change its

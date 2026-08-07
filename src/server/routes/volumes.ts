@@ -32,7 +32,7 @@ export async function handleAttachVolume(request: Request): Promise<Response> {
       kind: "attach_volume",
       resourceKeys: [`app:${app_id}`],
       input: { appId: app_id, sizeGb: size, mountPath: mount_path },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -58,7 +58,7 @@ export async function handleAttachExistingVolume(request: Request): Promise<Resp
       kind: "attach_existing_volume",
       resourceKeys: [`app:${app_id}`, `volume:${volume_id}`],
       input: { appId: app_id, volumeId: volume_id, mountPath: mount_path },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -80,7 +80,7 @@ export async function handleDetachVolume(request: Request): Promise<Response> {
       kind: "detach_volume",
       resourceKeys: [`app:${app_id}`, `volume:${app.volume_id}`],
       input: { appId: app_id },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -106,7 +106,7 @@ export async function handleReattachVolume(request: Request): Promise<Response> 
       kind: "reattach_volume",
       resourceKeys: [`app:${from_app_id}`, `app:${to_app_id}`, `volume:${volume_id}`],
       input: { volumeId: volume_id, fromAppId: from_app_id, toAppId: to_app_id, mountPath: mount_path },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -124,7 +124,7 @@ export async function handleResizeVolume(request: Request): Promise<Response> {
       kind: "resize_volume",
       resourceKeys: [`volume:${volume_id}`],
       input: { volumeId: volume_id, sizeGb: size },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });

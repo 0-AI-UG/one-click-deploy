@@ -1,5 +1,5 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission, appScope, stackScope } from "../lib/permissions.ts";
+import { requirePermission, requireCliPermission, appScope, stackScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { StackDeployRequest } from "../../shared/rpc.ts";
@@ -51,7 +51,7 @@ function operationFields(stack: db.StackRow, fallback: ReturnType<typeof deriveS
 
 export async function handleDeployStack(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "stacks.deploy");
+    const payload = await requireCliPermission(request, "stacks.deploy");
     const req: StackDeployRequest = await request.json();
     if (!req?.name || typeof req.name !== "string") {
       return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });
@@ -69,7 +69,7 @@ export async function handleDeployStack(request: Request): Promise<Response> {
       kind: "deploy_stack",
       resourceKeys: stack ? stackLockKeys(stack) : [`stack:${req.name}`],
       input: req,
-      trigger: payload.client === "cli" ? "cli" : "api",
+      trigger: "cli",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -286,7 +286,7 @@ export async function handleDestroyStack(request: Request, stackId: number): Pro
       kind: "destroy_stack",
       resourceKeys: stackLockKeys(stack),
       input: { stackId, suspendWebhooks: true },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     // Enqueue first so this newer row is the durable superseding owner before
@@ -322,7 +322,7 @@ export async function handlePromoteStack(request: Request, stackId: number): Pro
       // landed last production would sit on branch HEAD, not the promoted commit.
       resourceKeys: stackLockKeys(stack),
       input: { stackId, userId: payload.userId },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });

@@ -1,18 +1,17 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission, requireAuthenticated, appScope } from "../lib/permissions.ts";
+import { requirePermission, requireCliPermission, requireAuthenticated, appScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
-import { validateAppName, validateDeployRequest } from "../../shared/validate.ts";
+import { validateDeployRequest } from "../../shared/validate.ts";
 import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-manager.ts";
-import { introspectRepo } from "../../shared/github-introspect.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
-import { applyAppConfig, diffAppConfig, mergeDeployRequestWithExistingApp } from "../../shared/app-config.ts";
+import { applyAppConfig, diffAppConfig } from "../../shared/app-config.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
@@ -33,29 +32,6 @@ export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
     deployed_commit: db.getDeployedCommit(app.id),
     public_address: app.public_port != null && panelIp ? `${panelIp}:${app.public_port}` : null,
   };
-}
-
-// One introspect endpoint for both deploy modes: `introspectRepo` detects an
-// `ocd-stack.json` and returns a `kind: "stack"` result, else `kind: "app"`.
-// The optional `path` param overrides which stack manifest to resolve.
-export async function handleIntrospectRepo(request: Request): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "apps.deploy");
-    const params = new URL(request.url).searchParams;
-    const url = params.get("url") || "";
-    const ref = params.get("ref") || undefined;
-    const path = params.get("path") || undefined;
-    if (!url) {
-      return Response.json(
-        { ok: false, error: "Missing repo URL" },
-        { status: 400, headers: corsHeaders },
-      );
-    }
-    const result = await introspectRepo(url, payload.userId, ref, path);
-    return Response.json(result, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
 }
 
 export async function handleGetServers(request: Request): Promise<Response> {
@@ -113,19 +89,11 @@ export async function handleGetApps(request: Request): Promise<Response> {
   }
 }
 
-type ApplyMode = "manifest" | "patch";
-
 type AppDeployRequest = Partial<DeployRequest> & {
-  apply_mode?: ApplyMode;
+  apply_mode?: "manifest";
   dry_run?: boolean;
   deploy?: boolean;
 };
-
-const CONTROL_FIELDS = new Set(["app_name", "apply_mode", "dry_run", "deploy"]);
-
-function hasPatchFields(req: AppDeployRequest): boolean {
-  return Object.keys(req).some((key) => !CONTROL_FIELDS.has(key));
-}
 
 function manifestSpec(req: AppDeployRequest): DeployRequest {
   const {
@@ -137,31 +105,24 @@ function manifestSpec(req: AppDeployRequest): DeployRequest {
 }
 
 /**
- * The single existing-app apply path. Callers normalize either a complete
- * manifest or a partial patch before entering; this helper owns validation,
- * locking, desired-state application, ingress sync, and optional rollout.
+ * The single existing-app manifest path. It owns validation, locking,
+ * desired-state application, ingress sync, and optional rollout.
  */
 async function applyExistingAppConfig(
   app: AppRow,
   spec: DeployRequest,
   controls: Pick<AppDeployRequest, "dry_run" | "deploy">,
-  applyConfig: boolean,
   userId: string,
-  trigger: "api" | "cli",
 ): Promise<Response> {
-  if (applyConfig) {
-    const validation = validateDeployRequest(spec);
-    if (!validation.valid) {
-      return Response.json(
-        { ok: false, error: validation.error },
-        { status: 400, headers: corsHeaders },
-      );
-    }
+  const validation = validateDeployRequest(spec);
+  if (!validation.valid) {
+    return Response.json(
+      { ok: false, error: validation.error },
+      { status: 400, headers: corsHeaders },
+    );
   }
 
-  const changes = applyConfig
-    ? diffAppConfig(app, spec)
-    : [];
+  const changes = diffAppConfig(app, spec);
   if (controls.dry_run) {
     return Response.json({
       ok: true,
@@ -184,17 +145,15 @@ async function applyExistingAppConfig(
     // Persist rollout intent before any config write. Migration 95's revision
     // triggers advance this marker with every revision created by the apply.
     if (controls.deploy !== false) db.requestAppRollout(app.id, app.config_revision);
-    if (applyConfig) {
-      await applyAppConfig(app.id, spec, {
-        userId,
-        log: (line) => db.appendDeployLog(app.id, `[config] ${line}`),
-      });
-    }
+    await applyAppConfig(app.id, spec, {
+      userId,
+      log: (line) => db.appendDeployLog(app.id, `[config] ${line}`),
+    });
     await syncAppIngress(app.id);
 
     const result = {
       ok: true,
-      applied: applyConfig,
+      applied: true,
       changes,
       config_revision: db.getApp(app.id)?.config_revision,
       op_id: null as number | null,
@@ -207,7 +166,7 @@ async function applyExistingAppConfig(
       kind: "redeploy",
       resourceKeys,
       input: { appId: app.id, userId },
-      trigger,
+      trigger: "cli",
       triggeredBy: userId,
     });
     return Response.json({ ...result, op_id: opId }, { headers: corsHeaders });
@@ -218,37 +177,26 @@ async function applyExistingAppConfig(
 
 export async function handleDeploy(request: Request): Promise<Response> {
   try {
-    const payload = await requirePermission(request, "apps.deploy");
+    const payload = await requireCliPermission(request, "apps.deploy");
     const req = await request.json() as AppDeployRequest;
     if (!req?.app_name || typeof req.app_name !== "string") {
       return Response.json({ ok: false, error: "app_name is required" }, { status: 400, headers: corsHeaders });
     }
-    if (req.apply_mode !== "manifest" && req.apply_mode !== "patch") {
+    if (req.apply_mode !== "manifest") {
       return Response.json(
-        { ok: false, error: 'apply_mode must be "manifest" or "patch"' },
+        { ok: false, error: 'apply_mode must be "manifest"' },
         { status: 400, headers: corsHeaders },
       );
     }
 
     const existing = db.getAppByName(req.app_name);
     if (existing) {
-      const patchHasFields = req.apply_mode === "patch" && hasPatchFields(req);
-      const spec = req.apply_mode === "manifest"
-        ? manifestSpec(req)
-        : mergeDeployRequestWithExistingApp(existing, req);
+      const spec = manifestSpec(req);
       return applyExistingAppConfig(
         existing,
         spec,
         req,
-        req.apply_mode === "manifest" || patchHasFields,
         payload.userId,
-        payload.client === "cli" ? "cli" : "api",
-      );
-    }
-    if (req.apply_mode !== "manifest") {
-      return Response.json(
-        { ok: false, error: `Patch target does not exist: "${req.app_name}". First deploy requires apply_mode "manifest".` },
-        { status: 404, headers: corsHeaders },
       );
     }
     const deployRequest = manifestSpec(req);
@@ -275,7 +223,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
       kind: "deploy",
       resourceKeys: [`app:create:${req.app_name}`],
       input: deployRequest,
-      trigger: payload.client === "cli" ? "cli" : "api",
+      trigger: "cli",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -293,7 +241,7 @@ export async function handleDestroyApp(request: Request, appId: number): Promise
       kind: "destroy_app",
       resourceKeys: [`app:${appId}`, ...(volumeId ? [`volume:${volumeId}`] : [])],
       input: { appId },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });
@@ -334,42 +282,6 @@ export function handlePauseApp(request: Request, appId: number): Promise<Respons
 
 export function handleUnpauseApp(request: Request, appId: number): Promise<Response> {
   return enqueueOp(request, { permission: "apps.pause", scope: appScope(appId), kind: "unpause_app", resourceKeys: [`app:${appId}`], input: { appId } });
-}
-
-export async function handleRenameApp(request: Request, appId: number): Promise<Response> {
-  try {
-    const payload = await requirePermission(request, "apps.rename", appScope(appId));
-    const { name } = await request.json() as { name: string };
-
-    const nameResult = validateAppName(name);
-    if (!nameResult.valid) {
-      return Response.json({ error: nameResult.error }, { status: 400, headers: corsHeaders });
-    }
-    const newName = nameResult.value;
-
-    const app = db.getApp(appId);
-    if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
-
-    if (newName === app.name) {
-      return Response.json({ ok: true }, { headers: corsHeaders });
-    }
-
-    const existing = db.getAppByName(newName);
-    if (existing) {
-      return Response.json({ error: `An app named "${newName}" already exists` }, { status: 409, headers: corsHeaders });
-    }
-
-    const { opId } = enqueue({
-      kind: "rename_app",
-      resourceKeys: [`app:${appId}`],
-      input: { appId, newName },
-      trigger: "ui",
-      triggeredBy: payload.userId,
-    });
-    return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
 }
 
 export async function handleGetContainerLogs(request: Request, appId: number): Promise<Response> {
@@ -464,7 +376,7 @@ export async function handlePromoteApp(request: Request): Promise<Response> {
       kind: "promote",
       resourceKeys: [`app:${dest.id}`],
       input: { appId: dest.id, sourceAppId: source.id, userId: payload.userId },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId, commit, repo_mismatch }, { headers: corsHeaders });
@@ -523,7 +435,7 @@ export async function handleRollbackApp(request: Request, appId: number): Promis
       kind: "rollback",
       resourceKeys: [`app:${appId}`],
       input: { appId, deploymentId: body.deployment_id },
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     return Response.json({ op_id: opId }, { headers: corsHeaders });

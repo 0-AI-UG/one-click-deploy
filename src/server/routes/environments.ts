@@ -173,7 +173,7 @@ export async function handleUpdateEnvironment(request: Request, id: number): Pro
           changedKeys,
           mode: rollout,
         },
-        trigger: "ui",
+        trigger: payload.client === "cli" ? "cli" : "ui",
         triggeredBy: payload.userId,
       });
       opId = r.opId;

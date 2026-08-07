@@ -5,10 +5,8 @@ import { handleError } from "../lib/utils.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 
 /** Shared tail for the many near-identical "check permission, enqueue an op,
- *  return its op_id" route handlers. All UI-triggered ops share trigger:"ui"
- *  and triggeredBy from the authenticated payload; per-route differences are
- *  the permission, op kind, resource keys, and input. `body` parameterizes the
- *  JSON envelope ({op_id} vs {ok:true, op_id}). */
+ *  return its op_id" route handlers. CLI and UI callers intentionally share
+ *  this path; only operation provenance differs. */
 export async function enqueueOp(
   request: Request,
   opts: {
@@ -28,7 +26,7 @@ export async function enqueueOp(
       kind: opts.kind,
       resourceKeys: opts.resourceKeys,
       input: opts.input,
-      trigger: "ui",
+      trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
     const body = opts.body ? opts.body(opId) : { op_id: opId };

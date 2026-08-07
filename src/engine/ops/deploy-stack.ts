@@ -817,6 +817,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
           } = appReq;
           await applyAppConfig(existingApp.id, {
             ...configFields,
+            apply_mode: "manifest",
             app_name: name,
             environment_id: environmentId,
             env_projection: effectiveProjection,

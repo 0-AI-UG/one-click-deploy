@@ -112,8 +112,8 @@ export type EnvVarEntry = {
 };
 
 export type DeployRequest = {
-  /** Complete manifest reconciliation or partial desired-state patch. */
-  apply_mode?: "manifest" | "patch";
+  /** Complete manifest reconciliation. Browser/API patches are not supported. */
+  apply_mode?: "manifest";
   app_name: string;
   domain?: string;
   git_repo: string;

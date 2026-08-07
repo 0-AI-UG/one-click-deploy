@@ -482,29 +482,7 @@ d(
       12 * 60_000,
     );
 
-    // ---- 12. rename-app ----------------------------------------------------
-    appTest(
-      "12. rename-app: app renamed in DB",
-      async () => {
-        expect(ctx).not.toBeNull();
-        const db = await import("../shared/db.ts");
-
-        const newName = `${ctx!.appName}-renamed`;
-        const result = await enqueueAndWait(
-          "rename_app",
-          { appId: ctx!.appId, newName },
-          { timeoutMs: 2 * 60_000 },
-        );
-        expect(result.status).toBe("done");
-
-        const app = db.getApp(ctx!.appId);
-        expect(app!.name).toBe(newName);
-        ctx!.appName = newName;
-      },
-      2 * 60_000,
-    );
-
-    // ---- 13. rollback -------------------------------------------------------
+    // ---- 12. rollback -------------------------------------------------------
     appTest(
       "13. rollback: rolls back to a prior deployment",
       async () => {

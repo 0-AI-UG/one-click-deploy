@@ -348,7 +348,6 @@ describe("migration 85", () => {
     // Spot-check a few of the splits.
     const perms = permsOf(d, "u1");
     expect(perms).toContain("servers.manage"); // from servers.delete
-    expect(perms).toContain("apps.rename"); // from apps.deploy
     expect(perms).toContain("apps.deploy"); // from apps.redeploy/scaling.manage
     expect(perms).toContain("scaling.migrate"); // from scaling.manage
     expect(perms).toContain("volumes.resize"); // from volumes.manage

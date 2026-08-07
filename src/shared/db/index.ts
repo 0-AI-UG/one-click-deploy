@@ -25,7 +25,6 @@ export {
   getApp,
   getAppByName,
   getAppByDomain,
-  renameApp,
   insertApp,
   insertAppWithFirstReplica,
   getServersForApp,
@@ -183,7 +182,6 @@ export {
   incrementTokenVersion,
 } from "./users.ts";
 export { getSettings, saveSetting, ensureProxyWakeSecret } from "./settings.ts";
-export { getDeploySession, saveDeploySession, deleteDeploySession } from "./deploy-sessions.ts";
 export type { PanelRow, PanelDeploymentRow } from "./panel.ts";
 export {
   getPanel,

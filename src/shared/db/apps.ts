@@ -269,11 +269,6 @@ export function getAppByDomain(domain: string): AppRow | null {
     .get(domain) as AppRow | null;
 }
 
-export function renameApp(id: number, newName: string): void {
-  db.query("UPDATE apps SET name = ? WHERE id = ?").run(newName, id);
-  db.query("UPDATE replicas SET container_name = ? WHERE app_id = ?").run(newName, id);
-}
-
 export type AppIngressSettings = {
   sticky?: boolean;
   rate_limit_rps?: number;

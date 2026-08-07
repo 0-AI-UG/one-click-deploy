@@ -30,6 +30,24 @@ export async function requirePermission(
   return payload;
 }
 
+/** Require a permission through a CLI-minted token.
+ *
+ * Desired-state entry points use this instead of duplicating client checks in
+ * individual routes. Browser sessions may operate resources, but cannot apply
+ * manifests or create manifest-owned resources.
+ */
+export async function requireCliPermission(
+  request: Request,
+  permission: string,
+  scope?: PermissionScope,
+): Promise<TokenPayload> {
+  const payload = await requirePermission(request, permission, scope);
+  if (payload.client !== "cli") {
+    throw new PermissionError("This action is only available through the ocd CLI");
+  }
+  return payload;
+}
+
 /** Authenticate with no permission requirement, but still enforce cli.access.
  *  For the handful of routes that are open to any signed-in user. */
 export async function requireAuthenticated(request: Request): Promise<TokenPayload> {

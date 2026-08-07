@@ -1,4 +1,4 @@
-import { get, post, put, resolveApp, type App } from "../api.ts";
+import { get, post, resolveApp, type App } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RESET, table } from "../format.ts";
 
@@ -117,18 +117,6 @@ async function showApp(args: string[]): Promise<void> {
       : "-"],
     ["Webhook", app.webhook_enabled ? "enabled" : "disabled"],
   ]);
-}
-
-async function renameApp(args: string[]): Promise<void> {
-  const parsed = parseAppFlags(args);
-  const [name, newName] = parsed.positional;
-  if (!name || !newName) throw new Error("Usage: ocd app rename <app> <new-name>");
-  const app = await resolveApp(name);
-  const result = await put<{ ok: boolean; op_id?: number }>(
-    `/api/apps/${app.id}/rename`,
-    { name: newName },
-  );
-  await followNamedOp(result.op_id, `Renamed ${app.name} to ${newName}`, "Rename failed");
 }
 
 async function reloadEnvironment(args: string[]): Promise<void> {
@@ -338,7 +326,6 @@ function usage(): void {
   console.log(`${BOLD}Usage:${RESET} ocd app <command> [args]
 
   show <app>                    Show app configuration and runtime state
-  rename <app> <new-name>       Rename an app and its managed resources
   deployments <app>            List deployment history
   replicas <app>               List replicas and current resource use
   metrics <app> [--since=SEC]   Current metrics or sampled history
@@ -358,7 +345,6 @@ export async function app(args: string[]): Promise<void> {
   }
   switch (command) {
     case "show": return showApp(rest);
-    case "rename": return renameApp(rest);
     case "deployments":
     case "history": return deployments(rest);
     case "replicas": return replicas(rest);

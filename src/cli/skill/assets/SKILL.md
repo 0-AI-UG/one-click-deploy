@@ -27,9 +27,9 @@ manifest. `ocd deploy --config-only` stores and applies the same manifest
 without deploying code. Both are modes of `ocd deploy`, not separate mutation
 commands.
 
-The UI edits only the fields selected by the user in the stored manifest and
-then invokes the same canonical deploy path. There is no separate CLI
-redeploy/config/settings/ingress path.
+App creation and desired-configuration mutation are CLI-only. The server
+rejects browser deploy requests, and the UI renders manifest-owned app
+configuration read-only. There is no UI redeploy/config/settings/ingress path.
 
 Operational actions remain separate because they do not redefine desired app
 configuration: wake, restart, rollback, pause, unpause, promotion, replica
