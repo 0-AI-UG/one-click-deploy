@@ -54,6 +54,7 @@ export {
   recordAppManifestApplied,
   updateAppDomain,
   updateAppVolume,
+  updateAppDesiredVolume,
   updateAppExtraVolumes,
   parseExtraVolumes,
   updateAppMemory,

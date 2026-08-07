@@ -32,8 +32,7 @@ import {
 } from "./routes/apps.ts";
 import { handleDeleteServer, handleRefreshServers, handleSetServerPool } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
-import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail, handleRenameVolume, handleGetVolumeDeletionAudit } from "./routes/resources.ts";
-import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
+import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail, handleGetVolumeDeletionAudit } from "./routes/resources.ts";
 import { handleWakeApp, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
 import { handleGetAvailability } from "./routes/availability.ts";
 import {
@@ -324,10 +323,6 @@ export const apiRoutes = {
       const id = new URL(req.url).pathname.split("/")[4];
       return handleGetVolumeDetail(req, id);
     },
-    PUT: (req: Request) => {
-      const id = new URL(req.url).pathname.split("/")[4];
-      return handleRenameVolume(req, id);
-    },
   },
   "/api/resources/volumes/:id/files": {
     GET: (req: Request) => {
@@ -446,9 +441,4 @@ export const apiRoutes = {
   "/api/terminal/exec": { POST: (req: Request) => handleTerminalExec(req) },
 
   // --- Volumes ---
-  "/api/volumes/attach": { POST: (req: Request) => handleAttachVolume(req) },
-  "/api/volumes/attach-existing": { POST: (req: Request) => handleAttachExistingVolume(req) },
-  "/api/volumes/detach": { POST: (req: Request) => handleDetachVolume(req) },
-  "/api/volumes/reattach": { POST: (req: Request) => handleReattachVolume(req) },
-  "/api/volumes/resize": { POST: (req: Request) => handleResizeVolume(req) },
 };

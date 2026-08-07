@@ -131,6 +131,33 @@ describe("desired app configuration", () => {
     expect(db.parseExtraVolumes(updated.extra_volumes)).toEqual([]);
   });
 
+  test("records primary-volume intent without mutating observed attachment state", async () => {
+    const { app } = seedApp();
+    db.updateAppVolume(app.id, "vol-old", "/mnt/vol-old:/old", true);
+    db.updateAppDesiredVolume(app.id, { volumeId: "vol-old", sizeGb: 20, mountPath: "/old" });
+
+    const req = {
+      apply_mode: "manifest" as const,
+      app_name: app.name,
+      git_repo: app.git_repo,
+      container_port: 3000,
+      volume_id: "vol-new",
+      volume_size: 40,
+      volume_path: "/data",
+    };
+    expect(diffAppConfig(db.getApp(app.id)!, req).map((change) => change.field)).toEqual(
+      expect.arrayContaining(["desired_volume_id", "desired_volume_size", "desired_volume_path"]),
+    );
+
+    await applyAppConfig(app.id, req);
+    const updated = db.getApp(app.id)!;
+    expect(updated.desired_volume_id).toBe("vol-new");
+    expect(updated.desired_volume_size).toBe(40);
+    expect(updated.desired_volume_path).toBe("/data");
+    expect(updated.volume_id).toBe("vol-old");
+    expect(updated.volume_mount).toBe("/mnt/vol-old:/old");
+  });
+
   test("editing a linked environment advances the desired-config revision", () => {
     const { app, env } = seedApp();
     const before = db.getApp(app.id)!.config_revision;

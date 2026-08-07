@@ -20,6 +20,7 @@ type ValidateOut = {
   hostKey: string;
   hasServer: boolean;
   extraVolumes: string;
+  appName: string;
 };
 
 const validate: Step<DetachVolumeInput, ValidateOut> = {
@@ -41,6 +42,7 @@ const validate: Step<DetachVolumeInput, ValidateOut> = {
       hostKey: server?.ssh_host_key || "",
       hasServer: !!server,
       extraVolumes: app.extra_volumes,
+      appName: app.name,
     };
   },
 };
@@ -63,15 +65,26 @@ const removeBindMount: Step<DetachVolumeInput, { ok: boolean }> = {
   },
 };
 
-const detachVolume: Step<DetachVolumeInput, { ok: boolean }> = {
+const detachVolume: Step<DetachVolumeInput, { ok: true }> = {
   name: "detach_volume",
   label: "Detach volume",
   async run(ctx, prior) {
     const v = prior["validate"] as ValidateOut;
-    const r = await softStep(ctx, "detach_volume", async () => {
-      await hetzner.volumes.detach(v.volumeId);
+    const before = await hetzner.volumes.get(v.volumeId);
+    if (before.serverId != null) await hetzner.volumes.detach(v.volumeId);
+    const after = await hetzner.volumes.get(v.volumeId);
+    if (after.serverId != null) {
+      throw new Error(`Provider did not confirm that volume ${v.volumeId} was detached`);
+    }
+    db.retireVolume({
+      providerVolumeId: v.volumeId,
+      formerResourceType: "app",
+      formerResourceId: ctx.input.appId,
+      formerResourceName: v.appName,
+      reason: `removed from manifest by operation #${ctx.opId}`,
+      retentionClass: "user",
     });
-    return { ok: r.ok };
+    return { ok: true };
   },
 };
 
@@ -79,9 +92,7 @@ const clearAppVolume: Step<DetachVolumeInput, { ok: true }> = {
   name: "clear_app_volume",
   label: "Clear volume from app",
   async run(ctx) {
-    await softStep(ctx, "clear_app_volume", async () => {
-      db.updateAppVolume(ctx.input.appId, "", "");
-    });
+    db.updateAppVolume(ctx.input.appId, "", "");
     return { ok: true };
   },
 };

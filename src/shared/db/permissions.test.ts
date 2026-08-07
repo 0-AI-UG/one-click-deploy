@@ -343,7 +343,12 @@ describe("migration 85", () => {
     for (const r of rows) {
       expect(r.scope_type).toBe("global");
       expect(r.scope_id).toBeNull();
-      expect(ALL_PERMISSIONS as readonly string[]).toContain(r.permission);
+      // Migration 85 legitimately created these historical grants; migration
+      // 97 later removes them when volume topology becomes manifest-owned.
+      expect([
+        ...(ALL_PERMISSIONS as readonly string[]),
+        "volumes.create", "volumes.attach", "volumes.detach", "volumes.resize",
+      ]).toContain(r.permission);
     }
     // Spot-check a few of the splits.
     const perms = permsOf(d, "u1");

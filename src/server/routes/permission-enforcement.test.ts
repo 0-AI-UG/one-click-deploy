@@ -136,19 +136,12 @@ import {
   handleMigrateReplica,
   handleGetReplicas,
 } from "./scaling.ts";
-import {
-  handleAttachVolume,
-  handleAttachExistingVolume,
-  handleDetachVolume,
-  handleResizeVolume,
-} from "./volumes.ts";
 import { handleDeleteServer, handleSetServerPool, handleGetServers } from "./servers.ts";
 import {
   handleGetResources,
   handleDeleteResource,
   handleListVolumeFiles,
   handleCreateServer,
-  handleRenameVolume,
   handleGetVolumeDeletionAudit,
 } from "./resources.ts";
 import { handleListOperations, handleCancelOperation } from "./operations.ts";
@@ -657,39 +650,6 @@ const CASES: Case[] = [
 
   // --- volumes --------------------------------------------------------------
   {
-    name: "volumes: handleAttachVolume",
-    permission: "volumes.create",
-    call: (c) =>
-      handleAttachVolume(
-        req("/api/volumes", { body: { app_id: appB, size: 10 }, token: c.token }),
-      ),
-  },
-  {
-    name: "volumes: handleAttachExistingVolume",
-    permission: "volumes.attach",
-    call: (c) =>
-      handleAttachExistingVolume(
-        req("/api/volumes/attach", {
-          body: { app_id: appB, volume_id: "nope" },
-          token: c.token,
-        }),
-      ),
-  },
-  {
-    name: "volumes: handleDetachVolume",
-    permission: "volumes.detach",
-    call: (c) =>
-      handleDetachVolume(req("/api/volumes/detach", { body: { app_id: appB }, token: c.token })),
-  },
-  {
-    name: "volumes: handleResizeVolume",
-    permission: "volumes.resize",
-    call: (c) =>
-      handleResizeVolume(
-        req("/api/volumes/resize", { body: { app_id: appB, size: 20 }, token: c.token }),
-      ),
-  },
-  {
     name: "volumes: handleListVolumeFiles",
     permission: "volumes.files.read",
     call: (c) =>
@@ -771,15 +731,6 @@ const CASES: Case[] = [
         "volume",
         "x",
       ),
-  },
-  {
-    name: "resources: handleRenameVolume",
-    permission: "volumes.rename",
-    denyOnly: "allow path calls the provider",
-    call: (c) => handleRenameVolume(
-      req("/api/resources/volumes/x", { method: "PUT", body: { name: "renamed" }, token: c.token }),
-      "x",
-    ),
   },
   {
     name: "resources: handleGetVolumeDeletionAudit",

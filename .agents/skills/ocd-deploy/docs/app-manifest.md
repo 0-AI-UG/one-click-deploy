@@ -55,6 +55,7 @@ configuration for one app.
   "durability_class": "none",
   "placement_pool": "general",
   "scale_to_zero_after": 0,
+  "volume": null,
   "extra_volumes": [],
   "webhook": {
     "enabled": true,
@@ -73,8 +74,9 @@ Use `image.ref` instead of Git/build source fields for a prebuilt image:
 {
   "suggested_app_name": "worker",
   "image": {
-    "ref": "ghcr.io/example/worker:2026-07-30"
+    "ref": "ghcr.io/example/worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
+  "volume": null,
   "public": false
 }
 ```
@@ -107,7 +109,10 @@ Use `image.ref` instead of Git/build source fields for a prebuilt image:
 - `public_protocol`: `tcp` or `udp`.
 - `replicas`: Desired replica count.
 - `autoscaling`: Autoscaling enablement, range, thresholds, and cooldown.
-- `volume`: Primary persistent volume declaration.
+- `volume`: Required primary-volume desired state. Use `null` for no volume,
+  `{ "size": 20, "path": "/data" }` for an OCD-managed volume, or
+  `{ "id": "provider-id", "size": 20, "path": "/data" }` to adopt one
+  exact retained/provider volume.
 - `extra_volumes`: Additional persistent volumes.
 - `durability_class`: Durability policy.
 - `placement_pool`: Scheduling pool.
@@ -123,6 +128,12 @@ least the desired `replicas` value.
 
 ## Complete replacement
 
-Omission normally means the documented default. The durable-state exceptions
+Omission normally means the documented default. `volume` is intentionally
+required: an app must say either `null` or declare the exact desired volume so
+a partial or stale manifest cannot silently detach data. `ocd deploy` creates,
+adopts, grows, remounts, or detaches-and-retains the volume to match. Provider
+volumes are grow-only; reducing `size` is rejected.
+
+The other durable-state exceptions
 are `environment` and `domain`: omit them to retain the existing link/domain,
 or use an explicit value (`environment: null`, `domain: ""`) to clear one.

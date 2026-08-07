@@ -38,6 +38,9 @@ export type AppData = {
   desired_replicas: number;
   volume_id?: string | number;
   volume_mount?: string;
+  desired_volume_id?: string;
+  desired_volume_size?: number;
+  desired_volume_path?: string;
   /** Whether HTTP basic auth is enabled (derived server-side from the password
    *  hash). The password itself is write-only and never sent to the client. */
   auth_enabled?: boolean;

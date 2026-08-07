@@ -31,6 +31,11 @@ type AppDetail = App & {
   health_check_command?: string;
   health_check_file?: string;
   health_check_max_age_seconds?: number;
+  volume_id?: string;
+  volume_mount?: string;
+  desired_volume_id?: string;
+  desired_volume_size?: number;
+  desired_volume_path?: string;
 };
 
 export type ParsedFlags = {
@@ -110,6 +115,12 @@ async function showApp(args: string[]): Promise<void> {
     ["Memory MB", String(app.memory_mb ?? "-")],
     ["CPU cores", String(app.cpu_limit ?? "-")],
     ["Config revision", String(app.config_revision ?? "-")],
+    ["Volume intent", (app.desired_volume_size ?? 0) < 0
+      ? "legacy; deploy an explicit manifest"
+      : (app.desired_volume_size ?? 0) > 0
+      ? `${app.desired_volume_id ? `adopt ${app.desired_volume_id}` : "managed"}, ${app.desired_volume_size} GB at ${app.desired_volume_path || "/data"}`
+      : "none"],
+    ["Volume actual", app.volume_id ? `${app.volume_id} at ${app.volume_mount}` : "none"],
     ["Health mode", app.health_check_mode || (app.health_check ? "http" : "container")],
     ["Health command", app.health_check_command || "-"],
     ["Health marker", app.health_check_file

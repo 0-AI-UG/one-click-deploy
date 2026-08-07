@@ -7,6 +7,7 @@
     { "key": "JWT_SECRET", "description": "Signing key for auth tokens; supply at deploy time", "required": true, "secret": true },
     { "key": "LOG_LEVEL", "default": "info" }
   ],
+  "volume": null,
   "health_check": { "path": "/health" },
   "webhook": { "enabled": true, "branch": "main", "path": "services/api" },
   "suggested_app_name": "myapp-api"

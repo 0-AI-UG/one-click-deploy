@@ -127,7 +127,8 @@ export type DeployRequest = {
   /** Limit this app to selected keys from its linked environment. null/omit =
    *  all keys (legacy); [] = platform OCD_INTERNAL_* variables only. */
   env_projection?: string[] | null;
-  volume_size?: number; // GB, if set a Hetzner Volume is created and mounted
+  volume_id?: string; // Explicit provider volume to adopt; empty = OCD-managed or none
+  volume_size?: number; // Desired GB; 0 = explicitly no primary volume
   volume_path?: string; // Container mount path, defaults to /data
   dockerfile_path?: string; // Path to Dockerfile in repo, auto-discovered if omitted
   docker_context?: string; // Docker build context path relative to repo root, defaults to "."

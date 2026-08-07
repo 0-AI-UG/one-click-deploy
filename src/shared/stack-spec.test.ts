@@ -99,6 +99,7 @@ describe("buildStackAppSpec", () => {
       autoscale_mem_threshold: 80,
       autoscale_req_threshold: 120,
       autoscale_cooldown: 180,
+      volume_id: "",
       volume_size: 20,
       volume_path: "/var/lib/app",
       extra_volumes: [{ host_path: "/srv/shared", container_path: "/shared" }],
@@ -117,6 +118,7 @@ describe("buildStackAppSpec", () => {
       { manifest: ".ocd-deploy.json" },
       {
         name: "Web",
+        volume: null,
         domain: "web.example.com",
         env_projection: [],
         durability_class: "standard",
@@ -135,6 +137,7 @@ describe("buildStackAppSpec", () => {
       { manifest: "docs/.ocd-deploy.json", needs: ["api"] },
       {
         name: "Docs",
+        volume: null,
         env: [
           { key: "DOCS_THEME", default: "light" },
           { key: "SEARCH_TOKEN", required: true, secret: true },
@@ -152,7 +155,7 @@ describe("buildStackAppSpec", () => {
     const spec = buildStackAppSpec(
       "legacy",
       { manifest: ".ocd-deploy.json", env_all: true },
-      { name: "Legacy" },
+      { name: "Legacy", volume: null },
       "https://github.com/acme/legacy",
       "",
     );

@@ -45,6 +45,7 @@ void _stack;
 
 const validApp = {
   name: "web",
+  volume: null,
   build: { container_port: 3000 },
   env: [{ key: "PORT", default: "3000" }],
   health_check: { enabled: false },
@@ -56,13 +57,13 @@ describe("validateDeployManifest", () => {
     const digest = "a".repeat(64);
     expect(() =>
       validateDeployManifest(
-        { name: "worker", image: { ref: `ghcr.io/acme/worker@sha256:${digest}` } },
+        { name: "worker", volume: null, image: { ref: `ghcr.io/acme/worker@sha256:${digest}` } },
         ".ocd-deploy.json",
       ),
     ).not.toThrow();
     expect(() =>
       validateDeployManifest(
-        { name: "worker", image: { ref: "ghcr.io/acme/worker:latest" } },
+        { name: "worker", volume: null, image: { ref: "ghcr.io/acme/worker:latest" } },
         ".ocd-deploy.json",
       ),
     ).toThrow();
@@ -71,13 +72,13 @@ describe("validateDeployManifest", () => {
   test("validates truthful worker and job health contracts", () => {
     expect(() =>
       validateDeployManifest(
-        { name: "worker", health_check: { mode: "exec", command: "test -f /tmp/ready" } },
+        { name: "worker", volume: null, health_check: { mode: "exec", command: "test -f /tmp/ready" } },
         ".ocd-deploy.json",
       ),
     ).not.toThrow();
     expect(() =>
       validateDeployManifest(
-        { name: "worker", health_check: { mode: "exec" } },
+        { name: "worker", volume: null, health_check: { mode: "exec" } },
         ".ocd-deploy.json",
       ),
     ).toThrow();
@@ -85,6 +86,7 @@ describe("validateDeployManifest", () => {
       validateDeployManifest(
         {
           name: "cron",
+          volume: null,
           health_check: {
             mode: "periodic_job",
             file: "/run/last-success",
@@ -96,7 +98,7 @@ describe("validateDeployManifest", () => {
     ).not.toThrow();
     expect(() =>
       validateDeployManifest(
-        { name: "cron", health_check: { mode: "periodic_job", file: "/run/last-success" } },
+        { name: "cron", volume: null, health_check: { mode: "periodic_job", file: "/run/last-success" } },
         ".ocd-deploy.json",
       ),
     ).toThrow();
@@ -108,7 +110,7 @@ describe("validateDeployManifest", () => {
   test("health_check boolean (the incident) fails with a clear message", () => {
     let msg = "";
     try {
-      validateDeployManifest({ name: "db", health_check: false }, "docker/.ocd-deploy.json");
+      validateDeployManifest({ volume: null, name: "db", health_check: false }, "docker/.ocd-deploy.json");
     } catch (e) {
       msg = (e as Error).message;
     }
@@ -119,7 +121,7 @@ describe("validateDeployManifest", () => {
   test("bad internal_protocol enum fails", () => {
     let msg = "";
     try {
-      validateDeployManifest({ name: "web", internal_protocol: "tpc" }, "a/.ocd-deploy.json");
+      validateDeployManifest({ volume: null, name: "web", internal_protocol: "tpc" }, "a/.ocd-deploy.json");
     } catch (e) {
       msg = (e as Error).message;
     }
@@ -127,13 +129,13 @@ describe("validateDeployManifest", () => {
   });
 
   test("missing name fails", () => {
-    expect(() => validateDeployManifest({}, "a/.ocd-deploy.json")).toThrow(/name:/);
+    expect(() => validateDeployManifest({ volume: null }, "a/.ocd-deploy.json")).toThrow(/name:/);
   });
 
   test("collects multiple issues at once", () => {
     let msg = "";
     try {
-      validateDeployManifest({ name: "web", public: "yes", health_check: false }, "a/.ocd-deploy.json");
+      validateDeployManifest({ volume: null, name: "web", public: "yes", health_check: false }, "a/.ocd-deploy.json");
     } catch (e) {
       msg = (e as Error).message;
     }
@@ -142,21 +144,21 @@ describe("validateDeployManifest", () => {
   });
 
   test("wrong-typed build / container_port fails", () => {
-    expect(() => validateDeployManifest({ name: "web", build: { container_port: "3000" } }, "a")).toThrow(
+    expect(() => validateDeployManifest({ volume: null, name: "web", build: { container_port: "3000" } }, "a")).toThrow(
       /build\.container_port: expected integer 1-65535, got "3000"/,
     );
   });
 
   test("unknown key warns but passes", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
-    expect(() => validateDeployManifest({ name: "web", futureField: 1 }, "a/.ocd-deploy.json")).not.toThrow();
+    expect(() => validateDeployManifest({ volume: null, name: "web", futureField: 1 }, "a/.ocd-deploy.json")).not.toThrow();
     expect(warn).toHaveBeenCalledWith('Manifest a/.ocd-deploy.json: unknown key "futureField" (ignored)');
     warn.mockRestore();
   });
 
   test("durability_class validates", () => {
     expect(() =>
-      validateDeployManifest({ name: "web", durability_class: "high" }, "a/.ocd-deploy.json"),
+      validateDeployManifest({ volume: null, name: "web", durability_class: "high" }, "a/.ocd-deploy.json"),
     ).not.toThrow();
   });
 
@@ -164,6 +166,7 @@ describe("validateDeployManifest", () => {
     expect(() =>
       validateDeployManifest({
         name: "web",
+        volume: null,
         domain: "web.example.com",
         git_branch: "release",
         env_projection: [],
@@ -175,6 +178,7 @@ describe("validateDeployManifest", () => {
     expect(() =>
       validateDeployManifest({
         name: "web",
+        volume: null,
         auth: { enabled: true, password_env: "not-valid!" },
       }, "a/.ocd-deploy.json"),
     ).toThrow(/auth\.password_env/);
@@ -183,7 +187,7 @@ describe("validateDeployManifest", () => {
   test("webhook.staging boolean validates", () => {
     expect(() =>
       validateDeployManifest(
-        { name: "web", webhook: { enabled: true, branch: "main", staging: true } },
+        { name: "web", volume: null, webhook: { enabled: true, branch: "main", staging: true } },
         "a/.ocd-deploy.json",
       ),
     ).not.toThrow();
@@ -193,6 +197,7 @@ describe("validateDeployManifest", () => {
     expect(() =>
       validateDeployManifest({
         name: "web",
+        volume: null,
         environment: "production",
         replicas: 2,
         autoscaling: {
@@ -214,6 +219,7 @@ describe("validateDeployManifest", () => {
     expect(() =>
       validateDeployManifest({
         name: "web",
+        volume: null,
         replicas: 3,
         autoscaling: { max_replicas: 2 },
       }, "a/.ocd-deploy.json"),
@@ -223,7 +229,7 @@ describe("validateDeployManifest", () => {
   test("wrong-typed webhook.staging fails", () => {
     expect(() =>
       validateDeployManifest(
-        { name: "web", webhook: { staging: "yes" } },
+        { name: "web", volume: null, webhook: { staging: "yes" } },
         "a/.ocd-deploy.json",
       ),
     ).toThrow(/staging|boolean/i);
@@ -232,22 +238,22 @@ describe("validateDeployManifest", () => {
   test("bad durability_class enum fails", () => {
     let msg = "";
     try {
-      validateDeployManifest({ name: "web", durability_class: "gold" }, "a/.ocd-deploy.json");
+      validateDeployManifest({ volume: null, name: "web", durability_class: "gold" }, "a/.ocd-deploy.json");
     } catch (e) {
       msg = (e as Error).message;
     }
     expect(msg).toContain("durability_class");
   });
 
-  test("minimal manifest validates (backward compat)", () => {
-    expect(() => validateDeployManifest({ name: "web" }, "a/.ocd-deploy.json")).not.toThrow();
+  test("minimal explicit no-volume manifest validates", () => {
+    expect(() => validateDeployManifest({ volume: null, name: "web" }, "a/.ocd-deploy.json")).not.toThrow();
   });
 
   test("legacy top-level `environments` key warns but does not throw", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     expect(() =>
       validateDeployManifest(
-        { name: "web", environments: { staging: { branch: "develop" } } },
+        { name: "web", volume: null, environments: { staging: { branch: "develop" } } },
         "a/.ocd-deploy.json",
       ),
     ).not.toThrow();

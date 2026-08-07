@@ -321,7 +321,6 @@ export function EnvironmentsPage() {
                   </div>
                   {isOpen && (
                     <>
-                      {/* Environment linkage is manifest-owned and read-only here. */}
                       <div className="px-4 py-2 ml-7 flex items-center gap-2 flex-wrap">
                         <span className="font-mono text-[9px] text-muted uppercase">Apps:</span>
                         {apps.map((a) => (
@@ -330,7 +329,6 @@ export function EnvironmentsPage() {
                           </span>
                         ))}
                         {apps.length === 0 && <span className="font-mono text-[9px] text-muted">no apps</span>}
-                        <span className="font-mono text-[9px] text-muted">linkage is controlled by app manifests</span>
                       </div>
                       {renderEditor(env.id)}
                     </>

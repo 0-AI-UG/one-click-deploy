@@ -48,6 +48,12 @@ ocd scale migrate my-app 42 --to=7
 
 ## Storage
 
-Declare the primary `volume` and `extra_volumes` in the manifest. Use
-`ocd volumes` and `ocd resources` for inspection and lifecycle operations that
-are not app desired-configuration changes.
+Declare the primary `volume` and `extra_volumes` in the manifest. The primary
+`volume` field is required: `null` means no attached volume, an object without
+`id` means an OCD-managed volume, and an object with `id` adopts that exact
+provider volume. `ocd deploy` is the only topology/size/path mutation path.
+
+Use `ocd volumes` and `ocd resources` only to inspect volumes, browse files,
+review deletion audit records, or permanently delete
+an unused volume. The browser shows manifest intent and observed attachment as
+separate read-only state; it has no volume controls.

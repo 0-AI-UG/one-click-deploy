@@ -118,6 +118,7 @@ const attachToApp: Step<AttachExistingVolumeInput, AttachToAppOut> = {
     // attached=true: this is a pre-existing volume, so destroy must DETACH it,
     // never delete it (deleting would be data loss on a volume we don't own).
     db.updateAppVolume(ctx.input.appId, ctx.input.volumeId, volumeMount, true);
+    db.deleteRetiredVolume(ctx.input.volumeId);
     // A volume locks the app to a single server: force min/max replicas to 1.
     db.updateAppScaling(ctx.input.appId, { min_replicas: Math.min(1, app.min_replicas), max_replicas: 1 });
     return { priorMinReplicas, priorMaxReplicas, volumeMount };

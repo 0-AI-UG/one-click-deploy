@@ -205,6 +205,7 @@ ${BOLD}Options:${RESET}
     durability_class: manifest.durability_class ?? "none",
     placement_pool: manifest.placement_pool ?? "general",
     scale_to_zero_after: manifest.scale_to_zero_after ?? 0,
+    volume_id: manifest.volume?.id ?? "",
     volume_size: manifest.volume?.size ?? 0,
     volume_path: manifest.volume?.path ?? "/data",
     extra_volumes: manifest.extra_volumes ?? [],
@@ -275,7 +276,13 @@ ${BOLD}Options:${RESET}
     const applied = await post<{
       changes: Array<{ field: string; before: unknown; after: unknown }>;
       config_revision: number;
+      op_id: number;
     }>("/api/apps/deploy", { ...body, deploy: false });
+    const result = await followOp(applied.op_id);
+    if (!result.ok) {
+      console.error(`\n${RED}Manifest reconciliation failed: ${result.error || "unknown error"}${RESET}`);
+      process.exit(1);
+    }
     console.log(`\n${GREEN}Configuration applied.${RESET} Revision ${applied.config_revision}.`);
     for (const change of applied.changes) {
       console.log(`  ${change.field}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`);

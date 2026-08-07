@@ -60,6 +60,8 @@ type VolumeOut = {
   volumeId: string;
   volumeMount: string;
   containerPath: string;
+  attached: boolean;
+  detachOnCompensate: boolean;
 } | null;
 
 type InsertAppOut = {
@@ -279,6 +281,25 @@ const createVolume: Step<DeployInput, VolumeOut> = {
     if (!providerServerId) providerServerId = db.getServer(server.serverId)?.provider_id;
     if (!providerServerId) return null;
     const location = db.getServer(server.serverId)?.location || settings.default_location || "nbg1";
+    if (req.volume_id) {
+      const info = await hetzner.volumes?.get(req.volume_id);
+      if (!info || info.serverId !== providerServerId) return null;
+      if (info.location && info.location !== location) {
+        throw new Error(`Cannot adopt volume ${req.volume_id}: it is in ${info.location}, but the app server is in ${location}`);
+      }
+      if (info.sizeGb > req.volume_size) {
+        throw new Error(`Cannot shrink volume ${req.volume_id} from ${info.sizeGb}GB to ${req.volume_size}GB`);
+      }
+      if (info.sizeGb < req.volume_size) return null;
+      const containerPath = req.volume_path || "/data";
+      return {
+        volumeId: req.volume_id,
+        volumeMount: `/mnt/vol-${req.volume_id}:${containerPath}`,
+        containerPath,
+        attached: true,
+        detachOnCompensate: false,
+      };
+    }
     const volName = appVolumeName(req.app_name, ctx.opId);
     const existing = await findVolumeByName(volName);
     if (!existing) return null;
@@ -308,6 +329,8 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       volumeId: existing.providerId,
       volumeMount: `${hostMountPath}:${containerPath}`,
       containerPath,
+      attached: false,
+      detachOnCompensate: true,
     };
   },
   async probeCompensated(_ctx, out) {
@@ -332,6 +355,32 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       providerServerId = existingServer.provider_id;
     }
 
+    if (req.volume_id) {
+      const info = await compute.volumes.get(req.volume_id);
+      const serverLocation = db.getServer(server.serverId)?.location || settings.default_location || "nbg1";
+      if (info.location && info.location !== serverLocation) {
+        throw new Error(`Cannot adopt volume ${req.volume_id}: it is in ${info.location}, but the app server is in ${serverLocation}`);
+      }
+      if (info.serverId && info.serverId !== providerServerId) {
+        throw new Error(`Cannot adopt volume ${req.volume_id}: it is attached to another server`);
+      }
+      if (info.sizeGb > req.volume_size) {
+        throw new Error(`Cannot shrink volume ${req.volume_id} from ${info.sizeGb}GB to ${req.volume_size}GB`);
+      }
+      if (info.sizeGb < req.volume_size) await compute.volumes.resize(req.volume_id, req.volume_size);
+      const wasDetached = !info.serverId;
+      if (wasDetached) await compute.volumes.attach(req.volume_id, providerServerId);
+      const containerPath = req.volume_path || "/data";
+      ctx.log(`Adopted volume ${req.volume_id} (${req.volume_size}GB at ${containerPath})`);
+      return {
+        volumeId: req.volume_id,
+        volumeMount: `/mnt/vol-${req.volume_id}:${containerPath}`,
+        containerPath,
+        attached: true,
+        detachOnCompensate: wasDetached,
+      };
+    }
+
     const volName = appVolumeName(req.app_name, ctx.opId);
     const vol = await compute.volumes.create({
       name: volName,
@@ -348,10 +397,16 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       volumeId: vol.providerId,
       volumeMount: `${hostMountPath}:${containerPath}`,
       containerPath,
+      attached: false,
+      detachOnCompensate: true,
     };
   },
   async compensate(ctx, out) {
     if (!out) return;
+    if (!out.detachOnCompensate) {
+      ctx.log(`Preserved pre-existing attachment for volume ${out.volumeId}`);
+      return;
+    }
     const compute = hetzner;
     try { await compute.volumes?.detach(out.volumeId); } catch (err) {
       if (!isNotFoundError(err)) throw err;
@@ -362,7 +417,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       formerResourceId: 0,
       formerResourceName: ctx.input.app_name || "unknown-app",
       reason: `deployment operation #${ctx.opId} compensated`,
-      retentionClass: "provisional",
+      retentionClass: out.attached ? "user" : "provisional",
     });
     ctx.log(`Retained detached volume ${out.volumeId} for recovery`);
   },
@@ -519,6 +574,9 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           placement_pool: req.placement_pool,
           target: targetTag,
           target_of: targetOf,
+          desired_volume_id: req.volume_id ?? "",
+          desired_volume_size: req.volume_size ?? 0,
+          desired_volume_path: req.volume_path ?? "/data",
         },
         server.serverId,
       );
@@ -545,7 +603,8 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
         });
       }
       if (volume) {
-        db.updateAppVolume(result.app.id, volume.volumeId, volume.volumeMount);
+        db.updateAppVolume(result.app.id, volume.volumeId, volume.volumeMount, volume.attached);
+        if (volume.attached) db.deleteRetiredVolume(volume.volumeId);
       }
       if (extraVolumes.length > 0) {
         db.updateAppExtraVolumes(result.app.id, extraVolumes);

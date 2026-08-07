@@ -24,6 +24,12 @@ export type AppRow = {
   /** 0 = volume was CREATED by us (deleted on destroy); 1 = an EXISTING volume
    *  ATTACHED via attach_existing_volume (detached-not-deleted on destroy). */
   volume_attached: number;
+  /** Manifest-owned primary-volume intent. desired_volume_id empty means OCD
+   * creates the volume; desired_volume_size 0 means explicitly no volume.
+   * A negative size is a migration-only legacy sentinel awaiting a manifest. */
+  desired_volume_id: string;
+  desired_volume_size: number;
+  desired_volume_path: string;
   webhook_enabled: number;
   webhook_secret: string;
   webhook_branch: string;
@@ -316,6 +322,9 @@ type InsertAppFields = {
   placement_pool?: string;
   target?: string;
   target_of?: number | null;
+  desired_volume_id?: string;
+  desired_volume_size?: number;
+  desired_volume_path?: string;
 } & AppIngressSettings;
 
 /** Resolve a deploy request's public exposure to a concrete port. Runs
@@ -348,7 +357,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, source_mode, image_ref, build_cache_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, source_mode, image_ref, build_cache_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -389,6 +398,9 @@ function insertAppRow(app: InsertAppFields): AppRow {
       app.placement_pool ?? "general",
       app.target ?? "",
       app.target_of ?? null,
+      app.desired_volume_id ?? "",
+      app.desired_volume_size ?? 0,
+      app.desired_volume_path ?? "/data",
     ) as AppRow;
 }
 
@@ -699,6 +711,15 @@ export function updateAppDomain(id: number, domain: string): void {
 export function updateAppVolume(id: number, volumeId: string, volumeMount: string, attached = false): void {
   db.query("UPDATE apps SET volume_id = ?, volume_mount = ?, volume_attached = ? WHERE id = ?")
     .run(volumeId, volumeMount, attached ? 1 : 0, id);
+}
+
+export function updateAppDesiredVolume(
+  id: number,
+  desired: { volumeId: string; sizeGb: number; mountPath: string },
+): void {
+  db.query(
+    "UPDATE apps SET desired_volume_id = ?, desired_volume_size = ?, desired_volume_path = ? WHERE id = ?",
+  ).run(desired.volumeId, desired.sizeGb, desired.mountPath, id);
 }
 
 export function updateAppExtraVolumes(id: number, extraVolumes: string[]): void {

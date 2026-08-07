@@ -11,7 +11,6 @@ import { LogsTab } from "./logs-tab.tsx";
 import { DeploymentsTab } from "./deployments-tab.tsx";
 import { ScalingTab } from "./scaling-tab.tsx";
 import { WebhooksTab } from "./webhooks-tab.tsx";
-import { SettingsTab } from "./settings-tab.tsx";
 import type { AppData, ServerData, ReplicaData, MetricSample, ScalingEvent, DeploymentRecord } from "../../types.ts";
 import { useMobileLayout } from "../../hooks/use-mobile-layout.ts";
 import { MobileActionSheet, MobileSheetAction } from "../../components/mobile-action-sheet.tsx";
@@ -24,8 +23,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const isMobile = useMobileLayout();
   const [app, setApp] = useState<AppData | null>(null);
   const [server, setServer] = useState<ServerData | null>(null);
-  const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks" | "settings">("overview");
-  const [volumeForm, setVolumeForm] = useState<{ size: number; mount_path: string }>({ size: 10, mount_path: "/data" });
+  const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks">("overview");
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
   const [replicas, setReplicas] = useState<ReplicaData[]>([]);
@@ -94,12 +92,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
     if (tab === "logs") { loadReplicas(); loadLogs(); }
     if (tab === "deployments") loadDeployments();
     if (tab === "overview" || tab === "scaling") loadReplicas();
-    if (tab === "settings" && app) {
-      if (app.volume_mount) {
-        const parts = String(app.volume_mount).split(":");
-        setVolumeForm((f) => ({ ...f, mount_path: parts[1] || "/data" }));
-      }
-    }
   }, [tab, app]);
 
   useEffect(() => {
@@ -145,7 +137,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
     { key: "deployments", label: "Deployments" },
     { key: "scaling", label: "Scaling" },
     { key: "webhooks", label: "Webhooks" },
-    { key: "settings", label: "Settings" },
   ] as const;
 
   return (
@@ -157,7 +148,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
             <div className="min-w-0 flex-1 pt-0.5">
               <p className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-muted">App</p>
               <h1 className="mt-0.5 truncate font-mono text-lg font-bold uppercase text-fg">{app.name}</h1>
-              <div className="mt-1"><StatusBadge status={app.status} subLabel={app.environment_stale ? "run ocd deploy" : badgeSubLabel} /></div>
+              <div className="mt-1"><StatusBadge status={app.status} subLabel={app.environment_stale ? "stale environment" : badgeSubLabel} /></div>
             </div>
             <button onClick={() => setMobileActionsOpen(true)} aria-label="App actions" className="grid h-11 w-11 shrink-0 place-items-center rounded-full active:bg-alt"><MoreHorizontal size={23} /></button>
           </div>
@@ -171,7 +162,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
             <h1 className="font-mono font-bold text-sm text-fg uppercase">{app.name}</h1>
             <StatusBadge
               status={app.status}
-              subLabel={app.environment_stale ? "stale environment — run ocd deploy" : badgeSubLabel}
+              subLabel={app.environment_stale ? "stale environment" : badgeSubLabel}
             />
           </div>
           {server && (
@@ -275,18 +266,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
         <WebhooksTab
           app={app}
           appId={appId}
-          action={action}
-          ops={ops}
-        />
-      )}
-
-      {tab === "settings" && (
-        <SettingsTab
-          app={app}
-          appId={appId}
-          volumeForm={volumeForm}
-          setVolumeForm={setVolumeForm}
-          actionLoading={actionLoading}
           action={action}
           ops={ops}
         />

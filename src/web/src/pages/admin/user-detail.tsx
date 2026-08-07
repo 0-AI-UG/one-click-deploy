@@ -84,11 +84,6 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
   {
     label: "Volumes",
     permissions: [
-      { key: "volumes.create", label: "Create volumes" },
-      { key: "volumes.attach", label: "Attach volumes to apps" },
-      { key: "volumes.detach", label: "Detach volumes" },
-      { key: "volumes.resize", label: "Resize volumes" },
-      { key: "volumes.rename", label: "Rename volumes" },
       { key: "volumes.delete", label: "Delete volumes" },
       { key: "volumes.files.read", label: "Browse and read files on a volume" },
     ],

@@ -78,11 +78,6 @@ export const ALL_PERMISSIONS = [
   "servers.delete",
 
   // --- Volumes ---------------------------------------------------------
-  "volumes.create",
-  "volumes.attach",
-  "volumes.detach",
-  "volumes.resize",
-  "volumes.rename",
   "volumes.delete",
   /** Browsing and reading file contents off a volume — i.e. application data. */
   "volumes.files.read",

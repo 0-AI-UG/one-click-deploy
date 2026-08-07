@@ -6,6 +6,7 @@
   "env": [
     { "key": "NODE_ENV", "default": "production" }
   ],
+  "volume": null,
   "webhook": { "enabled": true, "branch": "main", "path": "services/web" },
   "suggested_app_name": "myapp-web",
   "compress": true

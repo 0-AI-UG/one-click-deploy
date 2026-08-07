@@ -17,12 +17,13 @@ mock.module("../../shared/remote/index.ts", () => ({
 const resizeVolume = mock(async (_id: string, _size: number) => {});
 compute.volumes.resize = resizeVolume as any;
 let observedVolumeSize = 10;
+let observedVolumeServerId: string | null = null;
 compute.volumes.get = mock(async (id: string) => ({
   providerId: id,
   name: "v",
   sizeGb: observedVolumeSize,
   location: "fsn1",
-  serverId: null,
+  serverId: observedVolumeServerId,
 })) as any;
 resizeVolume.mockImplementation(async (_id: string, size: number) => {
   observedVolumeSize = size;
@@ -65,7 +66,9 @@ function makeAppWithVolume(volumeId: string | null) {
 
 beforeEach(() => {
   observedVolumeSize = 10;
+  observedVolumeServerId = null;
   compute._mocks.volumeDetach.mockClear();
+  compute._mocks.volumeDetach.mockImplementation(async () => { observedVolumeServerId = null; });
   resizeVolume.mockClear();
   recreateAppContainer.mockClear();
 });
@@ -77,8 +80,9 @@ describe("detach_volume", () => {
     expect(stepByName(detachVolumeOp, "validate").run(ctx, {})).rejects.toThrow(/no volume attached/i);
   });
 
-  test("detaches, clears the app row, and recreates without the volume (best-effort)", async () => {
-    const { app } = makeAppWithVolume("v-9");
+  test("confirms detach, retains the volume, clears the app row, and recreates", async () => {
+    const { server, app } = makeAppWithVolume("v-9");
+    observedVolumeServerId = server.provider_id;
     const { ctx } = makeCtx({ appId: app.id });
     const v = await stepByName(detachVolumeOp, "validate").run(ctx, {});
     const prior = { validate: v };
@@ -87,6 +91,7 @@ describe("detach_volume", () => {
     await stepByName(detachVolumeOp, "recreate_container").run(ctx, prior);
     expect(compute._mocks.volumeDetach).toHaveBeenCalledWith("v-9");
     expect(db.getApp(app.id)!.volume_id).toBe("");
+    expect(db.getRetiredVolumes().some((row) => row.provider_volume_id === "v-9")).toBe(true);
     expect(recreateAppContainer).toHaveBeenCalledWith(app.id, undefined, expect.anything());
   });
 

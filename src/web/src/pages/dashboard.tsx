@@ -286,7 +286,7 @@ export function DashboardPage() {
             )}
             <span className="shrink-0"><StatusBadge
               status={app.status}
-              subLabel={app.environment_stale ? "stale environment — run ocd deploy" : undefined}
+              subLabel={app.environment_stale ? "stale environment" : undefined}
             /></span>
             {app.webhook_enabled ? <span className="shrink-0" title="Webhook active"><GitBranch size={10} className="text-accent" /></span> : null}
             {app.desired_replicas > 1 && (
@@ -653,7 +653,7 @@ export function DashboardPage() {
         )}
 
         {nothingDeployed ? (
-          <div className="mt-12"><EmptyState message="Nothing deployed yet. Run ocd deploy from an app repository." icon={Box} /></div>
+          <div className="mt-12"><EmptyState message="Nothing deployed yet" icon={Box} /></div>
         ) : (
           <div className="space-y-5">
             {(mobileFilter === "all" || mobileFilter === "apps") && (
@@ -674,7 +674,7 @@ export function DashboardPage() {
         <MobileActionSheet open={mobileSelection != null} onClose={() => setMobileSelection(null)} title={selectedTitle} subtitle={selectedSubtitle}>
           {selectedApp && (
             <>
-              <MobileSheetAction icon={<Settings2 size={19} />} label="Open app" detail="Metrics, logs, deployments and settings" primary onClick={() => closeAnd(() => { window.location.hash = `#/apps/${selectedApp.id}`; })} />
+              <MobileSheetAction icon={<Settings2 size={19} />} label="Open app" detail="Metrics, logs and deployments" primary onClick={() => closeAnd(() => { window.location.hash = `#/apps/${selectedApp.id}`; })} />
               <PermissionGate permission="apps.restart" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<RotateCcw size={19} />} label="Restart" loading={isAppActionLoading(selectedApp.id, "restart")} disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction("restart", selectedApp.id))} /></PermissionGate>
               <PermissionGate permission="apps.pause" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={selectedApp.status === "paused" ? <Play size={19} /> : <Pause size={19} />} label={selectedApp.status === "paused" ? "Unpause" : "Pause"} disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction(selectedApp.status === "paused" ? "unpause" : "pause", selectedApp.id))} /></PermissionGate>
               <PermissionGate permission="apps.destroy" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<Trash2 size={19} />} label="Destroy app" danger disabled={!!appBusyKind(selectedApp.id)} onClick={async () => { if (await confirm("Destroy App", `Permanently destroy "${selectedApp.name}"? This removes all containers, DNS records, and webhooks.`, true)) closeAnd(() => appAction("delete", selectedApp.id)); }} /></PermissionGate>
@@ -715,7 +715,7 @@ export function DashboardPage() {
       </div>
 
       {nothingDeployed ? (
-        <EmptyState message="Nothing deployed yet. Run ocd deploy from an app repository." icon={Box} />
+        <EmptyState message="Nothing deployed yet" icon={Box} />
       ) : (
         <>
           {/* Apps + stacks */}

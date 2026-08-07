@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { get, del, post, put } from "../api/client.ts";
+import { get, del, post } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
-import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, Pencil, History } from "lucide-react";
+import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, History } from "lucide-react";
 import { InfoTip } from "./app-detail/shared.tsx";
 import type { ResourcesData } from "../types.ts";
 import { serverConfirmedDelete } from "../api/server-confirmation.ts";
@@ -131,18 +131,6 @@ export function ResourcesPage() {
       showToast(err.message, "error");
     } finally {
       setDeleting(null);
-    }
-  };
-
-  const handleRenameVolume = async (id: string, currentName: string) => {
-    const name = window.prompt("New provider volume name", currentName)?.trim();
-    if (!name || name === currentName) return;
-    try {
-      await put(`/api/resources/volumes/${encodeURIComponent(id)}`, { name });
-      showToast(`Volume renamed to ${name}`, "success");
-      load();
-    } catch (err: any) {
-      showToast(err.message || "Failed to rename volume", "error");
     }
   };
 
@@ -334,11 +322,6 @@ export function ResourcesPage() {
                 <td className="py-2 px-3 text-fg font-bold">{fmtPrice(v.monthly_eur)}</td>
                 <td className="py-2 px-3">
                   <div className="flex items-center gap-1">
-                    <PermissionGate permission="volumes.rename">
-                      <Btn size="xs" variant="ghost" title="Rename volume" onClick={() => handleRenameVolume(v.id, v.name)}>
-                        <Pencil size={11} />
-                      </Btn>
-                    </PermissionGate>
                     <PermissionGate permission="volumes.delete">
                       <Btn size="xs" variant="danger" disabled={!!v.app_name} title={v.app_name ? `In use by ${v.app_name}` : undefined} loading={deleting === `volume-${v.id}`} onClick={() => handleDelete("volume", v.id, v.name)}>
                         <Trash2 size={11} />

@@ -189,8 +189,9 @@ export function mergeDeployRequestWithExistingApp(
     extra_volumes: supplied.extra_volumes ?? [],
     target: supplied.target ?? app.target,
     target_of: supplied.target_of ?? app.target_of ?? undefined,
-    volume_size: supplied.volume_size,
-    volume_path: supplied.volume_path,
+    volume_id: supplied.volume_id ?? "",
+    volume_size: supplied.volume_size ?? 0,
+    volume_path: supplied.volume_path ?? "/data",
     manifest_path: supplied.manifest_path,
     manifest_hash: supplied.manifest_hash,
   };
@@ -245,6 +246,9 @@ function normalizedSpec(req: DeployRequest) {
     webhook_path: (req.webhook_path ?? "").trim().replace(/^\/+/, "").replace(/\/+$/, ""),
     webhook_wait_for_ci: req.webhook_wait_for_ci ?? false,
     webhook_staging_environment_id: req.webhook_staging_environment_id ?? null,
+    desired_volume_id: req.volume_id ?? "",
+    desired_volume_size: req.volume_size ?? 0,
+    desired_volume_path: req.volume_path ?? "/data",
   };
 }
 
@@ -295,6 +299,9 @@ function comparableApp(app: AppRow) {
     webhook_path: app.webhook_path || "",
     webhook_wait_for_ci: !!app.webhook_wait_for_ci,
     webhook_staging_environment_id: app.webhook_staging_environment_id,
+    desired_volume_id: app.desired_volume_id || "",
+    desired_volume_size: app.desired_volume_size ?? 0,
+    desired_volume_path: app.desired_volume_path || "/data",
   };
 }
 
@@ -411,14 +418,6 @@ export async function applyAppConfig(
   const effectiveValidation = validateDeployRequest(effective);
   if (!effectiveValidation.valid) throw new Error(effectiveValidation.error);
   if (effective.app_name !== app.name) throw new Error(`Manifest targets "${effective.app_name}", but app #${appId} is "${app.name}"`);
-  if (effective.volume_size && !app.volume_id) {
-    throw new Error("Adding a persistent volume to an existing app is an explicit storage operation; use the Volumes UI first");
-  }
-  const scaling = normalizeAppScaling(effective);
-  if (app.volume_id && (scaling.desired_replicas > 1 || scaling.max_replicas > 1)) {
-    throw new Error("Apps with persistent storage cannot have more than 1 replica");
-  }
-
   const desired = normalizedSpec(effective);
   const changes = diffAppConfig(app, effective);
   const changed = new Set(changes.map((c) => c.field));
@@ -478,6 +477,13 @@ export async function applyAppConfig(
     }
   }
   if (changed.has("extra_volumes")) db.updateAppExtraVolumes(app.id, desired.extra_volumes);
+  if (["desired_volume_id", "desired_volume_size", "desired_volume_path"].some((f) => changed.has(f))) {
+    db.updateAppDesiredVolume(app.id, {
+      volumeId: desired.desired_volume_id,
+      sizeGb: desired.desired_volume_size,
+      mountPath: desired.desired_volume_path,
+    });
+  }
   if (["durability_class", "max_per_host", "min_locations"].some((f) => changed.has(f))) {
     db.updateAppDurability(app.id, {
       durability_class: desired.durability_class,

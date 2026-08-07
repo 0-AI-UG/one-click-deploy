@@ -148,10 +148,9 @@ export function buildStackAppSpec(
   const scaleToZeroAfter = manifest.scale_to_zero_after;
   if (scaleToZeroAfter !== undefined) spec.scale_to_zero_after = scaleToZeroAfter;
 
-  if (manifest.volume?.size) {
-    spec.volume_size = manifest.volume.size;
-    spec.volume_path = manifest.volume.path || "/data";
-  }
+  spec.volume_id = manifest.volume?.id ?? "";
+  spec.volume_size = manifest.volume?.size ?? 0;
+  spec.volume_path = manifest.volume?.path ?? "/data";
   if (manifest.extra_volumes?.length) spec.extra_volumes = manifest.extra_volumes;
 
   return spec;

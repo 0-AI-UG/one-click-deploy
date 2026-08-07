@@ -45,8 +45,7 @@ Scaling/infrastructure:
 
 - `scaling.migrate`;
 - `servers.create`, `servers.manage`, `servers.delete`;
-- `volumes.create`, `volumes.attach`, `volumes.detach`, `volumes.resize`, `volumes.rename`,
-  `volumes.delete`, `volumes.files.read`;
+- `volumes.delete`, `volumes.files.read`;
 - `resources.view`, `resources.delete`;
 - `operations.cancel`, `panel.view`, `panel.manage`;
 - `terminal.container`, `terminal.host`.

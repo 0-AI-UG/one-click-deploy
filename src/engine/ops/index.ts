@@ -28,3 +28,5 @@ import "./attach-existing-volume.ts";
 import "./detach-volume.ts";
 import "./reattach-volume.ts";
 import "./resize-volume.ts";
+import "./remount-volume.ts";
+import "./apply-manifest.ts";

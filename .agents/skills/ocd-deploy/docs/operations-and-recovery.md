@@ -204,7 +204,7 @@ Recovery:
 
 1. identify the retained provider volume and former owner;
 2. verify backups and filesystem/application consistency;
-3. attach it to an eligible single-replica app with `ocd volumes adopt`;
+3. set that app manifest's `volume` to `{ "id": "<provider-id>", "size": <gb>, "path": "/data" }` and run `ocd deploy`;
 4. verify mount path and ownership;
 5. restart/redeploy and validate;
 6. delete only after recovery is no longer required.

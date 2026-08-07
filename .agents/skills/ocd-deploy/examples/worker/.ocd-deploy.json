@@ -7,6 +7,7 @@
     { "key": "REDIS_URL", "description": "Redis connection string", "required": true, "secret": true },
     { "key": "CONCURRENCY", "default": "4" }
   ],
+  "volume": null,
   "public": false,
   "health_check": { "enabled": false },
   "webhook": { "enabled": true, "branch": "main" },

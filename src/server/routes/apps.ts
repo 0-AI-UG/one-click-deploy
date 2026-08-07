@@ -13,6 +13,7 @@ import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
 import { applyAppConfig, diffAppConfig } from "../../shared/app-config.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
+import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
  *  public raw TCP/UDP address, a boolean `auth_enabled` flag, and strips every
@@ -132,6 +133,14 @@ async function applyExistingAppConfig(
     }, { headers: corsHeaders });
   }
 
+  const activeManifest = findActiveOperationByResourceKey("apply_manifest", `manifest:${app.id}`);
+  if (activeManifest) {
+    return Response.json(
+      { ok: false, error: `Manifest operation #${activeManifest.id} is still active. Wait for it to finish before applying another manifest.` },
+      { status: 409, headers: corsHeaders },
+    );
+  }
+
   const resourceKeys = [`app:${app.id}`];
   const acq = tryAcquire(resourceKeys, NON_OP_HOLDER, "apply_config");
   if (!acq.ok) {
@@ -158,14 +167,10 @@ async function applyExistingAppConfig(
       config_revision: db.getApp(app.id)?.config_revision,
       op_id: null as number | null,
     };
-    if (controls.deploy === false) {
-      return Response.json(result, { headers: corsHeaders });
-    }
-
     const { opId } = enqueue({
-      kind: "redeploy",
-      resourceKeys,
-      input: { appId: app.id, userId },
+      kind: "apply_manifest",
+      resourceKeys: [`manifest:${app.id}`],
+      input: { appId: app.id, userId, deploy: controls.deploy !== false },
       trigger: "cli",
       triggeredBy: userId,
     });
@@ -185,6 +190,12 @@ export async function handleDeploy(request: Request): Promise<Response> {
     if (req.apply_mode !== "manifest") {
       return Response.json(
         { ok: false, error: 'apply_mode must be "manifest"' },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    if (req.volume_size === undefined) {
+      return Response.json(
+        { ok: false, error: "Manifest must declare explicit primary volume state (`volume: null` or a volume object)" },
         { status: 400, headers: corsHeaders },
       );
     }

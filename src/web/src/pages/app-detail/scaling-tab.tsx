@@ -1,7 +1,7 @@
 import { post } from "../../api/client.ts";
 import { Card, Btn, Table } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { Zap, Gauge, History, TerminalSquare } from "lucide-react";
+import { Zap, Gauge, History } from "lucide-react";
 import type { ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, ScalingEvent } from "../../types.ts";
 
@@ -26,18 +26,6 @@ export function ScalingTab({
 }: ScalingTabProps) {
   return (
     <div className="space-y-4">
-      <Card className="p-4">
-        <div className="flex items-start gap-3">
-          <TerminalSquare size={15} className="mt-0.5 shrink-0 text-fg" />
-          <div>
-            <h3 className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg">Manifest controlled</h3>
-            <p className="mt-1 font-mono text-[10px] text-muted">
-              Replica count and autoscaling policy come from <code>.ocd-deploy.json</code>. Apply changes with <code>ocd deploy</code>.
-            </p>
-          </div>
-        </div>
-      </Card>
-
       <Card className="p-4">
         <div className="mb-3 flex items-center gap-2">
           <Zap size={14} className="text-fg" />

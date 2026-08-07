@@ -3,7 +3,7 @@ import { get, post } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, confirm, showToast } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
-import { GitBranch, ArrowUpCircle, ExternalLink, Rocket, TerminalSquare } from "lucide-react";
+import { GitBranch, ArrowUpCircle, ExternalLink, Rocket } from "lucide-react";
 import type { AppData } from "../../types.ts";
 import type { AppStagingResponse } from "../../../../shared/rpc.ts";
 
@@ -55,18 +55,6 @@ export function WebhooksTab({ app, appId, action, ops }: WebhooksTabProps) {
 
   return (
     <div className="space-y-4">
-      <Card className="p-4">
-        <div className="flex items-start gap-3">
-          <TerminalSquare size={15} className="mt-0.5 shrink-0 text-fg" />
-          <div>
-            <h3 className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg">Manifest controlled</h3>
-            <p className="mt-1 font-mono text-[10px] text-muted">
-              Webhook, branch, path filter, CI, and staging settings come from <code>.ocd-deploy.json</code>. Apply changes with <code>ocd deploy</code>.
-            </p>
-          </div>
-        </div>
-      </Card>
-
       <Card className="p-4">
         <div className="mb-3 flex items-center gap-2">
           <GitBranch size={14} className="text-fg" />

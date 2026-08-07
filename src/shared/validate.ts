@@ -525,6 +525,7 @@ export function validateDeployRequest(req: {
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   environment?: string | null;
   environment_id?: number | null;
+  volume_id?: string;
   volume_size?: number;
   replicas?: number;
   durability_class?: string;
@@ -659,6 +660,12 @@ export function validateDeployRequest(req: {
   }
   if (req.volume_size && (desired > 1 || maximum > 1)) {
     return { valid: false, error: "Apps with persistent storage cannot have more than 1 replica" };
+  }
+  if (req.volume_size !== undefined && (!Number.isInteger(req.volume_size) || req.volume_size < 0)) {
+    return { valid: false, error: "Volume size must be 0 or a positive integer" };
+  }
+  if (req.volume_id && !req.volume_size) {
+    return { valid: false, error: "An explicit provider volume requires a positive desired size" };
   }
 
   if (req.memory_mb !== undefined && !isValidMemoryMb(req.memory_mb)) {

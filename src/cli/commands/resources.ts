@@ -1,4 +1,4 @@
-import { del, get, post, put, resolveApp } from "../api.ts";
+import { del, get } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { promptLine } from "../prompt.ts";
 import { BOLD, DIM, GREEN, RED, RESET, table } from "../format.ts";
@@ -82,14 +82,6 @@ async function showVolume(ref: string): Promise<void> {
   if (data.host_path) console.log(`Host path: ${data.host_path}`);
 }
 
-async function renameVolume(volumeId: string, name: string): Promise<void> {
-  const result = await put<{ id: string; name: string }>(
-    `/api/resources/volumes/${encodeURIComponent(volumeId)}`,
-    { name },
-  );
-  console.log(`${GREEN}Renamed volume ${BOLD}${result.id}${RESET}${GREEN} to ${BOLD}${result.name}${RESET}`);
-}
-
 async function volumeDeletionAudit(): Promise<void> {
   const rows = await get<Array<{
     provider_volume_id: string; provider_volume_name: string; former_resource_name: string;
@@ -151,100 +143,6 @@ async function deleteResource(args: string[]): Promise<void> {
   console.log(`${GREEN}${type} deleted.${RESET}`);
 }
 
-function flag(args: string[], name: string): string | undefined {
-  const inline = args.find((arg) => arg.startsWith(`${name}=`));
-  if (inline) return inline.slice(name.length + 1);
-  const index = args.indexOf(name);
-  return index >= 0 ? args[index + 1] : undefined;
-}
-
-async function runVolumeOp(
-  path: string,
-  body: Record<string, unknown>,
-  label: string,
-): Promise<void> {
-  const { op_id } = await post<{ op_id: number }>(path, body);
-  console.log(`${label} ${DIM}(operation #${op_id})${RESET}`);
-  const op = await followOp(op_id);
-  if (!op.ok) throw new Error(op.error || `${label} failed`);
-  console.log(`${GREEN}${label} complete.${RESET}`);
-}
-
-async function volumeAttach(args: string[], existing: boolean): Promise<void> {
-  const appRef = args[0];
-  if (!appRef) {
-    throw new Error(
-      existing
-        ? "Usage: ocd volumes adopt <app> <provider-volume-id> [--mount-path=/data]"
-        : "Usage: ocd volumes attach <app> [--size=10] [--mount-path=/data]",
-    );
-  }
-  const app = await resolveApp(appRef);
-  const mountPath = flag(args, "--mount-path") || "/data";
-  if (existing) {
-    const volumeId = args[1];
-    if (!volumeId) throw new Error("Provider volume id is required");
-    await runVolumeOp(
-      "/api/volumes/attach-existing",
-      { app_id: app.id, volume_id: volumeId, mount_path: mountPath },
-      `Adopt volume ${volumeId} into ${app.name}`,
-    );
-    return;
-  }
-  const size = Number(flag(args, "--size") || "10");
-  if (!Number.isInteger(size) || size < 1) throw new Error("--size must be a positive integer");
-  await runVolumeOp(
-    "/api/volumes/attach",
-    { app_id: app.id, size, mount_path: mountPath },
-    `Attach a new ${size} GB volume to ${app.name}`,
-  );
-}
-
-async function volumeDetach(args: string[]): Promise<void> {
-  if (!args[0]) throw new Error("Usage: ocd volumes detach <app>");
-  const app = await resolveApp(args[0]);
-  await runVolumeOp(
-    "/api/volumes/detach",
-    { app_id: app.id },
-    `Detach and retain ${app.name}'s volume`,
-  );
-}
-
-async function volumeReattach(args: string[]): Promise<void> {
-  const volumeId = args[0];
-  const fromRef = flag(args, "--from");
-  const toRef = flag(args, "--to");
-  if (!volumeId || !fromRef || !toRef) {
-    throw new Error(
-      "Usage: ocd volumes reattach <provider-volume-id> --from=<app> --to=<app> [--mount-path=/data]",
-    );
-  }
-  const [fromApp, toApp] = await Promise.all([resolveApp(fromRef), resolveApp(toRef)]);
-  await runVolumeOp(
-    "/api/volumes/reattach",
-    {
-      volume_id: volumeId,
-      from_app_id: fromApp.id,
-      to_app_id: toApp.id,
-      mount_path: flag(args, "--mount-path") || "/data",
-    },
-    `Move volume ${volumeId} from ${fromApp.name} to ${toApp.name}`,
-  );
-}
-
-async function volumeResize(args: string[]): Promise<void> {
-  const volumeId = args[0];
-  const size = Number(flag(args, "--size") || args[1]);
-  if (!volumeId || !Number.isInteger(size) || size < 1) {
-    throw new Error("Usage: ocd volumes resize <provider-volume-id> --size=<gb>");
-  }
-  await runVolumeOp(
-    "/api/volumes/resize",
-    { volume_id: volumeId, size },
-    `Resize volume ${volumeId} to ${size} GB`,
-  );
-}
-
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
@@ -292,12 +190,6 @@ function volumeUsage(): void {
 ${BOLD}Commands:${RESET}
   list                                  List provider volumes and retention state
   show <provider-volume-id>             Show volume ownership, mount and cost
-  attach <app> [--size=10] [--mount-path=/data]
-  adopt <app> <volume-id> [--mount-path=/data]
-  detach <app>                          Detach but retain the volume
-  reattach <id> --from=<app> --to=<app> [--mount-path=/data]
-  resize <id> --size=<gb>               Grow a volume (provider volumes cannot shrink)
-  rename <id> <name>                    Rename a provider volume
   audit                                 Show the durable permanent-deletion audit
   ls <id> [path]                        Browse an attached volume
   cat <id> <path>                       Read a text file (max 256 KiB)
@@ -326,15 +218,6 @@ export async function volumes(args: string[] = []): Promise<void> {
     if (!args[1]) throw new Error("Usage: ocd volumes show <provider-volume-id>");
     return showVolume(args[1]);
   }
-  if (sub === "attach" || sub === "create") return volumeAttach(args.slice(1), false);
-  if (sub === "adopt" || sub === "attach-existing") return volumeAttach(args.slice(1), true);
-  if (sub === "detach") return volumeDetach(args.slice(1));
-  if (sub === "reattach" || sub === "move") return volumeReattach(args.slice(1));
-  if (sub === "resize") return volumeResize(args.slice(1));
-  if (sub === "rename") {
-    if (!args[1] || !args[2]) throw new Error("Usage: ocd volumes rename <provider-volume-id> <name>");
-    return renameVolume(args[1], args[2]);
-  }
   if (sub === "audit" || sub === "deletion-audit") return volumeDeletionAudit();
   if (sub === "ls" || sub === "files") {
     if (!args[1]) throw new Error("Usage: ocd volumes ls <provider-volume-id> [path]");
@@ -358,7 +241,7 @@ function usage(): void {
 ${BOLD}Commands:${RESET}
   ls                              Inventory and estimated monthly cost
   volume <provider-id>            Volume detail
-  volumes <command>               Volume lifecycle and file browsing
+  volumes <command>               Volume inspection, files, and deletion
   delete <server|volume> <id>     Permanently delete an unused provider resource`);
 }
 

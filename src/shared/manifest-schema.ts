@@ -139,10 +139,13 @@ const envEntrySchema = z.object(
   { error: 'expected object with a "key"' },
 );
 
-/** App data volume: size in GB and mount path. */
+/** App data volume desired state. `id` adopts one exact retained/provider
+ * volume; omitting it means OCD owns creation. Size is always explicit so the
+ * reconciler can grow deterministically and reject impossible shrink requests. */
 const volumeSchema = z.object(
   {
-    size: guardedNumber("expected positive number", (v) => v >= 1).optional(),
+    id: nonEmptyString("expected a non-empty provider volume id").optional(),
+    size: guardedNumber("expected positive integer", (v) => Number.isInteger(v) && v >= 1),
     path: z
       .string({ error: 'expected string starting with "/"' })
       .refine((v) => v.startsWith("/"), {
@@ -150,7 +153,7 @@ const volumeSchema = z.object(
       })
       .optional(),
   },
-  { error: "expected object { size, path? }" },
+  { error: "expected object { size, id?, path? }" },
 );
 
 /** Auto-deploy webhook config. `staging: true` holds each pushed commit in the
@@ -304,7 +307,10 @@ export const DeployManifestSchema = z
       nonEmptyString("expected a non-empty environment name"),
       z.null(),
     ]).optional(),
-    volume: volumeSchema.optional(),
+    /** Required: null explicitly means no primary volume. */
+    volume: z.union([volumeSchema, z.null()], {
+      error: "expected null or object { size, id?, path? }",
+    }),
     webhook: webhookSchema.optional(),
     suggested_app_name: z.string({ error: "expected string" }).optional(),
     /** Custom public domain. */

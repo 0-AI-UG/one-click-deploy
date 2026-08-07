@@ -499,17 +499,43 @@ describe("deploy step: create_volume", () => {
 
   test("compensation detaches and retains the volume", async () => {
     const { ctx } = makeCtx({});
-    await step.compensate!(ctx, { volumeId: "v-abc", volumeMount: "/mnt/x:/data", containerPath: "/data" }, {});
+    await step.compensate!(ctx, {
+      volumeId: "v-abc",
+      volumeMount: "/mnt/x:/data",
+      containerPath: "/data",
+      attached: false,
+      detachOnCompensate: true,
+    }, {});
     expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(1);
     expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
     expect(db.getRetiredVolumes().find((v) => v.provider_volume_id === "v-abc")?.retention_class).toBe("provisional");
+  });
+
+  test("compensation preserves a volume that was already attached before deployment", async () => {
+    const { ctx } = makeCtx({});
+    const detachCallsBefore = compute._mocks.volumeDetach.mock.calls.length;
+    await step.compensate!(ctx, {
+      volumeId: "v-existing",
+      volumeMount: "/mnt/vol-v-existing:/data",
+      containerPath: "/data",
+      attached: true,
+      detachOnCompensate: false,
+    }, {});
+    expect(compute._mocks.volumeDetach).toHaveBeenCalledTimes(detachCallsBefore);
+    expect(db.getRetiredVolumes().some((v) => v.provider_volume_id === "v-existing")).toBe(false);
   });
 
   test("compensation surfaces detach failure and does not claim retirement", async () => {
     compute._mocks.volumeDetach.mockImplementationOnce(async () => { throw new Error("ssh/provider unavailable"); });
     const { ctx } = makeCtx({});
     await expect(
-      step.compensate!(ctx, { volumeId: "v-xyz", volumeMount: "", containerPath: "/d" }, {}),
+      step.compensate!(ctx, {
+        volumeId: "v-xyz",
+        volumeMount: "",
+        containerPath: "/d",
+        attached: false,
+        detachOnCompensate: true,
+      }, {}),
     ).rejects.toThrow(/unavailable/);
     expect(compute._mocks.volumeDelete).not.toHaveBeenCalled();
   });

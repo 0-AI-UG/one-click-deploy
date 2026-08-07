@@ -261,25 +261,6 @@ export async function handleDeleteResource(request: Request, type: string, id: s
   }
 }
 
-export async function handleRenameVolume(request: Request, volumeId: string): Promise<Response> {
-  try {
-    await requirePermission(request, "volumes.rename");
-    const body = await request.json().catch(() => ({})) as { name?: string };
-    const name = typeof body.name === "string" ? body.name.trim() : "";
-    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/.test(name)) {
-      return Response.json(
-        { error: "Volume name must be 1-63 letters, digits, or hyphens and start with a letter or digit" },
-        { status: 400, headers: corsHeaders },
-      );
-    }
-    await hetzner.volumes.get(volumeId);
-    await hetzner.volumes.rename(volumeId, name);
-    return Response.json({ ok: true, id: volumeId, name }, { headers: corsHeaders });
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
 export async function handleGetVolumeDeletionAudit(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "volumes.delete");
