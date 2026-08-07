@@ -35,7 +35,6 @@ import {
 import { handleDeleteServer, handleRefreshServers, handleSetServerPool } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail, handleRenameVolume, handleGetVolumeDeletionAudit } from "./routes/resources.ts";
-import { handleGetTopology } from "./routes/topology.ts";
 import { handleAttachVolume, handleAttachExistingVolume, handleDetachVolume, handleReattachVolume, handleResizeVolume } from "./routes/volumes.ts";
 import { handleWakeApp, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
 import { handleGetAvailability } from "./routes/availability.ts";
@@ -319,7 +318,6 @@ export const apiRoutes = {
 
   // --- Resources ---
   "/api/resources": { GET: (req: Request) => handleGetResources(req) },
-  "/api/topology": { GET: (req: Request) => handleGetTopology(req) },
   "/api/resources/servers": { POST: (req: Request) => handleCreateServer(req) },
   "/api/resources/metrics/history": { GET: (req: Request) => handleGetServerMetricsHistory(req) },
   "/api/resources/volumes/deletion-audit": {

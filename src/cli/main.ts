@@ -77,7 +77,7 @@ ${BOLD}Commands:${RESET}
   ops <id> | logs <id>   Inspect an operation or stream its logs
   ops cancel|retry|finalize <id>  Recover a stuck operation
   servers                Inspect and manage servers
-  resources              Inventory, estimated cost, and topology
+  resources              Inventory and estimated cost
   volumes                Manage attached and retained volumes
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session

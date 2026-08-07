@@ -3,11 +3,11 @@ import { get, post, del } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
-import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, ScrollText, Check, Database, Box, Boxes, ChevronDown, ChevronRight, Table2, Share2, ArrowUpFromLine, MoreVertical, Settings2 } from "lucide-react";
-import { TopologyGraph, type TopologyData } from "../components/topology-graph.tsx";
+import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, Check, Database, Box, Boxes, ChevronDown, ChevronRight, ArrowUpFromLine, MoreVertical, Settings2 } from "lucide-react";
 import { serverConfirmedDelete } from "../api/server-confirmation.ts";
 import { useMobileLayout } from "../hooks/use-mobile-layout.ts";
 import { MobileActionSheet, MobileSheetAction } from "../components/mobile-action-sheet.tsx";
+import { ContextActionItem, ContextActionMenu } from "../components/context-action-menu.tsx";
 
 type AppData = {
   id: number; name: string; domain: string; git_repo: string; status: string;
@@ -82,34 +82,21 @@ export function DashboardPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const confirmTimeoutRef = useRef<number | null>(null);
-  const [view, setView] = useState<"table" | "graph">("table");
-  const [topo, setTopo] = useState<TopologyData | null>(null);
-  const [topoLoading, setTopoLoading] = useState(false);
   const [mobileFilter, setMobileFilter] = useState<"all" | "apps" | "services">("all");
   const [mobileSelection, setMobileSelection] = useState<
     { kind: "app" | "service" | "stack"; id: number } | null
   >(null);
-
-  const loadTopo = async () => {
-    setTopoLoading(true);
-    try {
-      setTopo(await get("/api/topology") as TopologyData);
-    } catch (err: any) {
-      showToast(err.message, "error");
-    } finally {
-      setTopoLoading(false);
-    }
-  };
 
   const ops = useActiveOperations(
     (op) => APP_OP_KINDS.has(op.kind) || SVC_OP_KINDS.has(op.kind) || STACK_OP_KINDS.has(op.kind),
     { rehydrateToasts: true },
   );
 
-  const armOrRun = (key: string, run: () => void) => {
+  const armOrRun = (key: string, run: () => void, close?: () => void) => {
     if (confirmKey === key) {
       if (confirmTimeoutRef.current) window.clearTimeout(confirmTimeoutRef.current);
       setConfirmKey(null);
+      close?.();
       run();
     } else {
       if (confirmTimeoutRef.current) window.clearTimeout(confirmTimeoutRef.current);
@@ -152,13 +139,7 @@ export function DashboardPage() {
   const activeSig = ops.active.map((o) => `${o.id}:${o.status}`).join(",");
   useEffect(() => {
     if (!loading) load();
-    if (!loading && view === "graph") loadTopo();
   }, [activeSig]);
-
-  // Fetch the topology lazily the first time the graph view is opened.
-  useEffect(() => {
-    if (view === "graph" && !topo) loadTopo();
-  }, [view]);
 
   const appAction = async (action: string, appId: number, body?: Record<string, unknown>) => {
     const key = `${action}-${appId}`;
@@ -296,92 +277,88 @@ export function DashboardPage() {
             <span aria-hidden className="absolute left-[23px] top-1/2 h-[1.5px] w-[11px] bg-fg/10" />
           </>
         )}
-        <div className={`${nested ? "pl-10 pr-4" : "px-4"} py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${app.status === "paused" ? "opacity-50" : ""} ${rowBusy ? "bg-alt/30" : ""}`}>
-          <div className="flex items-center gap-4 min-w-0">
-            <a href={`#/apps/${app.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{app.name}</a>
+        <div className={`${nested ? "pl-10 pr-4" : "px-4"} py-3 flex items-center justify-between gap-3 hover:bg-alt/50 transition-colors ${app.status === "paused" ? "opacity-50" : ""} ${rowBusy ? "bg-alt/30" : ""}`}>
+          <div className="flex min-w-0 flex-1 items-center gap-4 overflow-hidden">
+            <a href={`#/apps/${app.id}`} className="shrink-0 font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{app.name}</a>
             {app.domain && (
-              <span className="flex items-center gap-1 text-[9px] font-mono text-muted">
-                <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="flex items-center gap-1 hover:text-fg transition-colors">
-                  <Globe size={10} />{app.domain}<ExternalLink size={8} />
+              <span className="flex w-[300px] min-w-0 max-w-[300px] flex-1 items-center gap-1 text-[9px] font-mono text-muted" title={app.domain}>
+                <a href={`https://${app.domain}`} target="_blank" rel="noopener" className="flex min-w-0 items-center gap-1 hover:text-fg transition-colors">
+                  <Globe size={10} className="shrink-0" /><span className="truncate whitespace-nowrap">{app.domain}</span><ExternalLink size={8} className="shrink-0" />
                 </a>
                 <CopyButton text={`https://${app.domain}`} size={10} />
               </span>
             )}
             {!app.public && !app.domain && (
-              <span className="flex items-center gap-1 text-[9px] font-mono text-muted">
-                <Globe size={10} />{app.internal_protocol === "tcp" ? `${app.name}.ocd.internal:${app.container_port}` : `${app.name}.ocd.internal`}
+              <span className="flex w-[300px] min-w-0 max-w-[300px] flex-1 items-center gap-1 text-[9px] font-mono text-muted" title={app.internal_protocol === "tcp" ? `${app.name}.ocd.internal:${app.container_port}` : `${app.name}.ocd.internal`}>
+                <Globe size={10} className="shrink-0" /><span className="truncate whitespace-nowrap">{app.internal_protocol === "tcp" ? `${app.name}.ocd.internal:${app.container_port}` : `${app.name}.ocd.internal`}</span>
                 <CopyButton text={app.internal_protocol === "tcp" ? `tcp://${app.name}.ocd.internal:${app.container_port}` : `http://${app.name}.ocd.internal`} size={10} />
-                <span className="font-mono text-[8px] font-bold border border-fg px-1 uppercase">Private</span>
+                <span className="shrink-0 font-mono text-[8px] font-bold border border-fg px-1 uppercase">Private</span>
               </span>
             )}
-            <StatusBadge
+            <span className="shrink-0"><StatusBadge
               status={app.status}
               subLabel={app.environment_stale ? "stale environment — redeploy required" : undefined}
-            />
-            {app.webhook_enabled ? <span title="Webhook active"><GitBranch size={10} className="text-accent" /></span> : null}
+            /></span>
+            {app.webhook_enabled ? <span className="shrink-0" title="Webhook active"><GitBranch size={10} className="text-accent" /></span> : null}
             {app.desired_replicas > 1 && (
-              <span className="font-mono text-[9px] font-bold border border-fg px-1">{app.desired_replicas}x</span>
+              <span className="shrink-0 font-mono text-[9px] font-bold border border-fg px-1">{app.desired_replicas}x</span>
             )}
           </div>
-          <div className="flex items-center gap-1">
-            <PermissionGate permission="apps.logs" appId={app.id} environmentId={app.environment_id}>
-              <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/apps/${app.id}`; }}><ScrollText size={12} /></Btn>
-            </PermissionGate>
-            <PermissionGate permission="apps.restart" appId={app.id} environmentId={app.environment_id}>
+          <ContextActionMenu label={`Actions for ${app.name}`}>
+            {(close) => <>
+              <PermissionGate permission="apps.logs" appId={app.id} environmentId={app.environment_id}>
+                <ContextActionItem icon={<Settings2 size={12} />} label="Open app" onClick={() => { close(); window.location.hash = `#/apps/${app.id}`; }} />
+              </PermissionGate>
+              <PermissionGate permission="apps.restart" appId={app.id} environmentId={app.environment_id}>
               {(() => {
                 const k = `restart-${app.id}`;
                 const armed = confirmKey === k;
                 return (
-                  <Btn size="xs" variant="ghost" loading={isAppActionLoading(app.id, "restart")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("restart", app.id))}>
-                    {armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />}
-                  </Btn>
+                  <ContextActionItem icon={armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />} label={armed ? "Confirm restart" : "Restart"} loading={isAppActionLoading(app.id, "restart")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("restart", app.id), close)} />
                 );
               })()}
-            </PermissionGate>
-            <PermissionGate permission="apps.pause" appId={app.id} environmentId={app.environment_id}>
+              </PermissionGate>
+              <PermissionGate permission="apps.pause" appId={app.id} environmentId={app.environment_id}>
               {app.status === "paused" ? (() => {
                 const k = `unpause-${app.id}`;
                 const armed = confirmKey === k;
                 return (
-                  <Btn size="xs" variant="ghost" loading={isAppActionLoading(app.id, "unpause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("unpause", app.id))}>
-                    {armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />}
-                  </Btn>
+                  <ContextActionItem icon={armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />} label={armed ? "Confirm unpause" : "Unpause"} loading={isAppActionLoading(app.id, "unpause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("unpause", app.id), close)} />
                 );
               })() : (() => {
                 const k = `pause-${app.id}`;
                 const armed = confirmKey === k;
                 return (
-                  <Btn size="xs" variant="ghost" loading={isAppActionLoading(app.id, "pause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("pause", app.id))}>
-                    {armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />}
-                  </Btn>
+                  <ContextActionItem icon={armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />} label={armed ? "Confirm pause" : "Pause"} loading={isAppActionLoading(app.id, "pause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("pause", app.id), close)} />
                 );
               })()}
-            </PermissionGate>
-            <PermissionGate permission="apps.deploy" appId={app.id} environmentId={app.environment_id}>
+              </PermissionGate>
+              <PermissionGate permission="apps.deploy" appId={app.id} environmentId={app.environment_id}>
               {(() => {
                 const k = `redeploy-${app.id}`;
                 const armed = confirmKey === k;
                 return (
-                  <Btn size="xs" variant="ghost" loading={isAppActionLoading(app.id, "redeploy")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("redeploy", app.id))}>
-                    {armed ? <Check size={12} className="text-accent-blue" /> : <RefreshCw size={12} />}
-                  </Btn>
+                  <ContextActionItem icon={armed ? <Check size={12} className="text-accent-blue" /> : <RefreshCw size={12} />} label={armed ? "Confirm redeploy" : "Deploy latest code"} loading={isAppActionLoading(app.id, "redeploy")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => appAction("redeploy", app.id), close)} />
                 );
               })()}
-            </PermissionGate>
-            <PermissionGate permission="apps.destroy" appId={app.id} environmentId={app.environment_id}>
-              <Btn
-                size="xs"
-                variant="ghost"
+              </PermissionGate>
+              <PermissionGate permission="apps.destroy" appId={app.id} environmentId={app.environment_id}>
+              <ContextActionItem
+                icon={<Trash2 size={12} />}
+                label="Destroy app"
+                danger
                 loading={isAppActionLoading(app.id, "delete")}
                 disabled={disableRow}
                 onClick={async () => {
+                  close();
                   if (await confirm("Destroy App", `Permanently destroy "${app.name}"? This removes all containers, DNS records, and webhooks.`, true)) {
                     appAction("delete", app.id);
                   }
                 }}
-              ><Trash2 size={12} className="text-accent-red" /></Btn>
-            </PermissionGate>
-          </div>
+              />
+              </PermissionGate>
+            </>}
+          </ContextActionMenu>
         </div>
       </div>
     );
@@ -401,69 +378,67 @@ export function DashboardPage() {
             <span aria-hidden className="absolute left-[23px] top-1/2 h-[1.5px] w-[11px] bg-fg/10" />
           </>
         )}
-        <div className={`${nested ? "pl-10 pr-4" : "px-4"} py-3 flex items-center justify-between hover:bg-alt/50 transition-colors ${svc.status === "paused" ? "opacity-50" : ""} ${rowBusy ? "bg-alt/30" : ""}`}>
-          <div className="flex items-center gap-4 min-w-0">
-            <div className="flex items-center gap-1.5">
+        <div className={`${nested ? "pl-10 pr-4" : "px-4"} py-3 flex items-center justify-between gap-3 hover:bg-alt/50 transition-colors ${svc.status === "paused" ? "opacity-50" : ""} ${rowBusy ? "bg-alt/30" : ""}`}>
+          <div className="flex min-w-0 flex-1 items-center gap-4 overflow-hidden">
+            <div className="flex shrink-0 items-center gap-1.5">
               <Database size={10} className="text-muted" />
               <a href={`#/services/${svc.id}`} className="font-mono text-[10px] font-bold text-accent-blue hover:underline uppercase">{svc.name}</a>
             </div>
-            <span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{svc.service_type}</span>
-            <span className="font-mono text-[9px] text-muted">{svc.version}</span>
-            <StatusBadge status={svc.status} />
+            <span className="shrink-0 font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{svc.service_type}</span>
+            <span className="shrink-0 font-mono text-[9px] text-muted">{svc.version}</span>
+            <span className="shrink-0"><StatusBadge status={svc.status} /></span>
             {svc.linked_environments.length > 0 && (
-              <span className="font-mono text-[8px] text-muted">
+              <span className="min-w-0 truncate whitespace-nowrap font-mono text-[8px] text-muted" title={`injected into ${svc.linked_environments.map((e) => e.name).join(", ")}`}>
                 injected into {svc.linked_environments.map((e) => e.name).join(", ")}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1">
-            <PermissionGate permission="services.logs">
-              <Btn size="xs" variant="ghost" onClick={() => { window.location.hash = `#/services/${svc.id}`; }}><ScrollText size={12} /></Btn>
-            </PermissionGate>
-            <PermissionGate permission="services.manage">
+          <ContextActionMenu label={`Actions for ${svc.name}`}>
+            {(close) => <>
+              <PermissionGate permission="services.logs">
+                <ContextActionItem icon={<Settings2 size={12} />} label="Open service" onClick={() => { close(); window.location.hash = `#/services/${svc.id}`; }} />
+              </PermissionGate>
+              <PermissionGate permission="services.manage">
               {(() => {
                 const k = `svc-restart-${svc.id}`;
                 const armed = confirmKey === k;
                 return (
-                  <Btn size="xs" variant="ghost" loading={isSvcActionLoading(svc.id, "restart")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => svcAction("restart", svc.id))}>
-                    {armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />}
-                  </Btn>
+                  <ContextActionItem icon={armed ? <Check size={12} className="text-accent-blue" /> : <RotateCcw size={12} />} label={armed ? "Confirm restart" : "Restart"} loading={isSvcActionLoading(svc.id, "restart")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => svcAction("restart", svc.id), close)} />
                 );
               })()}
-            </PermissionGate>
-            <PermissionGate permission="services.manage">
+              </PermissionGate>
+              <PermissionGate permission="services.manage">
               {svc.status === "paused" ? (() => {
                 const k = `svc-unpause-${svc.id}`;
                 const armed = confirmKey === k;
                 return (
-                  <Btn size="xs" variant="ghost" loading={isSvcActionLoading(svc.id, "unpause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => svcAction("unpause", svc.id))}>
-                    {armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />}
-                  </Btn>
+                  <ContextActionItem icon={armed ? <Check size={12} className="text-accent-blue" /> : <Play size={12} />} label={armed ? "Confirm unpause" : "Unpause"} loading={isSvcActionLoading(svc.id, "unpause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => svcAction("unpause", svc.id), close)} />
                 );
               })() : (() => {
                 const k = `svc-pause-${svc.id}`;
                 const armed = confirmKey === k;
                 return (
-                  <Btn size="xs" variant="ghost" loading={isSvcActionLoading(svc.id, "pause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => svcAction("pause", svc.id))}>
-                    {armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />}
-                  </Btn>
+                  <ContextActionItem icon={armed ? <Check size={12} className="text-accent-blue" /> : <Pause size={12} />} label={armed ? "Confirm pause" : "Pause"} loading={isSvcActionLoading(svc.id, "pause")} disabled={disableRow && !armed} onClick={() => armOrRun(k, () => svcAction("pause", svc.id), close)} />
                 );
               })()}
-            </PermissionGate>
-            <PermissionGate permission="services.destroy">
-              <Btn
-                size="xs"
-                variant="ghost"
+              </PermissionGate>
+              <PermissionGate permission="services.destroy">
+              <ContextActionItem
+                icon={<Trash2 size={12} />}
+                label="Destroy service"
+                danger
                 loading={isSvcActionLoading(svc.id, "delete")}
                 disabled={disableRow}
                 onClick={async () => {
+                  close();
                   if (await confirm("Destroy Service", `Permanently destroy "${svc.name}"? This removes all containers, volumes, and data.`, true)) {
                     svcAction("delete", svc.id);
                   }
                 }}
-              ><Trash2 size={12} className="text-accent-red" /></Btn>
-            </PermissionGate>
-          </div>
+              />
+              </PermissionGate>
+            </>}
+          </ContextActionMenu>
         </div>
       </div>
     );
@@ -686,13 +661,13 @@ export function DashboardPage() {
             <h1 className="mt-1 font-mono text-xl font-bold uppercase text-fg">Dashboard</h1>
             <p className="mt-1 font-mono text-[10px] text-muted">{apps.length} apps · {services.length} services · {stacks.length} stacks</p>
           </div>
-          <button onClick={() => { load(); if (view === "graph") loadTopo(); }} aria-label="Refresh dashboard" className="grid h-11 w-11 shrink-0 place-items-center border-2 border-fg bg-bg-raised shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"><RefreshCw size={18} /></button>
+          <button onClick={load} aria-label="Refresh dashboard" className="grid h-11 w-11 shrink-0 place-items-center border-2 border-fg bg-bg-raised shadow-neo-sm active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"><RefreshCw size={18} /></button>
         </div>
 
         {!nothingDeployed && (
           <div className="mb-5 grid grid-cols-3 border-2 border-fg bg-bg-raised p-1 shadow-neo-sm">
             {(["all", "apps", "services"] as const).map((filter) => (
-              <button key={filter} onClick={() => { setMobileFilter(filter); setView("table"); }} className={`min-h-10 px-2 font-mono text-[9px] font-bold uppercase ${view === "table" && mobileFilter === filter ? "bg-fg text-accent" : "text-muted"}`}>{filter}</button>
+              <button key={filter} onClick={() => setMobileFilter(filter)} className={`min-h-10 px-2 font-mono text-[9px] font-bold uppercase ${mobileFilter === filter ? "bg-fg text-accent" : "text-muted"}`}>{filter}</button>
             ))}
           </div>
         )}
@@ -703,18 +678,11 @@ export function DashboardPage() {
           <div className="space-y-5">
             {(mobileFilter === "all" || mobileFilter === "apps") && (
               <section>
-                <div className="mb-3 flex items-center justify-between">
-                  <h2 className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider"><Box size={15} /> Apps & stacks <span className="text-muted">{standaloneApps.length + stacks.length}</span></h2>
-                  <button onClick={() => setView(view === "graph" ? "table" : "graph")} className="flex min-h-10 items-center gap-1.5 px-2 font-mono text-[9px] font-bold uppercase text-muted"><Share2 size={14} />{view === "graph" ? "Cards" : "Topology"}</button>
-                </div>
-                {view === "graph" ? (
-                  topoLoading && !topo ? <div className="flex justify-center py-16"><Spinner /></div> : topo ? <div className="overflow-x-auto border-2 border-fg bg-bg-raised p-2 shadow-neo-sm"><div className="min-w-[680px]"><TopologyGraph data={topo} /></div></div> : <EmptyState message="No topology data yet." icon={Share2} />
-                ) : (
-                  <div className="space-y-3">{standaloneApps.map((app) => appCard(app))}{stacks.map(stackCard)}</div>
-                )}
+                <h2 className="mb-3 flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider"><Box size={15} /> Apps & stacks <span className="text-muted">{standaloneApps.length + stacks.length}</span></h2>
+                <div className="space-y-3">{standaloneApps.map((app) => appCard(app))}{stacks.map(stackCard)}</div>
               </section>
             )}
-            {view === "table" && (mobileFilter === "all" || mobileFilter === "services") && standaloneServices.length > 0 && (
+            {(mobileFilter === "all" || mobileFilter === "services") && standaloneServices.length > 0 && (
               <section>
                 <h2 className="mb-3 flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wider"><Database size={15} /> Services <span className="text-muted">{standaloneServices.length}</span></h2>
                 <div className="space-y-3">{standaloneServices.map((service) => serviceCard(service))}</div>
@@ -764,32 +732,9 @@ export function DashboardPage() {
             {stacks.length > 0 && `, ${stacks.length} stack${stacks.length !== 1 ? "s" : ""}`}
           </p>
         </div>
-        <div className="flex gap-2 items-center">
-          {/* View switch: table list vs. topology graph */}
-          <div className="flex border-2 border-fg shadow-neo-sm">
-            <button
-              onClick={() => setView("table")}
-              title="List view"
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-colors ${view === "table" ? "bg-fg text-accent" : "bg-bg-raised text-fg-dim hover:bg-alt"}`}
-            ><Table2 size={12} /> List</button>
-            <button
-              onClick={() => setView("graph")}
-              title="Topology graph"
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider border-l-2 border-fg transition-colors ${view === "graph" ? "bg-fg text-accent" : "bg-bg-raised text-fg-dim hover:bg-alt"}`}
-            ><Share2 size={12} /> Graph</button>
-          </div>
-          <Btn onClick={() => { load(); if (view === "graph") loadTopo(); }} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>
-        </div>
+        <Btn onClick={load} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>
       </div>
 
-      {view === "graph" ? (
-        topoLoading && !topo
-          ? <div className="flex justify-center py-20"><Spinner /></div>
-          : topo
-            ? <TopologyGraph data={topo} />
-            : <EmptyState message="No topology data yet." icon={Share2} />
-      ) : (
-      <>
       {nothingDeployed ? (
         <EmptyState message="Nothing deployed yet. Deploy your first app or service to get started." icon={Box} />
       ) : (
@@ -824,8 +769,6 @@ export function DashboardPage() {
             </Card>
           )}
         </>
-      )}
-      </>
       )}
     </div>
   );

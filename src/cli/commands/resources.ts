@@ -21,14 +21,6 @@ type ResourceInventory = {
   totals?: { servers: number; volumes: number; total: number; currency: string };
 };
 
-type Topology = {
-  panelServerId: number | null;
-  servers: Array<{ id: number; name: string; location: string | null; isPanel: boolean }>;
-  apps: Array<{ id: number; name: string; status: string; stack_name: string | null; desired_replicas: number }>;
-  replicas: Array<{ id: number; app_id: number; server_id: number; status: string }>;
-  links: Array<{ from: number; to: number; key: string; sharedEnv: boolean }>;
-};
-
 function money(value: number | null | undefined, currency = "EUR"): string {
   return value == null ? "-" : `${currency} ${value.toFixed(2)}`;
 }
@@ -114,36 +106,6 @@ async function volumeDeletionAudit(): Promise<void> {
       row.status,
       row.actor_user_id,
       row.error || "-",
-    ]),
-  );
-}
-
-async function topology(): Promise<void> {
-  const data = await get<Topology>("/api/topology");
-  const appById = new Map(data.apps.map((app) => [app.id, app]));
-  const serverById = new Map(data.servers.map((server) => [server.id, server]));
-  console.log(`${BOLD}Placement${RESET}`);
-  table(
-    ["APP", "STACK", "STATUS", "DESIRED", "SERVERS"],
-    data.apps.map((app) => {
-      const servers = [
-        ...new Set(
-          data.replicas
-            .filter((replica) => replica.app_id === app.id)
-            .map((replica) => serverById.get(replica.server_id)?.name || `#${replica.server_id}`),
-        ),
-      ];
-      return [app.name, app.stack_name || "-", app.status, String(app.desired_replicas), servers.join(", ") || "-"];
-    }),
-  );
-  console.log(`\n${BOLD}Application links${RESET}`);
-  table(
-    ["FROM", "TO", "ENV KEY", "SHARED ENV"],
-    data.links.map((link) => [
-      appById.get(link.from)?.name || `#${link.from}`,
-      appById.get(link.to)?.name || `#${link.to}`,
-      link.key,
-      link.sharedEnv ? "yes" : "no",
     ]),
   );
 }
@@ -395,7 +357,6 @@ function usage(): void {
 
 ${BOLD}Commands:${RESET}
   ls                              Inventory and estimated monthly cost
-  topology                        App links and replica placement
   volume <provider-id>            Volume detail
   volumes <command>               Volume lifecycle and file browsing
   delete <server|volume> <id>     Permanently delete an unused provider resource`);
@@ -407,8 +368,6 @@ export async function resources(args: string[] = []): Promise<void> {
     case "ls":
     case "list":
       return listResources();
-    case "topology":
-      return topology();
     case "volume":
       if (!args[1]) throw new Error("Usage: ocd resources volume <provider-id>");
       return showVolume(args[1]);

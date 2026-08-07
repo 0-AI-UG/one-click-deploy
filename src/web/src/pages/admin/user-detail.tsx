@@ -20,7 +20,7 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
   {
     label: "Read",
     permissions: [
-      { key: "fleet.view", label: "View servers, topology, dashboard" },
+      { key: "fleet.view", label: "View servers and dashboard" },
       { key: "apps.view", label: "View apps" },
       { key: "services.view", label: "View services" },
       { key: "environments.view", label: "View environments (not their values)" },
