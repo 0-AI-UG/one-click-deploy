@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Terminal } from "xterm";
-import { FitAddon } from "xterm-addon-fit";
-import "xterm/css/xterm.css";
 import { useAuth } from "../stores/auth.ts";
 import { Btn, Spinner } from "../components/ui.tsx";
+import { TerminalViewport, type TerminalViewportHandle } from "../components/terminal-viewport.tsx";
 import { ArrowLeft } from "lucide-react";
 
 type Props = {
@@ -12,6 +10,7 @@ type Props = {
 };
 
 type Status = "connecting" | "open" | "disconnected" | "ended" | "error";
+const terminalInputEncoder = new TextEncoder();
 
 export function TerminalPage({ kind, id }: Props) {
   const { token } = useAuth();
@@ -20,9 +19,7 @@ export function TerminalPage({ kind, id }: Props) {
   const tokenRef = useRef(token);
   tokenRef.current = token;
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
+  const terminalRef = useRef<TerminalViewportHandle>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoffRef = useRef(500);
@@ -52,6 +49,7 @@ export function TerminalPage({ kind, id }: Props) {
     }
 
     setStatus("connecting");
+    setError("");
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const url = `${proto}://${window.location.host}/api/terminal/ws?target=${kind}:${id}&token=${encodeURIComponent(tokenRef.current || "")}`;
     const ws = new WebSocket(url);
@@ -74,31 +72,32 @@ export function TerminalPage({ kind, id }: Props) {
         }
       }, 25_000);
 
-      const term = termRef.current;
-      if (term) {
+      const terminal = terminalRef.current;
+      if (terminal) {
         // Visual separator on reconnect so the user knows a new session started.
         if (hasConnectedRef.current) {
-          term.write("\r\n\x1b[33m--- reconnected ---\x1b[0m\r\n");
+          terminal.write("\r\n\x1b[33m--- reconnected ---\x1b[0m\r\n");
         }
         hasConnectedRef.current = true;
-        term.focus();
+        terminal.focus();
         try {
-          ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+          const { cols, rows } = terminal.getSize();
+          ws.send(JSON.stringify({ type: "resize", cols, rows }));
         } catch { /* ws may not be fully open yet */ }
       }
     };
 
     ws.onmessage = (ev) => {
-      const term = termRef.current;
-      if (!term) return;
+      const terminal = terminalRef.current;
+      if (!terminal) return;
       if (ev.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(ev.data);
         // Server sends a single NUL byte as an application-level heartbeat
         // to keep the connection alive through reverse proxies. Ignore it.
         if (bytes.length === 1 && bytes[0] === 0) return;
-        term.write(bytes);
+        terminal.write(bytes);
       } else {
-        term.write(ev.data);
+        terminal.write(ev.data);
       }
     };
 
@@ -131,87 +130,34 @@ export function TerminalPage({ kind, id }: Props) {
 
   useEffect(() => {
     disposedRef.current = false;
-
-    const term = new Terminal({
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      fontSize: 12,
-      theme: { background: "#000000" },
-      cursorBlink: true,
-      scrollback: 5000,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    const container = containerRef.current;
-    if (container) {
-      term.open(container);
-      // Defer the initial fit to the next frame so the container has its final
-      // laid-out size. Measuring before layout settles causes xterm's glyph
-      // size to be computed against the wrong box, which makes mouse
-      // selection drift by several rows from the cursor.
-      requestAnimationFrame(() => {
-        try { fit.fit(); } catch { /* disposed */ }
-      });
-    }
-    termRef.current = term;
-    fitRef.current = fit;
-
-    // Pipe keystrokes to whatever ws is currently active (read via ref so
-    // reconnected sessions transparently pick up the new socket).
-    const encoder = new TextEncoder();
-    term.onData((data) => {
-      const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(encoder.encode(data));
-      }
-      // If the ws isn't OPEN, silently drop — the auto-reconnect overlay
-      // is already visible so the user knows input isn't flowing.
-    });
-
-    const onResize = () => {
-      try {
-        fit.fit();
-        const ws = wsRef.current;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-        }
-      } catch { /* terminal may be disposed */ }
-    };
-    window.addEventListener("resize", onResize);
-
-    // Also react to container-level size changes (status overlay mount/unmount,
-    // error banner appearing, flex layout reflows). Without this, xterm's row
-    // math goes stale and selection lands a few rows off from the click.
-    const ro = new ResizeObserver(() => onResize());
-    if (container) ro.observe(container);
-
-    // Refocus the terminal whenever the window/tab regains focus — otherwise
-    // alt-tabbing back lands keystrokes on the document body.
-    const onWindowFocus = () => { termRef.current?.focus(); };
-    window.addEventListener("focus", onWindowFocus);
-
-    connect();
+    connectingRef.current = false;
+    hasConnectedRef.current = false;
+    backoffRef.current = 500;
 
     return () => {
       disposedRef.current = true;
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("focus", onWindowFocus);
-      ro.disconnect();
+      connectingRef.current = false;
       if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
       try { wsRef.current?.close(); } catch { /* cleanup */ }
-      try { term.dispose(); } catch { /* cleanup */ }
-      termRef.current = null;
-      fitRef.current = null;
       wsRef.current = null;
     };
   }, [kind, id, connect]);
 
-  // Click anywhere in the terminal frame to refocus xterm — works around the
-  // "I clicked a notification and now typing goes nowhere" class of issue.
-  const onContainerPointerDown = () => { termRef.current?.focus(); };
+  const handleData = useCallback((data: string) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(terminalInputEncoder.encode(data));
+  }, []);
+
+  const handleResize = useCallback((cols: number, rows: number) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "resize", cols, rows }));
+    }
+  }, []);
 
   const statusColor =
     status === "open" ? "text-accent-green"
@@ -229,9 +175,12 @@ export function TerminalPage({ kind, id }: Props) {
       </div>
       {error && <div className="font-mono text-[10px] text-red-500 mb-2">{error}</div>}
       <div className="relative">
-        <div
-          ref={containerRef}
-          onPointerDown={onContainerPointerDown}
+        <TerminalViewport
+          key={`${kind}:${id}`}
+          ref={terminalRef}
+          onReady={connect}
+          onData={handleData}
+          onResize={handleResize}
           className="border-2 border-fg bg-black"
           style={{ height: "70vh" }}
         />

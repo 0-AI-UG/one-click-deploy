@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Ban,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   CircleStop,
   Copy,
@@ -15,6 +16,7 @@ import {
 import { get } from "../api/client.ts";
 import { useAuth } from "../stores/auth.ts";
 import { confirm, showToast } from "../components/ui.tsx";
+import { TerminalViewport, type TerminalViewportHandle } from "../components/terminal-viewport.tsx";
 import {
   buildWebCliArgv,
   formatWebCliCommand,
@@ -29,7 +31,7 @@ type ResourceOption = { value: string; label: string };
 type ResourceOptions = Partial<Record<WebCliResource, ResourceOption[]>>;
 type RunRecord = { command: string; code: number | null; at: Date };
 
-const inputClass = "w-full border-2 border-fg bg-bg-raised px-3 py-2.5 font-mono text-xs outline-none focus:shadow-neo-sm disabled:cursor-not-allowed disabled:bg-alt disabled:text-fg-dim";
+const inputClass = "w-full border border-white/20 bg-black/30 px-3 py-2.5 font-mono text-xs text-[#eefbd5] outline-none transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-40";
 
 const ROOT_META: Record<string, { label: string; description: string }> = {
   status: { label: "Status", description: "Dashboard overview" },
@@ -211,9 +213,11 @@ export function WebCliPage() {
   const [output, setOutput] = useState("");
   const [running, setRunning] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
+  const [optionsExpanded, setOptionsExpanded] = useState(false);
+  const [terminalReady, setTerminalReady] = useState(false);
   const [history, setHistory] = useState<RunRecord[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  const outputRef = useRef<HTMLPreElement>(null);
+  const terminalRef = useRef<TerminalViewportHandle>(null);
   const selected = selectedId
     ? WEB_CLI_COMMANDS.find((command) => command.id === selectedId) ?? null
     : null;
@@ -299,11 +303,20 @@ export function WebCliPage() {
     setValues(defaultsFor(selected));
     setOutput("");
     setExitCode(null);
+    setOptionsExpanded(false);
   }, [selectedId]);
 
   useEffect(() => {
-    if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
-  }, [output]);
+    if (!selected || resourcesLoading) return;
+    const singletonDefaults = Object.fromEntries(selected.inputs.flatMap((input) => {
+      if (!input.required || values[input.key] !== undefined || input.kind !== "resource" || !input.resource) return [];
+      const choices = resources[input.resource] ?? [];
+      return choices.length === 1 ? [[input.key, choices[0].value]] : [];
+    }));
+    if (Object.keys(singletonDefaults).length > 0) {
+      setValues((current) => ({ ...singletonDefaults, ...current }));
+    }
+  }, [selected, resources, resourcesLoading, values]);
 
   const roots = useMemo(() => {
     const names = Array.from(new Set(WEB_CLI_COMMANDS.map((command) => command.args[0])));
@@ -334,10 +347,28 @@ export function WebCliPage() {
     }
   }, [selected, values]);
 
+  const validationError = useMemo(() => {
+    if (!selected || selected.unavailableReason) return null;
+    try {
+      buildWebCliArgv(selected, values);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Complete the required parameters";
+    }
+  }, [selected, values]);
+
+  useEffect(() => {
+    if (!terminalReady || running || output) return;
+    const command = selected ? preview : selectedRoot ? `ocd ${selectedRoot}` : "ocd";
+    terminalRef.current?.reset();
+    terminalRef.current?.write(`\x1b[1;92m$\x1b[0m ${command} \x1b[5;92m_\x1b[0m`);
+  }, [terminalReady, selected, selectedRoot, preview, running, output]);
+
   const chooseRoot = (root: string) => {
     if (running) return;
+    const commands = WEB_CLI_COMMANDS.filter((command) => command.args[0] === root);
     setSelectedRoot(root);
-    setSelectedId(null);
+    setSelectedId(commands.length === 1 ? commands[0].id : null);
     setSearch("");
   };
 
@@ -350,6 +381,8 @@ export function WebCliPage() {
   const back = () => {
     if (running) return;
     if (selectedId) {
+      const commands = WEB_CLI_COMMANDS.filter((command) => command.args[0] === selectedRoot);
+      if (commands.length === 1) setSelectedRoot(null);
       setSelectedId(null);
       setValues({});
       setOutput("");
@@ -361,6 +394,8 @@ export function WebCliPage() {
   };
 
   const setValue = (key: string, value: string | boolean) => {
+    setOutput("");
+    setExitCode(null);
     setValues((current) => ({
       ...current,
       [key]: value,
@@ -392,8 +427,10 @@ export function WebCliPage() {
     abortRef.current = controller;
     setRunning(true);
     setExitCode(null);
-    setOutput("");
     let commandLine = formatWebCliCommand(argv);
+    setOutput(`$ ${commandLine}\n\n`);
+    terminalRef.current?.reset();
+    terminalRef.current?.write(`\x1b[1;92m$\x1b[0m ${commandLine}\r\n\r\n`);
     try {
       const response = await fetch(`${window.location.origin}/api/web-cli/run`, {
         method: "POST",
@@ -424,12 +461,16 @@ export function WebCliPage() {
           if (item.type === "start" && item.command) {
             commandLine = item.command;
             setOutput(`$ ${item.command}\n\n`);
+            terminalRef.current?.reset();
+            terminalRef.current?.write(`\x1b[1;92m$\x1b[0m ${item.command}\r\n\r\n`);
           } else if (item.type === "stdout" || item.type === "stderr") {
             setOutput((current) => current + stripAnsi(item.data || ""));
+            terminalRef.current?.write(item.data || "");
           } else if (item.type === "exit") {
             const code = item.code ?? 1;
             setExitCode(code);
             setOutput((current) => `${current}\n[${item.timed_out ? "timed out" : `exit ${code}`}]\n`);
+            terminalRef.current?.write(`\r\n\x1b[2m[${item.timed_out ? "timed out" : `exit ${code}`}]\x1b[0m\r\n`);
             setHistory((current) => [{ command: commandLine, code, at: new Date() }, ...current].slice(0, 8));
           } else if (item.type === "error") {
             throw new Error(item.error || "CLI execution failed");
@@ -440,9 +481,11 @@ export function WebCliPage() {
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         setOutput((current) => `${current}\n[cancelled]\n`);
+        terminalRef.current?.write("\r\n\x1b[33m[cancelled]\x1b[0m\r\n");
       } else {
         const message = err instanceof Error ? err.message : "CLI execution failed";
         setOutput((current) => `${current}\n[error] ${message}\n`);
+        terminalRef.current?.write(`\r\n\x1b[31m[error] ${message}\x1b[0m\r\n`);
         showToast(message, "error");
       }
       setExitCode(1);
@@ -452,162 +495,166 @@ export function WebCliPage() {
     }
   }
 
-  const stage = selected ? 3 : selectedRoot ? 2 : 1;
   const rootMeta = selectedRoot ? ROOT_META[selectedRoot] : null;
+  const requiredInputs = selected?.inputs.filter((input) => input.required) ?? [];
+  const optionalInputs = selected?.inputs.filter((input) => !input.required) ?? [];
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 pb-24 animate-fade-in">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+    <div className="mx-auto max-w-5xl px-4 py-6 pb-24 animate-fade-in">
+      <div className="mb-4 flex items-center gap-2">
+        <TerminalSquare size={20} />
         <div>
-          <div className="mb-1 flex items-center gap-2">
-            <TerminalSquare size={22} />
-            <h1 className="font-mono text-xl font-bold uppercase tracking-wider">Web CLI</h1>
-          </div>
-          <p className="max-w-2xl text-xs text-fg-dim">Navigate the real OCD command tree, choose contextual values, then run the exact CLI command on this panel.</p>
+          <h1 className="font-mono text-lg font-bold uppercase tracking-wider">Web CLI</h1>
+          <p className="text-[11px] text-fg-dim">The real OCD CLI, guided by panel context.</p>
         </div>
-        <span className="border-2 border-fg bg-accent px-2 py-1 font-mono text-[9px] font-bold uppercase shadow-neo-sm">CLI is authoritative</span>
       </div>
 
-      <div className="mb-6 flex items-center gap-2 font-mono text-[10px] font-bold uppercase">
-        <Step active={stage === 1} done={stage > 1} number="1" label="Command" />
-        <span className="h-0.5 w-6 bg-fg/25" />
-        <Step active={stage === 2} done={stage > 2} number="2" label="Action" />
-        <span className="h-0.5 w-6 bg-fg/25" />
-        <Step active={stage === 3} done={false} number="3" label="Parameters" />
-      </div>
-
-      {(selectedRoot || selected) && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <button onClick={back} disabled={running} className="inline-flex items-center gap-1.5 border-2 border-fg bg-bg-raised px-3 py-2 font-mono text-[10px] font-bold uppercase shadow-neo-sm disabled:opacity-40">
-            <ArrowLeft size={14} /> Back
-          </button>
-          <button onClick={() => { if (!running) { setSelectedRoot(null); setSelectedId(null); setSearch(""); } }} disabled={running} className="font-mono text-[10px] font-bold uppercase text-fg-dim hover:text-fg disabled:opacity-40">All commands</button>
-          {selectedRoot && <><ChevronRight size={13} className="text-fg-dim" /><button onClick={() => { if (!running) setSelectedId(null); }} disabled={running} className="font-mono text-[10px] font-bold uppercase text-fg-dim hover:text-fg disabled:opacity-40">ocd {selectedRoot}</button></>}
-          {selected && <><ChevronRight size={13} className="text-fg-dim" /><span className="font-mono text-[10px] font-bold uppercase">{selected.label}</span></>}
+      <section className="overflow-hidden border-2 border-fg bg-[#151713] shadow-neo">
+        <div className="flex items-center justify-between border-b border-white/10 bg-[#242720] px-3 py-2">
+          <div className="flex gap-1.5" aria-hidden="true">
+            <span className="h-2.5 w-2.5 rounded-full bg-accent-red" />
+            <span className="h-2.5 w-2.5 rounded-full bg-accent-amber" />
+            <span className="h-2.5 w-2.5 rounded-full bg-accent" />
+          </div>
+          <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-white/45">ocd@panel · authenticated</span>
+          <button disabled={!output} onClick={() => navigator.clipboard.writeText(output)} className="grid w-10 place-items-center text-white/30 hover:text-white disabled:opacity-20" title="Copy output"><Copy size={13} /></button>
         </div>
-      )}
 
-      {!selected && (
-        <div className="mx-auto mb-5 max-w-xl">
-          <label className="flex items-center gap-2 border-2 border-fg bg-bg-raised px-3 shadow-neo-sm">
-            <Search size={15} className="shrink-0 text-fg-dim" />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={selectedRoot ? `Find an ocd ${selectedRoot} action` : "Find a top-level command"} className="min-w-0 flex-1 bg-transparent py-3 font-mono text-xs outline-none" />
-          </label>
+        <div className="bg-black p-3">
+          <TerminalViewport
+            ref={terminalRef}
+            focusOnWindow={false}
+            onReady={() => setTerminalReady(true)}
+            options={{
+              convertEol: true,
+              cursorBlink: false,
+              disableStdin: true,
+              theme: {
+                background: "#000000",
+                foreground: "#d9f99d",
+                cursor: "#bef264",
+                selectionBackground: "#3f4a2d",
+              },
+            }}
+            style={{ height: "220px" }}
+          />
         </div>
-      )}
 
-      {!selectedRoot && (
-        <section>
-          <div className="mb-5 text-center">
-            <h2 className="font-mono text-lg font-bold uppercase tracking-wider">Choose a command</h2>
-            <p className="mt-1 text-xs text-fg-dim">Start with the same top-level command you would type after <code className="font-mono">ocd</code>.</p>
-          </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {roots.map((root) => (
-              <button key={root.name} onClick={() => chooseRoot(root.name)} className="group min-h-36 border-2 border-fg bg-bg-raised p-5 text-left shadow-neo transition-all hover:translate-x-0.5 hover:translate-y-0.5 hover:bg-accent hover:shadow-neo-none">
-                <div className="mb-4 flex items-start justify-between gap-3">
-                  <code className="border-2 border-fg bg-fg px-2 py-1 font-mono text-[10px] font-bold text-accent">ocd {root.name}</code>
-                  <ChevronRight size={20} className="transition-transform group-hover:translate-x-1" />
-                </div>
-                <h3 className="font-mono text-base font-bold uppercase">{root.label}</h3>
-                <p className="mt-1 text-xs text-fg-dim group-hover:text-fg/70">{root.description}</p>
-                <div className="mt-4 font-mono text-[9px] font-bold uppercase text-fg-dim">{root.commands.length} {root.commands.length === 1 ? "action" : "actions"}</div>
-              </button>
-            ))}
-          </div>
-          {roots.length === 0 && <Empty label="No commands match this search" />}
-        </section>
-      )}
+        <div className="min-h-[280px] border-t border-white/10 p-4 sm:p-6">
+          {(selectedRoot || selected) && (
+            <button onClick={back} disabled={running} className="mb-5 inline-flex items-center gap-1.5 font-mono text-[10px] text-white/45 transition-colors hover:text-accent disabled:opacity-30">
+              <ArrowLeft size={13} /> back
+            </button>
+          )}
 
-      {selectedRoot && !selected && (
-        <section>
-          <div className="mb-5 text-center">
-            <code className="inline-block border-2 border-fg bg-fg px-2 py-1 font-mono text-[10px] font-bold text-accent">ocd {selectedRoot}</code>
-            <h2 className="mt-3 font-mono text-lg font-bold uppercase tracking-wider">Choose an action</h2>
-            <p className="mt-1 text-xs text-fg-dim">{rootMeta?.description ?? `Available ${selectedRoot} actions`}</p>
-          </div>
-          <div className="mx-auto grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {rootCommands.map((command) => (
-              <button key={command.id} onClick={() => chooseCommand(command)} className={`group min-h-40 border-2 border-fg p-5 text-left shadow-neo transition-all hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-neo-none ${command.unavailableReason ? "bg-alt" : "bg-bg-raised hover:bg-accent"}`}>
-                <div className="mb-4 flex items-start justify-between gap-3">
-                  <code className="break-all font-mono text-[10px] font-bold text-fg-dim">{formatWebCliCommand(command.args)}</code>
-                  {command.unavailableReason ? <Ban size={18} className="shrink-0 text-fg-dim" /> : <ChevronRight size={19} className="shrink-0 transition-transform group-hover:translate-x-1" />}
-                </div>
-                <h3 className="font-mono text-sm font-bold uppercase">{command.label}</h3>
-                <p className="mt-2 text-xs leading-5 text-fg-dim">{command.description}</p>
-                {command.danger && <span className="mt-3 inline-flex items-center gap-1 font-mono text-[9px] font-bold uppercase text-amber-700"><AlertTriangle size={11} /> Confirmation required</span>}
-              </button>
-            ))}
-          </div>
-          {rootCommands.length === 0 && <Empty label="No actions match this search" />}
-        </section>
-      )}
+          {!selected && (
+            <label className="flex items-center gap-2 border-b border-white/15 pb-2 text-white/60 focus-within:border-accent">
+              <Search size={14} className="shrink-0" />
+              <input value={search} onChange={(event) => setSearch(event.target.value)} autoFocus placeholder={selectedRoot ? `Filter ${selectedRoot} actions…` : "Filter commands…"} className="min-w-0 flex-1 bg-transparent font-mono text-xs text-[#eefbd5] outline-none placeholder:text-white/25" />
+            </label>
+          )}
 
-      {selected && (
-        <section className="mx-auto max-w-4xl">
-          <div className="border-2 border-fg bg-bg-raised shadow-neo">
-            <div className="border-b-2 border-fg p-5 sm:p-6">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+          {!selectedRoot && (
+            <div className="mt-5">
+              <p className="mb-3 font-mono text-[10px] text-white/35">Select a command</p>
+              <div className="grid grid-cols-1 gap-px overflow-hidden border border-white/10 bg-white/10 sm:grid-cols-2 lg:grid-cols-3">
+                {roots.map((root) => (
+                  <button key={root.name} onClick={() => chooseRoot(root.name)} className="group flex min-h-20 items-center justify-between gap-3 bg-[#191b17] px-4 py-3 text-left transition-colors hover:bg-[#242b1c]">
+                    <div className="min-w-0">
+                      <code className="font-mono text-xs font-bold text-accent">{root.name}</code>
+                      <p className="mt-1 truncate text-[10px] text-white/45">{root.description}</p>
+                    </div>
+                    <ChevronRight size={15} className="shrink-0 text-white/20 transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
+                  </button>
+                ))}
+              </div>
+              {roots.length === 0 && <TerminalEmpty label="No matching commands" />}
+            </div>
+          )}
+
+          {selectedRoot && !selected && (
+            <div className="mt-5">
+              <p className="mb-3 font-mono text-[10px] text-white/35">{rootMeta?.description ?? `Select an ${selectedRoot} action`}</p>
+              <div className="grid grid-cols-1 gap-px overflow-hidden border border-white/10 bg-white/10 sm:grid-cols-2">
+                {rootCommands.map((command) => (
+                  <button key={command.id} onClick={() => chooseCommand(command)} className="group flex min-h-24 items-start justify-between gap-4 bg-[#191b17] px-4 py-3 text-left transition-colors hover:bg-[#242b1c]">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <code className="font-mono text-xs font-bold text-accent">{command.args.slice(1).join(" ") || selectedRoot}</code>
+                        {command.danger && <AlertTriangle size={11} className="text-accent-amber" />}
+                        {command.unavailableReason && <Ban size={11} className="text-white/35" />}
+                      </div>
+                      <p className="mt-1 text-[10px] leading-4 text-white/45">{command.description}</p>
+                    </div>
+                    <ChevronRight size={15} className="mt-0.5 shrink-0 text-white/20 transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
+                  </button>
+                ))}
+              </div>
+              {rootCommands.length === 0 && <TerminalEmpty label="No matching actions" />}
+            </div>
+          )}
+
+          {selected && (
+            <div className="mt-5">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
                 <div>
-                  <code className="font-mono text-[10px] font-bold text-fg-dim">{formatWebCliCommand(selected.args)}</code>
-                  <h2 className="mt-1 font-mono text-lg font-bold uppercase">{selected.label}</h2>
-                  <p className="mt-1 max-w-2xl text-xs leading-5 text-fg-dim">{selected.description}</p>
+                  <h2 className="font-mono text-sm font-bold text-[#eefbd5]">{selected.label}</h2>
+                  <p className="mt-1 max-w-2xl text-[11px] leading-5 text-white/45">{selected.description}</p>
                 </div>
-                {selected.danger && <span className="inline-flex items-center gap-1 border-2 border-fg bg-accent-amber px-2 py-1 font-mono text-[9px] font-bold uppercase"><AlertTriangle size={12} /> Changes infrastructure</span>}
+                {selected.danger && <span className="inline-flex items-center gap-1 font-mono text-[9px] font-bold uppercase text-accent-amber"><AlertTriangle size={11} /> confirmation required</span>}
               </div>
 
               {selected.unavailableReason ? (
-                <div className="mt-5 border-2 border-fg bg-alt p-4">
-                  <div className="flex gap-3"><Ban size={18} className="shrink-0" /><div><div className="font-mono text-[10px] font-bold uppercase">Local CLI required</div><p className="mt-1 text-xs leading-5 text-fg-dim">{selected.unavailableReason}</p></div></div>
+                <div className="mt-5 flex gap-3 border border-white/15 bg-white/5 p-4 text-white/60">
+                  <Ban size={16} className="shrink-0" />
+                  <div><div className="font-mono text-[10px] font-bold uppercase text-white/80">Local CLI required</div><p className="mt-1 text-[11px] leading-5">{selected.unavailableReason}</p></div>
                 </div>
               ) : (
                 <>
-                  <div className="mt-6 flex items-center justify-between gap-3">
-                    <h3 className="font-mono text-[10px] font-bold uppercase tracking-widest">Contextual parameters</h3>
-                    <button onClick={() => refreshResources().catch(() => {})} disabled={resourcesLoading} className="inline-flex items-center gap-1 font-mono text-[9px] font-bold uppercase text-fg-dim hover:text-fg disabled:opacity-40"><RefreshCw size={11} className={resourcesLoading ? "animate-spin" : ""} /> Refresh choices</button>
-                  </div>
-                  <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    {selected.inputs.map((input) => (
-                      <InputField key={input.key} input={input} value={values[input.key]} options={input.resource ? resources[input.resource] : undefined} resourcesLoading={resourcesLoading || !!(input.resource && contextLoading[input.resource])} onChange={(value) => setValue(input.key, value)} />
-                    ))}
-                    {selected.inputs.length === 0 && <div className="sm:col-span-2 border-2 border-dashed border-fg/25 p-5 text-center font-mono text-[10px] text-fg-dim">This command needs no parameters. Review it below and run.</div>}
+                  {requiredInputs.length > 0 && (
+                    <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      {requiredInputs.map((input) => <InputField key={input.key} input={input} value={values[input.key]} options={input.resource ? resources[input.resource] : undefined} resourcesLoading={resourcesLoading || !!(input.resource && contextLoading[input.resource])} onChange={(value) => setValue(input.key, value)} />)}
+                    </div>
+                  )}
+
+                  {optionalInputs.length > 0 && (
+                    <div className={`${requiredInputs.length > 0 ? "mt-5 border-t border-white/10 pt-4" : "mt-5"}`}>
+                      <button onClick={() => setOptionsExpanded((current) => !current)} className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase text-white/45 transition-colors hover:text-accent">
+                        <ChevronDown size={13} className={`transition-transform ${optionsExpanded ? "rotate-180" : ""}`} />
+                        {optionalInputs.length} optional {optionalInputs.length === 1 ? "parameter" : "parameters"}
+                      </button>
+                      {optionsExpanded && <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">{optionalInputs.map((input) => <InputField key={input.key} input={input} value={values[input.key]} options={input.resource ? resources[input.resource] : undefined} resourcesLoading={resourcesLoading || !!(input.resource && contextLoading[input.resource])} onChange={(value) => setValue(input.key, value)} />)}</div>}
+                    </div>
+                  )}
+
+                  <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-white/10 pt-4">
+                    <button disabled={running || !!validationError} onClick={run} className="inline-flex items-center gap-2 bg-accent px-4 py-2.5 font-mono text-[10px] font-bold uppercase text-[#151713] transition-opacity disabled:cursor-not-allowed disabled:opacity-35">
+                      <Play size={13} fill="currentColor" /> {running ? "running…" : "run ↵"}
+                    </button>
+                    {running && <button onClick={() => abortRef.current?.abort()} className="inline-flex items-center gap-2 border border-accent-red px-3 py-2 font-mono text-[10px] font-bold uppercase text-accent-red"><CircleStop size={13} /> stop</button>}
+                    {selected.inputs.some((input) => input.resource) && <button onClick={() => refreshResources().catch(() => {})} disabled={resourcesLoading} className="inline-flex items-center gap-1.5 font-mono text-[9px] uppercase text-white/35 hover:text-accent disabled:opacity-30"><RefreshCw size={11} className={resourcesLoading ? "animate-spin" : ""} /> refresh context</button>}
+                    {validationError && <span className="font-mono text-[10px] text-accent-amber">{validationError}</span>}
+                    {exitCode !== null && <span className={`ml-auto inline-flex items-center gap-1 font-mono text-[10px] font-bold ${exitCode === 0 ? "text-accent" : "text-accent-red"}`}><CheckCircle2 size={13} /> exit {exitCode}</span>}
                   </div>
                 </>
               )}
             </div>
+          )}
 
-            <div className="border-b-2 border-fg bg-fg p-4 text-accent">
-              <div className="mb-1 font-mono text-[8px] font-bold uppercase tracking-widest text-accent/60">Exact command</div>
-              <code className="break-all font-mono text-xs">$ {preview}</code>
+          {!selected && history.length > 0 && (
+            <div className="mt-8 border-t border-white/10 pt-4">
+              <div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-white/25">recent</div>
+              {history.slice(0, 3).map((item, index) => <div key={`${item.at.getTime()}-${index}`} className="flex gap-3 py-1 font-mono text-[10px] text-white/35"><span className={item.code === 0 ? "text-accent" : "text-accent-red"}>{item.code}</span><span className="min-w-0 flex-1 truncate">$ {item.command}</span></div>)}
             </div>
-
-            <div className="flex flex-wrap items-center gap-2 border-b-2 border-fg p-4">
-              <button disabled={!!selected.unavailableReason || running} onClick={run} className="inline-flex items-center gap-2 border-2 border-fg bg-accent px-5 py-2.5 font-mono text-[10px] font-bold uppercase shadow-neo-sm transition-all enabled:hover:translate-x-0.5 enabled:hover:translate-y-0.5 enabled:hover:shadow-neo-none disabled:cursor-not-allowed disabled:opacity-40">
-                <Play size={14} fill="currentColor" /> {running ? "Running…" : "Run command"}
-              </button>
-              {running && <button onClick={() => abortRef.current?.abort()} className="inline-flex items-center gap-2 border-2 border-fg bg-accent-red px-3 py-2.5 font-mono text-[10px] font-bold uppercase text-white"><CircleStop size={14} /> Stop</button>}
-              {exitCode !== null && <span className={`ml-auto inline-flex items-center gap-1 font-mono text-[10px] font-bold uppercase ${exitCode === 0 ? "text-green-700" : "text-accent-red"}`}><CheckCircle2 size={14} /> Exit {exitCode}</span>}
-            </div>
-
-            <div className="relative min-h-[260px] bg-[#151713]">
-              <button disabled={!output} onClick={() => navigator.clipboard.writeText(output)} className="absolute right-3 top-3 z-10 border border-white/30 bg-black/40 p-1.5 text-white/60 hover:text-white disabled:opacity-30" title="Copy output"><Copy size={13} /></button>
-              <pre ref={outputRef} className="min-h-[260px] max-h-[440px] overflow-auto whitespace-pre-wrap break-words p-4 pr-12 font-mono text-[11px] leading-5 text-[#d9f99d]">{output || "Command output will appear here."}</pre>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {history.length > 0 && <section className="mx-auto mt-6 max-w-4xl"><h2 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest">This session</h2><div className="border-2 border-fg bg-bg-raised">{history.map((item, index) => <div key={`${item.at.getTime()}-${index}`} className="flex gap-3 border-b border-fg/15 px-3 py-2 last:border-b-0"><span className={`font-mono text-[9px] font-bold ${item.code === 0 ? "text-green-700" : "text-accent-red"}`}>{item.code}</span><code className="min-w-0 flex-1 truncate font-mono text-[10px]">{item.command}</code><span className="font-mono text-[9px] text-fg-dim">{item.at.toLocaleTimeString()}</span></div>)}</div></section>}
+          )}
+        </div>
+      </section>
     </div>
   );
 }
 
-function Step({ active, done, number, label }: { active: boolean; done: boolean; number: string; label: string }) {
-  return <div className={`flex items-center gap-1.5 ${active ? "text-fg" : "text-fg-dim"}`}><span className={`grid h-5 w-5 place-items-center border-2 border-fg text-[9px] ${active || done ? "bg-fg text-accent" : "bg-bg-raised"}`}>{done ? "✓" : number}</span><span>{label}</span></div>;
-}
-
-function Empty({ label }: { label: string }) {
-  return <div className="mx-auto max-w-2xl border-2 border-dashed border-fg/25 p-8 text-center font-mono text-xs text-fg-dim">{label}</div>;
+function TerminalEmpty({ label }: { label: string }) {
+  return <div className="border border-t-0 border-white/10 p-6 text-center font-mono text-[10px] text-white/35">{label}</div>;
 }
 
 function InputField({ input, value, options, resourcesLoading, onChange }: { input: WebCliInput; value: string | boolean | string[] | undefined; options?: ResourceOption[]; resourcesLoading: boolean; onChange: (value: string | boolean) => void }) {
@@ -616,10 +663,10 @@ function InputField({ input, value, options, resourcesLoading, onChange }: { inp
   const showResourceId = !input.resource || !["service-type", "service-version", "server-type", "location"].includes(input.resource);
   return (
     <label className={input.repeatable || input.kind === "key-value" ? "sm:col-span-2" : ""}>
-      <div className="mb-1 flex items-center gap-1 font-mono text-[10px] font-bold uppercase">{input.label}{input.required && <span className="text-accent-red">*</span>}</div>
-      {input.description && <p className="mb-1.5 text-[10px] leading-4 text-fg-dim">{input.description}</p>}
+      <div className="mb-1 flex items-center gap-1 font-mono text-[10px] font-bold uppercase text-white/75">{input.label}{input.required && <span className="text-accent">*</span>}</div>
+      {input.description && <p className="mb-1.5 text-[10px] leading-4 text-white/35">{input.description}</p>}
       {input.kind === "boolean" ? (
-        <button type="button" onClick={() => onChange(value !== true)} className={`flex w-full items-center justify-between border-2 border-fg px-3 py-2.5 font-mono text-xs ${value === true ? "bg-accent" : "bg-bg-raised"}`}><span>{value === true ? "Enabled" : "Disabled"}</span><span className={`h-4 w-8 border-2 border-fg p-0.5 ${value === true ? "bg-fg" : "bg-alt"}`}><span className={`block h-2 w-2 bg-accent transition-transform ${value === true ? "translate-x-4" : ""}`} /></span></button>
+        <button type="button" onClick={() => onChange(value !== true)} className={`flex w-full items-center justify-between border px-3 py-2.5 font-mono text-xs transition-colors ${value === true ? "border-accent bg-accent/10 text-accent" : "border-white/20 bg-black/30 text-white/50"}`}><span>{value === true ? "enabled" : "disabled"}</span><span className={`h-4 w-8 border p-0.5 ${value === true ? "border-accent bg-accent/15" : "border-white/20 bg-black/20"}`}><span className={`block h-2 w-2 bg-accent transition-transform ${value === true ? "translate-x-4" : ""}`} /></span></button>
       ) : input.kind === "select" ? (
         <select value={stringValue} onChange={(event) => onChange(event.target.value)} className={inputClass}><option value="">Select…</option>{input.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
       ) : input.kind === "resource" ? (
@@ -628,7 +675,7 @@ function InputField({ input, value, options, resourcesLoading, onChange }: { inp
             <option value="">{resourcesLoading ? `Loading ${input.label.toLowerCase()} choices…` : resourceOptions.length === 0 ? `No ${input.label.toLowerCase()} choices available` : `Select ${input.label.toLowerCase()}…`}</option>
             {resourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}{showResourceId ? ` · #${option.value}` : ""}</option>)}
           </select>
-          {!resourcesLoading && resourceOptions.length === 0 && <p className="mt-1.5 text-[10px] text-fg-dim">No accessible {input.label.toLowerCase()} exists for this command.</p>}
+          {!resourcesLoading && resourceOptions.length === 0 && <p className="mt-1.5 text-[10px] text-white/35">No accessible {input.label.toLowerCase()} exists for this command.</p>}
         </>
       ) : input.repeatable || input.kind === "key-value" ? (
         <textarea value={stringValue} onChange={(event) => onChange(event.target.value)} rows={3} placeholder={input.placeholder || "One value per line"} className={`${inputClass} resize-y`} />
