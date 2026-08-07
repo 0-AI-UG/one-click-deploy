@@ -283,11 +283,11 @@ export async function handlePurgeEnvironment(request: Request, id: number): Prom
     if (!environment) {
       return Response.json({ ok: false, error: "Deleted environment not found" }, { status: 404, headers: corsHeaders });
     }
-    if (db.isEnvironmentPurgeProtected(environment)) {
+    if (db.isEnvironmentPurgeProtected(environment) && payload.client === "cli") {
       return Response.json(
         {
           ok: false,
-          error: `Environment is protected from permanent deletion until ${environment.purge_after} UTC`,
+          error: `Environment is protected from permanent deletion until ${environment.purge_after} UTC. The recovery window can only be overridden with the Purge button in the OCD web UI.`,
           purge_after: environment.purge_after,
         },
         { status: 409, headers: corsHeaders },

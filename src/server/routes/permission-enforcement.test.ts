@@ -144,6 +144,10 @@ import {
   handleCreateServer,
   handleGetVolumeDeletionAudit,
 } from "./resources.ts";
+import {
+  handleConfirmConfirmation,
+  handleCreateConfirmation,
+} from "./confirmations.ts";
 import { handleListOperations, handleCancelOperation } from "./operations.ts";
 import { handleGetPanel, handleRedeployPanel } from "./panel.ts";
 import {
@@ -1164,6 +1168,102 @@ describe("cli.access gates CLI-minted tokens on every route", () => {
       env,
     );
     expect(res.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Protected environment purge
+// ---------------------------------------------------------------------------
+
+describe("protected environment purge", () => {
+  test("the web purge flow overrides recovery protection after the exact name is typed", async () => {
+    const ctx = await userWith(["environments.manage"]);
+    const environment = db.insertEnvironment(`protected-purge-${uid()}`, "{}");
+    db.softDeleteEnvironment(environment.id);
+
+    const createRes = await handleCreateConfirmation(req("/api/confirmations", {
+      body: {
+        action: "purge_environment",
+        resource_type: "environment",
+        resource_id: environment.id,
+      },
+      token: ctx.token,
+    }));
+    expect(createRes.status).toBe(200);
+    const confirmation = await createRes.json() as { confirm_code: string; user_code: string };
+
+    const wrongName = await handleConfirmConfirmation(
+      req(`/api/confirmations/item/${confirmation.user_code}/confirm`, {
+        body: { typed_resource_name: `${environment.name}-wrong` },
+        token: ctx.token,
+      }),
+      confirmation.user_code,
+    );
+    expect(wrongName.status).toBe(400);
+
+    const exactName = await handleConfirmConfirmation(
+      req(`/api/confirmations/item/${confirmation.user_code}/confirm`, {
+        body: { typed_resource_name: environment.name },
+        token: ctx.token,
+      }),
+      confirmation.user_code,
+    );
+    expect(exactName.status).toBe(200);
+
+    const purge = await handlePurgeEnvironment(
+      req(`/api/environments/${environment.id}/purge`, {
+        method: "DELETE",
+        token: ctx.token,
+        headers: { "x-ocd-confirmation": confirmation.confirm_code },
+      }),
+      environment.id,
+    );
+    expect(purge.status).toBe(200);
+    expect(db.getDeletedEnvironment(environment.id)).toBeNull();
+  });
+
+  test("the CLI cannot create an override confirmation during the recovery window", async () => {
+    const ctx = await userWith(["environments.manage", "cli.access"], { cli: true });
+    const environment = db.insertEnvironment(`protected-cli-purge-${uid()}`, "{}");
+    db.softDeleteEnvironment(environment.id);
+
+    const createRes = await handleCreateConfirmation(req("/api/confirmations", {
+      body: {
+        action: "purge_environment",
+        resource_type: "environment",
+        resource_id: environment.id,
+      },
+      token: ctx.token,
+    }));
+    expect(createRes.status).toBe(409);
+    expect(((await createRes.json()) as { error: string }).error).toMatch(/only be overridden.*Purge button/i);
+    expect(db.getDeletedEnvironment(environment.id)).not.toBeNull();
+  });
+
+  test("the purge route still rejects a protected CLI request with a pre-issued confirmation", async () => {
+    const ctx = await userWith(["environments.manage", "cli.access"], { cli: true });
+    const environment = db.insertEnvironment(`protected-cli-route-${uid()}`, "{}");
+    db.softDeleteEnvironment(environment.id);
+    const user = { userId: ctx.userId, username: ctx.userId, client: "cli" as const };
+    const confirmation = createConfirmation(
+      user,
+      "purge_environment",
+      "environment",
+      String(environment.id),
+      "test protected CLI purge",
+    );
+    resolveConfirmation(confirmation.userCode, user, "confirmed");
+
+    const purge = await handlePurgeEnvironment(
+      req(`/api/environments/${environment.id}/purge`, {
+        method: "DELETE",
+        token: ctx.token,
+        headers: { "x-ocd-confirmation": confirmation.confirmCode },
+      }),
+      environment.id,
+    );
+    expect(purge.status).toBe(409);
+    expect(db.getDeletedEnvironment(environment.id)).not.toBeNull();
   });
 });
 

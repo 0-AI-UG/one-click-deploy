@@ -15,7 +15,7 @@ export async function serverConfirmedDelete<T>(
   action: "delete_stack" | "delete_environment" | "purge_environment" | "delete_volume",
   resourceType: string,
   resourceId: string | number,
-  typedResourceId?: string,
+  typedResource?: string,
 ): Promise<T> {
   const confirmation = await post("/api/confirmations", {
     action,
@@ -25,7 +25,11 @@ export async function serverConfirmedDelete<T>(
 
   await post(
     `/api/confirmations/item/${encodeURIComponent(confirmation.user_code)}/confirm`,
-    action === "delete_volume" ? { typed_resource_id: typedResourceId } : undefined,
+    action === "delete_volume"
+      ? { typed_resource_id: typedResource }
+      : action === "purge_environment"
+        ? { typed_resource_name: typedResource }
+        : undefined,
   );
 
   return apiFetch<T>(path, {

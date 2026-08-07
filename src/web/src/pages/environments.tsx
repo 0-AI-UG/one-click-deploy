@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { get, post, put } from "../api/client.ts";
-import { Card, Btn, showToast, confirm, EmptyState } from "../components/ui.tsx";
+import { Card, Btn, showToast, confirm, confirmWithText, EmptyState } from "../components/ui.tsx";
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
@@ -354,18 +354,14 @@ export function EnvironmentsPage() {
                 <div>
                   <div className="font-mono text-[10px] font-bold text-fg uppercase">{environment.name}</div>
                   <div className="font-mono text-[9px] text-muted">
-                    Protected from permanent deletion until {environment.purge_after || "the recovery window ends"}
+                    Recovery-protected until {environment.purge_after || "the recovery window ends"}. Purge here can override protection.
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Btn
                     size="xs"
                     variant="ghost"
-                    disabled={!!environment.purge_after &&
-                      Date.now() < Date.parse(`${environment.purge_after.replace(" ", "T")}Z`)}
-                    title={environment.purge_after
-                      ? `Permanent deletion becomes available after ${environment.purge_after} UTC`
-                      : "Permanently delete environment"}
+                    title="Restore environment"
                     onClick={async () => {
                       try {
                         await post(`/api/environments/${environment.id}/restore`);
@@ -382,10 +378,11 @@ export function EnvironmentsPage() {
                     size="xs"
                     variant="ghost"
                     onClick={async () => {
-                      if (!await confirm(
+                      if (!await confirmWithText(
                         "Permanently Delete Environment",
                         `Permanently delete "${environment.name}" and all its variables? This cannot be undone.`,
-                        true,
+                        environment.name,
+                        `Type ${environment.name} to confirm`,
                       )) return;
                       try {
                         await serverConfirmedDelete(
@@ -393,6 +390,7 @@ export function EnvironmentsPage() {
                           "purge_environment",
                           "environment",
                           environment.id,
+                          environment.name,
                         );
                         showToast("Environment permanently deleted", "success");
                         load();

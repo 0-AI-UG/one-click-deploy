@@ -65,4 +65,9 @@ describe("web CLI command catalog", () => {
       keys: "--replace",
     })).toThrow("cannot start with a dash");
   });
+
+  test("validates contextual numeric resource identities", () => {
+    expect(buildWebCliArgv(command("ops.show"), { operation: "42" })).toEqual(["ops", "42"]);
+    expect(() => buildWebCliArgv(command("ops.show"), { operation: "latest" })).toThrow("invalid ID");
+  });
 });

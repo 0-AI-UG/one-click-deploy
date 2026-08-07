@@ -166,9 +166,10 @@ There is no force flag.
 
 Deleted environments keep encrypted variables, remain separate from active
 selection, and can be listed/restored in the UI or with `ocd envs
-deleted`/`restore`. Permanent purge is blocked during the seven-day recovery
-window; afterward it is a second browser-confirmed action and cannot use
-`--yes`.
+deleted`/`restore`. During the seven-day recovery window, the protection can be
+overridden only by the Purge button in the web environment view, after typing
+the exact environment name. The CLI remains blocked until the window expires;
+afterward purge is still a browser-confirmed action and cannot use `--yes`.
 
 ## Volume/resource deletion
 

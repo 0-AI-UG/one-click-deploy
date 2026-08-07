@@ -8,6 +8,7 @@ type Item = {
   summary: string;
   resource_type: string;
   resource_id: string;
+  resource_name?: string;
 };
 
 export function CliConfirmPage({ userCode }: { userCode: string }) {
@@ -30,6 +31,8 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
         `/api/confirmations/item/${encodeURIComponent(userCode)}/confirm`,
         item?.action === "delete_volume"
           ? { typed_resource_id: typedResource.trim() }
+          : item?.action === "purge_environment"
+            ? { typed_resource_name: typedResource.trim() }
           : undefined,
       );
       setDone("confirmed");
@@ -107,8 +110,12 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
   }
 
   // --- loaded (pending) ---
-  const requiresTypedVolume = item.action === "delete_volume";
-  const typedVolumeMatches = !requiresTypedVolume || typedResource.trim() === item.resource_id;
+  const requiredTypedResource = item.action === "delete_volume"
+    ? item.resource_id
+    : item.action === "purge_environment"
+      ? item.resource_name
+      : undefined;
+  const typedResourceMatches = requiredTypedResource === undefined || typedResource.trim() === requiredTypedResource;
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
@@ -124,13 +131,14 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
           <div className="border-2 border-fg bg-bg p-3 mb-5">
             <p className="font-mono text-xs text-fg break-words">{item.summary}</p>
           </div>
-          {requiresTypedVolume && (
+          {requiredTypedResource !== undefined && (
             <div className="mb-5">
-              <label className="block font-mono text-[10px] font-bold text-fg mb-2" htmlFor="volume-confirmation">
-                Type volume ID <span className="select-all">{item.resource_id}</span> to permanently delete it
+              <label className="block font-mono text-[10px] font-bold text-fg mb-2" htmlFor="resource-confirmation">
+                Type {item.action === "delete_volume" ? "volume ID" : "environment name"}{" "}
+                <span className="select-all">{requiredTypedResource}</span> to permanently delete it
               </label>
               <input
-                id="volume-confirmation"
+                id="resource-confirmation"
                 type="text"
                 value={typedResource}
                 onChange={(event) => setTypedResource(event.target.value)}
@@ -143,7 +151,7 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
             <button
               type="button"
               onClick={handleConfirm}
-              disabled={submitting !== null || !typedVolumeMatches}
+              disabled={submitting !== null || !typedResourceMatches}
               className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35"
             >
               {submitting === "confirm" ? <Spinner /> : "Confirm & Delete"}

@@ -94,6 +94,8 @@ type ConfirmState = {
   title: string;
   message: string;
   danger?: boolean;
+  requiredText?: string;
+  requiredTextLabel?: string;
   resolve?: (v: boolean) => void;
 };
 
@@ -111,14 +113,32 @@ export function confirm(title: string, message: string, danger = false): Promise
   });
 }
 
+export function confirmWithText(
+  title: string,
+  message: string,
+  requiredText: string,
+  requiredTextLabel: string,
+  danger = true,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    confirmState = { open: true, title, message, danger, requiredText, requiredTextLabel, resolve };
+    notifyConfirmListeners();
+  });
+}
+
 export function ConfirmDialog() {
   const [state, setState] = useState<ConfirmState>({ open: false, title: "", message: "" });
+  const [typedText, setTypedText] = useState("");
   const isMobile = useMobileLayout();
 
   useEffect(() => {
     confirmListeners.push(setState);
     return () => { confirmListeners = confirmListeners.filter((l) => l !== setState); };
   }, []);
+
+  useEffect(() => {
+    setTypedText("");
+  }, [state.open, state.requiredText]);
 
   if (!state.open) return null;
 
@@ -139,17 +159,38 @@ export function ConfirmDialog() {
             <p className="text-xs text-fg-dim mt-1">{state.message}</p>
           </div>
         </div>
+        {state.requiredText !== undefined && (
+          <div className="mb-4">
+            <label className="block font-mono text-[10px] font-bold text-fg mb-2" htmlFor="typed-confirmation">
+              {state.requiredTextLabel}
+            </label>
+            <input
+              id="typed-confirmation"
+              type="text"
+              value={typedText}
+              onChange={(event) => setTypedText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && typedText.trim() === state.requiredText) close(true);
+                if (event.key === "Escape") close(false);
+              }}
+              autoComplete="off"
+              autoFocus
+              className="w-full border-2 border-fg bg-bg px-3 py-2 font-mono text-xs text-fg outline-none focus:shadow-neo-sm"
+            />
+          </div>
+        )}
         <div className={`flex gap-2 justify-end ${isMobile ? "mt-5" : ""}`}>
           <button onClick={() => close(false)} className={`font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg bg-bg-raised text-fg-dim shadow-neo-sm hover:bg-alt transition-all active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none ${isMobile ? "min-h-12 flex-1 px-4" : "px-3 py-1.5"}`}>
             Cancel
           </button>
           <button
             onClick={() => close(true)}
+            disabled={state.requiredText !== undefined && typedText.trim() !== state.requiredText}
             className={`font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg shadow-neo-sm transition-all active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none ${isMobile ? "min-h-12 flex-1 px-4" : "px-3 py-1.5"} ${
               state.danger
                 ? "bg-accent-red text-white"
                 : "bg-accent text-fg"
-            }`}
+            } disabled:cursor-not-allowed disabled:opacity-35`}
           >
             Confirm
           </button>

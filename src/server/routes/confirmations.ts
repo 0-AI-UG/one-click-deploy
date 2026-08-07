@@ -69,6 +69,15 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
     } else if (action === "purge_environment") {
       const env = db.getDeletedEnvironment(Number(resourceId));
       if (!env) return Response.json({ error: "Deleted environment not found" }, { status: 404, headers: corsHeaders });
+      if (payload.client === "cli" && db.isEnvironmentPurgeProtected(env)) {
+        return Response.json(
+          {
+            error: `Environment is protected from permanent deletion until ${env.purge_after} UTC. The recovery window can only be overridden with the Purge button in the OCD web UI.`,
+            purge_after: env.purge_after,
+          },
+          { status: 409, headers: corsHeaders },
+        );
+      }
       summary = `Permanently delete retired environment "${env.name}" (id ${env.id}) and all its variables. This cannot be undone.`;
     } else if (action === "delete_volume") {
       let volume;
@@ -122,11 +131,16 @@ export async function handleLookupConfirmation(request: Request, userCode: strin
       return Response.json({ error: "Confirmation not found or expired" }, { status: 404, headers: corsHeaders });
     }
 
+    const resourceName = pending.action === "purge_environment"
+      ? db.getDeletedEnvironment(Number(pending.resourceId))?.name
+      : undefined;
+
     return Response.json({
       action: pending.action,
       summary: pending.summary,
       resource_type: pending.resourceType,
       resource_id: pending.resourceId,
+      ...(resourceName ? { resource_name: resourceName } : {}),
     }, { headers: corsHeaders });
   } catch (err) {
     return handleError(err);
@@ -146,6 +160,18 @@ export async function handleConfirmConfirmation(request: Request, userCode: stri
       if (body.typed_resource_id !== pending.resourceId) {
         return Response.json(
           { error: `Type volume ID ${pending.resourceId} to confirm permanent deletion` },
+          { status: 400, headers: corsHeaders },
+        );
+      }
+    } else if (pending.action === "purge_environment") {
+      const environment = db.getDeletedEnvironment(Number(pending.resourceId));
+      if (!environment) {
+        return Response.json({ error: "Deleted environment not found" }, { status: 404, headers: corsHeaders });
+      }
+      const body = await request.json().catch(() => ({})) as { typed_resource_name?: string };
+      if (body.typed_resource_name !== environment.name) {
+        return Response.json(
+          { error: `Type environment name ${environment.name} to confirm permanent deletion` },
           { status: 400, headers: corsHeaders },
         );
       }
