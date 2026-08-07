@@ -26,6 +26,7 @@ import { CliConfirmPage } from "./pages/cli-confirm.tsx";
 import { EnginePage } from "./pages/engine.tsx";
 import { EngineOpDetailPage } from "./pages/engine-op-detail.tsx";
 import { EngineOpLogsPage } from "./pages/engine-op-logs.tsx";
+import { WebCliPage } from "./pages/web-cli.tsx";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -140,6 +141,8 @@ export function App() {
     content = serviceId ? <ServiceDetailPage serviceId={serviceId} /> : <DashboardPage />;
   } else if (hash === "#/cli/auth") {
     content = <DeviceAuthPage />;
+  } else if (hash === "#/cli") {
+    content = <WebCliPage />;
   } else if (hash.startsWith("#/cli/confirm/")) {
     const code = decodeURIComponent(hash.split("/")[3] || "");
     content = code ? <CliConfirmPage userCode={code} /> : <DashboardPage />;

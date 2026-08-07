@@ -46,6 +46,15 @@ export async function createToken(payload: TokenPayload): Promise<string> {
     .sign(JWT_SECRET);
 }
 
+/** Short-lived credential used only by the panel-side web CLI process. */
+export async function createWebCliToken(payload: Omit<TokenPayload, "client">): Promise<string> {
+  return new SignJWT({ ...payload, client: "cli" } as unknown as Record<string, unknown>)
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .sign(JWT_SECRET);
+}
+
 export async function createTempToken(userId: string, v: number): Promise<string> {
   return new SignJWT({ userId, purpose: "2fa", v } as unknown as Record<string, unknown>)
     .setProtectedHeader({ alg: "HS256" })

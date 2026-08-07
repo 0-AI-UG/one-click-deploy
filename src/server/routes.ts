@@ -56,6 +56,7 @@ import {
 import { handleDeviceCode, handleDeviceToken, handleDeviceConfirm } from "./routes/device-auth.ts";
 import { handleCreateConfirmation, handlePollConfirmation, handleLookupConfirmation, handleConfirmConfirmation, handleDenyConfirmation } from "./routes/confirmations.ts";
 import { handleCliInstallSh, handleCliDownload } from "./routes/cli.ts";
+import { handleWebCliRun } from "./routes/web-cli.ts";
 import {
   handleGetEnvironments,
   handleGetDeletedEnvironments,
@@ -180,6 +181,9 @@ export const apiRoutes = {
   // --- CLI distribution (public) ---
   "/cli/install.sh": { GET: (req: Request) => handleCliInstallSh(req) },
   "/cli/:binary": { GET: (req: Request) => handleCliDownload(req) },
+
+  // --- Browser command builder; executes the actual allowlisted OCD CLI ---
+  "/api/web-cli/run": { POST: (req: Request) => handleWebCliRun(req) },
 
   // --- Setup ---
   "/api/setup/status": { GET: (req: Request) => handleSetupStatus(req) },

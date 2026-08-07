@@ -20,6 +20,7 @@ import { SkillInstallMenu } from "./skill-install-menu.tsx";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
+  { hash: "#/cli", label: "Web CLI", icon: TerminalSquare, match: /^#\/cli$/ },
   { hash: "#/environments", label: "Env", icon: Layers, match: /^#\/environments/ },
   { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
   { hash: "#/engine", label: "Engine", icon: Cpu, match: /^#\/engine/ },
@@ -287,13 +288,14 @@ function MobileNav({ hash }: { hash: string }) {
               </a>
             );
           })}
-          <button onClick={() => setMoreOpen(true)} className={`flex flex-col items-center justify-center gap-1 font-mono text-[9px] font-bold uppercase ${moreOpen || hash.startsWith("#/engine") || hash.startsWith("#/admin") || hash.startsWith("#/account") ? "bg-accent text-fg" : "text-muted"}`}>
+          <button onClick={() => setMoreOpen(true)} className={`flex flex-col items-center justify-center gap-1 font-mono text-[9px] font-bold uppercase ${moreOpen || hash === "#/cli" || hash.startsWith("#/engine") || hash.startsWith("#/admin") || hash.startsWith("#/account") ? "bg-accent text-fg" : "text-muted"}`}>
             <Menu size={20} /><span>More</span>
           </button>
         </div>
       </nav>
 
       <MobileActionSheet open={moreOpen} onClose={() => setMoreOpen(false)} title="OCD Menu" subtitle={user?.username}>
+        <MobileSheetAction icon={<TerminalSquare size={19} />} label="Web CLI" detail="Build and run OCD commands" onClick={() => { window.location.hash = "#/cli"; }} />
         <MobileSheetAction icon={<Cpu size={19} />} label="Engine" detail="Operations and recovery" onClick={() => { window.location.hash = "#/engine"; }} />
         {user?.isAdmin && <MobileSheetAction icon={<Users size={19} />} label="Admin" detail="Users and permissions" onClick={() => { window.location.hash = "#/admin"; }} />}
         <MobileSheetAction icon={<User size={19} />} label="Account" detail="Security and profile" onClick={() => { window.location.hash = "#/account"; }} />
