@@ -44,7 +44,7 @@ mock.module("../../shared/github.ts", () => ({
 import * as db from "../../shared/db.ts";
 import { destroyApp } from "./lifecycle.ts";
 import { destroyServiceCore } from "./service-lifecycle.ts";
-import { listChildOperations, markOperationFinished } from "../../shared/db/operations.ts";
+import { enqueueOperation, listChildOperations, markOperationFinished } from "../../shared/db/operations.ts";
 import destroyServerOp from "../ops/destroy-server.ts";
 
 // destroyServer() (the imperative lifecycle helper) was removed; the destroy
@@ -53,8 +53,14 @@ import destroyServerOp from "../ops/destroy-server.ts";
 // order. Best-effort steps swallow their own errors; only `preflight` throws,
 // which maps to ok:false here.
 async function destroyServer(serverId: number): Promise<{ ok: boolean; error?: string }> {
+  const parent = enqueueOperation({
+    kind: "destroy_server",
+    resourceKeys: [`server:${serverId}`],
+    input: { serverId },
+    trigger: "test",
+  });
   const ctx = {
-    opId: 1,
+    opId: parent.id,
     kind: "destroy_server",
     input: { serverId },
     trigger: "user" as const,
@@ -86,8 +92,12 @@ async function destroyServer(serverId: number): Promise<{ ok: boolean; error?: s
       }
       prior[step.name] = await running;
     }
+    markOperationFinished(parent.id, "done");
     return { ok: true };
   } catch (err) {
+    markOperationFinished(parent.id, "failed", {
+      message: err instanceof Error ? err.message : String(err),
+    });
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

@@ -834,8 +834,18 @@ describe("deploy: private apps", () => {
     expect(db.getApp(app.id)!.desired_replicas).toBe(2);
   });
 
-  test("finalize_deploy rejects a missing desired replica instead of reporting success", async () => {
+  test("finalize_deploy rejects an unattested desired replica instead of reporting success", async () => {
     const name = `pub-${randomSuffix()}`;
+    const server = db.insertServer({
+      name: `srv-${randomSuffix()}`,
+      provider_id: `h-${randomSuffix()}`,
+      ipv4: "10.0.0.11",
+      private_ipv4: "10.0.0.11",
+      ipv6: "",
+      type: "cx22",
+      location: "fsn1",
+      status: "ready",
+    });
     const app = db.insertApp({
       name,
       domain: "",
@@ -845,11 +855,28 @@ describe("deploy: private apps", () => {
       env_vars: "{}",
       public: true,
     });
+    db.updateAppScaling(app.id, { desired_replicas: 2, min_replicas: 2, max_replicas: 2 });
+    for (let i = 1; i <= 2; i++) {
+      const replica = db.insertReplica({
+        app_id: app.id,
+        server_id: server.id,
+        host_port: 11_000 + i,
+        container_name: `${name}-r${i}`,
+        status: "running",
+      });
+      if (i === 1) {
+        db.recordReplicaAttestation(replica.id, {
+          imageDigest: "sha256:test-image",
+          envHash: "test-env",
+          configRevision: app.config_revision,
+        });
+      }
+    }
     const step = stepByName("finalize_deploy");
     const { ctx } = makeCtx({ app_name: name, git_repo: "https://github.com/x/y", container_port: 3000, replicas: 2 });
     await expect(step.run(ctx, { insert_app_row: { appId: app.id, domain: "" } }))
-      .rejects.toThrow(/replica convergence incomplete|first replica|private_ipv4/i);
-    expect(db.getApp(app.id)!.desired_replicas).toBe(1);
+      .rejects.toThrow(/replica convergence incomplete/i);
+    expect(db.getApp(app.id)!.desired_replicas).toBe(2);
   });
 });
 

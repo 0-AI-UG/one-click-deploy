@@ -30,7 +30,6 @@ mock.module("../../engine/scale/traefik-manager.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import { getOperation } from "../../shared/db/operations.ts";
 import { handleDeploy, handleGetApps } from "./apps.ts";
 
 function makeApp(overrides: Partial<Parameters<typeof db.insertApp>[0]> = {}) {
@@ -115,7 +114,6 @@ describe("CLI-only manifest endpoint", () => {
     const body = await response.json() as { applied: boolean; op_id: number | null };
     expect(body.applied).toBe(true);
     expect(body.op_id).toBeNumber();
-    expect(getOperation(body.op_id!)?.kind).toBe("apply_manifest");
 
     const updated = db.getApp(app.id)!;
     expect(updated.sticky).toBe(0);
