@@ -16,7 +16,6 @@ import {
 import { get } from "../api/client.ts";
 import { useAuth } from "../stores/auth.ts";
 import { confirm, showToast } from "../components/ui.tsx";
-import { TerminalViewport, type TerminalViewportHandle } from "../components/terminal-viewport.tsx";
 import {
   buildWebCliArgv,
   formatWebCliCommand,
@@ -213,10 +212,9 @@ export function WebCliPage() {
   const [running, setRunning] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [optionsExpanded, setOptionsExpanded] = useState(false);
-  const [terminalReady, setTerminalReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
-  const terminalRef = useRef<TerminalViewportHandle>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const selected = selectedId
     ? WEB_CLI_COMMANDS.find((command) => command.id === selectedId) ?? null
     : null;
@@ -358,11 +356,8 @@ export function WebCliPage() {
   }, [selected, values]);
 
   useEffect(() => {
-    if (!terminalReady || running || output) return;
-    const command = selected ? preview : selectedRoot ? `ocd ${selectedRoot}` : "ocd";
-    terminalRef.current?.reset();
-    terminalRef.current?.write(`\x1b[1;92m$\x1b[0m ${command} \x1b[5;92m_\x1b[0m`);
-  }, [terminalReady, selected, selectedRoot, preview, running, output]);
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [output, menuOpen, selectedId, selectedRoot, optionsExpanded]);
 
   const chooseRoot = (root: string) => {
     if (running) return;
@@ -430,8 +425,6 @@ export function WebCliPage() {
     setExitCode(null);
     let commandLine = formatWebCliCommand(argv);
     setOutput(`$ ${commandLine}\n\n`);
-    terminalRef.current?.reset();
-    terminalRef.current?.write(`\x1b[1;92m$\x1b[0m ${commandLine}\r\n\r\n`);
     try {
       const response = await fetch(`${window.location.origin}/api/web-cli/run`, {
         method: "POST",
@@ -462,16 +455,12 @@ export function WebCliPage() {
           if (item.type === "start" && item.command) {
             commandLine = item.command;
             setOutput(`$ ${item.command}\n\n`);
-            terminalRef.current?.reset();
-            terminalRef.current?.write(`\x1b[1;92m$\x1b[0m ${item.command}\r\n\r\n`);
           } else if (item.type === "stdout" || item.type === "stderr") {
             setOutput((current) => current + stripAnsi(item.data || ""));
-            terminalRef.current?.write(item.data || "");
           } else if (item.type === "exit") {
             const code = item.code ?? 1;
             setExitCode(code);
             setOutput((current) => `${current}\n[${item.timed_out ? "timed out" : `exit ${code}`}]\n`);
-            terminalRef.current?.write(`\r\n\x1b[2m[${item.timed_out ? "timed out" : `exit ${code}`}]\x1b[0m\r\n`);
           } else if (item.type === "error") {
             throw new Error(item.error || "CLI execution failed");
           }
@@ -481,11 +470,9 @@ export function WebCliPage() {
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         setOutput((current) => `${current}\n[cancelled]\n`);
-        terminalRef.current?.write("\r\n\x1b[33m[cancelled]\x1b[0m\r\n");
       } else {
         const message = err instanceof Error ? err.message : "CLI execution failed";
         setOutput((current) => `${current}\n[error] ${message}\n`);
-        terminalRef.current?.write(`\r\n\x1b[31m[error] ${message}\x1b[0m\r\n`);
         showToast(message, "error");
       }
       setExitCode(1);
@@ -525,27 +512,19 @@ export function WebCliPage() {
           </div>
         </div>
 
-        <div className="relative bg-black p-3">
-          <TerminalViewport
-            ref={terminalRef}
-            focusOnWindow={false}
-            onReady={() => setTerminalReady(true)}
-            options={{
-              convertEol: true,
-              cursorBlink: false,
-              disableStdin: true,
-              theme: {
-                background: "#000000",
-                foreground: "#d9f99d",
-                cursor: "#bef264",
-                selectionBackground: "#3f4a2d",
-              },
-            }}
-            style={{ height: "min(72vh, 680px)" }}
-          />
+        <div ref={scrollRef} className="overflow-y-auto bg-black p-4 sm:p-5" style={{ height: "min(72vh, 680px)" }}>
+          {output && <pre className="mb-3 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-[#d9f99d]">{output}</pre>}
+
+          {!running && (
+            <div className="flex min-w-0 items-start gap-2 font-mono text-[12px] leading-5 text-[#d9f99d]">
+              <span className="shrink-0 font-bold text-accent">$</span>
+              <code className="min-w-0 break-all">{selected ? preview : selectedRoot ? `ocd ${selectedRoot}` : "ocd"}</code>
+              <span className="mt-0.5 inline-block h-4 w-1.5 shrink-0 animate-pulse bg-accent" />
+            </div>
+          )}
 
           {menuOpen && !running && (
-            <div className="absolute left-4 right-4 top-12 z-20 max-w-2xl overflow-hidden border border-white/25 bg-[#121410]/95 shadow-2xl backdrop-blur-sm sm:left-8 sm:right-auto sm:w-[620px]">
+            <div className="mt-3 max-w-2xl overflow-hidden border border-white/25 bg-[#121410] shadow-2xl">
               <div className="flex h-10 items-center gap-2 border-b border-white/10 px-3">
                 {selectedRoot && <button onClick={back} className="grid h-6 w-6 shrink-0 place-items-center text-white/40 hover:text-accent" title="Back"><ArrowLeft size={13} /></button>}
                 <div className="min-w-0 flex-1 truncate font-mono text-[10px] text-white/40">
@@ -556,7 +535,7 @@ export function WebCliPage() {
                 <button onClick={() => setMenuOpen(false)} className="grid h-6 w-6 shrink-0 place-items-center text-white/30 hover:text-white" title="Close"><X size={13} /></button>
               </div>
 
-              <div className="max-h-[calc(min(72vh,680px)-4rem)] overflow-y-auto p-3">
+              <div className="p-3">
                 {!selected && (
                   <label className="flex items-center gap-2 border-b border-white/15 px-1 pb-2 text-white/50 focus-within:border-accent">
                     <Search size={13} className="shrink-0" />
@@ -628,7 +607,7 @@ export function WebCliPage() {
             </div>
           )}
 
-          {running && <button onClick={() => abortRef.current?.abort()} className="absolute bottom-5 right-5 z-10 inline-flex items-center gap-2 border border-accent-red bg-black/80 px-3 py-2 font-mono text-[9px] font-bold uppercase text-accent-red"><CircleStop size={12} /> stop</button>}
+          {running && <div className="sticky bottom-0 flex justify-end pt-4"><button onClick={() => abortRef.current?.abort()} className="inline-flex items-center gap-2 border border-accent-red bg-black px-3 py-2 font-mono text-[9px] font-bold uppercase text-accent-red"><CircleStop size={12} /> stop</button></div>}
         </div>
       </section>
     </div>
