@@ -3,6 +3,29 @@ import { asUser, log, buildDockerRunArgs, withImageGcLease } from "./container-c
 import * as db from "../../shared/db.ts";
 import { REVISION_LABELS } from "../revision.ts";
 
+type SshExecutor = typeof sshExec;
+
+async function writeEnvDeployFileWithSsh(
+  exec: SshExecutor,
+  ip: string,
+  appName: string,
+  envVars: Record<string, string>,
+  hostKey?: string,
+  baseDir = "/home/deploy/apps",
+): Promise<string | undefined> {
+  const entries = Object.entries(envVars);
+  if (entries.length === 0) return undefined;
+  const appDir = `${baseDir}/${appName}`;
+  const envFilePath = `${appDir}/.env.deploy`;
+  const content = entries.map(([k, v]) => `${k}=${v}`).join("\n").replace(/'/g, "'\\''");
+  await exec(
+    ip,
+    `mkdir -p ${appDir} && chown deploy:deploy ${baseDir} ${appDir} && echo '${content}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`,
+    hostKey,
+  );
+  return envFilePath;
+}
+
 /**
  * Write `<baseDir>/<appName>/.env.deploy` from resolved env vars — single-quote
  * escaping the values (so container env can contain anything), creating the app
@@ -17,17 +40,46 @@ export async function writeEnvDeployFile(
   hostKey?: string,
   baseDir = "/home/deploy/apps",
 ): Promise<string | undefined> {
-  const entries = Object.entries(envVars);
-  if (entries.length === 0) return undefined;
-  const appDir = `${baseDir}/${appName}`;
-  const envFilePath = `${appDir}/.env.deploy`;
-  const content = entries.map(([k, v]) => `${k}=${v}`).join("\n").replace(/'/g, "'\\''");
-  await sshExec(
-    ip,
-    `mkdir -p ${appDir} && chown deploy:deploy ${baseDir} ${appDir} && echo '${content}' > ${envFilePath} && chown deploy:deploy ${envFilePath} && chmod 600 ${envFilePath}`,
-    hostKey,
-  );
-  return envFilePath;
+  return writeEnvDeployFileWithSsh(sshExec, ip, appName, envVars, hostKey, baseDir);
+}
+
+async function ensureVolumeOwnershipWithSsh(
+  exec: SshExecutor,
+  ip: string,
+  image: string,
+  hostMountPath: string,
+  hostKey?: string,
+): Promise<void> {
+  const inspect = await exec(ip, asUser(`docker inspect --format '{{.Config.User}}' ${image}`), hostKey);
+  const userSpec = inspect.stdout.trim();
+  if (!userSpec || userSpec === "0" || userSpec === "root" || userSpec === "0:0") return;
+
+  let uid = "";
+  let gid = "";
+  const idProbe = await exec(ip, asUser(`docker run --rm --entrypoint '' ${image} id 2>/dev/null`), hostKey);
+  const m = idProbe.stdout.match(/uid=(\d+)\D.*?gid=(\d+)/);
+  if (m) {
+    uid = m[1];
+    gid = m[2];
+  } else {
+    const [u, g] = userSpec.split(":");
+    if (/^\d+$/.test(u)) {
+      uid = u;
+      gid = /^\d+$/.test(g ?? "") ? g : u;
+    }
+  }
+  if (!uid) {
+    log("run", `could not resolve runtime uid for ${image}; leaving ${hostMountPath} ownership unchanged`);
+    return;
+  }
+
+  const chown = await exec(ip, `chown ${uid}:${gid} ${hostMountPath}`, hostKey);
+  if (chown.exitCode !== 0) {
+    throw new Error(
+      `chown ${uid}:${gid} ${hostMountPath} failed (exit ${chown.exitCode}): ${chown.stderr.trim() || chown.stdout.trim()}`,
+    );
+  }
+  log("run", `volume root ${hostMountPath} chowned to ${uid}:${gid} for ${image}`);
 }
 
 /**
@@ -59,42 +111,7 @@ export async function ensureVolumeOwnership(
   hostMountPath: string,
   hostKey?: string,
 ): Promise<void> {
-  // Which user will the container run as? Empty / 0 / root → nothing to do.
-  const inspect = await sshExec(ip, asUser(`docker inspect --format '{{.Config.User}}' ${image}`), hostKey);
-  const userSpec = inspect.stdout.trim();
-  if (!userSpec || userSpec === "0" || userSpec === "root" || userSpec === "0:0") return;
-
-  // Resolve to a numeric uid[:gid]. `id` run under the image's default USER
-  // reports the real runtime ids whether Config.User is a name ("postgres") or
-  // a number ("70") — override the entrypoint so we run `id`, not the app.
-  let uid = "";
-  let gid = "";
-  const idProbe = await sshExec(ip, asUser(`docker run --rm --entrypoint '' ${image} id 2>/dev/null`), hostKey);
-  const m = idProbe.stdout.match(/uid=(\d+)\D.*?gid=(\d+)/);
-  if (m) {
-    uid = m[1];
-    gid = m[2];
-  } else {
-    // Fall back to a numeric Config.User ("70" or "70:70"); a named user we
-    // couldn't resolve is left alone rather than guessed at.
-    const [u, g] = userSpec.split(":");
-    if (/^\d+$/.test(u)) {
-      uid = u;
-      gid = /^\d+$/.test(g ?? "") ? g : u;
-    }
-  }
-  if (!uid) {
-    log("run", `could not resolve runtime uid for ${image}; leaving ${hostMountPath} ownership unchanged`);
-    return;
-  }
-
-  const chown = await sshExec(ip, `chown ${uid}:${gid} ${hostMountPath}`, hostKey);
-  if (chown.exitCode !== 0) {
-    throw new Error(
-      `chown ${uid}:${gid} ${hostMountPath} failed (exit ${chown.exitCode}): ${chown.stderr.trim() || chown.stdout.trim()}`,
-    );
-  }
-  log("run", `volume root ${hostMountPath} chowned to ${uid}:${gid} for ${image}`);
+  return ensureVolumeOwnershipWithSsh(sshExec, ip, image, hostMountPath, hostKey);
 }
 
 export type StartAppReplicaOpts = {
@@ -181,12 +198,23 @@ export async function startAppReplica(
   opts: StartAppReplicaOpts,
   hostKey?: string,
 ): Promise<{ containerId: string }> {
+  return startAppReplicaWithSsh(sshExec, ip, opts, hostKey);
+}
+
+/** Dependency-injected variant used by command-construction tests so their
+ * SSH capture cannot be replaced by another test file's process-global mock. */
+export async function startAppReplicaWithSsh(
+  exec: SshExecutor,
+  ip: string,
+  opts: StartAppReplicaOpts,
+  hostKey?: string,
+): Promise<{ containerId: string }> {
   let envFilePath = opts.envFilePath;
   if (opts.envVars !== undefined) {
-    envFilePath = await writeEnvDeployFile(ip, opts.appName, opts.envVars, hostKey, opts.baseDir);
+    envFilePath = await writeEnvDeployFileWithSsh(exec, ip, opts.appName, opts.envVars, hostKey, opts.baseDir);
   }
 
-  const imageInspect = await sshExec(
+  const imageInspect = await exec(
     ip,
     asUser(`docker image inspect --format '{{.Id}}' ${opts.image}`),
     hostKey,
@@ -208,7 +236,7 @@ export async function startAppReplica(
   if (opts.removeExisting !== false) {
     // Crash-resume adoption: keep an already-running exact revision. A stale
     // or mismatched namesake is removed so retry is deterministic.
-    const existing = await sshExec(
+    const existing = await exec(
       ip,
       asUser(`docker inspect --format '{{json .Config.Labels}}|{{.State.Running}}|{{.Id}}' ${opts.containerName} 2>/dev/null || true`),
       hostKey,
@@ -223,14 +251,14 @@ export async function startAppReplica(
       log("run", `Adopted existing attested container ${opts.containerName}`);
       return { containerId: existingId || opts.containerName };
     }
-    await sshExec(ip, asUser(`docker rm -f ${opts.containerName} 2>/dev/null || true`), hostKey);
+    await exec(ip, asUser(`docker rm -f ${opts.containerName} 2>/dev/null || true`), hostKey);
   }
 
   // A fresh block volume is root-owned; make its root writable by the image's
   // runtime user before we start the hardened (cap-dropped) container, which
   // otherwise can't chown it itself. No-op for root images / already-correct mounts.
   if (opts.volumeMount) {
-    await ensureVolumeOwnership(ip, opts.image, opts.volumeMount.split(":")[0], hostKey);
+    await ensureVolumeOwnershipWithSsh(exec, ip, opts.image, opts.volumeMount.split(":")[0], hostKey);
   }
 
   // `/etc/hosts` on the fleet host is not inherited by Docker containers.
@@ -260,7 +288,7 @@ export async function startAppReplica(
   // Keep GC out while Docker resolves the image tag and creates the container.
   // The build path takes the same shared lease, while every prune takes the
   // exclusive side, closing both ends of the build-before-run race.
-  const result = await sshExec(ip, asUser(withImageGcLease(cmd)), hostKey);
+  const result = await exec(ip, asUser(withImageGcLease(cmd)), hostKey);
   if (result.exitCode !== 0) {
     log("run", `Docker run stderr: ${result.stderr}`);
     throw new Error(describeFailure("Failed to start container", result));

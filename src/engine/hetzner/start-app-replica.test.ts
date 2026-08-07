@@ -1,24 +1,21 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
 
-// Capture every command sshipped to the (mocked) SSH layer so we can assert
+// Capture every command shipped to the injected SSH layer so we can assert
 // startAppReplica's rm / env-write / hardened-run sequence without a server.
 // `stubs` lets a test shape the reply for a command matching a substring (used
 // to drive the image-inspect / `id` probe of the volume-ownership fix).
 const calls: string[] = [];
 let stubs: Array<{ match: string; stdout: string; exitCode?: number }> = [];
-mock.module("./ssh.ts", () => ({
-  sshExec: mock(async (_ip: string, cmd: string) => {
-    calls.push(cmd);
-    const stub = stubs.find((s) => cmd.includes(s.match));
-    if (stub) return { exitCode: stub.exitCode ?? 0, stdout: stub.stdout, stderr: "" };
-    return { exitCode: 0, stdout: "abc123def456", stderr: "" };
-  }),
-  getSshKeyPath: () => "/tmp/key",
-  buildSshArgs: () => ({ args: [], tmpKnownHostsPath: null }),
-  describeFailure: (msg: string) => msg,
-}));
+const sshExec = mock(async (_ip: string, cmd: string) => {
+  calls.push(cmd);
+  const stub = stubs.find((s) => cmd.includes(s.match));
+  if (stub) return { exitCode: stub.exitCode ?? 0, stdout: stub.stdout, stderr: "" };
+  return { exitCode: 0, stdout: "abc123def456", stderr: "" };
+});
 
-const { startAppReplica } = await import("./docker-run.ts");
+const { startAppReplicaWithSsh } = await import("./docker-run.ts");
+const startAppReplica = (ip: string, opts: Parameters<typeof startAppReplicaWithSsh>[2]) =>
+  startAppReplicaWithSsh(sshExec, ip, opts);
 
 beforeEach(() => {
   calls.length = 0;
