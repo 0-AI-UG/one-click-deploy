@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   Ban,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   CircleStop,
@@ -11,7 +10,8 @@ import {
   Play,
   RefreshCw,
   Search,
-  TerminalSquare,
+  SlidersHorizontal,
+  X,
 } from "lucide-react";
 import { get } from "../api/client.ts";
 import { useAuth } from "../stores/auth.ts";
@@ -29,7 +29,6 @@ import {
 
 type ResourceOption = { value: string; label: string };
 type ResourceOptions = Partial<Record<WebCliResource, ResourceOption[]>>;
-type RunRecord = { command: string; code: number | null; at: Date };
 
 const inputClass = "w-full border border-white/20 bg-black/30 px-3 py-2.5 font-mono text-xs text-[#eefbd5] outline-none transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-40";
 
@@ -215,7 +214,7 @@ export function WebCliPage() {
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [optionsExpanded, setOptionsExpanded] = useState(false);
   const [terminalReady, setTerminalReady] = useState(false);
-  const [history, setHistory] = useState<RunRecord[]>([]);
+  const [menuOpen, setMenuOpen] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   const terminalRef = useRef<TerminalViewportHandle>(null);
   const selected = selectedId
@@ -304,6 +303,7 @@ export function WebCliPage() {
     setOutput("");
     setExitCode(null);
     setOptionsExpanded(false);
+    setMenuOpen(true);
   }, [selectedId]);
 
   useEffect(() => {
@@ -426,6 +426,7 @@ export function WebCliPage() {
     const controller = new AbortController();
     abortRef.current = controller;
     setRunning(true);
+    setMenuOpen(false);
     setExitCode(null);
     let commandLine = formatWebCliCommand(argv);
     setOutput(`$ ${commandLine}\n\n`);
@@ -471,7 +472,6 @@ export function WebCliPage() {
             setExitCode(code);
             setOutput((current) => `${current}\n[${item.timed_out ? "timed out" : `exit ${code}`}]\n`);
             terminalRef.current?.write(`\r\n\x1b[2m[${item.timed_out ? "timed out" : `exit ${code}`}]\x1b[0m\r\n`);
-            setHistory((current) => [{ command: commandLine, code, at: new Date() }, ...current].slice(0, 8));
           } else if (item.type === "error") {
             throw new Error(item.error || "CLI execution failed");
           }
@@ -499,28 +499,33 @@ export function WebCliPage() {
   const requiredInputs = selected?.inputs.filter((input) => input.required) ?? [];
   const optionalInputs = selected?.inputs.filter((input) => !input.required) ?? [];
 
+  const resetToRoot = () => {
+    if (running) return;
+    setSelectedRoot(null);
+    setSelectedId(null);
+    setValues({});
+    setSearch("");
+    setOutput("");
+    setExitCode(null);
+    setMenuOpen(true);
+  };
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 pb-24 animate-fade-in">
-      <div className="mb-4 flex items-center gap-2">
-        <TerminalSquare size={20} />
-        <div>
-          <h1 className="font-mono text-lg font-bold uppercase tracking-wider">Web CLI</h1>
-          <p className="text-[11px] text-fg-dim">The real OCD CLI, guided by panel context.</p>
-        </div>
-      </div>
-
       <section className="overflow-hidden border-2 border-fg bg-[#151713] shadow-neo">
         <div className="flex items-center justify-between border-b border-white/10 bg-[#242720] px-3 py-2">
-          <div className="flex gap-1.5" aria-hidden="true">
-            <span className="h-2.5 w-2.5 rounded-full bg-accent-red" />
-            <span className="h-2.5 w-2.5 rounded-full bg-accent-amber" />
+          <div className="flex items-center gap-2">
             <span className="h-2.5 w-2.5 rounded-full bg-accent" />
+            <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-white/55">OCD Web CLI</span>
           </div>
-          <span className="font-mono text-[9px] font-bold uppercase tracking-widest text-white/45">ocd@panel · authenticated</span>
-          <button disabled={!output} onClick={() => navigator.clipboard.writeText(output)} className="grid w-10 place-items-center text-white/30 hover:text-white disabled:opacity-20" title="Copy output"><Copy size={13} /></button>
+          <div className="flex items-center gap-1">
+            {exitCode !== null && <span className={`mr-2 font-mono text-[9px] ${exitCode === 0 ? "text-accent" : "text-accent-red"}`}>exit {exitCode}</span>}
+            <button onClick={() => setMenuOpen((current) => !current)} disabled={running} className={`grid h-7 w-7 place-items-center transition-colors disabled:opacity-25 ${menuOpen ? "text-accent" : "text-white/35 hover:text-white"}`} title={menuOpen ? "Hide command menu" : "Show command menu"}><SlidersHorizontal size={13} /></button>
+            <button disabled={!output} onClick={() => navigator.clipboard.writeText(output)} className="grid h-7 w-7 place-items-center text-white/30 hover:text-white disabled:opacity-20" title="Copy output"><Copy size={13} /></button>
+          </div>
         </div>
 
-        <div className="bg-black p-3">
+        <div className="relative bg-black p-3">
           <TerminalViewport
             ref={terminalRef}
             focusOnWindow={false}
@@ -536,117 +541,94 @@ export function WebCliPage() {
                 selectionBackground: "#3f4a2d",
               },
             }}
-            style={{ height: "220px" }}
+            style={{ height: "min(72vh, 680px)" }}
           />
-        </div>
 
-        <div className="min-h-[280px] border-t border-white/10 p-4 sm:p-6">
-          {(selectedRoot || selected) && (
-            <button onClick={back} disabled={running} className="mb-5 inline-flex items-center gap-1.5 font-mono text-[10px] text-white/45 transition-colors hover:text-accent disabled:opacity-30">
-              <ArrowLeft size={13} /> back
-            </button>
-          )}
-
-          {!selected && (
-            <label className="flex items-center gap-2 border-b border-white/15 pb-2 text-white/60 focus-within:border-accent">
-              <Search size={14} className="shrink-0" />
-              <input value={search} onChange={(event) => setSearch(event.target.value)} autoFocus placeholder={selectedRoot ? `Filter ${selectedRoot} actions…` : "Filter commands…"} className="min-w-0 flex-1 bg-transparent font-mono text-xs text-[#eefbd5] outline-none placeholder:text-white/25" />
-            </label>
-          )}
-
-          {!selectedRoot && (
-            <div className="mt-5">
-              <p className="mb-3 font-mono text-[10px] text-white/35">Select a command</p>
-              <div className="grid grid-cols-1 gap-px overflow-hidden border border-white/10 bg-white/10 sm:grid-cols-2 lg:grid-cols-3">
-                {roots.map((root) => (
-                  <button key={root.name} onClick={() => chooseRoot(root.name)} className="group flex min-h-20 items-center justify-between gap-3 bg-[#191b17] px-4 py-3 text-left transition-colors hover:bg-[#242b1c]">
-                    <div className="min-w-0">
-                      <code className="font-mono text-xs font-bold text-accent">{root.name}</code>
-                      <p className="mt-1 truncate text-[10px] text-white/45">{root.description}</p>
-                    </div>
-                    <ChevronRight size={15} className="shrink-0 text-white/20 transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
-                  </button>
-                ))}
-              </div>
-              {roots.length === 0 && <TerminalEmpty label="No matching commands" />}
-            </div>
-          )}
-
-          {selectedRoot && !selected && (
-            <div className="mt-5">
-              <p className="mb-3 font-mono text-[10px] text-white/35">{rootMeta?.description ?? `Select an ${selectedRoot} action`}</p>
-              <div className="grid grid-cols-1 gap-px overflow-hidden border border-white/10 bg-white/10 sm:grid-cols-2">
-                {rootCommands.map((command) => (
-                  <button key={command.id} onClick={() => chooseCommand(command)} className="group flex min-h-24 items-start justify-between gap-4 bg-[#191b17] px-4 py-3 text-left transition-colors hover:bg-[#242b1c]">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <code className="font-mono text-xs font-bold text-accent">{command.args.slice(1).join(" ") || selectedRoot}</code>
-                        {command.danger && <AlertTriangle size={11} className="text-accent-amber" />}
-                        {command.unavailableReason && <Ban size={11} className="text-white/35" />}
-                      </div>
-                      <p className="mt-1 text-[10px] leading-4 text-white/45">{command.description}</p>
-                    </div>
-                    <ChevronRight size={15} className="mt-0.5 shrink-0 text-white/20 transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
-                  </button>
-                ))}
-              </div>
-              {rootCommands.length === 0 && <TerminalEmpty label="No matching actions" />}
-            </div>
-          )}
-
-          {selected && (
-            <div className="mt-5">
-              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
-                <div>
-                  <h2 className="font-mono text-sm font-bold text-[#eefbd5]">{selected.label}</h2>
-                  <p className="mt-1 max-w-2xl text-[11px] leading-5 text-white/45">{selected.description}</p>
+          {menuOpen && !running && (
+            <div className="absolute left-4 right-4 top-12 z-20 max-w-2xl overflow-hidden border border-white/25 bg-[#121410]/95 shadow-2xl backdrop-blur-sm sm:left-8 sm:right-auto sm:w-[620px]">
+              <div className="flex h-10 items-center gap-2 border-b border-white/10 px-3">
+                {selectedRoot && <button onClick={back} className="grid h-6 w-6 shrink-0 place-items-center text-white/40 hover:text-accent" title="Back"><ArrowLeft size={13} /></button>}
+                <div className="min-w-0 flex-1 truncate font-mono text-[10px] text-white/40">
+                  <button onClick={resetToRoot} className="hover:text-accent">ocd</button>
+                  {selectedRoot && <><span className="px-1 text-white/20">/</span><span className="text-white/65">{selectedRoot}</span></>}
+                  {selected && <><span className="px-1 text-white/20">/</span><span className="text-white/65">{selected.label}</span></>}
                 </div>
-                {selected.danger && <span className="inline-flex items-center gap-1 font-mono text-[9px] font-bold uppercase text-accent-amber"><AlertTriangle size={11} /> confirmation required</span>}
+                <button onClick={() => setMenuOpen(false)} className="grid h-6 w-6 shrink-0 place-items-center text-white/30 hover:text-white" title="Close"><X size={13} /></button>
               </div>
 
-              {selected.unavailableReason ? (
-                <div className="mt-5 flex gap-3 border border-white/15 bg-white/5 p-4 text-white/60">
-                  <Ban size={16} className="shrink-0" />
-                  <div><div className="font-mono text-[10px] font-bold uppercase text-white/80">Local CLI required</div><p className="mt-1 text-[11px] leading-5">{selected.unavailableReason}</p></div>
-                </div>
-              ) : (
-                <>
-                  {requiredInputs.length > 0 && (
-                    <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      {requiredInputs.map((input) => <InputField key={input.key} input={input} value={values[input.key]} options={input.resource ? resources[input.resource] : undefined} resourcesLoading={resourcesLoading || !!(input.resource && contextLoading[input.resource])} onChange={(value) => setValue(input.key, value)} />)}
-                    </div>
-                  )}
+              <div className="max-h-[calc(min(72vh,680px)-4rem)] overflow-y-auto p-3">
+                {!selected && (
+                  <label className="flex items-center gap-2 border-b border-white/15 px-1 pb-2 text-white/50 focus-within:border-accent">
+                    <Search size={13} className="shrink-0" />
+                    <input value={search} onChange={(event) => setSearch(event.target.value)} autoFocus placeholder={selectedRoot ? `Filter ${selectedRoot} actions…` : "Filter commands…"} className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-[#eefbd5] outline-none placeholder:text-white/25" />
+                  </label>
+                )}
 
-                  {optionalInputs.length > 0 && (
-                    <div className={`${requiredInputs.length > 0 ? "mt-5 border-t border-white/10 pt-4" : "mt-5"}`}>
-                      <button onClick={() => setOptionsExpanded((current) => !current)} className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase text-white/45 transition-colors hover:text-accent">
-                        <ChevronDown size={13} className={`transition-transform ${optionsExpanded ? "rotate-180" : ""}`} />
-                        {optionalInputs.length} optional {optionalInputs.length === 1 ? "parameter" : "parameters"}
+                {!selectedRoot && (
+                  <div className="mt-2 divide-y divide-white/5 border border-white/10">
+                    {roots.map((root) => (
+                      <button key={root.name} onClick={() => chooseRoot(root.name)} className="group flex w-full items-center gap-3 bg-[#171a15] px-3 py-2.5 text-left hover:bg-[#242b1c]">
+                        <code className="w-24 shrink-0 font-mono text-[11px] font-bold text-accent">{root.name}</code>
+                        <span className="min-w-0 flex-1 truncate text-[10px] text-white/40">{root.description}</span>
+                        <ChevronRight size={12} className="shrink-0 text-white/20 group-hover:text-accent" />
                       </button>
-                      {optionsExpanded && <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">{optionalInputs.map((input) => <InputField key={input.key} input={input} value={values[input.key]} options={input.resource ? resources[input.resource] : undefined} resourcesLoading={resourcesLoading || !!(input.resource && contextLoading[input.resource])} onChange={(value) => setValue(input.key, value)} />)}</div>}
-                    </div>
-                  )}
-
-                  <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-white/10 pt-4">
-                    <button disabled={running || !!validationError} onClick={run} className="inline-flex items-center gap-2 bg-accent px-4 py-2.5 font-mono text-[10px] font-bold uppercase text-[#151713] transition-opacity disabled:cursor-not-allowed disabled:opacity-35">
-                      <Play size={13} fill="currentColor" /> {running ? "running…" : "run ↵"}
-                    </button>
-                    {running && <button onClick={() => abortRef.current?.abort()} className="inline-flex items-center gap-2 border border-accent-red px-3 py-2 font-mono text-[10px] font-bold uppercase text-accent-red"><CircleStop size={13} /> stop</button>}
-                    {selected.inputs.some((input) => input.resource) && <button onClick={() => refreshResources().catch(() => {})} disabled={resourcesLoading} className="inline-flex items-center gap-1.5 font-mono text-[9px] uppercase text-white/35 hover:text-accent disabled:opacity-30"><RefreshCw size={11} className={resourcesLoading ? "animate-spin" : ""} /> refresh context</button>}
-                    {validationError && <span className="font-mono text-[10px] text-accent-amber">{validationError}</span>}
-                    {exitCode !== null && <span className={`ml-auto inline-flex items-center gap-1 font-mono text-[10px] font-bold ${exitCode === 0 ? "text-accent" : "text-accent-red"}`}><CheckCircle2 size={13} /> exit {exitCode}</span>}
+                    ))}
+                    {roots.length === 0 && <TerminalEmpty label="No matching commands" />}
                   </div>
-                </>
-              )}
+                )}
+
+                {selectedRoot && !selected && (
+                  <div className="mt-2">
+                    <p className="mb-2 font-mono text-[9px] text-white/30">{rootMeta?.description}</p>
+                    <div className="divide-y divide-white/5 border border-white/10">
+                      {rootCommands.map((command) => (
+                        <button key={command.id} onClick={() => chooseCommand(command)} className="group flex w-full items-center gap-3 bg-[#171a15] px-3 py-2.5 text-left hover:bg-[#242b1c]">
+                          <code className="min-w-0 flex-1 truncate font-mono text-[11px] font-bold text-accent">{command.args.slice(1).join(" ") || selectedRoot}</code>
+                          {command.danger && <AlertTriangle size={11} className="shrink-0 text-accent-amber" />}
+                          {command.unavailableReason && <Ban size={11} className="shrink-0 text-white/30" />}
+                          <ChevronRight size={12} className="shrink-0 text-white/20 group-hover:text-accent" />
+                        </button>
+                      ))}
+                      {rootCommands.length === 0 && <TerminalEmpty label="No matching actions" />}
+                    </div>
+                  </div>
+                )}
+
+                {selected && (
+                  <div>
+                    <div className="mb-3 flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <code className="block truncate font-mono text-[10px] text-accent">$ {preview}</code>
+                        <p className="mt-1 text-[10px] leading-4 text-white/35">{selected.description}</p>
+                      </div>
+                      {selected.danger && <AlertTriangle size={12} className="shrink-0 text-accent-amber" />}
+                    </div>
+
+                    {selected.unavailableReason ? (
+                      <div className="flex gap-2 border border-white/15 bg-white/5 p-3 text-white/50"><Ban size={14} className="shrink-0" /><p className="text-[10px] leading-4">{selected.unavailableReason}</p></div>
+                    ) : (
+                      <>
+                        {requiredInputs.length > 0 && <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{requiredInputs.map((input) => <InputField key={input.key} input={input} value={values[input.key]} options={input.resource ? resources[input.resource] : undefined} resourcesLoading={resourcesLoading || !!(input.resource && contextLoading[input.resource])} onChange={(value) => setValue(input.key, value)} />)}</div>}
+                        {optionalInputs.length > 0 && (
+                          <div className={`${requiredInputs.length > 0 ? "mt-3 border-t border-white/10 pt-3" : ""}`}>
+                            <button onClick={() => setOptionsExpanded((current) => !current)} className="flex items-center gap-2 font-mono text-[9px] font-bold uppercase text-white/35 hover:text-accent"><ChevronDown size={12} className={`transition-transform ${optionsExpanded ? "rotate-180" : ""}`} />{optionalInputs.length} optional</button>
+                            {optionsExpanded && <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">{optionalInputs.map((input) => <InputField key={input.key} input={input} value={values[input.key]} options={input.resource ? resources[input.resource] : undefined} resourcesLoading={resourcesLoading || !!(input.resource && contextLoading[input.resource])} onChange={(value) => setValue(input.key, value)} />)}</div>}
+                          </div>
+                        )}
+                        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-white/10 pt-3">
+                          <button disabled={!!validationError} onClick={run} className="inline-flex items-center gap-2 bg-accent px-3 py-2 font-mono text-[9px] font-bold uppercase text-[#151713] disabled:cursor-not-allowed disabled:opacity-35"><Play size={12} fill="currentColor" /> run ↵</button>
+                          {selected.inputs.some((input) => input.resource) && <button onClick={() => refreshResources().catch(() => {})} disabled={resourcesLoading} className="inline-flex items-center gap-1 font-mono text-[8px] uppercase text-white/30 hover:text-accent disabled:opacity-30"><RefreshCw size={10} className={resourcesLoading ? "animate-spin" : ""} /> refresh</button>}
+                          {validationError && <span className="font-mono text-[9px] text-accent-amber">{validationError}</span>}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
-          {!selected && history.length > 0 && (
-            <div className="mt-8 border-t border-white/10 pt-4">
-              <div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-white/25">recent</div>
-              {history.slice(0, 3).map((item, index) => <div key={`${item.at.getTime()}-${index}`} className="flex gap-3 py-1 font-mono text-[10px] text-white/35"><span className={item.code === 0 ? "text-accent" : "text-accent-red"}>{item.code}</span><span className="min-w-0 flex-1 truncate">$ {item.command}</span></div>)}
-            </div>
-          )}
+          {running && <button onClick={() => abortRef.current?.abort()} className="absolute bottom-5 right-5 z-10 inline-flex items-center gap-2 border border-accent-red bg-black/80 px-3 py-2 font-mono text-[9px] font-bold uppercase text-accent-red"><CircleStop size={12} /> stop</button>}
         </div>
       </section>
     </div>
