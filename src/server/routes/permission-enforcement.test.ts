@@ -49,11 +49,20 @@ if (!realPermissions.requirePermission.toString().includes("hasPermission")) {
   );
 }
 
+// reconciler.test.ts installs a process-wide enqueue stub. Load a pristine
+// copy so approval tests verify the operation payload written to the database,
+// regardless of which test files Bun ran first.
+const REAL_ENQUEUE_SPECIFIER: string = "../ipc/enqueue.ts?real";
+const realEnqueue = (await import(
+  REAL_ENQUEUE_SPECIFIER
+)) as typeof import("../ipc/enqueue.ts");
+
 // --- side-effect stubs ------------------------------------------------------
 // Only genuine I/O boundaries are stubbed; the permission layer never is.
 import * as remote from "../../shared/remote/index.ts";
 import * as enginePanel from "../../engine/deploy/panel.ts";
 import * as traefik from "../../engine/scale/traefik-manager.ts";
+import * as ipcEnqueue from "../ipc/enqueue.ts";
 
 // Captured before we install our own stubs so we can hand the process back
 // whatever was installed when this file loaded (engine suites run first and
@@ -61,6 +70,7 @@ import * as traefik from "../../engine/scale/traefik-manager.ts";
 const priorSshExec = remote.sshExec;
 const priorRedeployPanel = enginePanel.redeployPanel;
 const priorSyncAppIngress = traefik.syncAppIngress;
+const priorEnqueue = ipcEnqueue.enqueue;
 
 beforeEach(() => {
   // Re-register the REAL permission layer so this file wins over any bypass
@@ -79,12 +89,14 @@ beforeEach(() => {
   mock.module("../../engine/scale/traefik-manager.ts", () => ({
     syncAppIngress: async () => {},
   }));
+  mock.module("../ipc/enqueue.ts", () => ({ enqueue: realEnqueue.enqueue }));
 });
 
 afterAll(() => {
   mock.module("../../shared/remote/index.ts", () => ({ sshExec: priorSshExec }));
   mock.module("../../engine/deploy/panel.ts", () => ({ redeployPanel: priorRedeployPanel }));
   mock.module("../../engine/scale/traefik-manager.ts", () => ({ syncAppIngress: priorSyncAppIngress }));
+  mock.module("../ipc/enqueue.ts", () => ({ enqueue: priorEnqueue }));
 });
 
 import * as db from "../../shared/db.ts";
