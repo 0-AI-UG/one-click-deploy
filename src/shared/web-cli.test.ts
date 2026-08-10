@@ -41,6 +41,11 @@ describe("web CLI command catalog", () => {
     })).toEqual(["envs", "set", "production", "A=1", "B=two", "--rollout=restart"]);
 
     expect(() => buildWebCliArgv(command("status"), { command: "ssh root" })).toThrow("Unknown parameter");
+    expect(buildWebCliArgv(command("app.show"), {
+      app: "api",
+      deployment: undefined,
+      replica: undefined,
+    })).toEqual(["app", "show", "api"]);
   });
 
   test("rejects malformed numbers, key-value entries and disabled commands", () => {
