@@ -230,7 +230,13 @@ export function WebCliPage() {
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
-  const [menuPosition, setMenuPosition] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+    placement: "above" | "below";
+  } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
@@ -422,14 +428,27 @@ export function WebCliPage() {
   useLayoutEffect(() => {
     if (!menuOpen) return;
     const update = () => {
-      if (!composerRef.current) return;
-      const rect = portalAnchorRect(composerRef.current);
-      const width = Math.min(420, Math.max(280, rect.width), window.innerWidth - 24);
-      const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
-      const roomBelow = window.innerHeight - rect.bottom;
-      setMenuPosition(roomBelow >= 220
-        ? { top: rect.bottom + 6, left, width }
-        : { bottom: window.innerHeight - rect.top + 6, left, width });
+      const anchor = inputRef.current ?? composerRef.current;
+      if (!anchor) return;
+      const rect = portalAnchorRect(anchor);
+      const zoom = Number(getComputedStyle(document.documentElement).zoom) || 1;
+      // Fixed portals inherit html's zoom, while window.innerWidth/Height do not.
+      // Normalize the viewport into the same coordinate space as portalAnchorRect.
+      const viewportWidth = window.innerWidth / zoom;
+      const viewportHeight = window.innerHeight / zoom;
+      const width = Math.min(420, Math.max(280, rect.width), viewportWidth - 24);
+      const left = Math.max(12, Math.min(rect.left, viewportWidth - width - 12));
+      const roomAbove = rect.top - 12;
+      const roomBelow = viewportHeight - rect.bottom - 12;
+      const placement = roomBelow < 220 && roomAbove > roomBelow ? "above" : "below";
+      const availableHeight = placement === "above" ? roomAbove : roomBelow;
+      setMenuPosition({
+        top: placement === "above" ? rect.top - 6 : rect.bottom + 6,
+        left,
+        width,
+        maxHeight: Math.min(288, Math.max(48, availableHeight)),
+        placement,
+      });
     };
     update();
     window.addEventListener("resize", update);
@@ -783,8 +802,15 @@ export function WebCliPage() {
         <div
           ref={menuRef}
           role="listbox"
-          style={{ position: "fixed", ...menuPosition }}
-          className="z-[70] max-h-72 overflow-y-auto border border-white/25 bg-[#121410] shadow-2xl"
+          style={{
+            position: "fixed",
+            top: menuPosition.top,
+            left: menuPosition.left,
+            width: menuPosition.width,
+            maxHeight: menuPosition.maxHeight,
+            transform: menuPosition.placement === "above" ? "translateY(-100%)" : undefined,
+          }}
+          className="z-[70] overflow-y-auto border border-white/25 bg-[#121410] shadow-2xl"
         >
           <div className="sticky top-0 z-10 flex items-start gap-2 border-b border-white/10 bg-[#171a15] px-2.5 py-2">
             <div className="min-w-0 flex-1">
