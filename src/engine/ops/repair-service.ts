@@ -28,9 +28,10 @@ const repair: Step<RepairServiceInput, { serverId: number }> = {
     let moving = false;
     if (!server || server.status !== "ready") {
       const panelServerId = db.getPanel()?.server_id;
+      const pool = service.placement_pool || "general";
       server = db.getServers().find((candidate) =>
         candidate.status === "ready" && !candidate.gc_requested_at &&
-        candidate.id !== panelServerId && candidate.pool === "general"
+        candidate.id !== panelServerId && candidate.pool === pool
       ) ?? null;
       if (!server) {
         const settings = db.getSettings();
@@ -41,6 +42,8 @@ const repair: Step<RepairServiceInput, { serverId: number }> = {
           serverType: settings.default_server_type,
           location: settings.default_location,
           name: `ocd-repair-${service.name}-${Date.now()}`,
+          pool,
+          approved: false,
           emit: (phase, detail) => ctx.log(`[${phase}] ${detail}`),
         });
       }

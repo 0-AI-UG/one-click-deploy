@@ -10,7 +10,8 @@ export async function pickTargetServer(
   // Replicas of THIS app already decided earlier in the same converge/scale
   // pass but not necessarily persisted yet (server_id → count). Lets a single
   // scale 1→3 spread across hosts/locations instead of stacking on one host.
-  plannedByServer?: Map<number, number>
+  plannedByServer?: Map<number, number>,
+  allowServerProvisioning = false,
 ): Promise<Server> {
   // Explicit placement: caller chose a specific server
   if (preferredServerId) {
@@ -144,6 +145,7 @@ export async function pickTargetServer(
       name: `ocd-${app.name}-r${Date.now()}`,
       // Join the app's placement pool so future picks see it as a candidate.
       pool: app.placement_pool,
+      approved: allowServerProvisioning,
       emit,
     });
   }

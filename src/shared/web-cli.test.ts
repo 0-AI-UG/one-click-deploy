@@ -22,15 +22,13 @@ describe("web CLI command catalog", () => {
     }
   });
 
-  test("constructs positional values, flags and server-owned safety switches", () => {
+  test("constructs positional values and flags", () => {
     expect(buildWebCliArgv(command("app.rollback"), {
       app: "api",
       deployment: "42",
     })).toEqual(["rollback", "api", "--deployment=42"]);
 
-    expect(buildWebCliArgv(command("app.delete"), { app: "api" })).toEqual([
-      "delete", "api", "--yes",
-    ]);
+    expect(() => buildWebCliArgv(command("app.delete"), { app: "api" })).toThrow("browser approval");
   });
 
   test("expands repeatable values without accepting arbitrary parameters", () => {

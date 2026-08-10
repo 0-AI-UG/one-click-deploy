@@ -6,6 +6,7 @@ import { hetzner } from "../../shared/providers/index.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
+import { serverProvisioningResourceId } from "../../shared/server-provisioning.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
@@ -194,6 +195,7 @@ export async function handleDeleteResource(request: Request, type: string, id: s
           const users = replicas.map((r) => `${r.container_name} (replica)`);
           return Response.json({ ok: false, error: `Server is in use by: ${users.join(", ")}` }, { headers: corsHeaders });
         }
+        await enforceConfirmation(request, payload, "delete_server", "server", String(server.id));
         const apps = db.getApps(server.id);
         const services = db.getServicesOnServer(server.id);
         const keys = [
@@ -210,8 +212,10 @@ export async function handleDeleteResource(request: Request, type: string, id: s
         });
         return Response.json({ ok: true, op_id: opId }, { headers: corsHeaders });
       }
-      await compute.deleteServer(id);
-      return Response.json({ ok: true }, { headers: corsHeaders });
+      return Response.json(
+        { ok: false, error: "Server is not tracked by OCD; refresh inventory before deleting it" },
+        { status: 404, headers: corsHeaders },
+      );
     } else if (type === "volume") {
       const allApps = db.getApps();
       const using = allApps.filter((a) => a.volume_id === id);
@@ -688,6 +692,14 @@ export async function handleCreateServer(request: Request): Promise<Response> {
     if (!body.server_type || !body.location) {
       return Response.json({ error: "server_type and location are required" }, { status: 400, headers: corsHeaders });
     }
+
+    const planId = serverProvisioningResourceId({
+      serverType: body.server_type,
+      location: body.location,
+      pools: ["general"],
+      reason: body.name ? `server ${body.name}` : "an explicitly requested server",
+    });
+    await enforceConfirmation(request, payload, "create_server", "server_plan", planId);
 
     const { opId } = enqueue({
       kind: "provision_server",

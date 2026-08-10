@@ -2171,7 +2171,26 @@ export const migrations: Migration[] = [
               ELSE 0
             END
           WHERE id = NEW.id;
-        END`);
+      END`);
+    },
+  },
+  {
+    version: 98,
+    description:
+      "Track managed-service deploy targets, production/staging relationships and placement pools, plus explicitly staging-owned environment keys.",
+    up: (db) => {
+      // Keep these as explicit service properties rather than inferring them
+      // from names. A staging service owns persistent data, so reconciliation
+      // and teardown must be able to distinguish it from an unrelated service
+      // that happens to end in "-staging".
+      db.run("ALTER TABLE services ADD COLUMN target TEXT NOT NULL DEFAULT 'production'");
+      db.run("ALTER TABLE services ADD COLUMN target_of INTEGER");
+      db.run("ALTER TABLE services ADD COLUMN placement_pool TEXT NOT NULL DEFAULT 'general'");
+      db.run("CREATE UNIQUE INDEX services_target_of_target ON services(target_of, target) WHERE target_of IS NOT NULL");
+      // Certification prevents a copied production key from satisfying a
+      // staging_env `required` declaration before an explicit staging value
+      // has ever been applied for that key.
+      db.run("ALTER TABLE stacks ADD COLUMN staging_env_keys TEXT NOT NULL DEFAULT '[]'");
     },
   },
 ];

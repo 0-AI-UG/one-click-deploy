@@ -14,6 +14,7 @@ import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
 import { applyAppConfig, diffAppConfig } from "../../shared/app-config.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
 import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
+import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
  *  public raw TCP/UDP address, a boolean `auth_enabled` flag, and strips every
@@ -211,6 +212,10 @@ export async function handleDeploy(request: Request): Promise<Response> {
       );
     }
     const deployRequest = manifestSpec(req);
+    // Never trust this internal flag from the request body. New app deployment
+    // may select existing capacity, but any provider creation it falls back to
+    // must have been approved for this exact deployment first.
+    deployRequest.server_provisioning_approved = false;
     const validation = validateDeployRequest(deployRequest);
     if (!validation.valid) {
       return Response.json(
@@ -229,6 +234,15 @@ export async function handleDeploy(request: Request): Promise<Response> {
         { ok: false, error: `Cannot apply configuration only: app "${req.app_name}" does not exist` },
         { status: 404, headers: corsHeaders },
       );
+    }
+    if (!deployRequest.server_id) {
+      await approveAutomaticServerProvisioning(
+        request,
+        payload,
+        `deploying app ${deployRequest.app_name}`,
+        [deployRequest.placement_pool || "general"],
+      );
+      deployRequest.server_provisioning_approved = true;
     }
     const { opId } = enqueue({
       kind: "deploy",
@@ -378,6 +392,13 @@ export async function handlePromoteApp(request: Request): Promise<Response> {
     if (!commit) {
       return Response.json({ error: `Source app "${source.name}" has no successful deployment to promote` }, { status: 400, headers: corsHeaders });
     }
+    await enforceConfirmation(
+      request,
+      payload,
+      "promote_app",
+      "promotion",
+      `${source.id}:${dest.id}`,
+    );
 
     // Different repos is unusual (promotions normally share a repo) but allowed;
     // surface it in the response so the caller can notice.

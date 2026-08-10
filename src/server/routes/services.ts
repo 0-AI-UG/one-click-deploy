@@ -9,6 +9,8 @@ import { getServiceLogs } from "../../engine/deploy/service-lifecycle.ts";
 import { getCatalogEntries, getCatalogEntry } from "../../shared/services/catalog.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
+import { enforceConfirmation } from "../lib/action-confirm.ts";
+import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
 
 // --- Catalog ---
 
@@ -92,6 +94,15 @@ export async function handleDeployService(request: Request): Promise<Response> {
     if (!req?.name || typeof req.name !== "string") {
       return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });
     }
+    // Ownership and isolation metadata is engine-owned. A direct service
+    // deploy cannot impersonate a stack staging counterpart.
+    req.stack_id = undefined;
+    req.target = "production";
+    req.target_of = undefined;
+    req.placement_pool = "general";
+    req.server_provisioning_approved = false;
+    await approveAutomaticServerProvisioning(request, payload, `deploying service ${req.name}`, ["general"]);
+    req.server_provisioning_approved = true;
     const { opId } = enqueue({
       kind: "deploy_service",
       resourceKeys: [`service:create:${req.name}`],
@@ -107,16 +118,27 @@ export async function handleDeployService(request: Request): Promise<Response> {
 
 // --- Lifecycle ---
 
-export function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
-  const volumeKeys = db.getServiceInstances(serviceId)
-    .filter((instance) => !!instance.volume_id)
-    .map((instance) => `volume:${instance.volume_id}`);
-  return enqueueOp(request, {
-    permission: "services.destroy",
-    kind: "destroy_service",
-    resourceKeys: [`service:${serviceId}`, ...volumeKeys],
-    input: { serviceId },
-  });
+export async function handleDestroyService(request: Request, serviceId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "services.destroy");
+    if (!db.getService(serviceId)) {
+      return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
+    }
+    await enforceConfirmation(request, payload, "delete_service", "service", String(serviceId));
+    const volumeKeys = db.getServiceInstances(serviceId)
+      .filter((instance) => !!instance.volume_id)
+      .map((instance) => `volume:${instance.volume_id}`);
+    const { opId } = enqueue({
+      kind: "destroy_service",
+      resourceKeys: [`service:${serviceId}`, ...volumeKeys],
+      input: { serviceId },
+      trigger: payload.client === "cli" ? "cli" : "ui",
+      triggeredBy: payload.userId,
+    });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
 }
 
 export function handleRestartService(request: Request, serviceId: number): Promise<Response> {

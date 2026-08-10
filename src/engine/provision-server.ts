@@ -22,11 +22,20 @@ export async function provisionServer(opts: {
   // Capacity pool the new server joins. Defaults to 'general'; a staging-pool
   // app's scale-up passes its placement_pool so the server lands in that pool.
   pool?: string;
+  /** True only for a user-initiated operation whose capacity plan was approved
+   * in the browser before it entered the engine. */
+  approved: boolean;
   emit: ProgressFn;
 }): Promise<Server> {
   const { serverType, location, emit } = opts;
   const compute = hetzner;
   const serverName = opts.name || `ocd-server-${Date.now()}`;
+
+  if (!opts.approved) {
+    throw new Error(
+      "Automatic server creation requires browser approval. Run `ocd servers create` and approve the capacity in the web UI.",
+    );
+  }
 
   emit("server", `Creating new ${compute.name} server...`);
 

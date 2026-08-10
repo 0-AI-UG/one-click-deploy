@@ -6,6 +6,7 @@ import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOp
 import { GitBranch, ArrowUpCircle, ExternalLink, Rocket } from "lucide-react";
 import type { AppData } from "../../types.ts";
 import type { AppStagingResponse } from "../../../../shared/rpc.ts";
+import { serverConfirmedAction } from "../../api/server-confirmation.ts";
 
 const errMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
@@ -41,10 +42,14 @@ export function WebhooksTab({ app, appId, action, ops }: WebhooksTabProps) {
     )) return;
 
     await action("promote", async () => {
-      const result = await post("/api/apps/promote", {
-        source_app: sibling.name,
-        dest_app: app.name,
-      }) as { op_id?: number };
+      const result = await serverConfirmedAction<{ op_id?: number }>(
+        "/api/apps/promote",
+        "POST",
+        "promote_app",
+        "promotion",
+        `${sibling.id}:${appId}`,
+        { source_app: sibling.name, dest_app: app.name },
+      );
       if (result.op_id) {
         trackOperationInToast(result.op_id, "Promoting to production");
         ops.track(result.op_id);

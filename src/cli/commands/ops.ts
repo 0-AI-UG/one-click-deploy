@@ -300,12 +300,14 @@ function parseOpId(args: string[], usageLine: string): number {
 }
 
 async function opsCancel(args: string[]): Promise<void> {
-  const id = parseOpId(args, "Usage: ocd ops cancel <id> [--yes]");
+  if (args.includes("--yes") || args.includes("-y")) {
+    throw new Error("--yes has been removed; approve cancellation in the web UI");
+  }
+  const id = parseOpId(args, "Usage: ocd ops cancel <id>");
   const confirmation = await webConfirm(
     "cancel_operation",
     "operation",
     id,
-    { yes: args.includes("--yes") },
   );
   if (!confirmation) return;
   await post(
@@ -355,7 +357,7 @@ ${BOLD}Subcommands:${RESET}
   engine                     Show heartbeat, concurrency and operation kinds
   <id>                       Show an operation's steps and children
   logs <id> [--follow]       Print an operation's logs (--follow to stream)
-  cancel <id> [--yes]        Confirm, then stop and compensate safely
+  cancel <id>                Confirm in the web UI, then stop and compensate safely
   retry <id>                 Resume cleanup or create a fresh retry
   finalize <id>              Reconcile resources and close a stale operation`);
 }

@@ -19,7 +19,7 @@ import deployStackOp, {
 import type { StackDeployRequest } from "../../shared/rpc.ts";
 import type { OpContext } from "../types.ts";
 import { hetzner } from "../../shared/providers/index.ts";
-import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import { resolveAppEnvVars, resolveEnvVarsForDeploy } from "../../shared/env-crypto.ts";
 import { hashEnvironment } from "../revision.ts";
 
 // Minimal OpContext for exercising a step's run() directly against a real
@@ -43,6 +43,7 @@ function makeCtx(input: StackDeployRequest): OpContext<StackDeployRequest> {
 const planStep = deployStackOp.steps.find((s) => s.name === "plan")!;
 const deployAppsStep = deployStackOp.steps.find((s) => s.name === "deploy_apps")!;
 const reconcileServicesStep = deployStackOp.steps.find((s) => s.name === "reconcile_services")!;
+const reconcileRemovalsStep = deployStackOp.steps.find((s) => s.name === "reconcile_removals")!;
 const preflightAppsStep = deployStackOp.steps.find((s) => s.name === "preflight_apps")!;
 
 function app(key: string, needs?: string[]) {
@@ -380,6 +381,70 @@ describe("deploy_stack service adoption", () => {
 
     await expect(reconcileServicesStep.run(ctx, { plan: planOut }))
       .rejects.toThrow(/immutable managed-service drift.*17-alpine.*17-pgmq.*confirmation is required/i);
+  });
+
+  test("injects explicitly-owned staging counterparts only into the staging environment", async () => {
+    const name = `staging-svc-${randomSuffix()}`;
+    const input = req(
+      name,
+      [{ ...app("web"), webhook_enabled: true, webhook_staging: true } as any],
+      [{ key: "db", type: "postgresql" }],
+    );
+    const ctx = makeCtx(input);
+    const planOut = await planStep.run(ctx, {}) as any;
+    const production = db.insertService({
+      name: `${name}-db`, service_type: "postgresql", version: "17-alpine", port: 5432,
+      env_vars: "{}", credentials: JSON.stringify({
+        host: `${name}-db.svc.ocd.internal`, port: 15000,
+        username: "prod", password: "prod-secret", database: "prod",
+        connection_url: `postgresql://prod:prod-secret@${name}-db.svc.ocd.internal:15000/prod`,
+      }),
+    });
+    const staging = db.insertService({
+      name: `${name}-db-staging`, service_type: "postgresql", version: "17-alpine", port: 5432,
+      env_vars: "{}", credentials: JSON.stringify({
+        host: `${name}-db-staging.svc.ocd.internal`, port: 15001,
+        username: "stage", password: "stage-secret", database: "stage",
+        connection_url: `postgresql://stage:stage-secret@${name}-db-staging.svc.ocd.internal:15001/stage`,
+      }),
+      stack_id: planOut.stackId,
+      target: "staging",
+      target_of: production.id,
+      placement_pool: "staging",
+    });
+
+    const out = await reconcileServicesStep.run(ctx, { plan: planOut }) as { childIds: number[] };
+    expect(out.childIds).toEqual([]);
+    expect(db.getStagingService(production.id)?.id).toBe(staging.id);
+    const prodVars = await resolveEnvVarsForDeploy(db.getEnvironment(planOut.environmentId)!.env_vars);
+    const stageVars = await resolveEnvVarsForDeploy(db.getEnvironment(planOut.stagingEnvironmentId)!.env_vars);
+    expect(prodVars.DB_HOST).toBe(`${name}-db.svc.ocd.internal`);
+    expect(stageVars.DB_HOST).toBe(`${name}-db-staging.svc.ocd.internal`);
+    expect(stageVars.DB_URL).toContain("stage-secret");
+    expect(db.getServiceLinks(production.id).map((link) => link.environment_id)).toEqual([planOut.environmentId]);
+    expect(db.getServiceLinks(staging.id).map((link) => link.environment_id)).toEqual([planOut.stagingEnvironmentId]);
+  });
+
+  test("refuses to adopt an unowned same-name service as a staging counterpart", async () => {
+    const name = `staging-conflict-${randomSuffix()}`;
+    const input = req(
+      name,
+      [{ ...app("web"), webhook_enabled: true, webhook_staging: true } as any],
+      [{ key: "cache", type: "redis" }],
+    );
+    const ctx = makeCtx(input);
+    const planOut = await planStep.run(ctx, {}) as any;
+    db.insertService({
+      name: `${name}-cache`, service_type: "redis", version: "7-alpine", port: 6379,
+      env_vars: "{}", credentials: "{}",
+    });
+    db.insertService({
+      name: `${name}-cache-staging`, service_type: "redis", version: "7-alpine", port: 6379,
+      env_vars: "{}", credentials: "{}",
+      // Defaults to production/general: it is deliberately not adoptable.
+    });
+    await expect(reconcileServicesStep.run(ctx, { plan: planOut }))
+      .rejects.toThrow(/identity conflict.*refusing to adopt/i);
   });
 
   test("grows a declared existing service volume and waits for provider confirmation", async () => {
@@ -814,5 +879,65 @@ describe("deploy_stack shared staging environment", () => {
     const name = `s-${randomSuffix()}`;
     const broken = { ...app("web"), webhook_staging: true };
     await expect(planOf(name, [broken])).rejects.toThrow(/webhook\.enabled/i);
+  });
+
+  test("applies staging-only overrides after copying the production environment", async () => {
+    const name = `s-${randomSuffix()}`;
+    const input = {
+      ...req(name, [stagingApp("web")]),
+      env_vars: [{ key: "DATABASE_URL", value: "postgres://production" }],
+      staging_env_vars: [{ key: "DATABASE_URL", value: "postgres://staging", secret: true }],
+      staging_env_keys: ["DATABASE_URL"],
+    } as StackDeployRequest;
+    const out = await planStep.run(makeCtx(input), {}) as Out;
+    const vars = await resolveEnvVarsForDeploy(db.getEnvironment(out.stagingEnvironmentId!)!.env_vars);
+    expect(vars.DATABASE_URL).toBe("postgres://staging");
+    expect(JSON.parse(db.getStackByName(name)!.staging_env_keys)).toEqual(["DATABASE_URL"]);
+  });
+
+  test("cannot certify a copied production key without applying a staging value", async () => {
+    const name = `s-${randomSuffix()}`;
+    const input = {
+      ...req(name, [stagingApp("web")]),
+      env_vars: [{ key: "DATABASE_URL", value: "postgres://production" }],
+      staging_env_keys: ["DATABASE_URL"],
+    } as StackDeployRequest;
+    await planStep.run(makeCtx(input), {});
+    expect(JSON.parse(db.getStackByName(name)!.staging_env_keys)).toEqual([]);
+  });
+});
+
+describe("deploy_stack staging service removal", () => {
+  test("disabling staging queues only the staging counterpart for removal", async () => {
+    const name = `remove-stage-${randomSuffix()}`;
+    const input = req(name, [app("web")], [{ key: "cache", type: "redis" }]);
+    const parent = enqueueOperation({
+      kind: "deploy_stack", resourceKeys: [`stack:${name}`], input, trigger: "test",
+    });
+    const ctx = makeCtx(input);
+    ctx.opId = parent.id;
+    const planOut = await planStep.run(ctx, {}) as any;
+    const production = db.insertService({
+      name: `${name}-cache`, service_type: "redis", version: "7", port: 6379,
+      env_vars: "{}", credentials: "{}", stack_id: planOut.stackId,
+    });
+    const staging = db.insertService({
+      name: `${name}-cache-staging`, service_type: "redis", version: "7", port: 6379,
+      env_vars: "{}", credentials: "{}", stack_id: planOut.stackId,
+      target: "staging", target_of: production.id, placement_pool: "staging",
+    });
+    const poll = setInterval(() => {
+      for (const child of listChildOperations(parent.id)) {
+        if (child.status !== "done") markOperationFinished(child.id, "done");
+      }
+    }, 5);
+    try {
+      await reconcileRemovalsStep.run(ctx, { plan: planOut });
+    } finally {
+      clearInterval(poll);
+    }
+    const destroys = listChildOperations(parent.id).filter((child) => child.kind === "destroy_service");
+    expect(destroys).toHaveLength(1);
+    expect(JSON.parse(destroys[0].input_json).serviceId).toBe(staging.id);
   });
 });

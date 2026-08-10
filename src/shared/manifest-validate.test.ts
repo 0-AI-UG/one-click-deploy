@@ -289,6 +289,23 @@ describe("validateStackManifest", () => {
     }, "ocd-stack.json")).not.toThrow();
   });
 
+  test("managed service staging overrides and stack staging env declarations validate", () => {
+    expect(() => validateStackManifest({
+      ...validStack,
+      staging_env: [
+        { key: "PUBLIC_BASE_URL", default: "https://staging.example.com" },
+        { key: "STRIPE_SECRET_KEY", required: true, secret: true },
+      ],
+      services: {
+        db: {
+          type: "postgresql",
+          volume_size: 20,
+          staging: { volume_size: 10, env_overrides: { POSTGRES_DB: "staging" } },
+        },
+      },
+    }, "ocd-stack.json")).not.toThrow();
+  });
+
   test("stack app environment projections accept selected keys and an empty list", () => {
     expect(() => validateStackManifest({
       $schema: 1,

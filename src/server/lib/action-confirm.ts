@@ -106,50 +106,19 @@ export async function enforceConfirmation(
   resourceType: string,
   resourceId: string,
 ): Promise<void> {
-  const alwaysBrowserConfirmed =
-    action === "delete_environment" ||
-    action === "purge_environment" ||
-    action === "delete_stack" ||
-    action === "delete_volume";
-  if (payload.client !== "cli" && !alwaysBrowserConfirmed) return;
-
   const token = request.headers.get("x-ocd-confirmation");
   if (!token) {
     throw new ConfirmationError(
-      payload.client === "cli"
-        ? "This action requires browser confirmation. Re-run it through the ocd CLI and approve it in your browser."
-        : "This action requires a server-issued browser confirmation. Use the OCD web UI to perform it.",
+      "This action requires a server-issued browser confirmation.",
+      { action, resource_type: resourceType, resource_id: resourceId },
     );
-  }
-
-  // Non-interactive automation is opt-in at the command line (`--yes`) and is
-  // still authenticated by the signed CLI bearer token + normal destructive
-  // permission. Bind the approval to the exact action and resource so it cannot
-  // be replayed for a broader target.
-  const automationApproval = `automation:${action}:${resourceType}:${resourceId}`;
-  if (token === automationApproval) {
-    // Environments are durable user-owned configuration, independent of any
-    // app/stack lifecycle. Stack deletion fans out across several resources.
-    // These therefore always require human approval in the browser; do not
-    // let an old CLI's --yes token bypass that invariant. Permanent provider
-    // volume deletion is included because it irreversibly destroys user data.
-    if (
-      action === "delete_environment" ||
-      action === "purge_environment" ||
-      action === "delete_stack" ||
-      action === "delete_volume"
-    ) {
-      throw new ConfirmationError(
-        "This action always requires confirmation in the OCD web UI. Re-run the command and approve it in your browser.",
-      );
-    }
-    return;
   }
 
   const ok = consumeConfirmation(token, payload.userId, action, resourceType, resourceId);
   if (!ok) {
     throw new ConfirmationError(
       "Confirmation invalid, expired, or not approved. Re-run the command and approve it in your browser.",
+      { action, resource_type: resourceType, resource_id: resourceId },
     );
   }
 }

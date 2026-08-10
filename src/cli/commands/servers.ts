@@ -1,6 +1,6 @@
 import { del, get, patch, post } from "../api.ts";
 import { followOp } from "../ops.ts";
-import { promptLine } from "../prompt.ts";
+import { webConfirm, withWebConfirmation } from "../confirm.ts";
 import { BOLD, DIM, GREEN, RED, RESET, colorStatus, table } from "../format.ts";
 
 interface Server {
@@ -170,39 +170,31 @@ async function createServer(args: string[]): Promise<void> {
     process.exit(1);
   }
   const { serverType, location, name } = parsed.value;
-  const { op_id } = await post<{ op_id: number }>("/api/resources/servers", {
-    server_type: serverType,
-    location,
-    name,
-  });
+  const body = { server_type: serverType, location, name };
+  const { op_id } = await withWebConfirmation((headers) =>
+    post<{ op_id: number }>("/api/resources/servers", body, headers)
+  );
   const result = await followOp(op_id);
   if (!result.ok) throw new Error(result.error || "Server provisioning failed");
   console.log(`${GREEN}Server provisioned.${RESET}`);
 }
 
-async function confirmDestructive(label: string, yes: boolean): Promise<boolean> {
-  if (yes) return true;
-  if (!process.stdin.isTTY) {
-    console.error(`${RED}Refusing destructive action without --yes in a non-interactive shell.${RESET}`);
-    return false;
-  }
-  const answer = await promptLine(`Destroy ${label}? This cannot be undone. Type "destroy" to continue: `);
-  return answer.trim().toLowerCase() === "destroy";
-}
-
 async function deleteServer(args: string[]): Promise<void> {
+  if (args.includes("--yes") || args.includes("-y")) {
+    throw new Error("--yes has been removed; approve server deletion in the web UI");
+  }
   const ref = args.find((arg) => !arg.startsWith("-"));
   if (!ref) {
-    console.error("Usage: ocd servers delete <name|id> [--yes]");
+    console.error("Usage: ocd servers delete <name|id>");
     process.exit(1);
   }
   const server = await resolveServer(ref);
-  if (!await confirmDestructive(`server ${server.name} (${server.provider_id})`, args.includes("--yes"))) {
-    console.log("Aborted.");
-    return;
-  }
+  const confirmation = await webConfirm("delete_server", "server", server.id);
+  if (!confirmation) return;
   const result = await del<{ ok: boolean; error?: string; op_id?: number }>(
     `/api/resources/server/${encodeURIComponent(server.provider_id)}`,
+    undefined,
+    { "X-OCD-Confirmation": confirmation },
   );
   if (!result.ok) throw new Error(result.error || "Server deletion failed");
   if (result.op_id) {
@@ -250,7 +242,7 @@ ${BOLD}Commands:${RESET}
   show <name|id>                  Detail, workloads and host diagnostics
   diagnose <name|id>              Host diagnostics
   create --type=X --location=X    Provision a server
-  delete <name|id> [--yes]        Destroy an unused server
+  delete <name|id>                Confirm in the web UI, then destroy an unused server
   refresh                         Refresh provider-backed server inventory
   pool <name|id> <pool>           Change future-placement capacity pool
   metrics [name|id] [--since=N]   Server metric history`);

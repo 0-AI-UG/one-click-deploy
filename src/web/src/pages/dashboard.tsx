@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { get, post, del } from "../api/client.ts";
+import { get, post } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, Check, Database, Box, Boxes, ChevronDown, ChevronRight, ArrowUpFromLine, MoreVertical, Settings2 } from "lucide-react";
-import { serverConfirmedDelete } from "../api/server-confirmation.ts";
+import { serverConfirmedAction, serverConfirmedDelete } from "../api/server-confirmation.ts";
 import { useMobileLayout } from "../hooks/use-mobile-layout.ts";
 import { MobileActionSheet, MobileSheetAction } from "../components/mobile-action-sheet.tsx";
 import { ContextActionItem, ContextActionMenu } from "../components/context-action-menu.tsx";
@@ -144,7 +144,7 @@ export function DashboardPage() {
     setActionLoading(key);
     try {
       const res = action === "delete"
-        ? await del(`/api/apps/${appId}`) as { op_id?: number }
+        ? await serverConfirmedDelete<{ op_id?: number }>(`/api/apps/${appId}`, "delete_app", "app", appId)
         : await post(`/api/apps/${appId}/${action}`, body) as { op_id?: number };
       if (res?.op_id) {
         trackOperationInToast(res.op_id, APP_OP_LABELS[action] || "Operation");
@@ -163,7 +163,7 @@ export function DashboardPage() {
     setActionLoading(key);
     try {
       const res = action === "delete"
-        ? await del(`/api/services/${svcId}`) as { op_id?: number }
+        ? await serverConfirmedDelete<{ op_id?: number }>(`/api/services/${svcId}`, "delete_service", "service", svcId)
         : await post(`/api/services/${svcId}/${action}`) as { op_id?: number };
       if (res?.op_id) {
         trackOperationInToast(res.op_id, SVC_OP_LABELS[action] || "Operation");
@@ -189,7 +189,13 @@ export function DashboardPage() {
     const key = `stack-promote-${stack.id}`;
     setActionLoading(key);
     try {
-      const res = await post(`/api/stacks/${stack.id}/promote`) as { op_id?: number };
+      const res = await serverConfirmedAction<{ op_id?: number }>(
+        `/api/stacks/${stack.id}/promote`,
+        "POST",
+        "promote_stack",
+        "stack",
+        stack.id,
+      );
       if (res?.op_id) {
         trackOperationInToast(res.op_id, `Promoting stack ${stack.name}`);
         ops.track(res.op_id);

@@ -156,6 +156,9 @@ export type DeployRequest = {
   public?: boolean; // Whether the app is publicly accessible (default true)
   extra_volumes?: Array<{ host_path: string; container_path: string }>; // Additional volume mounts
   server_id?: number; // If set, deploy to this specific server instead of auto-selecting
+  /** Internal authorization set only by a server route after browser approval.
+   * Client-supplied values are ignored and overwritten. */
+  server_provisioning_approved?: boolean;
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
   cpu_limit?: number; // Per-container CPU ceiling in cores (fractional allowed). Omit / 0 → platform default
   health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
@@ -251,8 +254,16 @@ export type StackDeployRequest = {
    *  stack env on first use); null explicitly clears it. */
   staging_environment_id?: number | null;
   env_vars?: Array<{ key: string; value: string; secret?: boolean }>; // Already-merged member env (manifest defaults + --set), written into the shared environment
+  /** Staging-only desired values, applied after a staging environment is
+   * created/copied so they replace inherited production values. */
+  staging_env_vars?: Array<{ key: string; value: string; secret?: boolean }>;
+  /** Declared staging contract keys. The server retains certification only for
+   * previously-applied keys still present in this list. */
+  staging_env_keys?: string[];
   services: Array<{ key: string; type: string; version?: string; volume_size?: number;
-                    env_overrides?: Record<string, string>; domain?: string; needs?: string[] }>;
+                    env_overrides?: Record<string, string>; domain?: string;
+                    staging?: { volume_size?: number; env_overrides?: Record<string, string>; domain?: string };
+                    needs?: string[] }>;
   /** Members. `webhook_staging` is the member manifest's opt-in intent
    *  (webhook.staging) — the ONLY staging input a member has. The environment
    *  is the stack's; any inherited `webhook_staging_environment_id` on an
@@ -270,6 +281,8 @@ export type StackDeployRequest = {
      * public-app exposure warnings. Values never appear here. */
     declared_env_keys?: string[];
   }>;
+  /** Internal authorization set only by the stack route after browser approval. */
+  server_provisioning_approved?: boolean;
 };
 
 export type ParsedManifest = {

@@ -184,22 +184,26 @@ export async function processIncomingEnvVars(
  *  listens on :80); TCP-routed apps get `tcp://<name>.ocd.internal:<container_port>`
  *  (the VIP mirrors the app's own port). The proxy also listens on the legacy
  *  internal_port so already-deployed apps' baked env keeps working.
- *  User-defined vars with the same key always win over these. */
+ *  User-defined OCD_INTERNAL_* values retain their legacy override behavior.
+ *  OCD_DEPLOY_TARGET is platform-owned and is re-applied after user env merge. */
 export function platformEnvVars(
-  app: Pick<AppRow, "name" | "internal_protocol" | "container_port">,
+  app: Pick<AppRow, "name" | "internal_protocol" | "container_port"> & { target?: string },
 ): Record<string, string> {
   const host = `${app.name}.ocd.internal`;
+  const deployTarget = app.target === "staging" ? "staging" : "production";
   if (app.internal_protocol === "tcp") {
     return {
       OCD_INTERNAL_URL: `tcp://${host}:${app.container_port}`,
       OCD_INTERNAL_HOST: host,
       OCD_INTERNAL_PORT: String(app.container_port),
+      OCD_DEPLOY_TARGET: deployTarget,
     };
   }
   return {
     OCD_INTERNAL_URL: `http://${host}`,
     OCD_INTERNAL_HOST: host,
     OCD_INTERNAL_PORT: "80",
+    OCD_DEPLOY_TARGET: deployTarget,
   };
 }
 
@@ -220,5 +224,12 @@ export async function resolveAppEnvVars(app: AppRow): Promise<Record<string, str
   let ownVars = await resolveEnvVarsForDeploy(ownRow?.env_vars);
   const projection = db.parseAppEnvProjection(app);
   ownVars = projectEnvVars(ownVars, projection);
-  return { ...platformEnvVars(app), ...ownVars };
+  const platform = platformEnvVars(app);
+  return {
+    ...platform,
+    ...ownVars,
+    // A staging fail-closed guard must not be bypassable by an environment
+    // copied from production or by a manifest value.
+    OCD_DEPLOY_TARGET: platform.OCD_DEPLOY_TARGET,
+  };
 }

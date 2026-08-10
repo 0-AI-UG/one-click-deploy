@@ -88,8 +88,8 @@ server-side confirmation. Approval is bound to:
 
 The confirmation is consumed once. It cannot be replayed for another target.
 
-Authorized automation tokens use a resource-bound `automation:` value only
-where the server permits it.
+There is no non-interactive approval token. Confirmation always comes from the
+signed-in web UI.
 
 Invariant:
 
@@ -100,8 +100,7 @@ Invariant:
 - the only unattended exception is an expired failed-deploy provisional volume;
   the reconciler rechecks that it has no live OCD owner and is provider-detached,
   then records the deletion in the permanent audit;
-- legacy/current `--yes` automation tokens are rejected server-side for all
-  three.
+- legacy `--yes` automation tokens are rejected server-side for every action.
 
 Bare authenticated stack/environment/provider-volume DELETE requests are
 rejected. Permanent volume deletion additionally requires typing the exact
@@ -111,11 +110,14 @@ provider volume ID before the server marks the confirmation approved.
 
 | Action | Confirmation | Environment | Managed volume | Other effects |
 |---|---|---|---|---|
-| Delete app | Browser by default; app-only `--yes` allowed when explicitly authorized | retained | detached/retained | staging sibling, containers, DNS, ingress, webhook removed |
-| Delete stack | Web UI always; no `--yes` | production and staging retained | member volumes detached/retained | member webhooks suspended; all recorded apps/services destroyed |
-| Delete environment | Web UI always; no `--yes` | explicitly deleted only if unused | n/a | fails while apps link it |
-| Cancel operation | Browser by default; authorized `--yes` allowed | compensation depends on provisional ownership | compensation may detach created volume | runs operation rollback |
-| Delete provider volume | Web UI + typed provider ID; no `--yes` | n/a | provider data destroyed | irreversible; verify backup/ownership |
+| Delete app | Web UI always | retained | detached/retained | staging sibling, containers, DNS, ingress, webhook removed |
+| Delete service | Web UI always | retained | detached/retained | containers and injected variables removed |
+| Delete server | Web UI always | retained | workload volumes retained | may cascade through assigned workloads before provider deletion |
+| Delete stack | Web UI always | production and staging retained | member volumes detached/retained | member webhooks suspended; all recorded apps/services destroyed |
+| Delete environment | Web UI always | explicitly deleted only if unused | n/a | fails while apps link it |
+| Cancel operation | Web UI always once compensation is possible | compensation depends on provisional ownership | compensation may detach created volume | runs operation rollback |
+| Delete provider volume | Web UI + typed provider ID | n/a | provider data destroyed | irreversible; verify backup/ownership |
+| Create server capacity | Web UI always | n/a | n/a | creates one or more billable provider resources; automatic deploy capacity uses the same gate |
 
 ## App deletion
 
@@ -169,7 +171,7 @@ selection, and can be listed/restored in the UI or with `ocd envs
 deleted`/`restore`. During the seven-day recovery window, the protection can be
 overridden only by the Purge button in the web environment view, after typing
 the exact environment name. The CLI remains blocked until the window expires;
-afterward purge is still a browser-confirmed action and cannot use `--yes`.
+afterward purge is still a browser-confirmed action.
 
 ## Volume/resource deletion
 

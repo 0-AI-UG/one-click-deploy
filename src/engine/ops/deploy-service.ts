@@ -39,8 +39,16 @@ export type ServiceDeployRequest = {
   env_overrides?: Record<string, string>;
   environment_id?: number;
   env_prefix?: string;
+  /** Internal stack ownership/target metadata. Direct CLI service deploys are
+   * forced to production/general by the HTTP route. */
+  stack_id?: number;
+  target?: "production" | "staging";
+  target_of?: number;
+  placement_pool?: string;
   /** Optional custom domain for HTTP-facing services; falls back to nip.io. */
   domain?: string;
+  /** Internal authorization set only after browser approval. */
+  server_provisioning_approved?: boolean;
 };
 
 type DeployServiceInput = ServiceDeployRequest;
@@ -159,8 +167,9 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
     }
 
     const panelServerId = db.getPanel()?.server_id;
+    const pool = req.placement_pool || "general";
     const existingReady = db.getServers().find((s) =>
-      s.status === "ready" && s.id !== panelServerId && s.pool === "general"
+      s.status === "ready" && s.id !== panelServerId && s.pool === pool
     );
     if (existingReady) {
       return {
@@ -181,6 +190,8 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
       serverType,
       location,
       name: `ocd-svc-${req.name}-${Date.now()}`,
+      pool,
+      approved: req.server_provisioning_approved === true,
       emit: (step, detail) => ctx.log(`[${step}] ${detail}`),
     });
     return {
@@ -382,6 +393,10 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
       port: catalog.defaultPort,
       env_vars: JSON.stringify(envVars),
       credentials: JSON.stringify(credentials),
+      stack_id: req.stack_id,
+      target: req.target,
+      target_of: req.target_of,
+      placement_pool: req.placement_pool,
     });
     const instance = db.insertServiceInstance({
       service_id: service.id,

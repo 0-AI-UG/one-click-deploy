@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { ServiceData, ServiceInstance, LinkedEnvironment } from "../types.ts";
 import { CpuUsage, MemUsage } from "./app-detail/shared.tsx";
+import { serverConfirmedDelete } from "../api/server-confirmation.ts";
 
 type EnvironmentRef = { id: number; name: string };
 
@@ -60,7 +61,7 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
     try {
       let res: { op_id?: number };
       if (act === "delete") {
-        res = await del(`/api/services/${serviceId}`);
+        res = await serverConfirmedDelete(`/api/services/${serviceId}`, "delete_service", "service", serviceId);
       } else {
         res = await post(`/api/services/${serviceId}/${act}`);
       }

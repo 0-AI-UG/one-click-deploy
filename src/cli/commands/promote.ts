@@ -3,7 +3,7 @@ import { get, post, resolveApp } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, YELLOW } from "../format.ts";
 import { getGitRepo, readManifest } from "../manifest.ts";
-import { promptLine } from "../prompt.ts";
+import { webConfirm } from "../confirm.ts";
 import type { PromoteRequest } from "../../shared/rpc.ts";
 
 interface Deployment {
@@ -12,18 +12,17 @@ interface Deployment {
   git_commit: string;
 }
 
-function parseFlags(args: string[]): { from?: string; to?: string; yes: boolean; help: boolean } {
+function parseFlags(args: string[]): { from?: string; to?: string; help: boolean } {
   let from: string | undefined;
   let to: string | undefined;
-  let yes = false;
   let help = false;
   for (const arg of args) {
     if (arg.startsWith("--from=")) from = arg.slice(7);
     else if (arg.startsWith("--to=")) to = arg.slice(5);
-    else if (arg === "--yes" || arg === "-y") yes = true;
+    else if (arg === "--yes" || arg === "-y") throw new Error("--yes has been removed; approve promotion in the web UI");
     else if (arg === "--help" || arg === "-h") help = true;
   }
-  return { from, to, yes, help };
+  return { from, to, help };
 }
 
 interface StackListItem {
@@ -55,11 +54,11 @@ async function resolveStack(nameOrId: string): Promise<StackListItem> {
  * server-side in the promote_stack op; this only resolves + follows.
  */
 async function promoteStack(args: string[]): Promise<void> {
-  const { yes, help } = parseFlags(args);
+  const { help } = parseFlags(args);
   const name = args.find((a) => !a.startsWith("-"));
 
   if (help || !name) {
-    console.error(`${BOLD}Usage:${RESET} ocd promote stack <name|id> [--yes]
+    console.error(`${BOLD}Usage:${RESET} ocd promote stack <name|id>
 
 Promotes every member of the stack that has a webhook-staging sibling holding a
 successful deployment. Members without a sibling (or whose sibling has never
@@ -68,8 +67,7 @@ deployed) are skipped and reported in the stack log.
 Members are promoted dependency level by dependency level. Independent members
 within one level may promote concurrently.
 
-${BOLD}Options:${RESET}
-  --yes, -y         Skip the confirmation prompt`);
+Promotion always requires approval in the OCD web UI.`);
     process.exit(help ? 0 : 1);
   }
 
@@ -84,19 +82,14 @@ ${BOLD}Options:${RESET}
     `Promote staging for ${BOLD}${stack.name}${RESET} ${DIM}(${pending} member(s) with a staging sibling)${RESET}`,
   );
 
-  if (!yes) {
-    if (!process.stdin.isTTY) {
-      console.error(`${RED}Refusing to promote without confirmation (non-interactive). Pass --yes.${RESET}`);
-      process.exit(1);
-    }
-    const answer = (await promptLine(`Continue? [y/N] `)).toLowerCase();
-    if (answer !== "y" && answer !== "yes") {
-      console.log("Aborted.");
-      return;
-    }
-  }
+  const confirmation = await webConfirm("promote_stack", "stack", stack.id);
+  if (!confirmation) return;
 
-  const { op_id } = await post<{ op_id: number }>(`/api/stacks/${stack.id}/promote`, {});
+  const { op_id } = await post<{ op_id: number }>(
+    `/api/stacks/${stack.id}/promote`,
+    {},
+    { "X-OCD-Confirmation": confirmation },
+  );
   const result = await followOp(op_id);
   if (result.ok) {
     console.log(`\n${GREEN}Promoted staging for stack ${stack.name}${RESET}`);
@@ -109,12 +102,12 @@ ${BOLD}Options:${RESET}
 export async function promote(args: string[]): Promise<void> {
   if (args[0] === "stack") return promoteStack(args.slice(1));
 
-  const { from, to, yes, help } = parseFlags(args);
+  const { from, to, help } = parseFlags(args);
 
   if (help) {
-    console.error(`${BOLD}Usage:${RESET} ocd promote [--yes]
-       ocd promote --from=<app> --to=<app> [--yes]
-       ocd promote stack <name|id> [--yes]
+    console.error(`${BOLD}Usage:${RESET} ocd promote
+       ocd promote --from=<app> --to=<app>
+       ocd promote stack <name|id>
 
 Promotes the exact version running in a source (e.g. staging) app up to a
 destination (production) app by rebuilding it from the source's git commit.
@@ -129,7 +122,8 @@ operation, respecting dependency levels.
 ${BOLD}Options:${RESET}
   --from=<app>      Explicit source app (name or id)
   --to=<app>        Explicit destination app (name or id)
-  --yes, -y         Skip the confirmation prompt`);
+
+Promotion always requires approval in the OCD web UI.`);
     process.exit(0);
   }
 
@@ -175,20 +169,15 @@ ${BOLD}Options:${RESET}
     console.log(`${YELLOW}Warning: source and destination have different git repos.${RESET}`);
   }
 
-  if (!yes) {
-    if (!process.stdin.isTTY) {
-      console.error(`${RED}Refusing to promote without confirmation (non-interactive). Pass --yes.${RESET}`);
-      process.exit(1);
-    }
-    const answer = (await promptLine(`Continue? [y/N] `)).toLowerCase();
-    if (answer !== "y" && answer !== "yes") {
-      console.log("Aborted.");
-      return;
-    }
-  }
+  const confirmation = await webConfirm("promote_app", "promotion", `${source.id}:${dest.id}`);
+  if (!confirmation) return;
 
   const body: PromoteRequest = { source_app: source.name, dest_app: dest.name };
-  const { op_id } = await post<{ op_id: number }>("/api/apps/promote", body);
+  const { op_id } = await post<{ op_id: number }>(
+    "/api/apps/promote",
+    body,
+    { "X-OCD-Confirmation": confirmation },
+  );
 
   const result = await followOp(op_id);
   if (result.ok) {

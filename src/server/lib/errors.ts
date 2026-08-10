@@ -17,7 +17,14 @@ export class PermissionError extends Error {
 }
 
 export class ConfirmationError extends Error {
-  constructor(message = "Browser confirmation required") {
+  constructor(
+    message = "Browser confirmation required",
+    public readonly requirement?: {
+      action: string;
+      resource_type: string;
+      resource_id: string;
+    },
+  ) {
     super(message);
   }
 }

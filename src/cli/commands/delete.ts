@@ -5,18 +5,20 @@ import { stackDown } from "./stack.ts";
 import { BOLD, GREEN, RED, RESET } from "../format.ts";
 
 function usage(): void {
-  console.error(`${BOLD}Usage:${RESET} ocd delete <app> [--yes]
+  console.error(`${BOLD}Usage:${RESET} ocd delete <app>
        ocd delete stack <name> [--suspend-webhooks]
 
 Destroys an app (its container(s), DNS records, and managed volumes) or a
 whole stack. Stack deletion always suspends and supersedes member webhook
 deployments; --suspend-webhooks explicitly requests this safe default.
 Stack deletion always requires confirmation in the OCD web UI.
-App deletion requires browser confirmation unless --yes is supplied for an
-explicitly authorized non-interactive session.`);
+App and stack deletion always require confirmation in the OCD web UI.`);
 }
 
 export async function deleteCmd(args: string[]): Promise<void> {
+  if (args.includes("--yes") || args.includes("-y")) {
+    throw new Error("--yes has been removed; approve deletion in the web UI");
+  }
   const sub = args[0];
 
   if (sub === "stack") {
@@ -35,7 +37,7 @@ export async function deleteCmd(args: string[]): Promise<void> {
   }
 
   const app = await resolveApp(name);
-  const confirm = await webConfirm("delete_app", "app", app.id, { yes: args.includes("--yes") });
+  const confirm = await webConfirm("delete_app", "app", app.id);
   if (!confirm) {
     console.log("Aborted.");
     return;

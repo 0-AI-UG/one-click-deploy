@@ -4,6 +4,7 @@ import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
 import { getGitRepo, readManifest, promptRequired, resolveAuthPassword, manifestHash } from "../manifest.ts";
 import { mergeEnv } from "../../shared/env-merge.ts";
+import { withWebConfirmation } from "../confirm.ts";
 
 interface Environment {
   id: number;
@@ -293,10 +294,12 @@ ${BOLD}Options:${RESET}
 
   console.log(`\nDeploying ${BOLD}${body.app_name}${RESET}...`);
 
-  const { op_id, changes } = await post<{
-    op_id: number;
-    changes?: Array<{ field: string; before: unknown; after: unknown }>;
-  }>("/api/apps/deploy", body);
+  const { op_id, changes } = await withWebConfirmation((headers) =>
+    post<{
+      op_id: number;
+      changes?: Array<{ field: string; before: unknown; after: unknown }>;
+    }>("/api/apps/deploy", body, headers)
+  );
   if (changes?.length) {
     console.log(`${DIM}Applied configuration:${RESET}`);
     for (const change of changes) {

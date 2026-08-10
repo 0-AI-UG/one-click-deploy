@@ -50,6 +50,10 @@
       "type": "terminal",
       "title": "Terminal 2"
     },
+    "61bf8a99-eb8c-4936-94cf-b5898d8174ac": {
+      "type": "terminal",
+      "title": "Codex 3"
+    },
     "00d6c5ad-7100-45c2-82c6-4d0eaab1b0ea": {
       "type": "canvas",
       "title": "Canvas"
@@ -69,7 +73,7 @@
             "width": 640,
             "height": 499.797400607109
           },
-          "zOrder": 867,
+          "zOrder": 904,
           "creationIndex": 16,
           "animationState": "idle",
           "dockLayout": {
@@ -91,7 +95,7 @@
             "width": 639.9999999999998,
             "height": 399.9999999999999
           },
-          "zOrder": 866,
+          "zOrder": 915,
           "creationIndex": 17,
           "animationState": "idle",
           "dockLayout": {
@@ -124,12 +128,34 @@
             ],
             "activeIndex": 0
           }
+        },
+        "46587d70-92e2-46d3-b313-d729b95d6b25": {
+          "id": "46587d70-92e2-46d3-b313-d729b95d6b25",
+          "origin": {
+            "x": 2960,
+            "y": 800
+          },
+          "size": {
+            "width": 640,
+            "height": 400
+          },
+          "zOrder": 914,
+          "creationIndex": 19,
+          "animationState": "idle",
+          "dockLayout": {
+            "type": "tabs",
+            "id": "2b4c9120-5cfc-46b7-8e2a-49340335bf3c",
+            "panelIds": [
+              "61bf8a99-eb8c-4936-94cf-b5898d8174ac"
+            ],
+            "activeIndex": 0
+          }
         }
       },
       "zoomLevel": 0.9056887897949276,
       "viewportOffset": {
-        "x": -1307.5508881103624,
-        "y": -563.9534297744547
+        "x": -1257.6592305273625,
+        "y": -496.18878979492763
       }
     }
   }

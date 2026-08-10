@@ -12,7 +12,7 @@ type Confirmation = {
  */
 export async function serverConfirmedDelete<T>(
   path: string,
-  action: "delete_stack" | "delete_environment" | "purge_environment" | "delete_volume",
+  action: "delete_app" | "delete_service" | "delete_server" | "delete_stack" | "delete_environment" | "purge_environment" | "delete_volume",
   resourceType: string,
   resourceId: string | number,
   typedResource?: string,
@@ -35,5 +35,29 @@ export async function serverConfirmedDelete<T>(
   return apiFetch<T>(path, {
     method: "DELETE",
     headers: { "X-OCD-Confirmation": confirmation.confirm_code },
+  });
+}
+
+export async function serverConfirmedAction<T>(
+  path: string,
+  method: "POST" | "DELETE",
+  action: "create_server" | "promote_app" | "promote_stack" | "cancel_operation",
+  resourceType: string,
+  resourceId: string | number,
+  body?: unknown,
+): Promise<T> {
+  const confirmation = await post("/api/confirmations", {
+    action,
+    resource_type: resourceType,
+    resource_id: resourceId,
+  }) as Confirmation;
+  await post(`/api/confirmations/item/${encodeURIComponent(confirmation.user_code)}/confirm`);
+  return apiFetch<T>(path, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      "X-OCD-Confirmation": confirmation.confirm_code,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
 }

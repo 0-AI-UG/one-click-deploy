@@ -61,6 +61,7 @@ export class ApiError extends Error {
     public readonly path: string,
     message: string,
     public readonly transportKind?: PanelTransportFailureKind,
+    public readonly responseBody?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiError";
@@ -197,7 +198,7 @@ async function apiRequest<T>(
   }
 
   if (!res.ok) {
-    const err = (await res.json().catch(() => null)) as { error?: string } | null;
+    const err = (await res.json().catch(() => null)) as ({ error?: string } & Record<string, unknown>) | null;
 
     // The server rejects every CLI-minted token whose user lacks `cli.access`.
     // That is an account-configuration problem, not a bad request, so print the
@@ -213,6 +214,8 @@ async function apiRequest<T>(
       method,
       path,
       `${method} ${path} → HTTP ${res.status} ${res.statusText}${server}`,
+      undefined,
+      err ?? undefined,
     );
   }
 

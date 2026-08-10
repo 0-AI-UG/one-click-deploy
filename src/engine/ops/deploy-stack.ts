@@ -45,6 +45,9 @@ type PlanOut = {
   /** True only when this run minted the staging environment, so rollback
    *  deletes it while a reused one survives (mirrors `createdEnv`). */
   createdStagingEnv: boolean;
+  /** True when at least one member currently opts into webhook staging. The
+   * retained environment alone does not keep staging service counterparts. */
+  stagingServicesEnabled: boolean;
   levels: string[][];
   createdStack: boolean;
   // True only when this run minted a fresh environment. A reused (pre-existing)
@@ -417,6 +420,34 @@ const plan: Step<DeployStackInput, PlanOut> = {
       ctx.log(`created staging environment "${stagingName}" (${created.id}) as a copy of the stack env`);
       db.appendStackLog(stackId, `[plan] created staging environment "${stagingName}"`);
     }
+    const appliedStagingKeys: string[] = [];
+    if (req.staging_env_vars?.length) {
+      if (stagingEnvId == null) {
+        throw new Error("staging_env values require at least one webhook-staging member or a selected staging environment");
+      }
+      const incoming = (await processIncomingEnvVars(req.staging_env_vars)).entries;
+      const envRow = db.getEnvironment(stagingEnvId)!;
+      const overlaid = new Set(incoming.map((entry) => entry.key));
+      const base = parseEnvVars(envRow.env_vars).entries.filter((entry) => !overlaid.has(entry.key));
+      db.updateEnvironment(stagingEnvId, envRow.name, serializeEnvVars([...base, ...incoming]));
+      appliedStagingKeys.push(...incoming.map((entry) => entry.key));
+      ctx.log(`applied ${incoming.length} staging-only env var(s)`);
+    }
+    if (req.staging_env_keys !== undefined) {
+      let previouslyCertified: string[] = [];
+      try {
+        const parsed = JSON.parse(existing?.staging_env_keys || "[]");
+        if (Array.isArray(parsed)) previouslyCertified = parsed.map(String);
+      } catch { /* invalid legacy state certifies nothing */ }
+      const declared = new Set(req.staging_env_keys);
+      // A wire request cannot certify an inherited value merely by naming it:
+      // it must have been certified earlier or carry a value in this request.
+      const nextCertified = [
+        ...previouslyCertified.filter((key) => declared.has(key)),
+        ...appliedStagingKeys,
+      ];
+      db.updateStackStagingEnvKeys(stackId, nextCertified);
+    }
     db.updateStackStagingEnvironment(stackId, stagingEnvId);
     if (stagingEnvId != null && !createdStagingEnv) {
       ctx.log(`staging environment: "${db.getEnvironment(stagingEnvId)?.name}" (${stagingEnvId})`);
@@ -435,6 +466,7 @@ const plan: Step<DeployStackInput, PlanOut> = {
       stagingEnvironmentId: stagingEnvId,
       stagingByKey,
       createdStagingEnv,
+      stagingServicesEnabled: wantsStaging && stagingEnvId != null,
       levels,
       createdStack,
       createdEnv,
@@ -600,11 +632,23 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
   label: "Deploy services",
   async run(ctx, prior) {
     const req = ctx.input;
-    const { stackId, environmentId } = prior["plan"] as PlanOut;
+    const { stackId, environmentId, stagingEnvironmentId, stagingServicesEnabled } =
+      prior["plan"] as PlanOut;
     const byKey = childByKey(ctx.opId);
     const childIds: number[] = [];
-    for (const svc of req.services) {
-      const name = memberName(req.name, svc.key);
+
+    type ServiceSpec = DeployStackInput["services"][number];
+    const reconcileOne = async (args: {
+      svc: ServiceSpec;
+      name: string;
+      environmentId: number;
+      target: "production" | "staging";
+      targetOf?: number;
+      volumeSize?: number;
+      envOverrides?: Record<string, string>;
+      domain?: string;
+    }): Promise<void> => {
+      const { svc, name, target, targetOf } = args;
       const existing = db.getServiceByName(name);
       if (existing) {
         const desiredVersion = svc.version || getCatalogEntry(svc.type)?.versions[0] || "";
@@ -617,25 +661,35 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
               `the stack is not reconciled and will not be marked successful.`,
           );
         }
+        if (
+          existing.target !== target ||
+          (existing.target_of ?? null) !== (targetOf ?? null) ||
+          existing.placement_pool !== (target === "staging" ? "staging" : "general")
+        ) {
+          throw new Error(
+            `Managed-service identity conflict for "${name}": the existing service is not ` +
+              `the stack's expected ${target} service. Refusing to adopt or move persistent data implicitly.`,
+          );
+        }
         // Managed-service adoption must include its provider volume, not just
         // the DB/container row. Reconcile declared sizes grow-only and wait for
         // provider confirmation before publishing credentials or reporting the
         // stack ready.
-        if (svc.volume_size != null && getCatalogEntry(svc.type)?.volumePath) {
+        if (args.volumeSize != null && getCatalogEntry(svc.type)?.volumePath) {
           const instance = db.getPrimaryInstance(existing.id);
           if (!instance?.volume_id) {
             throw new Error(
-              `Service "${name}" declares a ${svc.volume_size}GB volume but has no recorded provider volume`,
+              `Service "${name}" declares a ${args.volumeSize}GB volume but has no recorded provider volume`,
             );
           }
           let providerVolume = await hetzner.volumes.get(instance.volume_id);
-          if (providerVolume.sizeGb < svc.volume_size) {
-            const resizeKey = `stack:${ctx.opId}:svc-volume-resize:${svc.key}:${svc.volume_size}`;
+          if (providerVolume.sizeGb < args.volumeSize) {
+            const resizeKey = `stack:${ctx.opId}:svc-volume-resize:${target}:${svc.key}:${args.volumeSize}`;
             const prev = byKey.get(resizeKey);
             const resize = prev ?? enqueueOperation({
               kind: "resize_volume",
               resourceKeys: [`volume:${instance.volume_id}`],
-              input: { volumeId: instance.volume_id, sizeGb: svc.volume_size },
+              input: { volumeId: instance.volume_id, sizeGb: args.volumeSize },
               trigger: "stack",
               triggeredBy: ctx.triggeredBy,
               parentId: ctx.opId,
@@ -645,32 +699,32 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
             db.appendStackLog(
               stackId,
               `[services] growing ${name} volume ${instance.volume_id} ` +
-                `${providerVolume.sizeGb}GB → ${svc.volume_size}GB`,
+                `${providerVolume.sizeGb}GB → ${args.volumeSize}GB`,
             );
             await awaitChildren(ctx, { childIds: [resize.id] });
             providerVolume = await hetzner.volumes.get(instance.volume_id);
-            if (providerVolume.sizeGb < svc.volume_size) {
+            if (providerVolume.sizeGb < args.volumeSize) {
               throw new Error(
                 `Provider did not confirm volume ${instance.volume_id} resize: ` +
-                  `${providerVolume.sizeGb}GB observed, ${svc.volume_size}GB declared`,
+                  `${providerVolume.sizeGb}GB observed, ${args.volumeSize}GB declared`,
               );
             }
-          } else if (providerVolume.sizeGb > svc.volume_size) {
+          } else if (providerVolume.sizeGb > args.volumeSize) {
             ctx.log(
               `${name}: provider volume is ${providerVolume.sizeGb}GB; declared ` +
-                `${svc.volume_size}GB is smaller and volumes are grow-only, leaving it unchanged`,
+                `${args.volumeSize}GB is smaller and volumes are grow-only, leaving it unchanged`,
             );
           }
         }
         db.setServiceStack(existing.id, stackId);
-        await injectExistingServiceCredentials(existing, environmentId, envPrefix(svc.key));
-        db.appendStackLog(stackId, `[services] adopted existing service ${name} (id ${existing.id})`);
-        ctx.log(`adopted existing service "${name}"`);
-        continue;
+        await injectExistingServiceCredentials(existing, args.environmentId, envPrefix(svc.key));
+        db.appendStackLog(stackId, `[services] reconciled ${target} service ${name} (id ${existing.id})`);
+        ctx.log(`reconciled ${target} service "${name}"`);
+        return;
       }
-      const idk = `stack:${ctx.opId}:svc:${svc.key}`;
+      const idk = `stack:${ctx.opId}:svc:${target}:${svc.key}`;
       const prev = byKey.get(idk);
-      if (prev) { childIds.push(prev.id); continue; }
+      if (prev) { childIds.push(prev.id); return; }
       const row = enqueueOperation({
         kind: "deploy_service",
         resourceKeys: [`service:create:${name}`],
@@ -678,11 +732,16 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
           name,
           service_type: svc.type,
           version: svc.version,
-          volume_size: svc.volume_size,
-          env_overrides: svc.env_overrides,
-          domain: svc.domain,
-          environment_id: environmentId,
+          volume_size: args.volumeSize,
+          env_overrides: args.envOverrides,
+          domain: args.domain,
+          environment_id: args.environmentId,
           env_prefix: envPrefix(svc.key),
+          stack_id: stackId,
+          target,
+          target_of: targetOf,
+          placement_pool: target === "staging" ? "staging" : "general",
+          server_provisioning_approved: req.server_provisioning_approved === true,
         },
         trigger: "stack",
         triggeredBy: ctx.triggeredBy,
@@ -690,15 +749,62 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
         idempotencyKey: idk,
       });
       childIds.push(row.id);
+    };
+
+    // Production services are reconciled first because the durable production
+    // id is the ownership anchor for each staging counterpart.
+    for (const svc of req.services) {
+      await reconcileOne({
+        svc,
+        name: memberName(req.name, svc.key),
+        environmentId,
+        target: "production",
+        volumeSize: svc.volume_size,
+        envOverrides: svc.env_overrides,
+        domain: svc.domain,
+      });
     }
     if (childIds.length > 0) {
-      db.appendStackLog(stackId, `[services] waiting for ${childIds.length} reconcile operation(s)`);
+      db.appendStackLog(stackId, `[services] waiting for ${childIds.length} production reconcile operation(s)`);
       await awaitChildren(ctx, { childIds });
     }
-    // Tag each created service with this stack (child injected its creds itself).
+
+    if (stagingServicesEnabled && stagingEnvironmentId != null) {
+      const stagingChildStart = childIds.length;
+      for (const svc of req.services) {
+        const production = db.getServiceByName(memberName(req.name, svc.key));
+        if (!production) throw new Error(`Production service for "${svc.key}" was not created`);
+        const stagingOverrides = {
+          ...(svc.env_overrides || {}),
+          ...(svc.staging?.env_overrides || {}),
+        };
+        await reconcileOne({
+          svc,
+          name: `${memberName(req.name, svc.key)}-staging`,
+          environmentId: stagingEnvironmentId,
+          target: "staging",
+          targetOf: production.id,
+          volumeSize: svc.staging?.volume_size ?? svc.volume_size,
+          envOverrides: Object.keys(stagingOverrides).length ? stagingOverrides : undefined,
+          // Never inherit a production HTTP hostname. Omission lets the service
+          // deploy choose an isolated nip.io hostname.
+          domain: svc.staging?.domain,
+        });
+      }
+      const stagingChildIds = childIds.slice(stagingChildStart);
+      if (stagingChildIds.length > 0) {
+        db.appendStackLog(stackId, `[services] waiting for ${stagingChildIds.length} staging reconcile operation(s)`);
+        await awaitChildren(ctx, { childIds: stagingChildIds });
+      }
+    }
+
+    // Backstop ownership tags for services adopted from an earlier run. New
+    // children persist them atomically with the service row.
     for (const svc of req.services) {
       const row = db.getServiceByName(memberName(req.name, svc.key));
       if (row) db.setServiceStack(row.id, stackId);
+      const staging = row ? db.getStagingService(row.id) : null;
+      if (staging) db.setServiceStack(staging.id, stackId);
     }
     return { childIds };
   },
@@ -871,6 +977,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
               environment_id: environmentId,
               env_projection: effectiveProjection,
               webhook_staging_environment_id: stagingEnvFor(key) ?? undefined,
+              server_provisioning_approved: req.server_provisioning_approved === true,
             },
             trigger: "stack",
             triggeredBy: ctx.triggeredBy,
@@ -952,9 +1059,14 @@ const reconcileRemovals: Step<DeployStackInput, { removed: number }> = {
   label: "Reconcile removals",
   async run(ctx, prior) {
     const req = ctx.input;
-    const { stackId } = prior["plan"] as PlanOut;
+    const { stackId, stagingServicesEnabled } = prior["plan"] as PlanOut;
     const appKeys = new Set(req.apps.map((a) => a.key));
-    const serviceKeys = new Set(req.services.map((s) => s.key));
+    const desiredServiceNames = new Set(
+      req.services.flatMap((service) => {
+        const production = memberName(req.name, service.key);
+        return stagingServicesEnabled ? [production, `${production}-staging`] : [production];
+      }),
+    );
     const prefix = `${req.name}-`;
     const deriveKey = (name: string) => (name.startsWith(prefix) ? name.slice(prefix.length) : name);
 
@@ -981,7 +1093,7 @@ const reconcileRemovals: Step<DeployStackInput, { removed: number }> = {
       db.appendStackLog(stackId, `[reconcile] removing app ${app.name}`);
     }
     for (const svc of db.getServicesByStackId(stackId)) {
-      if (serviceKeys.has(deriveKey(svc.name))) continue;
+      if (desiredServiceNames.has(svc.name)) continue;
       const idk = `stack:${ctx.opId}:rm-svc:${svc.id}`;
       const prev = byKey.get(idk);
       if (prev) { childIds.push(prev.id); continue; }

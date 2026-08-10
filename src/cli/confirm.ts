@@ -1,4 +1,4 @@
-import { post } from "./api.ts";
+import { ApiError, post } from "./api.ts";
 import { loadConfig } from "./config.ts";
 import { BOLD, GREEN, RED, RESET } from "./format.ts";
 
@@ -25,14 +25,7 @@ export async function webConfirm(
   action: string,
   resourceType: string,
   resourceId: number | string,
-  opts: { yes?: boolean } = {},
 ): Promise<string | null> {
-  if (opts.yes) {
-    // The bearer token authenticating the destructive request is server-signed;
-    // this value binds the caller's explicit --yes to one exact action/resource.
-    // The server validates both together and never accepts a generic "yes".
-    return `automation:${action}:${resourceType}:${resourceId}`;
-  }
   const config = loadConfig();
   const panel = config?.panel_url ?? "";
 
@@ -80,4 +73,37 @@ export async function webConfirm(
 
   console.log(`${RED}  Timed out waiting for confirmation.${RESET}`);
   return null;
+}
+
+type ConfirmationRequirement = {
+  action: string;
+  resource_type: string;
+  resource_id: string;
+};
+
+/** Run a mutation and, only when the server says this exact request requires
+ * browser approval, open that approval and replay the still-unperformed call. */
+export async function withWebConfirmation<T>(
+  run: (headers?: Record<string, string>) => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const requirement = error instanceof ApiError
+      ? error.responseBody?.confirmation as ConfirmationRequirement | undefined
+      : undefined;
+    if (
+      !(error instanceof ApiError) || error.status !== 403 || !requirement ||
+      typeof requirement.action !== "string" ||
+      typeof requirement.resource_type !== "string" ||
+      typeof requirement.resource_id !== "string"
+    ) throw error;
+    const confirmation = await webConfirm(
+      requirement.action,
+      requirement.resource_type,
+      requirement.resource_id,
+    );
+    if (!confirmation) throw new Error("Browser confirmation was not approved");
+    return run({ "X-OCD-Confirmation": confirmation });
+  }
 }

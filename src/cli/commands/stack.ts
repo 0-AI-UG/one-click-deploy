@@ -3,9 +3,15 @@ import { dirname, resolve } from "node:path";
 import { get, post, del } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, colorStatus, table } from "../format.ts";
-import { webConfirm } from "../confirm.ts";
+import { webConfirm, withWebConfirmation } from "../confirm.ts";
 import { getGitRepo, readManifest, promptRequired, resolveAuthPassword, manifestHash } from "../manifest.ts";
-import { mergeEnv, type AppEnvDefs } from "../../shared/env-merge.ts";
+import {
+  mergeEnv,
+  type AppEnvDefs,
+  type EnvDef,
+  type MergedEntry,
+  type RequiredMissing,
+} from "../../shared/env-merge.ts";
 import { buildStackAppSpec, resolveRepoPath, repoDirOf } from "../../shared/stack-spec.ts";
 import { validateStackManifest } from "../../shared/manifest-validate.ts";
 import type { StackManifest, StackDeployRequest } from "../../shared/rpc.ts";
@@ -23,6 +29,7 @@ export function buildStackServiceSpecs(
     volume_size: svc.volume_size,
     env_overrides: svc.env_overrides,
     domain: svc.domain,
+    staging: svc.staging,
     needs: undefined,
   }));
 }
@@ -37,6 +44,7 @@ interface StackListItem {
   environment_id?: number | null;
   /** The stack's shared webhook-staging environment, remembered across re-ups. */
   staging_environment_id?: number | null;
+  staging_env_keys?: string;
   last_operation_id?: number | null;
   last_operation_status?: string | null;
   last_operation_failed?: boolean;
@@ -154,6 +162,7 @@ ${BOLD}Arguments:${RESET}
 ${BOLD}Options:${RESET}
   --set=<app>.KEY=VALUE      Set an env var for one app (repeatable)
   --set=KEY=VALUE            Set an env var for all apps as a fallback
+  --staging-set=KEY=VALUE    Set a staging-only env var (repeatable)
 
 Select shared production and staging environments with the stack manifest's
 \`environment\` and \`staging_environment\` fields.`);
@@ -189,15 +198,70 @@ async function findEnvironmentById(id: number): Promise<ResolvedEnv | undefined>
   return list.find((e) => e.id === id);
 }
 
+/** Only keys previously written through stack staging_env may satisfy a
+ * required declaration from an existing environment. A copied production key
+ * with the same name is not evidence of staging configuration. */
+export function certifiedStagingExistingKeys(
+  env: ResolvedEnv | undefined,
+  encodedCertifiedKeys: string | undefined,
+): Set<string> {
+  let certified: string[] = [];
+  try {
+    const parsed = JSON.parse(encodedCertifiedKeys || "[]");
+    if (Array.isArray(parsed)) certified = parsed.map(String);
+  } catch { /* invalid legacy state certifies nothing */ }
+  const present = new Set((env?.env_vars || []).map((entry) => entry.key));
+  return new Set(certified.filter((key) => present.has(key)));
+}
+
+/** Staging declarations are desired overrides, not production-style defaults:
+ * an explicit default (including the empty string) must replace a value copied
+ * from production. A required value without a default is satisfied only by a
+ * key previously certified as explicitly staging-owned. */
+export function mergeStagingEnv(
+  defs: EnvDef[],
+  overrides: Record<string, string>,
+  certifiedExistingKeys: Set<string>,
+): { entries: MergedEntry[]; requiredMissing: RequiredMissing[] } {
+  const byKey = new Map(defs.map((def) => [def.key, def]));
+  const keys = new Set([...byKey.keys(), ...Object.keys(overrides)]);
+  const entries: MergedEntry[] = [];
+  const requiredMissing: RequiredMissing[] = [];
+  for (const key of [...keys].sort()) {
+    const def = byKey.get(key);
+    const secret = def?.secret === true;
+    if (Object.hasOwn(overrides, key)) {
+      entries.push({ key, value: overrides[key], secret });
+    } else if (def?.default !== undefined) {
+      // Empty is meaningful here: it clears a copied production credential or
+      // side-effect URL in a checked-in, reviewable staging contract.
+      entries.push({ key, value: def.default, secret });
+    } else if (certifiedExistingKeys.has(key)) {
+      continue;
+    } else if (def?.required) {
+      requiredMissing.push({
+        key,
+        apps: ["staging"],
+        secret,
+        description: def.description,
+      });
+    }
+  }
+  return { entries, requiredMissing };
+}
+
 export async function stackUp(args: string[]): Promise<void> {
   let manifestPath = "";
   const rawSets: string[] = [];
+  const rawStagingSets: string[] = [];
   for (const arg of args) {
     if (arg === "--help" || arg === "-h") {
       upUsage();
       process.exit(0);
     } else if (arg.startsWith("--set=")) {
       rawSets.push(arg.slice(6));
+    } else if (arg.startsWith("--staging-set=")) {
+      rawStagingSets.push(arg.slice("--staging-set=".length));
     } else if (arg.startsWith("--")) {
       console.error(`${RED}Unknown option: ${arg}${RESET}`);
       process.exit(1);
@@ -307,12 +371,47 @@ export async function stackUp(args: string[]): Promise<void> {
   // stack's stored staging env. Only an explicit null sends null.
   let stagingEnvId: number | null | undefined;
   let stagingEnvName: string | undefined;
+  let resolvedStagingEnv: ResolvedEnv | undefined;
   if (manifest.staging_environment === null) {
     stagingEnvId = null;
   } else if (manifest.staging_environment !== undefined) {
     const env = await resolveEnvironment(manifest.staging_environment);
     stagingEnvId = env.id;
     stagingEnvName = env.name;
+    resolvedStagingEnv = env;
+  } else if (existingStack?.staging_environment_id != null) {
+    resolvedStagingEnv = await findEnvironmentById(existingStack.staging_environment_id);
+  }
+
+  const stagingOverrides: Record<string, string> = {};
+  for (const pair of rawStagingSets) {
+    const eq = pair.indexOf("=");
+    if (eq < 1) {
+      console.error(`${RED}Invalid --staging-set value (expected --staging-set=KEY=VALUE): ${pair}${RESET}`);
+      process.exit(1);
+    }
+    stagingOverrides[pair.slice(0, eq)] = pair.slice(eq + 1);
+  }
+  const wantsStaging = apps.some((app) => app.webhook_staging === true);
+  if (!wantsStaging && rawStagingSets.length > 0) {
+    console.error(`${RED}--staging-set requires at least one stack member with webhook.staging enabled${RESET}`);
+    process.exit(1);
+  }
+  // Staging declarations are dormant during production-only deploys. This
+  // lets a repository keep its complete staging contract checked in without
+  // prompting for staging secrets until staging is explicitly enabled.
+  let staging_env_vars: Array<{ key: string; value: string; secret?: boolean }> = [];
+  if (wantsStaging) {
+    const mergedStaging = mergeStagingEnv(
+      manifest.staging_env || [],
+      stagingOverrides,
+      certifiedStagingExistingKeys(resolvedStagingEnv, existingStack?.staging_env_keys),
+    );
+    const promptedStaging = await promptRequired(
+      mergedStaging.requiredMissing,
+      "Required environment variables (staging)",
+    );
+    staging_env_vars = [...mergedStaging.entries, ...promptedStaging];
   }
 
   // --set overrides target the shared env; app-scoped (`app.KEY`) and global
@@ -337,6 +436,13 @@ export async function stackUp(args: string[]): Promise<void> {
     environment_id: reused?.id,
     staging_environment_id: stagingEnvId,
     env_vars: env_vars.length > 0 ? env_vars : undefined,
+    staging_env_vars: staging_env_vars.length > 0 ? staging_env_vars : undefined,
+    staging_env_keys: [
+      ...new Set([
+        ...(manifest.staging_env || []).map((entry) => entry.key),
+        ...Object.keys(stagingOverrides),
+      ]),
+    ],
     services,
     apps,
   };
@@ -352,7 +458,9 @@ export async function stackUp(args: string[]): Promise<void> {
   if (stagingEnvName) console.log(`${DIM}Staging:${RESET} ${stagingEnvName}`);
   else if (stagingEnvId === null) console.log(`${DIM}Staging:${RESET} (cleared)`);
 
-  const { op_id, attached } = await post<{ op_id: number; attached?: boolean }>("/api/stacks", body);
+  const { op_id, attached } = await withWebConfirmation((headers) =>
+    post<{ op_id: number; attached?: boolean }>("/api/stacks", body, headers)
+  );
   if (attached) {
     console.log(
       `\n${DIM}A deploy of ${manifest.name} is already in progress — attaching to op #${op_id}…${RESET}`,

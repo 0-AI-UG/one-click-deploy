@@ -1,6 +1,7 @@
 import { del, get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, table, colorStatus } from "../format.ts";
+import { webConfirm, withWebConfirmation } from "../confirm.ts";
 
 interface Service {
   id: number;
@@ -157,7 +158,9 @@ async function createService(args: string[]): Promise<void> {
 
   console.log(`Deploying service ${BOLD}${opts.name}${RESET} (${opts.serviceType})...`);
   if (environment) console.log(`${DIM}Environment:${RESET} ${environment.name}`);
-  const { op_id } = await post<{ op_id: number }>("/api/services/deploy", body);
+  const { op_id } = await withWebConfirmation((headers) =>
+    post<{ op_id: number }>("/api/services/deploy", body, headers)
+  );
   const result = await followOp(op_id);
   if (!result.ok) throw new Error(result.error || "Service deployment failed");
   console.log(`\n${GREEN}Service deploy complete!${RESET}`);
@@ -237,14 +240,15 @@ async function runServiceOp(
   console.log(`${GREEN}${service.name}: ${action} complete${RESET}`);
 }
 
-async function deleteService(ref: string, yes: boolean): Promise<void> {
+async function deleteService(ref: string): Promise<void> {
   const service = await resolveService(ref);
-  if (!yes) {
-    throw new Error(
-      `Destroying ${service.name} requires --yes. Its containers are removed and any managed volume is detached and retained for recovery.`,
-    );
-  }
-  const { op_id } = await del<{ op_id: number }>(`/api/services/${service.id}`);
+  const confirmation = await webConfirm("delete_service", "service", service.id);
+  if (!confirmation) return;
+  const { op_id } = await del<{ op_id: number }>(
+    `/api/services/${service.id}`,
+    undefined,
+    { "X-OCD-Confirmation": confirmation },
+  );
   console.log(`Destroying ${BOLD}${service.name}${RESET}…`);
   const result = await followOp(op_id);
   if (!result.ok) throw new Error(result.error || "Service destroy failed");
@@ -334,7 +338,7 @@ ${BOLD}Commands:${RESET}
   logs <service> [--tail=N] [--instance=ID]
   inject <service> <env> [--prefix=DATABASE]
   uninject <service> <env>           Remove injected credentials
-  delete <service> --yes             Destroy containers; retain the environment
+  delete <service>                   Confirm in the web UI, then destroy containers
 
 Use ${BOLD}ocd ssh <service> --service${RESET} for a service container terminal.`);
 }
@@ -389,8 +393,11 @@ export async function services(args: string[] = []): Promise<void> {
     return;
   }
   if (args[0] === "delete" || args[0] === "destroy" || args[0] === "remove") {
-    if (!args[1]) throw new Error("Usage: ocd service delete <service> --yes");
-    await deleteService(args[1], args.includes("--yes"));
+    if (args.includes("--yes") || args.includes("-y")) {
+      throw new Error("--yes has been removed; approve service deletion in the web UI");
+    }
+    if (!args[1]) throw new Error("Usage: ocd service delete <service>");
+    await deleteService(args[1]);
     return;
   }
   if (args[0] === "help" || args[0] === "--help" || args[0] === "-h") {

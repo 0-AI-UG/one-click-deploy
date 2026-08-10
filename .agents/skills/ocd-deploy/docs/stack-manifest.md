@@ -32,12 +32,17 @@ runtime configuration into the stack manifest.
 | `description` | string | Human metadata. |
 | `environment` | non-empty string | Existing shared production environment by name. Omit to retain it on later deploys or create one on first deploy. |
 | `staging_environment` | non-empty string or `null` | Existing shared webhook-staging environment by name. `null` disables it; omission retains it. |
+| `staging_env` | env declaration array | Staging-only desired values. Declarations are dormant until a member enables webhook staging. Required values prompt securely and `--staging-set=KEY=VALUE` overrides them. |
 | `services` | object map, optional | Managed-service members keyed by the desired injection prefix. |
 | `services.<key>.type` | non-empty catalog key, required | Query `ocd service catalog`; use `postgresql`, not `postgres`. |
 | `services.<key>.version` | string | Catalog-supported image version/tag. |
 | `services.<key>.volume_size` | number `>=1` | Managed data volume size in GB. |
 | `services.<key>.env_overrides` | string map | Override generated service environment values. |
 | `services.<key>.domain` | string | Custom domain for an HTTP-facing service. |
+| `services.<key>.staging` | object | Optional overrides for the isolated staging counterpart. |
+| `services.<key>.staging.volume_size` | number `>=1` | Staging volume size; defaults to the production declaration. |
+| `services.<key>.staging.env_overrides` | string map | Staging service container overrides layered over production service overrides. |
+| `services.<key>.staging.domain` | string | Staging-only HTTP hostname. Production domains are never inherited. |
 | `apps` | non-empty object map, required | App members. |
 | `apps.<key>.manifest` | non-empty string, required | Child app manifest path relative to `ocd-stack.json`. |
 | `apps.<key>.needs` | string[] | Declared app/service keys that must become healthy first. |
@@ -105,6 +110,24 @@ suspicious unrelated names such as `*_PASSWORD`, `*_TOKEN`, `*_SECRET`,
 Do not mark dependency-generated variables as `required` in a child manifest;
 they do not exist at initial CLI prompt time.
 
+When any member enables webhook staging, OCD creates/reconciles one isolated
+`<stack>-<service>-staging` counterpart for every declared managed service. It
+has separate generated credentials and persistent volume, runs only in the
+`staging` server pool, and injects its credentials only into the shared staging
+environment. Removing the service, disabling all staging members, or destroying
+the stack tears down the counterpart through the normal recoverable-volume
+lifecycle. Existing same-name services are never adopted unless their stored
+production/staging ownership relationship matches.
+
+`staging_env` is applied after an automatically-created staging environment is
+copied from production. Keep secret values out of the manifest: declare them
+with `"required": true, "secret": true` and enter them at the prompt or pass
+`--staging-set` from a protected process environment. Existing values in an
+explicit/reused staging environment satisfy required declarations only after
+OCD has previously applied that key through `staging_env`; copied production
+keys do not. A declared `"default": ""` is meaningful and clears any copied
+value, which is useful for disabling email, alerts, and other side effects.
+
 ## Reconciliation semantics
 
 Re-running `ocd deploy stack` is a complete reconciliation:
@@ -134,11 +157,16 @@ equivalent to destroying the old member and creating a new one.
   "description": "Public web app and private API",
   "environment": "production",
   "staging_environment": "staging",
+  "staging_env": [
+    { "key": "PUBLIC_BASE_URL", "default": "https://staging.example.com" },
+    { "key": "STRIPE_SECRET_KEY", "required": true, "secret": true }
+  ],
   "services": {
     "database": {
       "type": "postgresql",
       "version": "17",
-      "volume_size": 20
+      "volume_size": 20,
+      "staging": { "volume_size": 10 }
     }
   },
   "apps": {

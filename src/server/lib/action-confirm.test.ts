@@ -19,24 +19,40 @@ const webUser: TokenPayload = {
   username: "browser",
 };
 
-describe("enforceConfirmation automation approval", () => {
-  test("accepts an exact operation-cancel automation approval", async () => {
+describe("enforceConfirmation browser-only approval", () => {
+  test("returns an exact confirmation requirement when approval is missing", async () => {
+    const request = new Request("http://localhost/api/resources/servers", { method: "POST" });
+    try {
+      await enforceConfirmation(request, cliUser, "create_server", "server_plan", "plan-42");
+      throw new Error("expected confirmation rejection");
+    } catch (error) {
+      expect(error).toMatchObject({
+        requirement: {
+          action: "create_server",
+          resource_type: "server_plan",
+          resource_id: "plan-42",
+        },
+      });
+    }
+  });
+
+  test("rejects the former operation-cancel automation approval", async () => {
     const request = new Request("https://panel.test/api/operations/1290/cancel", {
       method: "POST",
       headers: { "x-ocd-confirmation": "automation:cancel_operation:operation:1290" },
     });
     await expect(
       enforceConfirmation(request, cliUser, "cancel_operation", "operation", "1290"),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("Confirmation invalid");
   });
 
-  test("accepts an exact action-and-resource-bound automation token", async () => {
+  test("rejects the former action-and-resource-bound automation token", async () => {
     const request = new Request("http://localhost/api/apps/42", {
       headers: { "x-ocd-confirmation": "automation:delete_app:app:42" },
     });
     await expect(
       enforceConfirmation(request, cliUser, "delete_app", "app", "42"),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("Confirmation invalid");
   });
 
   test("rejects an automation token for a different resource", async () => {
@@ -48,22 +64,6 @@ describe("enforceConfirmation automation approval", () => {
     ).rejects.toThrow("Confirmation invalid");
   });
 
-  for (const [action, resourceType] of [
-    ["delete_stack", "stack"],
-    ["delete_environment", "environment"],
-    ["purge_environment", "environment"],
-    ["delete_volume", "volume"],
-  ] as const) {
-    test(`requires web UI approval for ${action} even with an automation token`, async () => {
-      const request = new Request("http://localhost/api/destructive/42", {
-        headers: { "x-ocd-confirmation": `automation:${action}:${resourceType}:42` },
-      });
-      await expect(
-        enforceConfirmation(request, cliUser, action, resourceType, "42"),
-      ).rejects.toThrow("always requires confirmation");
-    });
-  }
-
   test("rejects a bare authenticated browser DELETE for permanent volume data", async () => {
     const request = new Request("http://localhost/api/resources/volume/42", {
       method: "DELETE",
@@ -73,11 +73,11 @@ describe("enforceConfirmation automation approval", () => {
     ).rejects.toThrow("server-issued browser confirmation");
   });
 
-  test("retains the historical browser pass-through for lower-risk app deletion", async () => {
+  test("rejects a bare authenticated browser app deletion", async () => {
     const request = new Request("http://localhost/api/apps/42", { method: "DELETE" });
     await expect(
       enforceConfirmation(request, webUser, "delete_app", "app", "42"),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("server-issued browser confirmation");
   });
 
   test("consumes an exact server-issued browser confirmation once", async () => {

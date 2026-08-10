@@ -209,7 +209,7 @@ ocd status                   Dashboard overview: apps and services with statuses
 ocd apps                     List all apps (name, status, domain, repo)
 ocd deploy [manifest]        Deploy the current git repo using .ocd-deploy.json
 ocd redeploy <app>           Rebuild and redeploy an existing app
-ocd delete <app> [--yes]     Delete an app (browser confirmation by default)
+ocd delete <app>             Delete an app (browser confirmation required)
 ocd logs <app> [--tail=N]    Show app logs (default: last 100 lines)
 ocd restart <app>            Restart an app's containers
 ocd rollback <app>           Roll back to the previous successful deployment
@@ -303,9 +303,9 @@ wins (manifest default skipped), keys the environment lacks are added, and
 ### `ocd promote`
 
 ```
-ocd promote [--yes]
-ocd promote --from=<app> --to=<app> [--yes]
-ocd promote stack <name> [--yes]
+ocd promote
+ocd promote --from=<app> --to=<app>
+ocd promote stack <name>
 ```
 
 Promotes the exact git commit currently running in a source (staging) app up to
@@ -319,14 +319,14 @@ commit (reusing the rollback machinery).
   id); both are required together and override the manifest-derived names.
 - `stack <name>` — promotes every ready staging sibling in dependency order.
   Independent members in the same dependency level may promote concurrently.
-- `--yes`, `-y` — skip the confirmation prompt (required in non-interactive
-  shells; otherwise the command refuses to promote).
+- Promotion always requires approval in the signed-in web UI. There is no
+  non-interactive bypass flag.
 
 ### `ocd stack`
 
 ```
 ocd deploy stack [manifest] [--env=<name|id>] [--staging-env=<name|id>] [--set=KEY=VALUE ...] [--set=<app>.KEY=VALUE ...]   Deploy a stack (default: ocd-stack.json)
-ocd delete stack <name> [--yes]                          Destroy a stack and every member
+ocd delete stack <name>                                  Destroy a stack and every member
 ocd stack ls                                           List stacks
 ocd stack status <name>                                Show a stack's apps and services
 ocd stack logs <name>                                  Print a stack's combined deploy log
@@ -384,7 +384,7 @@ ocd envs create <name> [KEY=VALUE ...] [--secret KEY=VALUE]  Create an environme
 ocd envs copy <name|id> <new-name>                           Duplicate an environment, including secrets
 ocd envs set <name|id> KEY=VALUE ... [--replace] [rollout]   Merge (or replace) variables
 ocd envs unset <name|id> KEY [KEY...] [rollout]              Remove variables
-ocd envs remove <name|id> [--yes]                            Delete an unused environment
+ocd envs remove <name|id>                                    Delete an unused environment
 ```
 
 `--secret KEY=VALUE` marks a variable secret (encrypted at rest, not
@@ -411,9 +411,8 @@ ocd ops finalize <id> [--status auto|done|failed]  Reconcile and close a stale o
 ```
 
 `finalize` refuses to mark an operation successful unless its current resources
-match the intended successful state. Destructive CLI actions use browser
-confirmation by default; `--yes` is the explicit non-interactive approval for
-an already-authorized automation session.
+match the intended successful state. Destructive CLI actions require browser
+confirmation and have no non-interactive bypass flag.
 
 `cancel` is potentially destructive because it runs compensation for resources
 created by that operation. The browser confirmation shows the operation and

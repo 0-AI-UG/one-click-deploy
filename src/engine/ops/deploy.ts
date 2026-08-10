@@ -240,6 +240,7 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
       location,
       name: `ocd-${req.app_name}-${Date.now()}`,
       pool: desiredPool,
+      approved: req.server_provisioning_approved === true,
       emit: (step, detail) => ctx.log(`[${step}] ${detail}`),
     });
     const ingressIp = panelServerRow?.ipv4 || newServer.ipv4;
@@ -807,10 +808,16 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
 
     // First-deploy path bypasses resolveAppEnvVars (env vars were resolved
     // before the app row existed), so merge the platform OCD_INTERNAL_* vars
-    // here. User-defined vars with the same key win.
+    // here. OCD_DEPLOY_TARGET is platform-owned; legacy OCD_INTERNAL_* values
+    // remain user-overridable.
     const appRow = db.getApp(appOut.appId);
-    const envVars = appRow
-      ? { ...platformEnvVars(appRow), ...appOut.flatEnvVars }
+    const platform = appRow ? platformEnvVars(appRow) : null;
+    const envVars = platform
+      ? {
+          ...platform,
+          ...appOut.flatEnvVars,
+          OCD_DEPLOY_TARGET: platform.OCD_DEPLOY_TARGET,
+        }
       : appOut.flatEnvVars;
 
     let imageTag = `${req.app_name}:latest`;
@@ -1162,7 +1169,7 @@ const finalizeDeploy: Step<DeployInput, { ok: true }> = {
       await scaleUp(app, current, current.length, desired, (phase, detail) => {
         ctx.log(`[${phase}] ${detail}`);
         db.appendDeployLog(app.id, `[${phase}] ${detail}`);
-      });
+      }, undefined, undefined, req.server_provisioning_approved === true);
     }
     const finalReplicas = db.getReplicas(app.id);
     const divergent = finalReplicas.filter((replica) => replica.status !== "running" || !replica.attested_at);

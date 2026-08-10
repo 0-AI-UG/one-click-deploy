@@ -5,6 +5,7 @@ import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { enrichAppForResponse } from "./apps.ts";
 import * as db from "../../shared/db.ts";
 import { enqueue } from "../ipc/enqueue.ts";
+import { enforceConfirmation } from "../lib/action-confirm.ts";
 
 /** Scrub each server's app rows through enrichAppForResponse so secrets never
  *  leak from the server-overview endpoints (same guarantee as /api/apps). */
@@ -25,6 +26,10 @@ export async function handleGetServers(request: Request): Promise<Response> {
 export async function handleDeleteServer(request: Request, serverId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "servers.delete");
+    if (!db.getServer(serverId)) {
+      return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
+    }
+    await enforceConfirmation(request, payload, "delete_server", "server", String(serverId));
     const apps = db.getApps(serverId);
     const services = db.getServicesOnServer(serverId);
     const keys = [

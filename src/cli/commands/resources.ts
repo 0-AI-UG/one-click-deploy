@@ -1,6 +1,5 @@
 import { del, get } from "../api.ts";
 import { followOp } from "../ops.ts";
-import { promptLine } from "../prompt.ts";
 import { BOLD, DIM, GREEN, RED, RESET, table } from "../format.ts";
 import { webConfirm } from "../confirm.ts";
 
@@ -102,21 +101,14 @@ async function volumeDeletionAudit(): Promise<void> {
   );
 }
 
-async function confirmDelete(label: string, yes: boolean): Promise<boolean> {
-  if (yes) return true;
-  if (!process.stdin.isTTY) {
-    console.error(`${RED}Refusing provider deletion without --yes in a non-interactive shell.${RESET}`);
-    return false;
-  }
-  const answer = await promptLine(`Permanently delete ${label}? Type "delete" to continue: `);
-  return answer.trim().toLowerCase() === "delete";
-}
-
 async function deleteResource(args: string[]): Promise<void> {
+  if (args.includes("--yes") || args.includes("-y")) {
+    throw new Error("--yes has been removed; approve resource deletion in the web UI");
+  }
   const type = args[0];
   const id = args[1];
   if (!type || !id || !["server", "volume"].includes(type)) {
-    throw new Error("Usage: ocd resources delete <server|volume> <provider-id> [--yes]");
+    throw new Error("Usage: ocd resources delete <server|volume> <provider-id>");
   }
   let headers: Record<string, string> | undefined;
   if (type === "volume") {
@@ -126,9 +118,13 @@ async function deleteResource(args: string[]): Promise<void> {
       return;
     }
     headers = { "X-OCD-Confirmation": confirmation };
-  } else if (!await confirmDelete(`${type} ${id}`, args.includes("--yes"))) {
-      console.log("Aborted.");
-      return;
+  } else {
+    const inventory = await get<ResourceInventory>("/api/resources");
+    const server = inventory.servers.find((row) => row.provider_id === id || String(row.id) === id);
+    if (!server) throw new Error(`Server not found: ${id}`);
+    const confirmation = await webConfirm("delete_server", "server", server.id);
+    if (!confirmation) return;
+    headers = { "X-OCD-Confirmation": confirmation };
   }
   const result = await del<{ ok: boolean; error?: string; op_id?: number }>(
     `/api/resources/${type}/${encodeURIComponent(id)}`,

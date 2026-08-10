@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { get, del, post } from "../api/client.ts";
+import { get, post } from "../api/client.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
 import { PermissionGate } from "../components/permission-gate.tsx";
@@ -8,7 +8,8 @@ import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-serve
 import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, History } from "lucide-react";
 import { InfoTip } from "./app-detail/shared.tsx";
 import type { ResourcesData } from "../types.ts";
-import { serverConfirmedDelete } from "../api/server-confirmation.ts";
+import { serverConfirmedAction, serverConfirmedDelete } from "../api/server-confirmation.ts";
+import { serverProvisioningResourceId } from "../../../shared/server-provisioning.ts";
 
 export function ResourcesPage() {
   const [data, setData] = useState<ResourcesData | null>(null);
@@ -59,13 +60,32 @@ export function ResourcesPage() {
       showToast("Select server type and location", "error");
       return;
     }
+    if (!await confirm(
+      "Create Server",
+      `Create a billable ${createType} server in ${createLocation}${createName ? ` named "${createName}"` : ""}?`,
+      true,
+    )) return;
     setCreating(true);
     try {
-      const res = await post("/api/resources/servers", {
+      const body = {
         server_type: createType,
         location: createLocation,
         name: createName || undefined,
-      }) as { op_id: number };
+      };
+      const planId = serverProvisioningResourceId({
+        serverType: createType,
+        location: createLocation,
+        pools: ["general"],
+        reason: createName ? `server ${createName}` : "an explicitly requested server",
+      });
+      const res = await serverConfirmedAction<{ op_id: number }>(
+        "/api/resources/servers",
+        "POST",
+        "create_server",
+        "server_plan",
+        planId,
+        body,
+      );
       trackOperationInToast(res.op_id, "Provisioning server");
       ops.track(res.op_id);
       setShowCreate(false);
@@ -108,14 +128,19 @@ export function ResourcesPage() {
     setDeleting(key);
     try {
       const res = type === "volume"
-        ? await serverConfirmedDelete<{ ok: boolean; audit_id?: number; error?: string }>(
+        ? await serverConfirmedDelete<{ ok: boolean; audit_id?: number; op_id?: number; error?: string }>(
             `/api/resources/${type}/${id}`,
             "delete_volume",
             "volume",
             id,
             typedVolumeId,
           )
-        : await del(`/api/resources/${type}/${id}`);
+        : await serverConfirmedDelete<{ ok: boolean; op_id?: number; error?: string }>(
+            `/api/resources/${type}/${id}`,
+            "delete_server",
+            "server",
+            data?.servers.find((server) => server.provider_id === id)?.id ?? id,
+          );
       if (res.ok) {
         if (type === "server" && res.op_id) {
           trackOperationInToast(res.op_id, `Destroying ${name}`);

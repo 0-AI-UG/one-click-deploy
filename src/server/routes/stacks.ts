@@ -14,6 +14,7 @@ import {
   suspendStackWebhookOperations,
 } from "../lib/stack-operations.ts";
 import { validatePublicEndpoint } from "../../engine/dns-reconciler.ts";
+import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
 
 const TERMINAL_OPERATION_STATUSES = new Set([
   "done",
@@ -56,6 +57,7 @@ export async function handleDeployStack(request: Request): Promise<Response> {
     if (!req?.name || typeof req.name !== "string") {
       return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });
     }
+    req.server_provisioning_approved = false;
     // Single-flight: only one deploy_stack per stack may run at a time. If one is
     // already in flight (pending/running/compensating), attach to it — follow the
     // existing run — instead of enqueuing a duplicate.
@@ -65,6 +67,21 @@ export async function handleDeployStack(request: Request): Promise<Response> {
       return Response.json({ op_id: existing.id, attached: true }, { headers: corsHeaders });
     }
     const stack = db.getStackByName(req.name);
+    const hasNewServices = req.services.some((service) => !db.getServiceByName(`${req.name}-${service.key}`));
+    const wantsStagingServices = req.apps.some((app) => app.webhook_staging === true);
+    const hasNewStagingServices = wantsStagingServices && req.services.some(
+      (service) => !db.getServiceByName(`${req.name}-${service.key}-staging`),
+    );
+    const newApps = req.apps.filter((app) => !db.getAppByName(`${req.name}-${app.key}`));
+    if (hasNewServices || hasNewStagingServices || newApps.length > 0) {
+      const pools = [
+        ...(hasNewServices ? ["general"] : []),
+        ...(hasNewStagingServices ? ["staging"] : []),
+        ...newApps.map((app) => app.placement_pool || "general"),
+      ];
+      await approveAutomaticServerProvisioning(request, payload, `deploying stack ${req.name}`, pools);
+      req.server_provisioning_approved = true;
+    }
     const { opId } = enqueue({
       kind: "deploy_stack",
       resourceKeys: stack ? stackLockKeys(stack) : [`stack:${req.name}`],
@@ -313,6 +330,7 @@ export async function handlePromoteStack(request: Request, stackId: number): Pro
     if (!stack) {
       return Response.json({ ok: false, error: "Stack not found" }, { status: 404, headers: corsHeaders });
     }
+    await enforceConfirmation(request, payload, "promote_stack", "stack", String(stackId));
     const { opId } = enqueue({
       kind: "promote_stack",
       // Both key shapes on purpose: `stack:<id>` serializes against

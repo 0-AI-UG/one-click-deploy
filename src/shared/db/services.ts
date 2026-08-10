@@ -13,6 +13,13 @@ export type ServiceRow = {
   credentials: string;
   desired_instances: number;
   stack_id: number | null;
+  /** Platform deploy target. Stack-managed counterparts use `staging`; legacy
+   *  and standalone services are production. */
+  target: string;
+  /** Production service id for an auto-managed staging counterpart. */
+  target_of: number | null;
+  /** Fleet capacity pool this service must remain on. */
+  placement_pool: string;
   deletion_requested_at: string | null;
   created_at: string;
 };
@@ -59,12 +66,31 @@ export function insertService(data: {
   env_vars: string;
   credentials: string;
   desired_instances?: number;
+  stack_id?: number | null;
+  target?: string;
+  target_of?: number | null;
+  placement_pool?: string;
 }): ServiceRow {
   return db
     .query(
-      "INSERT INTO services (name, service_type, version, port, env_vars, credentials, desired_instances) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      `INSERT INTO services
+        (name, service_type, version, port, env_vars, credentials, desired_instances,
+         stack_id, target, target_of, placement_pool)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
     )
-    .get(data.name, data.service_type, data.version, data.port, data.env_vars, data.credentials, data.desired_instances ?? 1) as ServiceRow;
+    .get(
+      data.name,
+      data.service_type,
+      data.version,
+      data.port,
+      data.env_vars,
+      data.credentials,
+      data.desired_instances ?? 1,
+      data.stack_id ?? null,
+      data.target ?? "production",
+      data.target_of ?? null,
+      data.placement_pool ?? "general",
+    ) as ServiceRow;
 }
 
 export function getService(id: number): ServiceRow | null {
@@ -73,6 +99,12 @@ export function getService(id: number): ServiceRow | null {
 
 export function getServiceByName(name: string): ServiceRow | null {
   return db.query("SELECT * FROM services WHERE name = ?").get(name) as ServiceRow | null;
+}
+
+export function getStagingService(productionServiceId: number): ServiceRow | null {
+  return db
+    .query("SELECT * FROM services WHERE target_of = ? AND target = 'staging'")
+    .get(productionServiceId) as ServiceRow | null;
 }
 
 export function getServices(): ServiceRow[] {

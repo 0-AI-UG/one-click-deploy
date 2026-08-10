@@ -13,7 +13,11 @@ export function handleError(error: unknown): Response {
       return Response.json({ error: error.message }, { status: 403, headers: corsHeaders });
     }
     if (name === "ConfirmationError") {
-      return Response.json({ error: error.message }, { status: 403, headers: corsHeaders });
+      const requirement = (error as Error & { requirement?: Record<string, string> }).requirement;
+      return Response.json(
+        { error: error.message, ...(requirement ? { confirmation: requirement } : {}) },
+        { status: 403, headers: corsHeaders },
+      );
     }
   }
   console.error("[server] unhandled error:", error);

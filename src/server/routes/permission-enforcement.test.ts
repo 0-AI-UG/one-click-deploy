@@ -89,9 +89,10 @@ afterAll(() => {
 
 import * as db from "../../shared/db.ts";
 import { ALL_PERMISSIONS, type PermissionGrant } from "../../shared/db/users.ts";
-import { enqueueOperation } from "../../shared/db/operations.ts";
+import { enqueueOperation, getOperation } from "../../shared/db/operations.ts";
 import { createToken } from "../lib/auth.ts";
 import { createConfirmation, resolveConfirmation } from "../lib/action-confirm.ts";
+import { serverProvisioningResourceId } from "../../shared/server-provisioning.ts";
 
 import {
   handleGetApps,
@@ -210,6 +211,18 @@ const grant = (
   scopeType,
   scopeId: scopeId == null ? null : String(scopeId),
 });
+
+function confirmedHeader(
+  c: { userId: string },
+  action: string,
+  resourceType: string,
+  resourceId: string | number,
+): Record<string, string> {
+  const user = { userId: c.userId, username: c.userId };
+  const confirmation = createConfirmation(user, action, resourceType, String(resourceId), "permission test");
+  resolveConfirmation(confirmation.userCode, user, "confirmed");
+  return { "x-ocd-confirmation": confirmation.confirmCode };
+}
 
 // Fleet fixtures. Deliberately NOT created once: the whole run shares one temp
 // DB and several other suites wipe `apps`/`servers`/`replicas` wholesale from
@@ -393,7 +406,11 @@ const CASES: Case[] = [
     name: "apps: handleDestroyApp",
     permission: "apps.destroy",
     call: (c) =>
-      handleDestroyApp(req(`/api/apps/${appA}`, { method: "DELETE", token: c.token }), appA),
+      handleDestroyApp(req(`/api/apps/${appA}`, {
+        method: "DELETE",
+        token: c.token,
+        headers: confirmedHeader(c, "delete_app", "app", appA),
+      }), appA),
   },
   {
     name: "apps: handleRestartApp",
@@ -474,7 +491,14 @@ const CASES: Case[] = [
     name: "stacks: handlePromoteStack",
     permission: "stacks.promote",
     call: (c) =>
-      handlePromoteStack(req(`/api/stacks/${stackA}/promote`, { body: {}, token: c.token }), stackA),
+      handlePromoteStack(
+        req(`/api/stacks/${stackA}/promote`, {
+          body: {},
+          token: c.token,
+          headers: confirmedHeader(c, "promote_stack", "stack", String(stackA)),
+        }),
+        stackA,
+      ),
   },
 
   // --- services -------------------------------------------------------------
@@ -500,7 +524,11 @@ const CASES: Case[] = [
     permission: "services.destroy",
     call: (c) =>
       handleDestroyService(
-        req(`/api/services/${serviceX}`, { method: "DELETE", token: c.token }),
+        req(`/api/services/${serviceX}`, {
+          method: "DELETE",
+          token: c.token,
+          headers: confirmedHeader(c, "delete_service", "service", serviceX),
+        }),
         serviceX,
       ),
   },
@@ -680,7 +708,11 @@ const CASES: Case[] = [
         status: "running",
       }).id;
       return handleDeleteServer(
-        req(`/api/servers/${srv}`, { method: "DELETE", token: c.token }),
+        req(`/api/servers/${srv}`, {
+          method: "DELETE",
+          token: c.token,
+          headers: confirmedHeader(c, "delete_server", "server", srv),
+        }),
         srv,
       );
     },
@@ -701,10 +733,21 @@ const CASES: Case[] = [
   {
     name: "resources: handleCreateServer",
     permission: "servers.create",
-    call: (c) =>
-      handleCreateServer(
-        req("/api/servers", { body: { server_type: "cx22", location: "fsn1" }, token: c.token }),
-      ),
+    call: (c) => {
+      const planId = serverProvisioningResourceId({
+        serverType: "cx22",
+        location: "fsn1",
+        pools: ["general"],
+        reason: "an explicitly requested server",
+      });
+      return handleCreateServer(
+        req("/api/servers", {
+          body: { server_type: "cx22", location: "fsn1" },
+          token: c.token,
+          headers: confirmedHeader(c, "create_server", "server_plan", planId),
+        }),
+      );
+    },
   },
 
   // --- resources ------------------------------------------------------------
@@ -1120,6 +1163,65 @@ describe("deploy entry points are CLI-only", () => {
     );
     expect(res.status).toBe(403);
     expect(((await res.json()) as { error: string }).error).toMatch(/only available through the ocd CLI/i);
+  });
+});
+
+describe("automatic server provisioning approval", () => {
+  test("a service deploy cannot authorize billable capacity without servers.create", async () => {
+    db.saveSetting("default_server_type", "cx22");
+    db.saveSetting("default_location", "fsn1");
+    const ctx = await userWith(["services.deploy", "cli.access"], { cli: true });
+    const res = await handleDeployService(
+      req("/api/services", { body: { name: `capacity-${uid()}` }, token: ctx.token }),
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toMatch(/servers\.create/);
+  });
+
+  test("a service deploy requires and consumes browser approval for its exact capacity plan", async () => {
+    db.saveSetting("default_server_type", "cx22");
+    db.saveSetting("default_location", "fsn1");
+    const ctx = await userWith(["services.deploy", "servers.create", "cli.access"], { cli: true });
+    const name = `capacity-${uid()}`;
+    const body = { name };
+
+    const denied = await handleDeployService(
+      req("/api/services", { body, token: ctx.token }),
+    );
+    expect(denied.status).toBe(403);
+    const deniedBody = await denied.json() as {
+      confirmation?: { action: string; resource_type: string; resource_id: string };
+    };
+    const requirement = deniedBody.confirmation;
+    expect(requirement).toEqual({
+      action: "create_server",
+      resource_type: "server_plan",
+      resource_id: serverProvisioningResourceId({
+        serverType: "cx22",
+        location: "fsn1",
+        pools: ["general"],
+        reason: `deploying service ${name}`,
+      }),
+    });
+
+    const approved = await handleDeployService(
+      req("/api/services", {
+        body,
+        token: ctx.token,
+        headers: confirmedHeader(
+          ctx,
+          requirement!.action,
+          requirement!.resource_type,
+          requirement!.resource_id,
+        ),
+      }),
+    );
+    expect(approved.status).toBe(200);
+    const { op_id: opId } = await approved.json() as { op_id: number };
+    const queuedInput = JSON.parse(getOperation(opId)!.input_json) as {
+      server_provisioning_approved?: boolean;
+    };
+    expect(queuedInput.server_provisioning_approved).toBe(true);
   });
 });
 

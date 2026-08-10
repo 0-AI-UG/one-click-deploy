@@ -33,6 +33,16 @@ ocd app webhook status my-app
 ocd app staging my-app
 ```
 
+Every app container receives the platform-owned runtime marker
+`OCD_DEPLOY_TARGET=production|staging`. Environment and manifest values cannot
+override it. Use it for fail-closed guards against production databases,
+storage prefixes, payment/email credentials, schedulers, and other side effects.
+
+For stacks, enabling staging on any member also reconciles isolated staging
+counterparts for every declared managed service and injects their credentials
+into the stack staging environment. Use top-level `staging_env` declarations
+and `ocd deploy stack --staging-set=KEY=VALUE` for non-managed dependencies.
+
 ## Promotion
 
 Promotion is an explicit operational action:

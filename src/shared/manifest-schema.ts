@@ -426,7 +426,16 @@ const stackServiceSchema = z
       .optional(),
     /** Custom domain for HTTP-facing catalog services. */
     domain: z.string({ error: "expected string" }).optional(),
-  }, { error: "expected object { type, version?, volume_size?, env_overrides?, domain? }" })
+    /** Optional settings for the automatically-created isolated staging
+     * counterpart. Omitted fields inherit the production declaration. */
+    staging: z.object({
+      volume_size: guardedNumber("expected positive number", (v) => v >= 1).optional(),
+      env_overrides: z
+        .record(z.string(), z.string(), { error: "expected object map of string -> string" })
+        .optional(),
+      domain: z.string({ error: "expected string" }).optional(),
+    }, { error: "expected object { volume_size?, env_overrides?, domain? }" }).strict().optional(),
+  }, { error: "expected object { type, version?, volume_size?, env_overrides?, domain?, staging? }" })
   .strict();
 
 /** One app member: a path to a child `.ocd-deploy.json` + stack-level overrides. */
@@ -471,6 +480,9 @@ export const StackManifestSchema = z
       nonEmptyString("expected a non-empty environment name"),
       z.null(),
     ]).optional(),
+    /** Desired overrides applied after the staging environment is
+     * created/copied. Secret values are supplied by the CLI, not stored here. */
+    staging_env: z.array(envEntrySchema, { error: "expected array of environment variable definitions" }).optional(),
     services: z
       .record(z.string(), stackServiceSchema, { error: "expected object map of key -> service" })
       .optional(),

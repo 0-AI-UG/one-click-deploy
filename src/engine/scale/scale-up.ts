@@ -18,6 +18,7 @@ export async function scaleUp(
   emit: ProgressFn,
   targetServerId?: number,
   preReservedPort?: { id: number; server_id: number; bind_address: string; host_port: number },
+  allowServerProvisioning = false,
 ) {
   const settings = db.getSettings();
   const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
@@ -38,7 +39,14 @@ export async function scaleUp(
     // persisted via insertReplica (below) before the next iteration's pick, so
     // the picker's DB read already reflects prior placements decided this pass
     // (anti-affinity / min_locations spread stay correct without double-counting).
-    let targetServer = await pickTargetServer(app, settings, emit, targetServerId);
+    let targetServer = await pickTargetServer(
+      app,
+      settings,
+      emit,
+      targetServerId,
+      undefined,
+      allowServerProvisioning,
+    );
     const targetHostKey = targetServer.ssh_host_key || undefined;
 
     // Every replica listens on the same host port — the ingress upstream

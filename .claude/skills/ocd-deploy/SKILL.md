@@ -155,8 +155,7 @@ that environment with `--staging-env`.
 ## Production safety and recovery
 
 - Treat `ocd ops cancel` as destructive: it may compensate created resources.
-  Review the exact targets in browser confirmation; use `--yes` only in an
-  explicitly authorized automation session.
+  Review the exact targets in the required browser confirmation.
 - Prefer `ocd ops retry <id>` for resumable work. Use
   `ocd ops finalize <id>` only to reconcile and close an irrecoverably stale
   operation; it will not claim success when resources disagree.

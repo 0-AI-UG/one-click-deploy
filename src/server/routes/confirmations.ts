@@ -4,6 +4,7 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { getOperation } from "../../shared/db/operations.ts";
 import { hetzner } from "../../shared/providers/index.ts";
+import { parseServerProvisioningResourceId } from "../../shared/server-provisioning.ts";
 import {
   createConfirmation,
   pollConfirmation,
@@ -11,7 +12,19 @@ import {
   resolveConfirmation,
 } from "../lib/action-confirm.ts";
 
-const CONFIRMABLE_ACTIONS = ["delete_app", "delete_stack", "delete_environment", "purge_environment", "delete_volume", "cancel_operation"] as const;
+const CONFIRMABLE_ACTIONS = [
+  "delete_app",
+  "delete_service",
+  "delete_server",
+  "delete_stack",
+  "delete_environment",
+  "purge_environment",
+  "delete_volume",
+  "cancel_operation",
+  "create_server",
+  "promote_app",
+  "promote_stack",
+] as const;
 type ConfirmableAction = (typeof CONFIRMABLE_ACTIONS)[number];
 
 // POST /api/confirmations — called by CLI (requires auth) to open a pending
@@ -52,6 +65,16 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       const app = db.getApp(Number(resourceId));
       if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
       summary = `Destroy app "${app.name}" (id ${app.id}) — removes its container(s) and DNS records; managed volumes are detached and retained for recovery.`;
+    } else if (action === "delete_service") {
+      const service = db.getService(Number(resourceId));
+      if (!service) return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
+      summary = `Destroy service "${service.name}" (id ${service.id}) — removes its containers and injected environment variables; managed volumes are detached and retained for recovery.`;
+    } else if (action === "delete_server") {
+      const server = db.getServers().find((row) => String(row.id) === resourceId || row.provider_id === resourceId);
+      if (!server) return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
+      const apps = db.getApps(server.id);
+      const services = db.getServicesOnServer(server.id);
+      summary = `Permanently delete server "${server.name}" (${server.provider_id || `id ${server.id}`}) and destroy ${apps.length} app(s) plus ${services.length} service(s) assigned to it.`;
     } else if (action === "delete_stack") {
       const s = db.getStack(Number(resourceId));
       if (!s) return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
@@ -89,6 +112,26 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       summary =
         `Permanently delete provider volume "${volume.name}" (id ${volume.providerId}, ` +
         `${volume.sizeGb} GB, ${volume.location}) and all data on it. This cannot be undone.`;
+    } else if (action === "create_server") {
+      if (resourceType !== "server_plan") {
+        return Response.json({ error: "create_server requires a server_plan resource" }, { status: 400, headers: corsHeaders });
+      }
+      const plan = parseServerProvisioningResourceId(resourceId);
+      if (!plan) return Response.json({ error: "Invalid server provisioning plan" }, { status: 400, headers: corsHeaders });
+      summary =
+        `Allow creation of one or more billable provider servers as required for ${plan.reason}: ` +
+        `${plan.serverType} in ${plan.location}, pool${plan.pools.length === 1 ? "" : "s"} ${plan.pools.join(", ")}.`;
+    } else if (action === "promote_app") {
+      const match = /^(\d+):(\d+)$/.exec(resourceId);
+      const source = match ? db.getApp(Number(match[1])) : null;
+      const destination = match ? db.getApp(Number(match[2])) : null;
+      if (!source || !destination) return Response.json({ error: "Promotion apps not found" }, { status: 404, headers: corsHeaders });
+      const commit = db.getDeployments(source.id).find((deployment) => deployment.status === "deployed")?.git_commit;
+      summary = `Promote ${source.name}${commit ? ` at commit ${commit}` : ""} to production app ${destination.name}, replacing its running deployment.`;
+    } else if (action === "promote_stack") {
+      const stack = db.getStack(Number(resourceId));
+      if (!stack) return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
+      summary = `Promote every ready staging sibling in stack "${stack.name}" to production, replacing the affected production deployments.`;
     } else {
       const op = getOperation(Number(resourceId));
       if (!op) return Response.json({ error: "Operation not found" }, { status: 404, headers: corsHeaders });

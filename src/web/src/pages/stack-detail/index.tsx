@@ -8,7 +8,7 @@ import { ArrowLeft, ArrowUpFromLine, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
 import { StackLogsTab } from "./logs-tab.tsx";
 import type { StackDetail, EnvironmentData } from "../../types.ts";
-import { serverConfirmedDelete } from "../../api/server-confirmation.ts";
+import { serverConfirmedAction, serverConfirmedDelete } from "../../api/server-confirmation.ts";
 
 const errMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
@@ -122,7 +122,13 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
                 if (await confirm(
                   "Promote Stack",
                   `Promote the staging sibling of ${promotable} member(s) of "${stack.name}" to production? Each member is rebuilt from the commit its staging app is running. Members are promoted concurrently, not in dependency order.`,
-                )) await action("promote", () => post(`/api/stacks/${stackId}/promote`));
+                )) await action("promote", () => serverConfirmedAction(
+                  `/api/stacks/${stackId}/promote`,
+                  "POST",
+                  "promote_stack",
+                  "stack",
+                  stackId,
+                ));
               }}
             ><ArrowUpFromLine size={12} /> Promote</Btn>
           </PermissionGate>

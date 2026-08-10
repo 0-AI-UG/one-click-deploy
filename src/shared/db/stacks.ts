@@ -10,6 +10,9 @@ export type StackRow = {
    *  staging deploy their sibling with this env unless they carry a per-app
    *  override in apps.webhook_staging_environment_id. NULL = none selected. */
   staging_environment_id: number | null;
+  /** JSON string array of keys explicitly applied through stack staging_env.
+   * Copied production keys are intentionally absent. */
+  staging_env_keys: string;
   status: string;
   deploy_log: string;
   created_at: string;
@@ -30,6 +33,11 @@ export function insertStack(data: {
  *  re-pointed at it on the next stack deploy. */
 export function updateStackStagingEnvironment(id: number, environmentId: number | null): void {
   db.query("UPDATE stacks SET staging_environment_id = ? WHERE id = ?").run(environmentId, id);
+}
+
+export function updateStackStagingEnvKeys(id: number, keys: string[]): void {
+  db.query("UPDATE stacks SET staging_env_keys = ? WHERE id = ?")
+    .run(JSON.stringify([...new Set(keys)].sort()), id);
 }
 
 export function getStack(id: number): StackRow | null {

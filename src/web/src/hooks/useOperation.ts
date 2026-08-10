@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { get, post } from "../api/client.ts";
 import { showLiveToast } from "../components/ui.tsx";
+import { serverConfirmedAction } from "../api/server-confirmation.ts";
 
 export type OperationStep = {
   seq: number;
@@ -469,6 +470,11 @@ export function trackOperationInToast(
 }
 
 export async function cancelOperation(opId: number): Promise<void> {
-  await post(`/api/operations/${opId}/cancel`);
+  await serverConfirmedAction(
+    `/api/operations/${opId}/cancel`,
+    "POST",
+    "cancel_operation",
+    "operation",
+    opId,
+  );
 }
-

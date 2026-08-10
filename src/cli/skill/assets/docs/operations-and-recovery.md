@@ -82,7 +82,7 @@ Cancellation is cooperative:
 - may enter compensation;
 - can remove resources created by the operation;
 - requires browser approval by default;
-- permits `--yes` only for explicitly authorized automation.
+- cannot be bypassed by a non-interactive CLI flag.
 
 Do not cancel merely because CLI output paused. Inspect operation status/logs
 first.

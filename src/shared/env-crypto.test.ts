@@ -57,6 +57,7 @@ describe("platformEnvVars", () => {
       OCD_INTERNAL_URL: "http://api.ocd.internal",
       OCD_INTERNAL_HOST: "api.ocd.internal",
       OCD_INTERNAL_PORT: "80",
+      OCD_DEPLOY_TARGET: "production",
     });
   });
 
@@ -66,6 +67,7 @@ describe("platformEnvVars", () => {
       OCD_INTERNAL_URL: "tcp://queue.ocd.internal:5432",
       OCD_INTERNAL_HOST: "queue.ocd.internal",
       OCD_INTERNAL_PORT: "5432",
+      OCD_DEPLOY_TARGET: "production",
     });
   });
 });
@@ -98,6 +100,21 @@ describe("resolveAppEnvVars platform injection", () => {
     expect(vars.OCD_INTERNAL_URL).toBe(`http://${app.name}.ocd.internal`);
     expect(vars.OCD_INTERNAL_HOST).toBe(`${app.name}.ocd.internal`);
     expect(vars.OCD_INTERNAL_PORT).toBe("80");
+    expect(vars.OCD_DEPLOY_TARGET).toBe("production");
+  });
+
+  test("injects a non-overridable staging deploy target", async () => {
+    const now = new Date().toISOString();
+    const env = db.insertEnvironment(
+      `envtest-target-${randomSuffix()}`,
+      serializeEnvVars([
+        { key: "OCD_DEPLOY_TARGET", value: "production", secret: false, updated_at: now },
+      ]),
+    );
+    const app = makeApp({ environment_id: env.id });
+    db.setAppTarget(app.id, null, "staging");
+    const vars = await resolveAppEnvVars(db.getApp(app.id)!);
+    expect(vars.OCD_DEPLOY_TARGET).toBe("staging");
   });
 
   test("user-defined var with the same key wins over the injected one", async () => {
