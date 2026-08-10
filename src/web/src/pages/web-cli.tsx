@@ -1,21 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
-  ArrowLeft,
   Ban,
-  ChevronDown,
   ChevronRight,
   CircleStop,
   Copy,
-  Play,
   RefreshCw,
-  Search,
-  SlidersHorizontal,
-  X,
 } from "lucide-react";
 import { get } from "../api/client.ts";
 import { useAuth } from "../stores/auth.ts";
-import { confirm, showToast } from "../components/ui.tsx";
+import { confirm, portalAnchorRect, showToast } from "../components/ui.tsx";
 import {
   buildWebCliArgv,
   formatWebCliCommand,
@@ -28,8 +23,6 @@ import {
 
 type ResourceOption = { value: string; label: string };
 type ResourceOptions = Partial<Record<WebCliResource, ResourceOption[]>>;
-
-const inputClass = "w-full border border-white/20 bg-black/30 px-3 py-2.5 font-mono text-xs text-[#eefbd5] outline-none transition-colors focus:border-accent disabled:cursor-not-allowed disabled:opacity-40";
 
 const ROOT_META: Record<string, { label: string; description: string }> = {
   status: { label: "Status", description: "Dashboard overview" },
@@ -199,6 +192,29 @@ async function loadResources(): Promise<ResourceOptions> {
   };
 }
 
+type CompletionItem =
+  | { kind: "root"; key: string; value: string; label: string; detail: string }
+  | { kind: "command"; key: string; command: WebCliCommand; label: string; detail: string }
+  | { kind: "value"; key: string; value: string; label: string; detail?: string }
+  | { kind: "input"; key: string; input: WebCliInput; label: string; detail?: string }
+  | { kind: "run"; key: string; label: string; detail: string };
+
+function hasValue(value: WebCliValues[string]): boolean {
+  if (value === true) return true;
+  if (typeof value === "string") return value.trim().length > 0;
+  return Array.isArray(value) && value.some((item) => item.trim().length > 0);
+}
+
+function inputTokens(input: WebCliInput, value: WebCliValues[string]): string[] {
+  if (input.kind === "boolean") return value === true && input.flag ? ["--" + input.flag] : [];
+  const rows = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? input.repeatable ? value.split(/\r?\n/).filter(Boolean) : [value]
+      : [];
+  return rows.map((row) => input.positional ? row : input.flag ? "--" + input.flag + "=" + row : row);
+}
+
 export function WebCliPage() {
   const { token } = useAuth();
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
@@ -207,14 +223,19 @@ export function WebCliPage() {
   const [resources, setResources] = useState<ResourceOptions>({});
   const [resourcesLoading, setResourcesLoading] = useState(true);
   const [contextLoading, setContextLoading] = useState<Partial<Record<WebCliResource, boolean>>>({});
-  const [search, setSearch] = useState("");
-  const [output, setOutput] = useState("");
+  const [query, setQuery] = useState("");
+  const [activeInputKey, setActiveInputKey] = useState<string | null>(null);
+  const [history, setHistory] = useState("");
   const [running, setRunning] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
-  const [optionsExpanded, setOptionsExpanded] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(true);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [highlighted, setHighlighted] = useState(0);
+  const [menuPosition, setMenuPosition] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const selected = selectedId
     ? WEB_CLI_COMMANDS.find((command) => command.id === selectedId) ?? null
     : null;
@@ -295,55 +316,25 @@ export function WebCliPage() {
     return () => { cancelled = true; };
   }, [selectedId, values.service]);
 
-  useEffect(() => {
-    if (!selected) return;
-    setValues(defaultsFor(selected));
-    setOutput("");
-    setExitCode(null);
-    setOptionsExpanded(false);
-    setMenuOpen(true);
-  }, [selectedId]);
-
-  useEffect(() => {
-    if (!selected || resourcesLoading) return;
-    const singletonDefaults = Object.fromEntries(selected.inputs.flatMap((input) => {
-      if (!input.required || values[input.key] !== undefined || input.kind !== "resource" || !input.resource) return [];
-      const choices = resources[input.resource] ?? [];
-      return choices.length === 1 ? [[input.key, choices[0].value]] : [];
-    }));
-    if (Object.keys(singletonDefaults).length > 0) {
-      setValues((current) => ({ ...singletonDefaults, ...current }));
-    }
-  }, [selected, resources, resourcesLoading, values]);
-
   const roots = useMemo(() => {
     const names = Array.from(new Set(WEB_CLI_COMMANDS.map((command) => command.args[0])));
-    const query = search.trim().toLowerCase();
+    const filter = query.trim().toLowerCase();
     return names.map((name) => {
       const commands = WEB_CLI_COMMANDS.filter((command) => command.args[0] === name);
       const meta = ROOT_META[name] ?? { label: name, description: `Run ocd ${name}` };
       return { name, commands, ...meta };
     }).filter((root) =>
-      !query || `${root.name} ${root.label} ${root.description} ${root.commands.map((command) => command.label).join(" ")}`.toLowerCase().includes(query)
+      !filter || (root.name + " " + root.label + " " + root.description + " " + root.commands.map((command) => command.label).join(" ")).toLowerCase().includes(filter)
     );
-  }, [search]);
+  }, [query]);
 
   const rootCommands = useMemo(() => {
     if (!selectedRoot) return [];
-    const query = search.trim().toLowerCase();
+    const filter = query.trim().toLowerCase();
     return WEB_CLI_COMMANDS
       .filter((command) => command.args[0] === selectedRoot)
-      .filter((command) => !query || `${command.label} ${command.description} ${command.args.join(" ")}`.toLowerCase().includes(query));
-  }, [selectedRoot, search]);
-
-  const preview = useMemo(() => {
-    if (!selected) return "";
-    try {
-      return formatWebCliCommand(buildWebCliArgv(selected, values));
-    } catch {
-      return formatWebCliCommand(selected.args);
-    }
-  }, [selected, values]);
+      .filter((command) => !filter || (command.label + " " + command.description + " " + command.args.join(" ")).toLowerCase().includes(filter));
+  }, [selectedRoot, query]);
 
   const validationError = useMemo(() => {
     if (!selected || selected.unavailableReason) return null;
@@ -355,48 +346,195 @@ export function WebCliPage() {
     }
   }, [selected, values]);
 
+  const nextRequired = selected?.inputs.find((input) => input.required && !hasValue(values[input.key])) ?? null;
+  const activeInput = selected?.inputs.find((input) => input.key === activeInputKey) ?? nextRequired;
+  const activeLoading = !!(activeInput?.resource && (resourcesLoading || contextLoading[activeInput.resource]));
+
+  const completions = useMemo<CompletionItem[]>(() => {
+    if (!selectedRoot) {
+      return roots.map((root) => ({
+        kind: "root",
+        key: "root:" + root.name,
+        value: root.name,
+        label: root.name,
+        detail: root.description,
+      }));
+    }
+    if (!selected) {
+      return rootCommands.map((command) => ({
+        kind: "command",
+        key: "command:" + command.id,
+        command,
+        label: command.args.slice(1).join(" ") || command.args[0],
+        detail: command.description,
+      }));
+    }
+    if (activeInput) {
+      const filter = query.trim().toLowerCase();
+      const choices = activeInput.kind === "resource" && activeInput.resource
+        ? resources[activeInput.resource] ?? []
+        : activeInput.kind === "select"
+          ? activeInput.options ?? []
+          : activeInput.kind === "boolean"
+            ? values[activeInput.key] === true
+              ? [{ value: "false", label: "Disable --" + activeInput.flag }]
+              : [{ value: "true", label: "Enable --" + activeInput.flag }]
+            : [];
+      return choices
+        .filter((choice) => !filter || (choice.value + " " + choice.label).toLowerCase().includes(filter))
+        .map((choice) => ({
+          kind: "value",
+          key: "value:" + activeInput.key + ":" + choice.value,
+          value: choice.value,
+          label: choice.label,
+          detail: activeInput.kind === "resource" && choice.label !== choice.value ? choice.value : undefined,
+        }));
+    }
+    const filter = query.trim().toLowerCase();
+    const optional = selected.inputs
+      .filter((input) => !input.required && !hasValue(values[input.key]))
+      .filter((input) => !filter || ((input.flag ? "--" + input.flag : input.label) + " " + (input.description || "")).toLowerCase().includes(filter));
+    return [
+      ...(!validationError && !selected.unavailableReason && (!filter || "run command".includes(filter)) ? [{
+        kind: "run" as const,
+        key: "run",
+        label: "Run command",
+        detail: "Enter",
+      }] : []),
+      ...optional.map((input): CompletionItem => ({
+        kind: "input",
+        key: "input:" + input.key,
+        input,
+        label: input.flag ? "--" + input.flag : input.label,
+        detail: input.description || input.label,
+      })),
+    ];
+  }, [selectedRoot, selected, activeInput, query, roots, rootCommands, resources, values, validationError]);
+
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [output, menuOpen, selectedId, selectedRoot, optionsExpanded]);
+  }, [history, running]);
+
+  useEffect(() => {
+    setHighlighted(0);
+  }, [query, activeInput?.key, selectedId, selectedRoot]);
+
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    const update = () => {
+      if (!composerRef.current) return;
+      const rect = portalAnchorRect(composerRef.current);
+      const width = Math.min(420, Math.max(280, rect.width), window.innerWidth - 24);
+      const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+      const roomBelow = window.innerHeight - rect.bottom;
+      setMenuPosition(roomBelow >= 220
+        ? { top: rect.bottom + 6, left, width }
+        : { bottom: window.innerHeight - rect.top + 6, left, width });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [menuOpen, selectedId, selectedRoot, activeInput?.key]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (composerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [menuOpen]);
 
   const chooseRoot = (root: string) => {
     if (running) return;
     const commands = WEB_CLI_COMMANDS.filter((command) => command.args[0] === root);
     setSelectedRoot(root);
-    setSelectedId(commands.length === 1 ? commands[0].id : null);
-    setSearch("");
+    setQuery("");
+    if (commands.length === 1) {
+      chooseCommand(commands[0]);
+      return;
+    }
+    setSelectedId(null);
+    setValues({});
+    setActiveInputKey(null);
+    setMenuOpen(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const chooseCommand = (command: WebCliCommand) => {
     if (running) return;
+    setSelectedRoot(command.args[0]);
     setSelectedId(command.id);
-    setSearch("");
+    setValues(defaultsFor(command));
+    setActiveInputKey(command.inputs.find((input) => input.required && input.defaultValue === undefined)?.key ?? null);
+    setQuery("");
+    setMenuOpen(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const back = () => {
+  const setValue = (input: WebCliInput, value: string | boolean) => {
+    setValues((current) => {
+      const next = { ...current, [input.key]: value };
+      if (input.key === "app") {
+        delete next.deployment;
+        delete next.replica;
+      } else if (input.key === "service") {
+        delete next.instance;
+      }
+      return next;
+    });
+  };
+
+  const resetComposer = (open: boolean) => {
     if (running) return;
-    if (selectedId) {
-      const commands = WEB_CLI_COMMANDS.filter((command) => command.args[0] === selectedRoot);
-      if (commands.length === 1) setSelectedRoot(null);
-      setSelectedId(null);
-      setValues({});
-      setOutput("");
-      setExitCode(null);
-    } else {
-      setSelectedRoot(null);
-    }
-    setSearch("");
+    setSelectedRoot(null);
+    setSelectedId(null);
+    setValues({});
+    setQuery("");
+    setActiveInputKey(null);
+    setMenuOpen(open);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const setValue = (key: string, value: string | boolean) => {
-    setOutput("");
-    setExitCode(null);
-    setValues((current) => ({
-      ...current,
-      [key]: value,
-      ...(key === "app" ? { deployment: undefined, replica: undefined } : {}),
-      ...(key === "service" ? { instance: undefined } : {}),
-    }));
+  const reopenCommand = () => {
+    if (!selectedRoot || running) return;
+    const commands = WEB_CLI_COMMANDS.filter((command) => command.args[0] === selectedRoot);
+    if (commands.length === 1) {
+      resetComposer(true);
+      return;
+    }
+    setSelectedId(null);
+    setValues({});
+    setActiveInputKey(null);
+    setQuery("");
+    setMenuOpen(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const commitActiveValue = (value: string) => {
+    if (!activeInput) return;
+    if (!value.trim() && activeInput.kind !== "boolean") return;
+    if (activeInput.kind === "boolean") {
+      setValue(activeInput, value !== "false");
+    } else if (activeInput.repeatable) {
+      const current = values[activeInput.key];
+      const rows = Array.isArray(current)
+        ? current
+        : typeof current === "string" && current.trim() ? current.split(/\r?\n/) : [];
+      setValue(activeInput, [...rows, value.trim()].join("\n"));
+    } else {
+      setValue(activeInput, value.trim());
+    }
+    setActiveInputKey(null);
+    setQuery("");
+    setMenuOpen(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   async function run() {
@@ -424,7 +562,7 @@ export function WebCliPage() {
     setMenuOpen(false);
     setExitCode(null);
     let commandLine = formatWebCliCommand(argv);
-    setOutput(`$ ${commandLine}\n\n`);
+    setHistory((current) => current + (current && !current.endsWith("\n") ? "\n" : "") + "$ " + commandLine + "\n\n");
     try {
       const response = await fetch(`${window.location.origin}/api/web-cli/run`, {
         method: "POST",
@@ -454,13 +592,12 @@ export function WebCliPage() {
           const item = JSON.parse(line) as { type: string; data?: string; command?: string; code?: number; error?: string; timed_out?: boolean };
           if (item.type === "start" && item.command) {
             commandLine = item.command;
-            setOutput(`$ ${item.command}\n\n`);
           } else if (item.type === "stdout" || item.type === "stderr") {
-            setOutput((current) => current + stripAnsi(item.data || ""));
+            setHistory((current) => current + stripAnsi(item.data || ""));
           } else if (item.type === "exit") {
             const code = item.code ?? 1;
             setExitCode(code);
-            setOutput((current) => `${current}\n[${item.timed_out ? "timed out" : `exit ${code}`}]\n`);
+            setHistory((current) => current + "\n[" + (item.timed_out ? "timed out" : "exit " + code) + "]\n");
           } else if (item.type === "error") {
             throw new Error(item.error || "CLI execution failed");
           }
@@ -469,33 +606,113 @@ export function WebCliPage() {
       }
     } catch (err) {
       if ((err as Error).name === "AbortError") {
-        setOutput((current) => `${current}\n[cancelled]\n`);
+        setHistory((current) => current + "\n[cancelled]\n");
       } else {
         const message = err instanceof Error ? err.message : "CLI execution failed";
-        setOutput((current) => `${current}\n[error] ${message}\n`);
+        setHistory((current) => current + "\n[error] " + message + "\n");
         showToast(message, "error");
       }
       setExitCode(1);
     } finally {
       abortRef.current = null;
       setRunning(false);
+      setSelectedRoot(null);
+      setSelectedId(null);
+      setValues({});
+      setQuery("");
+      setActiveInputKey(null);
     }
   }
 
-  const rootMeta = selectedRoot ? ROOT_META[selectedRoot] : null;
-  const requiredInputs = selected?.inputs.filter((input) => input.required) ?? [];
-  const optionalInputs = selected?.inputs.filter((input) => !input.required) ?? [];
-
-  const resetToRoot = () => {
-    if (running) return;
-    setSelectedRoot(null);
-    setSelectedId(null);
-    setValues({});
-    setSearch("");
-    setOutput("");
-    setExitCode(null);
-    setMenuOpen(true);
+  const chooseCompletion = (item: CompletionItem) => {
+    if (item.kind === "root") chooseRoot(item.value);
+    else if (item.kind === "command") chooseCommand(item.command);
+    else if (item.kind === "value") commitActiveValue(item.value);
+    else if (item.kind === "input") {
+      if (item.input.kind === "boolean") {
+        setValue(item.input, true);
+        setQuery("");
+        setMenuOpen(true);
+      } else {
+        setActiveInputKey(item.input.key);
+        setQuery("");
+        setMenuOpen(true);
+      }
+      requestAnimationFrame(() => inputRef.current?.focus());
+    } else {
+      run().catch(() => {});
+    }
   };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown" && menuOpen && completions.length) {
+      event.preventDefault();
+      setHighlighted((current) => (current + 1) % completions.length);
+      return;
+    }
+    if (event.key === "ArrowUp" && menuOpen && completions.length) {
+      event.preventDefault();
+      setHighlighted((current) => (current - 1 + completions.length) % completions.length);
+      return;
+    }
+    if (event.key === "Escape") {
+      setMenuOpen(false);
+      return;
+    }
+    if (event.key === "Backspace" && activeInput && !activeInput.required && !query) {
+      event.preventDefault();
+      setValues((current) => {
+        const next = { ...current };
+        delete next[activeInput.key];
+        return next;
+      });
+      setActiveInputKey(null);
+      return;
+    }
+    if (event.key === " " && !selected && query.trim()) {
+      const exact = completions.find((item) => item.kind === "root"
+        ? item.value === query.trim()
+        : item.kind === "command" && item.label === query.trim());
+      if (exact) {
+        event.preventDefault();
+        chooseCompletion(exact);
+        return;
+      }
+    }
+    if (event.key !== "Tab" && event.key !== "Enter") return;
+    if (menuOpen && completions[highlighted] && (!activeInput || !query.trim() || completions[highlighted].kind === "value")) {
+      event.preventDefault();
+      const completion = completions[highlighted];
+      if (event.key === "Tab" && completion.kind === "run") {
+        const nextCompletion = completions.find((item) => item.kind !== "run");
+        if (nextCompletion) chooseCompletion(nextCompletion);
+      } else {
+        chooseCompletion(completion);
+      }
+      return;
+    }
+    if (activeInput && query.trim()) {
+      event.preventDefault();
+      commitActiveValue(query);
+      return;
+    }
+    if (event.key === "Enter" && selected && !validationError && !selected.unavailableReason) {
+      event.preventDefault();
+      run().catch(() => {});
+      return;
+    }
+    if (event.key === "Tab" && menuOpen && completions[highlighted]) {
+      event.preventDefault();
+      chooseCompletion(completions[highlighted]);
+    }
+  };
+
+  const completedInputs = selected?.inputs.flatMap((input) =>
+    inputTokens(input, values[input.key]).map((token, index) => ({ input, token, key: input.key + ":" + index }))
+  ) ?? [];
+  const inputPlaceholder = activeInput
+    ? activeInput.placeholder || activeInput.label.toLowerCase()
+    : selected ? "option" : selectedRoot ? "action" : "command";
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 pb-24 animate-fade-in">
@@ -507,142 +724,112 @@ export function WebCliPage() {
           </div>
           <div className="flex items-center gap-1">
             {exitCode !== null && <span className={`mr-2 font-mono text-[9px] ${exitCode === 0 ? "text-accent" : "text-accent-red"}`}>exit {exitCode}</span>}
-            <button onClick={() => setMenuOpen((current) => !current)} disabled={running} className={`grid h-7 w-7 place-items-center transition-colors disabled:opacity-25 ${menuOpen ? "text-accent" : "text-white/35 hover:text-white"}`} title={menuOpen ? "Hide command menu" : "Show command menu"}><SlidersHorizontal size={13} /></button>
-            <button disabled={!output} onClick={() => navigator.clipboard.writeText(output)} className="grid h-7 w-7 place-items-center text-white/30 hover:text-white disabled:opacity-20" title="Copy output"><Copy size={13} /></button>
+            <button disabled={!history} onClick={() => navigator.clipboard.writeText(history)} className="grid h-7 w-7 place-items-center text-white/30 hover:text-white disabled:opacity-20" title="Copy history"><Copy size={13} /></button>
           </div>
         </div>
 
         <div ref={scrollRef} className="overflow-y-auto bg-black p-4 sm:p-5" style={{ height: "min(72vh, 680px)" }}>
-          {output && <pre className="mb-3 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-[#d9f99d]">{output}</pre>}
+          {history && <pre className="mb-3 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-[#d9f99d]">{history}</pre>}
 
           {!running && (
-            <div className="flex min-w-0 items-start gap-2 font-mono text-[12px] leading-5 text-[#d9f99d]">
+            <div ref={composerRef} className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 font-mono text-[12px] leading-5 text-[#d9f99d]">
               <span className="shrink-0 font-bold text-accent">$</span>
-              <code className="min-w-0 break-all">{selected ? preview : selectedRoot ? `ocd ${selectedRoot}` : "ocd"}</code>
-              <span className="mt-0.5 inline-block h-4 w-1.5 shrink-0 animate-pulse bg-accent" />
-            </div>
-          )}
-
-          {menuOpen && !running && (
-            <div className="mt-3 max-w-2xl overflow-hidden border border-white/25 bg-[#121410] shadow-2xl">
-              <div className="flex h-10 items-center gap-2 border-b border-white/10 px-3">
-                {selectedRoot && <button onClick={back} className="grid h-6 w-6 shrink-0 place-items-center text-white/40 hover:text-accent" title="Back"><ArrowLeft size={13} /></button>}
-                <div className="min-w-0 flex-1 truncate font-mono text-[10px] text-white/40">
-                  <button onClick={resetToRoot} className="hover:text-accent">ocd</button>
-                  {selectedRoot && <><span className="px-1 text-white/20">/</span><span className="text-white/65">{selectedRoot}</span></>}
-                  {selected && <><span className="px-1 text-white/20">/</span><span className="text-white/65">{selected.label}</span></>}
-                </div>
-                <button onClick={() => setMenuOpen(false)} className="grid h-6 w-6 shrink-0 place-items-center text-white/30 hover:text-white" title="Close"><X size={13} /></button>
-              </div>
-
-              <div className="p-3">
-                {!selected && (
-                  <label className="flex items-center gap-2 border-b border-white/15 px-1 pb-2 text-white/50 focus-within:border-accent">
-                    <Search size={13} className="shrink-0" />
-                    <input value={search} onChange={(event) => setSearch(event.target.value)} autoFocus placeholder={selectedRoot ? `Filter ${selectedRoot} actions…` : "Filter commands…"} className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-[#eefbd5] outline-none placeholder:text-white/25" />
-                  </label>
-                )}
-
-                {!selectedRoot && (
-                  <div className="mt-2 divide-y divide-white/5 border border-white/10">
-                    {roots.map((root) => (
-                      <button key={root.name} onClick={() => chooseRoot(root.name)} className="group flex w-full items-center gap-3 bg-[#171a15] px-3 py-2.5 text-left hover:bg-[#242b1c]">
-                        <code className="w-24 shrink-0 font-mono text-[11px] font-bold text-accent">{root.name}</code>
-                        <span className="min-w-0 flex-1 truncate text-[10px] text-white/40">{root.description}</span>
-                        <ChevronRight size={12} className="shrink-0 text-white/20 group-hover:text-accent" />
-                      </button>
-                    ))}
-                    {roots.length === 0 && <TerminalEmpty label="No matching commands" />}
-                  </div>
-                )}
-
-                {selectedRoot && !selected && (
-                  <div className="mt-2">
-                    <p className="mb-2 font-mono text-[9px] text-white/30">{rootMeta?.description}</p>
-                    <div className="divide-y divide-white/5 border border-white/10">
-                      {rootCommands.map((command) => (
-                        <button key={command.id} onClick={() => chooseCommand(command)} className="group flex w-full items-center gap-3 bg-[#171a15] px-3 py-2.5 text-left hover:bg-[#242b1c]">
-                          <code className="min-w-0 flex-1 truncate font-mono text-[11px] font-bold text-accent">{command.args.slice(1).join(" ") || selectedRoot}</code>
-                          {command.danger && <AlertTriangle size={11} className="shrink-0 text-accent-amber" />}
-                          {command.unavailableReason && <Ban size={11} className="shrink-0 text-white/30" />}
-                          <ChevronRight size={12} className="shrink-0 text-white/20 group-hover:text-accent" />
-                        </button>
-                      ))}
-                      {rootCommands.length === 0 && <TerminalEmpty label="No matching actions" />}
-                    </div>
-                  </div>
-                )}
-
-                {selected && (
-                  <div>
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <code className="block truncate font-mono text-[10px] text-accent">$ {preview}</code>
-                        <p className="mt-1 text-[10px] leading-4 text-white/35">{selected.description}</p>
-                      </div>
-                      {selected.danger && <AlertTriangle size={12} className="shrink-0 text-accent-amber" />}
-                    </div>
-
-                    {selected.unavailableReason ? (
-                      <div className="flex gap-2 border border-white/15 bg-white/5 p-3 text-white/50"><Ban size={14} className="shrink-0" /><p className="text-[10px] leading-4">{selected.unavailableReason}</p></div>
-                    ) : (
-                      <>
-                        {requiredInputs.length > 0 && <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{requiredInputs.map((input) => <InputField key={input.key} input={input} value={values[input.key]} options={input.resource ? resources[input.resource] : undefined} resourcesLoading={resourcesLoading || !!(input.resource && contextLoading[input.resource])} onChange={(value) => setValue(input.key, value)} />)}</div>}
-                        {optionalInputs.length > 0 && (
-                          <div className={`${requiredInputs.length > 0 ? "mt-3 border-t border-white/10 pt-3" : ""}`}>
-                            <button onClick={() => setOptionsExpanded((current) => !current)} className="flex items-center gap-2 font-mono text-[9px] font-bold uppercase text-white/35 hover:text-accent"><ChevronDown size={12} className={`transition-transform ${optionsExpanded ? "rotate-180" : ""}`} />{optionalInputs.length} optional</button>
-                            {optionsExpanded && <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">{optionalInputs.map((input) => <InputField key={input.key} input={input} value={values[input.key]} options={input.resource ? resources[input.resource] : undefined} resourcesLoading={resourcesLoading || !!(input.resource && contextLoading[input.resource])} onChange={(value) => setValue(input.key, value)} />)}</div>}
-                          </div>
-                        )}
-                        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-white/10 pt-3">
-                          <button disabled={!!validationError} onClick={run} className="inline-flex items-center gap-2 bg-accent px-3 py-2 font-mono text-[9px] font-bold uppercase text-[#151713] disabled:cursor-not-allowed disabled:opacity-35"><Play size={12} fill="currentColor" /> run ↵</button>
-                          {selected.inputs.some((input) => input.resource) && <button onClick={() => refreshResources().catch(() => {})} disabled={resourcesLoading} className="inline-flex items-center gap-1 font-mono text-[8px] uppercase text-white/30 hover:text-accent disabled:opacity-30"><RefreshCw size={10} className={resourcesLoading ? "animate-spin" : ""} /> refresh</button>}
-                          {validationError && <span className="font-mono text-[9px] text-accent-amber">{validationError}</span>}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+              <button type="button" onClick={() => resetComposer(true)} className="font-mono text-[#d9f99d] underline decoration-white/20 underline-offset-4 hover:text-accent">ocd</button>
+              {selected ? selected.args.map((arg, index) => (
+                <button key={index + ":" + arg} type="button" onClick={reopenCommand} className="font-mono text-[#d9f99d] underline decoration-white/20 underline-offset-4 hover:text-accent">{arg}</button>
+              )) : selectedRoot ? (
+                <button type="button" onClick={reopenCommand} className="font-mono text-[#d9f99d] underline decoration-white/20 underline-offset-4 hover:text-accent">{selectedRoot}</button>
+              ) : null}
+              {completedInputs.map(({ input, token, key }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setActiveInputKey(input.key);
+                    setQuery(typeof values[input.key] === "string" && !input.repeatable ? values[input.key] as string : "");
+                    setMenuOpen(true);
+                    requestAnimationFrame(() => inputRef.current?.focus());
+                  }}
+                  className={"max-w-full break-all font-mono underline decoration-white/20 underline-offset-4 hover:text-accent " + (activeInput?.key === input.key ? "text-accent" : "text-[#d9f99d]")}
+                >
+                  {token}
+                </button>
+              ))}
+              {selected?.fixedArgs?.map((arg) => <span key={arg} className="text-white/35">{arg}</span>)}
+              <input
+                ref={inputRef}
+                value={query}
+                disabled={running}
+                spellCheck={false}
+                autoComplete="off"
+                aria-label={activeInput ? activeInput.label : "OCD command"}
+                placeholder={inputPlaceholder}
+                size={Math.max(2, Math.min(36, query.length || inputPlaceholder.length))}
+                onFocus={() => { if (query) setMenuOpen(true); }}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  if (event.target.value || selectedRoot || selected) setMenuOpen(true);
+                }}
+                onKeyDown={onKeyDown}
+                className="min-w-[2ch] max-w-full flex-1 bg-transparent font-mono text-[12px] text-[#eefbd5] caret-accent outline-none placeholder:text-white/20"
+              />
             </div>
           )}
 
           {running && <div className="sticky bottom-0 flex justify-end pt-4"><button onClick={() => abortRef.current?.abort()} className="inline-flex items-center gap-2 border border-accent-red bg-black px-3 py-2 font-mono text-[9px] font-bold uppercase text-accent-red"><CircleStop size={12} /> stop</button></div>}
         </div>
       </section>
-    </div>
-  );
-}
-
-function TerminalEmpty({ label }: { label: string }) {
-  return <div className="border border-t-0 border-white/10 p-6 text-center font-mono text-[10px] text-white/35">{label}</div>;
-}
-
-function InputField({ input, value, options, resourcesLoading, onChange }: { input: WebCliInput; value: string | boolean | string[] | undefined; options?: ResourceOption[]; resourcesLoading: boolean; onChange: (value: string | boolean) => void }) {
-  const stringValue = typeof value === "string" ? value : Array.isArray(value) ? value.join("\n") : "";
-  const resourceOptions = options ?? [];
-  const showResourceId = !input.resource || !["service-type", "service-version", "server-type", "location"].includes(input.resource);
-  return (
-    <label className={input.repeatable || input.kind === "key-value" ? "sm:col-span-2" : ""}>
-      <div className="mb-1 flex items-center gap-1 font-mono text-[10px] font-bold uppercase text-white/75">{input.label}{input.required && <span className="text-accent">*</span>}</div>
-      {input.description && <p className="mb-1.5 text-[10px] leading-4 text-white/35">{input.description}</p>}
-      {input.kind === "boolean" ? (
-        <button type="button" onClick={() => onChange(value !== true)} className={`flex w-full items-center justify-between border px-3 py-2.5 font-mono text-xs transition-colors ${value === true ? "border-accent bg-accent/10 text-accent" : "border-white/20 bg-black/30 text-white/50"}`}><span>{value === true ? "enabled" : "disabled"}</span><span className={`h-4 w-8 border p-0.5 ${value === true ? "border-accent bg-accent/15" : "border-white/20 bg-black/20"}`}><span className={`block h-2 w-2 bg-accent transition-transform ${value === true ? "translate-x-4" : ""}`} /></span></button>
-      ) : input.kind === "select" ? (
-        <select value={stringValue} onChange={(event) => onChange(event.target.value)} className={inputClass}><option value="">Select…</option>{input.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-      ) : input.kind === "resource" ? (
-        <>
-          <select disabled={resourcesLoading || resourceOptions.length === 0} value={stringValue} onChange={(event) => onChange(event.target.value)} className={inputClass}>
-            <option value="">{resourcesLoading ? `Loading ${input.label.toLowerCase()} choices…` : resourceOptions.length === 0 ? `No ${input.label.toLowerCase()} choices available` : `Select ${input.label.toLowerCase()}…`}</option>
-            {resourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}{showResourceId ? ` · #${option.value}` : ""}</option>)}
-          </select>
-          {!resourcesLoading && resourceOptions.length === 0 && <p className="mt-1.5 text-[10px] text-white/35">No accessible {input.label.toLowerCase()} exists for this command.</p>}
-        </>
-      ) : input.repeatable || input.kind === "key-value" ? (
-        <textarea value={stringValue} onChange={(event) => onChange(event.target.value)} rows={3} placeholder={input.placeholder || "One value per line"} className={`${inputClass} resize-y`} />
-      ) : (
-        <input type={input.kind === "number" ? "number" : "text"} min={input.min} max={input.max} value={stringValue} onChange={(event) => onChange(event.target.value)} placeholder={input.placeholder} className={inputClass} />
+      {menuOpen && !running && menuPosition && createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          style={{ position: "fixed", ...menuPosition }}
+          className="z-[70] max-h-72 overflow-y-auto border border-white/25 bg-[#121410] shadow-2xl"
+        >
+          <div className="sticky top-0 z-10 flex items-start gap-2 border-b border-white/10 bg-[#171a15] px-2.5 py-2">
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-mono text-[9px] font-bold text-accent">
+                {activeInput ? activeInput.label : selected ? selected.label : selectedRoot ? ROOT_META[selectedRoot]?.label || selectedRoot : "OCD commands"}
+              </div>
+              <p className="mt-0.5 truncate text-[9px] text-white/35">
+                {activeInput?.description || selected?.unavailableReason || selected?.description || (selectedRoot ? ROOT_META[selectedRoot]?.description : "Type to filter · Tab to complete")}
+              </p>
+            </div>
+            {selected?.danger && <AlertTriangle size={11} className="mt-0.5 shrink-0 text-accent-amber" />}
+            {selected?.unavailableReason && <Ban size={11} className="mt-0.5 shrink-0 text-white/35" />}
+            {selected?.inputs.some((input) => input.resource) && (
+              <button type="button" onClick={() => refreshResources().catch(() => {})} disabled={resourcesLoading} className="grid h-5 w-5 shrink-0 place-items-center text-white/30 hover:text-accent disabled:opacity-30" title="Refresh choices">
+                <RefreshCw size={10} className={resourcesLoading ? "animate-spin" : ""} />
+              </button>
+            )}
+          </div>
+          {activeLoading ? (
+            <div className="px-2.5 py-3 font-mono text-[9px] text-white/35">Loading {activeInput?.label.toLowerCase()}…</div>
+          ) : completions.length ? completions.map((item, index) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={index === highlighted}
+              key={item.key}
+              onMouseEnter={() => setHighlighted(index)}
+              onClick={() => chooseCompletion(item)}
+              className={"group flex w-full items-center gap-2 border-b border-white/5 px-2.5 py-1.5 text-left last:border-b-0 " + (index === highlighted ? "bg-[#29351d]" : "bg-[#151713] hover:bg-[#20261a]")}
+            >
+              <code className={"min-w-0 flex-1 truncate font-mono text-[10px] " + (item.kind === "run" ? "font-bold text-accent" : "text-[#eefbd5]")}>{item.label}</code>
+              {"detail" in item && item.detail && <span className="max-w-[48%] truncate text-[8px] text-white/30">{item.detail}</span>}
+              <ChevronRight size={10} className="shrink-0 text-white/20 group-hover:text-accent" />
+            </button>
+          )) : (
+            <div className="px-2.5 py-3 font-mono text-[9px] text-white/35">
+              {activeInput && query ? "Press Enter or Tab to use “" + query + "”" : validationError || "No matching suggestions"}
+            </div>
+          )}
+          <div className="sticky bottom-0 border-t border-white/10 bg-[#171a15] px-2.5 py-1 font-mono text-[8px] text-white/25">
+            ↑↓ select · Tab complete · Enter run · Esc close
+          </div>
+        </div>,
+        document.body,
       )}
-    </label>
+    </div>
   );
 }

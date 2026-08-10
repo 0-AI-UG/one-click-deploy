@@ -185,7 +185,10 @@ export function buildWebCliArgv(command: WebCliCommand, values: WebCliValues): s
   if (command.unavailableReason) throw new Error(command.unavailableReason);
   const known = new Set(command.inputs.map((input) => input.key));
   for (const key of Object.keys(values)) {
-    if (!known.has(key)) throw new Error(`Unknown parameter: ${key}`);
+    // UI state may retain cleared contextual fields while switching commands.
+    // An absent value is not a supplied parameter and must not make an otherwise
+    // valid command fail (for example app rollback -> app show).
+    if (values[key] !== undefined && !known.has(key)) throw new Error(`Unknown parameter: ${key}`);
   }
 
   const positional: string[] = [];
