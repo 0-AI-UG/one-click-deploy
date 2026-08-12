@@ -99,7 +99,8 @@ export async function cloneRepo(
   emit?: (msg: string) => void,
   gitBranch?: string,
   hostKey?: string,
-) {
+  gitSha?: string,
+): Promise<string> {
   const appDir = `/home/deploy/apps/${appName}`;
 
   let cloneUrl = gitRepo;
@@ -110,17 +111,29 @@ export async function cloneRepo(
     );
   }
 
-  const branchFlag = gitBranch ? ` -b ${gitBranch}` : "";
-  emit?.("Cloning repository...");
-  log("build", `Cloning ${gitRepo} into ${appDir} (token: ${gitToken ? "yes" : "no"}, branch: ${gitBranch || "default"})`);
+  const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+  const branchFlag = gitBranch ? ` --branch ${shellQuote(gitBranch)}` : "";
+  emit?.("Creating fresh immutable checkout...");
+  log("build", `Cloning ${gitRepo} into a fresh ${appDir} worktree (token: ${gitToken ? "yes" : "no"}, branch: ${gitBranch || "default"}, commit: ${gitSha || "remote HEAD"})`);
   // Ensure the app dir (if it exists) is owned by deploy so the subsequent
   // rm -rf/git clone/pull works even if a prior root-run step (e.g. scaleUp
   // writing .env.deploy) left root-owned files behind.
   await sshExec(ip, `mkdir -p /home/deploy/apps && chown deploy:deploy /home/deploy/apps && mkdir -p ${appDir} && chown -R deploy:deploy ${appDir}`, hostKey);
   const gitEnv = gitToken ? "export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true; " : "";
+  const explicitTarget = gitSha
+    ? shellQuote(gitSha)
+    : gitBranch
+      ? shellQuote(`origin/${gitBranch}`)
+      : '"$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD || echo origin/HEAD)"';
   const cloneResult = await sshExec(
     ip,
-    asUser(`${gitEnv}if [ -d "${appDir}/.git" ]; then cd ${appDir} && git remote set-url origin ${cloneUrl} && git fetch origin && git checkout ${gitBranch || "HEAD"} && git pull; else rm -rf ${appDir} && git clone${branchFlag} ${cloneUrl} ${appDir}; fi`),
+    asUser(
+      `${gitEnv}rm -rf ${shellQuote(appDir)} && ` +
+      `git clone --no-checkout${branchFlag} ${shellQuote(cloneUrl)} ${shellQuote(appDir)} && ` +
+      `cd ${shellQuote(appDir)} && git fetch --prune origin${gitSha ? ` ${shellQuote(gitSha)}` : ""} && ` +
+      `target=${explicitTarget} && git checkout --detach "$target" && ` +
+      `git reset --hard "$target" && git clean -ffd && git rev-parse HEAD`,
+    ),
     hostKey,
   );
   if (cloneResult.exitCode !== 0) {
@@ -144,7 +157,13 @@ export async function cloneRepo(
   if (gitToken && cloneUrl !== gitRepo) {
     await sshExec(ip, asUser(`cd ${appDir} && git remote set-url origin ${gitRepo}`), hostKey);
   }
-  log("build", `Clone done, stdout: ${cloneResult.stdout.trim().slice(0, 200)}`);
+  const revision = cloneResult.stdout.trim().split(/\s+/).at(-1) || "";
+  if (!/^[0-9a-f]{40,64}$/i.test(revision)) {
+    throw new Error(`Git checkout completed but did not report an immutable commit`);
+  }
+  emit?.(`Checked out ${revision.slice(0, 12)} (detached, clean worktree)`);
+  log("build", `Clone done at immutable commit ${revision}`);
+  return revision;
 }
 
 export async function cloneAndBuild(
@@ -161,6 +180,7 @@ export async function cloneAndBuild(
     dockerContext?: string; // build context path relative to repo root, defaults to "."
     gitToken?: string; // GitHub PAT for private repos
     gitBranch?: string; // Branch to clone, defaults to repo default
+    gitSha?: string; // Exact immutable commit to check out
     /** Host-side bind address for the published port. Defaults to 127.0.0.1
      *  so containers aren't exposed on the public interface. Pass the
      *  server's `private_ipv4` when the app is reached by the ingress proxy
@@ -198,7 +218,7 @@ export async function cloneAndBuild(
   const hostKey = opts.hostKey;
 
   if (!opts.skipClone) {
-    await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch, hostKey);
+    await cloneRepo(ip, opts.name, opts.gitRepo, opts.gitToken, emit, opts.gitBranch, hostKey, opts.gitSha);
   }
 
   // Find Dockerfile

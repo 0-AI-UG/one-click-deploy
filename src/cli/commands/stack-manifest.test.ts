@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { buildStackServiceSpecs, certifiedStagingExistingKeys, mergeStagingEnv } from "./stack.ts";
+import {
+  appIsAffectedByFiles,
+  buildStackServiceSpecs,
+  certifiedStagingExistingKeys,
+  expandAppDependents,
+  mergeStagingEnv,
+} from "./stack.ts";
 
 describe("buildStackServiceSpecs", () => {
   test("maps every managed-service manifest field to the stack request", () => {
@@ -59,5 +65,32 @@ describe("certifiedStagingExistingKeys", () => {
       entries: [{ key: "RESEND_API_KEY", value: "", secret: true }],
       requiredMissing: [],
     });
+  });
+});
+
+describe("partial stack selection", () => {
+  const apps = {
+    api: { manifest: "apps/api/.ocd-deploy.json" },
+    worker: { manifest: "apps/worker/.ocd-deploy.json", needs: ["api"] },
+    admin: { manifest: "apps/admin/.ocd-deploy.json", needs: ["api"] },
+  };
+
+  test("expands downstream dependents transitively", () => {
+    expect([...expandAppDependents(["api"], apps)].sort()).toEqual(["admin", "api", "worker"]);
+    expect([...expandAppDependents(["worker"], apps)]).toEqual(["worker"]);
+  });
+
+  test("matches only the canonical manifest and build context", () => {
+    const app = {
+      key: "worker",
+      app_name: "worker",
+      git_repo: "https://github.com/acme/repo",
+      container_port: 3000,
+      manifest_path: "apps/worker/.ocd-deploy.json",
+      docker_context: "apps/worker",
+      dockerfile_path: "apps/worker/Dockerfile",
+    };
+    expect(appIsAffectedByFiles(app, ["apps/worker/src/index.ts"])).toBe(true);
+    expect(appIsAffectedByFiles(app, ["apps/api/src/index.ts"])).toBe(false);
   });
 });

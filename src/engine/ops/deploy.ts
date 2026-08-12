@@ -76,7 +76,7 @@ type InsertAppOut = {
   dockerfilePath: string;
 };
 
-type CloneOut = { ok: true };
+type CloneOut = { ok: true; revision?: string };
 
 type BuildOut = {
   imageTag: string;
@@ -561,6 +561,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           health_check_command: req.health_check_command,
           health_check_file: req.health_check_file,
           health_check_max_age_seconds: req.health_check_max_age_seconds,
+          health_check_expected_statuses: req.health_check_expected_statuses,
           internal_protocol: req.internal_protocol,
           sticky: req.sticky,
           rate_limit_rps: req.rate_limit_rps,
@@ -705,12 +706,15 @@ const cloneRepoStep: Step<DeployInput, CloneOut> = {
     if (!server) return null;
     const check = await sshExec(
       server.serverIp,
-      `[ -d /home/deploy/apps/${req.app_name}/.git ] && echo yes || echo no`,
+      req.git_sha
+        ? `su - deploy -c ${JSON.stringify(`cd /home/deploy/apps/${req.app_name} 2>/dev/null && git rev-parse HEAD || true`)}`
+        : `[ -d /home/deploy/apps/${req.app_name}/.git ] && echo yes || echo no`,
       server.serverHostKey || undefined,
     );
-    if (check.stdout.trim() === "yes") {
+    const existingRevision = check.stdout.trim();
+    if (existingRevision === "yes" || (req.git_sha && existingRevision.toLowerCase().startsWith(req.git_sha.toLowerCase()))) {
       ctx.log(`repo already cloned at /home/deploy/apps/${req.app_name} — adopting`);
-      return { ok: true };
+      return { ok: true, revision: req.git_sha || undefined };
     }
     return null;
   },
@@ -727,21 +731,12 @@ const cloneRepoStep: Step<DeployInput, CloneOut> = {
       ctx.triggeredBy,
       Object.values(appOut.flatEnvVars),
     );
-    await cloneRepo(server.serverIp, req.app_name, req.git_repo, githubPat, (line) => {
+    const revision = await cloneRepo(server.serverIp, req.app_name, req.git_repo, githubPat, (line) => {
       db.appendDeployLog(appOut.appId, mask(`[clone] ${line}`));
       ctx.log(`[clone] ${mask(line)}`);
-    }, req.git_branch, server.serverHostKey || undefined);
-    if (req.git_sha) {
-      if (!/^[0-9a-f]{7,64}$/i.test(req.git_sha)) throw new Error("Invalid webhook commit SHA");
-      const checkedOut = await sshExec(
-        server.serverIp,
-        `su - deploy -c ${JSON.stringify(`cd /home/deploy/apps/${req.app_name} && git checkout --detach ${req.git_sha}`)}`,
-        server.serverHostKey || undefined,
-      );
-      if (checkedOut.exitCode !== 0) throw new Error(`Could not check out webhook commit ${req.git_sha}`);
-      ctx.log(`Checked out webhook commit ${req.git_sha}`);
-    }
-    return { ok: true };
+    }, req.git_branch, server.serverHostKey || undefined, req.git_sha);
+    ctx.log(`Immutable source revision: ${revision}`);
+    return { ok: true, revision };
   },
   async compensate(ctx, _out, prior) {
     const req = ctx.input;
@@ -1031,7 +1026,7 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
     if (!req.image_ref) {
       const gitCommitResult = await sshExec(
         server.serverIp,
-        `su - deploy -c "cd /home/deploy/apps/${req.app_name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
+        `su - deploy -c "cd /home/deploy/apps/${req.app_name} && git rev-parse --short=12 HEAD 2>/dev/null || echo unknown"`,
         server.serverHostKey || undefined,
       );
       gitCommit = gitCommitResult.stdout.trim();

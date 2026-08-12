@@ -20,8 +20,7 @@ import type { StackDeployRequest } from "../../shared/rpc.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
-import { syncAllTraefik } from "../scale/traefik-manager.ts";
-import { applyAppConfig } from "../../shared/app-config.ts";
+import { diffAppConfig } from "../../shared/app-config.ts";
 import { validateDeployRequest, assertSafeHostPath, validateRepoBuildPath } from "../../shared/validate.ts";
 import { cloneRepo, findDockerfile, sshExec } from "../../shared/remote/index.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
@@ -76,6 +75,18 @@ const NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 /** Namespaced fleet-global member name: `<stack>-<key>`. */
 function memberName(stack: string, key: string): string {
   return `${stack}-${key}`;
+}
+
+function selectedApps(req: DeployStackInput): DeployStackInput["apps"] {
+  if (!req.selected_app_keys) return req.apps;
+  const selected = new Set(req.selected_app_keys);
+  return req.apps.filter((app) => selected.has(app.key));
+}
+
+function selectedServices(req: DeployStackInput): DeployStackInput["services"] {
+  if (!req.selected_service_keys) return req.services;
+  const selected = new Set(req.selected_service_keys);
+  return req.services.filter((service) => selected.has(service.key));
 }
 
 /** Env-var prefix for a stack member key (uppercased, per the plan). */
@@ -146,6 +157,27 @@ function injectAppUrl(envId: number, key: string, app: AppRow): void {
  */
 function injectStagingUrl(stagingEnvId: number, key: string, app: AppRow, staged: boolean): void {
   injectAppUrl(stagingEnvId, key, staged ? ({ ...app, name: `${app.name}-staging` } as AppRow) : app);
+}
+
+/** Overlay incoming values only when plaintext actually changed. Secret
+ * ciphertext is intentionally randomized, so comparing serialized rows would
+ * spuriously bump every linked app's config revision on every stack retry. */
+async function applyEnvironmentOverlayIfChanged(
+  environmentId: number,
+  incomingValues: NonNullable<DeployStackInput["env_vars"]>,
+): Promise<string[]> {
+  const env = db.getEnvironment(environmentId);
+  if (!env || incomingValues.length === 0) return [];
+  const existing = await resolveEnvVarsForDeploy(env.env_vars);
+  const changedKeys = incomingValues
+    .filter((entry) => existing[entry.key] !== entry.value)
+    .map((entry) => entry.key);
+  if (changedKeys.length === 0) return [];
+  const incoming = (await processIncomingEnvVars(incomingValues)).entries;
+  const overlaid = new Set(incoming.map((entry) => entry.key));
+  const base = parseEnvVars(env.env_vars).entries.filter((entry) => !overlaid.has(entry.key));
+  db.updateEnvironment(environmentId, env.name, serializeEnvVars([...base, ...incoming]));
+  return changedKeys;
 }
 
 type StackAppRequest = DeployStackInput["apps"][number];
@@ -302,18 +334,20 @@ const plan: Step<DeployStackInput, PlanOut> = {
     }
 
     // Topo-sort (also detects cycles) before touching any state.
-    const levels = topoLevels(req.apps);
+    const activeApps = selectedApps(req);
+    const activeServices = selectedServices(req);
+    const levels = topoLevels(activeApps);
 
     // Snapshot which managed services already exist before reconciliation for
     // durable plan/audit output. Both reused and newly successful services are
     // retained as checkpoints when a later child fails.
-    const reusedServiceKeys = req.services
+    const reusedServiceKeys = activeServices
       .filter((s) => db.getServiceByName(memberName(req.name, s.key)))
       .map((s) => s.key);
 
     // Capacity pre-check: only apps not already present as `<stack>-<key>`
     // consume a new internal port.
-    const newApps = req.apps.filter(
+    const newApps = activeApps.filter(
       (a) => !db.getAppByName(memberName(req.name, a.key)),
     ).length;
     if (portCapacityExceeded(db.countApps(), newApps, db.INTERNAL_PORT_COUNT)) {
@@ -379,12 +413,10 @@ const plan: Step<DeployStackInput, PlanOut> = {
     // conflict-checked and existing-wins-filtered client-side) into the shared
     // environment. Overlay by key; runs every deploy so re-ups reconcile env.
     if (req.env_vars && req.env_vars.length > 0) {
-      const incoming = (await processIncomingEnvVars(req.env_vars)).entries;
-      const envRow = db.getEnvironment(envId)!;
-      const overlaid = new Set(incoming.map((e) => e.key));
-      const base = parseEnvVars(envRow.env_vars).entries.filter((e) => !overlaid.has(e.key));
-      db.updateEnvironment(envId, envRow.name, serializeEnvVars([...base, ...incoming]));
-      ctx.log(`applied ${incoming.length} stack env var(s)`);
+      const changedKeys = await applyEnvironmentOverlayIfChanged(envId, req.env_vars);
+      ctx.log(changedKeys.length > 0
+        ? `applied ${changedKeys.length} changed stack env var(s): ${changedKeys.join(", ")}`
+        : "stack environment already matches; no configuration revision bump");
     }
 
     // --- shared staging environment ---------------------------------------
@@ -425,13 +457,11 @@ const plan: Step<DeployStackInput, PlanOut> = {
       if (stagingEnvId == null) {
         throw new Error("staging_env values require at least one webhook-staging member or a selected staging environment");
       }
-      const incoming = (await processIncomingEnvVars(req.staging_env_vars)).entries;
-      const envRow = db.getEnvironment(stagingEnvId)!;
-      const overlaid = new Set(incoming.map((entry) => entry.key));
-      const base = parseEnvVars(envRow.env_vars).entries.filter((entry) => !overlaid.has(entry.key));
-      db.updateEnvironment(stagingEnvId, envRow.name, serializeEnvVars([...base, ...incoming]));
-      appliedStagingKeys.push(...incoming.map((entry) => entry.key));
-      ctx.log(`applied ${incoming.length} staging-only env var(s)`);
+      const changedKeys = await applyEnvironmentOverlayIfChanged(stagingEnvId, req.staging_env_vars);
+      appliedStagingKeys.push(...req.staging_env_vars.map((entry) => entry.key));
+      ctx.log(changedKeys.length > 0
+        ? `applied ${changedKeys.length} changed staging-only env var(s)`
+        : "staging environment already matches; no configuration revision bump");
     }
     if (req.staging_env_keys !== undefined) {
       let previouslyCertified: string[] = [];
@@ -500,13 +530,12 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
   label: "Validate app sources",
   async run(ctx, prior) {
     const req = ctx.input;
-    const { stackId } = prior["plan"] as PlanOut;
     const checkedApps: string[] = [];
     const skippedRemoteApps: string[] = [];
     const sourceRevisionByKey: Record<string, string> = {};
     let githubToken: string | null | undefined;
 
-    for (const appReq of req.apps) {
+    for (const appReq of selectedApps(req)) {
       const name = memberName(req.name, appReq.key);
       const validation = validateDeployRequest({ ...appReq, app_name: name });
       if (!validation.valid) throw new Error(`App "${appReq.key}": ${validation.error}`);
@@ -546,7 +575,7 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
       const scratchDir = `/home/deploy/apps/${scratchName}`;
       let preflightFailure: unknown;
       try {
-        await cloneRepo(
+        const revision = await cloneRepo(
           server.ipv4,
           scratchName,
           appReq.git_repo,
@@ -554,17 +583,8 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
           (line) => ctx.log(`[preflight:${appReq.key}] ${line}`),
           appReq.git_branch,
           server.ssh_host_key || undefined,
+          appReq.git_sha,
         );
-        if (appReq.git_sha) {
-          const checkout = await sshExec(
-            server.ipv4,
-            `su - deploy -c ${JSON.stringify(`cd ${scratchDir} && git checkout --detach ${appReq.git_sha}`)}`,
-            server.ssh_host_key || undefined,
-          );
-          if (checkout.exitCode !== 0) {
-            throw new Error(`Git commit ${appReq.git_sha} is not available in the repository`);
-          }
-        }
 
         let dockerfile = appReq.dockerfile_path;
         if (dockerfile) {
@@ -592,15 +612,7 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
             `Dockerfile "${dockerfile}" or build context "${contextResult.value}" does not exist in the repository`,
           );
         }
-        const revision = await sshExec(
-          server.ipv4,
-          `su - deploy -c ${JSON.stringify(`cd ${scratchDir} && git rev-parse --short HEAD`)}`,
-          server.ssh_host_key || undefined,
-        );
-        if (revision.exitCode !== 0 || !revision.stdout.trim()) {
-          throw new Error(`Could not resolve checked-out Git revision for ${appReq.key}`);
-        }
-        sourceRevisionByKey[appReq.key] = revision.stdout.trim();
+        sourceRevisionByKey[appReq.key] = revision.slice(0, 12);
         checkedApps.push(appReq.key);
       } catch (error) {
         preflightFailure = error;
@@ -618,11 +630,14 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
       }
       if (preflightFailure) throw preflightFailure;
     }
-    db.appendStackLog(
-      stackId,
-      `[preflight] validated ${checkedApps.length} app(s)` +
-        (skippedRemoteApps.length ? `; remote source deferred for ${skippedRemoteApps.join(", ")}` : ""),
-    );
+    const existingStack = db.getStackByName(req.name);
+    if (existingStack) {
+      db.appendStackLog(
+        existingStack.id,
+        `[preflight] validated ${checkedApps.length} app(s)` +
+          (skippedRemoteApps.length ? `; remote source deferred for ${skippedRemoteApps.join(", ")}` : ""),
+      );
+    }
     return { checkedApps, skippedRemoteApps, sourceRevisionByKey };
   },
 };
@@ -753,7 +768,7 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
 
     // Production services are reconciled first because the durable production
     // id is the ownership anchor for each staging counterpart.
-    for (const svc of req.services) {
+    for (const svc of selectedServices(req)) {
       await reconcileOne({
         svc,
         name: memberName(req.name, svc.key),
@@ -771,7 +786,7 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
 
     if (stagingServicesEnabled && stagingEnvironmentId != null) {
       const stagingChildStart = childIds.length;
-      for (const svc of req.services) {
+      for (const svc of selectedServices(req)) {
         const production = db.getServiceByName(memberName(req.name, svc.key));
         if (!production) throw new Error(`Production service for "${svc.key}" was not created`);
         const stagingOverrides = {
@@ -800,7 +815,7 @@ const reconcileServices: Step<DeployStackInput, EnqueueChildrenOut> = {
 
     // Backstop ownership tags for services adopted from an earlier run. New
     // children persist them atomically with the service row.
-    for (const svc of req.services) {
+    for (const svc of selectedServices(req)) {
       const row = db.getServiceByName(memberName(req.name, svc.key));
       if (row) db.setServiceStack(row.id, stackId);
       const staging = row ? db.getStagingService(row.id) : null;
@@ -921,7 +936,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
             declared_env_keys: _declaredKeys,
             ...configFields
           } = appReq;
-          await applyAppConfig(existingApp.id, {
+          const candidate: import("../../shared/rpc.ts").DeployRequest = {
             ...configFields,
             apply_mode: "manifest",
             app_name: name,
@@ -929,26 +944,30 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
             env_projection: effectiveProjection,
             webhook_staging: false,
             webhook_staging_environment_id: stagingEnvFor(key),
-          }, {
-            userId: ctx.triggeredBy || undefined,
-            log: (line) => db.appendStackLog(stackId, `[config] ${key}: ${line}`),
-          });
-          await syncAllTraefik();
-          db.appendStackLog(stackId, `[apps] ${key}: desired configuration applied`);
+          };
+          const configChanges = diffAppConfig(existingApp, candidate);
           const convergence = await stackAppAlreadyConverged(
-            db.getApp(existingApp.id) || existingApp,
+            existingApp,
             preflight?.sourceRevisionByKey[key],
           );
-          if (convergence.converged) {
+          if (convergence.converged && configChanges.length === 0) {
             db.appendStackLog(stackId, `[apps] ${key}: already reconciled; skipped rollout`);
             ctx.log(`${key}: already reconciled; skipped rollout`);
             continue;
           }
-          ctx.log(`${key}: rollout required (${convergence.reason})`);
+          const reason = configChanges.length > 0
+            ? `configuration diff: ${configChanges.map((change) => change.field).join(", ")}`
+            : convergence.reason;
+          ctx.log(`${key}: rollout required (${reason})`);
           row = enqueueOperation({
             kind: "redeploy",
             resourceKeys: [`app:${existingApp.id}`],
-            input: { appId: existingApp.id, userId: ctx.triggeredBy || undefined },
+            input: {
+              appId: existingApp.id,
+              userId: ctx.triggeredBy || undefined,
+              gitSha: appReq.git_sha,
+              candidate,
+            },
             trigger: "stack",
             triggeredBy: ctx.triggeredBy,
             parentId: ctx.opId,
@@ -1060,6 +1079,10 @@ const reconcileRemovals: Step<DeployStackInput, { removed: number }> = {
   async run(ctx, prior) {
     const req = ctx.input;
     const { stackId, stagingServicesEnabled } = prior["plan"] as PlanOut;
+    if (req.partial) {
+      ctx.log("partial stack reconcile: removals are disabled");
+      return { removed: 0 };
+    }
     const appKeys = new Set(req.apps.map((a) => a.key));
     const desiredServiceNames = new Set(
       req.services.flatMap((service) => {
@@ -1140,7 +1163,9 @@ const deployStackOp: OpKindDefinition<DeployStackInput> = {
   kind: "deploy_stack",
   label: "Deploy stack",
   resourceKeys: (input) => [`stack:${input.name}`],
-  steps: [plan, preflightApps, reconcileServices, deployApps, reconcileRemovals, finalize],
+  // Source/path validation is deliberately first: no stack, environment,
+  // service volume, or desired configuration is mutated until it succeeds.
+  steps: [preflightApps, plan, reconcileServices, deployApps, reconcileRemovals, finalize],
 };
 
 registerOp(deployStackOp as OpKindDefinition<any>);

@@ -7,17 +7,20 @@ import { syncAppIngress } from "./traefik-manager.ts";
 import { type ProgressFn, log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 import { attestReplica } from "../revision.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
+import type { AppRow } from "../../shared/db/apps.ts";
 
 export async function rollingRedeploy(
   appId: number,
   onProgress?: ProgressFn,
   expectedRevision?: { imageDigest: string; envHash: string; configRevision: number },
+  candidate?: { app: AppRow; envVars: Record<string, string> },
 ): Promise<{ ok: boolean; error?: string }> {
   const emit = onProgress || (() => {});
 
   try {
-    const app = db.getApp(appId);
-    if (!app) throw new Error("App not found");
+    const storedApp = db.getApp(appId);
+    if (!storedApp) throw new Error("App not found");
+    const app = candidate?.app ?? storedApp;
 
     const replicas = db.getReplicas(appId);
     if (replicas.length <= 1) {
@@ -76,7 +79,7 @@ export async function rollingRedeploy(
       // Rewrite the projected environment on every target. Reusing an
       // existing .env.deploy file here is what allowed replicas on different
       // servers to retain different revisions.
-      const envVars = await resolveAppEnvVars(app);
+      const envVars = candidate?.envVars ?? await resolveAppEnvVars(app);
       await startAppReplica(server.ipv4, {
         ...appReplicaRunOpts(app, server, { containerName: replica.container_name, hostPort: replica.host_port, envVars }),
         image: imageName,

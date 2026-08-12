@@ -7,7 +7,12 @@ import {
   probeAppHealth,
   startAppReplica,
 } from "../../shared/remote/index.ts";
-import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import {
+  platformEnvVars,
+  projectEnvVars,
+  resolveAppEnvVars,
+  resolveEnvVarsForDeploy,
+} from "../../shared/env-crypto.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { rollingRedeploy } from "../scale/index.ts";
 import { wakeApp } from "../scale/wake.ts";
@@ -16,12 +21,20 @@ import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
+import type { AppRow } from "../../shared/db/apps.ts";
+import type { DeployRequest } from "../../shared/rpc.ts";
+import {
+  applyAppConfig,
+  mergeDeployRequestWithExistingApp,
+  resolveDeployRequestEnvironmentIds,
+} from "../../shared/app-config.ts";
 
 type RedeployInput = {
   appId: number;
   userId?: string;
   /** Immutable commit selected by a webhook. Manual redeploys follow git_branch. */
   gitSha?: string;
+  candidate?: DeployRequest;
 };
 
 type WakeOut = { woke: boolean };
@@ -50,6 +63,58 @@ type HealthOut = { healthy: boolean; statusCode?: number };
 
 const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
+function effectiveCandidate(app: AppRow, input: RedeployInput): DeployRequest | null {
+  return input.candidate
+    ? mergeDeployRequestWithExistingApp(app, resolveDeployRequestEnvironmentIds(input.candidate))
+    : null;
+}
+
+function candidateApp(app: AppRow, candidate: DeployRequest | null): AppRow {
+  if (!candidate) return app;
+  const mode = candidate.health_check_mode ?? (candidate.health_check === false ? "container" : "http");
+  return {
+    ...app,
+    git_repo: candidate.git_repo,
+    git_branch: candidate.git_branch ?? "",
+    dockerfile_path: candidate.dockerfile_path ?? "Dockerfile",
+    docker_context: candidate.docker_context ?? ".",
+    source_mode: candidate.image_ref ? "image" : "git",
+    image_ref: candidate.image_ref ?? "",
+    build_cache_ref: candidate.build_cache_ref ?? "",
+    container_port: candidate.container_port,
+    environment_id: candidate.environment_id !== undefined ? candidate.environment_id : app.environment_id,
+    env_projection: candidate.env_projection == null ? null : JSON.stringify(candidate.env_projection),
+    memory_mb: candidate.memory_mb ?? 0,
+    cpu_limit: candidate.cpu_limit ?? 0,
+    health_check: mode === "http" ? 1 : 0,
+    health_check_mode: mode,
+    health_check_command: candidate.health_check_command ?? "",
+    health_check_file: candidate.health_check_file ?? "",
+    health_check_max_age_seconds: candidate.health_check_max_age_seconds ?? 0,
+    health_check_expected_statuses: JSON.stringify(candidate.health_check_expected_statuses ?? [200]),
+    health_check_path: candidate.health_check_path ?? "",
+    internal_protocol: candidate.internal_protocol ?? "http",
+    extra_volumes: JSON.stringify((candidate.extra_volumes ?? []).map((v) => `${v.host_path}:${v.container_path}`)),
+    config_revision: app.config_revision + 1,
+  };
+}
+
+async function candidateEnvVars(app: AppRow, candidate: DeployRequest | null): Promise<Record<string, string>> {
+  if (!candidate) return resolveAppEnvVars(app);
+  const effectiveApp = candidateApp(app, candidate);
+  const environment = effectiveApp.environment_id ? db.getEnvironment(effectiveApp.environment_id) : null;
+  const values = await resolveEnvVarsForDeploy(environment?.env_vars);
+  if (candidate.env_vars) {
+    const incoming = Array.isArray(candidate.env_vars)
+      ? candidate.env_vars
+      : Object.entries(candidate.env_vars).map(([key, value]) => ({ key, value }));
+    for (const entry of incoming) values[entry.key] = entry.value;
+  }
+  const projected = projectEnvVars(values, candidate.env_projection);
+  const platform = platformEnvVars(effectiveApp);
+  return { ...platform, ...projected, OCD_DEPLOY_TARGET: platform.OCD_DEPLOY_TARGET };
+}
+
 const wakeIfSleeping: Step<RedeployInput, WakeOut> = {
   name: "wake_if_sleeping",
   label: "Wake app",
@@ -67,8 +132,9 @@ const cloneRepoStep: Step<RedeployInput, { ok: true }> = {
   name: "clone_repo",
   label: "Clone repository",
   async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
-    if (!app) throw new Error("App not found");
+    const stored = db.getApp(ctx.input.appId);
+    if (!stored) throw new Error("App not found");
+    const app = candidateApp(stored, effectiveCandidate(stored, ctx.input));
     if (app.source_mode === "image") {
       if (ctx.input.gitSha) throw new Error("Webhook commit redeploy is not valid for an image artifact app");
       ctx.log("Immutable image deployment: no Git clone required");
@@ -79,22 +145,11 @@ const cloneRepoStep: Step<RedeployInput, { ok: true }> = {
     const server = db.getServer(replicas[0].server_id);
     if (!server) throw new Error("Server not found");
     const githubPat = (await resolveGitHubToken(ctx.input.userId)) || undefined;
-    await cloneRepo(server.ipv4, app.name, app.git_repo, githubPat, (line) => {
+    const revision = await cloneRepo(server.ipv4, app.name, app.git_repo, githubPat, (line) => {
       db.appendDeployLog(ctx.input.appId, `[clone] ${line}`);
       ctx.log(`[clone] ${line}`);
-    }, app.git_branch || undefined, server.ssh_host_key || undefined);
-    if (ctx.input.gitSha) {
-      if (!/^[0-9a-f]{7,64}$/i.test(ctx.input.gitSha)) throw new Error("Invalid webhook commit SHA");
-      const checkedOut = await sshExec(
-        server.ipv4,
-        asUser(`cd /home/deploy/apps/${app.name} && git checkout --detach ${ctx.input.gitSha}`),
-        server.ssh_host_key || undefined,
-      );
-      if (checkedOut.exitCode !== 0) {
-        throw new Error(`Could not check out webhook commit ${ctx.input.gitSha}`);
-      }
-      ctx.log(`Checked out webhook commit ${ctx.input.gitSha}`);
-    }
+    }, app.git_branch || undefined, server.ssh_host_key || undefined, ctx.input.gitSha || ctx.input.candidate?.git_sha);
+    ctx.log(`Immutable source revision: ${revision}`);
     return { ok: true };
   },
 };
@@ -128,8 +183,10 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
   label: "Build container",
   async run(ctx) {
     const { appId } = ctx.input;
-    const app = db.getApp(appId);
-    if (!app) throw new Error("App not found");
+    const storedApp = db.getApp(appId);
+    if (!storedApp) throw new Error("App not found");
+    const candidate = effectiveCandidate(storedApp, ctx.input);
+    const app = candidateApp(storedApp, candidate);
     const replicas = db.getReplicas(appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
     const first = replicas[0];
@@ -137,10 +194,11 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     if (!server) throw new Error("Server not found");
 
     const containerPort = app.container_port;
-    const envVars = await resolveAppEnvVars(app);
+    const envVars = await candidateEnvVars(storedApp, candidate);
     const githubPat = (await resolveGitHubToken(ctx.input.userId)) || undefined;
     const bindAddr = replicaBindHost(server);
     const extraVolumes = db.parseExtraVolumes(app.extra_volumes);
+    const previousEnvVars = await resolveAppEnvVars(storedApp);
 
     let imageTag = `${app.name}:latest`;
 
@@ -165,13 +223,13 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
           containerName: first.container_name,
           hostPort: first.host_port,
           // Roll back to the port the *previous* container actually used.
-          containerPort: app.container_port,
+          containerPort: storedApp.container_port,
           bindAddr,
-          envFilePath: Object.keys(envVars).length > 0 ? `/home/deploy/apps/${app.name}/.env.deploy` : null,
-          volumeMount: app.volume_mount || null,
-          extraVolumes,
-          memoryMb: app.memory_mb ?? null,
-          cpus: app.cpu_limit ?? null,
+          envFilePath: Object.keys(previousEnvVars).length > 0 ? `/home/deploy/apps/${app.name}/.env.deploy` : null,
+          volumeMount: storedApp.volume_mount || null,
+          extraVolumes: db.parseExtraVolumes(storedApp.extra_volumes),
+          memoryMb: storedApp.memory_mb ?? null,
+          cpus: storedApp.cpu_limit ?? null,
         };
       }
     } catch (err) {
@@ -283,16 +341,48 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
   },
 };
 
+const validateCandidate: Step<RedeployInput, HealthOut> = {
+  name: "validate_candidate",
+  label: "Validate candidate",
+  async run(ctx) {
+    if (!ctx.input.candidate) return { healthy: true };
+    const stored = db.getApp(ctx.input.appId);
+    if (!stored) throw new Error("App not found");
+    const candidate = effectiveCandidate(stored, ctx.input)!;
+    const app = candidateApp(stored, candidate);
+    const first = db.getReplicas(app.id)[0];
+    if (!first) throw new Error("App has no replicas");
+    const server = db.getServer(first.server_id);
+    if (!server) throw new Error("Server not found");
+    const health = await probeAppHealth(
+      app,
+      server.ipv4,
+      first.container_name,
+      replicaBindHost(server),
+      first.host_port,
+      10,
+      server.ssh_host_key || undefined,
+    );
+    if (!health.healthy) {
+      throw new Error(`Candidate configuration failed readiness before commit: ${health.error || `HTTP ${health.statusCode ?? "no response"}`}`);
+    }
+    ctx.log(`candidate passed readiness; stored configuration remains at r${stored.config_revision}`);
+    return { healthy: true, statusCode: health.statusCode };
+  },
+};
+
 const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
   name: "roll_extra_replicas",
   label: "Roll extra replicas",
   async run(ctx, prior) {
     const replicas = db.getReplicas(ctx.input.appId);
     if (replicas.length <= 1) return { ok: true };
-    const app = db.getApp(ctx.input.appId);
-    if (!app) throw new Error("App not found");
+    const stored = db.getApp(ctx.input.appId);
+    if (!stored) throw new Error("App not found");
+    const candidate = effectiveCandidate(stored, ctx.input);
+    const app = candidateApp(stored, candidate);
     const build = prior["pull_and_build"] as BuildOut;
-    const envVars = await resolveAppEnvVars(app);
+    const envVars = await candidateEnvVars(stored, candidate);
     const rolling = await rollingRedeploy(
       ctx.input.appId,
       (step, detail) => ctx.log(`[${step}] ${detail}`),
@@ -301,6 +391,7 @@ const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
         envHash: hashEnvironment(envVars),
         configRevision: app.config_revision,
       },
+      candidate ? { app, envVars } : undefined,
     );
     if (!rolling.ok) throw new Error(`Rolling update failed: ${rolling.error}`);
     return { ok: true };
@@ -320,6 +411,30 @@ const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
     } catch (err) {
       ctx.log(`Failed to re-sync after roll_extra_replicas compensate: ${err}`);
     }
+  },
+};
+
+const commitCandidateConfig: Step<RedeployInput, { committed: boolean; configRevision: number }> = {
+  name: "commit_candidate_config",
+  label: "Commit configuration",
+  async run(ctx) {
+    if (!ctx.input.candidate) {
+      const app = db.getApp(ctx.input.appId);
+      return { committed: false, configRevision: app?.config_revision ?? 0 };
+    }
+    const before = db.getApp(ctx.input.appId);
+    if (!before) throw new Error("App not found");
+    await applyAppConfig(before.id, ctx.input.candidate, {
+      userId: ctx.input.userId,
+      log: (line) => ctx.log(`[config] ${line}`),
+    });
+    const after = db.getApp(before.id);
+    if (!after) throw new Error("App disappeared while committing candidate configuration");
+    if (after.config_revision !== before.config_revision + 1) {
+      throw new Error(`Candidate revision commit was not atomic: expected r${before.config_revision + 1}, got r${after.config_revision}`);
+    }
+    ctx.log(`configuration committed atomically at r${after.config_revision} after readiness passed`);
+    return { committed: true, configRevision: after.config_revision };
   },
 };
 
@@ -390,7 +505,7 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
       try {
         const r = await sshExec(
           server.ipv4,
-          `su - deploy -c "cd /home/deploy/apps/${app.name} && git rev-parse --short HEAD 2>/dev/null || echo unknown"`,
+          `su - deploy -c "cd /home/deploy/apps/${app.name} && git rev-parse --short=12 HEAD 2>/dev/null || echo unknown"`,
           server.ssh_host_key || undefined,
         );
         gitCommit = r.stdout.trim() || "unknown";
@@ -422,7 +537,9 @@ const redeployOp: OpKindDefinition<RedeployInput> = {
     cloneRepoStep,
     setDeploying,
     pullAndBuild,
+    validateCandidate,
     rollExtraReplicas,
+    commitCandidateConfig,
     syncIngressStep,
     healthCheckStep,
     recordDeploymentHistory,

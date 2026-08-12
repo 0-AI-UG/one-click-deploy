@@ -149,6 +149,7 @@ export function mergeDeployRequestWithExistingApp(
     health_check_command: supplied.health_check_command ?? "",
     health_check_file: supplied.health_check_file ?? "",
     health_check_max_age_seconds: supplied.health_check_max_age_seconds ?? 0,
+    health_check_expected_statuses: supplied.health_check_expected_statuses ?? [200],
     environment: supplied.environment,
     environment_id: supplied.environment_id !== undefined
       ? supplied.environment_id
@@ -219,6 +220,7 @@ function normalizedSpec(req: DeployRequest) {
     health_check_command: req.health_check_command ?? "",
     health_check_file: req.health_check_file ?? "",
     health_check_max_age_seconds: req.health_check_max_age_seconds ?? 0,
+    health_check_expected_statuses: req.health_check_expected_statuses ?? [200],
     internal_protocol: req.internal_protocol ?? "http",
     sticky: req.sticky ?? false,
     rate_limit_rps: req.rate_limit_rps ?? 0,
@@ -272,6 +274,12 @@ function comparableApp(app: AppRow) {
     health_check_command: app.health_check_command || "",
     health_check_file: app.health_check_file || "",
     health_check_max_age_seconds: app.health_check_max_age_seconds || 0,
+    health_check_expected_statuses: (() => {
+      try {
+        const parsed = JSON.parse(app.health_check_expected_statuses || "[200]");
+        return Array.isArray(parsed) ? parsed : [200];
+      } catch { return [200]; }
+    })(),
     internal_protocol: app.internal_protocol || "http",
     sticky: !!app.sticky,
     rate_limit_rps: app.rate_limit_rps ?? 0,
@@ -432,7 +440,7 @@ export async function applyAppConfig(
   }
   if ([
     "image_ref", "build_cache_ref", "health_check_mode", "health_check_command",
-    "health_check_file", "health_check_max_age_seconds",
+    "health_check_file", "health_check_max_age_seconds", "health_check_expected_statuses",
   ].some((f) => changed.has(f))) {
     db.updateAppArtifactAndHealth(app.id, {
       imageRef: desired.image_ref,
@@ -441,6 +449,7 @@ export async function applyAppConfig(
       healthCommand: desired.health_check_command,
       healthFile: desired.health_check_file,
       healthMaxAgeSeconds: desired.health_check_max_age_seconds,
+      healthExpectedStatuses: desired.health_check_expected_statuses,
     });
   }
   if (changed.has("container_port")) db.updateAppContainerPort(app.id, desired.container_port);
@@ -519,9 +528,10 @@ export async function applyAppConfig(
   ) {
     await applyWebhook(db.getApp(app.id)!, effective, opts.userId, opts.log);
   }
+  if (opts.userId) db.updateAppDeployedBy(app.id, opts.userId);
+  db.normalizeAppConfigRevision(app.id, app.config_revision);
   if (effective.manifest_path && effective.manifest_hash) {
     db.recordAppManifestApplied(app.id, effective.manifest_path, effective.manifest_hash);
   }
-  if (opts.userId) db.updateAppDeployedBy(app.id, opts.userId);
   return changes;
 }

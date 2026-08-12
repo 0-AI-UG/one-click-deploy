@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { resolveDockerfilePath } from "./commands/deploy.ts";
-import { resolveAuthPassword } from "./manifest.ts";
+import { resolveDockerfilePath, resolveManifestBuildPaths } from "./commands/deploy.ts";
+import { assertLocalBuildPaths, resolveAuthPassword } from "./manifest.ts";
 
 const AUTH_ENV = "OCD_TEST_MANIFEST_AUTH_PASSWORD";
 
@@ -30,5 +30,29 @@ describe("resolveDockerfilePath", () => {
   test("resolves Dockerfiles relative to a nested build context", () => {
     expect(resolveDockerfilePath("zero-agent-website", "Dockerfile"))
       .toBe("zero-agent-website/Dockerfile");
+  });
+});
+
+describe("local build preflight", () => {
+  test("accepts canonical files/directories and rejects a missing Dockerfile", () => {
+    expect(() => assertLocalBuildPaths("package.json", ".")).not.toThrow();
+    expect(() => assertLocalBuildPaths("definitely-missing.Dockerfile", "."))
+      .toThrow("Preflight failed: Dockerfile does not exist");
+  });
+});
+
+describe("resolveManifestBuildPaths", () => {
+  test("keeps standalone member paths relative to the member manifest", () => {
+    expect(resolveManifestBuildPaths("services/worker", ".", "Dockerfile")).toEqual({
+      context: "services/worker",
+      dockerfile: "services/worker/Dockerfile",
+    });
+  });
+
+  test("resolves nested context and Dockerfile from the manifest directory", () => {
+    expect(resolveManifestBuildPaths("apps/admin", "frontend", "docker/Dockerfile")).toEqual({
+      context: "apps/admin/frontend",
+      dockerfile: "apps/admin/docker/Dockerfile",
+    });
   });
 });

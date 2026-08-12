@@ -1,10 +1,20 @@
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { get, post, del } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, colorStatus, table } from "../format.ts";
 import { webConfirm, withWebConfirmation } from "../confirm.ts";
-import { getGitRepo, readManifest, promptRequired, resolveAuthPassword, manifestHash } from "../manifest.ts";
+import {
+  getGitCommit,
+  getGitRepo,
+  assertLocalBuildPaths,
+  manifestRepoLocation,
+  readManifest,
+  promptRequired,
+  resolveAuthPassword,
+  manifestHash,
+} from "../manifest.ts";
 import {
   mergeEnv,
   type AppEnvDefs,
@@ -163,9 +173,90 @@ ${BOLD}Options:${RESET}
   --set=<app>.KEY=VALUE      Set an env var for one app (repeatable)
   --set=KEY=VALUE            Set an env var for all apps as a fallback
   --staging-set=KEY=VALUE    Set a staging-only env var (repeatable)
+  --only=web,worker          Reconcile only these app members
+  --with-dependents          Include downstream app dependents of --only
+  --changed                  Reconcile members affected since their deployed commit
+  --all                      Reconcile every member (disables changed-only default)
 
 Select shared production and staging environments with the stack manifest's
 \`environment\` and \`staging_environment\` fields.`);
+}
+
+export function expandAppDependents(
+  selected: Iterable<string>,
+  apps: StackManifest["apps"],
+): Set<string> {
+  const out = new Set(selected);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [key, app] of Object.entries(apps)) {
+      if (out.has(key)) continue;
+      if ((app.needs ?? []).some((dependency) => out.has(dependency))) {
+        out.add(key);
+        grew = true;
+      }
+    }
+  }
+  return out;
+}
+
+function changedFilesSince(commit: string): string[] | null {
+  if (!/^[0-9a-f]{7,64}$/i.test(commit)) return null;
+  try {
+    const raw = execFileSync("git", ["diff", "--name-only", `${commit}..HEAD`], { encoding: "utf-8" });
+    return raw.split(/\r?\n/).map((path) => path.trim()).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+function pathTouches(root: string, path: string): boolean {
+  const normalized = root.replace(/^\.\//, "").replace(/\/+$/, "");
+  return normalized === "" || normalized === "." || path === normalized || path.startsWith(`${normalized}/`);
+}
+
+function clientVisibleConfigDiff(existing: Record<string, unknown>, desired: AppElement): string[] {
+  const desiredValues: Record<string, unknown> = {
+    git_repo: desired.git_repo,
+    git_branch: desired.git_branch ?? "",
+    dockerfile_path: desired.dockerfile_path ?? "Dockerfile",
+    docker_context: desired.docker_context ?? ".",
+    image_ref: desired.image_ref ?? "",
+    build_cache_ref: desired.build_cache_ref ?? "",
+    container_port: desired.container_port,
+    public: desired.public ?? true,
+    memory_mb: desired.memory_mb ?? 0,
+    cpu_limit: desired.cpu_limit ?? 0,
+    health_check_mode: desired.health_check_mode ?? (desired.health_check === false ? "container" : "http"),
+    health_check_path: desired.health_check_path ?? "",
+    health_check_command: desired.health_check_command ?? "",
+    health_check_file: desired.health_check_file ?? "",
+    health_check_max_age_seconds: desired.health_check_max_age_seconds ?? 0,
+    internal_protocol: desired.internal_protocol ?? "http",
+    sticky: desired.sticky ?? false,
+    rate_limit_rps: desired.rate_limit_rps ?? 0,
+    ip_allowlist: desired.ip_allowlist ?? "",
+    compress: desired.compress ?? false,
+    public_port: desired.public_port ?? null,
+    public_protocol: desired.public_protocol ?? "tcp",
+    placement_pool: desired.placement_pool ?? "general",
+    scale_to_zero_after: desired.scale_to_zero_after ?? 0,
+  };
+  const booleanFields = new Set(["public", "sticky", "compress"]);
+  const changed: string[] = [];
+  for (const [field, wanted] of Object.entries(desiredValues)) {
+    let actual = existing[field];
+    if (booleanFields.has(field)) actual = Boolean(actual);
+    if (JSON.stringify(actual) !== JSON.stringify(wanted)) changed.push(field);
+  }
+  return changed;
+}
+
+export function appIsAffectedByFiles(app: AppElement, files: string[]): boolean {
+  if (app.manifest_path && files.includes(app.manifest_path)) return true;
+  if (app.dockerfile_path && files.includes(app.dockerfile_path)) return true;
+  return files.some((path) => pathTouches(app.docker_context || ".", path));
 }
 
 type ResolvedEnv = { id: number; name: string; env_vars?: Array<{ key: string }> };
@@ -254,6 +345,10 @@ export async function stackUp(args: string[]): Promise<void> {
   let manifestPath = "";
   const rawSets: string[] = [];
   const rawStagingSets: string[] = [];
+  let onlyRaw = "";
+  let withDependents = false;
+  let changedOnly = false;
+  let forceAll = false;
   for (const arg of args) {
     if (arg === "--help" || arg === "-h") {
       upUsage();
@@ -262,6 +357,14 @@ export async function stackUp(args: string[]): Promise<void> {
       rawSets.push(arg.slice(6));
     } else if (arg.startsWith("--staging-set=")) {
       rawStagingSets.push(arg.slice("--staging-set=".length));
+    } else if (arg.startsWith("--only=")) {
+      onlyRaw = arg.slice("--only=".length);
+    } else if (arg === "--with-dependents") {
+      withDependents = true;
+    } else if (arg === "--changed") {
+      changedOnly = true;
+    } else if (arg === "--all") {
+      forceAll = true;
     } else if (arg.startsWith("--")) {
       console.error(`${RED}Unknown option: ${arg}${RESET}`);
       process.exit(1);
@@ -274,7 +377,8 @@ export async function stackUp(args: string[]): Promise<void> {
   }
   if (!manifestPath) manifestPath = "ocd-stack.json";
 
-  const manifestFullPath = resolve(manifestPath);
+  const stackLocation = manifestRepoLocation(manifestPath);
+  const manifestFullPath = stackLocation.fullPath;
   const manifest = readStackManifest(manifestFullPath);
   const baseDir = dirname(manifestFullPath);
 
@@ -313,9 +417,11 @@ export async function stackUp(args: string[]): Promise<void> {
   }
 
   const repo = getGitRepo();
+  const gitCommit = getGitCommit();
 
   console.log(`${DIM}Repo:${RESET}  ${repo}`);
-  console.log(`${DIM}Stack:${RESET} ${manifestPath} ${BOLD}(${manifest.name})${RESET}`);
+  console.log(`${DIM}Stack:${RESET} ${stackLocation.path} ${BOLD}(${manifest.name})${RESET}`);
+  console.log(`${DIM}Commit:${RESET} ${gitCommit}`);
 
   // Managed services
   const services = buildStackServiceSpecs(manifest);
@@ -329,7 +435,8 @@ export async function stackUp(args: string[]): Promise<void> {
     appEnvDefs.push({ app: key, defs: appManifest.env || [] });
     // Dockerfile paths resolve relative to the app manifest's dir (repo-root-
     // relative, assuming the stack manifest sits at the repo root).
-    const manifestDir = repoDirOf(resolveRepoPath("", entry.manifest));
+    const childRepoPath = resolveRepoPath(repoDirOf(stackLocation.path), entry.manifest);
+    const manifestDir = repoDirOf(childRepoPath);
     const childManifestPath = resolve(baseDir, entry.manifest);
     const appElement = buildAppElement(
       key,
@@ -338,9 +445,16 @@ export async function stackUp(args: string[]): Promise<void> {
       repo,
       [],
       manifestDir,
-      resolveRepoPath("", entry.manifest),
+      childRepoPath,
       childManifestPath,
     );
+    if (!appElement.image_ref) {
+      assertLocalBuildPaths(
+        appElement.dockerfile_path || "Dockerfile",
+        appElement.docker_context || ".",
+      );
+    }
+    if (!appElement.image_ref) appElement.git_sha = gitCommit;
     const authPassword = await resolveAuthPassword(appManifest.auth);
     if (authPassword !== undefined) appElement.auth_password = authPassword;
     apps.push(appElement);
@@ -447,8 +561,99 @@ export async function stackUp(args: string[]): Promise<void> {
     apps,
   };
 
+  const existingApps = await get<Array<{
+    id: number;
+    name: string;
+    status: string;
+    deployed_commit?: string | null;
+    config_revision?: number;
+    last_manifest_hash?: string | null;
+    dockerfile_path?: string;
+    docker_context?: string;
+    [key: string]: unknown;
+  }>>("/api/apps");
+  const allKeys = new Set(Object.keys(manifest.apps));
+  let selectedKeys = new Set(allKeys);
+  let selectionReason = "all members";
+  if (onlyRaw) {
+    selectedKeys = new Set(onlyRaw.split(",").map((key) => key.trim()).filter(Boolean));
+    const unknown = [...selectedKeys].filter((key) => !allKeys.has(key));
+    if (unknown.length) {
+      console.error(`${RED}Unknown --only app member(s): ${unknown.join(", ")}${RESET}`);
+      process.exit(1);
+    }
+    if (withDependents) selectedKeys = expandAppDependents(selectedKeys, manifest.apps);
+    selectionReason = `explicit --only${withDependents ? " plus dependents" : ""}`;
+  } else if (!forceAll && (changedOnly || existingStack)) {
+    selectedKeys = new Set<string>();
+    for (const app of apps) {
+      const deployed = existingApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
+      if (!deployed?.deployed_commit || deployed.last_manifest_hash !== app.manifest_hash) {
+        selectedKeys.add(app.key);
+        continue;
+      }
+      const files = changedFilesSince(deployed.deployed_commit);
+      if (files === null || files.includes(stackLocation.path) || appIsAffectedByFiles(app, files)) {
+        selectedKeys.add(app.key);
+      }
+    }
+    selectedKeys = expandAppDependents(selectedKeys, manifest.apps);
+    if (rawSets.length > 0) selectedKeys = expandAppDependents(allKeys, manifest.apps);
+    if (rawStagingSets.length > 0) {
+      for (const app of apps) if (app.webhook_staging) selectedKeys.add(app.key);
+    }
+    selectionReason = "changed build contexts/manifests plus dependents";
+  }
+
+  const partial = selectedKeys.size < allKeys.size;
+  body.selected_app_keys = [...selectedKeys].sort();
+  body.partial = partial;
+  // Managed catalog services are reconciled on first/full deploy or when the
+  // stack manifest itself changed. App-only source changes do not rebuild them.
+  body.selected_service_keys = partial ? [] : services.map((service) => service.key);
+
+  const levels = (() => {
+    const remaining = new Set(selectedKeys);
+    const out: string[][] = [];
+    while (remaining.size) {
+      const level = [...remaining].filter((key) =>
+        (manifest.apps[key].needs ?? []).every((dep) => !remaining.has(dep))
+      ).sort();
+      if (!level.length) break;
+      level.forEach((key) => remaining.delete(key));
+      out.push(level);
+    }
+    return out;
+  })();
+  console.log(`\n${BOLD}Preflight plan${RESET}`);
+  console.log(`${DIM}Target commit:${RESET} ${gitCommit}`);
+  console.log(`${DIM}Selection:${RESET}     ${selectionReason}`);
+  console.log(`${DIM}Order:${RESET}         ${levels.map((level) => level.join(" + ")).join(" → ") || "(no app rollout)"}`);
+  table(
+    ["MEMBER", "ACTION", "CONFIG DIFF", "MANIFEST", "DOCKERFILE", "CONTEXT"],
+    apps.map((app) => {
+      const existing = existingApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
+      const configDiff = !existing
+        ? "new app"
+        : clientVisibleConfigDiff(existing, app).join(", ") || "none";
+      return [
+        app.key,
+        selectedKeys.has(app.key) ? (existing ? "reconcile" : "create") : "retain",
+        configDiff,
+        app.manifest_path || "-",
+        app.dockerfile_path || "(image)",
+        app.docker_context || "-",
+      ];
+    }),
+  );
+
+  if (selectedKeys.size === 0 && body.selected_service_keys.length === 0) {
+    console.log(`\n${GREEN}Stack already converged with the current commit; nothing to deploy.${RESET}`);
+    return;
+  }
+
   console.log(
-    `\nDeploying stack ${BOLD}${manifest.name}${RESET} (${services.length} service(s), ${apps.length} app(s))...`,
+    `\nDeploying stack ${BOLD}${manifest.name}${RESET} (${body.selected_service_keys.length} affected service(s), ${selectedKeys.size} affected app(s))...`,
   );
   if (reused) {
     console.log(
@@ -469,6 +674,30 @@ export async function stackUp(args: string[]): Promise<void> {
   const result = await followOp(op_id);
   if (result.ok) {
     console.log(`\n${GREEN}Stack deploy complete!${RESET}`);
+    const convergedApps = await get<Array<{
+      name: string;
+      status: string;
+      deployed_commit?: string | null;
+      config_revision?: number;
+      environment_stale?: number | boolean;
+    }>>("/api/apps");
+    console.log(`\n${BOLD}Commit convergence${RESET}`);
+    table(
+      ["MEMBER", "EXPECTED", "ACTUAL", "STATUS", "HEALTH", "CONFIG"],
+      apps.map((app) => {
+        const actual = convergedApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
+        const expected = app.image_ref || app.git_sha || "-";
+        const actualCommit = actual?.deployed_commit || "-";
+        return [
+          app.key,
+          expected.startsWith("sha256:") ? expected.slice(0, 19) : expected.slice(0, 12),
+          actualCommit.slice(0, 12),
+          actual?.status || "missing",
+          actual?.status === "running" && !actual.environment_stale ? "ready" : "not ready",
+          actual?.config_revision != null ? `r${actual.config_revision}` : "-",
+        ];
+      }),
+    );
   } else {
     console.error(`\n${RED}Stack deploy failed: ${result.error || "unknown error"}${RESET}`);
     console.error(

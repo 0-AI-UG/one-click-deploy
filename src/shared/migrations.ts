@@ -2193,6 +2193,41 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE stacks ADD COLUMN staging_env_keys TEXT NOT NULL DEFAULT '[]'");
     },
   },
+  {
+    version: 99,
+    description: "Store exact HTTP readiness status contracts for apps.",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN health_check_expected_statuses TEXT NOT NULL DEFAULT '[200]'");
+      db.run("DROP TRIGGER apps_bump_config_revision");
+      db.run(`CREATE TRIGGER apps_bump_config_revision
+        AFTER UPDATE OF
+          domain, git_repo, git_branch, dockerfile_path, docker_context,
+          source_mode, image_ref, build_cache_ref,
+          container_port, auth_password_hash, environment_id, env_projection,
+          public, health_check, health_check_mode, health_check_command,
+          health_check_file, health_check_max_age_seconds, health_check_expected_statuses,
+          internal_protocol, sticky, rate_limit_rps,
+          ip_allowlist, health_check_path, compress, public_port,
+          public_protocol, desired_replicas, min_replicas, max_replicas,
+          autoscale_enabled, autoscale_cpu_threshold, autoscale_mem_threshold,
+          autoscale_cooldown, autoscale_req_threshold, scale_to_zero_after,
+          desired_volume_id, desired_volume_size, desired_volume_path,
+          extra_volumes, memory_mb, cpu_limit,
+          webhook_enabled, webhook_branch, webhook_path, webhook_wait_for_ci,
+          webhook_staging_environment_id, durability_class, max_per_host,
+          min_locations, placement_pool
+        ON apps
+        BEGIN
+          UPDATE apps SET
+            config_revision = config_revision + 1,
+            rollout_requested_revision = CASE
+              WHEN rollout_requested_revision > 0 THEN config_revision + 1
+              ELSE 0
+            END
+          WHERE id = NEW.id;
+        END`);
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

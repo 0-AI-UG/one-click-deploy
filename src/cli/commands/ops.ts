@@ -1,5 +1,5 @@
 import { get, post, ApiError } from "../api.ts";
-import { newFollowRetryState, resetFollowRetryState, handleTransientFollowError } from "../ops.ts";
+import { newFollowRetryState, resetFollowRetryState, handleTransientFollowError, summarizeOperationError } from "../ops.ts";
 import { webConfirm } from "../confirm.ts";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW, colorStatus, table } from "../format.ts";
 
@@ -183,7 +183,8 @@ async function opsShow(id: number): Promise<void> {
   if (op.trigger) console.log(`${DIM}Trigger:${RESET}  ${op.trigger}`);
 
   if (op.error && op.error.message) {
-    console.log(`\n${RED}${BOLD}Error:${RESET} ${RED}${op.error.message}${RESET}`);
+    console.log(`\n${RED}${BOLD}Error:${RESET} ${RED}${summarizeOperationError(op.error.message)}${RESET}`);
+    console.log(`${DIM}More context: ocd ops logs ${op.id} --tail=80${RESET}`);
   }
 
   const commitStep = [...(op.steps || [])]
@@ -232,6 +233,7 @@ async function opsLogs(args: string[]): Promise<void> {
   let idStr = "";
   let since = 0;
   let follow = false;
+  let tail = 0;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--follow" || arg === "-f") {
@@ -242,6 +244,12 @@ async function opsLogs(args: string[]): Promise<void> {
     } else if (arg.startsWith("--since=")) {
       const n = parseInt(arg.slice(8), 10);
       if (!isNaN(n)) since = n;
+    } else if (arg === "--tail") {
+      const n = parseInt(args[++i] || "", 10);
+      if (!isNaN(n) && n > 0) tail = n;
+    } else if (arg.startsWith("--tail=")) {
+      const n = parseInt(arg.slice(7), 10);
+      if (!isNaN(n) && n > 0) tail = n;
     } else if (!arg.startsWith("-") && !idStr) {
       idStr = arg;
     }
@@ -249,17 +257,28 @@ async function opsLogs(args: string[]): Promise<void> {
 
   const id = parseInt(idStr, 10);
   if (!idStr || isNaN(id)) {
-    console.error("Usage: ocd ops logs <id> [--since N] [--follow]");
+    console.error("Usage: ocd ops logs <id> [--since N] [--tail=N] [--follow]");
     process.exit(1);
   }
 
   if (!follow) {
-    const data = await get<{ status: string; logs: OpLog[] }>(`/api/operations/${id}/logs?since=${since}`);
+    const tailQuery = tail > 0 ? `&tail=${tail}` : "";
+    const data = await get<{ status: string; logs: OpLog[] }>(`/api/operations/${id}/logs?since=${since}${tailQuery}`);
     for (const log of data.logs) printLog(log);
     return;
   }
 
   let cursor = since;
+  if (tail > 0) {
+    const initial = await get<{ logs: OpLog[]; next_cursor?: number }>(
+      `/api/operations/${id}/logs?since=${since}&tail=${tail}`,
+    );
+    for (const log of initial.logs) {
+      printLog(log);
+      cursor = Math.max(cursor, log.id);
+    }
+    if (typeof initial.next_cursor === "number") cursor = Math.max(cursor, initial.next_cursor);
+  }
   const retry = newFollowRetryState();
   while (true) {
     let data: { status: string; logs: OpLog[]; next_cursor?: number };
@@ -356,7 +375,7 @@ ${BOLD}Subcommands:${RESET}
   (list)                     List deploy engine operations (default)
   engine                     Show heartbeat, concurrency and operation kinds
   <id>                       Show an operation's steps and children
-  logs <id> [--follow]       Print an operation's logs (--follow to stream)
+  logs <id> [--tail=N] [--follow]  Print or reconnectingly stream operation logs
   cancel <id>                Confirm in the web UI, then stop and compensate safely
   retry <id>                 Resume cleanup or create a fresh retry
   finalize <id>              Reconcile resources and close a stale operation`);

@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { dirname, relative, resolve } from "node:path";
 import { BOLD, DIM, RED, RESET } from "./format.ts";
 import { promptLine, promptHidden } from "./prompt.ts";
 import type { DeployManifest } from "../shared/rpc.ts";
@@ -51,6 +52,65 @@ export function getGitRepo(): string {
   } catch {
     console.error(`${RED}Not a git repository (or no remote "origin" configured)${RESET}`);
     process.exit(1);
+  }
+}
+
+/** Absolute root of the current Git worktree. */
+export function getGitRoot(): string {
+  try {
+    return execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+  } catch {
+    console.error(`${RED}Not a git worktree${RESET}`);
+    process.exit(1);
+  }
+}
+
+/** Full immutable commit selected by the local checkout. */
+export function getGitCommit(): string {
+  try {
+    return execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+  } catch {
+    console.error(`${RED}Could not resolve the current Git commit${RESET}`);
+    process.exit(1);
+  }
+}
+
+/** Resolve a local manifest to a canonical repo-relative path and directory. */
+export function manifestRepoLocation(path: string): { path: string; dir: string; fullPath: string } {
+  const root = getGitRoot();
+  const fullPath = resolve(path);
+  const repoPath = relative(root, fullPath).replaceAll("\\", "/");
+  if (!repoPath || repoPath === ".." || repoPath.startsWith("../")) {
+    console.error(`${RED}Manifest must be inside the current Git worktree: ${path}${RESET}`);
+    process.exit(1);
+  }
+  const dir = relative(root, dirname(fullPath)).replaceAll("\\", "/");
+  return { path: repoPath, dir: dir === "." ? "" : dir, fullPath };
+}
+
+/** Fail locally before an API call can mutate stack/config state. Paths are
+ * canonical repository-relative values produced by the manifest resolver. */
+export function assertLocalBuildPaths(dockerfile: string, context: string): void {
+  const root = getGitRoot();
+  const checkInsideRepo = (path: string, label: string): string => {
+    const fullPath = resolve(root, path);
+    const repoPath = relative(root, fullPath).replaceAll("\\", "/");
+    if (repoPath === ".." || repoPath.startsWith("../")) {
+      throw new Error(`${label} escapes the Git worktree: ${path}`);
+    }
+    return fullPath;
+  };
+  const dockerfilePath = checkInsideRepo(dockerfile, "Dockerfile");
+  const contextPath = checkInsideRepo(context, "Docker context");
+  try {
+    if (!statSync(dockerfilePath).isFile()) throw new Error("not a file");
+  } catch {
+    throw new Error(`Preflight failed: Dockerfile does not exist: ${dockerfile}`);
+  }
+  try {
+    if (!statSync(contextPath).isDirectory()) throw new Error("not a directory");
+  } catch {
+    throw new Error(`Preflight failed: Docker context does not exist: ${context}`);
   }
 }
 

@@ -97,6 +97,10 @@ Retry either resumes recoverable cleanup/work or enqueues a fresh attempt,
 depending on operation state. The command returns the operation ID and whether
 it resumed. Follow the returned ID.
 
+For a failed stack deployment, retry is a checkpointed continuation: successful
+members are retained and convergence skips them, while failed/unreconciled
+members continue from the dependency level that still needs work.
+
 Prefer retry when steps are idempotent/resumable and the external cause has
 been fixed: capacity, Git access, provider/API availability, health endpoint,
 or invalid dependent state.

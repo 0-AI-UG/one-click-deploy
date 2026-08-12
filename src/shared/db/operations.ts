@@ -278,13 +278,14 @@ export function requeueOperation(id: number): OperationRow | null {
 export function retryOperationAsNew(
   id: number,
   triggeredBy: string,
+  inputOverride?: unknown,
 ): OperationRow | null {
   const op = getOperation(id);
   if (!op) return null;
   return enqueueOperation({
     kind: op.kind,
     resourceKeys: safeStringArray(op.resource_keys),
-    input: safeJson(op.input_json, {}),
+    input: inputOverride ?? safeJson(op.input_json, {}),
     trigger: "retry",
     triggeredBy,
   });

@@ -10,6 +10,8 @@ ocd deploy [manifest]
     [--dry-run]
     [--config-only]
 ocd deploy stack [manifest]
+    [--only=web,worker] [--with-dependents]
+    [--changed | --all]
 ```
 
 `ocd deploy` is the only CLI mutation for desired app configuration.
@@ -73,7 +75,7 @@ ocd service create <name>
 ocd stack <ls|status|logs>
 ocd ops [--app=<app>]
 ocd ops <id>
-ocd ops logs <id>
+ocd ops logs <id> [--tail=N] [--follow]
 ocd ops cancel|retry|finalize <id>
 ocd servers
 ocd resources

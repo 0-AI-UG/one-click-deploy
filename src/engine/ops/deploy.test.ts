@@ -997,6 +997,13 @@ describe("deploy step: build_and_run_container probe (resume robustness)", () =>
 });
 
 describe("deploy op: structure", () => {
+  test("existing-app candidates pass readiness before configuration commit", () => {
+    const names = redeployOp.steps.map((step) => step.name);
+    expect(names.indexOf("validate_candidate")).toBeLessThan(names.indexOf("commit_candidate_config"));
+    expect(names.indexOf("roll_extra_replicas")).toBeLessThan(names.indexOf("commit_candidate_config"));
+    expect(names.indexOf("commit_candidate_config")).toBeLessThan(names.indexOf("health_check"));
+  });
+
   test("has the expected step sequence", () => {
     const names = deployOp.steps.map((s) => s.name);
     expect(names).toEqual([

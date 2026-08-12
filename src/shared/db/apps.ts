@@ -88,6 +88,8 @@ export type AppRow = {
   health_check_command: string;
   health_check_file: string;
   health_check_max_age_seconds: number;
+  /** JSON array of exact HTTP readiness status codes. */
+  health_check_expected_statuses: string;
   /** Internal routing protocol on the app's internal entrypoint: 'http' =
    *  Traefik HTTP router (L7), 'tcp' = raw TCP pass-through. Decoupled from
    *  health_check (which only controls the container probe) — see migration 67.
@@ -288,6 +290,7 @@ export type AppIngressSettings = {
   health_check_command?: string;
   health_check_file?: string;
   health_check_max_age_seconds?: number;
+  health_check_expected_statuses?: number[];
   image_ref?: string;
   build_cache_ref?: string;
 };
@@ -357,7 +360,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, source_mode, image_ref, build_cache_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, source_mode, image_ref, build_cache_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, health_check_expected_statuses, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -382,6 +385,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
       app.health_check_command ?? "",
       app.health_check_file ?? "",
       app.health_check_max_age_seconds ?? 0,
+      JSON.stringify(app.health_check_expected_statuses ?? [200]),
       internalProtocol,
       allocateInternalPort(),
       allocateVirtualIp(),
@@ -674,12 +678,13 @@ export function updateAppArtifactAndHealth(
     healthCommand: string;
     healthFile: string;
     healthMaxAgeSeconds: number;
+    healthExpectedStatuses?: number[];
   },
 ): void {
   db.query(
     `UPDATE apps SET source_mode = ?, image_ref = ?, build_cache_ref = ?,
        health_check_mode = ?, health_check_command = ?, health_check_file = ?,
-       health_check_max_age_seconds = ? WHERE id = ?`,
+       health_check_max_age_seconds = ?, health_check_expected_statuses = ? WHERE id = ?`,
   ).run(
     fields.imageRef ? "image" : "git",
     fields.imageRef,
@@ -688,6 +693,7 @@ export function updateAppArtifactAndHealth(
     fields.healthCommand,
     fields.healthFile,
     fields.healthMaxAgeSeconds,
+    JSON.stringify(fields.healthExpectedStatuses ?? [200]),
     id,
   );
 }
@@ -698,6 +704,18 @@ export function recordAppManifestApplied(id: number, path: string, hash: string)
   db.query(
     "UPDATE apps SET last_manifest_path = ?, last_manifest_hash = ?, last_manifest_applied_at = datetime('now'), last_manifest_config_revision = config_revision WHERE id = ?",
   ).run(path, hash, id);
+}
+
+/** Collapse the many column-level trigger bumps produced by one manifest
+ * transaction into one externally-visible configuration revision. */
+export function normalizeAppConfigRevision(id: number, baseRevision: number): void {
+  const current = getApp(id);
+  if (!current || current.config_revision <= baseRevision) return;
+  db.query(
+    `UPDATE apps SET config_revision = ?,
+       rollout_requested_revision = CASE WHEN rollout_requested_revision > 0 THEN ? ELSE 0 END
+     WHERE id = ?`,
+  ).run(baseRevision + 1, baseRevision + 1, id);
 }
 
 export function updateAppDomain(id: number, domain: string): void {

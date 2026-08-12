@@ -16,11 +16,16 @@ For image deployments, set `image.ref`; a Git remote is then unnecessary.
 1. Read and validate the local manifest.
 2. Resolve `environment` and `webhook.staging_environment` by name.
 3. Resolve secret values from allowed local inputs.
-4. Send a complete manifest payload with `apply_mode: "manifest"`.
-5. Store the desired manifest server-side.
-6. Invoke the canonical deploy engine path.
+4. Resolve the exact local Git commit and canonical repo-relative build paths.
+5. Send a complete manifest payload with `apply_mode: "manifest"`.
+6. Build and health-check the candidate while the stored configuration remains unchanged.
+7. Commit the desired configuration as one revision only after readiness passes.
 
 The same sequence handles first deploys and later deploys.
+
+Git deployments use a fresh detached checkout of the exact selected commit;
+OCD never runs `git pull` in an existing app worktree. Dockerfile and context
+paths are always resolved relative to the manifest that declared them.
 
 App deployment and desired-configuration application are CLI-only. The web UI
 cannot submit this endpoint; it shows the last applied manifest and current

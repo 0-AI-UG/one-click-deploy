@@ -4,9 +4,18 @@ import {
   handleTransientFollowError,
   newFollowRetryState,
   resetFollowRetryState,
+  summarizeOperationError,
 } from "./ops.ts";
 
 describe("operation follow fallback", () => {
+  test("error summaries retain the final relevant build lines", () => {
+    const summary = summarizeOperationError(
+      Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n"),
+      3,
+    );
+    expect(summary).toBe("line 18\nline 19\nline 20");
+  });
+
   test("deduplicates reconnect warnings during one continuous outage", async () => {
     const state = newFollowRetryState();
     const lines: string[] = [];

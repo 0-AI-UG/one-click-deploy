@@ -1,8 +1,18 @@
-import { posix, resolve } from "node:path";
+import { posix } from "node:path";
 import { get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
-import { getGitRepo, readManifest, promptRequired, resolveAuthPassword, manifestHash } from "../manifest.ts";
+import {
+  getGitCommit,
+  getGitRepo,
+  assertLocalBuildPaths,
+  manifestRepoLocation,
+  readManifest,
+  promptRequired,
+  resolveAuthPassword,
+  manifestHash,
+} from "../manifest.ts";
+import { resolveRepoPath } from "../../shared/stack-spec.ts";
 import { mergeEnv } from "../../shared/env-merge.ts";
 import { withWebConfirmation } from "../confirm.ts";
 
@@ -14,6 +24,25 @@ interface Environment {
 
 export function resolveDockerfilePath(context = ".", dockerfile = "Dockerfile"): string {
   return context === "." ? dockerfile : posix.join(context, dockerfile);
+}
+
+export function resolveManifestBuildPaths(
+  manifestDir: string,
+  context = ".",
+  dockerfile = "Dockerfile",
+): { context: string; dockerfile: string } {
+  const resolvedContext = context === "."
+    ? (manifestDir || ".")
+    : manifestDir && (context === manifestDir || context.startsWith(`${manifestDir}/`))
+      ? context
+      : resolveRepoPath(manifestDir, context);
+  const dockerfileBase = manifestDir || (resolvedContext === "." ? "" : resolvedContext);
+  return {
+    context: resolvedContext,
+    dockerfile: manifestDir && (dockerfile === manifestDir || dockerfile.startsWith(`${manifestDir}/`))
+      ? dockerfile
+      : resolveRepoPath(dockerfileBase, dockerfile),
+  };
 }
 
 async function resolveEnvironment(name: string): Promise<Environment> {
@@ -121,11 +150,23 @@ ${BOLD}Options:${RESET}
     process.exit(0);
   }
 
-  const manifest = readManifest(resolve(manifestPath));
+  const location = manifestRepoLocation(manifestPath);
+  const manifest = readManifest(location.fullPath);
   const repo = manifest.image ? "" : getGitRepo();
+  const gitCommit = manifest.image ? undefined : getGitCommit();
+  const buildPaths = resolveManifestBuildPaths(
+    location.dir,
+    manifest.build?.context,
+    manifest.build?.dockerfile,
+  );
+  if (!manifest.image) assertLocalBuildPaths(buildPaths.dockerfile, buildPaths.context);
 
   console.log(`${DIM}${manifest.image ? "Image" : "Repo"}:${RESET}    ${manifest.image?.ref || repo}`);
-  console.log(`${DIM}Manifest:${RESET} ${manifestPath} ${BOLD}(${manifest.name})${RESET}`);
+  console.log(`${DIM}Manifest:${RESET} ${location.path} ${BOLD}(${manifest.name})${RESET}`);
+  if (gitCommit) console.log(`${DIM}Commit:${RESET}   ${gitCommit}`);
+  if (!manifest.image) {
+    console.log(`${DIM}Build:${RESET}    ${buildPaths.dockerfile} ${DIM}(context ${buildPaths.context})${RESET}`);
+  }
 
   const name = manifest.suggested_app_name ||
     (manifest.image ? manifest.image.ref.split("/").pop()!.split("@")[0] : repo.replace(/.*\//, ""));
@@ -175,11 +216,9 @@ ${BOLD}Options:${RESET}
     container_port: port,
     domain: manifest.domain,
     git_branch: manifest.git_branch ?? "",
-    dockerfile_path: resolveDockerfilePath(
-      manifest.build?.context,
-      manifest.build?.dockerfile,
-    ),
-    docker_context: manifest.build?.context ?? ".",
+    git_sha: gitCommit,
+    dockerfile_path: buildPaths.dockerfile,
+    docker_context: buildPaths.context,
     image_ref: manifest.image?.ref ?? "",
     build_cache_ref: manifest.build?.cache_ref ?? "",
     env_projection: manifest.env_projection ?? null,
@@ -195,6 +234,7 @@ ${BOLD}Options:${RESET}
     health_check_command: manifest.health_check?.command ?? "",
     health_check_file: manifest.health_check?.file ?? "",
     health_check_max_age_seconds: manifest.health_check?.max_age_seconds ?? 0,
+    health_check_expected_statuses: manifest.health_check?.expected_statuses ?? [200],
     internal_protocol: manifest.internal_protocol ?? "http",
     sticky: manifest.sticky ?? false,
     rate_limit_rps: manifest.rate_limit_rps ?? 0,
@@ -223,8 +263,8 @@ ${BOLD}Options:${RESET}
     autoscale_mem_threshold: autoscaling?.memory_threshold ?? 85,
     autoscale_req_threshold: autoscaling?.requests_per_minute ?? 0,
     autoscale_cooldown: autoscaling?.cooldown_seconds ?? 300,
-    manifest_path: manifestPath,
-    manifest_hash: manifestHash(resolve(manifestPath)),
+    manifest_path: location.path,
+    manifest_hash: manifestHash(location.fullPath),
     ...(serverId !== undefined ? { server_id: serverId } : {}),
     env_vars: [] as Array<{ key: string; value: string; secret?: boolean }>,
   };

@@ -142,6 +142,24 @@ async function applyExistingAppConfig(
     );
   }
 
+  if (controls.deploy !== false) {
+    const { opId } = enqueue({
+      kind: "apply_manifest",
+      resourceKeys: [`manifest:${app.id}`],
+      input: { appId: app.id, userId, deploy: true, spec },
+      trigger: "cli",
+      triggeredBy: userId,
+    });
+    return Response.json({
+      ok: true,
+      applied: false,
+      pending_commit: true,
+      changes,
+      config_revision: changes.length > 0 ? app.config_revision + 1 : app.config_revision,
+      op_id: opId,
+    }, { headers: corsHeaders });
+  }
+
   const resourceKeys = [`app:${app.id}`];
   const acq = tryAcquire(resourceKeys, NON_OP_HOLDER, "apply_config");
   if (!acq.ok) {
@@ -154,7 +172,6 @@ async function applyExistingAppConfig(
   try {
     // Persist rollout intent before any config write. Migration 95's revision
     // triggers advance this marker with every revision created by the apply.
-    if (controls.deploy !== false) db.requestAppRollout(app.id, app.config_revision);
     await applyAppConfig(app.id, spec, {
       userId,
       log: (line) => db.appendDeployLog(app.id, `[config] ${line}`),
@@ -171,7 +188,7 @@ async function applyExistingAppConfig(
     const { opId } = enqueue({
       kind: "apply_manifest",
       resourceKeys: [`manifest:${app.id}`],
-      input: { appId: app.id, userId, deploy: controls.deploy !== false },
+      input: { appId: app.id, userId, deploy: false },
       trigger: "cli",
       triggeredBy: userId,
     });

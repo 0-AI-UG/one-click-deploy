@@ -80,12 +80,20 @@ export function buildStackAppSpec(
   if (domain) spec.domain = domain;
   const gitBranch = manifest.git_branch;
   if (gitBranch) spec.git_branch = gitBranch;
-  if (manifest.build?.dockerfile) {
-    spec.dockerfile_path = manifestDir
-      ? `${manifestDir}/${manifest.build.dockerfile}`
-      : manifest.build.dockerfile;
-  }
-  if (manifest.build?.context) spec.docker_context = manifest.build.context;
+  const declaredContext = manifest.build?.context ?? ".";
+  const context = declaredContext === "."
+    ? (manifestDir || ".")
+    : manifestDir && (declaredContext === manifestDir || declaredContext.startsWith(`${manifestDir}/`))
+      ? declaredContext
+      : resolveRepoPath(manifestDir, declaredContext);
+  const declaredDockerfile = manifest.build?.dockerfile ?? "Dockerfile";
+  const dockerfileBase = manifestDir || (context === "." ? "" : context);
+  spec.docker_context = context;
+  spec.dockerfile_path = manifestDir && (
+    declaredDockerfile === manifestDir || declaredDockerfile.startsWith(`${manifestDir}/`)
+  )
+    ? declaredDockerfile
+    : resolveRepoPath(dockerfileBase, declaredDockerfile);
 
   if (manifest.webhook?.enabled) {
     spec.webhook_enabled = true;
@@ -125,6 +133,7 @@ export function buildStackAppSpec(
   if (healthCheck?.command) spec.health_check_command = healthCheck.command;
   if (healthCheck?.file) spec.health_check_file = healthCheck.file;
   if (healthCheck?.max_age_seconds) spec.health_check_max_age_seconds = healthCheck.max_age_seconds;
+  if (healthCheck?.expected_statuses) spec.health_check_expected_statuses = healthCheck.expected_statuses;
   const internalProtocol = manifest.internal_protocol;
   if (internalProtocol) spec.internal_protocol = internalProtocol;
   const sticky = manifest.sticky;

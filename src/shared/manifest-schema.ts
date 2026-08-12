@@ -252,6 +252,11 @@ const healthCheckSchema = z.object(
       "expected positive integer",
       (v) => Number.isInteger(v) && v >= 1,
     ).optional(),
+    /** Exact HTTP statuses accepted by readiness. Defaults to [200]. */
+    expected_statuses: z.array(
+      guardedNumber("expected integer HTTP status 100-599", (v) => Number.isInteger(v) && v >= 100 && v <= 599),
+      { error: "expected array of HTTP status codes" },
+    ).min(1, { error: "expected at least one HTTP status code" }).optional(),
   },
   { error: "expected health-check object" },
 ).superRefine((value, ctx) => {
@@ -267,6 +272,9 @@ const healthCheckSchema = z.object(
   }
   if (value.mode && mode !== "http" && value.path) {
     ctx.addIssue({ code: "custom", message: "only valid when mode is http", path: ["path"] });
+  }
+  if (mode !== "http" && value.expected_statuses) {
+    ctx.addIssue({ code: "custom", message: "only valid when mode is http", path: ["expected_statuses"] });
   }
 });
 
@@ -291,6 +299,8 @@ const authSchema = z.object(
 export const DeployManifestSchema = z
   .object({
     $schema: z.literal(1, { error: "expected 1" }).optional(),
+    /** Recognized metadata for agent/tooling hints; ignored by the deploy engine. */
+    $llm: z.unknown().optional(),
     name: nonEmptyString("expected a non-empty string"),
     description: z.string({ error: "expected string" }).optional(),
     icon: z.string({ error: "expected string" }).optional(),
@@ -471,6 +481,8 @@ const stackAppSchema = z
 export const StackManifestSchema = z
   .object({
     $schema: z.literal(1, { error: "expected 1" }).optional(),
+    /** Recognized metadata for agent/tooling hints; ignored by the deploy engine. */
+    $llm: z.unknown().optional(),
     name: nonEmptyString("expected a non-empty string"),
     description: z.string({ error: "expected string" }).optional(),
     /** Existing shared production environment selected by name. */

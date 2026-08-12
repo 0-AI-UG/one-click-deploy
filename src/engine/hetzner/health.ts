@@ -35,6 +35,10 @@ type ProbeStep =
   | { done: true; log?: string; result: HealthResult }
   | { done: false; retryLog: string; finalResult: HealthResult };
 
+export function isExpectedHttpStatus(statusCode: number, expectedStatuses: number[] = [200]): boolean {
+  return expectedStatuses.includes(statusCode);
+}
+
 /**
  * Shared retry loop for every health probe: log the intro once, then run
  * `step` up to `maxAttempts` times, sleeping 3s between attempts. `step`
@@ -176,10 +180,11 @@ async function httpProbeStep(
   retryLabel: string,
   hostKey?: string,
   path?: string,
+  expectedStatuses: number[] = [200],
 ): Promise<ProbeStep> {
   const { statusCode, sshFailed } = await httpProbe(ip, bindHost, port, hostKey, path);
   if (sshFailed) return inconclusiveStep(attempt, maxAttempts);
-  if (statusCode >= 200 && statusCode < 500) {
+  if (isExpectedHttpStatus(statusCode, expectedStatuses)) {
     return { done: true, log: `${passLabel}: HTTP ${statusCode}`, result: { healthy: true, statusCode } };
   }
   return {
@@ -213,6 +218,7 @@ export async function healthCheck(
   maxAttempts = 5,
   hostKey?: string,
   path?: string,
+  expectedStatuses: number[] = [200],
 ): Promise<HealthResult> {
   return runHealthProbe(
     `Checking health of ${containerName} on ${ip} via ${bindHost}:${port}${probePath(path)}`,
@@ -243,7 +249,7 @@ export async function healthCheck(
       // server's private IPv4 for tenant apps, 127.0.0.1 for the panel.
       const outcome = await httpProbeStep(
         ip, bindHost, port, i, maxAttempts,
-        "Health check passed", "Health check returned", hostKey, path,
+        "Health check passed", "Health check returned", hostKey, path, expectedStatuses,
       );
       if (outcome.done) {
         return {
@@ -386,6 +392,7 @@ export async function probeAppHealth(
     health_check_command?: string | null;
     health_check_file?: string | null;
     health_check_max_age_seconds?: number | null;
+    health_check_expected_statuses?: string | number[] | null;
   },
   ip: string,
   containerName: string,
@@ -396,7 +403,19 @@ export async function probeAppHealth(
 ): Promise<{ healthy: boolean; statusCode?: number; error?: string; inconclusive?: boolean }> {
   const mode = app.health_check_mode || (app.health_check ? "http" : "container");
   if (mode === "http") {
-    return healthCheck(ip, containerName, bindHost, port, maxAttempts, hostKey, app.health_check_path ?? undefined);
+    let expectedStatuses = [200];
+    if (Array.isArray(app.health_check_expected_statuses)) {
+      expectedStatuses = app.health_check_expected_statuses;
+    } else if (typeof app.health_check_expected_statuses === "string") {
+      try {
+        const parsed = JSON.parse(app.health_check_expected_statuses);
+        if (Array.isArray(parsed) && parsed.every((value) => Number.isInteger(value))) expectedStatuses = parsed;
+      } catch { /* legacy/invalid state falls back to strict HTTP 200 */ }
+    }
+    return healthCheck(
+      ip, containerName, bindHost, port, maxAttempts, hostKey,
+      app.health_check_path ?? undefined, expectedStatuses,
+    );
   }
   if (mode === "exec") {
     if (!app.health_check_command) return { healthy: false, error: "Exec health check command is missing" };

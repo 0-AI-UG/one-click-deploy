@@ -19,7 +19,7 @@ import { getSettings } from "../../shared/db/settings.ts";
 import { getApp } from "../../shared/db/apps.ts";
 import { getServer } from "../../shared/db/servers.ts";
 import { stepCount, listOps, getOp } from "../../engine/ops/registry.ts";
-import { getOpLogs } from "../../engine/op-logger.ts";
+import { getOpLogs, getOpLogTail } from "../../engine/op-logger.ts";
 import { currentHolder } from "../../engine/scheduler.ts";
 import {
   applyOperationResourceStatus,
@@ -206,8 +206,9 @@ export async function handleOperationEvents(request: Request, id: number): Promi
     }
     // Timed out with no new events — client re-polls.
     const op = getOperation(id)!;
+    const children = listChildOperations(id).map(toJsonRow);
     return Response.json(
-      { status: op.status, last_step: op.last_step, steps: [], next_cursor: since, resumable: true },
+      { status: op.status, last_step: op.last_step, steps: [], next_cursor: since, resumable: true, children },
       { headers: corsHeaders },
     );
   } catch (err) {
@@ -222,6 +223,7 @@ export async function handleGetOperationLogs(request: Request, id: number): Prom
     if (!op) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     const url = new URL(request.url);
     const since = parseInt(url.searchParams.get("since") || "0", 10);
+    const tail = Math.min(Math.max(parseInt(url.searchParams.get("tail") || "0", 10) || 0, 0), 5000);
     const wait = parseInt(url.searchParams.get("wait") || "0", 10);
     const timeoutMs = Math.min(Math.max(wait, 0), 25000);
 
@@ -244,7 +246,7 @@ export async function handleGetOperationLogs(request: Request, id: number): Prom
       return Response.json({ status: cur.status, logs: [], next_cursor: since, resumable: true }, { headers: corsHeaders });
     }
 
-    const logs = getOpLogs(id, since, 1000);
+    const logs = tail > 0 ? getOpLogTail(id, tail, since) : getOpLogs(id, since, 1000);
     const nextCursor = logs.reduce((max, row) => Math.max(max, row.id), since);
     return Response.json({ status: op.status, logs, next_cursor: nextCursor, resumable: true }, { headers: corsHeaders });
   } catch (err) {
@@ -308,12 +310,18 @@ export async function handleRetryOperation(request: Request, id: number): Promis
     // completed cleanup steps stay skipped. A completed/rolled-back forward
     // attempt gets a new audit row and starts from scratch.
     const sameAttempt = ["pending", "running", "compensating", "compensation_failed"].includes(op.status);
+    const stackResume = op.kind === "deploy_stack" && !sameAttempt;
+    const originalInput = safeParse<Record<string, unknown>>(op.input_json, {});
     const retried = sameAttempt
       ? requeueOperation(op.id)
-      : retryOperationAsNew(op.id, payload.userId);
+      : retryOperationAsNew(
+          op.id,
+          payload.userId,
+          stackResume ? { ...originalInput, resume_operation_id: op.id } : undefined,
+        );
     if (!retried) return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     return Response.json(
-      { ok: true, op_id: retried.id, resumed: retried.id === op.id },
+      { ok: true, op_id: retried.id, resumed: retried.id === op.id || stackResume, resumed_from: stackResume ? op.id : undefined },
       { headers: corsHeaders },
     );
   } catch (err) {

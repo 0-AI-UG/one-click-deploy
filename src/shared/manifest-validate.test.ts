@@ -53,6 +53,23 @@ const validApp = {
 };
 
 describe("validateDeployManifest", () => {
+  test("accepts recognized $llm metadata without warnings", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => validateDeployManifest({ ...validApp, $llm: { purpose: "worker" } }, ".ocd-deploy.json")).not.toThrow();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  test("validates exact HTTP readiness statuses", () => {
+    expect(() => validateDeployManifest({
+      ...validApp,
+      health_check: { mode: "http", path: "/ready", expected_statuses: [200, 204] },
+    }, ".ocd-deploy.json")).not.toThrow();
+    expect(() => validateDeployManifest({
+      ...validApp,
+      health_check: { mode: "http", expected_statuses: [700] },
+    }, ".ocd-deploy.json")).toThrow();
+  });
   test("accepts immutable image artifacts only by digest", () => {
     const digest = "a".repeat(64);
     expect(() =>

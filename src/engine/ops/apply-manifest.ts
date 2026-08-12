@@ -3,8 +3,9 @@ import { enqueueOperation, listChildOperations } from "../../shared/db/operation
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
+import type { DeployRequest } from "../../shared/rpc.ts";
 
-type ApplyManifestInput = { appId: number; userId?: string; deploy: boolean };
+type ApplyManifestInput = { appId: number; userId?: string; deploy: boolean; spec?: DeployRequest };
 type ApplyOut = { childOpIds: number[] };
 
 async function runChild(
@@ -41,6 +42,21 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
     const childOpIds: number[] = [];
     let app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
+    if (ctx.input.deploy && ctx.input.spec) {
+      childOpIds.push(await runChild(
+        ctx,
+        "candidate-redeploy",
+        "redeploy",
+        [`app:${app.id}`],
+        {
+          appId: app.id,
+          userId: ctx.input.userId,
+          gitSha: ctx.input.spec.git_sha,
+          candidate: ctx.input.spec,
+        },
+      ));
+      app = db.getApp(ctx.input.appId)!;
+    }
     const desiredId = app.desired_volume_id || "";
     const desiredSize = app.desired_volume_size;
     const desiredPath = app.desired_volume_path || "/data";
@@ -103,7 +119,7 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
       }
     }
 
-    if (ctx.input.deploy) {
+    if (ctx.input.deploy && !ctx.input.spec) {
       childOpIds.push(await runChild(
         ctx,
         "redeploy",

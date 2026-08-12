@@ -3,8 +3,17 @@ import {
   assessContainerInspection,
   assessMarkerFreshness,
   dockerExecScriptCommand,
+  isExpectedHttpStatus,
   parseContainerInspection,
 } from "./health.ts";
+
+describe("HTTP readiness status contract", () => {
+  test("rejects 404 by default and accepts only explicitly declared statuses", () => {
+    expect(isExpectedHttpStatus(200)).toBe(true);
+    expect(isExpectedHttpStatus(404)).toBe(false);
+    expect(isExpectedHttpStatus(204, [200, 204])).toBe(true);
+  });
+});
 
 describe("docker container state health", () => {
   test("parses full docker state rather than only State.Running", () => {

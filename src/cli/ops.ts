@@ -24,6 +24,15 @@ export interface OperationEventPoll {
   }>;
   next_cursor?: number;
   resumable?: boolean;
+  children?: OperationChildProgress[];
+}
+
+interface OperationChildProgress {
+  id: number;
+  label?: string;
+  status: string;
+  last_step?: string | null;
+  resource_labels?: string[];
 }
 
 interface OperationFallbackPoll {
@@ -34,6 +43,7 @@ interface OperationFallbackPoll {
   started_at: string | null;
   finished_at: string | null;
   steps: OperationEventPoll["steps"];
+  children?: OperationChildProgress[];
 }
 
 export const TERMINAL = new Set([
@@ -135,6 +145,13 @@ export function formatFallbackProgress(op: OperationFallbackPoll): string {
   return `last step ${step} at ${time}`;
 }
 
+export function summarizeOperationError(message: string, maxLines = 8, maxChars = 1200): string {
+  const lines = message.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
+  let summary = lines.slice(-maxLines).join("\n");
+  if (summary.length > maxChars) summary = `…${summary.slice(-maxChars)}`;
+  return summary || message;
+}
+
 /**
  * Poll an operation until it reaches a terminal state, printing step events
  * as they arrive. Returns ok=true only if the op completed successfully.
@@ -152,6 +169,7 @@ export async function followOp(
   if (!opts.quiet) console.log(`${DIM}Operation #${opId} — inspect with: ocd ops ${opId}${RESET}`);
   let lastSeq = 0;
   const printed = new Set<string>();
+  const printedChildren = new Map<number, string>();
   const retry = newFollowRetryState();
   while (true) {
     let poll: OperationEventPoll;
@@ -181,9 +199,10 @@ export async function followOp(
             if (!opts.quiet) printFollowEvent(event);
             lastSeq = Math.max(lastSeq, event.seq);
           }
+          if (!opts.quiet) printChildProgress(fallback.children, printedChildren);
           if (TERMINAL.has(fallback.status)) {
             if (fallback.status === "done") return { ok: true };
-            return { ok: false, error: fallback.error?.message || fallback.status };
+            return { ok: false, error: summarizeOperationError(fallback.error?.message || fallback.status) };
           }
         } catch {
           // Both paths may be unavailable during a panel restart. The bounded
@@ -212,11 +231,25 @@ export async function followOp(
       }
       lastSeq = event.seq;
     }
+    if (!opts.quiet) printChildProgress(poll.children, printedChildren);
 
     if (TERMINAL.has(poll.status)) {
       if (poll.status === "done") return { ok: true };
-      return { ok: false, error: poll.error?.message || poll.status };
+      return { ok: false, error: summarizeOperationError(poll.error?.message || poll.status) };
     }
+  }
+}
+
+function printChildProgress(
+  children: OperationChildProgress[] | undefined,
+  printed: Map<number, string>,
+): void {
+  for (const child of children ?? []) {
+    const key = `${child.status}:${child.last_step || ""}`;
+    if (printed.get(child.id) === key) continue;
+    printed.set(child.id, key);
+    const target = child.resource_labels?.filter(Boolean).join(", ") || child.label || `child #${child.id}`;
+    console.log(`    ${DIM}↳ ${target}${RESET} ${child.last_step || "waiting"} ${DIM}(${child.status})${RESET}`);
   }
 }
 

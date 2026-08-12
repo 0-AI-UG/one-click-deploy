@@ -166,6 +166,7 @@ export type DeployRequest = {
   health_check_command?: string;
   health_check_file?: string;
   health_check_max_age_seconds?: number;
+  health_check_expected_statuses?: number[];
   /** Immutable prebuilt OCI image. Production artifact deployments require
    * an @sha256 digest; tags are never accepted as deploy identity. */
   image_ref?: string;
@@ -246,6 +247,11 @@ export type { DeployManifest, StackManifest };
 
 export type StackDeployRequest = {
   name: string;
+  /** Optional partial reconcile selection. Omission means every member. */
+  selected_app_keys?: string[];
+  selected_service_keys?: string[];
+  /** Partial runs never interpret omitted members as desired removals. */
+  partial?: boolean;
   environment_id?: number; // Reuse an existing environment instead of auto-creating one (only honored when the stack is first created)
   /** The stack's shared staging environment from the stack manifest — the
    *  exact same model as `environment_id` above: one per stack, used by every

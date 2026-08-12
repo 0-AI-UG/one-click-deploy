@@ -28,6 +28,7 @@ runtime configuration into the stack manifest.
 | Field | Type/default | Exact behavior |
 |---|---|---|
 | `$schema` | `1`, optional | Stack schema version. |
+| `$llm` | any JSON value, optional | Agent/tooling metadata ignored by the deploy engine. |
 | `name` | non-empty string, required | Stack identifier and resource-name prefix. |
 | `description` | string | Human metadata. |
 | `environment` | non-empty string | Existing shared production environment by name. Omit to retain it on later deploys or create one on first deploy. |
@@ -132,8 +133,12 @@ value, which is useful for disabling email, alerts, and other side effects.
 
 Re-running `ocd deploy stack` is a complete reconciliation:
 
-- existing apps receive the complete child-manifest configuration and a
-  code rollout;
+- by default on an existing stack, only members whose manifest/build context
+  changed since their deployed commit (plus downstream dependents) roll;
+- `--all` forces every member, while `--only=a,b --with-dependents` performs an
+  explicit partial reconcile without treating retained siblings as removals;
+- existing apps build and pass readiness before their configuration revision
+  is committed;
 - new apps/services are created;
 - recorded members omitted from the new manifest are destroyed;
 - reused/adopted resources are protected from stale compensation;
@@ -147,6 +152,11 @@ Re-running `ocd deploy stack` is a complete reconciliation:
 
 Review the manifest diff before removing a member key. Renaming a key is
 equivalent to destroying the old member and creating a new one.
+
+Before enqueueing, the CLI prints the exact target commit, canonical manifest,
+Dockerfile and context paths, affected members, dependency order, and detected
+configuration differences. Completion prints expected/actual commit, status,
+readiness and configuration revision for every member.
 
 ## Example
 

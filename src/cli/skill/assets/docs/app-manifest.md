@@ -33,7 +33,8 @@ configuration for one app.
   "cpu_limit": 1,
   "health_check": {
     "mode": "http",
-    "path": "/health"
+    "path": "/health",
+    "expected_statuses": [200]
   },
   "internal_protocol": "http",
   "sticky": false,
@@ -84,6 +85,7 @@ Use `image.ref` instead of Git/build source fields for a prebuilt image:
 ## Manifest-owned fields
 
 - `$schema`: Manifest schema version; currently `1`.
+- `$llm`: Optional agent/tooling metadata ignored by the deploy engine.
 - `name`: Human-readable manifest name.
 - `description`: Human-readable description metadata.
 - `icon`: Icon URL metadata.
@@ -100,6 +102,8 @@ Use `image.ref` instead of Git/build source fields for a prebuilt image:
 - `memory_mb`: Memory limit.
 - `cpu_limit`: CPU limit.
 - `health_check`: HTTP, command, file, or container health policy.
+  HTTP readiness accepts only `expected_statuses` (default `[200]`), so a 404
+  is never considered ready unless explicitly declared.
 - `internal_protocol`: Upstream protocol.
 - `sticky`: Sticky sessions.
 - `rate_limit_rps`: Request limit; `0` disables it.

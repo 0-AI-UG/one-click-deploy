@@ -546,6 +546,7 @@ export function validateDeployRequest(req: {
   health_check_command?: string;
   health_check_file?: string;
   health_check_max_age_seconds?: number;
+  health_check_expected_statuses?: number[];
   internal_protocol?: string;
   sticky?: boolean;
   rate_limit_rps?: number;
@@ -597,6 +598,16 @@ export function validateDeployRequest(req: {
 
   const portResult = validatePort(req.container_port);
   if (!portResult.valid) return { valid: false, error: `Port: ${portResult.error}` };
+  if (
+    req.health_check_expected_statuses !== undefined &&
+    (
+      !Array.isArray(req.health_check_expected_statuses) ||
+      req.health_check_expected_statuses.length === 0 ||
+      req.health_check_expected_statuses.some((status) => !Number.isInteger(status) || status < 100 || status > 599)
+    )
+  ) {
+    return { valid: false, error: "Health check expected statuses must be a non-empty array of HTTP codes 100-599" };
+  }
 
   if (req.env_vars) {
     const envResult = validateEnvVars(req.env_vars);

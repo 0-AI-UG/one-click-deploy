@@ -45,6 +45,21 @@ export function getOpLogs(opId: number, sinceId = 0, limit = 1000): OpLogRow[] {
     .all(opId, sinceId, limit) as OpLogRow[];
 }
 
+/** Read the newest rows without scanning/transferring the whole operation log.
+ * The outer query restores chronological display order. */
+export function getOpLogTail(opId: number, limit: number, sinceId = 0): OpLogRow[] {
+  return db
+    .query(
+      `SELECT id, op_id, ts, level, message, attempt FROM (
+         SELECT id, op_id, ts, level, message, attempt FROM operation_logs
+          WHERE op_id = ? AND id > ?
+          ORDER BY id DESC
+          LIMIT ?
+       ) ORDER BY id ASC`,
+    )
+    .all(opId, sinceId, limit) as OpLogRow[];
+}
+
 function formatArg(a: unknown): string {
   if (typeof a === "string") return a;
   if (a instanceof Error) return a.stack || a.message;

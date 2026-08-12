@@ -52,6 +52,7 @@ export {
   updateAppBuildSource,
   updateAppArtifactAndHealth,
   recordAppManifestApplied,
+  normalizeAppConfigRevision,
   updateAppDomain,
   updateAppVolume,
   updateAppDesiredVolume,

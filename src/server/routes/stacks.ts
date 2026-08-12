@@ -67,12 +67,18 @@ export async function handleDeployStack(request: Request): Promise<Response> {
       return Response.json({ op_id: existing.id, attached: true }, { headers: corsHeaders });
     }
     const stack = db.getStackByName(req.name);
-    const hasNewServices = req.services.some((service) => !db.getServiceByName(`${req.name}-${service.key}`));
+    const selectedApps = req.selected_app_keys
+      ? req.apps.filter((app) => req.selected_app_keys!.includes(app.key))
+      : req.apps;
+    const selectedServices = req.selected_service_keys
+      ? req.services.filter((service) => req.selected_service_keys!.includes(service.key))
+      : req.services;
+    const hasNewServices = selectedServices.some((service) => !db.getServiceByName(`${req.name}-${service.key}`));
     const wantsStagingServices = req.apps.some((app) => app.webhook_staging === true);
-    const hasNewStagingServices = wantsStagingServices && req.services.some(
+    const hasNewStagingServices = wantsStagingServices && selectedServices.some(
       (service) => !db.getServiceByName(`${req.name}-${service.key}-staging`),
     );
-    const newApps = req.apps.filter((app) => !db.getAppByName(`${req.name}-${app.key}`));
+    const newApps = selectedApps.filter((app) => !db.getAppByName(`${req.name}-${app.key}`));
     if (hasNewServices || hasNewStagingServices || newApps.length > 0) {
       const pools = [
         ...(hasNewServices ? ["general"] : []),
