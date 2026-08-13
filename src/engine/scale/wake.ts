@@ -11,13 +11,17 @@ import { log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
 
-export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: string }> {
+export async function wakeApp(appId: number, operationId?: number): Promise<{ ok: boolean; error?: string }> {
   log("wake", `Waking app ${appId}`);
 
   try {
     const app = db.getApp(appId);
     if (!app) return { ok: false, error: "App not found" };
-    if (app.status !== "sleeping") return { ok: true }; // already awake or waking
+    const recoveringInterruptedWake =
+      (app.status === "waking" || app.status === "error") &&
+      app.sleeping_server_id != null &&
+      app.sleeping_host_port != null;
+    if (app.status !== "sleeping" && !recoveringInterruptedWake) return { ok: true };
 
     const serverId = app.sleeping_server_id;
     const hostPort = app.sleeping_host_port;
@@ -26,7 +30,7 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     const server = db.getServer(serverId);
     if (!server) return { ok: false, error: "Server not found" };
 
-    db.updateAppStatus(appId, "waking");
+    if (app.status !== "waking") db.updateAppStatus(appId, "waking");
 
     const hostKey = server.ssh_host_key || undefined;
     const containerName = app.name;
@@ -154,7 +158,14 @@ export async function wakeApp(appId: number): Promise<{ ok: boolean; error?: str
     // monitor would re-sleep the app on its next tick.
     db.touchAppLastRequest(appId);
     db.updateAppStatus(appId, "running");
-    db.insertScalingEvent({ app_id: appId, event_type: "wake", from_count: 0, to_count: 1, reason: "wake request" });
+    db.insertScalingEvent({
+      app_id: appId,
+      event_type: "wake",
+      from_count: 0,
+      to_count: 1,
+      reason: "wake request",
+      operation_id: operationId,
+    });
 
     // Re-render ingress so traffic is routed back to the replica — the
     // desired-state render replaces the waker routing (every router → panel

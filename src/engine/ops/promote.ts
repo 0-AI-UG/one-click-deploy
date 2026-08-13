@@ -1,13 +1,17 @@
 import * as db from "../../shared/db.ts";
 import { rollingRedeploy } from "../scale/index.ts";
 import { syncAppIngress } from "../scale/traefik-manager.ts";
+import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import { hashEnvironment } from "../revision.ts";
 import { registerOp } from "./registry.ts";
 import {
+  snapshotCurrentRevision,
   checkoutTarget,
   rebuildImage,
   swapContainer,
   syncIngressStep,
   healthCheckStep,
+  discardRevisionSnapshot,
   type TargetOut,
 } from "./rollback.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -37,17 +41,27 @@ const loadPromotionTarget: Step<PromoteInput, TargetOut> = {
     const source = db.getApp(ctx.input.sourceAppId);
     if (!source) throw new Error("Source app not found");
     if (source.id === dest.id) throw new Error("Source and destination must be different apps");
+    if (source.source_mode !== dest.source_mode) {
+      throw new Error("Source and destination apps use different artifact modes");
+    }
 
     const replicas = db.getReplicas(dest.id);
     if (replicas.length === 0) throw new Error("Destination app has no replicas");
     const first = replicas[0];
 
     // The version running in SOURCE = its most recent successful deployment.
-    const sourceCommit = db
+    const sourceDeployment = db
       .getDeployments(source.id)
-      .find((d) => d.status === "deployed")?.git_commit;
+      .find((d) => d.status === "deployed");
+    const sourceCommit = sourceDeployment?.git_commit;
     if (!sourceCommit) {
       throw new Error(`Source app ${source.name} has no successful deployment to promote`);
+    }
+    if (dest.source_mode !== "image" && !/^[a-f0-9]{7,64}$/i.test(sourceCommit)) {
+      throw new Error(`Source app ${source.name} has no valid Git revision to promote`);
+    }
+    if (dest.source_mode === "image" && !sourceDeployment?.image_digest?.includes("@sha256:")) {
+      throw new Error(`Source app ${source.name} has no immutable image digest to promote`);
     }
 
     if (ctx.input.userId) db.updateAppDeployedBy(dest.id, ctx.input.userId);
@@ -62,6 +76,7 @@ const loadPromotionTarget: Step<PromoteInput, TargetOut> = {
       serverId: first.server_id,
       gitCommit: sourceCommit,
       imageTag: `${dest.name}:latest`,
+      imageDigest: sourceDeployment?.image_digest || undefined,
       previousStatus: dest.status,
     };
   },
@@ -75,11 +90,23 @@ const loadPromotionTarget: Step<PromoteInput, TargetOut> = {
 const rollExtraReplicas: Step<PromoteInput, { ok: true }> = {
   name: "roll_extra_replicas",
   label: "Roll extra replicas",
-  async run(ctx) {
+  async run(ctx, prior) {
     const replicas = db.getReplicas(ctx.input.appId);
     if (replicas.length <= 1) return { ok: true };
-    const rolling = await rollingRedeploy(ctx.input.appId, (step, detail) => ctx.log(`[${step}] ${detail}`));
-    if (!rolling.ok) db.appendDeployLog(ctx.input.appId, `[promote] Rolling update warning: ${rolling.error}`);
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("Destination app not found");
+    const swap = prior["swap_container"] as { imageDigest: string };
+    const envVars = await resolveAppEnvVars(app);
+    const rolling = await rollingRedeploy(
+      ctx.input.appId,
+      (step, detail) => ctx.log(`[${step}] ${detail}`),
+      {
+        imageDigest: swap.imageDigest,
+        envHash: hashEnvironment(envVars),
+        configRevision: app.config_revision,
+      },
+    );
+    if (!rolling.ok) throw new Error(`Promotion rolling update failed: ${rolling.error}`);
     return { ok: true };
   },
   async compensate(ctx) {
@@ -105,6 +132,7 @@ const recordPromotion: Step<PromoteInput, { deploymentId: number }> = {
   label: "Record promotion",
   async run(ctx, prior) {
     const target = prior["load_target_deployment"] as TargetOut;
+    const swap = prior["swap_container"] as { imageDigest: string };
     const source = db.getApp(ctx.input.sourceAppId);
     const sourceName = source?.name ?? `app:${ctx.input.sourceAppId}`;
     const sourceDeployment = db.getLastSuccessfulDeployment(ctx.input.sourceAppId);
@@ -114,6 +142,7 @@ const recordPromotion: Step<PromoteInput, { deploymentId: number }> = {
       operation_id: ctx.opId,
       app_id: target.appId,
       image_tag: target.imageTag,
+      image_digest: swap.imageDigest,
       image_size_bytes: sourceDeployment?.image_size_bytes,
       archive_size_bytes: sourceDeployment?.archive_size_bytes,
       transfer_size_bytes: sourceDeployment?.transfer_size_bytes,
@@ -132,6 +161,7 @@ const promoteOp: OpKindDefinition<PromoteInput> = {
   resourceKeys: (input) => [`app:${input.appId}`],
   steps: [
     loadPromotionTarget,
+    snapshotCurrentRevision,
     checkoutTarget,
     rebuildImage,
     swapContainer,
@@ -139,6 +169,7 @@ const promoteOp: OpKindDefinition<PromoteInput> = {
     syncIngressStep,
     healthCheckStep,
     recordPromotion,
+    discardRevisionSnapshot,
   ],
 };
 

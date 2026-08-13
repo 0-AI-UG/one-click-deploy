@@ -20,6 +20,7 @@ export async function scaleUp(
   targetServerId?: number,
   preReservedPort?: { id: number; server_id: number; bind_address: string; host_port: number },
   allowServerProvisioning = false,
+  provisioningKey?: string,
 ) {
   const settings = db.getSettings();
   const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
@@ -47,6 +48,7 @@ export async function scaleUp(
       targetServerId,
       undefined,
       allowServerProvisioning,
+      provisioningKey ? `${provisioningKey}-r${replicaNum}` : undefined,
     );
     const targetHostKey = targetServer.ssh_host_key || undefined;
 
@@ -80,6 +82,7 @@ export async function scaleUp(
       reservation.bind_address !== replicaBindAddr ||
       reservation.host_port !== hostPort
     ) throw new Error("Pre-reserved port tuple does not match selected target");
+    let inserted: Replica | null = null;
     try {
       const bindProbe = await sshExec(
         targetServer.ipv4,
@@ -203,7 +206,7 @@ export async function scaleUp(
 
     // Insert replica record BEFORE syncing ingress so the upstream pool
     // built from the DB actually includes the new replica.
-    const inserted = db.insertReplica({
+    inserted = db.insertReplica({
       app_id: app.id,
       server_id: targetServer.id,
       host_port: hostPort,
@@ -231,6 +234,26 @@ export async function scaleUp(
     await syncAppIngress(app.id);
 
     emit("scale", `Replica ${replicaNum} deployed on ${targetServer.name}`);
+    } catch (error) {
+      // One replica iteration is a work boundary even when its caller wraps a
+      // larger scale/deploy step. A failure before return must remove its own
+      // possibly-started container and DB row because the runner cannot invoke
+      // a compensation hook for an incomplete caller step.
+      const removal = await sshExec(
+        targetServer.ipv4,
+        `su - deploy -c ${JSON.stringify(`docker rm -f ${containerName} 2>/dev/null || true`)}`,
+        targetHostKey,
+      );
+      if (inserted) db.deleteReplica(inserted.id);
+      try { await syncAppIngress(app.id); } catch { /* best-effort convergence */ }
+      try { await db.gcServerIfEmpty(targetServer.id); } catch { /* reconciler will retry */ }
+      if (removal.exitCode !== 0) {
+        throw new Error(
+          `Replica setup failed and partial container ${containerName} could not be removed (ssh exit ${removal.exitCode})`,
+          { cause: error },
+        );
+      }
+      throw error;
     } finally {
       if (ownsReservation) db.releaseHostPortReservation(reservation.id);
     }

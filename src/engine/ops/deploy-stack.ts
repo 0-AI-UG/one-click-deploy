@@ -28,6 +28,7 @@ import type { Server } from "../../shared/rpc.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { allReplicasAttested, hashEnvironment } from "../revision.ts";
+import dbInstance from "../../shared/db/connection.ts";
 
 type DeployStackInput = StackDeployRequest;
 
@@ -312,10 +313,80 @@ async function injectExistingServiceCredentials(
 
 // --- Steps -----------------------------------------------------------------
 
+type ValidatePlanOut = { levels: string[][]; newApps: number };
+
+const validatePlan: Step<DeployStackInput, ValidatePlanOut> = {
+  name: "validate_plan",
+  label: "Validate stack plan",
+  async run(ctx) {
+    const req = ctx.input;
+    if (!req.name || !NAME_RE.test(req.name)) {
+      throw new Error(
+        "Stack name must start with a letter/digit and contain only lowercase letters, digits, and hyphens",
+      );
+    }
+    const appKeys = new Set(req.apps.map((app) => app.key));
+    const serviceKeys = new Set(req.services.map((service) => service.key));
+    if (appKeys.size !== req.apps.length) throw new Error("Stack app keys must be unique");
+    if (serviceKeys.size !== req.services.length) throw new Error("Stack service keys must be unique");
+    for (const key of appKeys) {
+      if (serviceKeys.has(key)) throw new Error(`Stack key "${key}" is used by both an app and a service`);
+    }
+    for (const key of req.selected_app_keys ?? []) {
+      if (!appKeys.has(key)) throw new Error(`Selected app key "${key}" is not declared in the stack`);
+    }
+    for (const key of req.selected_service_keys ?? []) {
+      if (!serviceKeys.has(key)) throw new Error(`Selected service key "${key}" is not declared in the stack`);
+    }
+    for (const app of req.apps) {
+      if (!NAME_RE.test(app.key)) throw new Error(`Invalid app key "${app.key}"`);
+      for (const dependency of app.needs ?? []) {
+        if (!appKeys.has(dependency) && !serviceKeys.has(dependency)) {
+          throw new Error(`App "${app.key}" needs unknown key "${dependency}"`);
+        }
+      }
+      if (app.webhook_staging && !app.webhook_enabled) {
+        throw new Error(
+          `App "${app.key}" sets webhook.staging but not webhook.enabled — staging holds pushed commits, so it needs the webhook.`,
+        );
+      }
+    }
+    for (const service of req.services) {
+      if (!NAME_RE.test(service.key)) throw new Error(`Invalid service key "${service.key}"`);
+      if (!getCatalogEntry(service.type)) throw new Error(`Unknown service type: ${service.type}`);
+    }
+    if (req.environment_id != null && !db.getEnvironment(req.environment_id)) {
+      throw new Error(`Environment ${req.environment_id} not found`);
+    }
+    if (req.staging_environment_id != null && !db.getEnvironment(req.staging_environment_id)) {
+      throw new Error(`Staging environment ${req.staging_environment_id} not found`);
+    }
+    const wantsStaging = req.apps.some((app) => app.webhook_staging);
+    const existing = db.getStackByName(req.name);
+    const effectiveStagingId = req.staging_environment_id !== undefined
+      ? req.staging_environment_id
+      : existing?.staging_environment_id ?? null;
+    if (req.staging_env_vars?.length && effectiveStagingId == null && !wantsStaging) {
+      throw new Error("staging_env values require at least one webhook-staging member or a selected staging environment");
+    }
+    const activeApps = selectedApps(req);
+    const levels = topoLevels(activeApps);
+    const newApps = activeApps.filter(
+      (app) => !db.getAppByName(memberName(req.name, app.key)),
+    ).length;
+    if (portCapacityExceeded(db.countApps(), newApps, db.INTERNAL_PORT_COUNT)) {
+      throw new Error(
+        `Stack needs ${newApps} new app port(s) but only ${db.INTERNAL_PORT_COUNT - db.countApps()} of the ${db.INTERNAL_PORT_COUNT} fleet internal ports remain. Destroy an app or shrink the stack.`,
+      );
+    }
+    return { levels, newApps };
+  },
+};
+
 const plan: Step<DeployStackInput, PlanOut> = {
   name: "plan",
   label: "Plan stack",
-  async run(ctx) {
+  async run(ctx, prior) {
     const req = ctx.input;
     if (!req.name || !NAME_RE.test(req.name)) {
       throw new Error(
@@ -324,6 +395,19 @@ const plan: Step<DeployStackInput, PlanOut> = {
     }
     const appKeys = new Set(req.apps.map((a) => a.key));
     const serviceKeys = new Set(req.services.map((s) => s.key));
+    // Keep direct step invocation safe as well as normal runner execution:
+    // every validation that depends only on input/current state precedes the
+    // first stack/environment mutation.
+    for (const app of req.apps) {
+      if (app.webhook_staging && !app.webhook_enabled) {
+        throw new Error(
+          `App "${app.key}" sets webhook.staging but not webhook.enabled — staging holds pushed commits, so it needs the webhook.`,
+        );
+      }
+    }
+    if (req.staging_environment_id != null && !db.getEnvironment(req.staging_environment_id)) {
+      throw new Error(`Staging environment ${req.staging_environment_id} not found`);
+    }
     // Every dependency must resolve to a known app or service key.
     for (const a of req.apps) {
       for (const n of a.needs ?? []) {
@@ -336,7 +420,7 @@ const plan: Step<DeployStackInput, PlanOut> = {
     // Topo-sort (also detects cycles) before touching any state.
     const activeApps = selectedApps(req);
     const activeServices = selectedServices(req);
-    const levels = topoLevels(activeApps);
+    const levels = (prior["validate_plan"] as ValidatePlanOut | undefined)?.levels ?? topoLevels(activeApps);
 
     // Snapshot which managed services already exist before reconciliation for
     // durable plan/audit output. Both reused and newly successful services are
@@ -357,9 +441,9 @@ const plan: Step<DeployStackInput, PlanOut> = {
     }
 
     // Idempotent upsert: reuse an existing stack (resume) or create it + env.
-    let stackId: number;
+    let stackId = 0;
     let envId: number;
-    let createdStack: boolean;
+    let createdStack = false;
     let createdEnv: boolean;
     const existing = db.getStackByName(req.name);
     if (existing) {
@@ -388,15 +472,24 @@ const plan: Step<DeployStackInput, PlanOut> = {
         while (db.getEnvironments().find((e) => e.name === envName)) {
           envName = `${req.name}-stack-env-${suffix++}`;
         }
-        const env = db.insertEnvironment(envName, "");
-        envId = env.id;
+        const created = dbInstance.transaction(() => {
+          const env = db.insertEnvironment(envName, "");
+          const stack = db.insertStack({ name: req.name, environment_id: env.id });
+          return { env, stack };
+        })();
+        envId = created.env.id;
+        stackId = created.stack.id;
         createdEnv = true;
-        ctx.log(`created environment "${envName}" (${env.id})`);
+        createdStack = true;
+        ctx.log(`created environment "${envName}" (${created.env.id})`);
+        ctx.log(`created stack #${created.stack.id} (env ${envId})`);
       }
-      const stack = db.insertStack({ name: req.name, environment_id: envId });
-      stackId = stack.id;
-      createdStack = true;
-      ctx.log(`created stack #${stack.id} (env ${envId})`);
+      if (!createdEnv) {
+        const stack = db.insertStack({ name: req.name, environment_id: envId });
+        stackId = stack.id;
+        createdStack = true;
+        ctx.log(`created stack #${stack.id} (env ${envId})`);
+      }
     }
     // The owning stack control file is an implicit webhook input for every
     // member, including members omitted from a partial reconcile.
@@ -453,7 +546,14 @@ const plan: Step<DeployStackInput, PlanOut> = {
       while (db.getEnvironments().find((e) => e.name === stagingName)) {
         stagingName = `${req.name}-stack-staging-env-${suffix++}`;
       }
-      const created = db.duplicateEnvironment(envId, stagingName);
+      const created = dbInstance.transaction(() => {
+        const environment = db.duplicateEnvironment(envId, stagingName);
+        // Environment creation and ownership publication are one crash-safe
+        // boundary: a retry can discover it through the stack row and cannot
+        // leak suffix-named staging environments.
+        db.updateStackStagingEnvironment(stackId, environment.id);
+        return environment;
+      })();
       stagingEnvId = created.id;
       createdStagingEnv = true;
       ctx.log(`created staging environment "${stagingName}" (${created.id}) as a copy of the stack env`);
@@ -1200,9 +1300,9 @@ const deployStackOp: OpKindDefinition<DeployStackInput> = {
   kind: "deploy_stack",
   label: "Deploy stack",
   resourceKeys: (input) => [`stack:${input.name}`],
-  // Source/path validation is deliberately first: no stack, environment,
-  // service volume, or desired configuration is mutated until it succeeds.
-  steps: [preflightApps, plan, reconcileServices, deployApps, reconcileRemovals, finalize],
+  // Pure plan validation and source/path preflight both finish before any
+  // stack, environment, service volume, or desired configuration is mutated.
+  steps: [validatePlan, preflightApps, plan, reconcileServices, deployApps, reconcileRemovals, finalize],
 };
 
 registerOp(deployStackOp as OpKindDefinition<any>);

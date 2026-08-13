@@ -80,6 +80,8 @@ mock.module("../../shared/github.ts", () => ({
 import * as db from "../../shared/db.ts";
 import deployOp, { appVolumeName, resolveAppDomain, resolveStagingEnvironment } from "./deploy.ts";
 import redeployOp from "./redeploy.ts";
+import rollbackOp from "./rollback.ts";
+import promoteOp from "./promote.ts";
 
 // Synthetic op context. Steps that don't call park/unpark can use this shape.
 function makeCtx(input: any) {
@@ -1002,6 +1004,30 @@ describe("deploy op: structure", () => {
     expect(names.indexOf("validate_candidate")).toBeLessThan(names.indexOf("commit_candidate_config"));
     expect(names.indexOf("roll_extra_replicas")).toBeLessThan(names.indexOf("commit_candidate_config"));
     expect(names.indexOf("commit_candidate_config")).toBeLessThan(names.indexOf("health_check"));
+  });
+
+  test("revision-changing operations complete a reversible snapshot before mutation", () => {
+    for (const op of [redeployOp, rollbackOp, promoteOp]) {
+      const names = op.steps.map((step) => step.name);
+      const snapshotIndex = names.indexOf("snapshot_current_revision");
+      expect(snapshotIndex).toBeGreaterThan(0);
+      expect(op.steps[snapshotIndex].compensate).toBeFunction();
+
+      const firstMutation = op.kind === "redeploy"
+        ? names.indexOf("clone_repo")
+        : names.indexOf("checkout_target");
+      expect(snapshotIndex).toBeLessThan(firstMutation);
+      expect(names.at(-1)).toBe("discard_revision_snapshot");
+    }
+  });
+
+  test("a failing build or swap is restored by the prior completed snapshot step", () => {
+    const redeployBuild = redeployOp.steps.find((step) => step.name === "pull_and_build");
+    const rollbackSwap = rollbackOp.steps.find((step) => step.name === "swap_container");
+    const promoteSwap = promoteOp.steps.find((step) => step.name === "swap_container");
+    expect(redeployBuild?.compensate).toBeUndefined();
+    expect(rollbackSwap?.compensate).toBeUndefined();
+    expect(promoteSwap?.compensate).toBeUndefined();
   });
 
   test("has the expected step sequence", () => {

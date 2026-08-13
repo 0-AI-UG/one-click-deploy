@@ -12,6 +12,8 @@ export async function pickTargetServer(
   // scale 1→3 spread across hosts/locations instead of stacking on one host.
   plannedByServer?: Map<number, number>,
   allowServerProvisioning = false,
+  /** Stable owner suffix supplied by an engine operation for crash adoption. */
+  provisioningKey?: string,
 ): Promise<Server> {
   // Explicit placement: caller chose a specific server
   if (preferredServerId) {
@@ -142,7 +144,9 @@ export async function pickTargetServer(
     return await provisionServer({
       serverType,
       location,
-      name: `ocd-${app.name}-r${Date.now()}`,
+      name: provisioningKey
+        ? `ocd-${app.name}-${provisioningKey}`
+        : `ocd-${app.name}-r${Date.now()}`,
       // Join the app's placement pool so future picks see it as a candidate.
       pool: app.placement_pool,
       approved: allowServerProvisioning,

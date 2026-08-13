@@ -45,6 +45,7 @@ const deployAppsStep = deployStackOp.steps.find((s) => s.name === "deploy_apps")
 const reconcileServicesStep = deployStackOp.steps.find((s) => s.name === "reconcile_services")!;
 const reconcileRemovalsStep = deployStackOp.steps.find((s) => s.name === "reconcile_removals")!;
 const preflightAppsStep = deployStackOp.steps.find((s) => s.name === "preflight_apps")!;
+const validatePlanStep = deployStackOp.steps.find((s) => s.name === "validate_plan")!;
 
 function app(key: string, needs?: string[]) {
   return { key, needs, app_name: key, git_repo: "https://github.com/x/y", container_port: 3000 };
@@ -216,6 +217,19 @@ describe("stack member convergence checkpoints", () => {
 });
 
 describe("deploy_stack plan step", () => {
+  test("runs pure manifest validation before remote preflight and state mutation", async () => {
+    expect(deployStackOp.steps.indexOf(validatePlanStep)).toBeLessThan(
+      deployStackOp.steps.indexOf(preflightAppsStep),
+    );
+    const name = `s-${randomSuffix()}`;
+    const input = {
+      ...req(name, [{ ...app("web"), webhook_staging: true } as any]),
+    } as StackDeployRequest;
+    await expect(validatePlanStep.run(makeCtx(input), {})).rejects.toThrow(/webhook\.enabled/);
+    expect(db.getStackByName(name)).toBeNull();
+    expect(db.getEnvironments().some((environment) => environment.name.startsWith(name))).toBe(false);
+  });
+
   test("rejects an invalid stack name", async () => {
     const ctx = makeCtx(req("Bad Name", [app("web")]));
     await expect(planStep.run(ctx, {})).rejects.toThrow();

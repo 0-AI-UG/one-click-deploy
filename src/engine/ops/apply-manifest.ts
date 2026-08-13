@@ -17,6 +17,7 @@ type ApplyManifestInput = {
   pendingRollout?: boolean;
 };
 type ApplyOut = { childOpIds: number[] };
+type ManifestPlanOut = { rollout: "control" | "runtime" | "build" };
 
 async function runChild(
   ctx: OpContext<ApplyManifestInput>,
@@ -45,14 +46,32 @@ function containerMountPath(volumeMount: string): string {
   return separator < 0 ? "" : volumeMount.slice(separator + 1);
 }
 
+const validateManifest: Step<ApplyManifestInput, ManifestPlanOut> = {
+  name: "validate_manifest",
+  label: "Validate manifest plan",
+  async run(ctx) {
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App not found");
+    const rollout = ctx.input.rollout ?? (ctx.input.deploy ? "build" : "control");
+    if (ctx.input.deploy && rollout === "control") {
+      throw new Error("A deploy request cannot use a control-only rollout");
+    }
+    if (!ctx.input.spec && app.desired_volume_size < 0) {
+      throw new Error("The app volume predates manifest ownership; deploy a manifest with explicit volume state");
+    }
+    return { rollout };
+  },
+};
+
 const reconcile: Step<ApplyManifestInput, ApplyOut> = {
   name: "reconcile_manifest",
   label: "Reconcile manifest state",
-  async run(ctx) {
+  async run(ctx, prior) {
     const childOpIds: number[] = [];
     let app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
-    const rollout = ctx.input.rollout ?? (ctx.input.deploy ? "build" : "control");
+    const rollout = (prior["validate_manifest"] as ManifestPlanOut | undefined)?.rollout ??
+      (ctx.input.rollout ?? (ctx.input.deploy ? "build" : "control"));
     if (ctx.input.pendingRollout) db.requestAppRollout(app.id);
     if (ctx.input.spec && rollout === "build") {
       childOpIds.push(await runChild(
@@ -148,24 +167,6 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
         [`app:${app.id}`],
         { appId: app.id, force: true },
       ));
-      app = db.getApp(ctx.input.appId)!;
-      const priorDeployment = db.getDeployments(app.id).find((row) => row.status === "deployed");
-      if (priorDeployment) {
-        db.insertDeployment({
-          app_id: app.id,
-          operation_id: ctx.opId,
-          image_tag: priorDeployment.image_tag,
-          image_digest: priorDeployment.image_digest,
-          env_hash: hashEnvironment(await resolveAppEnvVars(app)),
-          git_commit: priorDeployment.git_commit,
-          config_revision: app.config_revision,
-          source: "manifest-runtime",
-          image_size_bytes: priorDeployment.image_size_bytes,
-          archive_size_bytes: 0,
-          transfer_size_bytes: 0,
-        });
-        if (!ctx.input.pendingRollout) db.clearAppRolloutRequest(app.id, app.config_revision);
-      }
     }
 
     if (ctx.input.deploy && !ctx.input.spec) {
@@ -181,11 +182,52 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
   },
 };
 
+const recordRuntimeDeployment: Step<ApplyManifestInput, { recorded: boolean }> = {
+  name: "record_runtime_deployment",
+  label: "Record runtime rollout",
+  async probe(ctx, prior) {
+    const rollout = (prior["validate_manifest"] as ManifestPlanOut | undefined)?.rollout;
+    if (rollout !== "runtime") return { recorded: false };
+    const existing = db.getDeployments(ctx.input.appId).find(
+      (deployment) => deployment.operation_id === ctx.opId,
+    );
+    return existing ? { recorded: true } : null;
+  },
+  async run(ctx, prior) {
+    const rollout = (prior["validate_manifest"] as ManifestPlanOut | undefined)?.rollout ??
+      (ctx.input.rollout ?? (ctx.input.deploy ? "build" : "control"));
+    if (rollout !== "runtime") return { recorded: false };
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App disappeared after runtime rollout");
+    const priorDeployment = db.getDeployments(app.id).find(
+      (deployment) => deployment.status === "deployed" && deployment.operation_id !== ctx.opId,
+    );
+    if (!priorDeployment) {
+      throw new Error("Runtime rollout completed but no prior deployment revision exists to record");
+    }
+    db.insertDeployment({
+      app_id: app.id,
+      operation_id: ctx.opId,
+      image_tag: priorDeployment.image_tag,
+      image_digest: priorDeployment.image_digest,
+      env_hash: hashEnvironment(await resolveAppEnvVars(app)),
+      git_commit: priorDeployment.git_commit,
+      config_revision: app.config_revision,
+      source: "manifest-runtime",
+      image_size_bytes: priorDeployment.image_size_bytes,
+      archive_size_bytes: 0,
+      transfer_size_bytes: 0,
+    });
+    if (!ctx.input.pendingRollout) db.clearAppRolloutRequest(app.id, app.config_revision);
+    return { recorded: true };
+  },
+};
+
 const applyManifestOp: OpKindDefinition<ApplyManifestInput> = {
   kind: "apply_manifest",
   label: "Apply app manifest",
   resourceKeys: (input) => [`manifest:${input.appId}`],
-  steps: [reconcile],
+  steps: [validateManifest, reconcile, recordRuntimeDeployment],
 };
 
 registerOp(applyManifestOp as OpKindDefinition<any>);

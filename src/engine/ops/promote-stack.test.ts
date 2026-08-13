@@ -217,6 +217,7 @@ describe("promote_stack plan step", () => {
     expect(out.skipped.map((s: any) => s.appName).sort()).toEqual(
       [`${stack.name}-api`, `${stack.name}-worker`].sort(),
     );
+    expect(out.levels).toHaveLength(1);
   });
 
   test("throws when there is nothing to promote", async () => {

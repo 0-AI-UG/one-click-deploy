@@ -10,11 +10,32 @@ import type { OpKindDefinition, Step } from "../types.ts";
 
 type DestroyStackInput = { stackId: number; suspendWebhooks?: boolean };
 
+type DestroyPlanOut = {
+  stackName: string;
+  appIds: number[];
+  serviceIds: number[];
+};
+
+const planDestroy: Step<DestroyStackInput, DestroyPlanOut> = {
+  name: "plan_destroy",
+  label: "Plan stack destruction",
+  async run(ctx) {
+    const stack = db.getStack(ctx.input.stackId);
+    if (!stack) throw new Error(`Stack ${ctx.input.stackId} not found`);
+    return {
+      stackName: stack.name,
+      appIds: db.getAppsByStackId(stack.id).map((app) => app.id).sort((a, b) => a - b),
+      serviceIds: db.getServicesByStackId(stack.id).map((service) => service.id).sort((a, b) => a - b),
+    };
+  },
+};
+
 const destroyMembers: Step<DestroyStackInput, { childIds: number[] }> = {
   name: "destroy_members",
   label: "Destroy stack members",
-  async run(ctx) {
+  async run(ctx, prior) {
     const { stackId } = ctx.input;
+    const planned = prior["plan_destroy"] as DestroyPlanOut | undefined;
     const byKey = new Map(
       listChildOperations(ctx.opId).map((c) => [c.idempotency_key ?? "", c]),
     );
@@ -46,11 +67,13 @@ const destroyMembers: Step<DestroyStackInput, { childIds: number[] }> = {
       childIds.push(op.id);
     };
 
-    for (const app of db.getAppsByStackId(stackId)) {
-      enqueueDestroy("destroy_app", `app:${app.id}`, { appId: app.id }, `destroy_stack:${ctx.opId}:app:${app.id}`);
+    const appIds = planned?.appIds ?? db.getAppsByStackId(stackId).map((app) => app.id);
+    const serviceIds = planned?.serviceIds ?? db.getServicesByStackId(stackId).map((service) => service.id);
+    for (const appId of appIds) {
+      enqueueDestroy("destroy_app", `app:${appId}`, { appId }, `destroy_stack:${ctx.opId}:app:${appId}`);
     }
-    for (const svc of db.getServicesByStackId(stackId)) {
-      enqueueDestroy("destroy_service", `service:${svc.id}`, { serviceId: svc.id }, `destroy_stack:${ctx.opId}:svc:${svc.id}`);
+    for (const serviceId of serviceIds) {
+      enqueueDestroy("destroy_service", `service:${serviceId}`, { serviceId }, `destroy_stack:${ctx.opId}:svc:${serviceId}`);
     }
     if (childIds.length > 0) {
       ctx.log(`destroying ${childIds.length} stack member(s)`);
@@ -63,6 +86,9 @@ const destroyMembers: Step<DestroyStackInput, { childIds: number[] }> = {
 const deleteStackRow: Step<DestroyStackInput, { ok: true }> = {
   name: "delete_stack_row",
   label: "Delete stack",
+  async probe(ctx) {
+    return db.getStack(ctx.input.stackId) ? null : { ok: true };
+  },
   async run(ctx) {
     const stack = db.getStack(ctx.input.stackId);
     if (stack?.environment_id) {
@@ -81,7 +107,7 @@ const destroyStackOp: OpKindDefinition<DestroyStackInput> = {
   kind: "destroy_stack",
   label: "Destroy stack",
   resourceKeys: (input) => [`stack:${input.stackId}`],
-  steps: [destroyMembers, deleteStackRow],
+  steps: [planDestroy, destroyMembers, deleteStackRow],
 };
 
 registerOp(destroyStackOp as OpKindDefinition<any>);

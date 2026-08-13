@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import * as db from "../../shared/db.ts";
-import { decideMember } from "./webhook-reconcile-stack.ts";
+import {
+  enqueueOperation,
+  listChildOperations,
+  markOperationFinished,
+} from "../../shared/db/operations.ts";
+import type { OpContext } from "../types.ts";
+import webhookReconcileStackOp, { decideMember } from "./webhook-reconcile-stack.ts";
 
 function webhookApp() {
   const app = db.insertApp({
@@ -64,5 +70,79 @@ describe("webhook member baseline decisions", () => {
       decision: "selected",
       reason: "commit comparison failed; fail-open deployment",
     });
+  });
+});
+
+describe("webhook staging reconciliation boundary", () => {
+  test("passes the staging environment as a redeploy candidate without mutating the sibling first", async () => {
+    const productionEnv = db.insertEnvironment(`prod-${crypto.randomUUID()}`, "");
+    const stagingEnv = db.insertEnvironment(`stage-${crypto.randomUUID()}`, "");
+    const prod = webhookApp();
+    db.updateAppEnvironment(prod.id, productionEnv.id);
+    db.updateAppWebhookStagingEnvironment(prod.id, stagingEnv.id);
+    const sibling = db.insertApp({
+      name: `${prod.name}-staging`,
+      domain: "",
+      git_repo: prod.git_repo,
+      dockerfile_path: "Dockerfile",
+      container_port: 3000,
+      env_vars: "{}",
+      environment_id: productionEnv.id,
+    });
+    db.setAppTarget(sibling.id, prod.id, "staging");
+    const freshProd = db.getApp(prod.id)!;
+    const candidate = candidateFor(freshProd, "f".repeat(40));
+    const parent = enqueueOperation({
+      kind: "webhook_reconcile_stack",
+      resourceKeys: [`webhook-candidate:${candidate.id}`],
+      input: { candidateId: candidate.id },
+      trigger: "test",
+    });
+    const input = { candidateId: candidate.id };
+    const ctx = {
+      opId: parent.id,
+      kind: parent.kind,
+      input,
+      trigger: "test",
+      triggeredBy: "tester",
+      parentId: null,
+      attempt: 1,
+      isCancelRequested: () => false,
+      log: () => {},
+      park: () => {},
+      unpark: () => {},
+    } satisfies OpContext<typeof input>;
+    const reconcile = webhookReconcileStackOp.steps.find(
+      (step) => step.name === "reconcile_stack_members",
+    )!;
+    const decision = {
+      appId: freshProd.id,
+      appName: freshProd.name,
+      decision: "selected" as const,
+      reason: "test",
+      base: null,
+      head: candidate.head_sha,
+      changedPaths: [],
+      matchingPaths: [],
+      matchedPatterns: [],
+    };
+    const poll = setInterval(() => {
+      for (const child of listChildOperations(parent.id)) markOperationFinished(child.id, "done");
+    }, 20);
+    try {
+      await reconcile.run(ctx, {
+        resolve_candidate_eligibility: { eligible: true, ciResult: "not_required" },
+        evaluate_stack_members: { decisions: [decision] },
+      });
+    } finally {
+      clearInterval(poll);
+    }
+
+    expect(db.getApp(sibling.id)!.environment_id).toBe(productionEnv.id);
+    const child = listChildOperations(parent.id)[0];
+    expect(child.kind).toBe("redeploy");
+    const childInput = JSON.parse(child.input_json);
+    expect(childInput.candidate.environment_id).toBe(stagingEnv.id);
+    expect(childInput.appId).toBe(sibling.id);
   });
 });

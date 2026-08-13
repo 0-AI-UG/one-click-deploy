@@ -372,13 +372,21 @@ const reconcileMembers: Step<WebhookReconcileInput, { decisions: WebhookMemberDe
         let child;
         if (app.webhook_staging_environment_id != null) {
           if (target) {
-            if (target.environment_id !== app.webhook_staging_environment_id) {
-              db.updateAppEnvironment(target.id, app.webhook_staging_environment_id);
-            }
+            // Reconcile the staging environment as part of the redeploy
+            // candidate. The redeploy saga validates the candidate, starts and
+            // verifies it, then commits desired configuration. Mutating the app
+            // row here before enqueue would leave a failed child pointing at an
+            // environment it never successfully ran with.
+            const candidateRequest = stagingDeployRequest(app, candidate.head_sha);
             child = enqueueOperation({
               kind: "redeploy",
               resourceKeys: [`app:${target.id}`, ...stackKeys(app)],
-              input: { appId: target.id, userId: app.deployed_by || undefined, gitSha: candidate.head_sha },
+              input: {
+                appId: target.id,
+                userId: app.deployed_by || undefined,
+                gitSha: candidate.head_sha,
+                candidate: candidateRequest,
+              },
               trigger: "webhook",
               triggeredBy: `github:${candidate.delivery_id}`,
               parentId: ctx.opId,

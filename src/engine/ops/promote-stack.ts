@@ -24,7 +24,7 @@ export type Promotion = {
 /** A member that was considered but cannot be promoted, plus why. */
 export type Skip = { appName: string; reason: string };
 
-export type PromotionPlan = { promotions: Promotion[]; skipped: Skip[] };
+export type PromotionPlan = { promotions: Promotion[]; skipped: Skip[]; levels?: Promotion[][] };
 
 /**
  * Decide which stack members are promotable. Pure over its injected lookups so
@@ -134,20 +134,27 @@ const plan: Step<PromoteStackInput, PromotionPlan & { stackName: string }> = {
       db.getDeployedCommit,
     );
 
-    for (const s of skipped) {
-      db.appendStackLog(stackId, `[promote] skipping ${s.appName}: ${s.reason}`);
-      ctx.log(`skipping ${s.appName}: ${s.reason}`);
-    }
     if (promotions.length === 0) {
       throw new Error(
         `Stack "${stack.name}" has nothing to promote: no member has a staging sibling with a successful deployment.`,
       );
     }
+    // Persist the dependency order in the completed plan output. Recomputing
+    // from mutable app rows during a retry could enqueue a different order
+    // than the one the user originally approved.
+    const levels = orderPromotions(promotions, stack.name, (promotion) => {
+      const app = db.getApp(promotion.appId);
+      return db.parseStackNeeds(app?.stack_needs);
+    });
+    for (const s of skipped) {
+      db.appendStackLog(stackId, `[promote] skipping ${s.appName}: ${s.reason}`);
+      ctx.log(`skipping ${s.appName}: ${s.reason}`);
+    }
     db.appendStackLog(
       stackId,
       `[promote] promoting ${promotions.length} member(s): ${promotions.map((p) => p.appName).join(", ")}`,
     );
-    return { stackName: stack.name, promotions, skipped };
+    return { stackName: stack.name, promotions, skipped, levels };
   },
 };
 
@@ -156,7 +163,7 @@ const promoteMembers: Step<PromoteStackInput, { childIds: number[] }> = {
   label: "Promote members",
   async run(ctx, prior) {
     const { stackId, userId } = ctx.input;
-    const { promotions, stackName } = prior["plan"] as PromotionPlan & { stackName: string };
+    const { promotions, stackName, levels: plannedLevels } = prior["plan"] as PromotionPlan & { stackName: string };
     const byKey = new Map(
       listChildOperations(ctx.opId).map((c) => [c.idempotency_key ?? "", c]),
     );
@@ -169,18 +176,10 @@ const promoteMembers: Step<PromoteStackInput, { childIds: number[] }> = {
     // longer than one member's promotion. Members deployed before that column
     // existed carry no edges and fall back to one concurrent batch — exactly
     // the old behaviour.
-    let levels: Promotion[][];
-    try {
-      levels = orderPromotions(promotions, stackName, (p) => {
+    const levels = plannedLevels ?? orderPromotions(promotions, stackName, (p) => {
         const app = db.getApp(p.appId);
         return db.parseStackNeeds(app?.stack_needs);
       });
-    } catch (err) {
-      // A cycle can only come from edges deploy_stack already rejected once, so
-      // treat it as unorderable rather than blocking a legitimate promotion.
-      ctx.log(`cannot order members by dependency (${err}); promoting concurrently`);
-      levels = [promotions];
-    }
 
     for (const [i, level] of levels.entries()) {
       const childIds: number[] = [];

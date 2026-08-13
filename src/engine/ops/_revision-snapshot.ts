@@ -25,7 +25,10 @@ function snapshotPaths(target: SnapshotTarget) {
     envAbsent: `${dir}/env.absent`,
     gitHead: `${dir}/git-head`,
     gitAbsent: `${dir}/git.absent`,
-    image: `${target.appName}:rollback-op${target.opId}`,
+    // Build GC deliberately protects only :latest and :rollback. The app
+    // resource lock serializes revision operations, while the env/git files
+    // remain operation-scoped for exact crash-resume adoption.
+    image: `${target.appName}:rollback`,
   };
 }
 
@@ -36,8 +39,8 @@ function commandFailure(action: string, result: { exitCode: number; stdout: stri
 /**
  * Pin the currently running image and copy the exact env file/git HEAD before
  * a revision-changing step. All names are operation-scoped, so retrying this
- * incomplete step is safe and cannot overwrite another operation's recovery
- * material.
+ * incomplete step is safe. The app-scoped rollback tag is protected by build
+ * GC; operation-scoped metadata prevents a new op from adopting an old tag.
  */
 export async function captureRemoteRevisionSnapshot(target: SnapshotTarget): Promise<RemoteRevisionSnapshot | null> {
   const paths = snapshotPaths(target);
@@ -161,12 +164,16 @@ export async function restoreSnapshotGitCheckout(target: SnapshotTarget, gitComm
   if (result.exitCode !== 0) throw commandFailure(`Restoring Git revision for ${target.appName}`, result);
 }
 
-/** Recovery artifacts are disposable only after every fallible forward step. */
+/**
+ * Remove operation-owned env/Git metadata after success. Keep the app-scoped
+ * :rollback tag as the single last-known-good image protected by host GC; the
+ * next serialized revision operation replaces it.
+ */
 export async function discardRemoteRevisionSnapshot(target: SnapshotTarget): Promise<void> {
   const paths = snapshotPaths(target);
   await sshExec(
     target.ip,
-    asUser(`docker image rm ${paths.image} 2>/dev/null || true; rm -rf ${paths.dir}`),
+    asUser(`rm -rf ${paths.dir}`),
     target.hostKey,
   );
 }

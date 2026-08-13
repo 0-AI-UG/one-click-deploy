@@ -93,8 +93,11 @@ async function findVolumeByName(name: string) {
   try {
     const all = await hetzner.volumes.list();
     return all.find((v) => v.name === name) ?? null;
-  } catch {
-    return null;
+  } catch (error) {
+    throw new FatalProbeError(
+      `Cannot verify whether operation-owned volume ${name} already exists; refusing to create a possible duplicate`,
+      { cause: error },
+    );
   }
 }
 
@@ -240,7 +243,7 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
     const newServer = await provisionServer({
       serverType,
       location,
-      name: `ocd-${req.app_name}-${Date.now()}`,
+      name: `ocd-${req.app_name}-op${ctx.opId}`,
       pool: desiredPool,
       approved: req.server_provisioning_approved === true,
       emit: (step, detail) => ctx.log(`[${step}] ${detail}`),
@@ -434,10 +437,19 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const existing = db.getAppByName(req.app_name);
     if (!existing) return null;
     const replicas = db.getReplicas(existing.id);
-    if (replicas.length === 0) return null;
+    if (replicas.length === 0) {
+      throw new FatalProbeError(
+        `Cannot adopt app "${req.app_name}": the existing app has no primary replica`,
+      );
+    }
     const replica = replicas[0];
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
-    if (!server || replica.server_id !== server.serverId) return null;
+    if (!server) return null;
+    if (replica.server_id !== server.serverId) {
+      throw new FatalProbeError(
+        `Cannot adopt app "${req.app_name}": its existing replica is on a different server`,
+      );
+    }
     const useDomain =
       existing.domain || resolveAppDomain(req, domainSettings(server), server.ingressIp).domain;
     const useInternalTls = useDomain.endsWith(".nip.io");
@@ -675,6 +687,23 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
         await Bun.sleep(3000);
       }
     }
+    // This step has not completed, so the runner will not call its own
+    // compensate hook. Remove any partially-written fstab/bind state inline
+    // before earlier steps detach/retire the provider volume.
+    try {
+      const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+      await removeVolumeBindMount({
+        serverIp: server.serverIp,
+        hostKey: server.serverHostKey || undefined,
+        hostMountPath,
+        blockName: `app-${appOut.appId}`,
+      });
+    } catch (rollbackError) {
+      throw new Error(
+        `Volume bind setup failed and its partial mount could not be removed: ${rollbackError}`,
+        { cause: lastErr },
+      );
+    }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   },
   async compensate(ctx, _out, prior) {
@@ -838,31 +867,51 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         envHash: hashEnvironment(envVars),
     };
     const buildRegistry = await resolveBuildRegistry(req.build_cache_ref);
-    const result = req.image_ref
-      ? await pullImmutableImageAndRun(server.serverIp, {
-          ...common,
-          imageRef: req.image_ref,
-          gitToken: githubPat,
-        }, (line) => {
-          maskedLog(`[pull] ${line}`);
-          ctx.log(`[pull] ${mask(line)}`);
-        })
-      : await cloneAndBuild(
-      server.serverIp,
-      {
-        ...common,
-        gitRepo: req.git_repo,
-        buildCacheRef: buildRegistry.ref,
-        registryUsername: buildRegistry.username,
-        registryPassword: buildRegistry.password,
-        reserveArchiveSpace:
-          (req.replicas ?? 1) > 1 && db.getSettings().allow_archive_image_transfer === "1",
-      },
-      (line) => {
-        maskedLog(`[build] ${line}`);
-        ctx.log(`[build] ${mask(line)}`);
-      },
-    );
+    let result;
+    try {
+      result = req.image_ref
+        ? await pullImmutableImageAndRun(server.serverIp, {
+            ...common,
+            imageRef: req.image_ref,
+            gitToken: githubPat,
+          }, (line) => {
+            maskedLog(`[pull] ${line}`);
+            ctx.log(`[pull] ${mask(line)}`);
+          })
+        : await cloneAndBuild(
+          server.serverIp,
+          {
+            ...common,
+            gitRepo: req.git_repo,
+            buildCacheRef: buildRegistry.ref,
+            registryUsername: buildRegistry.username,
+            registryPassword: buildRegistry.password,
+            reserveArchiveSpace:
+              (req.replicas ?? 1) > 1 && db.getSettings().allow_archive_image_transfer === "1",
+          },
+          (line) => {
+            maskedLog(`[build] ${line}`);
+            ctx.log(`[build] ${mask(line)}`);
+          },
+        );
+    } catch (error) {
+      // A helper may fail after replacing/creating the container. Because this
+      // step has not returned, its normal compensate hook is ineligible; own
+      // the partial mutation here so DB teardown cannot leave a live orphan.
+      try {
+        await removeContainer(
+          server.serverIp,
+          appOut.containerName,
+          server.serverHostKey || undefined,
+        );
+      } catch (rollbackError) {
+        throw new Error(
+          `Build/run failed and its partial container could not be removed: ${rollbackError}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     if (result.imageTag) imageTag = result.imageTag;
 
     return {
@@ -1183,7 +1232,7 @@ const finalizeDeploy: Step<DeployInput, { ok: true }> = {
       await scaleUp(app, current, current.length, desired, (phase, detail) => {
         ctx.log(`[${phase}] ${detail}`);
         db.appendDeployLog(app.id, `[${phase}] ${detail}`);
-      }, undefined, undefined, req.server_provisioning_approved === true);
+      }, undefined, undefined, req.server_provisioning_approved === true, `op${ctx.opId}`);
     }
     const finalReplicas = db.getReplicas(app.id);
     const divergent = finalReplicas.filter((replica) => replica.status !== "running" || !replica.attested_at);

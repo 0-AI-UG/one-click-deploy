@@ -192,7 +192,7 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
     const newServer = await provisionServer({
       serverType,
       location,
-      name: `ocd-svc-${req.name}-${Date.now()}`,
+      name: `ocd-svc-${req.name}-op${ctx.opId}`,
       pool,
       approved: req.server_provisioning_approved === true,
       emit: (step, detail) => ctx.log(`[${step}] ${detail}`),
@@ -235,8 +235,11 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
     let volumes;
     try {
       volumes = await hetzner.volumes.list();
-    } catch {
-      return null;
+    } catch (error) {
+      throw new FatalProbeError(
+        `Cannot verify whether operation-owned volume ${name} already exists; refusing to create a possible duplicate`,
+        { cause: error },
+      );
     }
     const existing = volumes.find((volume) => volume.name === name);
     if (!existing) return null;
@@ -512,6 +515,20 @@ const setupVolumeBindMount: Step<DeployServiceInput, { ok: true }> = {
         await Bun.sleep(3000);
       }
     }
+    try {
+      const { removeVolumeBindMount } = await import("../hetzner/host-mounts.ts");
+      await removeVolumeBindMount({
+        serverIp: server.serverIp,
+        hostKey: server.serverHostKey || undefined,
+        hostMountPath: volume.hostMountPath,
+        blockName: `svc-${svc.serviceId}`,
+      });
+    } catch (rollbackError) {
+      throw new Error(
+        `Volume bind setup failed and its partial mount could not be removed: ${rollbackError}`,
+        { cause: lastErr },
+      );
+    }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   },
   async compensate(ctx, _out, prior) {
@@ -564,23 +581,38 @@ const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
     const svc = prior["insert_service_and_instance"] as InsertOut;
     const catalog = resolveCatalog(req);
 
-    await pullAndRunService(
-      server.serverIp,
-      {
-        name: svc.containerName,
-        image: svc.image,
-        port: catalog.defaultPort,
-        hostPort: svc.hostPort,
-        envVars: svc.envVars,
-        volumeMount: volume.skipped ? undefined : volume.volumeMount,
-        bindAddress: svc.bindAddress,
-        cmd: catalog.cmd,
-        memoryMb: catalog.memoryMb,
-        cpus: catalog.cpus,
-        extraCaps: catalog.extraCaps,
-      },
-      server.serverHostKey || undefined,
-    );
+    try {
+      await pullAndRunService(
+        server.serverIp,
+        {
+          name: svc.containerName,
+          image: svc.image,
+          port: catalog.defaultPort,
+          hostPort: svc.hostPort,
+          envVars: svc.envVars,
+          volumeMount: volume.skipped ? undefined : volume.volumeMount,
+          bindAddress: svc.bindAddress,
+          cmd: catalog.cmd,
+          memoryMb: catalog.memoryMb,
+          cpus: catalog.cpus,
+          extraCaps: catalog.extraCaps,
+        },
+        server.serverHostKey || undefined,
+      );
+    } catch (error) {
+      const rollback = await sshExec(
+        server.serverIp,
+        `su - deploy -c "docker rm -f ${svc.containerName} 2>/dev/null || true"`,
+        server.serverHostKey || undefined,
+      );
+      if (rollback.exitCode !== 0) {
+        throw new Error(
+          `Service start failed and its partial container could not be removed (ssh exit ${rollback.exitCode})`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     ctx.log("Container started");
     return { ok: true };
   },

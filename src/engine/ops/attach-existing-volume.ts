@@ -71,12 +71,30 @@ const attachVolume: Step<AttachExistingVolumeInput, { hostMountPath: string }> =
   },
   async run(ctx, prior) {
     const target = prior["validate"] as ValidateOut;
-    await hetzner.volumes.attach(ctx.input.volumeId, target.providerServerId);
-    const confirmed = await hetzner.volumes.get(ctx.input.volumeId);
-    if (confirmed.serverId !== target.providerServerId) {
-      throw new Error(
-        `Provider did not confirm volume ${ctx.input.volumeId} on server ${target.providerServerId}`,
-      );
+    try {
+      await hetzner.volumes.attach(ctx.input.volumeId, target.providerServerId);
+      const confirmed = await hetzner.volumes.get(ctx.input.volumeId);
+      if (confirmed.serverId !== target.providerServerId) {
+        throw new Error(
+          `Provider did not confirm volume ${ctx.input.volumeId} on server ${target.providerServerId}`,
+        );
+      }
+    } catch (error) {
+      // A failing step is not part of the runner's reverse walk. Restore the
+      // pre-step detached state inline if attach may have succeeded before a
+      // failed confirmation request.
+      try {
+        const state = await hetzner.volumes.get(ctx.input.volumeId);
+        if (state.serverId === target.providerServerId) {
+          await hetzner.volumes.detach(ctx.input.volumeId);
+        }
+      } catch (rollbackError) {
+        throw new Error(
+          `Volume attach failed and its inline rollback could not be verified: ${rollbackError}`,
+          { cause: error },
+        );
+      }
+      throw error;
     }
     return { hostMountPath: hostMountPathFor(ctx.input.volumeId) };
   },

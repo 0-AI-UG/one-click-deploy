@@ -37,6 +37,23 @@ export async function provisionServer(opts: {
     );
   }
 
+  const existingRow = db.getServers().find((server) => server.name === serverName);
+  if (existingRow) {
+    if (
+      existingRow.type !== serverType ||
+      existingRow.location !== location ||
+      existingRow.pool !== (opts.pool ?? "general")
+    ) {
+      throw new Error(
+        `Server name collision for ${serverName}: the existing database row has different placement or type`,
+      );
+    }
+    if (existingRow.status === "ready" && existingRow.provider_id && existingRow.ipv4) {
+      emit("server", `Reusing ready server ${serverName}`);
+      return existingRow as Server;
+    }
+  }
+
   emit("server", `Creating new ${compute.name} server...`);
 
   log("ssh", "Ensuring SSH key, firewall, and private network exist...");
@@ -49,30 +66,60 @@ export async function provisionServer(opts: {
   log("ssh", `SSH key ready: ${sshKey.name}, firewall: ${firewallId}, network: ${networkId || "(none)"}`);
   emit("server", "SSH key + firewall + network ready");
 
-  // Insert placeholder DB record BEFORE provider API call to prevent orphans
-  const dbServer = db.insertServer({
-    name: serverName,
-    provider_id: "",
-    ipv4: "",
-    ipv6: "",
-    type: serverType,
-    location,
-    status: "creating",
-    pool: opts.pool ?? "general",
-  });
+  // Insert the placeholder BEFORE the provider call, and reuse it on replay.
+  // The row is the ownership marker that distinguishes safe crash-adoption
+  // from an unrelated provider resource with the same name.
+  const dbServer = existingRow ?? db.insertServer({
+      name: serverName,
+      provider_id: "",
+      ipv4: "",
+      ipv6: "",
+      type: serverType,
+      location,
+      status: "creating",
+      pool: opts.pool ?? "general",
+    });
 
   log("server", `Creating ${compute.name} server: name=${serverName} type=${serverType} location=${location}`);
-  const createStart = Date.now();
-  const providerServer = await compute.createServer({
-    name: serverName,
-    serverType,
-    location,
-    sshKeyName: sshKey.name,
-    firewallId,
-    networkId: networkId || undefined,
-    userData: "",
-  });
-  log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId} private=${providerServer.privateIpv4 || "(none)"}`);
+  let providerServer;
+  if (dbServer.provider_id) {
+    providerServer = await compute.getServer(dbServer.provider_id);
+  } else {
+    // A provider create may have succeeded immediately before a process crash.
+    // Resolve the deterministic name before issuing another billable create.
+    // Lookup failure is fatal: an inconclusive provider state is never a
+    // licence to create a possible duplicate.
+    const matching = (await compute.listServers()).find((server) => server.name === serverName);
+    if (matching) {
+      if (!existingRow) {
+        // This invocation created the DB marker, so a pre-existing provider
+        // server cannot belong to it.
+        db.deleteServer(dbServer.id);
+        throw new Error(
+          `Provider server name collision for ${serverName}; refusing implicit adoption`,
+        );
+      }
+      providerServer = await compute.getServer(matching.providerId);
+      providerServer = {
+        ...providerServer,
+        ipv4: providerServer.ipv4 || matching.ipv4,
+        ipv6: providerServer.ipv6 || matching.ipv6,
+      };
+      emit("server", `Adopted provider server ${serverName} after interrupted provisioning`);
+    } else {
+      const createStart = Date.now();
+      providerServer = await compute.createServer({
+        name: serverName,
+        serverType,
+        location,
+        sshKeyName: sshKey.name,
+        firewallId,
+        networkId: networkId || undefined,
+        userData: "",
+      });
+      log("server", `Server created in ${Date.now() - createStart}ms: id=${providerServer.providerId} private=${providerServer.privateIpv4 || "(none)"}`);
+    }
+  }
 
   // Update placeholder with real data
   const serverIp = providerServer.ipv4;
