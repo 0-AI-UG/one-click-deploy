@@ -160,11 +160,30 @@ const volumeSchema = z.object(
  *  `<name>-staging` sibling for manual promotion instead of redeploying
  *  production directly — it requires a staging environment to be selected at
  *  deploy time through `webhook.staging_environment`. */
+const webhookPatternSchema = nonEmptyString("expected a non-empty repository-relative glob")
+  .superRefine((value, ctx) => {
+    if (value.startsWith("!")) {
+      ctx.addIssue({ code: "custom", message: "inline !patterns are not supported; use webhook.paths_ignore" });
+    }
+    if (value.includes("\\")) {
+      ctx.addIssue({ code: "custom", message: 'patterns must use "/", not "\\\\"' });
+    }
+    if (value.startsWith("/") || value.startsWith("./") || value.split("/").includes("..")) {
+      ctx.addIssue({ code: "custom", message: "expected a repository-root-relative pattern" });
+    }
+  });
+
 const webhookSchema = z.object(
   {
     enabled: z.boolean({ error: "expected boolean" }).optional(),
     branch: z.string({ error: "expected string" }).optional(),
     path: z.string({ error: "expected string" }).optional(),
+    paths: z.array(webhookPatternSchema, {
+      error: "expected a non-empty array of repository-relative glob patterns",
+    }).min(1, { error: "expected at least one pattern" }).optional(),
+    paths_ignore: z.array(webhookPatternSchema, {
+      error: "expected an array of repository-relative glob patterns",
+    }).optional(),
     wait_for_ci: z.boolean({ error: "expected boolean" }).optional(),
     staging: z.boolean({ error: "expected boolean" }).optional(),
     staging_environment: z.union([
@@ -172,8 +191,16 @@ const webhookSchema = z.object(
       z.null(),
     ]).optional(),
   },
-  { error: "expected object { enabled?, branch?, path?, wait_for_ci?, staging?, staging_environment? }" },
-);
+  { error: "expected object { enabled?, branch?, path?, paths?, paths_ignore?, wait_for_ci?, staging?, staging_environment? }" },
+).superRefine((value, ctx) => {
+  if (value.path !== undefined && value.paths !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      message: "cannot be used together with webhook.paths",
+      path: ["path"],
+    });
+  }
+});
 
 const autoscalingSchema = z.object({
   enabled: z.boolean({ error: "expected boolean" }).optional(),

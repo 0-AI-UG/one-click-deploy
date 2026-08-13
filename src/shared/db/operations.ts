@@ -111,6 +111,34 @@ export function findActiveOperationByResourceKey(kind: string, resourceKey: stri
   return null;
 }
 
+/** Find a pending/running app deployment already targeting the candidate SHA. */
+export function findActiveDeploymentOperationForCommit(
+  appId: number,
+  sha: string,
+): OperationRow | null {
+  const rows = db.query(
+    `SELECT * FROM operations
+     WHERE kind IN ('deploy','redeploy')
+       AND status IN ('pending','running','compensating')
+     ORDER BY id DESC`,
+  ).all() as OperationRow[];
+  const appKey = `app:${appId}`;
+  for (const row of rows) {
+    let input: any;
+    let keys: unknown;
+    try {
+      input = JSON.parse(row.input_json || "{}");
+      keys = JSON.parse(row.resource_keys || "[]");
+    } catch { continue; }
+    const targetsApp = input?.appId === appId ||
+      (Array.isArray(keys) && keys.includes(appKey));
+    if (!targetsApp) continue;
+    const candidateSha = String(input?.gitSha || input?.git_sha || input?.candidate?.git_sha || "");
+    if (candidateSha && (candidateSha.startsWith(sha) || sha.startsWith(candidateSha))) return row;
+  }
+  return null;
+}
+
 export function listPendingOperations(limit = 50): OperationRow[] {
   return db
     .query(

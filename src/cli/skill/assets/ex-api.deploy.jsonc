@@ -9,6 +9,6 @@
   ],
   "volume": null,
   "health_check": { "path": "/health" },
-  "webhook": { "enabled": true, "branch": "main", "path": "services/api" },
+  "webhook": { "enabled": true, "branch": "main", "paths": ["services/api/**"] },
   "suggested_app_name": "myapp-api"
 }

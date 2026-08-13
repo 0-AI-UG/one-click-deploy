@@ -17,7 +17,7 @@ import {
   requestCancel,
 } from "../shared/db/operations.ts";
 import { runOperation } from "./step-runner.ts";
-import type { AnyOpKind } from "./types.ts";
+import { FatalProbeError, type AnyOpKind } from "./types.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
 
 // park/unpark are no-ops in unit tests — the engine module has module-level
@@ -399,6 +399,56 @@ describe("step-runner: probe adopts existing side effect", () => {
     await runOperation(op, def);
     expect(runFn).toHaveBeenCalled();
     expect(getOperation(op.id)!.status).toBe("done");
+  });
+
+  test("an ordinary probe error remains inconclusive and falls through to run", async () => {
+    const runFn = mock(async () => "reconciled");
+    const def = makeDef([
+      {
+        name: "best-effort-probe",
+        run: runFn,
+        probe: async () => { throw new Error("provider temporarily unavailable"); },
+      },
+    ]);
+    const op = makeOp("test-op");
+
+    await runOperation(op, def);
+
+    expect(runFn).toHaveBeenCalledTimes(1);
+    expect(getOperation(op.id)!.status).toBe("done");
+    expect(getSteps(op.id).find((row) => row.step === "best-effort-probe")?.status).toBe("ok");
+  });
+
+  test("FatalProbeError fails the step without running and compensates prior work", async () => {
+    const runFn = mock(async () => "must-not-run");
+    const compensate = mock(async () => {});
+    const def = makeDef([
+      {
+        name: "created-resource",
+        run: async () => ({ id: 42 }),
+        compensate,
+      },
+      {
+        name: "unsafe-collision",
+        run: runFn,
+        probe: async () => {
+          throw new FatalProbeError("resource belongs to another operation");
+        },
+      },
+    ]);
+    const op = makeOp("test-op");
+
+    await runOperation(op, def);
+
+    expect(runFn).not.toHaveBeenCalled();
+    expect(compensate).toHaveBeenCalledTimes(1);
+    const failedProbe = getSteps(op.id).find(
+      (row) => row.phase === "forward" && row.step === "unsafe-collision",
+    );
+    expect(failedProbe?.status).toBe("failed");
+    expect(failedProbe?.detail).toContain("resource belongs to another operation");
+    expect(getOperation(op.id)!.status).toBe("compensated");
+    expect(getOperation(op.id)!.error_json).toContain("resource belongs to another operation");
   });
 
   test("step is marked 'executing' before run() is invoked", async () => {

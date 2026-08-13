@@ -2225,7 +2225,108 @@ export const migrations: Migration[] = [
               ELSE 0
             END
           WHERE id = NEW.id;
+      END`);
+    },
+  },
+  {
+    version: 100,
+    description:
+      "Add change-aware stack webhook filters, manifest provenance, durable push candidates, and decision observations.",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN webhook_paths TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN webhook_paths_ignore TEXT NOT NULL DEFAULT '[]'");
+      db.run("ALTER TABLE apps ADD COLUMN manifest_path TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN stack_manifest_path TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN last_webhook_head TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN last_webhook_decision TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN last_webhook_received_at TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN last_webhook_evaluated_at TEXT");
+      db.run("ALTER TABLE apps ADD COLUMN last_webhook_ci_result TEXT");
+      db.run("UPDATE apps SET manifest_path = last_manifest_path WHERE last_manifest_path IS NOT NULL");
+      db.run(
+        `UPDATE apps
+         SET webhook_paths = json_array(webhook_path || '/**')
+         WHERE webhook_path <> ''`,
+      );
+      db.run(`CREATE TABLE webhook_candidates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repository TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        before_sha TEXT NOT NULL DEFAULT '',
+        head_sha TEXT NOT NULL,
+        origin_app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        stack_id INTEGER,
+        delivery_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        ci_result TEXT,
+        parent_operation_id INTEGER,
+        superseded_by_head TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(repository, branch, head_sha)
+      )`);
+      db.run("CREATE INDEX webhook_candidates_repo_branch ON webhook_candidates(repository, branch, id DESC)");
+
+      db.run("DROP TRIGGER apps_bump_config_revision");
+      db.run(`CREATE TRIGGER apps_bump_config_revision
+        AFTER UPDATE OF
+          domain, git_repo, git_branch, dockerfile_path, docker_context,
+          source_mode, image_ref, build_cache_ref,
+          container_port, auth_password_hash, environment_id, env_projection,
+          public, health_check, health_check_mode, health_check_command,
+          health_check_file, health_check_max_age_seconds, health_check_expected_statuses,
+          internal_protocol, sticky, rate_limit_rps,
+          ip_allowlist, health_check_path, compress, public_port,
+          public_protocol, desired_replicas, min_replicas, max_replicas,
+          autoscale_enabled, autoscale_cpu_threshold, autoscale_mem_threshold,
+          autoscale_cooldown, autoscale_req_threshold, scale_to_zero_after,
+          desired_volume_id, desired_volume_size, desired_volume_path,
+          extra_volumes, memory_mb, cpu_limit,
+          webhook_enabled, webhook_branch, webhook_path, webhook_paths,
+          webhook_paths_ignore, webhook_wait_for_ci,
+          webhook_staging_environment_id, durability_class, max_per_host,
+          min_locations, placement_pool
+        ON apps
+        BEGIN
+          UPDATE apps SET
+            config_revision = config_revision + 1,
+            rollout_requested_revision = CASE
+              WHEN rollout_requested_revision > 0 THEN config_revision + 1
+              ELSE 0
+            END
+          WHERE id = NEW.id;
         END`);
+    },
+  },
+  {
+    version: 101,
+    description: "Persist deployment image, archive, and transfer sizes",
+    up: (db) => {
+      db.run("ALTER TABLE deployment_history ADD COLUMN image_size_bytes INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE deployment_history ADD COLUMN archive_size_bytes INTEGER NOT NULL DEFAULT 0");
+      db.run("ALTER TABLE deployment_history ADD COLUMN transfer_size_bytes INTEGER NOT NULL DEFAULT 0");
+    },
+  },
+  {
+    version: 102,
+    description: "Make engine deployment-history writes idempotent per operation",
+    up: (db) => {
+      db.run("ALTER TABLE deployment_history ADD COLUMN operation_id INTEGER");
+      db.run(
+        "CREATE UNIQUE INDEX deployment_history_operation_id_unique " +
+        "ON deployment_history(operation_id) WHERE operation_id IS NOT NULL",
+      );
+    },
+  },
+  {
+    version: 103,
+    description: "Make engine scaling-event writes idempotent per operation",
+    up: (db) => {
+      db.run("ALTER TABLE scaling_events ADD COLUMN operation_id INTEGER");
+      db.run(
+        "CREATE UNIQUE INDEX scaling_events_operation_id_unique " +
+        "ON scaling_events(operation_id) WHERE operation_id IS NOT NULL",
+      );
     },
   },
 ];

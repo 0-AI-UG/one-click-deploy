@@ -1,6 +1,7 @@
 import { requireConfig } from "./config.ts";
 import { VERSION } from "./version.ts";
 import { DIM, RESET, YELLOW } from "./format.ts";
+import { expectArray, expectRecord } from "./response.ts";
 
 // Warn at most once per process when the backend reports a different version
 // than this CLI, so a stale CLI (issue: version drift was invisible) is
@@ -70,13 +71,15 @@ export class ApiError extends Error {
   /** Transient gateway / network conditions worth retrying a poll through. */
   get isTransient(): boolean {
     return (
-      (this.status === 0 && this.transportKind !== "certificate_validation" && this.transportKind !== "local_trust_store") ||
+      (this.status === 0 && this.method === "GET" &&
+        this.transportKind !== "certificate_validation" && this.transportKind !== "local_trust_store") ||
       this.status === 502 || this.status === 503 || this.status === 504
     );
   }
 }
 
 export type PanelTransportFailureKind =
+  | "unknown_certificate_verification"
   | "certificate_validation"
   | "local_trust_store"
   | "tls_transport_reset"
@@ -84,6 +87,11 @@ export type PanelTransportFailureKind =
   | "dns_failure"
   | "timeout"
   | "transport_failure";
+
+export function shouldRetryPanelTransport(method: string, kind: PanelTransportFailureKind): boolean {
+  if (method !== "GET") return false;
+  return kind !== "certificate_validation" && kind !== "local_trust_store";
+}
 
 function errorChain(err: unknown): { text: string; codes: string[] } {
   const texts: string[] = [];
@@ -115,7 +123,14 @@ export function describePanelTransportError(
   const code = chain.codes[0] ? ` [${chain.codes.join(" → ")}]` : "";
   let kind: PanelTransportFailureKind;
   let label: string;
-  if (/unknown certificate verification|unable_to_get_issuer_cert_locally|cert_untrusted|local issuer/.test(lower)) {
+  if (/unknown certificate verification/.test(lower)) {
+    // Bun has intermittently emitted this generic error for a request that
+    // succeeds immediately on a fresh connection. It contains no durable
+    // certificate diagnosis, so idempotent GET callers may retry it. More
+    // specific trust/hostname/expiry failures below remain permanent.
+    kind = "unknown_certificate_verification";
+    label = "certificate verification failed for an unknown reason";
+  } else if (/unable_to_get_issuer_cert_locally|cert_untrusted|local issuer/.test(lower)) {
     kind = "local_trust_store";
     label = "local trust store could not build a trusted certificate chain";
   } else if (/certificate|self[_ -]?signed|unable_to_verify_leaf|cert_has_expired|hostname.*match/.test(lower)) {
@@ -138,7 +153,7 @@ export function describePanelTransportError(
     label = "panel transport failed";
   }
   let chainHint = "";
-  if (kind === "certificate_validation" || kind === "local_trust_store") {
+  if (kind === "unknown_certificate_verification" || kind === "certificate_validation" || kind === "local_trust_store") {
     try {
       const url = new URL(panelUrl);
       const port = url.port || "443";
@@ -171,7 +186,10 @@ async function apiRequest<T>(
         method,
         headers: {
           "Authorization": `Bearer ${config.token}`,
-          "Connection": "keep-alive",
+          // GETs are replayable and use a fresh transport connection. This
+          // avoids repeatedly selecting a stale pooled TLS connection when
+          // Bun reports its intermittent unknown verification failure.
+          "Connection": method === "GET" ? "close" : "keep-alive",
           ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
           ...(headers || {}),
         },
@@ -180,7 +198,7 @@ async function apiRequest<T>(
       break;
     } catch (err) {
       lastTransport = describePanelTransportError(err, config.panel_url);
-      const retryable = lastTransport.kind !== "certificate_validation" && lastTransport.kind !== "local_trust_store";
+      const retryable = shouldRetryPanelTransport(method, lastTransport.kind);
       if (!retryable || attempt === attempts) break;
       await Bun.sleep(250 * 2 ** (attempt - 1));
     }
@@ -262,7 +280,15 @@ let cachedApps: App[] | null = null;
 
 export async function getApps(): Promise<App[]> {
   if (!cachedApps) {
-    cachedApps = await get<App[]>("/api/apps");
+    const payload = await get<unknown>("/api/apps");
+    const rows = expectArray(payload, "Apps request");
+    for (const [index, value] of rows.entries()) {
+      const row = expectRecord(value, `Apps request item ${index + 1}`);
+      if (!Number.isInteger(row.id) || typeof row.name !== "string" || typeof row.status !== "string") {
+        throw new Error(`Apps request returned a malformed response (invalid app at index ${index})`);
+      }
+    }
+    cachedApps = rows as App[];
   }
   return cachedApps;
 }

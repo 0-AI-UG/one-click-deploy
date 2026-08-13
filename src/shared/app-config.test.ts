@@ -5,9 +5,33 @@ import { describe, expect, test } from "bun:test";
 import * as db from "./db.ts";
 import {
   applyAppConfig,
+  classifyAppConfigChanges,
+  classifyConfigOnlyChanges,
   diffAppConfig,
 } from "./app-config.ts";
 import { serializeEnvVars } from "./env-crypto.ts";
+
+describe("classifyAppConfigChanges", () => {
+  test("separates control, runtime, and build changes", () => {
+    expect(classifyAppConfigChanges([{ field: "webhook_enabled", before: false, after: true }])).toBe("control");
+    expect(classifyAppConfigChanges([{ field: "container_port", before: 3000, after: 4000 }])).toBe("runtime");
+    expect(classifyAppConfigChanges([{ field: "docker_context", before: ".", after: "apps/api" }])).toBe("build");
+    expect(classifyAppConfigChanges([
+      { field: "container_port", before: 3000, after: 4000 },
+      { field: "image_ref", before: "", after: "registry/app@sha256:abc" },
+    ])).toBe("build");
+  });
+
+  test("config-only recreates runtime state while deferring source builds", () => {
+    const runtime = { field: "memory_mb", before: 512, after: 1024 };
+    const build = { field: "dockerfile_path", before: "Dockerfile", after: "ops/Dockerfile" };
+    expect(classifyConfigOnlyChanges([runtime])).toEqual({ rollout: "runtime", pendingBuild: false });
+    expect(classifyConfigOnlyChanges([build])).toEqual({ rollout: "control", pendingBuild: true });
+    expect(classifyConfigOnlyChanges([runtime, build])).toEqual({ rollout: "runtime", pendingBuild: true });
+    expect(classifyConfigOnlyChanges([], { environmentChanged: true }))
+      .toEqual({ rollout: "runtime", pendingBuild: false });
+  });
+});
 
 function seedApp() {
   const suffix = randomSuffix();

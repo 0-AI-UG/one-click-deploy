@@ -20,7 +20,7 @@ import type { StackDeployRequest } from "../../shared/rpc.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
-import { diffAppConfig } from "../../shared/app-config.ts";
+import { classifyAppConfigChanges, classifyConfigOnlyChanges, diffAppConfig, type AppReconcileMode } from "../../shared/app-config.ts";
 import { validateDeployRequest, assertSafeHostPath, validateRepoBuildPath } from "../../shared/validate.ts";
 import { cloneRepo, findDockerfile, sshExec } from "../../shared/remote/index.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
@@ -398,6 +398,13 @@ const plan: Step<DeployStackInput, PlanOut> = {
       createdStack = true;
       ctx.log(`created stack #${stack.id} (env ${envId})`);
     }
+    // The owning stack control file is an implicit webhook input for every
+    // member, including members omitted from a partial reconcile.
+    if (req.stack_manifest_path !== undefined) {
+      for (const member of db.getAppsByStackId(stackId)) {
+        db.updateAppStackManifestPath(member.id, req.stack_manifest_path);
+      }
+    }
 
     // Staging needs the webhook: it holds PUSHED commits, so an opt-in without
     // one can never fire. Checked before anything deploys.
@@ -541,6 +548,18 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
       if (!validation.valid) throw new Error(`App "${appReq.key}": ${validation.error}`);
       for (const volume of appReq.extra_volumes ?? []) {
         assertSafeHostPath(volume.host_path, name);
+      }
+      const existingApp = db.getAppByName(name);
+      if (existingApp && (
+        req.config_only || appReq.reconcile_mode === "control" || appReq.reconcile_mode === "runtime"
+      )) {
+        const deployed = db.getDeployments(existingApp.id).find((row) => row.status === "deployed");
+        sourceRevisionByKey[appReq.key] = appReq.image_ref
+          ? `artifact:${appReq.image_ref}`
+          : deployed?.git_commit || "";
+        checkedApps.push(appReq.key);
+        ctx.log(`${appReq.key}: source preflight skipped (${appReq.reconcile_mode || "configuration-only"} reconciliation)`);
+        continue;
       }
       if (appReq.image_ref) {
         checkedApps.push(appReq.key);
@@ -934,6 +953,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
             needs: _needs,
             env_projection_mode: _projectionMode,
             declared_env_keys: _declaredKeys,
+            reconcile_mode: _reconcileMode,
             ...configFields
           } = appReq;
           const candidate: import("../../shared/rpc.ts").DeployRequest = {
@@ -944,13 +964,25 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
             env_projection: effectiveProjection,
             webhook_staging: false,
             webhook_staging_environment_id: stagingEnvFor(key),
+            stack_manifest_path: req.stack_manifest_path ?? null,
           };
           const configChanges = diffAppConfig(existingApp, candidate);
+          const requestedMode: AppReconcileMode = appReq.reconcile_mode ?? "build";
+          const configMode = classifyAppConfigChanges(configChanges);
+          const modeRank: Record<AppReconcileMode, number> = { control: 0, runtime: 1, build: 2 };
+          const configOnlyPlan = req.config_only
+            ? classifyConfigOnlyChanges(configChanges, {
+                environmentChanged: requestedMode === "runtime" || (req.env_vars?.length ?? 0) > 0,
+              })
+            : null;
+          const reconcileMode = configOnlyPlan
+            ? configOnlyPlan.rollout
+            : modeRank[configMode] > modeRank[requestedMode] ? configMode : requestedMode;
           const convergence = await stackAppAlreadyConverged(
             existingApp,
             preflight?.sourceRevisionByKey[key],
           );
-          if (convergence.converged && configChanges.length === 0) {
+          if (convergence.converged && configChanges.length === 0 && reconcileMode !== "control") {
             db.appendStackLog(stackId, `[apps] ${key}: already reconciled; skipped rollout`);
             ctx.log(`${key}: already reconciled; skipped rollout`);
             continue;
@@ -958,15 +990,17 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
           const reason = configChanges.length > 0
             ? `configuration diff: ${configChanges.map((change) => change.field).join(", ")}`
             : convergence.reason;
-          ctx.log(`${key}: rollout required (${reason})`);
+          ctx.log(`${key}: ${reconcileMode} reconciliation (${reason})`);
           row = enqueueOperation({
-            kind: "redeploy",
-            resourceKeys: [`app:${existingApp.id}`],
+            kind: "apply_manifest",
+            resourceKeys: [`manifest:${existingApp.id}`],
             input: {
               appId: existingApp.id,
               userId: ctx.triggeredBy || undefined,
-              gitSha: appReq.git_sha,
-              candidate,
+              deploy: reconcileMode === "build",
+              rollout: reconcileMode,
+              pendingRollout: configOnlyPlan?.pendingBuild === true,
+              spec: candidate,
             },
             trigger: "stack",
             triggeredBy: ctx.triggeredBy,
@@ -985,6 +1019,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
             webhook_staging: _s,
             env_projection_mode: _projectionMode,
             declared_env_keys: _declaredKeys,
+            reconcile_mode: _reconcileMode,
             ...deployFields
           } = appReq;
           row = enqueueOperation({
@@ -996,6 +1031,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
               environment_id: environmentId,
               env_projection: effectiveProjection,
               webhook_staging_environment_id: stagingEnvFor(key) ?? undefined,
+              stack_manifest_path: req.stack_manifest_path ?? null,
               server_provisioning_approved: req.server_provisioning_approved === true,
             },
             trigger: "stack",
@@ -1026,6 +1062,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
         const app = db.getAppByName(memberName(req.name, key));
         if (!app) continue;
         db.setAppStack(app.id, stackId);
+        db.updateAppStackManifestPath(app.id, req.stack_manifest_path ?? null);
         // Persist the member's dependency edges. They're otherwise consumed once
         // here (topoLevels) and forgotten, which left promote_stack unable to
         // order anything — see promote-stack.ts `orderPromotions`.

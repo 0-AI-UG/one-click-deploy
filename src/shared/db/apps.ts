@@ -34,6 +34,9 @@ export type AppRow = {
   webhook_secret: string;
   webhook_branch: string;
   webhook_path: string;
+  /** JSON array of repository-relative globs. NULL means unfiltered. */
+  webhook_paths: string | null;
+  webhook_paths_ignore: string;
   github_webhook_id: string;
   /** htpasswd bcrypt hash of the app password for Traefik's basicAuth
    *  middleware. This hash is the sole source of truth for "auth on" — non-empty
@@ -123,6 +126,14 @@ export type AppRow = {
   last_manifest_hash: string | null;
   last_manifest_applied_at: string | null;
   last_manifest_config_revision: number | null;
+  /** Canonical repository-relative control-file paths used by webhooks. */
+  manifest_path: string | null;
+  stack_manifest_path: string | null;
+  last_webhook_head: string | null;
+  last_webhook_decision: string | null;
+  last_webhook_received_at: string | null;
+  last_webhook_evaluated_at: string | null;
+  last_webhook_ci_result: string | null;
   rollout_requested_revision: number;
   rollout_requested_after_deployment_id: number;
   deletion_requested_at: string | null;
@@ -702,8 +713,12 @@ export function updateAppArtifactAndHealth(
  * itself runtime configuration and therefore does not bump config_revision. */
 export function recordAppManifestApplied(id: number, path: string, hash: string): void {
   db.query(
-    "UPDATE apps SET last_manifest_path = ?, last_manifest_hash = ?, last_manifest_applied_at = datetime('now'), last_manifest_config_revision = config_revision WHERE id = ?",
-  ).run(path, hash, id);
+    "UPDATE apps SET last_manifest_path = ?, manifest_path = ?, last_manifest_hash = ?, last_manifest_applied_at = datetime('now'), last_manifest_config_revision = config_revision WHERE id = ?",
+  ).run(path, path, hash, id);
+}
+
+export function updateAppStackManifestPath(id: number, path: string | null): void {
+  db.query("UPDATE apps SET stack_manifest_path = ? WHERE id = ?").run(path, id);
 }
 
 /** Collapse the many column-level trigger bumps produced by one manifest
@@ -822,6 +837,42 @@ export function updateAppWebhookProviderIdentity(id: number, repo: string, webho
 
 export function updateAppWebhookWaitForCi(id: number, waitForCi: boolean): void {
   db.query("UPDATE apps SET webhook_wait_for_ci = ? WHERE id = ?").run(waitForCi ? 1 : 0, id);
+}
+
+/** Store the new glob arrays. NULL paths preserves the historical unfiltered behavior. */
+export function updateAppWebhookPaths(
+  id: number,
+  paths: string[] | null,
+  pathsIgnore: string[],
+  opts: { clearLegacyPath?: boolean } = {},
+): void {
+  db.query(
+    "UPDATE apps SET webhook_paths = ?, webhook_paths_ignore = ?, webhook_path = CASE WHEN ? THEN '' ELSE webhook_path END WHERE id = ?",
+  ).run(
+    paths === null ? null : JSON.stringify(paths),
+    JSON.stringify(pathsIgnore),
+    opts.clearLegacyPath === false ? 0 : 1,
+    id,
+  );
+}
+
+export function recordAppWebhookReceived(id: number, headSha: string): void {
+  db.query(
+    "UPDATE apps SET last_webhook_head = ?, last_webhook_received_at = datetime('now') WHERE id = ?",
+  ).run(headSha, id);
+}
+
+export function recordAppWebhookDecision(
+  id: number,
+  headSha: string,
+  ciResult: string,
+  decision: unknown,
+): void {
+  db.query(
+    `UPDATE apps SET last_webhook_head = ?, last_webhook_ci_result = ?,
+       last_webhook_decision = ?, last_webhook_evaluated_at = datetime('now')
+     WHERE id = ?`,
+  ).run(headSha, ciResult, JSON.stringify(decision), id);
 }
 
 /** Select the environment the webhook staging sibling deploys with, or null to

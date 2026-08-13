@@ -24,7 +24,8 @@ stores that desired state, and invokes the canonical deploy path.
 
 `ocd deploy --dry-run` compares local desired state with the stored server
 manifest. `ocd deploy --config-only` stores and applies the same manifest
-without deploying code. Both are modes of `ocd deploy`, not separate mutation
+without rebuilding code; runtime changes recreate containers from the current
+immutable image, while source/build changes remain pending. Both are modes of `ocd deploy`, not separate mutation
 commands.
 
 App creation and desired-configuration mutation are CLI-only. The server
@@ -57,8 +58,9 @@ ocd deploy --config-only
 
 ```text
 ocd deploy [manifest] [--set=KEY=VALUE] [--auth-password-env=KEY]
-    [--server=ID] [--dry-run] [--config-only]
-ocd deploy stack [manifest]
+    [--server=ID] [--app=EXISTING_APP] [--dry-run] [--config-only]
+ocd deploy stack [manifest] [--config-only]
+ocd app redeploy <app>
 ocd apps
 ocd app show <app>
 ocd app deployments <app>

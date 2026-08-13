@@ -166,10 +166,19 @@ describe("validateDeployManifest", () => {
     );
   });
 
-  test("unknown key warns but passes", () => {
+  test("unknown key fails by default", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
-    expect(() => validateDeployManifest({ volume: null, name: "web", futureField: 1 }, "a/.ocd-deploy.json")).not.toThrow();
-    expect(warn).toHaveBeenCalledWith('Manifest a/.ocd-deploy.json: unknown key "futureField" (ignored)');
+    expect(() => validateDeployManifest({ volume: null, name: "web", futureField: 1 }, "a/.ocd-deploy.json"))
+      .toThrow(/futureField: unknown key/);
+    expect(warn).not.toHaveBeenCalled();
+    expect(() => validateDeployManifest(
+      { volume: null, name: "web", futureField: 1 },
+      "a/.ocd-deploy.json",
+      { allowUnknown: true },
+    )).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      'Manifest a/.ocd-deploy.json: unknown key "futureField" (ignored by --allow-unknown)',
+    );
     warn.mockRestore();
   });
 
@@ -208,6 +217,32 @@ describe("validateDeployManifest", () => {
         "a/.ocd-deploy.json",
       ),
     ).not.toThrow();
+  });
+
+  test("webhook paths and paths_ignore validate as repository globs", () => {
+    expect(() => validateDeployManifest({
+      name: "web",
+      volume: null,
+      webhook: {
+        enabled: true,
+        paths: ["services/web/**", "packages/core/**", "package.json"],
+        paths_ignore: ["services/web/**/*.md"],
+      },
+    }, "a/.ocd-deploy.json")).not.toThrow();
+    expect(() => validateDeployManifest({
+      name: "web", volume: null, webhook: { paths: [] },
+    }, "a/.ocd-deploy.json")).toThrow(/at least one pattern/);
+    expect(() => validateDeployManifest({
+      name: "web", volume: null, webhook: { paths: ["!ios/**"] },
+    }, "a/.ocd-deploy.json")).toThrow(/inline !patterns/);
+  });
+
+  test("rejects path and paths together", () => {
+    expect(() => validateDeployManifest({
+      name: "web",
+      volume: null,
+      webhook: { path: "services/web", paths: ["services/web/**"] },
+    }, "a/.ocd-deploy.json")).toThrow(/cannot be used together/);
   });
 
   test("environment selectors and complete autoscaling policy validate", () => {
@@ -266,18 +301,15 @@ describe("validateDeployManifest", () => {
     expect(() => validateDeployManifest({ volume: null, name: "web" }, "a/.ocd-deploy.json")).not.toThrow();
   });
 
-  test("legacy top-level `environments` key warns but does not throw", () => {
+  test("legacy top-level `environments` key is rejected", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     expect(() =>
       validateDeployManifest(
         { name: "web", volume: null, environments: { staging: { branch: "develop" } } },
         "a/.ocd-deploy.json",
       ),
-    ).not.toThrow();
-    // Some warning naming the stray key is emitted (exact wording unpinned —
-    // the contract upgrades it to a rename hint).
-    const messages = warn.mock.calls.map((c) => String(c[0]));
-    expect(messages.some((m) => m.includes("environments"))).toBe(true);
+    ).toThrow(/environments: unknown key/);
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 });
@@ -376,12 +408,19 @@ describe("validateStackManifest", () => {
     ).toThrow(/apps\.web\.manifest: expected a manifest path string, got number \(5\)/);
   });
 
-  test("unknown top-level key warns but passes", () => {
+  test("unknown top-level key fails unless compatibility is explicit", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     expect(() =>
       validateStackManifest({ name: "s", apps: { web: { manifest: "w" } }, extra: true }, "ocd-stack.json"),
-    ).not.toThrow();
-    expect(warn).toHaveBeenCalledWith('Manifest ocd-stack.json: unknown key "extra" (ignored)');
+    ).toThrow(/extra: unknown key/);
+    expect(() => validateStackManifest(
+      { name: "s", apps: { web: { manifest: "w" } }, extra: true },
+      "ocd-stack.json",
+      { allowUnknown: true },
+    )).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      'Manifest ocd-stack.json: unknown key "extra" (ignored by --allow-unknown)',
+    );
     warn.mockRestore();
   });
 });

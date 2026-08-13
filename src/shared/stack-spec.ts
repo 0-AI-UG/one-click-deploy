@@ -99,6 +99,8 @@ export function buildStackAppSpec(
     spec.webhook_enabled = true;
     spec.webhook_branch = manifest.webhook.branch || "main";
     if (manifest.webhook.path) spec.webhook_path = manifest.webhook.path;
+    if (manifest.webhook.paths) spec.webhook_paths = manifest.webhook.paths;
+    if (manifest.webhook.paths_ignore) spec.webhook_paths_ignore = manifest.webhook.paths_ignore;
     if (manifest.webhook.wait_for_ci) spec.webhook_wait_for_ci = true;
     // Staging is opt-in per member, declared in the member's own manifest. The
     // ENVIRONMENT it deploys with is not known here — it comes from the stack's

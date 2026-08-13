@@ -1,4 +1,4 @@
-import { sshExec } from "./ssh.ts";
+import { sshExec, sshExecWithStdin } from "./ssh.ts";
 import { asUser, log } from "./container-common.ts";
 
 export type GhcrAuth = {
@@ -9,6 +9,46 @@ export type GhcrAuth = {
   /** Best-effort cleanup of the credential dir. Always call in a `finally`. */
   cleanup: () => Promise<void>;
 };
+
+function registryHost(ref: string): string {
+  return ref.replace(/^https?:\/\//, "").split("/")[0];
+}
+
+/** Authenticate to any OCI registry using an ephemeral Docker config. */
+export async function dockerLoginRegistry(
+  ip: string,
+  registryRef: string,
+  username: string,
+  password: string,
+  hostKey?: string,
+): Promise<GhcrAuth> {
+  const host = registryHost(registryRef);
+  const rand = Math.random().toString(36).slice(2, 12);
+  const dockerConfig = `/home/deploy/.docker-ocd-${rand}`;
+  if (!/^[A-Za-z0-9._@+-]+$/.test(username)) {
+    throw new Error("OCI registry username contains unsupported characters");
+  }
+  const result = await sshExecWithStdin(
+    ip,
+    asUser(
+      `mkdir -p ${dockerConfig} && chmod 700 ${dockerConfig} && ` +
+      `DOCKER_CONFIG=${dockerConfig} docker login ${host} -u ${username} --password-stdin`,
+    ),
+    password,
+    hostKey,
+  );
+  if (result.exitCode !== 0) {
+    await sshExec(ip, asUser(`rm -rf ${dockerConfig}`), hostKey).catch(() => {});
+    throw new Error(`Failed to authenticate with OCI registry ${host}`);
+  }
+  return {
+    dockerConfig,
+    envPrefix: `DOCKER_CONFIG=${dockerConfig} `,
+    cleanup: async () => {
+      await sshExec(ip, asUser(`rm -rf ${dockerConfig}`), hostKey).catch(() => {});
+    },
+  };
+}
 
 /**
  * Authenticate against ghcr.io into a *per-deploy* DOCKER_CONFIG dir instead
@@ -22,39 +62,13 @@ export async function dockerLoginGhcr(
   token: string,
   hostKey?: string,
 ): Promise<GhcrAuth> {
-  // Random per-deploy dir, owned by `deploy` user (the uid that runs docker).
-  const rand = Math.random().toString(36).slice(2, 12);
-  const dockerConfig = `/home/deploy/.docker-ocd-${rand}`;
-  const escaped = token.replace(/'/g, "'\\''");
-  const result = await sshExec(
-    ip,
-    asUser(
-      `mkdir -p ${dockerConfig} && chmod 700 ${dockerConfig} && ` +
-      `DOCKER_CONFIG=${dockerConfig} sh -c "echo '${escaped}' | docker login ghcr.io -u x-access-token --password-stdin"`,
-    ),
-    hostKey,
-  );
-  if (result.exitCode !== 0) {
-    log("registry", `ghcr.io login failed: ${result.stderr}`);
-    // Best-effort: nuke the dir even on failure so a half-written config
-    // doesn't linger.
-    await sshExec(ip, asUser(`rm -rf ${dockerConfig}`), hostKey).catch(() => {});
+  try {
+    const auth = await dockerLoginRegistry(ip, "ghcr.io", "x-access-token", token, hostKey);
+    log("registry", "ghcr.io login succeeded (ephemeral DOCKER_CONFIG)");
+    return auth;
+  } catch {
     throw new Error(
       "Failed to authenticate with GitHub Container Registry (ghcr.io). Check your GitHub token has the read:packages scope.",
     );
   }
-  log("registry", "ghcr.io login succeeded (ephemeral DOCKER_CONFIG)");
-  return {
-    dockerConfig,
-    envPrefix: `DOCKER_CONFIG=${dockerConfig} `,
-    cleanup: async () => {
-      const r = await sshExec(ip, asUser(`rm -rf ${dockerConfig}`), hostKey).catch((err) => {
-        log("registry", `ghcr cleanup failed (non-fatal): ${err}`);
-        return null;
-      });
-      if (r && r.exitCode !== 0) {
-        log("registry", `ghcr cleanup non-zero exit: ${r.stderr}`);
-      }
-    },
-  };
 }

@@ -37,6 +37,24 @@ export function runDbCleanupGate(prior: Record<string, unknown>): string[] {
 }
 
 /**
+ * Turn best-effort cleanup outputs back into a hard operation boundary.
+ *
+ * Deletion steps use softStep so every independent resource gets an attempt,
+ * but an operation must not subsequently report success when one of those
+ * attempts failed. Keep this assertion in a separate final step so the failed
+ * best-effort step's output is durably recorded and available after a resume.
+ */
+export function assertCleanupComplete(
+  prior: Record<string, unknown>,
+  stepNames?: string[],
+): void {
+  const failures = runDbCleanupGate(prior).filter((name) => !stepNames || stepNames.includes(name));
+  if (failures.length > 0) {
+    throw new Error(`Cleanup incomplete (failed: ${failures.join(", ")})`);
+  }
+}
+
+/**
  * GC-empty-servers step, parameterized by the name of the prior step that
  * reported the affected server ids in its `affectedServerIds` field.
  */

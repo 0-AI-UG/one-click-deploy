@@ -25,6 +25,9 @@ import {
 import { buildStackAppSpec, resolveRepoPath, repoDirOf } from "../../shared/stack-spec.ts";
 import { validateStackManifest } from "../../shared/manifest-validate.ts";
 import type { StackManifest, StackDeployRequest } from "../../shared/rpc.ts";
+import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
+import { operationLogQuery, parseLogArgs } from "../log-filters.ts";
+import { expectArray, expectRecord, expectStringField } from "../response.ts";
 
 type AppElement = StackDeployRequest["apps"][number];
 
@@ -62,6 +65,17 @@ interface StackListItem {
   last_operation_children?: Array<{ id: number; kind: string; status: string }>;
 }
 
+async function fetchStackList(): Promise<StackListItem[]> {
+  const values = expectArray(await get<unknown>("/api/stacks"), "Stacks request");
+  for (const [index, value] of values.entries()) {
+    const row = expectRecord(value, `Stacks request item ${index + 1}`);
+    if (!Number.isInteger(row.id) || typeof row.name !== "string" || typeof row.status !== "string") {
+      throw new Error(`Stacks request returned a malformed response (invalid stack at index ${index})`);
+    }
+  }
+  return values as StackListItem[];
+}
+
 interface StackDetail {
   id: number;
   name: string;
@@ -82,7 +96,7 @@ interface StackDetail {
   acme_errors?: string[];
 }
 
-function readStackManifest(path: string): StackManifest {
+function readStackManifest(path: string, options: { allowUnknown?: boolean } = {}): StackManifest {
   let manifest: StackManifest;
   try {
     const raw = readFileSync(path, "utf-8");
@@ -96,7 +110,7 @@ function readStackManifest(path: string): StackManifest {
     process.exit(1);
   }
   try {
-    validateStackManifest(manifest, path);
+    validateStackManifest(manifest, path, options);
   } catch (err) {
     console.error(`${RED}${err instanceof Error ? err.message : err}${RESET}`);
     process.exit(1);
@@ -130,7 +144,7 @@ function buildAppElement(
 /** Non-exiting lookup — returns undefined instead of exiting when no stack row
  *  matches, so callers (e.g. stack logs) can fall back to op history. */
 async function lookupStack(name: string): Promise<StackListItem | undefined> {
-  const list = await get<StackListItem[]>("/api/stacks");
+  const list = await fetchStackList();
 
   // All-digit only: `parseInt("3rd-party")` is 3, which would resolve a
   // digit-leading stack name to an unrelated stack id — and `ocd delete stack`
@@ -149,7 +163,7 @@ async function resolveStack(name: string): Promise<StackListItem> {
   const found = await lookupStack(name);
   if (found) return found;
 
-  const list = await get<StackListItem[]>("/api/stacks");
+  const list = await fetchStackList();
   console.error(`Stack not found: ${name}`);
   console.error(`Available: ${list.map((s) => s.name).join(", ") || "(none)"}`);
   process.exit(1);
@@ -177,6 +191,9 @@ ${BOLD}Options:${RESET}
   --with-dependents          Include downstream app dependents of --only
   --changed                  Reconcile members affected since their deployed commit
   --all                      Reconcile every member (disables changed-only default)
+  --config-only              Apply config without rebuilding; runtime changes
+                             reuse the current immutable images
+  --allow-unknown            Compatibility escape hatch for newer manifest keys
 
 Select shared production and staging environments with the stack manifest's
 \`environment\` and \`staging_environment\` fields.`);
@@ -242,8 +259,24 @@ function clientVisibleConfigDiff(existing: Record<string, unknown>, desired: App
     public_protocol: desired.public_protocol ?? "tcp",
     placement_pool: desired.placement_pool ?? "general",
     scale_to_zero_after: desired.scale_to_zero_after ?? 0,
+    webhook_enabled: desired.webhook_enabled ?? false,
+    webhook_branch: desired.webhook_branch ?? "main",
+    webhook_path: desired.webhook_path ?? "",
+    webhook_paths: desired.webhook_paths ?? null,
+    webhook_paths_ignore: desired.webhook_paths_ignore ?? [],
+    webhook_wait_for_ci: desired.webhook_wait_for_ci ?? false,
+    desired_replicas: desired.replicas ?? 1,
+    min_replicas: desired.min_replicas ?? 1,
+    max_replicas: desired.max_replicas ?? Math.max(desired.replicas ?? 1, desired.min_replicas ?? 1),
+    autoscale_enabled: desired.autoscale_enabled ?? false,
+    desired_volume_id: desired.volume_id ?? "",
+    desired_volume_size: desired.volume_size ?? 0,
+    desired_volume_path: desired.volume_path ?? "/data",
   };
-  const booleanFields = new Set(["public", "sticky", "compress"]);
+  const booleanFields = new Set([
+    "public", "sticky", "compress", "webhook_enabled", "webhook_wait_for_ci",
+    "autoscale_enabled",
+  ]);
   const changed: string[] = [];
   for (const [field, wanted] of Object.entries(desiredValues)) {
     let actual = existing[field];
@@ -251,6 +284,30 @@ function clientVisibleConfigDiff(existing: Record<string, unknown>, desired: App
     if (JSON.stringify(actual) !== JSON.stringify(wanted)) changed.push(field);
   }
   return changed;
+}
+
+const LOCAL_RUNTIME_FIELDS = new Set([
+  "container_port", "memory_mb", "cpu_limit", "health_check_mode",
+  "health_check_command", "health_check_file", "health_check_max_age_seconds",
+  "internal_protocol", "desired_volume_id", "desired_volume_size", "desired_volume_path",
+]);
+
+export function classifyLocalStackReconcile(
+  existing: Record<string, unknown> | undefined,
+  desired: AppElement,
+  changedFiles: string[] | null,
+  stackManifestPath: string,
+  otherManifestPaths: string[] = [],
+): "control" | "runtime" | "build" {
+  if (!existing || !existing.deployed_commit) return "build";
+  if (changedFiles === null) return "build";
+  const metadataFiles = new Set(
+    [stackManifestPath, desired.manifest_path, ...otherManifestPaths].filter(Boolean),
+  );
+  const buildFiles = changedFiles.filter((path) => !metadataFiles.has(path));
+  if (appIsAffectedByFiles(desired, buildFiles)) return "build";
+  const changed = clientVisibleConfigDiff(existing, desired);
+  return changed.some((field) => LOCAL_RUNTIME_FIELDS.has(field)) ? "runtime" : "control";
 }
 
 export function appIsAffectedByFiles(app: AppElement, files: string[]): boolean {
@@ -279,7 +336,7 @@ async function resolveEnvironment(nameOrId: string): Promise<ResolvedEnv> {
  *  linked environment and staging environment across re-ups), or undefined when
  *  the stack doesn't exist yet. */
 async function findStackByName(name: string): Promise<StackListItem | undefined> {
-  const list = await get<StackListItem[]>("/api/stacks");
+  const list = await fetchStackList();
   const lower = name.toLowerCase();
   return list.find((s) => s.name.toLowerCase() === lower);
 }
@@ -342,44 +399,34 @@ export function mergeStagingEnv(
 }
 
 export async function stackUp(args: string[]): Promise<void> {
-  let manifestPath = "";
-  const rawSets: string[] = [];
-  const rawStagingSets: string[] = [];
-  let onlyRaw = "";
-  let withDependents = false;
-  let changedOnly = false;
-  let forceAll = false;
-  for (const arg of args) {
-    if (arg === "--help" || arg === "-h") {
-      upUsage();
-      process.exit(0);
-    } else if (arg.startsWith("--set=")) {
-      rawSets.push(arg.slice(6));
-    } else if (arg.startsWith("--staging-set=")) {
-      rawStagingSets.push(arg.slice("--staging-set=".length));
-    } else if (arg.startsWith("--only=")) {
-      onlyRaw = arg.slice("--only=".length);
-    } else if (arg === "--with-dependents") {
-      withDependents = true;
-    } else if (arg === "--changed") {
-      changedOnly = true;
-    } else if (arg === "--all") {
-      forceAll = true;
-    } else if (arg.startsWith("--")) {
-      console.error(`${RED}Unknown option: ${arg}${RESET}`);
-      process.exit(1);
-    } else if (!arg.startsWith("--") && !manifestPath) {
-      manifestPath = arg;
-    } else {
-      console.error(`${RED}Unexpected argument: ${arg}${RESET}`);
-      process.exit(1);
-    }
+  const parsed = parseCliArgs(args, {
+    help: { type: "boolean", aliases: ["h"] },
+    set: { type: "string", repeatable: true },
+    "staging-set": { type: "string", repeatable: true },
+    only: { type: "string" },
+    "with-dependents": { type: "boolean" },
+    changed: { type: "boolean" },
+    all: { type: "boolean" },
+    "config-only": { type: "boolean" },
+    "allow-unknown": { type: "boolean" },
+  }, { maxPositionals: 1 });
+  if (parsed.flags.help === true) {
+    upUsage();
+    process.exit(0);
   }
-  if (!manifestPath) manifestPath = "ocd-stack.json";
+  const manifestPath = parsed.positionals[0] || "ocd-stack.json";
+  const rawSets = (parsed.flags.set as string[] | undefined) ?? [];
+  const rawStagingSets = (parsed.flags["staging-set"] as string[] | undefined) ?? [];
+  const onlyRaw = (parsed.flags.only as string | undefined) ?? "";
+  const withDependents = parsed.flags["with-dependents"] === true;
+  const changedOnly = parsed.flags.changed === true;
+  const forceAll = parsed.flags.all === true;
+  const configOnly = parsed.flags["config-only"] === true;
+  const allowUnknown = parsed.flags["allow-unknown"] === true;
 
   const stackLocation = manifestRepoLocation(manifestPath);
   const manifestFullPath = stackLocation.fullPath;
-  const manifest = readStackManifest(manifestFullPath);
+  const manifest = readStackManifest(manifestFullPath, { allowUnknown });
   const baseDir = dirname(manifestFullPath);
 
   if (!manifest.name) {
@@ -431,7 +478,13 @@ export async function stackUp(args: string[]): Promise<void> {
   const apps: AppElement[] = [];
   const appEnvDefs: AppEnvDefs[] = [];
   for (const [key, entry] of Object.entries(manifest.apps)) {
-    const appManifest = readManifest(resolve(baseDir, entry.manifest));
+    const appManifest = readManifest(resolve(baseDir, entry.manifest), { allowUnknown });
+    if (appManifest.webhook?.path !== undefined) {
+      console.warn(
+        `${DIM}Deprecated (${key}):${RESET} webhook.path; use webhook.paths: ` +
+        `[\"${appManifest.webhook.path.replace(/\/+$/, "")}/**\"]`,
+      );
+    }
     appEnvDefs.push({ app: key, defs: appManifest.env || [] });
     // Dockerfile paths resolve relative to the app manifest's dir (repo-root-
     // relative, assuming the stack manifest sits at the repo root).
@@ -547,6 +600,7 @@ export async function stackUp(args: string[]): Promise<void> {
 
   const body: StackDeployRequest = {
     name: manifest.name,
+    stack_manifest_path: stackLocation.path,
     environment_id: reused?.id,
     staging_environment_id: stagingEnvId,
     env_vars: env_vars.length > 0 ? env_vars : undefined,
@@ -574,6 +628,8 @@ export async function stackUp(args: string[]): Promise<void> {
   }>>("/api/apps");
   const allKeys = new Set(Object.keys(manifest.apps));
   let selectedKeys = new Set(allKeys);
+  const modes = new Map<string, "control" | "runtime" | "build">();
+  let stackManifestChanged = false;
   let selectionReason = "all members";
   if (onlyRaw) {
     selectedKeys = new Set(onlyRaw.split(",").map((key) => key.trim()).filter(Boolean));
@@ -583,34 +639,86 @@ export async function stackUp(args: string[]): Promise<void> {
       process.exit(1);
     }
     if (withDependents) selectedKeys = expandAppDependents(selectedKeys, manifest.apps);
+    for (const key of selectedKeys) modes.set(key, "build");
     selectionReason = `explicit --only${withDependents ? " plus dependents" : ""}`;
   } else if (!forceAll && (changedOnly || existingStack)) {
     selectedKeys = new Set<string>();
     for (const app of apps) {
       const deployed = existingApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
-      if (!deployed?.deployed_commit || deployed.last_manifest_hash !== app.manifest_hash) {
+      if (!deployed?.deployed_commit) {
         selectedKeys.add(app.key);
+        modes.set(app.key, "build");
         continue;
       }
       const files = changedFilesSince(deployed.deployed_commit);
-      if (files === null || files.includes(stackLocation.path) || appIsAffectedByFiles(app, files)) {
+      const stackControlChanged = files?.includes(stackLocation.path) === true;
+      if (stackControlChanged) stackManifestChanged = true;
+      const mode = classifyLocalStackReconcile(
+        deployed,
+        app,
+        files,
+        stackLocation.path,
+        apps.map((candidate) => candidate.manifest_path).filter((path): path is string => !!path),
+      );
+      if (
+        files === null ||
+        stackControlChanged ||
+        deployed.last_manifest_hash !== app.manifest_hash ||
+        mode === "build" ||
+        clientVisibleConfigDiff(deployed, app).length > 0
+      ) {
         selectedKeys.add(app.key);
+        modes.set(app.key, mode);
       }
     }
+    const direct = new Set(selectedKeys);
     selectedKeys = expandAppDependents(selectedKeys, manifest.apps);
-    if (rawSets.length > 0) selectedKeys = expandAppDependents(allKeys, manifest.apps);
+    for (const key of selectedKeys) {
+      if (!direct.has(key)) modes.set(key, "runtime");
+    }
+    if (rawSets.length > 0) {
+      selectedKeys = expandAppDependents(allKeys, manifest.apps);
+      for (const key of selectedKeys) modes.set(key, "runtime");
+    }
     if (rawStagingSets.length > 0) {
       for (const app of apps) if (app.webhook_staging) selectedKeys.add(app.key);
     }
+    for (const app of apps) {
+      const deployed = existingApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
+      const desiredStaging = app.webhook_staging
+        ? stagingEnvId ?? existingStack?.staging_environment_id ?? null
+        : null;
+      if (deployed && (deployed.webhook_staging_environment_id ?? null) !== desiredStaging) {
+        selectedKeys.add(app.key);
+        modes.set(app.key, "control");
+      }
+    }
     selectionReason = "changed build contexts/manifests plus dependents";
+  }
+
+  for (const app of apps) {
+    if (!selectedKeys.has(app.key)) continue;
+    const existing = existingApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
+    app.reconcile_mode = existing ? modes.get(app.key) ?? "build" : "build";
+  }
+  if (configOnly) {
+    const missing = apps.filter((app) => selectedKeys.has(app.key) &&
+      !existingApps.some((candidate) => candidate.name === `${manifest.name}-${app.key}`));
+    if (missing.length) {
+      console.error(`${RED}Cannot use --config-only: stack members do not exist: ${missing.map((app) => app.key).join(", ")}${RESET}`);
+      process.exit(1);
+    }
   }
 
   const partial = selectedKeys.size < allKeys.size;
   body.selected_app_keys = [...selectedKeys].sort();
   body.partial = partial;
+  body.config_only = configOnly;
   // Managed catalog services are reconciled on first/full deploy or when the
   // stack manifest itself changed. App-only source changes do not rebuild them.
-  body.selected_service_keys = partial ? [] : services.map((service) => service.key);
+  body.selected_service_keys = !partial || stackManifestChanged
+    ? services.map((service) => service.key)
+    : [];
 
   const levels = (() => {
     const remaining = new Set(selectedKeys);
@@ -638,7 +746,7 @@ export async function stackUp(args: string[]): Promise<void> {
         : clientVisibleConfigDiff(existing, app).join(", ") || "none";
       return [
         app.key,
-        selectedKeys.has(app.key) ? (existing ? "reconcile" : "create") : "retain",
+        selectedKeys.has(app.key) ? (existing ? app.reconcile_mode || "reconcile" : "create") : "retain",
         configDiff,
         app.manifest_path || "-",
         app.dockerfile_path || "(image)",
@@ -708,7 +816,7 @@ export async function stackUp(args: string[]): Promise<void> {
 }
 
 async function stackLs(): Promise<void> {
-  const list = await get<StackListItem[]>("/api/stacks");
+  const list = await fetchStackList();
   table(
     ["NAME", "STATUS", "LAST OP", "APPS", "SERVICES", "CREATED"],
     list.map((s) => [
@@ -725,13 +833,21 @@ async function stackLs(): Promise<void> {
 }
 
 async function stackStatus(args: string[]): Promise<void> {
-  const name = args[0];
+  const parsed = parseCliArgs(args, {}, { maxPositionals: 1 });
+  const name = parsed.positionals[0];
   if (!name) {
     console.error(`Usage: ocd stack status <name>`);
     process.exit(1);
   }
   const stackRef = await resolveStack(name);
-  const detail = await get<StackDetail>(`/api/stacks/${stackRef.id}?validate_endpoints=1`);
+  const payload = await get<unknown>(`/api/stacks/${stackRef.id}?validate_endpoints=1`);
+  const detailRow = expectRecord(payload, "Stack status request");
+  if (typeof detailRow.name !== "string" || typeof detailRow.status !== "string") {
+    throw new Error("Stack status request returned a malformed response (missing name or status)");
+  }
+  expectArray(detailRow.apps, "Stack status apps");
+  expectArray(detailRow.services, "Stack status services");
+  const detail = detailRow as unknown as StackDetail;
 
   console.log(`${BOLD}${detail.name}${RESET}  ${colorStatus(detail.status)}`);
   if (detail.resource_status_reason) {
@@ -809,61 +925,66 @@ async function findStackDeployOp(name: string): Promise<OpRow | undefined> {
 }
 
 async function stackLogs(args: string[]): Promise<void> {
-  const name = args[0];
+  const filters = parseLogArgs(args);
+  const name = filters.target;
   if (!name) {
-    console.error(`Usage: ocd stack logs <name>`);
+    console.error(`Usage: ocd stack logs <name> [--tail N] [--since TIME] [--child NAME|ID] [--phase STEP]`);
     process.exit(1);
   }
+  if (filters.follow) throw new Error("ocd stack logs does not support --follow; use ocd ops logs <id> --follow");
 
   const stackRef = await lookupStack(name);
-  if (stackRef) {
-    const { log } = await get<{ log: string }>(`/api/stacks/${stackRef.id}/log`);
-    process.stdout.write(log || `${DIM}(no log)${RESET}\n`);
+  const op = await findStackDeployOp(stackRef?.name || name);
+  if (op) {
+    if (!stackRef) console.error(
+      `${DIM}Stack "${name}" no longer exists. Showing operation #${op.id} logs:${RESET}`,
+    );
+    const payload = await get<unknown>(
+      `/api/operations/${op.id}/logs?${operationLogQuery(filters)}`,
+    );
+    const row = expectRecord(payload, "Stack operation logs request");
+    const logs = expectArray(row.logs, "Stack operation logs request") as Array<{ ts: string; level: string; message: string }>;
+    for (const l of logs) {
+      if (!l || typeof l.message !== "string") throw new Error("Stack operation logs returned a malformed log entry");
+      const ts = (l.ts || "").replace("T", " ").slice(0, 19);
+      console.log(`${DIM}${ts}${RESET} ${l.level} ${l.message}`);
+    }
+    if (logs.length === 0) console.log(`${DIM}(no operation logs matched)${RESET}`);
     return;
   }
 
-  // Stack row is gone (likely a failed deploy that rolled back) — surface the
-  // deploy operation's logs instead.
-  const op = await findStackDeployOp(name);
-  if (!op) {
+  if (!stackRef) {
     console.error(`Stack not found: ${name}`);
-    const list = await get<StackListItem[]>("/api/stacks");
+    const list = await fetchStackList();
     console.error(`Available: ${list.map((s) => s.name).join(", ") || "(none)"}`);
     process.exit(1);
   }
-
-  console.error(
-    `${DIM}Stack "${name}" no longer exists (deploy failed and rolled back). Showing operation #${op.id} logs:${RESET}`,
-  );
-  const { logs } = await get<{ logs: Array<{ ts: string; level: string; message: string }> }>(
-    `/api/operations/${op.id}/logs?since=0`,
-  );
-  for (const l of logs) {
-    const ts = (l.ts || "").replace("T", " ").slice(0, 19);
-    console.log(`${DIM}${ts}${RESET} ${l.level} ${l.message}`);
+  if (filters.tail || filters.sinceTime || filters.child || filters.phase) {
+    throw new Error("This legacy stack has no operation logs, so filters cannot be applied");
   }
+  const payload = await get<unknown>(`/api/stacks/${stackRef.id}/log`);
+  const log = expectStringField(payload, "log", "Stack log request");
+  process.stdout.write(log || `${DIM}(no stack log)${RESET}\n`);
 }
 
 async function stackMemberLogs(args: string[]): Promise<void> {
-  const name = args.find((arg) => !arg.startsWith("-"));
+  const parsed = parseCliArgs(args, { tail: { type: "string" } }, { maxPositionals: 1 });
+  const name = parsed.positionals[0];
   if (!name) {
     console.error(`Usage: ocd stack member-logs <name|id> [--tail=N]`);
     process.exit(1);
   }
-  const tailArg = args.find((arg) => arg.startsWith("--tail="));
-  const tail = tailArg ? parseInt(tailArg.slice(7), 10) : 100;
-  if (!Number.isInteger(tail) || tail < 1 || tail > 1000) {
-    console.error(`${RED}--tail must be an integer from 1 to 1000${RESET}`);
-    process.exit(1);
-  }
+  const tail = positiveIntegerFlag(parsed.flags.tail, "tail", { defaultValue: 100, max: 1000 })!;
   const stackRef = await resolveStack(name);
-  const { members } = await get<{
-    members: Array<{ kind: "app" | "service"; id: number; name: string; logs: string; error?: string }>;
-  }>(`/api/stacks/${stackRef.id}/member-logs?tail=${tail}`);
+  const payload = await get<unknown>(`/api/stacks/${stackRef.id}/member-logs?tail=${tail}`);
+  const members = expectArray(expectRecord(payload, "Stack member logs request").members, "Stack member logs request") as
+    Array<{ kind: "app" | "service"; id: number; name: string; logs: string; error?: string }>;
   for (const member of members) {
     console.log(`${BOLD}==> ${member.kind} ${member.name} (#${member.id}) <==${RESET}`);
     if (member.error) console.log(`${RED}${member.error}${RESET}`);
-    else process.stdout.write(member.logs.endsWith("\n") ? member.logs : `${member.logs}\n`);
+    else if (typeof member.logs !== "string") throw new Error(`Stack member logs returned malformed logs for ${member.name}`);
+    else if (member.logs) process.stdout.write(member.logs.endsWith("\n") ? member.logs : `${member.logs}\n`);
+    else console.log(`${DIM}(no logs)${RESET}`);
   }
   if (members.length === 0) console.log(`${DIM}(no readable member logs)${RESET}`);
 }

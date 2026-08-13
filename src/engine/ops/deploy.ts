@@ -29,9 +29,10 @@ import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { provisionServer } from "../provision-server.ts";
 import { registerOp } from "./registry.ts";
-import type { OpContext, OpKindDefinition, Step } from "../types.ts";
+import { FatalProbeError, type OpContext, type OpKindDefinition, type Step } from "../types.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
 import { scaleUp } from "../scale/scale-up.ts";
+import { resolveBuildRegistry } from "../registry-config.ts";
 
 type DeployInput = DeployRequest;
 
@@ -81,6 +82,7 @@ type CloneOut = { ok: true; revision?: string };
 type BuildOut = {
   imageTag: string;
   imageDigest?: string;
+  imageBytes?: number;
 };
 
 function log(context: string, ...args: unknown[]) {
@@ -286,10 +288,10 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       const info = await hetzner.volumes?.get(req.volume_id);
       if (!info || info.serverId !== providerServerId) return null;
       if (info.location && info.location !== location) {
-        throw new Error(`Cannot adopt volume ${req.volume_id}: it is in ${info.location}, but the app server is in ${location}`);
+        throw new FatalProbeError(`Cannot adopt volume ${req.volume_id}: it is in ${info.location}, but the app server is in ${location}`);
       }
       if (info.sizeGb > req.volume_size) {
-        throw new Error(`Cannot shrink volume ${req.volume_id} from ${info.sizeGb}GB to ${req.volume_size}GB`);
+        throw new FatalProbeError(`Cannot shrink volume ${req.volume_id} from ${info.sizeGb}GB to ${req.volume_size}GB`);
       }
       if (info.sizeGb < req.volume_size) return null;
       const containerPath = req.volume_path || "/data";
@@ -308,7 +310,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       (row) => row.provider_volume_id === existing.providerId,
     );
     if (retired) {
-      throw new Error(
+      throw new FatalProbeError(
         `Refusing to adopt retained volume ${existing.providerId} (${volName}); it belongs to ` +
         `${retired.former_resource_type}:${retired.former_resource_name}.`,
       );
@@ -318,7 +320,7 @@ const createVolume: Step<DeployInput, VolumeOut> = {
       existing.location !== location ||
       (existing.serverId != null && existing.serverId !== providerServerId)
     ) {
-      throw new Error(
+      throw new FatalProbeError(
         `Volume name collision for ${volName}: provider volume ${existing.providerId} ` +
         "does not match requested size/location/server. Refusing implicit adoption.",
       );
@@ -835,6 +837,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         configRevision: appRow?.config_revision ?? 1,
         envHash: hashEnvironment(envVars),
     };
+    const buildRegistry = await resolveBuildRegistry(req.build_cache_ref);
     const result = req.image_ref
       ? await pullImmutableImageAndRun(server.serverIp, {
           ...common,
@@ -849,7 +852,9 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
       {
         ...common,
         gitRepo: req.git_repo,
-        buildCacheRef: req.build_cache_ref,
+        buildCacheRef: buildRegistry.ref,
+        registryUsername: buildRegistry.username,
+        registryPassword: buildRegistry.password,
         reserveArchiveSpace:
           (req.replicas ?? 1) > 1 && db.getSettings().allow_archive_image_transfer === "1",
       },
@@ -860,7 +865,11 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     );
     if (result.imageTag) imageTag = result.imageTag;
 
-    return { imageTag, imageDigest: "imageDigest" in result ? result.imageDigest : undefined };
+    return {
+      imageTag,
+      imageDigest: "imageDigest" in result ? result.imageDigest : undefined,
+      imageBytes: "imageBytes" in result ? result.imageBytes : undefined,
+    };
   },
   async compensate(ctx, out, prior) {
     if (!out) return;
@@ -998,13 +1007,12 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
   label: "Record deployment",
   async probe(ctx, prior) {
     const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
-    const build = prior["build_and_run_container"] as BuildOut | undefined;
-    if (!appOut || !build) return null;
-    // The newest row for this app + image_tag is treated as "ours" if we
-    // re-enter — avoids inserting a duplicate history row.
+    if (!appOut) return null;
+    // Operation identity is exact; image tags are intentionally reusable and
+    // must not cause a later explicit deploy to adopt an older history row.
     const row = dbInstance
-      .query("SELECT id, git_commit FROM deployment_history WHERE app_id = ? AND image_tag = ? ORDER BY id DESC LIMIT 1")
-      .get(appOut.appId, build.imageTag) as { id: number; git_commit: string } | null;
+      .query("SELECT id, git_commit FROM deployment_history WHERE operation_id = ?")
+      .get(ctx.opId) as { id: number; git_commit: string } | null;
     if (!row) return null;
     ctx.log(`adopting existing deployment_history row id=${row.id}`);
     return { deploymentId: row.id, gitCommit: row.git_commit };
@@ -1032,12 +1040,15 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
       gitCommit = gitCommitResult.stdout.trim();
     }
     const row = db.insertDeployment({
+      operation_id: ctx.opId,
       app_id: appOut.appId,
       image_tag: build.imageTag,
       image_digest: build.imageDigest || req.image_ref,
+      image_size_bytes: build.imageBytes,
       env_hash: hashEnvironment(await import("../../shared/env-crypto.ts").then(({ resolveAppEnvVars }) => resolveAppEnvVars(db.getApp(appOut.appId)!))),
       git_commit: gitCommit,
       config_revision: db.getApp(appOut.appId)?.config_revision ?? 1,
+      source: ctx.trigger === "ui" ? "manual" : ctx.trigger,
     });
     return { deploymentId: row.id, gitCommit };
   },
@@ -1126,6 +1137,14 @@ const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webho
         webhookPath,
         !!req.webhook_wait_for_ci,
       );
+      db.updateAppWebhookPaths(
+        appOut.appId,
+        req.webhook_paths !== undefined
+          ? req.webhook_paths
+          : (webhookPath ? [`${webhookPath}/**`] : null),
+        req.webhook_paths_ignore ?? [],
+        { clearLegacyPath: !webhookPath },
+      );
       db.appendDeployLog(appOut.appId, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}`);
       const stagingEnvId = resolveStagingEnvironment(ctx, req, appOut.appId);
       if (stagingEnvId != null) {
@@ -1175,6 +1194,9 @@ const finalizeDeploy: Step<DeployInput, { ok: true }> = {
     }
     if (req.manifest_path && req.manifest_hash) {
       db.recordAppManifestApplied(appOut.appId, req.manifest_path, req.manifest_hash);
+    }
+    if (req.stack_manifest_path !== undefined) {
+      db.updateAppStackManifestPath(appOut.appId, req.stack_manifest_path);
     }
     const deployment = prior["record_deployment_history"] as { deploymentId: number } | undefined;
     const finalRevision = db.getApp(appOut.appId)?.config_revision;

@@ -57,7 +57,7 @@ function parseKeys(op: OperationRow): string[] {
  * just deploy_stack/destroy_stack, so a later cascade or member failure is not
  * hidden behind an older successful stack deployment. */
 export function relatedStackResourceKeys(stack: db.StackRow): Set<string> {
-  const keys = new Set(stackLockKeys(stack));
+  const keys = new Set([...stackLockKeys(stack), `stack-webhook:${stack.id}`]);
   if (stack.environment_id != null) keys.add(`env:${stack.environment_id}`);
   if (stack.staging_environment_id != null) keys.add(`env:${stack.staging_environment_id}`);
   for (const app of db.getAppsByStackId(stack.id)) {

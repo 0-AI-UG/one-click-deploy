@@ -1,5 +1,6 @@
 import { get, appAddress } from "../api.ts";
 import { table, colorStatus, BOLD, RESET, DIM } from "../format.ts";
+import { expectArray, expectRecord } from "../response.ts";
 
 interface DashboardApp {
   id: number;
@@ -26,7 +27,16 @@ interface Dashboard {
 }
 
 export async function status(): Promise<void> {
-  const data = await get<Dashboard>("/api/dashboard");
+  const payload = await get<unknown>("/api/dashboard");
+  const row = expectRecord(payload, "Status request");
+  const apps = expectArray(row.apps, "Status apps") as DashboardApp[];
+  const services = expectArray(row.services, "Status services") as DashboardService[];
+  for (const app of apps) {
+    if (!app || typeof app.name !== "string" || typeof app.status !== "string") {
+      throw new Error("Status request returned a malformed app entry");
+    }
+  }
+  const data: Dashboard = { apps, services };
 
   const running = data.apps.filter((a) => a.status === "running").length;
   const unhealthy = data.apps.filter((a) => a.status === "unhealthy").length;

@@ -25,9 +25,9 @@ import {
 import { parseEnvVars, serializeEnvVars, encryptValue } from "../../shared/env-crypto.ts";
 import type { EnvVarEntry } from "../../shared/env-crypto.ts";
 import { registerOp } from "./registry.ts";
-import type { OpKindDefinition, Step } from "../types.ts";
-import type { Server } from "../../shared/rpc.ts";
+import { FatalProbeError, type OpKindDefinition, type Step } from "../types.ts";
 import { createMasker } from "../../shared/mask.ts";
+import dbInstance from "../../shared/db/connection.ts";
 
 // Public request shape for the `deploy_service` engine op — consumed by the
 // HTTP route that enqueues the op and by the op implementation itself.
@@ -83,7 +83,7 @@ export function assertAdoptableServiceVolume(
 ): void {
   const retiredRow = retired.find((row) => row.provider_volume_id === volume.providerId);
   if (retiredRow) {
-    throw new Error(
+    throw new FatalProbeError(
       `Refusing to adopt retained volume ${volume.providerId}; it belongs to ` +
       `${retiredRow.former_resource_type}:${retiredRow.former_resource_name}.`,
     );
@@ -93,7 +93,7 @@ export function assertAdoptableServiceVolume(
     volume.location !== expected.location ||
     (volume.serverId != null && volume.serverId !== expected.serverId)
   ) {
-    throw new Error(
+    throw new FatalProbeError(
       `Provider volume ${volume.providerId} does not match the requested size/location/server. ` +
       "Refusing implicit adoption.",
     );
@@ -151,6 +151,9 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
     }
     if (db.getAppByName(req.name)) {
       throw new Error(`An app named "${req.name}" already exists. Choose a different name.`);
+    }
+    if (req.environment_id && !db.getEnvironment(req.environment_id)) {
+      throw new Error(`Environment ${req.environment_id} not found`);
     }
     const catalog = resolveCatalog(req);
 
@@ -331,6 +334,56 @@ const createVolume: Step<DeployServiceInput, VolumeOut> = {
 const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
   name: "insert_service_and_instance",
   label: "Register service",
+  async probe(ctx, prior) {
+    const req = ctx.input;
+    const existing = db.getServiceByName(req.name);
+    if (!existing) return null;
+
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    const volume = prior["create_volume"] as VolumeOut | undefined;
+    const instance = db.getPrimaryInstance(existing.id);
+    const catalog = resolveCatalog(req);
+    const version = req.version || catalog.versions[0];
+    if (
+      !server || !volume || !instance ||
+      existing.service_type !== req.service_type ||
+      existing.version !== version ||
+      instance.server_id !== server.serverId ||
+      instance.container_name !== req.name ||
+      instance.volume_id !== volume.volumeId ||
+      instance.volume_mount !== volume.volumeMount
+    ) {
+      throw new FatalProbeError(
+        `Cannot adopt service "${req.name}": the existing service/primary instance ` +
+        "does not match this operation's requested placement and storage.",
+      );
+    }
+    const serverRow = db.getServer(server.serverId);
+    if (!serverRow) throw new FatalProbeError(`Cannot adopt service "${req.name}": server disappeared`);
+
+    let envVars: Record<string, string>;
+    let credentials: Record<string, string | number>;
+    try {
+      envVars = JSON.parse(existing.env_vars) as Record<string, string>;
+      credentials = JSON.parse(existing.credentials) as Record<string, string | number>;
+    } catch (err) {
+      throw new FatalProbeError(`Cannot adopt service "${req.name}": stored configuration is invalid`, {
+        cause: err,
+      });
+    }
+    ctx.log(`Adopting atomically registered service ${existing.id} and instance ${instance.id}`);
+    return {
+      serviceId: existing.id,
+      instanceId: instance.id,
+      containerName: instance.container_name,
+      hostPort: instance.host_port,
+      bindAddress: replicaBindHost(serverRow),
+      version,
+      image: resolveServiceImage(catalog, version),
+      envVars,
+      credentials,
+    };
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
@@ -339,7 +392,6 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
     const version = req.version || catalog.versions[0];
     const image = resolveServiceImage(catalog, version);
 
-    const hostPort = db.nextServiceHostPort(server.serverId);
     const containerName = req.name;
 
     const serverRow = db.getServer(server.serverId);
@@ -352,71 +404,74 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
     // IP — the alias survives service migrations across servers, while
     // bindAddress remains what docker run/health checks actually bind to.
     const stableHost = `${req.name}.svc.ocd.internal`;
-    const generated = resolveEnvVarTemplates(generateEnvVars(catalog, version), {
-      host: stableHost,
-      port: hostPort,
-      internalHost: containerName,
-      internalPort: catalog.defaultPort,
-    });
-    // Explicit user/manifest overrides remain literal and take precedence over
-    // catalog defaults (including defaults containing runtime placeholders).
-    const envVars = { ...generated, ...(req.env_overrides || {}) };
+    let finalEnvVars: Record<string, string> = {};
+    let credentials: Record<string, string | number> = {};
 
-    let connectionUrl: string;
-    let httpDomain: string | undefined;
-    if (catalog.http) {
-      // HTTP ingress lives on the panel server, so the public hostname must
-      // resolve to the panel's IP, not the service server's. The nip.io
-      // fallback uses the panel ipv4 captured in pick_or_provision_server.
-      httpDomain = req.domain || `${req.name}.${server.ingressIp}.nip.io`;
-      connectionUrl = `https://${httpDomain}`;
-    } else {
-      connectionUrl = buildConnectionUrl(catalog, envVars, stableHost, hostPort);
-    }
-    const credentials: Record<string, string | number> = {
-      host: stableHost,
-      port: hostPort,
-      internal_host: containerName,
-      internal_port: catalog.defaultPort,
-      ...extractCredentialFields(catalog, envVars),
-      connection_url: connectionUrl,
-    };
-    if (httpDomain) {
-      credentials.url = `https://${httpDomain}`;
-      credentials.domain = httpDomain;
-    }
+    // Allocate the service + primary instance and persist the port-dependent
+    // environment and credentials as one transaction.
+    // `nextServiceHostPort` remains inside the transaction, so two concurrent
+    // service registrations cannot choose from a stale snapshot.
+    const registered = db.insertServiceWithPrimaryInstance((hostPort) => {
+      const generated = resolveEnvVarTemplates(generateEnvVars(catalog, version), {
+        host: stableHost,
+        port: hostPort,
+        internalHost: containerName,
+        internalPort: catalog.defaultPort,
+      });
+      // Explicit user/manifest overrides remain literal and take precedence
+      // over catalog defaults (including runtime placeholders).
+      finalEnvVars = { ...generated, ...(req.env_overrides || {}) };
 
-    const service = db.insertService({
-      name: req.name,
-      service_type: req.service_type,
-      version,
-      port: catalog.defaultPort,
-      env_vars: JSON.stringify(envVars),
-      credentials: JSON.stringify(credentials),
-      stack_id: req.stack_id,
-      target: req.target,
-      target_of: req.target_of,
-      placement_pool: req.placement_pool,
-    });
-    const instance = db.insertServiceInstance({
-      service_id: service.id,
+      let connectionUrl: string;
+      let httpDomain: string | undefined;
+      if (catalog.http) {
+        httpDomain = req.domain || `${req.name}.${server.ingressIp}.nip.io`;
+        connectionUrl = `https://${httpDomain}`;
+      } else {
+        connectionUrl = buildConnectionUrl(catalog, finalEnvVars, stableHost, hostPort);
+      }
+      credentials = {
+        host: stableHost,
+        port: hostPort,
+        internal_host: containerName,
+        internal_port: catalog.defaultPort,
+        ...extractCredentialFields(catalog, finalEnvVars),
+        connection_url: connectionUrl,
+      };
+      if (httpDomain) {
+        credentials.url = `https://${httpDomain}`;
+        credentials.domain = httpDomain;
+      }
+      return {
+        name: req.name,
+        service_type: req.service_type,
+        version,
+        port: catalog.defaultPort,
+        env_vars: JSON.stringify(finalEnvVars),
+        credentials: JSON.stringify(credentials),
+        stack_id: req.stack_id,
+        target: req.target,
+        target_of: req.target_of,
+        placement_pool: req.placement_pool,
+      };
+    }, {
       server_id: server.serverId,
       role: "primary",
       container_name: containerName,
-      host_port: hostPort,
       volume_id: volume.volumeId,
       volume_mount: volume.volumeMount,
     });
+    const hostPort = registered.instance.host_port;
 
     return {
-      serviceId: service.id,
-      instanceId: instance.id,
+      serviceId: registered.service.id,
+      instanceId: registered.instance.id,
       containerName,
       hostPort,
       bindAddress,
       version,
       image,
-      envVars,
+      envVars: finalEnvVars,
       credentials,
     };
   },
@@ -427,6 +482,7 @@ const insertServiceAndInstance: Step<DeployServiceInput, InsertOut> = {
     // than orphan the service/instance rows behind a clean `compensated`.
     db.deleteServiceInstance(out.instanceId);
     db.deleteService(out.serviceId);
+    if (resolveCatalog(ctx.input).http) await syncAllTraefik();
   },
 };
 
@@ -481,6 +537,26 @@ const setupVolumeBindMount: Step<DeployServiceInput, { ok: true }> = {
 const pullAndRunContainer: Step<DeployServiceInput, { ok: true }> = {
   name: "pull_and_run_container",
   label: "Pull and run container",
+  async probe(ctx, prior) {
+    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
+    const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
+    if (!server || !svc) return null;
+    const inspect = await sshExec(
+      server.serverIp,
+      `su - deploy -c ${JSON.stringify(
+        `docker inspect --format='{{.State.Running}}|{{.Config.Image}}' ${svc.containerName} 2>/dev/null || true`,
+      )}`,
+      server.serverHostKey || undefined,
+    );
+    if (inspect.stdout.trim() === `true|${svc.image}`) {
+      ctx.log(`Adopting existing running service container ${svc.containerName}`);
+      return { ok: true };
+    }
+    if (inspect.stdout.trim().startsWith("true|")) {
+      ctx.log(`Existing container ${svc.containerName} has the wrong image; reconciling it`);
+    }
+    return null;
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
@@ -587,12 +663,37 @@ const configureHttpIngress: Step<DeployServiceInput, { ok: true; domain?: string
   },
 };
 
-const injectCredentials: Step<DeployServiceInput, { ok: true; injected: boolean }> = {
+type InjectCredentialsOut = {
+  ok: true;
+  injected: boolean;
+  environmentId?: number;
+  priorEnvVars?: string;
+  priorLink?: { envPrefix: string };
+  priorAppStale?: { id: number; stale: number }[];
+};
+
+const injectCredentials: Step<DeployServiceInput, InjectCredentialsOut> = {
   name: "inject_env_credentials",
-  label: "Inject credentials",
+  label: "Publish credentials",
+  async probe(ctx, prior) {
+    const environmentId = ctx.input.environment_id;
+    if (!environmentId) return { ok: true, injected: false };
+    const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
+    if (!svc) return null;
+    const envPrefix = ctx.input.env_prefix || "DATABASE";
+    const link = db.getServiceLinks(svc.serviceId).find(
+      (row) => row.environment_id === environmentId && row.env_prefix === envPrefix,
+    );
+    if (!link) return null;
+    // Environment update and link insertion commit in one SQLite transaction,
+    // so the link is the durable commit marker for crash adoption.
+    ctx.log(`Adopting previously published credentials in environment ${environmentId}`);
+    return { ok: true, injected: true, environmentId };
+  },
   async run(ctx, prior) {
     const req = ctx.input;
     if (!req.environment_id) return { ok: true, injected: false };
+    const environmentId = req.environment_id;
     const svc = prior["insert_service_and_instance"] as InsertOut;
     const credentials = svc.credentials;
 
@@ -619,21 +720,52 @@ const injectCredentials: Step<DeployServiceInput, { ok: true; injected: boolean 
       }
     }
 
-    const envRow = db.getEnvironment(req.environment_id);
-    if (envRow) {
-      const parsed = parseEnvVars(envRow.env_vars);
-      const newKeys = new Set(newEntries.map((e) => e.key));
-      const filtered = parsed.entries.filter((e) => !newKeys.has(e.key));
-      db.updateEnvironment(req.environment_id, envRow.name, serializeEnvVars([...filtered, ...newEntries]));
-      db.insertServiceLink(svc.serviceId, req.environment_id, envPrefix);
-      const stale = db.markAppsEnvironmentStaleForKeys(
-        req.environment_id,
+    const envRow = db.getEnvironment(environmentId);
+    if (!envRow) throw new Error(`Environment ${environmentId} not found`);
+    const parsed = parseEnvVars(envRow.env_vars);
+    const newKeys = new Set(newEntries.map((e) => e.key));
+    const filtered = parsed.entries.filter((e) => !newKeys.has(e.key));
+    const priorLink = db.getServiceLinks(svc.serviceId).find(
+      (row) => row.environment_id === environmentId,
+    );
+    const priorAppStale = dbInstance
+      .query("SELECT id, environment_stale AS stale FROM apps WHERE environment_id = ?")
+      .all(environmentId) as { id: number; stale: number }[];
+    const stale = dbInstance.transaction(() => {
+      db.updateEnvironment(environmentId, envRow.name, serializeEnvVars([...filtered, ...newEntries]));
+      db.insertServiceLink(svc.serviceId, environmentId, envPrefix);
+      return db.markAppsEnvironmentStaleForKeys(
+        environmentId,
         newEntries.map((entry) => entry.key),
       );
-      ctx.log(`Credentials added to environment "${envRow.name}"`);
-      if (stale > 0) ctx.log(`Marked ${stale} linked app(s) as stale environment`);
-    }
-    return { ok: true, injected: true };
+    })();
+    ctx.log(`Credentials added to environment "${envRow.name}"`);
+    if (stale > 0) ctx.log(`Marked ${stale} linked app(s) as stale environment`);
+    return {
+      ok: true,
+      injected: true,
+      environmentId,
+      priorEnvVars: envRow.env_vars,
+      priorLink: priorLink ? { envPrefix: priorLink.env_prefix } : undefined,
+      priorAppStale,
+    };
+  },
+  async compensate(_ctx, out, prior) {
+    if (!out?.injected || out.environmentId == null || out.priorEnvVars == null) return;
+    const svc = prior["insert_service_and_instance"] as InsertOut | undefined;
+    if (!svc) return;
+    const envRow = db.getEnvironment(out.environmentId);
+    if (!envRow) throw new Error(`Environment ${out.environmentId} disappeared during credential rollback`);
+    dbInstance.transaction(() => {
+      db.updateEnvironment(out.environmentId!, envRow.name, out.priorEnvVars!);
+      db.deleteServiceLink(svc.serviceId, out.environmentId!);
+      if (out.priorLink) {
+        db.insertServiceLink(svc.serviceId, out.environmentId!, out.priorLink.envPrefix);
+      }
+      for (const app of out.priorAppStale || []) {
+        dbInstance.query("UPDATE apps SET environment_stale = ? WHERE id = ?").run(app.stale, app.id);
+      }
+    })();
   },
 };
 
@@ -653,42 +785,7 @@ const healthCheckStep: Step<DeployServiceInput, { healthy: boolean }> = {
       10,
       server.serverHostKey || undefined,
     );
-    if (health.healthy && catalog.postStartCmd) {
-      const setup = await serviceHealthCheck(
-        server.serverIp,
-        svc.containerName,
-        catalog.postStartCmd,
-        1,
-        server.serverHostKey || undefined,
-      );
-      if (!setup.healthy) {
-        health = {
-          healthy: false,
-          error: `Post-start setup failed: ${setup.error || "command failed"}`,
-        };
-      } else {
-        ctx.log("Post-start setup complete");
-      }
-    }
-    if (health.healthy) {
-      const stability = await containerRunningCheck(
-        server.serverIp,
-        svc.containerName,
-        10,
-        server.serverHostKey || undefined,
-      );
-      if (!stability.healthy) {
-        health = {
-          healthy: false,
-          error: stability.error || "Container did not remain stable after startup",
-        };
-      }
-    }
-    if (health.healthy) {
-      db.updateServiceInstanceStatus(svc.instanceId, "running");
-      db.updateServiceStatus(svc.serviceId, "running");
-      ctx.log("Service is healthy");
-    } else {
+    if (!health.healthy) {
       db.updateServiceInstanceStatus(svc.instanceId, "unhealthy");
       db.updateServiceStatus(svc.serviceId, "unhealthy");
       const error = health.error || "service did not become healthy";
@@ -699,19 +796,77 @@ const healthCheckStep: Step<DeployServiceInput, { healthy: boolean }> = {
   },
 };
 
+const postStartSetupStep: Step<DeployServiceInput, { configured: boolean }> = {
+  name: "post_start_setup",
+  label: "Initialize service",
+  async run(ctx, prior) {
+    const catalog = resolveCatalog(ctx.input);
+    if (!catalog.postStartCmd) return { configured: false };
+    const server = prior["pick_or_provision_server"] as ServerOut;
+    const svc = prior["insert_service_and_instance"] as InsertOut;
+    // Catalog post-start commands must be convergent. PostgreSQL extension
+    // setup, for example, uses CREATE EXTENSION IF NOT EXISTS, making a retry
+    // after a runner crash safe.
+    const setup = await serviceHealthCheck(
+      server.serverIp,
+      svc.containerName,
+      catalog.postStartCmd,
+      1,
+      server.serverHostKey || undefined,
+    );
+    if (!setup.healthy) {
+      throw new Error(`Post-start setup failed: ${setup.error || "command failed"}`);
+    }
+    ctx.log("Post-start setup complete");
+    return { configured: true };
+  },
+};
+
+const stabilityCheckStep: Step<DeployServiceInput, { healthy: true }> = {
+  name: "stability_check",
+  label: "Verify stability",
+  async run(ctx, prior) {
+    const server = prior["pick_or_provision_server"] as ServerOut;
+    const svc = prior["insert_service_and_instance"] as InsertOut;
+    const stability = await containerRunningCheck(
+      server.serverIp,
+      svc.containerName,
+      10,
+      server.serverHostKey || undefined,
+    );
+    if (!stability.healthy) {
+      db.updateServiceInstanceStatus(svc.instanceId, "unhealthy");
+      db.updateServiceStatus(svc.serviceId, "unhealthy");
+      throw new Error(stability.error || "Container did not remain stable after startup");
+    }
+    db.updateServiceInstanceStatus(svc.instanceId, "running");
+    db.updateServiceStatus(svc.serviceId, "running");
+    ctx.log("Service is healthy and stable");
+    return { healthy: true };
+  },
+};
+
 const deployServiceOp: OpKindDefinition<DeployServiceInput> = {
   kind: "deploy_service",
   label: "Deploy service",
-  resourceKeys: (input) => [`service:create:${input.name}`],
+  resourceKeys: (input) => [
+    `service:create:${input.name}`,
+    ...(input.environment_id ? [`env:${input.environment_id}`] : []),
+  ],
   steps: [
     pickOrProvisionServer,
     createVolume,
     insertServiceAndInstance,
     setupVolumeBindMount,
     pullAndRunContainer,
-    configureHttpIngress,
-    injectCredentials,
     healthCheckStep,
+    postStartSetupStep,
+    stabilityCheckStep,
+    configureHttpIngress,
+    // Credential publication is intentionally last. Its environment update +
+    // link marker are atomic, so a failed deploy never exposes credentials for
+    // a service that did not pass readiness, initialization, and stability.
+    injectCredentials,
   ],
 };
 

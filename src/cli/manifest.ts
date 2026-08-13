@@ -115,7 +115,7 @@ export function assertLocalBuildPaths(dockerfile: string, context: string): void
 }
 
 /** Read + JSON.parse a `.ocd-deploy.json` manifest, exiting on error. */
-export function readManifest(path: string): DeployManifest {
+export function readManifest(path: string, options: { allowUnknown?: boolean } = {}): DeployManifest {
   let manifest: DeployManifest;
   try {
     const raw = readFileSync(path, "utf-8");
@@ -133,7 +133,7 @@ export function readManifest(path: string): DeployManifest {
   // both single-app `ocd deploy` and every stack child manifest (`ocd stack up`
   // calls readManifest per app entry).
   try {
-    validateDeployManifest(manifest, path);
+    validateDeployManifest(manifest, path, options);
   } catch (err) {
     console.error(`${RED}${err instanceof Error ? err.message : err}${RESET}`);
     process.exit(1);

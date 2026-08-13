@@ -165,6 +165,38 @@ export async function sshExec(
   }
 }
 
+/** Execute a remote command while supplying opaque bytes over stdin. The
+ * payload is deliberately never interpolated into, or logged with, the SSH
+ * command. Use this for passwords/tokens consumed by `--password-stdin`. */
+export async function sshExecWithStdin(
+  ip: string,
+  command: string,
+  stdin: string,
+  hostKey?: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const shortCmd = command.length > 120 ? command.slice(0, 120) + "..." : command;
+  log("ssh", `Exec with private stdin on ${ip}: ${shortCmd}`);
+  const { args, tmpKnownHostsPath } = buildSshArgs({ ip, command, hostKey, interactive: false });
+  try {
+    const proc = Bun.spawn(args, { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    proc.stdin.write(stdin);
+    proc.stdin.end();
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (exitCode !== 0) {
+      log("ssh", `private-stdin command exited non-zero (exit=${exitCode}): ${stderr.trim().slice(0, 200)}`);
+    }
+    return { stdout, stderr, exitCode };
+  } finally {
+    if (tmpKnownHostsPath) {
+      try { unlinkSync(tmpKnownHostsPath); } catch { /* cleanup */ }
+    }
+  }
+}
+
 /**
  * SSH execution that forwards stdout/stderr incrementally. Long Docker builds
  * use this instead of buffering the whole command until exit, so operation

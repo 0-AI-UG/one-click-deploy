@@ -237,6 +237,66 @@ export async function getCommitCiStatus(opts: {
   return "success";
 }
 
+export type GitHubChangedPath = {
+  path: string;
+  status: string;
+  previousPath?: string;
+};
+
+/** Compare merge-base(base, head)..head and retain both sides of renames. */
+export async function compareCommits(opts: {
+  gitRepo: string;
+  base: string;
+  head: string;
+  token: string;
+}): Promise<GitHubChangedPath[]> {
+  const { owner, repo } = parseGitHubRepo(opts.gitRepo);
+  const base = encodeURIComponent(opts.base);
+  const head = encodeURIComponent(opts.head);
+  const data = await githubApi(
+    `/repos/${owner}/${repo}/compare/${base}...${head}?per_page=100`,
+    opts.token,
+  ) as any;
+  const status = String(data?.status ?? "");
+  if (status === "behind") throw new Error("candidate head is older than the app deployment baseline");
+  if (!Array.isArray(data?.files)) throw new Error("GitHub compare response omitted changed files");
+  // GitHub caps compare-file output. Never make a skip decision from a
+  // truncated response: throw so the caller fails open and deploys.
+  if (data.files.length >= 300) throw new Error("GitHub compare file list may be truncated");
+  const changed: GitHubChangedPath[] = [];
+  for (const file of data.files as Array<Record<string, unknown>>) {
+    if (typeof file.filename !== "string") continue;
+    changed.push({
+      path: file.filename,
+      status: String(file.status || "modified"),
+      ...(typeof file.previous_filename === "string"
+        ? { previousPath: file.previous_filename }
+        : {}),
+    });
+  }
+  return changed;
+}
+
+export async function compareCommitsWithRetry(opts: {
+  gitRepo: string;
+  base: string;
+  head: string;
+  token: string;
+  attempts?: number;
+}): Promise<GitHubChangedPath[]> {
+  const attempts = Math.max(1, opts.attempts ?? 3);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await compareCommits(opts);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await Bun.sleep(250 * attempt);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 export async function getGitHubPat(userId?: string): Promise<string | null> {
   return (await resolveGitHubToken(userId)) || null;
 }

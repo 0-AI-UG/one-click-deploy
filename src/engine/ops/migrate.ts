@@ -150,6 +150,7 @@ const recordEvent: Step<MigrateInput, { ok: true }> = {
     if (!out) return { ok: true };
     db.insertScalingEvent({
       app_id: ctx.input.appId,
+      operation_id: ctx.opId,
       event_type: "migrate",
       from_count: out.fromCount,
       to_count: out.toCount,

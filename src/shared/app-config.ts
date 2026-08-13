@@ -4,12 +4,50 @@ import type { DeployRequest } from "./rpc.ts";
 import { parseEnvVars, processIncomingEnvVars, serializeEnvVars } from "./env-crypto.ts";
 import { resolveDurability } from "./durability.ts";
 import { validateDeployRequest } from "./validate.ts";
+import { legacyWebhookPathToPatterns, parseStoredWebhookPaths, parseStoredWebhookPathsIgnore } from "./webhook-paths.ts";
 
 export type AppConfigChange = {
   field: string;
   before: unknown;
   after: unknown;
 };
+
+export type AppReconcileMode = "control" | "runtime" | "build";
+
+const BUILD_CONFIG_FIELDS = new Set([
+  "git_repo", "git_branch", "dockerfile_path", "docker_context",
+  "image_ref", "build_cache_ref",
+]);
+
+const RUNTIME_CONFIG_FIELDS = new Set([
+  "container_port", "environment_id", "env_projection", "memory_mb", "cpu_limit",
+  "health_check", "health_check_mode", "health_check_command", "health_check_file",
+  "health_check_max_age_seconds", "health_check_expected_statuses", "internal_protocol",
+  "extra_volumes", "desired_volume_id", "desired_volume_size", "desired_volume_path",
+]);
+
+/** Classify the least disruptive convergence action for a desired-config diff.
+ * Source identity always requires a build/pull; container execution settings
+ * require recreation from the existing immutable image; ingress, webhook,
+ * placement and autoscaling policy are control-plane only. */
+export function classifyAppConfigChanges(changes: AppConfigChange[]): AppReconcileMode {
+  if (changes.some((change) => BUILD_CONFIG_FIELDS.has(change.field))) return "build";
+  if (changes.some((change) => RUNTIME_CONFIG_FIELDS.has(change.field))) return "runtime";
+  return "control";
+}
+
+/** A config-only apply never builds source, but it must still make runtime
+ * settings truthful by recreating containers from the current immutable
+ * artifact. Source/build changes remain recorded as pending rollout intent. */
+export function classifyConfigOnlyChanges(
+  changes: AppConfigChange[],
+  options: { environmentChanged?: boolean } = {},
+): { rollout: "control" | "runtime"; pendingBuild: boolean } {
+  const pendingBuild = changes.some((change) => BUILD_CONFIG_FIELDS.has(change.field));
+  const runtime = options.environmentChanged === true ||
+    changes.some((change) => RUNTIME_CONFIG_FIELDS.has(change.field));
+  return { rollout: runtime ? "runtime" : "control", pendingBuild };
+}
 
 export const AUTOSCALE_DEFAULTS = {
   enabled: false,
@@ -157,6 +195,8 @@ export function mergeDeployRequestWithExistingApp(
     webhook_enabled: supplied.webhook_enabled ?? false,
     webhook_branch: supplied.webhook_branch ?? "main",
     webhook_path: supplied.webhook_path ?? "",
+    webhook_paths: supplied.webhook_paths,
+    webhook_paths_ignore: supplied.webhook_paths_ignore ?? [],
     webhook_wait_for_ci: supplied.webhook_wait_for_ci ?? false,
     webhook_staging: supplied.webhook_staging ?? false,
     webhook_staging_environment: supplied.webhook_staging_environment,
@@ -246,6 +286,10 @@ function normalizedSpec(req: DeployRequest) {
     webhook_enabled: req.webhook_enabled ?? false,
     webhook_branch: req.webhook_branch ?? "main",
     webhook_path: (req.webhook_path ?? "").trim().replace(/^\/+/, "").replace(/\/+$/, ""),
+    webhook_paths: req.webhook_paths !== undefined
+      ? req.webhook_paths
+      : legacyWebhookPathToPatterns(req.webhook_path),
+    webhook_paths_ignore: req.webhook_paths_ignore ?? [],
     webhook_wait_for_ci: req.webhook_wait_for_ci ?? false,
     webhook_staging_environment_id: req.webhook_staging_environment_id ?? null,
     desired_volume_id: req.volume_id ?? "",
@@ -305,6 +349,8 @@ function comparableApp(app: AppRow) {
     webhook_enabled: !!app.webhook_enabled,
     webhook_branch: app.webhook_branch || "main",
     webhook_path: app.webhook_path || "",
+    webhook_paths: parseStoredWebhookPaths(app.webhook_paths, app.webhook_path),
+    webhook_paths_ignore: parseStoredWebhookPathsIgnore(app.webhook_paths_ignore),
     webhook_wait_for_ci: !!app.webhook_wait_for_ci,
     webhook_staging_environment_id: app.webhook_staging_environment_id,
     desired_volume_id: app.desired_volume_id || "",
@@ -375,6 +421,9 @@ async function applyWebhook(
       desired.webhook_path,
       desired.webhook_wait_for_ci,
     );
+    db.updateAppWebhookPaths(app.id, desired.webhook_paths, desired.webhook_paths_ignore, {
+      clearLegacyPath: !desired.webhook_path,
+    });
     db.updateAppWebhookStagingEnvironment(app.id, null);
     return;
   }
@@ -389,6 +438,9 @@ async function applyWebhook(
     desired.webhook_path,
     desired.webhook_wait_for_ci,
   );
+  db.updateAppWebhookPaths(app.id, desired.webhook_paths, desired.webhook_paths_ignore, {
+    clearLegacyPath: !desired.webhook_path,
+  });
 
   let stagingId = req.webhook_staging_environment_id;
   if (stagingId === undefined && req.webhook_staging) {
@@ -519,7 +571,10 @@ export async function applyAppConfig(
     });
   }
   if (
-    ["webhook_enabled", "webhook_branch", "webhook_path", "webhook_wait_for_ci"].some((f) => changed.has(f)) ||
+    [
+      "webhook_enabled", "webhook_branch", "webhook_path", "webhook_paths",
+      "webhook_paths_ignore", "webhook_wait_for_ci",
+    ].some((f) => changed.has(f)) ||
     changed.has("webhook_staging_environment_id") ||
     (
       effective.webhook_staging === true &&

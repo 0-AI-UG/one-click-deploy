@@ -7,21 +7,18 @@ process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-test-"));
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
 // Mock the engine enqueue so we never actually schedule any op.
-const fakeRunner = mock((appId: number, sha: string, idempotencyKey: string) => {
-  void appId; void sha; void idempotencyKey;
+const fakeRunner = mock((kind: string, input: Record<string, unknown>, idempotencyKey: string) => {
+  void kind; void input; void idempotencyKey;
   return { opId: 1 };
 });
 mock.module("../ipc/enqueue.ts", () => ({
   enqueue: (args: {
     kind: string;
-    input: { appId: number; gitSha?: string };
+    input: Record<string, unknown>;
     triggeredBy: string;
     idempotencyKey?: string;
   }) => {
-    if (args.kind === "redeploy") {
-      const sha = args.input.gitSha?.slice(0, 7) || "";
-      fakeRunner(args.input.appId, sha, args.idempotencyKey || "");
-    }
+    fakeRunner(args.kind, args.input, args.idempotencyKey || "");
     return { opId: 1 };
   },
 }));
@@ -131,7 +128,7 @@ describe("handleGithubWebhook", () => {
     expect(fakeRunner).not.toHaveBeenCalled();
   });
 
-  test("enqueues a redeploy on a valid push", async () => {
+  test("persists and enqueues one stack reconciliation on a valid push", async () => {
     const secret = "secret-c";
     const app = makeApp(secret, "main");
     const body = JSON.stringify({ ref: "refs/heads/main", after: "deadbee1234" });
@@ -139,8 +136,8 @@ describe("handleGithubWebhook", () => {
     const res = await handleGithubWebhook(req(app.id, body, sig), app.id);
     expect(res.status).toBe(202);
     expect(fakeRunner).toHaveBeenCalledTimes(1);
-    expect(fakeRunner.mock.calls[0][0]).toBe(app.id);
-    expect(fakeRunner.mock.calls[0][1]).toBe("deadbee");
+    expect(fakeRunner.mock.calls[0][0]).toBe("webhook_reconcile_stack");
+    expect(fakeRunner.mock.calls[0][1]).toMatchObject({ candidateId: expect.any(Number) });
   });
 
   test("uses the same app-and-commit key for distinct GitHub deliveries", async () => {
@@ -163,8 +160,9 @@ describe("handleGithubWebhook", () => {
     expect((await handleGithubWebhook(makeDelivery("push-guid"), app.id)).status).toBe(202);
     expect((await handleGithubWebhook(makeDelivery("ci-guid"), app.id)).status).toBe(202);
     expect(fakeRunner).toHaveBeenCalledTimes(2);
-    expect(fakeRunner.mock.calls[0][2]).toBe(`webhook-commit:${app.id}:1234567890abcdef`);
+    expect(fakeRunner.mock.calls[0][2]).toContain("webhook-candidate:");
     expect(fakeRunner.mock.calls[1][2]).toBe(fakeRunner.mock.calls[0][2]);
+    expect(fakeRunner.mock.calls[1][1]).toEqual(fakeRunner.mock.calls[0][1]);
   });
 
   test("panel webhook: 401 on bad signature", async () => {
@@ -234,7 +232,7 @@ describe("handleGithubWebhook", () => {
     expect(fakeRunner).not.toHaveBeenCalled();
   });
 
-  test("204 when path filter does not match any commit files", async () => {
+  test("defers path filtering until the candidate becomes eligible", async () => {
     const secret = "secret-path";
     const app = makeApp(secret, "main");
     db.updateAppWebhook(app.id, true, secret, "main", "gh-1", "services/api");
@@ -245,8 +243,9 @@ describe("handleGithubWebhook", () => {
     });
     const sig = await sign(secret, body);
     const res = await handleGithubWebhook(req(app.id, body, sig), app.id);
-    expect(res.status).toBe(204);
-    expect(fakeRunner).not.toHaveBeenCalled();
+    expect(res.status).toBe(202);
+    expect(fakeRunner).toHaveBeenCalledTimes(1);
+    expect(fakeRunner.mock.calls[0][0]).toBe("webhook_reconcile_stack");
   });
 
   test("202 when path filter matches at least one file", async () => {
@@ -262,6 +261,7 @@ describe("handleGithubWebhook", () => {
     const res = await handleGithubWebhook(req(app.id, body, sig), app.id);
     expect(res.status).toBe(202);
     expect(fakeRunner).toHaveBeenCalledTimes(1);
+    expect(fakeRunner.mock.calls[0][0]).toBe("webhook_reconcile_stack");
   });
 
   test("signature header of wrong length fails in constant time (no throw)", async () => {

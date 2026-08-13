@@ -1,56 +1,18 @@
 import { corsHeaders } from "../lib/cors.ts";
-import { requirePermission } from "../lib/permissions.ts";
+import { requirePermission, requireCliPermission, stackScope } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { redeployPanel } from "../../engine/deploy/panel.ts";
 import { isStackDestructionActiveForApp } from "../lib/stack-operations.ts";
 import { enqueue } from "../ipc/enqueue.ts";
-import { deployToStaging } from "../lib/staging.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
-import { getCommitCiStatus } from "../../shared/github.ts";
 import { timingSafeEqual } from "node:crypto";
-
-const CI_POLL_INTERVAL = 15_000;
-const CI_TIMEOUT = 30 * 60_000;
-
-async function waitForCi(appId: number, sha: string): Promise<boolean> {
-  const app = db.getApp(appId);
-  if (!app) return false;
-  const token = await resolveGitHubToken(app.deployed_by || undefined);
-  if (!token) return true; // can't check, proceed
-  const deadline = Date.now() + CI_TIMEOUT;
-  while (Date.now() < deadline) {
-    try {
-      const status = await getCommitCiStatus({ gitRepo: app.git_repo, ref: sha, token });
-      if (status === "success") return true;
-      if (status === "failure") {
-        db.insertDeployment({
-          app_id: appId,
-          image_tag: `${app.name}:latest`,
-          git_commit: sha.slice(0, 7),
-          status: "failed",
-          source: "webhook",
-          config_revision: app.config_revision ?? 1,
-          deploy_log: `CI checks failed for commit ${sha.slice(0, 7)}; deploy skipped`,
-        });
-        return false;
-      }
-    } catch (err) {
-      console.error(`[webhook] CI poll error for app ${appId}:`, err);
-    }
-    await Bun.sleep(CI_POLL_INTERVAL);
-  }
-  db.insertDeployment({
-    app_id: appId,
-    image_tag: `${app.name}:latest`,
-    git_commit: sha.slice(0, 7),
-    status: "failed",
-    source: "webhook",
-    config_revision: app.config_revision ?? 1,
-    deploy_log: `CI checks timed out after 30 minutes for commit ${sha.slice(0, 7)}; deploy skipped`,
-  });
-  return false;
-}
+import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { compareCommitsWithRetry } from "../../shared/github.ts";
+import {
+  evaluateWebhookPaths,
+  parseStoredWebhookPaths,
+  parseStoredWebhookPathsIgnore,
+} from "../../shared/webhook-paths.ts";
 
 // Normalize a user-supplied repo path filter: strip leading/trailing slashes
 // and surrounding whitespace. Empty string means "no filter".
@@ -62,6 +24,7 @@ export function normalizeWebhookPath(p: string): string {
 // `prefix`. An empty prefix matches everything.
 interface GitHubPushPayload {
   ref?: string;
+  before?: string;
   after?: string;
   commits?: Array<{
     added?: string[];
@@ -112,9 +75,8 @@ export async function verifyGithubSignature(
 
 // ── GitHub push webhook receiver ──
 //
-// Verifies HMAC-SHA256 against the app's stored secret, checks the branch,
-// and enqueues a rolling redeploy. Returns 202 immediately so GitHub does
-// not time out (the redeploy runs in the background).
+// Verifies HMAC-SHA256 against one member's stored secret, persists one
+// repository+branch+head candidate, and enqueues one stack-wide evaluation.
 export async function handleGithubWebhook(request: Request, appId: number): Promise<Response> {
   try {
     const app = db.getApp(appId);
@@ -144,63 +106,115 @@ export async function handleGithubWebhook(request: Request, appId: number): Prom
       return new Response("Branch mismatch", { status: 204 });
     }
 
-    const pathFilter = app.webhook_path || "";
-    if (!pushTouchesPath(payload, pathFilter)) {
-      return new Response("Path filter: no matching files", { status: 204 });
-    }
-
     const fullSha = payload.after ? String(payload.after) : "";
+    if (!/^[a-f0-9]{7,40}$/i.test(fullSha) || /^0+$/.test(fullSha)) {
+      return new Response("Push has no deployable head commit", { status: 204 });
+    }
     const deliveryId = request.headers.get("x-github-delivery") || `${appId}:${fullSha}:${Date.now()}`;
-    // Delivery GUIDs differ when GitHub emits another event around CI
-    // completion. Commit identity does not: app + full SHA is the deployment
-    // unit operators care about, so both deliveries collapse onto one op.
-    const dedupeId = fullSha || `delivery:${deliveryId}`;
+    const { candidate } = db.createWebhookCandidate({
+      repository: app.git_repo,
+      branch: app.webhook_branch || "main",
+      beforeSha: payload.before ? String(payload.before) : "",
+      headSha: fullSha,
+      originAppId: app.id,
+      stackId: app.stack_id,
+      deliveryId,
+    });
+    const members = app.stack_id == null ? [app] : db.getAppsByStackId(app.stack_id);
+    for (const member of members) db.recordAppWebhookReceived(member.id, fullSha);
 
-    // CI-wait remains a panel-side prelude so we don't hold an engine slot
-    // for 30 minutes. Once CI passes (or is disabled), enqueue the redeploy
-    // op with a commit-scoped idempotency key so push/CI deliveries collapse.
-    (async () => {
-      try {
-        if (app.webhook_wait_for_ci && fullSha) {
-          const ok = await waitForCi(appId, fullSha);
-          if (!ok) return;
-        }
-        // Destruction may have started during a long CI wait. Re-read durable
-        // state before enqueueing so a deleted member cannot be resurrected.
-        if (!db.getApp(appId) || isStackDestructionActiveForApp(appId)) {
-          console.log(`[webhook] dropping deployment for app ${appId}: stack destruction is active or app is gone`);
-          return;
-        }
-        // GitHub uses one delivery GUID per push across all webhooks on a repo.
-        // Without app scoping, sibling apps sharing a repo collide on this key
-        // and all but one get dropped.
-        if (app.webhook_staging_environment_id != null) {
-          // Staging mode: deploy the pushed commit to the <name>-staging sibling
-          // and HOLD. Production keeps serving until the user clicks Promote.
-          const res = deployToStaging(appId, {
-            userId: app.deployed_by || undefined,
-            trigger: "webhook",
-            triggeredBy: `github:${deliveryId}`,
-            idempotencyKey: `webhook-commit:staging:${appId}:${dedupeId}`,
-            gitSha: fullSha || undefined,
-          });
-          if (!res.ok) console.error(`[webhook] staging deploy failed for app ${appId}: ${res.error}`);
-        } else {
-          enqueue({
-            kind: "redeploy",
-            resourceKeys: [`app:${appId}`],
-            input: { appId, userId: app.deployed_by || undefined, gitSha: fullSha || undefined },
-            trigger: "webhook",
-            triggeredBy: `github:${deliveryId}`,
-            idempotencyKey: `webhook-commit:${appId}:${dedupeId}`,
-          });
-        }
-      } catch (err) {
-        console.error(`[webhook] enqueue failed for app ${appId}:`, err);
+    const { opId } = enqueue({
+      kind: "webhook_reconcile_stack",
+      resourceKeys: [
+        `webhook-candidate:${candidate.id}`,
+        ...(candidate.stack_id == null ? [] : [`stack-webhook:${candidate.stack_id}`]),
+      ],
+      input: {
+        candidateId: candidate.id,
+        repository: candidate.repository,
+        branch: candidate.branch,
+        beforeSha: candidate.before_sha,
+        headSha: candidate.head_sha,
+      },
+      trigger: "webhook",
+      triggeredBy: `github:${deliveryId}`,
+      idempotencyKey: `webhook-candidate:${candidate.repository}:${candidate.branch}:${candidate.head_sha}`,
+    });
+    if (candidate.parent_operation_id == null) db.setWebhookCandidateOperation(candidate.id, opId);
+    return new Response(`Accepted operation #${opId}`, { status: 202 });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/** Read-only diagnostic using an explicit common base/head for every member. */
+export async function handleWebhookPlan(request: Request): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    const stackName = url.searchParams.get("stack") || "";
+    const base = url.searchParams.get("base") || "";
+    const head = url.searchParams.get("head") || "";
+    if (!stackName || !/^[a-f0-9]{7,40}$/i.test(base) || !/^[a-f0-9]{7,40}$/i.test(head)) {
+      return Response.json(
+        { error: "stack, base, and head (Git SHAs) are required" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const stack = db.getStackByName(stackName);
+    if (!stack) return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
+    const auth = await requireCliPermission(request, "stacks.view", stackScope(stack.id));
+    const apps = db.getAppsByStackId(stack.id).filter((app) => app.target_of == null);
+    const repository = apps.find((app) => app.webhook_enabled)?.git_repo || apps[0]?.git_repo;
+    if (!repository) return Response.json({ error: "Stack has no app repository" }, { status: 400, headers: corsHeaders });
+    const token = await resolveGitHubToken(auth.userId);
+    let changedPaths: string[] = [];
+    let comparisonError: string | null = null;
+    try {
+      if (!token) throw new Error("GitHub token unavailable for compare");
+      const files = await compareCommitsWithRetry({ gitRepo: repository, base, head, token });
+      const paths = new Set<string>();
+      for (const file of files) {
+        paths.add(file.path);
+        if (file.previousPath) paths.add(file.previousPath);
       }
-    })();
-
-    return new Response("Accepted", { status: 202 });
+      changedPaths = [...paths].sort();
+    } catch (error) {
+      comparisonError = error instanceof Error ? error.message : String(error);
+    }
+    const decisions = apps.map((app) => {
+      if (!app.webhook_enabled) return { app: app.name, action: "skip", reason: "webhook disabled", matching_paths: [] };
+      if (app.git_repo !== repository) return { app: app.name, action: "skip", reason: "different repository", matching_paths: [] };
+      if (comparisonError) return {
+        app: app.name,
+        action: "deploy",
+        reason: "commit comparison failed; fail-open deployment",
+        matching_paths: [],
+      };
+      const decision = evaluateWebhookPaths(
+        changedPaths,
+        {
+          paths: parseStoredWebhookPaths(app.webhook_paths, app.webhook_path),
+          pathsIgnore: parseStoredWebhookPathsIgnore(app.webhook_paths_ignore),
+        },
+        [app.manifest_path || app.last_manifest_path, app.stack_manifest_path],
+      );
+      return {
+        app: app.name,
+        action: decision.selected ? "deploy" : "skip",
+        reason: decision.reason,
+        matching_paths: decision.matchingPaths,
+        matched_patterns: decision.matchedPatterns,
+      };
+    });
+    return Response.json({
+      stack: stack.name,
+      repository,
+      base,
+      head,
+      changed_paths: changedPaths,
+      comparison_error: comparisonError,
+      decisions,
+    }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

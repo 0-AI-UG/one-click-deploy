@@ -25,6 +25,8 @@ export interface OperationEventPoll {
   next_cursor?: number;
   resumable?: boolean;
   children?: OperationChildProgress[];
+  started_at?: string | null;
+  latest_log?: { ts?: string; message?: string } | null;
 }
 
 interface OperationChildProgress {
@@ -33,6 +35,7 @@ interface OperationChildProgress {
   status: string;
   last_step?: string | null;
   resource_labels?: string[];
+  started_at?: string | null;
 }
 
 interface OperationFallbackPoll {
@@ -152,6 +155,27 @@ export function summarizeOperationError(message: string, maxLines = 8, maxChars 
   return summary || message;
 }
 
+function elapsedLabel(startedAt: string | null | undefined, now = Date.now()): string {
+  if (!startedAt) return "elapsed unknown";
+  const elapsed = Math.max(0, now - Date.parse(startedAt));
+  if (!Number.isFinite(elapsed)) return "elapsed unknown";
+  const seconds = Math.floor(elapsed / 1000);
+  if (seconds < 60) return `${seconds}s elapsed`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s elapsed`;
+}
+
+export function formatOperationHeartbeat(poll: OperationEventPoll, now = Date.now()): string {
+  const active = (poll.children ?? []).find((child) => !TERMINAL.has(child.status));
+  const target = active?.resource_labels?.filter(Boolean).join(", ") || active?.label;
+  const phase = active?.last_step || poll.last_step || "waiting";
+  const latestTs = poll.latest_log?.ts;
+  const lastUpdate = latestTs && Number.isFinite(Date.parse(latestTs))
+    ? `${Math.max(0, Math.floor((now - Date.parse(latestTs)) / 1000))}s since update`
+    : "no recent log timestamp";
+  const detail = poll.latest_log?.message ? `; ${poll.latest_log.message}` : "";
+  return `${target ? `${target}: ` : ""}${phase} (${elapsedLabel(active?.started_at || poll.started_at, now)}; ${lastUpdate})${detail}`;
+}
+
 /**
  * Poll an operation until it reaches a terminal state, printing step events
  * as they arrive. Returns ok=true only if the op completed successfully.
@@ -171,6 +195,7 @@ export async function followOp(
   const printed = new Set<string>();
   const printedChildren = new Map<number, string>();
   const retry = newFollowRetryState();
+  let lastHeartbeatAt = 0;
   while (true) {
     let poll: OperationEventPoll;
     try {
@@ -232,6 +257,12 @@ export async function followOp(
       lastSeq = event.seq;
     }
     if (!opts.quiet) printChildProgress(poll.children, printedChildren);
+
+    const now = Date.now();
+    if (!opts.quiet && !TERMINAL.has(poll.status) && now - lastHeartbeatAt >= 30_000) {
+      console.log(`  ${DIM}heartbeat: ${formatOperationHeartbeat(poll, now)}${RESET}`);
+      lastHeartbeatAt = now;
+    }
 
     if (TERMINAL.has(poll.status)) {
       if (poll.status === "done") return { ok: true };

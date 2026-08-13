@@ -15,6 +15,12 @@ describe("app runtime CLI parsing", () => {
       appName: "api",
       deploymentId: 42,
     });
+    expect(parseRollbackArgs(["api", "--deployment", "43"])).toEqual({
+      appName: "api",
+      deploymentId: 43,
+    });
+    expect(() => parseRollbackArgs(["api", "--deployment"])).toThrow("requires a value");
+    expect(() => parseRollbackArgs(["api", "--wat"])).toThrow("Unknown option");
   });
 
 });

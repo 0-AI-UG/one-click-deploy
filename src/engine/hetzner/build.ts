@@ -1,10 +1,11 @@
 import { sshExec, sshExecStreaming, describeFailure } from "./ssh.ts";
 import { asUser, log, OCD_IMAGE_LABEL, withImageGcLease } from "./container-common.ts";
-import { dockerLoginGhcr, type GhcrAuth } from "./registry.ts";
+import { dockerLoginGhcr, dockerLoginRegistry, type GhcrAuth } from "./registry.ts";
 import { startAppReplica } from "./docker-run.ts";
 import { ensureOcdNetwork } from "./lifecycle.ts";
 import { pruneAfterBuild } from "./prune.ts";
 import { preflightBuildDiskSpace } from "./disk-space.ts";
+import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 
 /**
  * Conventional Dockerfile probe: prefer ./Dockerfile, then ./docker/Dockerfile,
@@ -38,6 +39,8 @@ export async function buildAppImage(
     onOutput?: (line: string) => void;
     /** Registry-backed BuildKit cache shared between build hosts. */
     cacheRef?: string;
+    /** Keep external admission/accounting leases alive during long builds. */
+    onHeartbeat?: () => void;
   },
   hostKey?: string,
 ): Promise<void> {
@@ -58,6 +61,7 @@ export async function buildAppImage(
       if (line.trim()) opts.onOutput?.(line);
     },
     onHeartbeat: (elapsedMs, outputLines) => {
+      opts.onHeartbeat?.();
       opts.onOutput?.(
         `Docker build still running (${Math.floor(elapsedMs / 1000)}s, ${outputLines} output lines)…`,
       );
@@ -204,6 +208,8 @@ export async function cloneAndBuild(
     hostKey?: string;
     /** Registry-backed BuildKit cache shared between build hosts. */
     buildCacheRef?: string;
+    registryUsername?: string;
+    registryPassword?: string;
     /** Reserve space for the explicitly-enabled emergency archive path when
      * this build will immediately fan out to another host. */
     reserveArchiveSpace?: boolean;
@@ -262,7 +268,7 @@ export async function cloneAndBuild(
   // Fail before an expensive build if the source host cannot safely hold the
   // new expanded image and (when no registry is configured) its fallback
   // transfer archive. This also performs bounded OCD-only GC first.
-  await preflightBuildDiskSpace({
+  const diskReservation = await preflightBuildDiskSpace({
     ip,
     appName: opts.name,
     contextPath: `${appDir}/${resolvedContext}`,
@@ -271,11 +277,20 @@ export async function cloneAndBuild(
     onProgress: emit,
   });
 
+  try {
   // Authenticate with ghcr.io if a GitHub token is available (needed for
   // private base images in FROM directives). Credentials live in a per-deploy
   // DOCKER_CONFIG dir and are wiped immediately after the build.
   let ghcrAuth: GhcrAuth | null = null;
-  if (opts.gitToken) {
+  if (opts.buildCacheRef && opts.registryUsername && opts.registryPassword) {
+    ghcrAuth = await dockerLoginRegistry(
+      ip,
+      opts.buildCacheRef,
+      opts.registryUsername,
+      opts.registryPassword,
+      hostKey,
+    );
+  } else if (opts.gitToken) {
     ghcrAuth = await dockerLoginGhcr(ip, opts.gitToken, hostKey);
   }
 
@@ -291,6 +306,7 @@ export async function cloneAndBuild(
       envPrefix: ghcrAuth?.envPrefix,
       onOutput: emit,
       cacheRef: opts.buildCacheRef,
+      onHeartbeat: () => { void diskReservation.refresh(); },
     }, hostKey);
   } finally {
     // Wipe the ephemeral ghcr creds whether or not the build succeeded.
@@ -300,10 +316,19 @@ export async function cloneAndBuild(
   emit("Image built successfully");
   const builtImage = await sshExec(
     ip,
-    asUser(`docker image inspect --format='{{.Id}}' ${opts.name}:latest`),
+    asUser(`docker image inspect --format='{{.Id}} {{.Size}}' ${opts.name}:latest`),
     hostKey,
   );
-  const imageDigest = builtImage.stdout.trim();
+  const [imageDigest = "", imageSizeRaw = ""] = builtImage.stdout.trim().split(/\s+/);
+  const imageBytes = Number(imageSizeRaw) || 0;
+  if (!imageDigest || imageBytes <= 0) {
+    throw new Error(describeFailure("Built image size inspection failed", builtImage));
+  }
+  // The candidate now occupies real disk and is visible to df. Retain only
+  // the future archive claim (if this build fans out without a registry),
+  // replacing the conservative input-derived estimate with its actual size.
+  await diskReservation.replace(opts.reserveArchiveSpace && !opts.buildCacheRef ? imageBytes : 0);
+  emit(`Built image occupies ${(imageBytes / 1024 / 1024).toFixed(1)} MiB expanded`);
 
   // Build succeeded — now safe to stop old container and swap.
   const containerName = opts.containerName || opts.name;
@@ -332,7 +357,10 @@ export async function cloneAndBuild(
   // Fire-and-forget cleanup of dangling images and git repo
   pruneAfterBuild(ip, opts.name, hostKey);
 
-  return { containerId, dockerfilePath, imageTag: `${opts.name}:latest`, imageDigest };
+  return { containerId, dockerfilePath, imageTag: `${opts.name}:latest`, imageDigest, imageBytes };
+  } finally {
+    await diskReservation.release();
+  }
 }
 
 /**
@@ -361,7 +389,7 @@ export async function pullImmutableImageAndRun(
     envHash?: string;
   },
   onLog?: (line: string) => void,
-): Promise<{ containerId: string; imageTag: string; imageDigest: string }> {
+): Promise<{ containerId: string; imageTag: string; imageDigest: string; imageBytes: number }> {
   await pullImmutableImage(ip, {
     name: opts.name,
     imageRef: opts.imageRef,
@@ -386,7 +414,13 @@ export async function pullImmutableImageAndRun(
     configRevision: opts.configRevision,
     envHash: opts.envHash,
   }, hostKey);
-  return { containerId, imageTag: opts.imageRef, imageDigest: opts.imageRef };
+  const inspected = await sshExec(
+    ip,
+    asUser(`docker image inspect --format '{{.Size}}' ${JSON.stringify(opts.imageRef)}`),
+    hostKey,
+  );
+  const imageBytes = Math.max(0, Number(inspected.stdout.trim()) || 0);
+  return { containerId, imageTag: opts.imageRef, imageDigest: opts.imageRef, imageBytes };
 }
 
 export async function pullImmutableImage(
@@ -399,7 +433,16 @@ export async function pullImmutableImage(
   }
   const hostKey = opts.hostKey;
   let auth: GhcrAuth | null = null;
-  if (opts.gitToken && opts.imageRef.toLowerCase().startsWith("ghcr.io/")) {
+  const registryCredentials = await resolveRegistryCredentialsForImage(opts.imageRef);
+  if (registryCredentials.username && registryCredentials.password) {
+    auth = await dockerLoginRegistry(
+      ip,
+      opts.imageRef,
+      registryCredentials.username,
+      registryCredentials.password,
+      hostKey,
+    );
+  } else if (opts.gitToken && opts.imageRef.toLowerCase().startsWith("ghcr.io/")) {
     auth = await dockerLoginGhcr(ip, opts.gitToken, hostKey);
   }
   try {

@@ -15,6 +15,7 @@ import {
 } from "../lib/stack-operations.ts";
 import { validatePublicEndpoint } from "../../engine/dns-reconciler.ts";
 import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
+import { enrichAppForResponse } from "./apps.ts";
 
 const TERMINAL_OPERATION_STATUSES = new Set([
   "done",
@@ -191,7 +192,7 @@ export async function handleGetStack(request: Request, stackId: number): Promise
         ? `${resourceState.reason}; one or more public endpoints are not HTTPS-ready`
         : resourceState.reason,
       ...operationFields(stack, resourceState),
-      apps,
+      apps: apps.map((app) => enrichAppForResponse(app as db.AppRow & Record<string, unknown>)),
       services: db.getServicesByStackId(stackId),
       public_endpoints: publicEndpoints,
       acme_errors,

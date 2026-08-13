@@ -1,9 +1,9 @@
 import * as db from "../../shared/db.ts";
-import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
-import { softStep, runDbCleanupGate } from "./_shared.ts";
+import { assertCleanupComplete, softStep, runDbCleanupGate } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
 type DestroyServerInput = { serverId: number };
@@ -87,33 +87,20 @@ const destroyServicesOnServer: Step<DestroyServerInput, { serviceIds: number[]; 
   },
 };
 
-const cleanupPanelRow: Step<DestroyServerInput, { ok: true }> = {
-  name: "cleanup_panel_row",
-  label: "Cleanup panel row",
-  async run(ctx) {
-    const panel = db.getPanel();
-    const server = db.getServer(ctx.input.serverId);
-    if (!panel || panel.server_id !== ctx.input.serverId || !server) return { ok: true };
-    if (panel.dns_zone_id && panel.dns_name && panel.dns_type && panel.dns_value) {
-      await softStep(ctx, "delete_panel_dns", async () => {
-        const dns = hetznerDns;
-        await dns.deleteRecord({
-          zoneId: panel.dns_zone_id,
-          name: panel.dns_name,
-          type: panel.dns_type,
-          value: panel.dns_value,
-        });
-      });
+// Preflight rejects the panel server, so panel-resource cleanup here was dead
+// code. More importantly, this boundary must run before provider deletion: a
+// failed child destroy means the server still owns live resources.
+const assertChildCleanup: Step<DestroyServerInput, { ok: true }> = {
+  name: "assert_child_cleanup",
+  label: "Verify child cleanup completed",
+  async run(ctx, prior) {
+    const childSteps = ["destroy_apps_on_server", "destroy_services_on_server"];
+    const failedSteps = runDbCleanupGate(prior).filter((name) => childSteps.includes(name));
+    if (failedSteps.length > 0) {
+      try { db.updateServerStatus(ctx.input.serverId, "cleanup_failed"); } catch { /* ignore */ }
+      ctx.log(`Child cleanup failed (${failedSteps.join(", ")}) — server retained and marked cleanup_failed`);
+      assertCleanupComplete(prior, childSteps);
     }
-    if (panel.volume_id) {
-      await softStep(ctx, "delete_panel_volume", async () => {
-        const compute = hetzner;
-        await compute.volumes?.delete(panel.volume_id);
-      });
-    }
-    await softStep(ctx, "delete_panel_row", async () => {
-      db.deletePanel();
-    });
     return { ok: true };
   },
 };
@@ -132,7 +119,7 @@ const deleteCloudServer: Step<DestroyServerInput, { ok: boolean; error?: string 
   },
 };
 
-const deleteDbRows: Step<DestroyServerInput, { ok: true }> = {
+const deleteDbRows: Step<DestroyServerInput, { ok: boolean; failed: boolean; failedSteps: string[] }> = {
   name: "delete_db_rows",
   label: "Delete DB rows",
   async run(ctx, prior) {
@@ -142,11 +129,24 @@ const deleteDbRows: Step<DestroyServerInput, { ok: true }> = {
         db.updateServerStatus(ctx.input.serverId, "cleanup_failed");
       } catch { /* ignore */ }
       ctx.log(`Some child resources could not be cleaned up (failed: ${failedSteps.join(", ")}) — server marked cleanup_failed`);
-      return { ok: true };
+      return { ok: false, failed: true, failedSteps };
     }
-    await softStep(ctx, "delete_server_row", async () => {
+    const result = await softStep(ctx, "delete_server_row", async () => {
       db.deleteServer(ctx.input.serverId);
     });
+    if (!result.ok) {
+      try { db.updateServerStatus(ctx.input.serverId, "cleanup_failed"); } catch { /* ignore */ }
+      return { ok: false, failed: true, failedSteps: [`server:${ctx.input.serverId}`] };
+    }
+    return { ok: true, failed: false, failedSteps: [] };
+  },
+};
+
+const assertDbCleanup: Step<DestroyServerInput, { ok: true }> = {
+  name: "assert_db_cleanup",
+  label: "Verify database cleanup completed",
+  async run(_ctx, prior) {
+    assertCleanupComplete(prior, ["delete_db_rows"]);
     return { ok: true };
   },
 };
@@ -168,9 +168,10 @@ const destroyServerOp: OpKindDefinition<DestroyServerInput> = {
     preflight,
     destroyAppsOnServer,
     destroyServicesOnServer,
-    cleanupPanelRow,
+    assertChildCleanup,
     deleteCloudServer,
     deleteDbRows,
+    assertDbCleanup,
   ],
 };
 

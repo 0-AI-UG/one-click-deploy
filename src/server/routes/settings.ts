@@ -12,6 +12,7 @@ export async function handleGetSettings(request: Request): Promise<Response> {
     const s = db.getSettings();
     const providerToken = await secretStore.getProviderToken();
     const githubOauthClientSecret = await secretStore.get("github_oauth_client_secret");
+    const registryPassword = await secretStore.get("oci_registry_password");
     const provider = hetzner;
     return Response.json(
       {
@@ -23,6 +24,10 @@ export async function handleGetSettings(request: Request): Promise<Response> {
         default_server_type: s.default_server_type ?? "",
         default_location: s.default_location ?? "",
         allow_archive_image_transfer: (s.allow_archive_image_transfer ?? "0") === "1",
+        oci_cache_ref: s.oci_cache_ref ?? "",
+        oci_artifact_ref: s.oci_artifact_ref ?? "",
+        oci_registry_username: s.oci_registry_username ?? "",
+        oci_registry_password: maskToken(registryPassword ?? ""),
         require_2fa: (s.require_2fa ?? "1") === "1",
       },
       { headers: corsHeaders },
@@ -55,6 +60,13 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
         continue;
       }
       const value = String(rawValue ?? "");
+      if ((key === "oci_cache_ref" || key === "oci_artifact_ref") && value &&
+          !/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+(?::[A-Za-z0-9._-]+)?$/i.test(value)) {
+        return Response.json(
+          { error: `${key} must be an OCI repository reference` },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       if (key === "provider_token") {
         if (value.includes("...") || value === "****") continue;
         if (value) {
@@ -81,6 +93,10 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
         } else {
           await secretStore.delete(key);
         }
+      } else if (key === "oci_registry_password") {
+        if (value.includes("...") || value === "****") continue;
+        if (value) await secretStore.set(key, value);
+        else await secretStore.delete(key);
       } else {
         db.saveSetting(key, String(value));
       }

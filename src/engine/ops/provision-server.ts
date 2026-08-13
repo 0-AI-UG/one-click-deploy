@@ -9,7 +9,7 @@ import {
 } from "../../shared/remote/index.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { registerOp } from "./registry.ts";
-import type { OpKindDefinition, Step } from "../types.ts";
+import { FatalProbeError, type OpKindDefinition, type Step } from "../types.ts";
 
 type ProvisionInput = {
   serverType: string;
@@ -31,6 +31,32 @@ type CreateCloudOut = {
   ipv6: string;
   privateIpv4: string;
 };
+
+function operationServerName(input: ProvisionInput, opId: number): string {
+  return input.name || `ocd-server-op${opId}`;
+}
+
+async function adoptCloudServerByName(
+  row: InsertRowOut,
+): Promise<CreateCloudOut | null> {
+  const existing = (await hetzner.listServers()).find((server) => server.name === row.serverName);
+  if (!existing) return null;
+  const detailed = await hetzner.getServer(existing.providerId);
+  const adopted = {
+    providerId: detailed.providerId,
+    ipv4: detailed.ipv4,
+    ipv6: detailed.ipv6 || "",
+    privateIpv4: detailed.privateIpv4 || "",
+  };
+  db.updateServer(row.serverId, {
+    provider_id: adopted.providerId,
+    ipv4: adopted.ipv4,
+    ipv6: adopted.ipv6,
+    private_ipv4: adopted.privateIpv4,
+    status: "provisioning",
+  });
+  return adopted;
+}
 
 const ensureInfra: Step<ProvisionInput, EnsureInfraOut> = {
   name: "ensure_infra",
@@ -57,8 +83,7 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
   name: "insert_server_row",
   label: "Register server",
   async run(ctx) {
-    const compute = hetzner;
-    const serverName = ctx.input.name || `ocd-server-${Date.now()}`;
+    const serverName = operationServerName(ctx.input, ctx.opId);
     const existing = db.getServers().find((s) => s.name === serverName && s.status === "creating");
     if (existing) {
       // Idempotent replay: reuse the placeholder row.
@@ -87,6 +112,29 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
 const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
   name: "create_cloud_server",
   label: "Create cloud server",
+  async probe(_ctx, prior) {
+    const row = prior["insert_server_row"] as InsertRowOut;
+    const current = db.getServer(row.serverId);
+    if (current?.provider_id) {
+      return {
+        providerId: current.provider_id,
+        ipv4: current.ipv4,
+        ipv6: current.ipv6,
+        privateIpv4: current.private_ipv4 || "",
+      };
+    }
+    // When provider identity is unknown, creating another server is unsafe;
+    // turn lookup failures into fatal probe errors rather than falling through
+    // to create and risking a second billable server.
+    try {
+      return await adoptCloudServerByName(row);
+    } catch (cause) {
+      throw new FatalProbeError(
+        `Could not determine whether provider server ${row.serverName} already exists`,
+        { cause },
+      );
+    }
+  },
   async run(ctx, prior) {
     const infra = prior["ensure_infra"] as EnsureInfraOut;
     const row = prior["insert_server_row"] as InsertRowOut;
@@ -101,6 +149,15 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
         ipv6: current.ipv6,
         privateIpv4: current.private_ipv4 || "",
       };
+    }
+
+    // Defend direct callers as well as the step runner. The runner probes
+    // before run, but a second lookup here closes the gap if a provider request
+    // completed while the first lookup was in flight.
+    const adopted = await adoptCloudServerByName(row);
+    if (adopted) {
+      ctx.log(`Adopted provider server ${row.serverName} (${adopted.ipv4})`);
+      return adopted;
     }
 
     const created = await compute.createServer({

@@ -4,7 +4,7 @@ import { sshExec } from "../../shared/remote/index.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
 import { registerOp } from "./registry.ts";
-import { softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
+import { assertCleanupComplete, softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
 type DestroyServiceInput = {
@@ -22,13 +22,14 @@ const markDeleting: Step<DestroyServiceInput, { ok: true }> = {
   },
 };
 
-const removeEnvFromLinkedEnvironments: Step<DestroyServiceInput, { ok: true }> = {
+const removeEnvFromLinkedEnvironments: Step<DestroyServiceInput, { ok: boolean; failed: boolean; failedEnvironmentIds: number[] }> = {
   name: "remove_env_vars_from_linked_environments",
   label: "Remove env vars from linked environments",
   async run(ctx) {
     const links = db.getServiceLinks(ctx.input.serviceId);
+    const failedEnvironmentIds: number[] = [];
     for (const link of links) {
-      await softStep(ctx, `uninject_env env#${link.environment_id}`, async () => {
+      const result = await softStep(ctx, `uninject_env env#${link.environment_id}`, async () => {
         const envRow = db.getEnvironment(link.environment_id);
         if (!envRow) return;
         const parsed = parseEnvVars(envRow.env_vars);
@@ -41,8 +42,13 @@ const removeEnvFromLinkedEnvironments: Step<DestroyServiceInput, { ok: true }> =
         const stale = db.markAppsEnvironmentStaleForKeys(link.environment_id, removedKeys);
         if (stale > 0) ctx.log(`Marked ${stale} linked app(s) stale after removing ${prefix}_*`);
       });
+      if (!result.ok) failedEnvironmentIds.push(link.environment_id);
     }
-    return { ok: true };
+    return {
+      ok: failedEnvironmentIds.length === 0,
+      failed: failedEnvironmentIds.length > 0,
+      failedEnvironmentIds,
+    };
   },
 };
 
@@ -112,7 +118,9 @@ const deleteVolumes: Step<DestroyServiceInput, { failed: boolean }> = {
   },
 };
 
-const deleteDbRows: Step<DestroyServiceInput, { ok: true }> = {
+type DeleteDbRowsOut = { ok: boolean; failed: boolean; failedSteps: string[] };
+
+const deleteDbRows: Step<DestroyServiceInput, DeleteDbRowsOut> = {
   name: "delete_db_rows",
   label: "Delete DB rows",
   async run(ctx, prior) {
@@ -120,18 +128,28 @@ const deleteDbRows: Step<DestroyServiceInput, { ok: true }> = {
     if (failedSteps.length > 0) {
       try { db.updateServiceStatus(ctx.input.serviceId, "cleanup_failed"); } catch { /* ignore */ }
       ctx.log(`Some resources could not be cleaned up (failed: ${failedSteps.join(", ")}) — service marked cleanup_failed`);
-      return { ok: true };
+      return { ok: false, failed: true, failedSteps };
     }
     const instances = db.getServiceInstances(ctx.input.serviceId);
+    const dbFailures: string[] = [];
     for (const inst of instances) {
-      await softStep(ctx, `delete_instance ${inst.id}`, async () => {
+      const result = await softStep(ctx, `delete_instance ${inst.id}`, async () => {
         db.deleteServiceInstance(inst.id);
       });
+      if (!result.ok) dbFailures.push(`instance:${inst.id}`);
     }
-    await softStep(ctx, "delete_service", async () => {
-      db.deleteService(ctx.input.serviceId);
-    });
-    return { ok: true };
+    if (dbFailures.length === 0) {
+      const result = await softStep(ctx, "delete_service", async () => {
+        db.deleteService(ctx.input.serviceId);
+      });
+      if (!result.ok) dbFailures.push(`service:${ctx.input.serviceId}`);
+    }
+    if (dbFailures.length > 0) {
+      try { db.updateServiceStatus(ctx.input.serviceId, "cleanup_failed"); } catch { /* ignore */ }
+      ctx.log(`Database cleanup failed (${dbFailures.join(", ")}) — service marked cleanup_failed`);
+      return { ok: false, failed: true, failedSteps: dbFailures };
+    }
+    return { ok: true, failed: false, failedSteps: [] };
   },
 };
 
@@ -151,6 +169,15 @@ const syncIngress: Step<DestroyServiceInput, { ok: true }> = {
 
 const gcEmptyServers = makeGcEmptyServersStep<DestroyServiceInput>("stop_and_remove_instance_container");
 
+const assertDbCleanup: Step<DestroyServiceInput, { ok: true }> = {
+  name: "assert_db_cleanup",
+  label: "Verify cleanup completed",
+  async run(_ctx, prior) {
+    assertCleanupComplete(prior, ["delete_db_rows"]);
+    return { ok: true };
+  },
+};
+
 const destroyServiceOp: OpKindDefinition<DestroyServiceInput> = {
   kind: "destroy_service",
   label: "Destroy service",
@@ -168,6 +195,7 @@ const destroyServiceOp: OpKindDefinition<DestroyServiceInput> = {
     deleteDbRows,
     syncIngress,
     gcEmptyServers,
+    assertDbCleanup,
   ],
 };
 

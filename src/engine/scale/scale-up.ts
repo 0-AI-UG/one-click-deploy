@@ -9,6 +9,7 @@ import { type ProgressFn, log, type App, type Replica, replicaBindHost, appRepli
 import { pickTargetServer } from "./server-picker.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
+import { resolveArtifactRegistry, resolveBuildRegistry } from "../registry-config.ts";
 
 export async function scaleUp(
   app: App,
@@ -105,6 +106,7 @@ export async function scaleUp(
     let rebuildFallback = false;
     try {
       if (!primaryServer) throw new Error("no healthy source replica is available");
+      const distribution = await resolveArtifactRegistry(app.build_cache_ref);
       await transferImage(
         primaryServer.ipv4,
         targetServer.ipv4,
@@ -112,10 +114,20 @@ export async function scaleUp(
         primaryServer.ssh_host_key || undefined,
         targetHostKey,
         {
-          registryRef: app.build_cache_ref || undefined,
+          registryRef: distribution.ref,
+          registryUsername: distribution.username,
+          registryPassword: distribution.password,
           registryToken: githubPat,
           allowArchiveFallback: db.getSettings().allow_archive_image_transfer === "1",
           onProgress: (line) => emit("transfer", line),
+          onStorage: (storage) => {
+            const deployment = db.getLastSuccessfulDeployment(app.id);
+            if (deployment) db.updateDeploymentStorage(deployment.id, {
+              image_size_bytes: storage.imageBytes,
+              archive_size_bytes: storage.archiveBytes,
+              transfer_size_bytes: storage.transferBytes,
+            });
+          },
         },
       );
     } catch (err) {
@@ -161,11 +173,14 @@ export async function scaleUp(
           imageRef: app.image_ref,
         }, logLine);
       } else {
+        const buildRegistry = await resolveBuildRegistry(app.build_cache_ref);
         await cloneAndBuild(targetServer.ipv4, {
           ...buildOpts,
           dockerfilePath: app.dockerfile_path || undefined,
           dockerContext: app.docker_context || undefined,
-          buildCacheRef: app.build_cache_ref || undefined,
+          buildCacheRef: buildRegistry.ref,
+          registryUsername: buildRegistry.username,
+          registryPassword: buildRegistry.password,
         }, logLine);
       }
     }

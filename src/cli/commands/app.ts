@@ -12,6 +12,8 @@ type AppDetail = App & {
   webhook_enabled?: boolean | number;
   webhook_branch?: string;
   webhook_path?: string;
+  webhook_paths?: string[] | null;
+  webhook_paths_ignore?: string[];
   webhook_wait_for_ci?: boolean | number;
   webhook_staging_environment_id?: number | null;
   autoscale_enabled?: boolean | number;
@@ -36,6 +38,14 @@ type AppDetail = App & {
   desired_volume_id?: string;
   desired_volume_size?: number;
   desired_volume_path?: string;
+  last_webhook_head?: string | null;
+  last_webhook_received_at?: string | null;
+  last_webhook_evaluated_at?: string | null;
+  last_webhook_ci_result?: string | null;
+  last_matching_paths?: string[];
+  last_decision?: string | null;
+  last_evaluated_commit?: string | null;
+  last_successfully_deployed_commit?: string | null;
 };
 
 export type ParsedFlags = {
@@ -97,6 +107,11 @@ async function followNamedOp(
 
 async function showApp(args: string[]): Promise<void> {
   const parsed = parseAppFlags(args);
+  if (parsed.positional.length > 1) throw new Error(`Unexpected argument: ${parsed.positional[1]}`);
+  const unknownSwitch = [...parsed.switches].find((flag) => flag !== "storage");
+  if (unknownSwitch) throw new Error(`Unknown option: --${unknownSwitch}`);
+  const valueFlag = [...parsed.values.keys()][0];
+  if (valueFlag) throw new Error(`Unknown option: --${valueFlag}`);
   const app = await resolveApp(requireAppName(parsed, "ocd app show <app>")) as AppDetail;
   table(["Field", "Value"], [
     ["ID", String(app.id)],
@@ -128,6 +143,24 @@ async function showApp(args: string[]): Promise<void> {
       : "-"],
     ["Webhook", app.webhook_enabled ? "enabled" : "disabled"],
   ]);
+  if (parsed.switches.has("storage")) {
+    const storage = await get<{
+      current: { image_size_bytes: number; archive_size_bytes: number; transfer_size_bytes: number } | null;
+      rollback: { image_size_bytes: number; archive_size_bytes: number; transfer_size_bytes: number } | null;
+      reclaimable_image_bytes_upper_bound: number;
+      caveat: string;
+    }>(`/api/apps/${app.id}/storage`);
+    const size = (bytes?: number | null) => typeof bytes === "number" && bytes > 0
+      ? `${(bytes / 1024 / 1024).toFixed(1)} MiB`
+      : "unknown";
+    console.log(`\n${BOLD}Image storage${RESET}`);
+    table(["Asset", "Expanded", "Compressed archive", "Transferred"], [
+      ["Current", size(storage.current?.image_size_bytes), size(storage.current?.archive_size_bytes), size(storage.current?.transfer_size_bytes)],
+      ["Rollback", size(storage.rollback?.image_size_bytes), size(storage.rollback?.archive_size_bytes), size(storage.rollback?.transfer_size_bytes)],
+      ["Reclaimable (upper bound)", size(storage.reclaimable_image_bytes_upper_bound), "-", "-"],
+    ]);
+    console.log(`${DIM}${storage.caveat}${RESET}`);
+  }
 }
 
 async function reloadEnvironment(args: string[]): Promise<void> {
@@ -138,6 +171,13 @@ async function reloadEnvironment(args: string[]): Promise<void> {
   }
   const result = await post<{ op_id: number }>(`/api/apps/${app.id}/reload-env`, { force: true });
   await followNamedOp(result.op_id, `Reloaded environment for ${app.name}`, "Environment reload failed");
+}
+
+async function redeployExisting(args: string[]): Promise<void> {
+  const parsed = parseAppFlags(args);
+  const app = await resolveApp(requireAppName(parsed, "ocd app redeploy <app>"));
+  const result = await post<{ op_id: number }>(`/api/apps/${app.id}/redeploy`, {});
+  await followNamedOp(result.op_id, `Redeployed ${app.name}`, "Redeploy failed");
 }
 
 type Deployment = {
@@ -328,15 +368,23 @@ async function webhook(args: string[]): Promise<void> {
   table(["Webhook", "Value"], [
     ["Status", app.webhook_enabled ? "enabled" : "disabled"],
     ["Branch", app.webhook_branch || "main"],
-    ["Path", app.webhook_path || "-"],
+    ["Paths", app.webhook_paths?.length ? app.webhook_paths.join("\n") : "(all pushes)"],
+    ["Paths ignore", app.webhook_paths_ignore?.length ? app.webhook_paths_ignore.join("\n") : "-"],
+    ...(app.webhook_path ? [["Legacy path (deprecated)", app.webhook_path]] : []),
     ["Wait for CI", String(!!app.webhook_wait_for_ci)],
+    ["Last received push", app.last_webhook_head ? `${app.last_webhook_head.slice(0, 12)} ${app.last_webhook_received_at || ""}`.trim() : "-"],
+    ["Last evaluated commit", app.last_evaluated_commit?.slice(0, 12) || "-"],
+    ["Last CI result", app.last_webhook_ci_result || "-"],
+    ["Last matching paths", app.last_matching_paths?.join("\n") || "-"],
+    ["Last decision", app.last_decision || "-"],
+    ["Last successfully deployed commit", app.last_successfully_deployed_commit || "-"],
   ]);
 }
 
 function usage(): void {
   console.log(`${BOLD}Usage:${RESET} ocd app <command> [args]
 
-  show <app>                    Show app configuration and runtime state
+  show <app> [--storage]        Show app configuration and optional image storage
   deployments <app>            List deployment history
   replicas <app>               List replicas and current resource use
   metrics <app> [--since=SEC]   Current metrics or sampled history
@@ -344,7 +392,8 @@ function usage(): void {
   scaling-events <app>         List recent manual/autoscale events
   staging <app>                Inspect the webhook staging sibling
   webhook status <app>         Inspect stored webhook configuration
-  reload-env <app> --force     Recreate only this app from its immutable image${RESET}`);
+  reload-env <app> --force     Recreate only this app from its immutable image
+  redeploy <app>               Rebuild using stored source, environment, and stack ownership${RESET}`);
 }
 
 export async function app(args: string[]): Promise<void> {
@@ -366,6 +415,8 @@ export async function app(args: string[]): Promise<void> {
     case "staging": return staging(rest);
     case "webhook": return webhook(rest);
     case "reload-env": return reloadEnvironment(rest);
+    case "deploy":
+    case "redeploy": return redeployExisting(rest);
     default: throw new Error(`Unknown app command: ${command}`);
   }
 }

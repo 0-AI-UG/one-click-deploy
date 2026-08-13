@@ -27,6 +27,8 @@ export type AppData = {
   webhook_enabled: number | boolean;
   webhook_branch?: string;
   webhook_path?: string;
+  webhook_paths?: string[] | null;
+  webhook_paths_ignore?: string[];
   webhook_wait_for_ci?: number | boolean;
   /** When set, webhook pushes deploy to the <name>-staging sibling and hold for
    *  manual promotion instead of redeploying production. */
@@ -83,6 +85,16 @@ export type AppData = {
   last_manifest_hash?: string | null;
   last_manifest_applied_at?: string | null;
   last_manifest_config_revision?: number | null;
+  manifest_path?: string | null;
+  stack_manifest_path?: string | null;
+  last_webhook_head?: string | null;
+  last_webhook_received_at?: string | null;
+  last_webhook_evaluated_at?: string | null;
+  last_webhook_ci_result?: string | null;
+  last_matching_paths?: string[];
+  last_decision?: string | null;
+  last_evaluated_commit?: string | null;
+  last_successfully_deployed_commit?: string | null;
 };
 
 export type ReplicaData = {

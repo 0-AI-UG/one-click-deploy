@@ -14,7 +14,7 @@ import {
   findSupersedingOperation,
   findSupersedingAncestorOperation,
 } from "../shared/db/operations.ts";
-import type { AnyOpKind, OpContext, Step } from "./types.ts";
+import { FatalProbeError, type AnyOpKind, type OpContext, type Step } from "./types.ts";
 import type { OperationRow } from "../shared/db/operations.ts";
 import { parkOp, unparkOp } from "./engine.ts";
 import { withOpContext } from "./op-logger.ts";
@@ -166,7 +166,13 @@ async function runOneForwardStep(
           return;
         }
       } catch (err) {
-        // Probe failure is informational, not fatal — fall through to run.
+        // A probe can conclusively reject unsafe adoption/execution (for
+        // example, an operation-owned resource name colliding with a foreign
+        // resource). Do not discard that validation result and run anyway.
+        if (err instanceof FatalProbeError) throw err;
+
+        // Legacy probe failures are informational — a transient provider or
+        // transport failure must not change the behavior of existing steps.
         log(`op#${op.id} probe ${step.name} failed (continuing):`, errMsg(err));
       }
     }

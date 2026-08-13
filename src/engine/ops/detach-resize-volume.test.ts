@@ -98,8 +98,20 @@ describe("detach_volume", () => {
   test("has no compensations (pure removal)", () => {
     expect(detachVolumeOp.steps.every((s) => !s.compensate)).toBe(true);
     expect(detachVolumeOp.steps.map((s) => s.name)).toEqual([
-      "validate", "remove_bind_mount", "detach_volume", "clear_app_volume", "recreate_container",
+      "validate", "remove_bind_mount", "detach_volume", "clear_app_volume", "recreate_container", "assert_cleanup",
     ]);
+  });
+
+  test("fails the cleanup gate when container recreation was incomplete", async () => {
+    const { app } = makeAppWithVolume("v-gate");
+    const { ctx } = makeCtx({ appId: app.id });
+    const gate = stepByName(detachVolumeOp, "assert_cleanup");
+
+    await expect(gate.run(ctx, {
+      remove_bind_mount: { ok: true },
+      recreate_container: { ok: false },
+    })).rejects.toThrow(/cleanup incomplete/i);
+    expect(db.getApp(app.id)?.status).toBe("cleanup_failed");
   });
 });
 

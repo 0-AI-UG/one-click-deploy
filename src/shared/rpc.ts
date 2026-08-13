@@ -29,6 +29,8 @@ export type App = {
   webhook_enabled: number;
   webhook_branch: string;
   webhook_path: string;
+  webhook_paths: string[] | null;
+  webhook_paths_ignore: string[];
   webhook_wait_for_ci: number;
   github_webhook_id: string;
   /** Whether HTTP basic auth is on (derived from the password hash server-side).
@@ -56,6 +58,15 @@ export type App = {
   public_port: number | null; // public raw TCP/UDP port on the panel IP; null = not exposed
   public_protocol: string; // 'tcp' | 'udp'
   created_at: string;
+  last_webhook_head?: string | null;
+  last_webhook_received_at?: string | null;
+  last_webhook_evaluated_at?: string | null;
+  last_webhook_ci_result?: string | null;
+  last_webhook_decision?: Record<string, unknown> | null;
+  last_matching_paths?: string[];
+  last_decision?: string | null;
+  last_evaluated_commit?: string | null;
+  last_successfully_deployed_commit?: string | null;
 };
 
 export type Replica = {
@@ -135,6 +146,8 @@ export type DeployRequest = {
   webhook_enabled?: boolean;
   webhook_branch?: string; // Branch to watch, defaults to "main"
   webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
+  webhook_paths?: string[]; // Repository-root-relative glob filters. Omit to deploy on every push.
+  webhook_paths_ignore?: string[]; // Changed paths removed before webhook_paths selection.
   webhook_wait_for_ci?: boolean; // Wait for CI checks to pass before deploying
   webhook_staging_environment_id?: number | null; // Environment the webhook staging sibling deploys with. Set = enable staging (pushes hold in <name>-staging for manual promotion). Requires webhook_enabled.
   /** Portable manifest selector for the webhook staging environment. */
@@ -193,6 +206,8 @@ export type DeployRequest = {
    * metadata only; the normalized fields above remain the desired spec. */
   manifest_path?: string;
   manifest_hash?: string;
+  /** Owning stack control file, populated for stack members. */
+  stack_manifest_path?: string | null;
 };
 
 export type PromoteRequest = {
@@ -247,11 +262,17 @@ export type { DeployManifest, StackManifest };
 
 export type StackDeployRequest = {
   name: string;
+  /** Canonical repository-relative owning stack manifest. */
+  stack_manifest_path?: string;
   /** Optional partial reconcile selection. Omission means every member. */
   selected_app_keys?: string[];
   selected_service_keys?: string[];
   /** Partial runs never interpret omitted members as desired removals. */
   partial?: boolean;
+  /** Apply desired configuration without rebuilding code. Runtime settings
+   * recreate containers from the current immutable artifact; source/build
+   * changes remain pending for a later code deployment. */
+  config_only?: boolean;
   environment_id?: number; // Reuse an existing environment instead of auto-creating one (only honored when the stack is first created)
   /** The stack's shared staging environment from the stack manifest — the
    *  exact same model as `environment_id` above: one per stack, used by every
@@ -278,6 +299,9 @@ export type StackDeployRequest = {
   apps: Array<Omit<DeployRequest, "environment_id"> & {
     key: string;
     needs?: string[];
+    /** Client preflight hint. The server promotes this mode when an
+     * authoritative config diff requires a more disruptive action. */
+    reconcile_mode?: "control" | "runtime" | "build";
     webhook_staging?: boolean;
     /** Stack-only projection intent. `declared` is the safe default for a new
      * member; existing members preserve their stored projection for backwards

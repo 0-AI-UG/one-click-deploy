@@ -1,5 +1,19 @@
 import type { OperationRow } from "../shared/db/operations.ts";
 
+/**
+ * Signals that a forward-step probe found an unsafe state and `run` must not
+ * be attempted. Use this for validation failures such as ownership conflicts
+ * or resource-name collisions. Ordinary probe errors remain best-effort for
+ * backwards compatibility and fall through to `run`.
+ */
+export class FatalProbeError extends Error {
+  override readonly name = "FatalProbeError";
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+  }
+}
+
 export type OpContext<Input = unknown> = {
   opId: number;
   kind: string;
@@ -28,6 +42,9 @@ export type Step<Input = unknown, Out = unknown> = {
    * will adopt it and skip `run`. Critical for safe resume after a crash that
    * happened between starting and finishing `run`.
    * Returning null means "no existing side effect found, please run".
+   * Throw `FatalProbeError` when the probe conclusively finds an unsafe state
+   * in which `run` must not execute. Other thrown errors are treated as an
+   * inconclusive best-effort probe and fall through to `run`.
    */
   probe?: (ctx: OpContext<Input>, prior: Record<string, unknown>) => Promise<Out | null>;
   /**

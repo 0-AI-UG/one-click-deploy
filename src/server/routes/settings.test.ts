@@ -67,6 +67,7 @@ function req(body?: unknown): Request {
 beforeEach(async () => {
   await secretStore.delete("hetzner_api_token");
   await secretStore.delete("github_oauth_client_secret");
+  await secretStore.delete("oci_registry_password");
 });
 
 describe("handleGetSettings", () => {
@@ -153,6 +154,26 @@ describe("handleSaveSettings: github_oauth_client_secret", () => {
 });
 
 describe("handleSaveSettings: plain db settings", () => {
+  test("stores separate OCI cache/artifact repositories and masks credentials", async () => {
+    const r = await handleSaveSettings(req({
+      oci_cache_ref: "registry.example/ocd/cache:main",
+      oci_artifact_ref: "registry.example/ocd/artifacts",
+      oci_registry_username: "deployer",
+      oci_registry_password: "registry-secret-value",
+    }));
+    expect(r.status).toBe(200);
+    expect(db.getSettings().oci_cache_ref).toBe("registry.example/ocd/cache:main");
+    expect(db.getSettings().oci_artifact_ref).toBe("registry.example/ocd/artifacts");
+    expect(await secretStore.get("oci_registry_password")).toBe("registry-secret-value");
+    const shown = await (await handleGetSettings(req())).json() as Record<string, unknown>;
+    expect(shown.oci_registry_password).not.toBe("registry-secret-value");
+  });
+
+  test("rejects invalid OCI repository defaults", async () => {
+    const r = await handleSaveSettings(req({ oci_cache_ref: "not-a-repository" }));
+    expect(r.status).toBe(400);
+  });
+
   test("saves dns_zone_id and default_server_type to the settings table", async () => {
     const r = await handleSaveSettings(
       req({

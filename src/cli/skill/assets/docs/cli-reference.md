@@ -9,9 +9,11 @@ ocd deploy [manifest]
     [--server=ID]
     [--dry-run]
     [--config-only]
+    [--app=EXISTING_APP]
+    [--allow-unknown]
 ocd deploy stack [manifest]
     [--only=web,worker] [--with-dependents]
-    [--changed | --all]
+    [--changed | --all] [--config-only]
 ```
 
 `ocd deploy` is the only CLI mutation for desired app configuration.
@@ -20,7 +22,7 @@ ocd deploy stack [manifest]
 
 ```text
 ocd apps
-ocd app show <app>
+ocd app show <app> [--storage]
 ocd app deployments <app>
 ocd app replicas <app>
 ocd app metrics <app> [--since=SEC]
@@ -28,7 +30,10 @@ ocd app availability <app>
 ocd app scaling-events <app>
 ocd app staging <app>
 ocd app webhook status <app>
+ocd app redeploy <app>
+ocd webhook plan --stack <name> --base <sha> --head <sha>
 ocd logs <app> [--tail=N]
+ocd gc [--server=<name|id|ip>] [--execute]
 ```
 
 ## Operational lifecycle
@@ -73,9 +78,11 @@ ocd services
 ocd service catalog
 ocd service create <name>
 ocd stack <ls|status|logs>
+ocd stack member-logs <name|id> [--tail N]
+ocd manifest validate [path] [--allow-unknown]
 ocd ops [--app=<app>]
 ocd ops <id>
-ocd ops logs <id> [--tail=N] [--follow]
+ocd ops logs <id> [--tail N] [--since TIME|CURSOR] [--child NAME|ID] [--phase STEP] [--follow]
 ocd ops cancel|retry|finalize <id>
 ocd servers
 ocd resources

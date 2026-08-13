@@ -9,11 +9,8 @@
  * path + expected-vs-got), so a bad manifest is rejected BEFORE the deploy
  * engine ever sees it.
  *
- * Wrong-typed KNOWN keys are hard errors; UNKNOWN keys are a non-fatal stderr
- * warning so forward-compat manifests still deploy. This maps onto Zod as:
- * schema `.strict()` reports unknown keys as `unrecognized_keys` issues, which
- * we turn into `console.warn`s and DO NOT count as errors; every other issue
- * code is a hard error.
+ * Wrong-typed and UNKNOWN keys are hard errors by default. Callers may opt into
+ * `allowUnknown` only as an explicit forward-compatibility escape hatch.
  */
 import type { z } from "zod";
 import {
@@ -86,12 +83,13 @@ function renderIssue(issue: Issue, root: unknown): string {
   return field ? `${field}: ${msg}` : msg;
 }
 
-/** Run a schema, warn on unknown keys, throw one Error listing all hard issues. */
+/** Run a schema and throw one Error listing all issues. */
 function runValidation(
   schema: typeof DeployManifestSchema | typeof StackManifestSchema,
   manifest: unknown,
   sourcePath: string,
   kind: "manifest" | "stack manifest",
+  options: { allowUnknown?: boolean } = {},
 ): void {
   const result = schema.safeParse(manifest);
   if (result.success) return;
@@ -100,15 +98,21 @@ function runValidation(
   for (const issue of result.error.issues) {
     if (issue.code === "unrecognized_keys") {
       for (const key of issue.keys) {
-        // eslint-disable-next-line no-console
-        console.warn(`Manifest ${sourcePath}: unknown key "${key}" (ignored)`);
+        const prefix = fieldPath(issue.path as PathSeg[]);
+        const field = prefix ? `${prefix}.${key}` : key;
+        if (options.allowUnknown) {
+          // eslint-disable-next-line no-console
+          console.warn(`Manifest ${sourcePath}: unknown key "${field}" (ignored by --allow-unknown)`);
+        } else {
+          errors.push(`${field}: unknown key`);
+        }
       }
       continue;
     }
     errors.push(renderIssue(issue, manifest));
   }
 
-  // Only unknown keys → warn (already done) and pass; no hard errors to throw.
+  // In compatibility mode only unknown keys produce warnings and pass.
   if (errors.length === 0) return;
 
   const header = `Invalid ${kind} ${sourcePath}:`;
@@ -120,8 +124,12 @@ function runValidation(
  * Validate an app manifest (`.ocd-deploy.json`). Throws with a field-level
  * message listing ALL issues when it doesn't conform to `DeployManifest`.
  */
-export function validateDeployManifest(manifest: unknown, sourcePath: string): void {
-  runValidation(DeployManifestSchema, manifest, sourcePath, "manifest");
+export function validateDeployManifest(
+  manifest: unknown,
+  sourcePath: string,
+  options: { allowUnknown?: boolean } = {},
+): void {
+  runValidation(DeployManifestSchema, manifest, sourcePath, "manifest", options);
 }
 
 /**
@@ -130,6 +138,10 @@ export function validateDeployManifest(manifest: unknown, sourcePath: string): v
  * validated separately through `readManifest`/`validateDeployManifest`.
  * Throws with a field-level message listing ALL issues.
  */
-export function validateStackManifest(manifest: unknown, sourcePath: string): void {
-  runValidation(StackManifestSchema, manifest, sourcePath, "stack manifest");
+export function validateStackManifest(
+  manifest: unknown,
+  sourcePath: string,
+  options: { allowUnknown?: boolean } = {},
+): void {
+  runValidation(StackManifestSchema, manifest, sourcePath, "stack manifest", options);
 }

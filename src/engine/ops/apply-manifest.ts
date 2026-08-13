@@ -4,8 +4,18 @@ import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
+import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
+import { hashEnvironment } from "../revision.ts";
 
-type ApplyManifestInput = { appId: number; userId?: string; deploy: boolean; spec?: DeployRequest };
+type ApplyManifestInput = {
+  appId: number;
+  userId?: string;
+  deploy: boolean;
+  spec?: DeployRequest;
+  rollout?: "control" | "runtime" | "build";
+  /** Desired source/build config was persisted without building it. */
+  pendingRollout?: boolean;
+};
 type ApplyOut = { childOpIds: number[] };
 
 async function runChild(
@@ -42,7 +52,9 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
     const childOpIds: number[] = [];
     let app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
-    if (ctx.input.deploy && ctx.input.spec) {
+    const rollout = ctx.input.rollout ?? (ctx.input.deploy ? "build" : "control");
+    if (ctx.input.pendingRollout) db.requestAppRollout(app.id);
+    if (ctx.input.spec && rollout === "build") {
       childOpIds.push(await runChild(
         ctx,
         "candidate-redeploy",
@@ -54,6 +66,15 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
           gitSha: ctx.input.spec.git_sha,
           candidate: ctx.input.spec,
         },
+      ));
+      app = db.getApp(ctx.input.appId)!;
+    } else if (ctx.input.spec) {
+      childOpIds.push(await runChild(
+        ctx,
+        "apply-config",
+        "apply_app_config",
+        [`app:${app.id}`],
+        { appId: app.id, userId: ctx.input.userId, spec: ctx.input.spec },
       ));
       app = db.getApp(ctx.input.appId)!;
     }
@@ -116,6 +137,34 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
           [`app:${app.id}`, `volume:${app.volume_id}`],
           { appId: app.id, mountPath: desiredPath },
         ));
+      }
+    }
+
+    if (rollout === "runtime") {
+      childOpIds.push(await runChild(
+        ctx,
+        "runtime-recreate",
+        "reload_app",
+        [`app:${app.id}`],
+        { appId: app.id, force: true },
+      ));
+      app = db.getApp(ctx.input.appId)!;
+      const priorDeployment = db.getDeployments(app.id).find((row) => row.status === "deployed");
+      if (priorDeployment) {
+        db.insertDeployment({
+          app_id: app.id,
+          operation_id: ctx.opId,
+          image_tag: priorDeployment.image_tag,
+          image_digest: priorDeployment.image_digest,
+          env_hash: hashEnvironment(await resolveAppEnvVars(app)),
+          git_commit: priorDeployment.git_commit,
+          config_revision: app.config_revision,
+          source: "manifest-runtime",
+          image_size_bytes: priorDeployment.image_size_bytes,
+          archive_size_bytes: 0,
+          transfer_size_bytes: 0,
+        });
+        if (!ctx.input.pendingRollout) db.clearAppRolloutRequest(app.id, app.config_revision);
       }
     }
 

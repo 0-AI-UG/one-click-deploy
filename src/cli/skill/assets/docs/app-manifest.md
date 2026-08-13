@@ -61,7 +61,8 @@ configuration for one app.
   "webhook": {
     "enabled": true,
     "branch": "main",
-    "path": "",
+    "paths": ["services/web/**", "packages/core/**"],
+    "paths_ignore": ["services/web/**/*.md"],
     "wait_for_ci": false,
     "staging": true,
     "staging_environment": "staging"
@@ -122,6 +123,10 @@ Use `image.ref` instead of Git/build source fields for a prebuilt image:
 - `placement_pool`: Scheduling pool.
 - `scale_to_zero_after`: Idle seconds; `0` disables scale-to-zero.
 - `webhook`: Webhook and staging policy.
+- `webhook.paths`: Non-empty array of repository-relative `*`, `**`, and `?`
+  globs. Omit to deploy on every push. `webhook.path` is deprecated and cannot
+  be combined with `paths`.
+- `webhook.paths_ignore`: Globs removed before selection.
 - `webhook.staging_environment`: Staging environment name or `null`.
 
 ## Autoscaling defaults
@@ -141,3 +146,16 @@ volumes are grow-only; reducing `size` is rejected.
 The other durable-state exceptions
 are `environment` and `domain`: omit them to retain the existing link/domain,
 or use an explicit value (`environment: null`, `domain: ""`) to clear one.
+
+# Validation
+
+Unknown keys are deployment errors by default so misspelled settings cannot be
+silently ignored. Validate an app manifest, or a stack and all of its referenced
+child manifests, before deployment:
+
+```text
+ocd manifest validate [path]
+```
+
+`--allow-unknown` is an explicit compatibility escape hatch for using a newer
+manifest with an older CLI. Unknown keys are still reported as warnings.

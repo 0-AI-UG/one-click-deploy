@@ -8,6 +8,7 @@ import { type ProgressFn, log, replicaBindHost, appReplicaRunOpts } from "./type
 import { attestReplica } from "../revision.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
+import { resolveArtifactRegistry } from "../registry-config.ts";
 
 export async function rollingRedeploy(
   appId: number,
@@ -33,6 +34,7 @@ export async function rollingRedeploy(
 
     const imageName = expectedRevision?.imageDigest || `${app.name}:latest`;
     const registryToken = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
+    const distribution = await resolveArtifactRegistry(app.build_cache_ref);
 
     for (let i = 0; i < replicas.length; i++) {
       const replica = replicas[i];
@@ -51,10 +53,20 @@ export async function rollingRedeploy(
           primaryServer.ssh_host_key || undefined,
           hostKey,
           {
-            registryRef: app.build_cache_ref || undefined,
+            registryRef: distribution.ref,
+            registryUsername: distribution.username,
+            registryPassword: distribution.password,
             registryToken,
             allowArchiveFallback: db.getSettings().allow_archive_image_transfer === "1",
             onProgress: (line) => emit("transfer", line),
+            onStorage: (storage) => {
+              const deployment = db.getLastSuccessfulDeployment(app.id);
+              if (deployment) db.updateDeploymentStorage(deployment.id, {
+                image_size_bytes: storage.imageBytes,
+                archive_size_bytes: storage.archiveBytes,
+                transfer_size_bytes: storage.transferBytes,
+              });
+            },
           },
         );
       }

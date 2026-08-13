@@ -10,7 +10,7 @@ import { syncAllTraefik } from "../scale/traefik-manager.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { reconcileAppDns } from "../dns-reconciler.ts";
 import { registerOp } from "./registry.ts";
-import { softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
+import { assertCleanupComplete, softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
 type DestroyInput = {
@@ -203,7 +203,9 @@ const deleteVolume: Step<DestroyInput, { ok: boolean; error?: string }> = {
   },
 };
 
-const deleteDbRows: Step<DestroyInput, { ok: true }> = {
+type DeleteDbRowsOut = { ok: boolean; failed: boolean; failedSteps: string[] };
+
+const deleteDbRows: Step<DestroyInput, DeleteDbRowsOut> = {
   name: "delete_db_rows",
   label: "Delete DB rows",
   async run(ctx, prior) {
@@ -213,17 +215,38 @@ const deleteDbRows: Step<DestroyInput, { ok: true }> = {
     if (failedSteps.length > 0) {
       try { db.updateAppStatus(ctx.input.appId, "cleanup_failed"); } catch { /* ignore */ }
       ctx.log(`Some resources could not be cleaned up (failed: ${failedSteps.join(", ")}) — app marked cleanup_failed`);
-      return { ok: true };
+      return { ok: false, failed: true, failedSteps };
     }
     const replicas = db.getReplicas(ctx.input.appId);
+    const dbFailures: string[] = [];
     for (const replica of replicas) {
-      await softStep(ctx, `delete_replica ${replica.id}`, async () => {
+      const result = await softStep(ctx, `delete_replica ${replica.id}`, async () => {
         db.deleteReplica(replica.id);
       });
+      if (!result.ok) dbFailures.push(`replica:${replica.id}`);
     }
-    await softStep(ctx, "delete_app", async () => {
-      db.deleteApp(ctx.input.appId);
-    });
+    // Preserve the app as the retry/recovery anchor when a child row could not
+    // be removed. Deleting it may cascade the evidence needed for recovery.
+    if (dbFailures.length === 0) {
+      const result = await softStep(ctx, "delete_app", async () => {
+        db.deleteApp(ctx.input.appId);
+      });
+      if (!result.ok) dbFailures.push(`app:${ctx.input.appId}`);
+    }
+    if (dbFailures.length > 0) {
+      try { db.updateAppStatus(ctx.input.appId, "cleanup_failed"); } catch { /* ignore */ }
+      ctx.log(`Database cleanup failed (${dbFailures.join(", ")}) — app marked cleanup_failed`);
+      return { ok: false, failed: true, failedSteps: dbFailures };
+    }
+    return { ok: true, failed: false, failedSteps: [] };
+  },
+};
+
+const assertDbCleanup: Step<DestroyInput, { ok: true }> = {
+  name: "assert_db_cleanup",
+  label: "Verify cleanup completed",
+  async run(_ctx, prior) {
+    assertCleanupComplete(prior, ["delete_db_rows"]);
     return { ok: true };
   },
 };
@@ -247,6 +270,7 @@ const destroyAppOp: OpKindDefinition<DestroyInput> = {
     deleteDbRows,
     removeIngressRoute,
     gcEmptyServers,
+    assertDbCleanup,
   ],
 };
 

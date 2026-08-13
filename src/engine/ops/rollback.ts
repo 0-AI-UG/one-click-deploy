@@ -13,6 +13,7 @@ import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
+import { preflightBuildDiskSpace } from "../hetzner/disk-space.ts";
 
 type RollbackInput = {
   appId: number;
@@ -128,12 +129,26 @@ const rebuildImage: Step<{ appId: number }, RebuildOut> = {
     }
     // Shares cloneAndBuild's build invocation so the rebuilt image carries the
     // OCD_IMAGE_LABEL — without it a rollback image escapes the scoped prune.
-    await buildAppImage(server.ipv4, {
-      appDir,
-      imageTag: `${app.name}:latest`,
-      dockerfilePath,
-      dockerContext: app.docker_context || undefined,
-    }, hostKey);
+    const reservation = await preflightBuildDiskSpace({
+      ip: server.ipv4,
+      appName: app.name,
+      contextPath: `${appDir}/${app.docker_context || "."}`,
+      registryBacked: true,
+      hostKey,
+      onProgress: (line) => ctx.log(`[disk] ${line}`),
+    });
+    try {
+      await buildAppImage(server.ipv4, {
+        appDir,
+        imageTag: `${app.name}:latest`,
+        dockerfilePath,
+        dockerContext: app.docker_context || undefined,
+        onHeartbeat: () => { void reservation.refresh(); },
+      }, hostKey);
+      await reservation.replace(0);
+    } finally {
+      await reservation.release();
+    }
     return { dockerfilePath };
   },
 };
@@ -289,10 +304,15 @@ const recordRollback: Step<RollbackInput, { deploymentId: number }> = {
   label: "Record rollback",
   async run(ctx, prior) {
     const target = prior["load_target_deployment"] as TargetOut;
+    const sourceDeployment = db.getDeployment(ctx.input.deploymentId);
     const row = db.insertDeployment({
+      operation_id: ctx.opId,
       app_id: target.appId,
       image_tag: target.imageTag,
       image_digest: target.imageDigest || "",
+      image_size_bytes: sourceDeployment?.image_size_bytes,
+      archive_size_bytes: sourceDeployment?.archive_size_bytes,
+      transfer_size_bytes: sourceDeployment?.transfer_size_bytes,
       git_commit: `rollback-from-${target.gitCommit}`,
       config_revision: db.getApp(target.appId)?.config_revision ?? 1,
     });

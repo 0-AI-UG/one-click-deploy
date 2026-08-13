@@ -82,6 +82,21 @@ export async function ensureBindMount(opts: {
   });
 }
 
+/** Teardown of a host bind mount. Idempotent, but surfaces SSH failures. */
+export async function removeBindMount(opts: {
+  serverIp: string;
+  hostKey: string;
+  hostMountPath: string;
+  appId: number;
+}): Promise<void> {
+  await _removeVolumeBindMount({
+    serverIp: opts.serverIp,
+    hostKey: opts.hostKey || undefined,
+    hostMountPath: opts.hostMountPath,
+    blockName: `app-${opts.appId}`,
+  });
+}
+
 /** Best-effort teardown of a host bind mount (Hetzner only; never throws). */
 export async function removeBindMountBestEffort(opts: {
   serverIp: string;
@@ -90,12 +105,7 @@ export async function removeBindMountBestEffort(opts: {
   appId: number;
 }): Promise<void> {
   try {
-    await _removeVolumeBindMount({
-      serverIp: opts.serverIp,
-      hostKey: opts.hostKey || undefined,
-      hostMountPath: opts.hostMountPath,
-      blockName: `app-${opts.appId}`,
-    });
+    await removeBindMount(opts);
   } catch {
     /* best-effort */
   }

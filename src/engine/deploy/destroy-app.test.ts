@@ -402,6 +402,20 @@ describe("destroyServer", () => {
     expect(db.getServer(server.id)).toBeFalsy();
   });
 
+  test("retains the cloud server when a child app cleanup fails", async () => {
+    const server = freshServer();
+    const app = freshApp();
+    attachReplica(app.id, server.id, app.name);
+    removeContainer.mockImplementationOnce(async () => { throw new Error("ssh down"); });
+
+    const result = await destroyServer(server.id);
+
+    expect(result.ok).toBe(false);
+    expect(compute._mocks.deleteServer).not.toHaveBeenCalled();
+    expect(db.getServer(server.id)?.status).toBe("cleanup_failed");
+    expect(db.getApp(app.id)?.status).toBe("cleanup_failed");
+  });
+
   test("returns error for unknown server id", async () => {
     const result = await destroyServer(999_999);
     expect(result.ok).toBe(false);

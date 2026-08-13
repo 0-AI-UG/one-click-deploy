@@ -107,11 +107,16 @@ const recordPromotion: Step<PromoteInput, { deploymentId: number }> = {
     const target = prior["load_target_deployment"] as TargetOut;
     const source = db.getApp(ctx.input.sourceAppId);
     const sourceName = source?.name ?? `app:${ctx.input.sourceAppId}`;
+    const sourceDeployment = db.getLastSuccessfulDeployment(ctx.input.sourceAppId);
     // git_commit is the real promoted commit (a valid future rollback target);
     // the promotion provenance lives in `source`.
     const row = db.insertDeployment({
+      operation_id: ctx.opId,
       app_id: target.appId,
       image_tag: target.imageTag,
+      image_size_bytes: sourceDeployment?.image_size_bytes,
+      archive_size_bytes: sourceDeployment?.archive_size_bytes,
+      transfer_size_bytes: sourceDeployment?.transfer_size_bytes,
       git_commit: target.gitCommit,
       config_revision: db.getApp(target.appId)?.config_revision ?? 1,
       source: `promote-from-${sourceName}@${target.gitCommit}`,

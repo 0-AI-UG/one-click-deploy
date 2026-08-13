@@ -153,6 +153,29 @@ export function insertServiceInstance(data: {
     ) as ServiceInstanceRow;
 }
 
+/**
+ * Register a service and its primary placement as one durable boundary.
+ * Selecting the host port inside the transaction prevents a service row from
+ * being stranded without an instance and serializes concurrent allocations on
+ * the same SQLite writer.
+ */
+export function insertServiceWithPrimaryInstance(
+  service: Parameters<typeof insertService>[0] | ((hostPort: number) => Parameters<typeof insertService>[0]),
+  instance: Omit<Parameters<typeof insertServiceInstance>[0], "service_id" | "host_port">,
+): { service: ServiceRow; instance: ServiceInstanceRow } {
+  const tx = db.transaction(() => {
+    const hostPort = nextServiceHostPort(instance.server_id);
+    const serviceRow = insertService(typeof service === "function" ? service(hostPort) : service);
+    const instanceRow = insertServiceInstance({
+      ...instance,
+      service_id: serviceRow.id,
+      host_port: hostPort,
+    });
+    return { service: serviceRow, instance: instanceRow };
+  });
+  return tx();
+}
+
 export function getServiceInstances(serviceId: number): ServiceInstanceRow[] {
   return db
     .query("SELECT * FROM service_instances WHERE service_id = ? ORDER BY created_at ASC")

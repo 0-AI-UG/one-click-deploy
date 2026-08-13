@@ -60,11 +60,11 @@ export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
  * Periodic disk cleanup. Two tiers based on disk pressure:
  *
  *   - Normal (root fs < 75% used): removes dangling images, foreign stopped
- *     containers, and ALL build cache (build cache is reproducible).
+ *     containers, stale OCD commit tags, and unused build cache older than a
+ *     week.
  *
- *   - Pressure (root fs >= 75%): also prunes all dangling layers, but still
- *     preserves tagged current, desired, and rollback images. Operators get
- *     disk-pressure visibility without GC invalidating a deployment revision.
+ *   - Pressure (root fs >= 75%): additionally prunes all unused BuildKit cache,
+ *     but still preserves running/stopped-anchor, current, and rollback images.
  *
  * NOTE: the container prune always excludes OCD-managed containers
  * (label!=ocd.managed=true). A sleeping app keeps its last container as a
@@ -84,7 +84,245 @@ export type PruneServerOptions = {
    * image plus one previous revision. Panel images are registry-built and do
    * not carry the ocd.managed label used by app image GC. */
   panelContainerName?: string;
+  /** Reclaim all unused BuildKit cache instead of only cache older than a week. */
+  underPressure?: boolean;
 };
+
+export type GcImageCategory =
+  | "running"
+  | "stopped-anchor"
+  | "current"
+  | "rollback"
+  | "reclaimable-ocd"
+  | "reclaimable-foreign";
+
+export type GcImageAsset = {
+  category: GcImageCategory;
+  id: string;
+  size_bytes: number;
+  refs: string[];
+};
+
+export type ServerGcInventory = {
+  server_ip: string;
+  images: GcImageAsset[];
+  reclaimable_image_bytes: number;
+  reclaimable_ocd_image_bytes: number;
+  reclaimable_foreign_image_bytes: number;
+  buildkit_reclaimable_bytes: number | null;
+  buildkit_reclaimable_display: string;
+  buildkit_policy: string;
+  free_bytes_before: number;
+  free_bytes_after: number;
+  free_bytes_delta: number;
+  reclaimed_bytes: number;
+  removed_image_ids: string[];
+  skipped_image_ids: string[];
+  executed: boolean;
+};
+
+type GcRunOptions = { activeAppNames: string[]; protectedImageRefs?: string[]; execute: boolean };
+
+/** Parse the decimal units emitted by `docker system df`. */
+export function parseDockerSize(value: string): number | null {
+  const match = value.trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|kB|MB|GB|TB|KiB|MiB|GiB|TiB)\b/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  const unit = match[2].toLowerCase();
+  const powers: Record<string, number> = {
+    b: 1,
+    kb: 1_000,
+    mb: 1_000_000,
+    gb: 1_000_000_000,
+    tb: 1_000_000_000_000,
+    kib: 1_024,
+    mib: 1_024 ** 2,
+    gib: 1_024 ** 3,
+    tib: 1_024 ** 4,
+  };
+  return Math.round(amount * powers[unit]);
+}
+
+/**
+ * Build one fail-closed host transaction. Docker's own metadata is treated as
+ * authoritative: every image inspect must succeed, and execution revalidates
+ * container ancestry plus current/rollback refs immediately before removal.
+ * The exclusive OCD lock prevents deploy/build races for the whole inventory
+ * and removal pass; Docker itself rejects removal of an externally-raced image.
+ */
+export function buildServerGcScript(opts: GcRunOptions): string {
+  const activeNames = safeNames(opts.activeAppNames);
+  const protectedImageRefs = safeImageRefs(opts.protectedImageRefs ?? []);
+  const activePattern = activeNames.length
+    ? activeNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+    : "ocd-no-active-app";
+  const lines = [
+    "set -eu",
+    `active_pattern='${activePattern}'`,
+    "free_before=$(df -B1 --output=avail / | tail -1 | tr -d ' ')",
+    "running_images=''",
+    "stopped_images=''",
+    "protected_images=''",
+    ...protectedImageRefs.map((ref) =>
+      `if protected_id=$(docker image inspect --format '{{.Id}}' '${ref}' 2>/dev/null); then protected_images="$protected_images\n$protected_id"; fi`
+    ),
+    "running_containers=$(docker ps -q)",
+    "all_containers=$(docker ps -aq)",
+    "for cid in $all_containers; do",
+    `  image=$(docker inspect --format '{{.Image}}' "$cid")`,
+    `  if printf '%s\\n' "$running_containers" | grep -Fxq "$cid"; then running_images="$running_images\n$image"; else stopped_images="$stopped_images\n$image"; fi`,
+    "done",
+    "reclaimable_ids=''",
+    "image_ids=$(docker image ls -aq --no-trunc | sort -u)",
+    "for id in $image_ids; do",
+    `  record=$(docker image inspect --format '{{.Id}}|{{.Size}}|{{json .RepoTags}}|{{index .Config.Labels "ocd.managed"}}' "$id")`,
+    `  actual_id=${"${record%%|*}"}; rest=${"${record#*|}"}; size=${"${rest%%|*}"}; rest=${"${rest#*|}"}; refs=${"${rest%%|*}"}; managed=${"${rest##*|}"}`,
+    `  [ "$actual_id" = "$id" ] || { echo "Docker returned mismatched image metadata for $id" >&2; exit 42; }`,
+    "  category=reclaimable-foreign",
+    `  printf '%b\\n' "$running_images" | grep -Fxq "$id" && category=running`,
+    `  if [ "$category" = reclaimable-foreign ] && printf '%b\\n' "$stopped_images" | grep -Fxq "$id"; then category=stopped-anchor; fi`,
+    `  if [ "$category" = reclaimable-foreign ] && printf '%b\\n' "$protected_images" | grep -Fxq "$id"; then category=rollback; fi`,
+    `  if [ "$category" = reclaimable-foreign ] && printf '%s' "$refs" | grep -Eq "\"($active_pattern):latest\""; then category=current; fi`,
+    `  if [ "$category" = reclaimable-foreign ] && printf '%s' "$refs" | grep -Eq "\"($active_pattern):rollback\""; then category=rollback; fi`,
+    `  if [ "$category" = reclaimable-foreign ] && [ "$managed" = true ]; then category=reclaimable-ocd; fi`,
+    `  printf 'OCD_GC\\t%s\\t%s\\t%s\\t%s\\n' "$category" "$id" "$size" "$refs"`,
+    `  case "$category" in reclaimable-ocd|reclaimable-foreign) reclaimable_ids="$reclaimable_ids $id" ;; esac`,
+    "done",
+    `buildkit_reclaimable=$(docker system df --format '{{.Type}}|{{.Reclaimable}}' 2>/dev/null | awk -F '|' '$1 == "Build Cache" { print $2; exit }' || true)`,
+    `printf 'OCD_BUILDKIT\\t%s\\n' "${"${buildkit_reclaimable:-unknown}"}"`,
+  ];
+  if (opts.execute) {
+    lines.push(
+      "for id in $reclaimable_ids; do",
+      // Recheck all container states, not only running containers. No force is
+      // used, so Docker remains the final safety barrier for external races.
+      `  if docker ps -aq --filter ancestor="$id" | grep -q .; then printf 'OCD_SKIPPED\\t%s\\n' "$id"; continue; fi`,
+      `  refs=$(docker image inspect --format '{{json .RepoTags}}' "$id" 2>/dev/null) || { printf 'OCD_SKIPPED\\t%s\\n' "$id"; continue; }`,
+      `  if printf '%b\\n' "$protected_images" | grep -Fxq "$id"; then printf 'OCD_SKIPPED\\t%s\\n' "$id"; continue; fi`,
+      `  if printf '%s' "$refs" | grep -Eq "\"($active_pattern):(latest|rollback)\""; then printf 'OCD_SKIPPED\\t%s\\n' "$id"; continue; fi`,
+      `  tag_list=$(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}' "$id" 2>/dev/null) || { printf 'OCD_SKIPPED\\t%s\\n' "$id"; continue; }`,
+      `  removal_ok=true; for ref in $tag_list; do docker image rm "$ref" >/dev/null 2>&1 || removal_ok=false; done`,
+      `  docker image rm "$id" >/dev/null 2>&1 || { docker image inspect "$id" >/dev/null 2>&1 && removal_ok=false || true; }`,
+      `  if [ "$removal_ok" = true ]; then printf 'OCD_REMOVED\\t%s\\n' "$id"; else printf 'OCD_SKIPPED\\t%s\\n' "$id"; fi`,
+      "done",
+      "docker builder prune -af >/dev/null",
+    );
+  }
+  lines.push(
+    "free_after=$(df -B1 --output=avail / | tail -1 | tr -d ' ')",
+    `printf 'OCD_SPACE\\t%s\\t%s\\n' "$free_before" "$free_after"`,
+  );
+  return lines.join("\n");
+}
+
+async function runServerGc(ip: string, hostKey: string | undefined, opts: GcRunOptions): Promise<ServerGcInventory> {
+  const result = await sshExec(ip, asUser(withExclusiveImageGc(buildServerGcScript(opts))), hostKey);
+  if (result.exitCode !== 0) {
+    const action = opts.execute ? "Garbage collection" : "Docker storage inventory";
+    throw new Error(`${action} failed on ${ip}: ${result.stderr.trim() || `exit ${result.exitCode}`}`);
+  }
+  const images: GcImageAsset[] = [];
+  const removedImageIds: string[] = [];
+  const skippedImageIds: string[] = [];
+  let buildkitDisplay = "unknown";
+  let freeBefore = 0;
+  let freeAfter = 0;
+  let sawSpace = false;
+  let sawBuildkit = false;
+  const categories = new Set<GcImageCategory>([
+    "running", "stopped-anchor", "current", "rollback", "reclaimable-ocd", "reclaimable-foreign",
+  ]);
+  for (const line of result.stdout.split("\n")) {
+    if (line.startsWith("OCD_GC\t")) {
+      const [, category, id, sizeRaw, refsRaw] = line.split("\t", 5);
+      if (!categories.has(category as GcImageCategory) || !/^sha256:[0-9a-f]{64}$/.test(id) || !/^\d+$/.test(sizeRaw)) {
+        throw new Error(`Docker returned malformed image metadata on ${ip}`);
+      }
+      let refs: string[] = [];
+      try {
+        const parsed = JSON.parse(refsRaw || "[]");
+        if (parsed === null) refs = [];
+        else if (Array.isArray(parsed) && parsed.every((ref) => typeof ref === "string")) refs = parsed;
+        else throw new Error("invalid RepoTags");
+      } catch {
+        throw new Error(`Docker returned malformed image metadata on ${ip}`);
+      }
+      images.push({ category: category as GcImageCategory, id, size_bytes: Math.max(0, Number(sizeRaw) || 0), refs });
+    } else if (line.startsWith("OCD_BUILDKIT\t")) {
+      buildkitDisplay = line.slice("OCD_BUILDKIT\t".length).trim() || "unknown";
+      sawBuildkit = true;
+    } else if (line.startsWith("OCD_REMOVED\t")) {
+      removedImageIds.push(line.slice("OCD_REMOVED\t".length).trim());
+    } else if (line.startsWith("OCD_SKIPPED\t")) {
+      skippedImageIds.push(line.slice("OCD_SKIPPED\t".length).trim());
+    } else if (line.startsWith("OCD_SPACE\t")) {
+      const [, beforeRaw, afterRaw] = line.split("\t", 3);
+      freeBefore = Math.max(0, Number(beforeRaw) || 0);
+      freeAfter = Math.max(0, Number(afterRaw) || 0);
+      sawSpace = /^\d+$/.test(beforeRaw) && /^\d+$/.test(afterRaw);
+    }
+  }
+  if (!sawSpace || !sawBuildkit) throw new Error(`Docker storage inventory on ${ip} returned an incomplete response`);
+  const isReclaimable = (image: GcImageAsset) => image.category.startsWith("reclaimable-");
+  const reclaimableOcd = images.filter((image) => image.category === "reclaimable-ocd").reduce((sum, image) => sum + image.size_bytes, 0);
+  const reclaimableForeign = images.filter((image) => image.category === "reclaimable-foreign").reduce((sum, image) => sum + image.size_bytes, 0);
+  const freeDelta = freeAfter - freeBefore;
+  if (opts.execute) {
+    const accounted = new Set([...removedImageIds, ...skippedImageIds]);
+    const unaccounted = images.filter(isReclaimable).find((image) => !accounted.has(image.id));
+    if (unaccounted) throw new Error(`Garbage collection on ${ip} did not account for image ${unaccounted.id}`);
+  }
+  return {
+    server_ip: ip,
+    images,
+    reclaimable_image_bytes: images.filter(isReclaimable).reduce((sum, image) => sum + image.size_bytes, 0),
+    reclaimable_ocd_image_bytes: reclaimableOcd,
+    reclaimable_foreign_image_bytes: reclaimableForeign,
+    buildkit_reclaimable_bytes: parseDockerSize(buildkitDisplay),
+    buildkit_reclaimable_display: buildkitDisplay,
+    buildkit_policy: "all unused BuildKit cache is reclaimable; execute prunes it after image revalidation",
+    free_bytes_before: freeBefore,
+    free_bytes_after: freeAfter,
+    free_bytes_delta: freeDelta,
+    reclaimed_bytes: Math.max(0, freeDelta),
+    removed_image_ids: removedImageIds,
+    skipped_image_ids: skippedImageIds,
+    executed: opts.execute,
+  };
+}
+
+/**
+ * Inventory images by protection reason using exact IDs. Shared layers mean
+ * image sizes are not additive; `reclaimable_image_bytes` is therefore an
+ * upper bound and the response states that caveat at the CLI boundary.
+ */
+export async function inspectServerGc(
+  ip: string,
+  hostKey?: string,
+  opts: { activeAppNames?: string[]; protectedImageRefs?: string[] } = {},
+): Promise<ServerGcInventory> {
+  return runServerGc(ip, hostKey, {
+    activeAppNames: opts.activeAppNames ?? [],
+    protectedImageRefs: opts.protectedImageRefs,
+    execute: false,
+  });
+}
+
+/** Remove every inventory-proven unused image (OCD and foreign/unlabelled),
+ * equivalent to Docker's `image prune -a` eligibility, while retaining every
+ * container ancestor and OCD current/rollback asset; then trim build cache. */
+export async function garbageCollectServer(
+  ip: string,
+  hostKey?: string,
+  opts: { activeAppNames?: string[]; protectedImageRefs?: string[] } = {},
+): Promise<ServerGcInventory> {
+  return runServerGc(ip, hostKey, {
+    activeAppNames: opts.activeAppNames ?? [],
+    protectedImageRefs: opts.protectedImageRefs,
+    execute: true,
+  });
+}
 
 function safeNames(names: string[]): string[] {
   const unique = [...new Set(names)];
@@ -95,6 +333,13 @@ function safeNames(names: string[]): string[] {
     // maintenance can retry after the bad row is repaired.
     throw new Error(`Unsafe Docker name in prune protection set: ${JSON.stringify(unsafe)}`);
   }
+  return unique;
+}
+
+function safeImageRefs(refs: string[]): string[] {
+  const unique = [...new Set(refs.filter(Boolean))];
+  const unsafe = unique.find((ref) => !/^[a-zA-Z0-9][a-zA-Z0-9_./:@+-]*$/.test(ref));
+  if (unsafe) throw new Error(`Unsafe Docker image reference in GC protection set: ${JSON.stringify(unsafe)}`);
   return unique;
 }
 
@@ -117,10 +362,14 @@ export function buildServerPruneSteps(opts: PruneServerOptions = {}): string[] {
   ];
 
   if (activeAppNames.length > 0) {
-    const keep = activeAppNames.map((name) => `${name}:*`).join("|");
+    const active = activeAppNames.join("|");
     steps.push(
       `for ref in $(docker images --filter label=${OCD_IMAGE_LABEL} --format '{{.Repository}}:{{.Tag}}'); do ` +
-        `case "$ref" in ${keep}) ;; *) docker image rm "$ref" >/dev/null 2>&1 || true ;; esac; done`,
+        `repo=${"${ref%:*}"}; tag=${"${ref##*:}"}; ` +
+        `case "$repo" in ${active}) ` +
+        `case "$tag" in latest|rollback) ;; *) ` +
+        `docker ps -aq --filter ancestor="$ref" | grep -q . || docker image rm "$ref" >/dev/null 2>&1 || true ;; esac ` +
+        `;; *) docker image rm "$ref" >/dev/null 2>&1 || true ;; esac; done`,
     );
   } else {
     steps.push(
@@ -146,7 +395,9 @@ export function buildServerPruneSteps(opts: PruneServerOptions = {}): string[] {
   steps.push(
     `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
     `docker image prune -f 2>&1 | tail -1`,
-    `docker builder prune -af 2>&1 | tail -1`,
+    opts.underPressure
+      ? `docker builder prune -af 2>&1 | tail -1`
+      : `docker builder prune -f --filter until=168h 2>&1 | tail -1`,
   );
   return steps;
 }
@@ -160,7 +411,7 @@ export async function pruneServer(ip: string, hostKey?: string, opts: PruneServe
   const usedPct = parseInt(usage.stdout.trim(), 10) || 0;
   const underPressure = usedPct >= 75;
 
-  const steps = buildServerPruneSteps(opts);
+  const steps = buildServerPruneSteps({ ...opts, underPressure });
   const result = await sshExec(ip, asUser(withExclusiveImageGc(steps.join("; "))), hostKey);
   const tag = underPressure ? "prune(pressure)" : "prune";
   log(tag, `Server ${ip} (disk ${usedPct}%): ${result.stdout.trim().replace(/\n/g, " | ")}`);

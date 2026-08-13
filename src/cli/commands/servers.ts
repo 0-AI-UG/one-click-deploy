@@ -2,6 +2,7 @@ import { del, get, patch, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { webConfirm, withWebConfirmation } from "../confirm.ts";
 import { BOLD, DIM, GREEN, RED, RESET, colorStatus, table } from "../format.ts";
+import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
 
 interface Server {
   id: number;
@@ -214,10 +215,9 @@ async function setPool(ref: string, pool: string): Promise<void> {
 }
 
 async function metrics(args: string[]): Promise<void> {
-  const ref = args.find((arg) => !arg.startsWith("-"));
-  const sinceArg = args.find((arg) => arg.startsWith("--since="));
-  const since = sinceArg ? parseInt(sinceArg.slice(8), 10) : 3600;
-  if (!Number.isInteger(since) || since < 1) throw new Error("--since must be a positive number of seconds");
+  const parsed = parseCliArgs(args, { since: { type: "string" } }, { maxPositionals: 1 });
+  const ref = parsed.positionals[0];
+  const since = positiveIntegerFlag(parsed.flags.since, "since", { defaultValue: 3600 })!;
   const server = ref ? await resolveServer(ref) : undefined;
   const samples = await get<Array<{ server_id: number; cpu_percent: number; memory_percent: number; sampled_at: string }>>(
     `/api/resources/metrics/history?since=${since}`,

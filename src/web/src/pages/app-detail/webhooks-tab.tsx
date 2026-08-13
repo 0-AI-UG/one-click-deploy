@@ -70,8 +70,15 @@ export function WebhooksTab({ app, appId, action, ops }: WebhooksTabProps) {
           {app.webhook_enabled && (
             <>
               <div className="flex justify-between"><span className="text-muted">Branch</span><span>{app.webhook_branch || "main"}</span></div>
-              <div className="flex justify-between"><span className="text-muted">Path filter</span><span>{app.webhook_path || "—"}</span></div>
+              <div className="flex justify-between gap-4"><span className="text-muted">Paths</span><span className="text-right">{app.webhook_paths?.length ? app.webhook_paths.join(", ") : "All pushes"}</span></div>
+              <div className="flex justify-between gap-4"><span className="text-muted">Paths ignored</span><span className="text-right">{app.webhook_paths_ignore?.length ? app.webhook_paths_ignore.join(", ") : "—"}</span></div>
               <div className="flex justify-between"><span className="text-muted">Wait for CI</span><span>{app.webhook_wait_for_ci ? "Yes" : "No"}</span></div>
+              <div className="flex justify-between"><span className="text-muted">Last received</span><span>{app.last_webhook_head?.slice(0, 12) || "—"}</span></div>
+              <div className="flex justify-between"><span className="text-muted">Last evaluated</span><span>{app.last_evaluated_commit?.slice(0, 12) || "—"}</span></div>
+              <div className="flex justify-between"><span className="text-muted">Last CI result</span><span>{app.last_webhook_ci_result || "—"}</span></div>
+              <div className="flex justify-between"><span className="text-muted">Last decision</span><span>{app.last_decision || "—"}</span></div>
+              <div className="flex justify-between gap-4"><span className="text-muted">Last matching paths</span><span className="text-right">{app.last_matching_paths?.join(", ") || "—"}</span></div>
+              <div className="flex justify-between"><span className="text-muted">Last deployed commit</span><span>{app.last_successfully_deployed_commit?.slice(0, 12) || "—"}</span></div>
               <div className="flex justify-between"><span className="text-muted">Staging environment</span><span>{staging?.staging_environment_id == null ? "Off" : `#${staging.staging_environment_id}`}</span></div>
             </>
           )}

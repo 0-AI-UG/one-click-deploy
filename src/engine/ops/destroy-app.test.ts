@@ -1,7 +1,7 @@
 import { useTempDataDir, randomSuffix } from "../../shared/test-helpers.ts";
 useTempDataDir();
 
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect, mock, spyOn } from "bun:test";
 
 // The sibling-cascade step touches neither hosts nor providers, but destroy-app
 // imports both at module scope — stub them so the op can be loaded in-process.
@@ -14,6 +14,7 @@ mock.module("../scale/traefik-manager.ts", () => ({ syncAllTraefik: mock(async (
 import * as db from "../../shared/db.ts";
 import { enqueueOperation, listChildOperations, markOperationFinished } from "../../shared/db/operations.ts";
 import destroyAppOp from "./destroy-app.ts";
+import destroyServiceOp from "./destroy-service.ts";
 import type { OpContext } from "../types.ts";
 
 type Input = { appId: number };
@@ -152,4 +153,60 @@ describe("destroy_app staging-sibling cascade", () => {
     expect(resumed.childIds).toEqual(first.childIds);
     expect(listChildOperations(parent.id)).toHaveLength(1);
   }, 30000);
+});
+
+describe("destructive DB cleanup gates", () => {
+  test("destroy_app records a DB deletion failure and the final gate rejects success", async () => {
+    const app = seedApp(`db-fail-${randomSuffix()}`);
+    const parent = parentOp(app.id);
+    const ctx = makeCtx({ appId: app.id }, parent.id);
+    const deleteRows = destroyAppOp.steps.find((s) => s.name === "delete_db_rows")!;
+    const gate = destroyAppOp.steps.find((s) => s.name === "assert_db_cleanup")!;
+    const deleteSpy = spyOn(db, "deleteApp").mockImplementationOnce(() => {
+      throw new Error("sqlite busy");
+    });
+    try {
+      const output = await deleteRows.run(ctx, {});
+      expect(output).toMatchObject({ ok: false, failed: true });
+      expect(db.getApp(app.id)?.status).toBe("cleanup_failed");
+      await expect(gate.run(ctx, { delete_db_rows: output })).rejects.toThrow(/cleanup incomplete/i);
+    } finally {
+      deleteSpy.mockRestore();
+    }
+  });
+
+  test("destroy_service env-removal failures reach DB cleanup and preserve the service", async () => {
+    const service = db.insertService({
+      name: `svc-${randomSuffix()}`,
+      service_type: "postgres",
+      version: "16",
+      port: 5432,
+      env_vars: "{}",
+      credentials: "{}",
+    });
+    const environment = db.insertEnvironment(`env-${randomSuffix()}`, JSON.stringify({ DATABASE_URL: "postgres://db" }));
+    db.insertServiceLink(service.id, environment.id, "DATABASE");
+    const removeEnv = destroyServiceOp.steps.find((s) => s.name === "remove_env_vars_from_linked_environments")!;
+    const deleteRows = destroyServiceOp.steps.find((s) => s.name === "delete_db_rows")!;
+    const gate = destroyServiceOp.steps.find((s) => s.name === "assert_db_cleanup")!;
+    const ctx = makeCtx({ appId: service.id }, parentOp(999_999).id) as unknown as OpContext<any>;
+    ctx.kind = "destroy_service";
+    ctx.input = { serviceId: service.id };
+
+    const updateSpy = spyOn(db, "updateEnvironment").mockImplementationOnce(() => {
+      throw new Error("sqlite busy");
+    });
+    const envOutput = await removeEnv.run(ctx, {});
+    updateSpy.mockRestore();
+    expect(envOutput).toEqual({
+      ok: false,
+      failed: true,
+      failedEnvironmentIds: [environment.id],
+    });
+
+    const output = await deleteRows.run(ctx, { remove_env_vars_from_linked_environments: envOutput });
+    expect(output).toMatchObject({ ok: false, failed: true });
+    expect(db.getService(service.id)?.status).toBe("cleanup_failed");
+    await expect(gate.run(ctx, { delete_db_rows: output })).rejects.toThrow(/cleanup incomplete/i);
+  });
 });

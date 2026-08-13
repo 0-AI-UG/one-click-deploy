@@ -8,7 +8,7 @@ import {
   removeBindMountBestEffort,
   type SingleReplicaTarget,
 } from "./_volumes.ts";
-import type { OpKindDefinition, Step } from "../types.ts";
+import { FatalProbeError, type OpKindDefinition, type Step } from "../types.ts";
 
 // Attach an EXISTING Hetzner volume to the app's single replica. Same shape as
 // attach_volume, but the volume step ATTACHES rather than creates (so its
@@ -17,7 +17,7 @@ import type { OpKindDefinition, Step } from "../types.ts";
 
 type AttachExistingVolumeInput = { appId: number; volumeId: string; mountPath?: string };
 
-type ValidateOut = SingleReplicaTarget;
+type ValidateOut = SingleReplicaTarget & { priorMinReplicas: number; priorMaxReplicas: number };
 type AttachToAppOut = { priorMinReplicas: number; priorMaxReplicas: number; volumeMount: string };
 
 function hostMountPathFor(volumeId: string): string {
@@ -29,13 +29,18 @@ const validate: Step<AttachExistingVolumeInput, ValidateOut> = {
   label: "Validate preconditions",
   async run(ctx) {
     const target = loadSingleReplicaTarget(ctx.input.appId, { requireNoVolume: true });
+    const app = db.getApp(ctx.input.appId)!;
     const volInfo = await hetzner.volumes.get(ctx.input.volumeId);
     if (volInfo.location && volInfo.location !== target.serverLocation) {
       throw new Error(
         `Cannot attach: volume is in ${volInfo.location} but server is in ${target.serverLocation}`,
       );
     }
-    return target;
+    return {
+      ...target,
+      priorMinReplicas: app.min_replicas,
+      priorMaxReplicas: app.max_replicas,
+    };
   },
 };
 
@@ -50,12 +55,29 @@ const attachVolume: Step<AttachExistingVolumeInput, { hostMountPath: string }> =
         ctx.log(`volume ${ctx.input.volumeId} already attached to server ${target.providerServerId}`);
         return { hostMountPath: hostMountPathFor(ctx.input.volumeId) };
       }
-    } catch { /* fall through to run */ }
+      if (info.serverId != null) {
+        throw new FatalProbeError(
+          `Volume ${ctx.input.volumeId} is attached to unexpected server ${info.serverId}; refusing to move it implicitly`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof FatalProbeError) throw error;
+      throw new FatalProbeError(
+        `Cannot verify attachment state for volume ${ctx.input.volumeId}; refusing an unsafe attach`,
+        { cause: error },
+      );
+    }
     return null;
   },
   async run(ctx, prior) {
     const target = prior["validate"] as ValidateOut;
     await hetzner.volumes.attach(ctx.input.volumeId, target.providerServerId);
+    const confirmed = await hetzner.volumes.get(ctx.input.volumeId);
+    if (confirmed.serverId !== target.providerServerId) {
+      throw new Error(
+        `Provider did not confirm volume ${ctx.input.volumeId} on server ${target.providerServerId}`,
+      );
+    }
     return { hostMountPath: hostMountPathFor(ctx.input.volumeId) };
   },
   async compensate(ctx) {
@@ -108,13 +130,39 @@ const bindMount: Step<AttachExistingVolumeInput, { ok: true }> = {
 const attachToApp: Step<AttachExistingVolumeInput, AttachToAppOut> = {
   name: "attach_to_app",
   label: "Record volume on app",
-  async run(ctx) {
+  async probe(ctx, prior) {
+    const before = prior["validate"] as ValidateOut;
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new FatalProbeError("App disappeared while recording its volume");
+    const volumeMount = `${hostMountPathFor(ctx.input.volumeId)}:${ctx.input.mountPath || "/data"}`;
+    if (app.volume_id && app.volume_id !== ctx.input.volumeId) {
+      throw new FatalProbeError(
+        `App already references unexpected volume ${app.volume_id}; refusing to overwrite it with ${ctx.input.volumeId}`,
+      );
+    }
+    if (
+      app.volume_id === ctx.input.volumeId &&
+      app.volume_mount === volumeMount &&
+      app.volume_attached === 1 &&
+      app.max_replicas === 1 &&
+      app.min_replicas === Math.min(1, before.priorMinReplicas)
+    ) {
+      return {
+        priorMinReplicas: before.priorMinReplicas,
+        priorMaxReplicas: before.priorMaxReplicas,
+        volumeMount,
+      };
+    }
+    return null;
+  },
+  async run(ctx, prior) {
+    const before = prior["validate"] as ValidateOut;
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
     const containerPath = ctx.input.mountPath || "/data";
     const volumeMount = `${hostMountPathFor(ctx.input.volumeId)}:${containerPath}`;
-    const priorMinReplicas = app.min_replicas;
-    const priorMaxReplicas = app.max_replicas;
+    const priorMinReplicas = before?.priorMinReplicas ?? app.min_replicas;
+    const priorMaxReplicas = before?.priorMaxReplicas ?? app.max_replicas;
     // attached=true: this is a pre-existing volume, so destroy must DETACH it,
     // never delete it (deleting would be data loss on a volume we don't own).
     db.updateAppVolume(ctx.input.appId, ctx.input.volumeId, volumeMount, true);

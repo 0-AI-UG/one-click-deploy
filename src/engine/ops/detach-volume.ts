@@ -3,13 +3,14 @@ import { hetzner } from "../../shared/providers/index.ts";
 import { recreateAppContainer } from "../deploy/index.ts";
 import { removeVolumeBindMount } from "../hetzner/host-mounts.ts";
 import { registerOp } from "./registry.ts";
-import { softStep } from "./_shared.ts";
+import { assertCleanupComplete, softStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
-// Detach a volume from an app. This is a pure REMOVAL, so it follows the
-// destroy pattern: every step is best-effort (softStep) and there are no
-// compensations — nothing to undo for a detach that partially succeeded. The
-// reconciler converges any leftover container state on its next pass.
+// Detach a volume from an app. This is a pure REMOVAL, so there are no
+// compensations — nothing to undo for a detach that partially succeeded.
+// Independent host/container cleanup is best-effort, followed by a hard gate
+// so an incomplete detach is surfaced for reconciliation rather than reported
+// as cleanly done.
 
 type DetachVolumeInput = { appId: number };
 
@@ -114,6 +115,22 @@ const recreateContainer: Step<DetachVolumeInput, { ok: boolean }> = {
   },
 };
 
+const assertDetachCleanup: Step<DetachVolumeInput, { ok: true }> = {
+  name: "assert_cleanup",
+  label: "Verify detach cleanup completed",
+  async run(ctx, prior) {
+    try {
+      assertCleanupComplete(prior, ["remove_bind_mount", "recreate_container"]);
+    } catch (err) {
+      // Provider and desired DB state may already have advanced. Surface the
+      // mismatch for reconciliation instead of claiming a clean detach.
+      try { db.updateAppStatus(ctx.input.appId, "cleanup_failed"); } catch { /* ignore */ }
+      throw err;
+    }
+    return { ok: true };
+  },
+};
+
 const detachVolumeOp: OpKindDefinition<DetachVolumeInput> = {
   kind: "detach_volume",
   label: "Detach volume",
@@ -121,7 +138,7 @@ const detachVolumeOp: OpKindDefinition<DetachVolumeInput> = {
     const volumeId = db.getApp(input.appId)?.volume_id;
     return [`app:${input.appId}`, ...(volumeId ? [`volume:${volumeId}`] : [])];
   },
-  steps: [validate, removeBindMount, detachVolume, clearAppVolume, recreateContainer],
+  steps: [validate, removeBindMount, detachVolume, clearAppVolume, recreateContainer, assertDetachCleanup],
 };
 
 registerOp(detachVolumeOp as OpKindDefinition<any>);

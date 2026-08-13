@@ -1,4 +1,3 @@
-import { restartApp } from "../deploy/lifecycle.ts";
 import { makeAppLifecycleOp, type AppLifecycleInput } from "./app-lifecycle.ts";
 
 const restartAppOp = makeAppLifecycleOp({
@@ -15,7 +14,8 @@ const restartAppOp = makeAppLifecycleOp({
     app.status === "cleanup_failed" ||
     app.status === "deploying",
   skipLog: (app) => `app ${app.name} status='${app.status}' — restart skipped`,
-  action: restartApp,
+  action: "restart",
+  requireReplicas: true,
 });
 
 export default restartAppOp;

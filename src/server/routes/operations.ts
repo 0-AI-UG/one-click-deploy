@@ -18,8 +18,9 @@ import {
 import { getSettings } from "../../shared/db/settings.ts";
 import { getApp } from "../../shared/db/apps.ts";
 import { getServer } from "../../shared/db/servers.ts";
+import { getService } from "../../shared/db/services.ts";
 import { stepCount, listOps, getOp } from "../../engine/ops/registry.ts";
-import { getOpLogs, getOpLogTail } from "../../engine/op-logger.ts";
+import { getFilteredOpLogs } from "../../engine/op-logger.ts";
 import { currentHolder } from "../../engine/scheduler.ts";
 import {
   applyOperationResourceStatus,
@@ -54,12 +55,16 @@ function redact(value: unknown): unknown {
 }
 
 function labelForResourceKey(key: string): string {
-  const m = /^(app|server):(\d+)$/.exec(key);
+  const m = /^(app|server|service):(\d+)$/.exec(key);
   if (!m) return key;
   const id = parseInt(m[2], 10);
   if (m[1] === "app") {
     const app = getApp(id);
     return app ? app.name : key;
+  }
+  if (m[1] === "service") {
+    const service = getService(id);
+    return service ? service.name : key;
   }
   const server = getServer(id);
   return server ? server.name : key;
@@ -189,15 +194,18 @@ export async function handleOperationEvents(request: Request, id: number): Promi
       if (steps.length > 0 || terminal) {
         const nextCursor = steps.reduce((max, step) => Math.max(max, step.seq), since);
         const children = listChildOperations(id).map(toJsonRow);
+        const latestLog = getFilteredOpLogs(id, { limit: 1, tail: true })[0] ?? null;
         return Response.json(
           {
             status: op.status,
             last_step: op.last_step,
+            started_at: op.started_at || op.enqueued_at,
             error: op.error_json ? safeParse(op.error_json, null) : null,
             steps: steps.map(mapStep),
             next_cursor: nextCursor,
             resumable: true,
             children,
+            latest_log: latestLog,
           },
           { headers: corsHeaders },
         );
@@ -207,8 +215,12 @@ export async function handleOperationEvents(request: Request, id: number): Promi
     // Timed out with no new events — client re-polls.
     const op = getOperation(id)!;
     const children = listChildOperations(id).map(toJsonRow);
+    const latestLog = getFilteredOpLogs(id, { limit: 1, tail: true })[0] ?? null;
     return Response.json(
-      { status: op.status, last_step: op.last_step, steps: [], next_cursor: since, resumable: true, children },
+      {
+        status: op.status, last_step: op.last_step, started_at: op.started_at || op.enqueued_at,
+        steps: [], next_cursor: since, resumable: true, children, latest_log: latestLog,
+      },
       { headers: corsHeaders },
     );
   } catch (err) {
@@ -224,14 +236,59 @@ export async function handleGetOperationLogs(request: Request, id: number): Prom
     const url = new URL(request.url);
     const since = parseInt(url.searchParams.get("since") || "0", 10);
     const tail = Math.min(Math.max(parseInt(url.searchParams.get("tail") || "0", 10) || 0, 0), 5000);
+    const sinceTimeRaw = url.searchParams.get("since_time") || "";
+    const sinceTime = sinceTimeRaw && Number.isFinite(Date.parse(sinceTimeRaw))
+      ? new Date(sinceTimeRaw).toISOString().replace("T", " ").slice(0, 19)
+      : "";
+    if (sinceTimeRaw && !sinceTime) {
+      return Response.json({ error: "since_time must be an ISO timestamp" }, { status: 400, headers: corsHeaders });
+    }
+    const phase = url.searchParams.get("phase") || "";
+    if (phase && !/^[a-zA-Z0-9_-]{1,80}$/.test(phase)) {
+      return Response.json({ error: "phase must be a step name, forward, or compensate" }, { status: 400, headers: corsHeaders });
+    }
+    const child = url.searchParams.get("child") || "";
+    let target = op;
+    if (child) {
+      const children = [] as ReturnType<typeof listChildOperations>;
+      const queue = [id];
+      const seen = new Set<number>();
+      while (queue.length > 0) {
+        const parentId = queue.shift()!;
+        if (seen.has(parentId)) continue;
+        seen.add(parentId);
+        for (const descendant of listChildOperations(parentId)) {
+          children.push(descendant);
+          queue.push(descendant.id);
+        }
+      }
+      const matchingChild = children.find((candidate) => String(candidate.id) === child) ??
+        children.find((candidate) => {
+          const row = toJsonRow(candidate);
+          const needle = child.toLowerCase();
+          return row.resource_labels.some((label) => label.toLowerCase() === needle) ||
+            row.resource_keys.some((key) => key.toLowerCase() === needle);
+        });
+      if (!matchingChild) {
+        return Response.json({ error: `Operation #${id} has no child matching ${child}` }, { status: 404, headers: corsHeaders });
+      }
+      target = matchingChild;
+    }
     const wait = parseInt(url.searchParams.get("wait") || "0", 10);
     const timeoutMs = Math.min(Math.max(wait, 0), 25000);
+    const readLogs = () => getFilteredOpLogs(target!.id, {
+      sinceId: since,
+      sinceTime,
+      phase,
+      limit: tail || 1000,
+      tail: tail > 0,
+    });
 
     if (timeoutMs > 0) {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        const logs = getOpLogs(id, since, 1000);
-        const cur = getOperation(id)!;
+        const logs = readLogs();
+        const cur = getOperation(target.id)!;
         const terminal = ["done", "failed", "cancelled", "compensated", "compensation_failed"].includes(cur.status);
         if (logs.length > 0 || terminal) {
           const nextCursor = logs.reduce((max, row) => Math.max(max, row.id), since);
@@ -242,13 +299,13 @@ export async function handleGetOperationLogs(request: Request, id: number): Prom
         }
         await new Promise((r) => setTimeout(r, 500));
       }
-      const cur = getOperation(id)!;
+      const cur = getOperation(target.id)!;
       return Response.json({ status: cur.status, logs: [], next_cursor: since, resumable: true }, { headers: corsHeaders });
     }
 
-    const logs = tail > 0 ? getOpLogTail(id, tail, since) : getOpLogs(id, since, 1000);
+    const logs = readLogs();
     const nextCursor = logs.reduce((max, row) => Math.max(max, row.id), since);
-    return Response.json({ status: op.status, logs, next_cursor: nextCursor, resumable: true }, { headers: corsHeaders });
+    return Response.json({ status: target.status, operation_id: target.id, logs, next_cursor: nextCursor, resumable: true }, { headers: corsHeaders });
   } catch (err) {
     return handleError(err);
   }

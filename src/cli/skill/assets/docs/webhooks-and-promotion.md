@@ -7,13 +7,25 @@
   "webhook": {
     "enabled": true,
     "branch": "main",
-    "path": "",
+    "paths": ["services/web/**", "packages/core/**", "package.json", "bun.lock"],
+    "paths_ignore": ["services/web/**/*.md"],
     "wait_for_ci": true,
     "staging": true,
     "staging_environment": "staging"
   }
 }
 ```
+
+Patterns are case-sensitive, repository-root-relative, use `/`, and support
+`*`, `**`, and `?`. Omit `paths` to select the app for every eligible push;
+an empty array is invalid. Use `paths_ignore` instead of inline `!patterns`.
+The deprecated `path: "admin-ui"` form remains equivalent to
+`paths: ["admin-ui/**"]`, but `path` and `paths` cannot be combined.
+
+OCD compares each app's last successful deployment commit to the eligible push
+SHA, not merely the push payload's `before` SHA. The app manifest and owning
+stack manifest always trigger reconciliation. Compare failures deploy fail-open.
+`needs` controls readiness/order only and never selects dependencies.
 
 `staging_environment` is an environment name or `null`. A name enables staging
 and links that environment. When `staging` is true and no name is provided, the
@@ -31,6 +43,7 @@ Inspect the stored webhook and staging sibling:
 ```bash
 ocd app webhook status my-app
 ocd app staging my-app
+ocd webhook plan --stack my-stack --base <sha> --head <sha>
 ```
 
 Every app container receives the platform-owned runtime marker

@@ -47,8 +47,11 @@ not apply configuration and does not deploy code.
 ocd deploy --config-only
 ```
 
-Config-only stores and applies the same complete manifest but skips code
-deployment. It requires an existing app.
+Config-only stores and applies the same complete manifest without rebuilding
+code. Control-plane changes apply in place. Runtime/environment changes
+recreate containers from the current immutable image. Source/build changes are
+recorded as pending until the next ordinary deployment. It requires an
+existing app.
 
 ## Allowed deploy flags
 

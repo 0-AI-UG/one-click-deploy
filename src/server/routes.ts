@@ -18,6 +18,7 @@ import {
   handleGetDashboard,
   handleGetApps,
   handleDeploy,
+  handleRedeployApp,
   handleDestroyApp,
   handleRestartApp,
   handleReloadAppEnvironment,
@@ -40,6 +41,7 @@ import {
   handlePanelGithubWebhook,
   handleEnablePanelWebhook,
   handleDisablePanelWebhook,
+  handleWebhookPlan,
 } from "./routes/webhooks.ts";
 import {
   handleGetPanel,
@@ -102,6 +104,8 @@ import {
   handlePromoteStack,
 } from "./routes/stacks.ts";
 import { VERSION } from "../shared/version.ts";
+import { handleGcExecute, handleGcInventory } from "./routes/gc.ts";
+import { handleGetAppStorage } from "./routes/app-storage.ts";
 
 function appIdFrom(req: Request): number {
   const url = new URL(req.url);
@@ -246,6 +250,10 @@ export const apiRoutes = {
   "/api/servers/refresh": { POST: (req: Request) => handleRefreshServers(req) },
   "/api/servers/:id": { DELETE: (req: Request) => handleDeleteServer(req, serverIdFrom(req)) },
   "/api/servers/:id/pool": { PATCH: (req: Request) => handleSetServerPool(req, serverPathIdFrom(req)) },
+  "/api/gc": {
+    GET: (req: Request) => handleGcInventory(req),
+    POST: (req: Request) => handleGcExecute(req),
+  },
 
   // --- Apps ---
   "/api/apps": { GET: (req: Request) => handleGetApps(req) },
@@ -255,6 +263,7 @@ export const apiRoutes = {
   // App-specific
   "/api/apps/:appId": { DELETE: (req: Request) => handleDestroyApp(req, appIdFrom(req)) },
   "/api/apps/:appId/restart": { POST: (req: Request) => handleRestartApp(req, appIdFrom(req)) },
+  "/api/apps/:appId/redeploy": { POST: (req: Request) => handleRedeployApp(req, appIdFrom(req)) },
   "/api/apps/:appId/reload-env": { POST: (req: Request) => handleReloadAppEnvironment(req, appIdFrom(req)) },
   "/api/apps/:appId/pause": { POST: (req: Request) => handlePauseApp(req, appIdFrom(req)) },
   "/api/apps/:appId/unpause": { POST: (req: Request) => handleUnpauseApp(req, appIdFrom(req)) },
@@ -263,6 +272,7 @@ export const apiRoutes = {
   "/api/apps/:appId/deployments": { GET: (req: Request) => handleGetDeployments(req, appIdFrom(req)) },
   "/api/apps/:appId/rollback": { POST: (req: Request) => handleRollbackApp(req, appIdFrom(req)) },
   "/api/apps/:appId/staging": { GET: (req: Request) => handleGetAppStaging(req, appIdFrom(req)) },
+  "/api/apps/:appId/storage": { GET: (req: Request) => handleGetAppStorage(req, appIdFrom(req)) },
 
   // Scaling
   "/api/apps/:appId/wake": { POST: (req: Request) => handleWakeApp(req, appIdFrom(req)) },
@@ -285,6 +295,7 @@ export const apiRoutes = {
       return handleGithubWebhook(req, m ? parseInt(m[1], 10) : 0);
     },
   },
+  "/api/webhooks/plan": { GET: (req: Request) => handleWebhookPlan(req) },
 
   // Fleet-internal: ocd-proxy wake endpoint (shared-secret auth, no user token)
   "/api/internal/wake": { POST: (req: Request) => handleInternalWake(req) },

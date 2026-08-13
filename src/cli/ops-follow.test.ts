@@ -5,6 +5,7 @@ import {
   newFollowRetryState,
   resetFollowRetryState,
   summarizeOperationError,
+  formatOperationHeartbeat,
 } from "./ops.ts";
 
 describe("operation follow fallback", () => {
@@ -54,5 +55,21 @@ describe("operation follow fallback", () => {
         finished_at: null,
       }],
     })).toBe("last step health_check at 2026-07-27 10:03:04");
+  });
+
+  test("heartbeat identifies the active child, phase, elapsed time and last update", () => {
+    const line = formatOperationHeartbeat({
+      status: "running", last_step: "deploy_children", error: null, steps: [],
+      started_at: "2026-08-12T09:00:00Z",
+      latest_log: { ts: "2026-08-12T09:01:55Z", message: "uploaded 200/500 MiB" },
+      children: [{
+        id: 9, label: "Deploy app", resource_labels: ["web"], status: "running",
+        last_step: "transfer", started_at: "2026-08-12T09:00:30Z",
+      }],
+    }, Date.parse("2026-08-12T09:02:00Z"));
+    expect(line).toContain("web: transfer");
+    expect(line).toContain("1m 30s elapsed");
+    expect(line).toContain("5s since update");
+    expect(line).toContain("uploaded 200/500 MiB");
   });
 });

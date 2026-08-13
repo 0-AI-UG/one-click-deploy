@@ -132,7 +132,9 @@ Re-running a stack is not a partial add operation. The submitted manifest
 defines desired membership:
 
 - missing recorded members are destroyed;
-- existing apps are config-applied and redeployed only when their desired state differs;
+- existing apps are classified as control-plane-only, runtime recreation from
+  the existing immutable image, or build-required; manifest/staging-only
+  changes do not rebuild or transfer unchanged images;
 - existing services are reconciled/reused according to ownership;
 - each failed child compensates only its own incomplete side effects;
 - successful new and reused resources survive for retry;
@@ -145,6 +147,11 @@ defines desired membership:
 
 A renamed member key is a remove-plus-create. Review data ownership and injected
 variable-name changes before renaming.
+
+Use `ocd deploy stack --config-only` to apply stack and member configuration
+without rebuilding code. Runtime changes reuse the current immutable image;
+source/build changes remain pending. Automatic reconciliation normally uses
+the least disruptive safe mode.
 
 The fleet has a hard 200-app cap. A stack exceeding remaining capacity is
 rejected before deployment.

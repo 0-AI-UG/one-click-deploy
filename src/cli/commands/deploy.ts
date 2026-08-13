@@ -15,6 +15,7 @@ import {
 import { resolveRepoPath } from "../../shared/stack-spec.ts";
 import { mergeEnv } from "../../shared/env-merge.ts";
 import { withWebConfirmation } from "../confirm.ts";
+import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
 
 interface Environment {
   id: number;
@@ -60,54 +61,42 @@ function parseFlags(args: string[]): {
   manifestPath: string;
   authPasswordEnv?: string;
   serverId?: number;
+  appName?: string;
   sets: Record<string, string>;
   help: boolean;
   dryRun: boolean;
   configOnly: boolean;
+  allowUnknown: boolean;
 } {
-  let manifestPath = "";
-  let authPasswordEnv: string | undefined;
-  let serverId: number | undefined;
+  const parsed = parseCliArgs(args, {
+    set: { type: "string", repeatable: true },
+    "auth-password-env": { type: "string" },
+    server: { type: "string" },
+    app: { type: "string" },
+    help: { type: "boolean", aliases: ["h"] },
+    "dry-run": { type: "boolean" },
+    "config-only": { type: "boolean" },
+    "allow-unknown": { type: "boolean" },
+  }, { maxPositionals: 1 });
+  const manifestPath = parsed.positionals[0] || ".ocd-deploy.json";
+  const authPasswordEnv = parsed.flags["auth-password-env"] as string | undefined;
+  const serverId = positiveIntegerFlag(parsed.flags.server, "server");
+  const appName = parsed.flags.app as string | undefined;
   const sets: Record<string, string> = {};
-  let help = false;
-  let dryRun = false;
-  let configOnly = false;
-
-  for (const arg of args) {
-    if (arg.startsWith("--set=")) {
-      const pair = arg.slice(6);
+  for (const pair of (parsed.flags.set as string[] | undefined) ?? []) {
       const eq = pair.indexOf("=");
       if (eq < 1) {
-        console.error(`${RED}Invalid --set value (expected --set=KEY=VALUE): ${arg}${RESET}`);
-        process.exit(1);
+        throw new Error(`Invalid --set value (expected KEY=VALUE): ${pair}`);
       }
       sets[pair.slice(0, eq)] = pair.slice(eq + 1);
-    } else if (arg.startsWith("--auth-password-env=")) {
-      authPasswordEnv = arg.slice(20);
-    } else if (arg.startsWith("--server=")) {
-      const raw = arg.slice(9);
-      serverId = Number(raw);
-      if (!Number.isInteger(serverId) || serverId < 1) {
-        console.error(`${RED}Invalid --server value (expected a positive numeric ID): ${raw}${RESET}`);
-        process.exit(1);
-      }
-    } else if (arg === "--help" || arg === "-h") {
-      help = true;
-    } else if (arg === "--dry-run") {
-      dryRun = true;
-    } else if (arg === "--config-only") {
-      configOnly = true;
-    } else if (arg.startsWith("--")) {
-      console.error(`${RED}Unknown option: ${arg}${RESET}`);
-      process.exit(1);
-    } else if (!arg.startsWith("--") && !manifestPath) {
-      manifestPath = arg;
-    }
   }
-
-  if (!manifestPath) manifestPath = ".ocd-deploy.json";
-
-  return { manifestPath, authPasswordEnv, serverId, sets, help, dryRun, configOnly };
+  return {
+    manifestPath, authPasswordEnv, serverId, appName, sets,
+    help: parsed.flags.help === true,
+    dryRun: parsed.flags["dry-run"] === true,
+    configOnly: parsed.flags["config-only"] === true,
+    allowUnknown: parsed.flags["allow-unknown"] === true,
+  };
 }
 
 export async function deploy(args: string[]): Promise<void> {
@@ -117,7 +106,7 @@ export async function deploy(args: string[]): Promise<void> {
     return;
   }
 
-  const { manifestPath, authPasswordEnv, serverId, sets, help, dryRun, configOnly } = parseFlags(args);
+  const { manifestPath, authPasswordEnv, serverId, appName, sets, help, dryRun, configOnly, allowUnknown } = parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
@@ -144,14 +133,18 @@ ${BOLD}Options:${RESET}
   --server=<id>              Pin this one deploy to a server ID. This is an
                              operational override; use placement_pool in a
                              committed manifest for portable scheduling intent.
+  --app=<name>               Apply to an explicit existing app while retaining
+                             its stored environment and stack association.
   --set=KEY=VALUE            Set an env var (repeatable)
   --dry-run                  Show the desired-configuration diff without applying or deploying
-  --config-only              Apply configuration without deploying code`);
+  --config-only              Apply config without rebuilding code; runtime
+                             changes reuse the current immutable image
+  --allow-unknown            Compatibility escape hatch for newer manifest keys`);
     process.exit(0);
   }
 
   const location = manifestRepoLocation(manifestPath);
-  const manifest = readManifest(location.fullPath);
+  const manifest = readManifest(location.fullPath, { allowUnknown });
   const repo = manifest.image ? "" : getGitRepo();
   const gitCommit = manifest.image ? undefined : getGitCommit();
   const buildPaths = resolveManifestBuildPaths(
@@ -168,7 +161,7 @@ ${BOLD}Options:${RESET}
     console.log(`${DIM}Build:${RESET}    ${buildPaths.dockerfile} ${DIM}(context ${buildPaths.context})${RESET}`);
   }
 
-  const name = manifest.suggested_app_name ||
+  const name = appName || manifest.suggested_app_name ||
     (manifest.image ? manifest.image.ref.split("/").pop()!.split("@")[0] : repo.replace(/.*\//, ""));
   const port = manifest.build?.container_port ?? 3000;
   const authPassword = await resolveAuthPassword(manifest.auth, authPasswordEnv);
@@ -178,6 +171,9 @@ ${BOLD}Options:${RESET}
   if (environment) console.log(`${DIM}Env:${RESET}      ${environment.name}`);
 
   const webhookEnabled = manifest.webhook?.enabled ?? false;
+  if (manifest.webhook?.path !== undefined) {
+    console.warn(`${DIM}Deprecated:${RESET} webhook.path; use webhook.paths: [\"${manifest.webhook.path.replace(/\/+$/, "")}/**\"]`);
+  }
   let webhookStaging = manifest.webhook?.staging ?? false;
   let webhookStagingEnvironmentId: number | null | undefined;
   const stagingEnvironmentName = manifest.webhook?.staging_environment;
@@ -253,6 +249,8 @@ ${BOLD}Options:${RESET}
     webhook_enabled: webhookEnabled,
     webhook_branch: manifest.webhook?.branch ?? "main",
     webhook_path: manifest.webhook?.path ?? "",
+    webhook_paths: manifest.webhook?.paths,
+    webhook_paths_ignore: manifest.webhook?.paths_ignore ?? [],
     webhook_wait_for_ci: manifest.webhook?.wait_for_ci ?? false,
     webhook_staging: webhookStaging,
     webhook_staging_environment_id: webhookStagingEnvironmentId,
@@ -318,6 +316,8 @@ ${BOLD}Options:${RESET}
       changes: Array<{ field: string; before: unknown; after: unknown }>;
       config_revision: number;
       op_id: number;
+      rollout?: "control" | "runtime";
+      pending_rollout?: boolean;
     }>("/api/apps/deploy", { ...body, deploy: false });
     const result = await followOp(applied.op_id);
     if (!result.ok) {
@@ -328,7 +328,14 @@ ${BOLD}Options:${RESET}
     for (const change of applied.changes) {
       console.log(`  ${change.field}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`);
     }
-    console.log(`${DIM}Code was not deployed.${RESET}`);
+    if (applied.rollout === "runtime") {
+      console.log(`${DIM}Containers were recreated from the existing immutable image; code was not rebuilt.${RESET}`);
+    } else {
+      console.log(`${DIM}No container rollout was required; code was not rebuilt.${RESET}`);
+    }
+    if (applied.pending_rollout) {
+      console.log(`${DIM}Source/build changes are stored and remain pending until the next code deployment.${RESET}`);
+    }
     return;
   }
 

@@ -62,6 +62,7 @@ export function UsersPage() {
     github_oauth_client_id: "", github_oauth_client_secret: "",
     dns_zone_id: "", default_server_type: "", default_location: "",
     allow_archive_image_transfer: false,
+    oci_cache_ref: "", oci_artifact_ref: "", oci_registry_username: "", oci_registry_password: "",
   });
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -106,6 +107,10 @@ export function UsersPage() {
           default_server_type: s.default_server_type ?? "",
           default_location: s.default_location ?? "",
           allow_archive_image_transfer: s.allow_archive_image_transfer === true,
+          oci_cache_ref: s.oci_cache_ref ?? "",
+          oci_artifact_ref: s.oci_artifact_ref ?? "",
+          oci_registry_username: s.oci_registry_username ?? "",
+          oci_registry_password: s.oci_registry_password ?? "",
         });
       })
       .catch(() => {})
@@ -242,6 +247,18 @@ export function UsersPage() {
               onChange={(v) => setSettingsForm((f) => ({ ...f, default_location: v }))}
               options={locationOptions(serverTypes, settingsForm.default_server_type)}
             />
+          </Field>
+          <Field label="OCI build cache repository">
+            <input type="text" value={settingsForm.oci_cache_ref} onChange={setS("oci_cache_ref")} placeholder="registry.internal/ocd/cache:main" />
+          </Field>
+          <Field label="OCI release artifact repository">
+            <input type="text" value={settingsForm.oci_artifact_ref} onChange={setS("oci_artifact_ref")} placeholder="registry.internal/ocd/artifacts" />
+          </Field>
+          <Field label="OCI registry username">
+            <input type="text" value={settingsForm.oci_registry_username} onChange={setS("oci_registry_username")} placeholder="ocd" />
+          </Field>
+          <Field label="OCI registry password/token">
+            <input type="password" value={settingsForm.oci_registry_password} onChange={setS("oci_registry_password")} placeholder="Registry password or token" />
           </Field>
           <Field
             label="Emergency archive transfer"

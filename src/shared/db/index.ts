@@ -52,6 +52,7 @@ export {
   updateAppBuildSource,
   updateAppArtifactAndHealth,
   recordAppManifestApplied,
+  updateAppStackManifestPath,
   normalizeAppConfigRevision,
   updateAppDomain,
   updateAppVolume,
@@ -66,6 +67,9 @@ export {
   updateAppWebhook,
   updateAppWebhookProviderIdentity,
   updateAppWebhookWaitForCi,
+  updateAppWebhookPaths,
+  recordAppWebhookReceived,
+  recordAppWebhookDecision,
   updateAppWebhookStagingEnvironment,
   updateAppScaling,
   updateAppDurability,
@@ -143,8 +147,11 @@ export {
   appendDeploymentLog,
   updateDeploymentGitCommit,
   updateDeploymentConfigRevision,
+  updateDeploymentStorage,
   getDeployments,
   getDeployedCommit,
+  getLastSuccessfulDeployment,
+  gitCommitsMatch,
   getDeployment,
 } from "./deployments.ts";
 export type {
@@ -218,6 +225,7 @@ export {
   updateServiceCredentials,
   deleteService,
   insertServiceInstance,
+  insertServiceWithPrimaryInstance,
   getServiceInstances,
   getServiceInstance,
   getPrimaryInstance,
@@ -275,3 +283,16 @@ export {
   getAvailabilityStats,
   pruneOldAvailabilitySamples,
 } from "./availability.ts";
+export type { WebhookCandidateRow, WebhookCandidateStatus } from "./webhooks.ts";
+export {
+  getWebhookCandidate,
+  getWebhookCandidateByHead,
+  createWebhookCandidate,
+  setWebhookCandidateOperation,
+  updateWebhookCandidate,
+  isWebhookCandidateCurrent,
+} from "./webhooks.ts";
+export {
+  parseStoredWebhookPaths,
+  parseStoredWebhookPathsIgnore,
+} from "../webhook-paths.ts";

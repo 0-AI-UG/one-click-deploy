@@ -2,7 +2,7 @@ import { statSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { sshExec, sshExecStreaming, getSshKeyPath, describeFailure } from "./ssh.ts";
 import { log } from "./container-common.ts";
-import { dockerLoginGhcr } from "./registry.ts";
+import { dockerLoginGhcr, dockerLoginRegistry } from "./registry.ts";
 import { preflightTransferDiskSpace } from "./disk-space.ts";
 
 export type ImageTransferProgress = (line: string) => void;
@@ -30,6 +30,29 @@ function transferProgress(label: string, bytes: number, total: number, started: 
   const eta = Number.isFinite(remaining) ? `${Math.ceil(remaining)}s remaining` : "estimating remaining time";
   return `[archive ${label}] ${(bytes / 1024 / 1024).toFixed(1)}/${(total / 1024 / 1024).toFixed(1)} MiB ` +
     `(${percent.toFixed(1)}%, ${(rate / 1024 / 1024).toFixed(1)} MiB/s, ${eta})`;
+}
+
+const BYTE_UNITS: Record<string, number> = {
+  b: 1,
+  kb: 1000,
+  mb: 1000 ** 2,
+  gb: 1000 ** 3,
+};
+
+/** Sum the final compressed byte totals Docker reports for layers actually
+ * downloaded. Repeated carriage-return progress frames are de-duplicated by
+ * layer id. Returns undefined when the daemon did not expose byte progress. */
+export function parseDockerPullTransferBytes(output: string): number | undefined {
+  const layers = new Map<string, number>();
+  const pattern = /([a-f0-9]{8,64}):\s+Downloading[^\r\n]*?\/\s*([0-9]+(?:\.[0-9]+)?)\s*(B|kB|MB|GB)\b/gi;
+  for (const match of output.matchAll(pattern)) {
+    const bytes = Number(match[2]) * (BYTE_UNITS[match[3].toLowerCase()] ?? 1);
+    if (Number.isFinite(bytes) && bytes > 0) {
+      layers.set(match[1], Math.max(layers.get(match[1]) ?? 0, Math.round(bytes)));
+    }
+  }
+  if (layers.size === 0) return undefined;
+  return [...layers.values()].reduce((sum, value) => sum + value, 0);
 }
 
 async function scpWithProgress(
@@ -77,11 +100,19 @@ export async function transferImage(
   opts: {
     registryRef?: string;
     registryToken?: string;
+    registryUsername?: string;
+    registryPassword?: string;
     onProgress?: ImageTransferProgress;
     attempt?: number;
     /** Emergency-only escape hatch. Normal multi-host distribution requires
      * a registry so retries use immutable, content-addressed layers. */
     allowArchiveFallback?: boolean;
+    /** Persist exact storage facts when the owning deployment is known. */
+    onStorage?: (storage: {
+      imageBytes: number;
+      archiveBytes?: number;
+      transferBytes?: number;
+    }) => void;
   } = {},
 ): Promise<void> {
   const emit = opts.onProgress ?? (() => {});
@@ -99,6 +130,7 @@ export async function transferImage(
   if (sourceInspect.exitCode !== 0 || !expectedImageId || imageBytes <= 0) {
     throw new Error(describeFailure("Image distribution preflight failed", sourceInspect));
   }
+  opts.onStorage?.({ imageBytes });
   const alreadyPresent = await sshExec(
     targetIp,
     `su - deploy -c ${JSON.stringify(`docker image inspect --format '{{.Id}}' ${expectedImageId}`)}`,
@@ -112,12 +144,25 @@ export async function transferImage(
   // A configured registry cache is also the distribution repository. Docker
   // push/pull is content-addressed, so replicas transfer only missing layers.
   if (opts.registryRef) {
+    const targetReservation = await preflightTransferDiskSpace({
+      ip: targetIp,
+      label: "destination import",
+      imageBytes,
+      archiveBytes: 0,
+      includeExpandedImage: true,
+      protectedImageRefs: protectedImageRefs(imageName),
+      hostKey: targetHostKey,
+      onProgress: emit,
+    });
     const ref = artifactRef(opts.registryRef, expectedImageId);
     emit(`Registry distribution ${ref} (content-addressed missing-layer pull)`);
     let sourceAuth: Awaited<ReturnType<typeof dockerLoginGhcr>> | null = null;
     let targetAuth: Awaited<ReturnType<typeof dockerLoginGhcr>> | null = null;
     try {
-      if (opts.registryToken && ref.startsWith("ghcr.io/")) {
+      if (opts.registryUsername && opts.registryPassword) {
+        sourceAuth = await dockerLoginRegistry(sourceIp, ref, opts.registryUsername, opts.registryPassword, sourceHostKey);
+        targetAuth = await dockerLoginRegistry(targetIp, ref, opts.registryUsername, opts.registryPassword, targetHostKey);
+      } else if (opts.registryToken && ref.startsWith("ghcr.io/")) {
         sourceAuth = await dockerLoginGhcr(sourceIp, opts.registryToken, sourceHostKey);
         targetAuth = await dockerLoginGhcr(targetIp, opts.registryToken, targetHostKey);
       }
@@ -127,7 +172,10 @@ export async function transferImage(
         {
           hostKey: sourceHostKey,
           onLine: (line) => line.trim() && emit(`[registry push] ${line}`),
-          onHeartbeat: (ms) => emit(`[registry push] still running (${Math.floor(ms / 1000)}s)`),
+          onHeartbeat: (ms) => {
+            void targetReservation.refresh();
+            emit(`[registry push] still running (${Math.floor(ms / 1000)}s)`);
+          },
         },
       );
       if (pushed.exitCode !== 0) throw new Error(describeFailure("Registry image push failed", pushed));
@@ -137,10 +185,20 @@ export async function transferImage(
         {
           hostKey: targetHostKey,
           onLine: (line) => line.trim() && emit(`[registry pull] ${line}`),
-          onHeartbeat: (ms) => emit(`[registry pull] still running (${Math.floor(ms / 1000)}s)`),
+          onHeartbeat: (ms) => {
+            void targetReservation.refresh();
+            emit(`[registry pull] still running (${Math.floor(ms / 1000)}s)`);
+          },
         },
       );
       if (pulled.exitCode !== 0) throw new Error(describeFailure("Registry image pull failed", pulled));
+      const transferredBytes = parseDockerPullTransferBytes(`${pulled.stdout}\n${pulled.stderr}`);
+      opts.onStorage?.({ imageBytes, transferBytes: transferredBytes });
+      if (transferredBytes !== undefined) {
+        emit(`[registry pull] transferred ${(transferredBytes / 1024 / 1024).toFixed(1)} MiB of missing compressed layers`);
+      } else {
+        emit("[registry pull] Docker did not report an exact missing-layer byte total");
+      }
       if (!imageName.startsWith("sha256:") && !imageName.includes("@sha256:")) {
         const tagged = await sshExec(
           targetIp,
@@ -164,6 +222,7 @@ export async function transferImage(
     } finally {
       await sourceAuth?.cleanup();
       await targetAuth?.cleanup();
+      await targetReservation.release();
     }
   }
   if (!opts.allowArchiveFallback) {
@@ -176,11 +235,13 @@ export async function transferImage(
   const ts = Date.now();
   const tmpFile = `/tmp/ocd-image-${ts}.tar.gz`;
   const localTmp = `${tmpdir()}/ocd-image-transfer-${ts}.tar.gz`;
+  let sourceReservation: Awaited<ReturnType<typeof preflightTransferDiskSpace>> | null = null;
+  let targetReservation: Awaited<ReturnType<typeof preflightTransferDiskSpace>> | null = null;
 
   try {
     // Conservative preflight before compression: a gzip archive can approach
     // the image's expanded size for already-compressed/binary-heavy layers.
-    await preflightTransferDiskSpace({
+    sourceReservation = await preflightTransferDiskSpace({
       ip: sourceIp,
       label: "source archive",
       imageBytes,
@@ -190,7 +251,7 @@ export async function transferImage(
       hostKey: sourceHostKey,
       onProgress: emit,
     });
-    await preflightTransferDiskSpace({
+    targetReservation = await preflightTransferDiskSpace({
       ip: targetIp,
       label: "destination import",
       imageBytes,
@@ -212,7 +273,11 @@ export async function transferImage(
       `su - deploy -c "set -o pipefail; docker save ${imageName} | gzip -1" > ${tmpFile}`,
       {
         hostKey: sourceHostKey,
-        onHeartbeat: (ms) => emit(`[archive] compression still running (${Math.floor(ms / 1000)}s)`),
+        onHeartbeat: (ms) => {
+          void sourceReservation?.refresh();
+          void targetReservation?.refresh();
+          emit(`[archive] compression still running (${Math.floor(ms / 1000)}s)`);
+        },
       },
     );
     if (saveResult.exitCode !== 0) {
@@ -226,21 +291,18 @@ export async function transferImage(
       throw new Error(`Exported image archive is suspiciously small (${archiveBytes} bytes) — image ${imageName} may not exist on the source server`);
     }
     emit(`[archive] size ${(archiveBytes / 1024 / 1024).toFixed(1)} MiB`);
+    opts.onStorage?.({ imageBytes, archiveBytes, transferBytes: archiveBytes });
+    // Compression has materialized the source archive, so df accounts for it;
+    // no future source allocation remains. On the target, replace the
+    // conservative archive estimate with the exact byte count.
+    await sourceReservation.replace(0);
+    await targetReservation.replace(
+      archiveBytes + imageBytes + Math.ceil(imageBytes * 0.25),
+    );
 
     // Recheck the destination with the exact archive size before transferring
     // a byte. The earlier conservative estimate catches obvious failures before
     // source compression; this check avoids retrying SCP into a full disk.
-    await preflightTransferDiskSpace({
-      ip: targetIp,
-      label: "destination import",
-      imageBytes,
-      archiveBytes,
-      includeExpandedImage: true,
-      protectedImageRefs: protectedImageRefs(imageName),
-      hostKey: targetHostKey,
-      onProgress: emit,
-    });
-
     // Download to local
     try { unlinkSync(localTmp); } catch { /* no prior partial */ }
     await scpWithProgress([
@@ -250,6 +312,7 @@ export async function transferImage(
       `root@${sourceIp}:${tmpFile}`,
       localTmp,
     ], "download", archiveBytes, async () => {
+      await Promise.all([sourceReservation?.refresh(), targetReservation?.refresh()]);
       try { return statSync(localTmp).size; } catch { return 0; }
     }, emit).catch((err) => {
       throw new Error(`Image download exhausted retries: ${err instanceof Error ? err.message : err}`);
@@ -263,6 +326,7 @@ export async function transferImage(
       localTmp,
       `root@${targetIp}:${tmpFile}`,
     ], "upload", archiveBytes, async () => {
+      await Promise.all([sourceReservation?.refresh(), targetReservation?.refresh()]);
       const progress = await sshExec(targetIp, `stat -c %s ${tmpFile} 2>/dev/null || echo 0`, targetHostKey);
       return parseInt(progress.stdout.trim(), 10) || 0;
     }, emit).catch((err) => {
@@ -284,7 +348,10 @@ export async function transferImage(
         {
           hostKey: targetHostKey,
           onLine: (line) => line.trim() && emit(`[archive load] ${line}`),
-          onHeartbeat: (ms) => emit(`[archive load] still running (${Math.floor(ms / 1000)}s)`),
+          onHeartbeat: (ms) => {
+            void targetReservation?.refresh();
+            emit(`[archive load] still running (${Math.floor(ms / 1000)}s)`);
+          },
         },
       );
       if (loadResult.exitCode !== 0) {
@@ -316,5 +383,7 @@ export async function transferImage(
     await sshExec(sourceIp, `rm -f ${tmpFile}`, sourceHostKey).catch(() => { /* non-fatal cleanup */ });
     await sshExec(targetIp, `rm -f ${tmpFile}`, targetHostKey).catch(() => { /* non-fatal cleanup */ });
     try { unlinkSync(localTmp); } catch { /* file may already be gone */ }
+    await sourceReservation?.release();
+    await targetReservation?.release();
   }
 }

@@ -61,11 +61,36 @@ explicitly in Admin settings. The registry identity needs pull and push
 permission. Build cache configuration is stored desired config and advances
 `config_revision`.
 
+Admins can configure fleet-wide OCI build-cache and release-artifact
+repositories. A manifest `build.cache_ref` overrides the cache default for that
+app; the separate artifact repository remains the preferred multi-host
+distribution path. Optional generic registry credentials are encrypted and
+used through operation-scoped Docker credential directories.
+
 Before a source build or emergency transfer, OCD runs bounded OCD-owned garbage
 collection and verifies source and destination root-disk capacity. The budget
 includes candidate/expanded layers, current and rollback protection, archive
 and import workspace, plus a fixed host reserve. A failure is reported during
 preflight rather than after the build or SCP retries.
+
+Build candidates are estimated from the checked-out build context, not from the
+image being replaced, so deploying a smaller image cannot be blocked solely by
+an oversized current image. Host-side admission leases account for concurrent
+build/archive/import phases and keep the fixed safety floor available. Once an
+image or archive exists, its inspected byte size replaces the estimate.
+Long-running phases refresh their host-side lease on each progress heartbeat;
+abandoned leases expire after three hours so a crashed operation cannot block
+the server indefinitely.
+
+Use `ocd gc` for a read-only inventory. It classifies running, stopped-anchor,
+current, rollback, reclaimable OCD-owned, and reclaimable foreign images.
+`ocd gc --execute` removes every image unused by any running or stopped
+container, except OCD current and rollback tags, then removes unused BuildKit
+cache. Inventory and deletion run under one exclusive host lock, and each image
+is revalidated immediately before removal. The dry run includes Docker's
+BuildKit reclaimable estimate; execution reports the observed filesystem
+free-space delta. Image sizes include shared layers, so preview totals remain
+upper bounds.
 
 ## Readiness is a workload contract
 

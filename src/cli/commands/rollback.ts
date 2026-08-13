@@ -1,5 +1,6 @@
 import { get, resolveApp } from "../api.ts";
 import { runAppOp } from "../ops.ts";
+import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
 
 interface Deployment {
   id: number;
@@ -13,14 +14,9 @@ export function parseRollbackArgs(args: string[]): {
   appName?: string;
   deploymentId?: number;
 } {
-  const appName = args.find((arg) => !arg.startsWith("-"));
-  const deploymentArg = args.find((arg) => arg.startsWith("--deployment="));
-  if (!deploymentArg) return { appName };
-  const raw = deploymentArg.slice("--deployment=".length);
-  const deploymentId = Number(raw);
-  if (!Number.isInteger(deploymentId) || deploymentId <= 0) {
-    throw new Error("--deployment must be a positive deployment ID");
-  }
+  const parsed = parseCliArgs(args, { deployment: { type: "string" } }, { maxPositionals: 1 });
+  const appName = parsed.positionals[0];
+  const deploymentId = positiveIntegerFlag(parsed.flags.deployment, "deployment");
   return { appName, deploymentId };
 }
 

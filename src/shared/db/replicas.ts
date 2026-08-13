@@ -41,6 +41,7 @@ export type ScalingEventRow = {
   from_count: number;
   to_count: number;
   reason: string;
+  operation_id: number | null;
   created_at: string;
 };
 
@@ -218,18 +219,34 @@ export function insertScalingEvent(event: {
   from_count: number;
   to_count: number;
   reason?: string;
+  operation_id?: number;
 }): ScalingEventRow {
-  return db
-    .query(
-      "INSERT INTO scaling_events (app_id, event_type, from_count, to_count, reason) VALUES (?, ?, ?, ?, ?) RETURNING *"
-    )
-    .get(
+  if (event.operation_id != null) {
+    return db.query(
+      `INSERT INTO scaling_events
+        (app_id, event_type, from_count, to_count, reason, operation_id)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(operation_id) WHERE operation_id IS NOT NULL
+       DO UPDATE SET operation_id = excluded.operation_id
+       RETURNING *`,
+    ).get(
       event.app_id,
       event.event_type,
       event.from_count,
       event.to_count,
-      event.reason || ""
+      event.reason || "",
+      event.operation_id,
     ) as ScalingEventRow;
+  }
+  return db.query(
+    "INSERT INTO scaling_events (app_id, event_type, from_count, to_count, reason) VALUES (?, ?, ?, ?, ?) RETURNING *",
+  ).get(
+    event.app_id,
+    event.event_type,
+    event.from_count,
+    event.to_count,
+    event.reason || "",
+  ) as ScalingEventRow;
 }
 
 export function getScalingEvents(appId: number, limit = 50): ScalingEventRow[] {

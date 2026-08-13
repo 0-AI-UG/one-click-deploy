@@ -10,11 +10,11 @@ import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-
 import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
-import { tryAcquire, release, NON_OP_HOLDER } from "../../engine/scheduler.ts";
-import { applyAppConfig, diffAppConfig } from "../../shared/app-config.ts";
+import { applyAppConfig, classifyConfigOnlyChanges, diffAppConfig } from "../../shared/app-config.ts";
 import type { DeployRequest } from "../../shared/rpc.ts";
 import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
 import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
+import { stackLockKeys, withOwningStackKeys } from "../lib/stack-operations.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
  *  public raw TCP/UDP address, a boolean `auth_enabled` flag, and strips every
@@ -25,6 +25,20 @@ export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
   const envRow = app.environment_id ? db.getEnvironment(app.environment_id as number) : null;
   const panelIp = app.public_port != null ? getPanelIngressIpv4() : null;
   const { auth_password_hash, webhook_secret, ...safe } = app;
+  const webhookPaths = (() => {
+    const parsed = db.parseStoredWebhookPaths(app.webhook_paths as string | null, app.webhook_path as string);
+    return parsed ?? null;
+  })();
+  const webhookPathsIgnore = (() => {
+    try {
+      const parsed = JSON.parse(String(app.webhook_paths_ignore || "[]"));
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
+  })();
+  const lastWebhookDecision = (() => {
+    try { return app.last_webhook_decision ? JSON.parse(String(app.last_webhook_decision)) : null; }
+    catch { return null; }
+  })();
   return {
     ...safe,
     env_vars: [],
@@ -32,6 +46,13 @@ export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
     environment_id: app.environment_id ?? null,
     environment_name: envRow?.name ?? null,
     deployed_commit: db.getDeployedCommit(app.id),
+    webhook_paths: webhookPaths,
+    webhook_paths_ignore: webhookPathsIgnore,
+    last_webhook_decision: lastWebhookDecision,
+    last_matching_paths: lastWebhookDecision?.matching_paths ?? [],
+    last_decision: lastWebhookDecision?.decision ?? null,
+    last_evaluated_commit: lastWebhookDecision?.head ?? null,
+    last_successfully_deployed_commit: db.getDeployedCommit(app.id),
     public_address: app.public_port != null && panelIp ? `${panelIp}:${app.public_port}` : null,
   };
 }
@@ -143,9 +164,10 @@ async function applyExistingAppConfig(
   }
 
   if (controls.deploy !== false) {
+    const owningStack = app.stack_id == null ? null : db.getStack(app.stack_id);
     const { opId } = enqueue({
       kind: "apply_manifest",
-      resourceKeys: [`manifest:${app.id}`],
+      resourceKeys: [`manifest:${app.id}`, ...(owningStack ? stackLockKeys(owningStack) : [])],
       input: { appId: app.id, userId, deploy: true, spec },
       trigger: "cli",
       triggeredBy: userId,
@@ -160,41 +182,64 @@ async function applyExistingAppConfig(
     }, { headers: corsHeaders });
   }
 
-  const resourceKeys = [`app:${app.id}`];
-  const acq = tryAcquire(resourceKeys, NON_OP_HOLDER, "apply_config");
-  if (!acq.ok) {
-    return Response.json(
-      { ok: false, error: `App is busy with another operation (${acq.heldBy.kind}). Try again in a moment.` },
-      { status: 409, headers: corsHeaders },
-    );
-  }
-
-  try {
-    // Persist rollout intent before any config write. Migration 95's revision
-    // triggers advance this marker with every revision created by the apply.
-    await applyAppConfig(app.id, spec, {
+  const owningStack = app.stack_id == null ? null : db.getStack(app.stack_id);
+  const plan = classifyConfigOnlyChanges(changes, {
+    // Manifest env entries may update encrypted values that are deliberately
+    // absent from the public config diff. Recreate conservatively so the
+    // reported runtime state is truthful.
+    environmentChanged: Array.isArray(spec.env_vars) && spec.env_vars.length > 0,
+  });
+  // Preserve the established config-only API contract: desired state is
+  // durably applied before the response. The child operation below performs
+  // only the required runtime/volume reconciliation.
+  await applyAppConfig(app.id, spec, {
+    userId,
+    log: (line) => db.appendDeployLog(app.id, `[config] ${line}`),
+  });
+  await syncAppIngress(app.id);
+  const updated = db.getApp(app.id)!;
+  if (plan.pendingBuild) db.requestAppRollout(app.id, updated.config_revision);
+  const { opId } = enqueue({
+    kind: "apply_manifest",
+    resourceKeys: [`manifest:${app.id}`, ...(owningStack ? stackLockKeys(owningStack) : [])],
+    input: {
+      appId: app.id,
       userId,
-      log: (line) => db.appendDeployLog(app.id, `[config] ${line}`),
-    });
-    await syncAppIngress(app.id);
+      deploy: false,
+      rollout: plan.rollout,
+      pendingRollout: plan.pendingBuild,
+    },
+    trigger: "cli",
+    triggeredBy: userId,
+  });
+  return Response.json({
+    ok: true,
+    applied: true,
+    changes,
+    rollout: plan.rollout,
+    pending_rollout: plan.pendingBuild,
+    config_revision: updated.config_revision,
+    op_id: opId,
+  }, { headers: corsHeaders });
+}
 
-    const result = {
-      ok: true,
-      applied: true,
-      changes,
-      config_revision: db.getApp(app.id)?.config_revision,
-      op_id: null as number | null,
-    };
-    const { opId } = enqueue({
-      kind: "apply_manifest",
-      resourceKeys: [`manifest:${app.id}`],
-      input: { appId: app.id, userId, deploy: false },
-      trigger: "cli",
-      triggeredBy: userId,
-    });
-    return Response.json({ ...result, op_id: opId }, { headers: corsHeaders });
-  } finally {
-    release(resourceKeys);
+/** Rebuild an existing app from its stored source and desired configuration.
+ * The stored environment and owning-stack association remain authoritative. */
+export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
+  try {
+    const payload = await requirePermission(request, "apps.deploy", appScope(appId));
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    const { opId } = enqueue(withOwningStackKeys({
+      kind: "redeploy",
+      resourceKeys: [`app:${app.id}`],
+      input: { appId: app.id, userId: payload.userId },
+      trigger: payload.client === "cli" ? "cli" : "ui",
+      triggeredBy: payload.userId,
+    }));
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
   }
 }
 

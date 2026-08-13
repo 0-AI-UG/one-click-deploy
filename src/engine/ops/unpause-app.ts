@@ -1,4 +1,3 @@
-import { unpauseApp } from "../deploy/lifecycle.ts";
 import { makeAppLifecycleOp, type AppLifecycleInput } from "./app-lifecycle.ts";
 
 const unpauseAppOp = makeAppLifecycleOp({
@@ -9,7 +8,8 @@ const unpauseAppOp = makeAppLifecycleOp({
   // Already running/unhealthy means no unpause needed.
   shouldSkip: (app) => app.status !== "paused",
   skipLog: (app) => `app ${app.name} is '${app.status}' (not paused) — no work needed`,
-  action: unpauseApp,
+  action: "unpause",
+  syncIngress: true,
 });
 
 export default unpauseAppOp;

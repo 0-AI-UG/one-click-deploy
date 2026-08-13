@@ -17,6 +17,7 @@ import { replicaBindHost, appReplicaRunOpts } from "../scale/types.ts";
 import * as github from "../../shared/github.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
 import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { resolveArtifactRegistry } from "../registry-config.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [deploy:${context}]`, ...args);
@@ -218,6 +219,7 @@ export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean
       configRevision: app.config_revision,
     };
     const registryToken = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
+    const distribution = await resolveArtifactRegistry(app.build_cache_ref);
     let allHealthy = true;
 
     for (const replica of replicas) {
@@ -255,10 +257,20 @@ export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean
             source.host.ssh_host_key || undefined,
             server.ssh_host_key || undefined,
             {
-              registryRef: app.build_cache_ref || undefined,
+              registryRef: distribution.ref,
+              registryUsername: distribution.username,
+              registryPassword: distribution.password,
               registryToken,
               allowArchiveFallback: db.getSettings().allow_archive_image_transfer === "1",
               onProgress: (line) => log("reloadAppEnvironment", line),
+              onStorage: (storage) => {
+                const deployment = db.getLastSuccessfulDeployment(app.id);
+                if (deployment) db.updateDeploymentStorage(deployment.id, {
+                  image_size_bytes: storage.imageBytes,
+                  archive_size_bytes: storage.archiveBytes,
+                  transfer_size_bytes: storage.transferBytes,
+                });
+              },
             },
           );
         }

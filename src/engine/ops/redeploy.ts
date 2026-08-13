@@ -28,6 +28,7 @@ import {
   mergeDeployRequestWithExistingApp,
   resolveDeployRequestEnvironmentIds,
 } from "../../shared/app-config.ts";
+import { resolveBuildRegistry } from "../registry-config.ts";
 
 type RedeployInput = {
   appId: number;
@@ -57,6 +58,7 @@ type RollbackSnapshot = {
 type BuildOut = {
   imageTag: string;
   imageDigest?: string;
+  imageBytes?: number;
   rollback: RollbackSnapshot | null;
 };
 type HealthOut = { healthy: boolean; statusCode?: number };
@@ -260,6 +262,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
       ctx.log(`[build] ${line}`);
     };
 
+    const buildRegistry = await resolveBuildRegistry(app.build_cache_ref);
     const r = app.source_mode === "image"
       ? await pullImmutableImageAndRun(server.ipv4, {
           ...buildOpts,
@@ -269,7 +272,9 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
           ...buildOpts,
           dockerfilePath: app.dockerfile_path || undefined,
           dockerContext: app.docker_context || undefined,
-          buildCacheRef: app.build_cache_ref || undefined,
+          buildCacheRef: buildRegistry.ref,
+          registryUsername: buildRegistry.username,
+          registryPassword: buildRegistry.password,
           reserveArchiveSpace:
             app.desired_replicas > 1 && db.getSettings().allow_archive_image_transfer === "1",
         }, logLine);
@@ -278,6 +283,7 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     return {
       imageTag,
       imageDigest: "imageDigest" in r ? r.imageDigest : undefined,
+      imageBytes: "imageBytes" in r ? r.imageBytes : undefined,
       rollback,
     };
   },
@@ -514,9 +520,11 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
       }
     }
     const row = db.insertDeployment({
+      operation_id: ctx.opId,
       app_id: ctx.input.appId,
       image_tag: build.imageTag,
       image_digest: build.imageDigest || app.image_ref || "",
+      image_size_bytes: build.imageBytes,
       env_hash: hashEnvironment(await resolveAppEnvVars(app)),
       git_commit: gitCommit,
       config_revision: app.config_revision ?? 1,

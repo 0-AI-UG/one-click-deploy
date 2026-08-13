@@ -2,21 +2,12 @@ import * as db from "../../shared/db.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { recreateAppContainer } from "../deploy/index.ts";
 import { registerOp } from "./registry.ts";
-import { ensureBindMount, removeBindMountBestEffort } from "./_volumes.ts";
+import { ensureBindMount, removeBindMount, removeBindMountBestEffort } from "./_volumes.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
-// Move a volume from a source app to a target app. This one needs REAL
-// compensation because it detaches from the source before attaching to the
-// target: if the target attach fails, the volume must roll back to the source
-// and both apps must end consistent.
-//
-// - detach_from_source: detaches + clears the source; its compensate RE-ATTACHES
-//   to the source (attach + bind + db + recreate).
-// - attach_to_target: attaches + binds + records + recreates on the target. It
-//   cleans up its OWN partial work inline on failure (the step-runner never
-//   calls a failing step's compensate), so the source re-attach can succeed.
-//
-// Both steps carry probe/probeCompensated so a crash mid-way resumes idempotently.
+// Move a volume through small, durable transitions. The source transitions are
+// intentionally ordered so their reverse compensations form a valid restore:
+// provider attach -> bind mount -> DB pointer -> container convergence.
 
 type ReattachVolumeInput = {
   volumeId: string;
@@ -41,12 +32,27 @@ type ValidateOut = {
   toExtraVolumes: string;
 };
 
+type OkOut = { ok: true };
+
+async function recreateOrThrow(appId: number, mount: string | undefined, extraVolumes: string, message: string) {
+  const result = await recreateAppContainer(appId, mount, db.parseExtraVolumes(extraVolumes));
+  if (!result.ok) throw new Error(result.error || message);
+}
+
+async function providerServerId(volumeId: string): Promise<string | null> {
+  return (await hetzner.volumes.get(volumeId)).serverId;
+}
+
 const validate: Step<ReattachVolumeInput, ValidateOut> = {
   name: "validate",
   label: "Validate preconditions",
   async run(ctx) {
+    if (ctx.input.fromAppId === ctx.input.toAppId) throw new Error("Source and target app must differ");
     const fromApp = db.getApp(ctx.input.fromAppId);
     if (!fromApp) throw new Error("Source app not found");
+    if (fromApp.volume_id !== ctx.input.volumeId) {
+      throw new Error(`Source app does not own volume ${ctx.input.volumeId}`);
+    }
     const toApp = db.getApp(ctx.input.toAppId);
     if (!toApp) throw new Error("Target app not found");
     if (toApp.volume_id) throw new Error("Target app already has a volume");
@@ -69,8 +75,6 @@ const validate: Step<ReattachVolumeInput, ValidateOut> = {
       fromHostKey: fromServer.ssh_host_key || "",
       fromHostMountPath,
       fromVolumeMount: fromApp.volume_mount || `${fromHostMountPath}:${containerPath}`,
-      // Carry the source volume's provenance so a created/attached-existing
-      // volume keeps the same destroy semantics after the move.
       fromVolumeAttached: !!fromApp.volume_attached,
       fromExtraVolumes: fromApp.extra_volumes,
       toProviderServerId: toServer.provider_id,
@@ -83,46 +87,84 @@ const validate: Step<ReattachVolumeInput, ValidateOut> = {
   },
 };
 
-const detachFromSource: Step<ReattachVolumeInput, { ok: true }> = {
-  name: "detach_from_source",
-  label: "Detach volume from source",
-  async probe(ctx, prior) {
-    const v = prior["validate"] as ValidateOut;
-    try {
-      const info = await hetzner.volumes.get(ctx.input.volumeId);
-      const fromApp = db.getApp(ctx.input.fromAppId);
-      if (info.serverId !== v.fromProviderServerId && fromApp && !fromApp.volume_id) {
-        ctx.log(`source already detached (volume ${ctx.input.volumeId})`);
-        return { ok: true };
-      }
-    } catch { /* fall through to run */ }
-    return null;
-  },
+const recreateSourceWithoutVolume: Step<ReattachVolumeInput, OkOut> = {
+  name: "recreate_source_without_volume",
+  label: "Drain source volume",
   async run(ctx, prior) {
     const v = prior["validate"] as ValidateOut;
-    await removeBindMountBestEffort({
-      serverIp: v.fromServerIp,
-      hostKey: v.fromHostKey,
-      hostMountPath: v.fromHostMountPath,
-      appId: ctx.input.fromAppId,
-    });
-    await hetzner.volumes.detach(ctx.input.volumeId);
-    db.updateAppVolume(ctx.input.fromAppId, "", "");
-    await recreateAppContainer(ctx.input.fromAppId, undefined, db.parseExtraVolumes(v.fromExtraVolumes));
+    try {
+      await recreateOrThrow(ctx.input.fromAppId, undefined, v.fromExtraVolumes, "Failed to recreate source container without volume");
+    } catch (err) {
+      // A failed replacement may already have removed the serving container.
+      // This step is not yet durable, so restore its own partial work inline.
+      try {
+        await recreateOrThrow(ctx.input.fromAppId, v.fromVolumeMount, v.fromExtraVolumes, "Failed to restore source container");
+      } catch (restoreErr) {
+        throw new Error(`${String(err)}; source restore also failed: ${String(restoreErr)}`);
+      }
+      throw err;
+    }
     return { ok: true };
   },
   async compensate(ctx, _out, prior) {
     const v = prior["validate"] as ValidateOut | undefined;
     if (!v) return;
-    // Roll the volume back onto the source app. Do NOT swallow failures here:
-    // this is a RESTORE — if the volume can't be re-attached, or the source
-    // container can't be brought back, the source app is left broken with its
-    // volume stranded on the target. That must surface as `compensation_failed`
-    // (reconciler retries, operators see it), not be hidden behind a clean
-    // `compensated` under a "MANUAL RECOVERY NEEDED" log line. probeCompensated
-    // short-circuits this step once the volume is back on source, so re-running
-    // after a partial restore is safe/idempotent.
-    await hetzner.volumes.attach(ctx.input.volumeId, v.fromProviderServerId);
+    await recreateOrThrow(ctx.input.fromAppId, v.fromVolumeMount, v.fromExtraVolumes, "Failed to restore source container");
+  },
+};
+
+const clearSourceApp: Step<ReattachVolumeInput, OkOut> = {
+  name: "clear_source_app",
+  label: "Clear volume from source app",
+  async probe(ctx) {
+    const app = db.getApp(ctx.input.fromAppId);
+    return app && !app.volume_id && !app.volume_mount ? { ok: true } : null;
+  },
+  async run(ctx) {
+    db.updateAppVolume(ctx.input.fromAppId, "", "");
+    return { ok: true };
+  },
+  async compensate(ctx, _out, prior) {
+    const v = prior["validate"] as ValidateOut | undefined;
+    if (!v) return;
+    db.updateAppVolume(ctx.input.fromAppId, ctx.input.volumeId, v.fromVolumeMount, v.fromVolumeAttached);
+  },
+  async probeCompensated(ctx, _out, prior) {
+    const v = prior["validate"] as ValidateOut | undefined;
+    const app = db.getApp(ctx.input.fromAppId);
+    return !!v && app?.volume_id === ctx.input.volumeId && app.volume_mount === v.fromVolumeMount &&
+      !!app.volume_attached === v.fromVolumeAttached;
+  },
+};
+
+const removeSourceBind: Step<ReattachVolumeInput, OkOut> = {
+  name: "remove_source_bind_mount",
+  label: "Remove source bind mount",
+  async run(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    try {
+      await removeBindMount({
+        serverIp: v.fromServerIp,
+        hostKey: v.fromHostKey,
+        hostMountPath: v.fromHostMountPath,
+        appId: ctx.input.fromAppId,
+      });
+    } catch (err) {
+      // Removal may have partially changed fstab/mount state.
+      await ensureBindMount({
+        serverIp: v.fromServerIp,
+        hostKey: v.fromHostKey,
+        volumeId: ctx.input.volumeId,
+        hostMountPath: v.fromHostMountPath,
+        appId: ctx.input.fromAppId,
+      });
+      throw err;
+    }
+    return { ok: true };
+  },
+  async compensate(ctx, _out, prior) {
+    const v = prior["validate"] as ValidateOut | undefined;
+    if (!v) return;
     await ensureBindMount({
       serverIp: v.fromServerIp,
       hostKey: v.fromHostKey,
@@ -130,50 +172,102 @@ const detachFromSource: Step<ReattachVolumeInput, { ok: true }> = {
       hostMountPath: v.fromHostMountPath,
       appId: ctx.input.fromAppId,
     });
-    db.updateAppVolume(ctx.input.fromAppId, ctx.input.volumeId, v.fromVolumeMount, v.fromVolumeAttached);
-    const result = await recreateAppContainer(ctx.input.fromAppId, v.fromVolumeMount, db.parseExtraVolumes(v.fromExtraVolumes));
-    if (!result.ok) throw new Error(result.error || "Failed to recreate source container during reattach rollback");
-    ctx.log(`Re-attached volume ${ctx.input.volumeId} to source app ${ctx.input.fromAppId}`);
-  },
-  async probeCompensated(ctx, _out, prior) {
-    const v = prior["validate"] as ValidateOut | undefined;
-    try {
-      const info = await hetzner.volumes.get(ctx.input.volumeId);
-      const fromApp = db.getApp(ctx.input.fromAppId);
-      return info.serverId === v?.fromProviderServerId && !!fromApp?.volume_id;
-    } catch {
-      return false;
-    }
   },
 };
 
-const attachToTarget: Step<ReattachVolumeInput, { ok: true }> = {
-  name: "attach_to_target",
-  label: "Attach volume to target",
-  async probe(ctx, prior) {
-    const v = prior["validate"] as ValidateOut;
-    try {
-      const info = await hetzner.volumes.get(ctx.input.volumeId);
-      const toApp = db.getApp(ctx.input.toAppId);
-      if (info.serverId === v.toProviderServerId && toApp?.volume_id === ctx.input.volumeId) {
-        ctx.log(`volume ${ctx.input.volumeId} already on target app ${ctx.input.toAppId}`);
-        return { ok: true };
-      }
-    } catch { /* fall through to run */ }
-    return null;
+const detachSourceProvider: Step<ReattachVolumeInput, OkOut> = {
+  name: "detach_source_provider",
+  label: "Detach volume from source server",
+  async probe(ctx) {
+    return (await providerServerId(ctx.input.volumeId)) == null ? { ok: true } : null;
   },
   async run(ctx, prior) {
     const v = prior["validate"] as ValidateOut;
-    // The step-runner never calls a failing step's own compensate, so if any
-    // part of the target attach fails we must undo our partial target-side work
-    // inline before rethrowing — otherwise the detach_from_source compensate
-    // can't re-attach the (still target-attached) volume back to the source.
-    let attached = false;
-    let bound = false;
-    let dbSet = false;
+    const before = await providerServerId(ctx.input.volumeId);
+    if (before == null) return { ok: true };
+    if (before !== v.fromProviderServerId) {
+      throw new Error(`Refusing to detach volume ${ctx.input.volumeId} from unexpected server ${before}`);
+    }
+    try {
+      await hetzner.volumes.detach(ctx.input.volumeId);
+      const after = await providerServerId(ctx.input.volumeId);
+      if (after != null) throw new Error(`Provider did not confirm volume ${ctx.input.volumeId} was detached`);
+    } catch (err) {
+      // A provider timeout may happen after detach. Since this failing step
+      // receives no runner compensation, restore it before surfacing failure.
+      if ((await providerServerId(ctx.input.volumeId)) == null) {
+        await hetzner.volumes.attach(ctx.input.volumeId, v.fromProviderServerId);
+      }
+      throw err;
+    }
+    return { ok: true };
+  },
+  async compensate(ctx, _out, prior) {
+    const v = prior["validate"] as ValidateOut | undefined;
+    if (!v) return;
+    const current = await providerServerId(ctx.input.volumeId);
+    if (current === v.fromProviderServerId) return;
+    if (current != null) throw new Error(`Volume ${ctx.input.volumeId} is attached to unexpected server ${current}`);
+    await hetzner.volumes.attach(ctx.input.volumeId, v.fromProviderServerId);
+    if ((await providerServerId(ctx.input.volumeId)) !== v.fromProviderServerId) {
+      throw new Error(`Provider did not confirm volume ${ctx.input.volumeId} was restored to source`);
+    }
+  },
+  async probeCompensated(ctx, _out, prior) {
+    const v = prior["validate"] as ValidateOut | undefined;
+    return !!v && (await providerServerId(ctx.input.volumeId)) === v.fromProviderServerId;
+  },
+};
+
+const attachTargetProvider: Step<ReattachVolumeInput, OkOut> = {
+  name: "attach_target_provider",
+  label: "Attach volume to target server",
+  async probe(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    return (await providerServerId(ctx.input.volumeId)) === v.toProviderServerId ? { ok: true } : null;
+  },
+  async run(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    const before = await providerServerId(ctx.input.volumeId);
+    if (before === v.toProviderServerId) return { ok: true };
+    if (before != null) throw new Error(`Volume ${ctx.input.volumeId} is still attached to server ${before}`);
     try {
       await hetzner.volumes.attach(ctx.input.volumeId, v.toProviderServerId);
-      attached = true;
+      if ((await providerServerId(ctx.input.volumeId)) !== v.toProviderServerId) {
+        throw new Error(`Provider did not confirm volume ${ctx.input.volumeId} was attached to target`);
+      }
+    } catch (err) {
+      if ((await providerServerId(ctx.input.volumeId)) === v.toProviderServerId) {
+        await hetzner.volumes.detach(ctx.input.volumeId);
+      }
+      throw err;
+    }
+    return { ok: true };
+  },
+  async compensate(ctx, _out, prior) {
+    const v = prior["validate"] as ValidateOut | undefined;
+    if (!v) return;
+    const current = await providerServerId(ctx.input.volumeId);
+    if (current == null) return;
+    if (current !== v.toProviderServerId) {
+      throw new Error(`Refusing to detach volume ${ctx.input.volumeId} from unexpected server ${current}`);
+    }
+    await hetzner.volumes.detach(ctx.input.volumeId);
+    if ((await providerServerId(ctx.input.volumeId)) != null) {
+      throw new Error(`Provider did not confirm volume ${ctx.input.volumeId} was detached from target`);
+    }
+  },
+  async probeCompensated(ctx) {
+    return (await providerServerId(ctx.input.volumeId)) == null;
+  },
+};
+
+const bindTarget: Step<ReattachVolumeInput, OkOut> = {
+  name: "bind_target_mount",
+  label: "Bind volume on target",
+  async run(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    try {
       await ensureBindMount({
         serverIp: v.toServerIp,
         hostKey: v.toHostKey,
@@ -181,37 +275,63 @@ const attachToTarget: Step<ReattachVolumeInput, { ok: true }> = {
         hostMountPath: v.toHostMountPath,
         appId: ctx.input.toAppId,
       });
-      bound = true;
-      db.updateAppVolume(ctx.input.toAppId, ctx.input.volumeId, v.toVolumeMount, v.fromVolumeAttached);
-      dbSet = true;
-      const result = await recreateAppContainer(
-        ctx.input.toAppId,
-        v.toVolumeMount,
-        db.parseExtraVolumes(v.toExtraVolumes),
-      );
-      if (!result.ok) throw new Error(result.error || "Failed to recreate container");
-      return { ok: true };
     } catch (err) {
-      ctx.log(`Target attach failed, cleaning up partial work: ${err}`);
-      if (dbSet) {
-        try { db.updateAppVolume(ctx.input.toAppId, "", ""); } catch { /* best-effort */ }
-        try {
-          await recreateAppContainer(ctx.input.toAppId, undefined, db.parseExtraVolumes(v.toExtraVolumes));
-        } catch { /* best-effort */ }
-      }
-      if (bound) {
-        await removeBindMountBestEffort({
-          serverIp: v.toServerIp,
-          hostKey: v.toHostKey,
-          hostMountPath: v.toHostMountPath,
-          appId: ctx.input.toAppId,
-        });
-      }
-      if (attached) {
-        try { await hetzner.volumes.detach(ctx.input.volumeId); } catch { /* best-effort */ }
-      }
+      await removeBindMountBestEffort({
+        serverIp: v.toServerIp,
+        hostKey: v.toHostKey,
+        hostMountPath: v.toHostMountPath,
+        appId: ctx.input.toAppId,
+      });
       throw err;
     }
+    return { ok: true };
+  },
+  async compensate(ctx, _out, prior) {
+    const v = prior["validate"] as ValidateOut | undefined;
+    if (!v) return;
+    await removeBindMount({
+      serverIp: v.toServerIp,
+      hostKey: v.toHostKey,
+      hostMountPath: v.toHostMountPath,
+      appId: ctx.input.toAppId,
+    });
+  },
+};
+
+const recordTargetApp: Step<ReattachVolumeInput, OkOut> = {
+  name: "record_target_app",
+  label: "Record volume on target app",
+  async probe(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    const app = db.getApp(ctx.input.toAppId);
+    return app?.volume_id === ctx.input.volumeId && app.volume_mount === v.toVolumeMount &&
+      !!app.volume_attached === v.fromVolumeAttached ? { ok: true } : null;
+  },
+  async run(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    db.updateAppVolume(ctx.input.toAppId, ctx.input.volumeId, v.toVolumeMount, v.fromVolumeAttached);
+    return { ok: true };
+  },
+  async compensate(ctx, _out, prior) {
+    const v = prior["validate"] as ValidateOut | undefined;
+    if (!v) return;
+    db.updateAppVolume(ctx.input.toAppId, "", "");
+    // The target replacement can fail after removing the old container. This
+    // completed DB step therefore owns convergence back to the volume-less
+    // target state, and deliberately has no probeCompensated.
+    await recreateOrThrow(ctx.input.toAppId, undefined, v.toExtraVolumes, "Failed to restore target container without volume");
+  },
+};
+
+// No probe: provider + DB state cannot prove what mounts the live container
+// received. Re-run the idempotent recreate after every ambiguous crash.
+const recreateTarget: Step<ReattachVolumeInput, OkOut> = {
+  name: "recreate_target_with_volume",
+  label: "Recreate target container with volume",
+  async run(ctx, prior) {
+    const v = prior["validate"] as ValidateOut;
+    await recreateOrThrow(ctx.input.toAppId, v.toVolumeMount, v.toExtraVolumes, "Failed to recreate target container with volume");
+    return { ok: true };
   },
 };
 
@@ -223,7 +343,17 @@ const reattachVolumeOp: OpKindDefinition<ReattachVolumeInput> = {
     `app:${input.toAppId}`,
     `volume:${input.volumeId}`,
   ],
-  steps: [validate, detachFromSource, attachToTarget],
+  steps: [
+    validate,
+    recreateSourceWithoutVolume,
+    clearSourceApp,
+    removeSourceBind,
+    detachSourceProvider,
+    attachTargetProvider,
+    bindTarget,
+    recordTargetApp,
+    recreateTarget,
+  ],
 };
 
 registerOp(reattachVolumeOp as OpKindDefinition<any>);

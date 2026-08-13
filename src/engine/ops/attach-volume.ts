@@ -9,7 +9,7 @@ import {
   removeBindMountBestEffort,
   type SingleReplicaTarget,
 } from "./_volumes.ts";
-import type { OpKindDefinition, Step } from "../types.ts";
+import { FatalProbeError, type OpKindDefinition, type Step } from "../types.ts";
 
 // Create a brand-new Hetzner volume and attach it to the app's single replica.
 // Every step past validation has a compensation, so any failure — including a
@@ -21,12 +21,19 @@ type AttachVolumeInput = { appId: number; sizeGb: number; mountPath?: string };
 
 type CreateVolumeOut = { volumeId: string; hostMountPath: string; volName: string };
 type AttachToAppOut = { priorMinReplicas: number; priorMaxReplicas: number; volumeMount: string };
+type ValidateOut = SingleReplicaTarget & { priorMinReplicas: number; priorMaxReplicas: number };
 
-const validate: Step<AttachVolumeInput, SingleReplicaTarget> = {
+const validate: Step<AttachVolumeInput, ValidateOut> = {
   name: "validate",
   label: "Validate preconditions",
   async run(ctx) {
-    return loadSingleReplicaTarget(ctx.input.appId, { requireNoVolume: true });
+    const target = loadSingleReplicaTarget(ctx.input.appId, { requireNoVolume: true });
+    const app = db.getApp(ctx.input.appId)!;
+    return {
+      ...target,
+      priorMinReplicas: app.min_replicas,
+      priorMaxReplicas: app.max_replicas,
+    };
   },
 };
 
@@ -46,8 +53,11 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
     let all;
     try {
       all = await hetzner.volumes.list();
-    } catch {
-      return null;
+    } catch (error) {
+      throw new FatalProbeError(
+        `Cannot verify whether operation-owned volume ${volName} already exists; refusing to create a possible duplicate`,
+        { cause: error },
+      );
     }
     const existing = all.find((v) => v.name === volName);
     if (!existing) return null;
@@ -55,7 +65,7 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
       (row) => row.provider_volume_id === existing.providerId,
     );
     if (retired) {
-      throw new Error(
+      throw new FatalProbeError(
         `Refusing to adopt retained volume ${existing.providerId} (${volName}); ` +
         `it belongs to ${retired.former_resource_type}:${retired.former_resource_name}. ` +
         "Attach it explicitly as an existing volume or permanently delete it first.",
@@ -66,7 +76,7 @@ const createVolume: Step<AttachVolumeInput, CreateVolumeOut> = {
       existing.location !== target.serverLocation ||
       (existing.serverId != null && existing.serverId !== target.providerServerId)
     ) {
-      throw new Error(
+      throw new FatalProbeError(
         `Volume name collision for ${volName}: provider volume ${existing.providerId} ` +
         `does not match the requested size/location/server. Refusing implicit adoption.`,
       );
@@ -139,14 +149,40 @@ const bindMount: Step<AttachVolumeInput, { ok: true }> = {
 const attachToApp: Step<AttachVolumeInput, AttachToAppOut> = {
   name: "attach_to_app",
   label: "Record volume on app",
+  async probe(ctx, prior) {
+    const vol = prior["create_volume"] as CreateVolumeOut;
+    const before = prior["validate"] as ValidateOut;
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new FatalProbeError("App disappeared while recording its volume");
+    const volumeMount = `${vol.hostMountPath}:${ctx.input.mountPath || "/data"}`;
+    if (app.volume_id && app.volume_id !== vol.volumeId) {
+      throw new FatalProbeError(
+        `App already references unexpected volume ${app.volume_id}; refusing to overwrite it with ${vol.volumeId}`,
+      );
+    }
+    if (
+      app.volume_id === vol.volumeId &&
+      app.volume_mount === volumeMount &&
+      app.max_replicas === 1 &&
+      app.min_replicas === Math.min(1, before.priorMinReplicas)
+    ) {
+      return {
+        priorMinReplicas: before.priorMinReplicas,
+        priorMaxReplicas: before.priorMaxReplicas,
+        volumeMount,
+      };
+    }
+    return null;
+  },
   async run(ctx, prior) {
     const vol = prior["create_volume"] as CreateVolumeOut;
+    const before = prior["validate"] as ValidateOut;
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
     const containerPath = ctx.input.mountPath || "/data";
     const volumeMount = `${vol.hostMountPath}:${containerPath}`;
-    const priorMinReplicas = app.min_replicas;
-    const priorMaxReplicas = app.max_replicas;
+    const priorMinReplicas = before?.priorMinReplicas ?? app.min_replicas;
+    const priorMaxReplicas = before?.priorMaxReplicas ?? app.max_replicas;
     db.updateAppVolume(ctx.input.appId, vol.volumeId, volumeMount);
     // A volume locks the app to a single server: force min/max replicas to 1
     // so autoscale + manual scaling cannot ever bring up replica 2+.

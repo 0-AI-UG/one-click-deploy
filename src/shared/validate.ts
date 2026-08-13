@@ -555,9 +555,33 @@ export function validateDeployRequest(req: {
   compress?: boolean;
   public_port?: number | "auto" | null;
   public_protocol?: string;
+  webhook_path?: string;
+  webhook_paths?: string[];
+  webhook_paths_ignore?: string[];
 }): ValidationResult<void> {
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };
+
+  if (req.webhook_path !== undefined && req.webhook_paths !== undefined) {
+    return { valid: false, error: "webhook_path and webhook_paths cannot be used together" };
+  }
+  if (req.webhook_paths !== undefined && req.webhook_paths.length === 0) {
+    return { valid: false, error: "webhook_paths must contain at least one pattern" };
+  }
+  for (const [field, patterns] of [
+    ["webhook_paths", req.webhook_paths],
+    ["webhook_paths_ignore", req.webhook_paths_ignore],
+  ] as const) {
+    if (patterns === undefined) continue;
+    if (!Array.isArray(patterns) || patterns.some((pattern) => typeof pattern !== "string" || !pattern)) {
+      return { valid: false, error: `${field} must be an array of non-empty strings` };
+    }
+    const invalid = patterns.find((pattern) =>
+      pattern.startsWith("!") || pattern.startsWith("/") || pattern.startsWith("./") ||
+      pattern.includes("\\") || pattern.split("/").includes("..")
+    );
+    if (invalid) return { valid: false, error: `${field} contains invalid repository glob: ${invalid}` };
+  }
 
   if (req.image_ref) {
     if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(req.image_ref)) {

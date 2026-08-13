@@ -18,6 +18,9 @@ import { skill } from "./commands/skill.ts";
 import { app } from "./commands/app.ts";
 import { scale } from "./commands/scale.ts";
 import { resources, volumes } from "./commands/resources.ts";
+import { webhook } from "./commands/webhook.ts";
+import { gc } from "./commands/gc.ts";
+import { manifest } from "./commands/manifest.ts";
 import { BOLD, DIM, RESET } from "./format.ts";
 import { VERSION } from "./version.ts";
 
@@ -45,6 +48,9 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   scale,
   resources,
   volumes,
+  webhook,
+  gc,
+  manifest,
 };
 
 function printUsage(): void {
@@ -57,9 +63,11 @@ ${BOLD}Commands:${RESET}
   status                 Dashboard overview
   apps                   List all apps
   app <command>          Inspect and manage an existing app
+  webhook plan           Preview change-aware stack deployment selection
   logs <app> [--tail=N]  View app logs
   deploy [manifest]      Apply desired config, then deploy current Git code
   deploy stack [manifest]  Deploy a multi-app stack
+  manifest validate [path] Validate an app or stack manifest (including children)
   delete <app>           Destroy an app
   delete stack <name>    Destroy a stack and all its members
   envs                   Manage environments and variables
@@ -79,6 +87,7 @@ ${BOLD}Commands:${RESET}
   servers                Inspect and manage servers
   resources              Inventory and estimated cost
   volumes                Manage attached and retained volumes
+  gc [--server X]        Preview safe disk garbage collection (--execute to apply)
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session
   ssh <server> --server  Interactive shell on a server

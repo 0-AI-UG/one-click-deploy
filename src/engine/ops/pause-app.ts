@@ -1,4 +1,3 @@
-import { pauseApp } from "../deploy/lifecycle.ts";
 import { makeAppLifecycleOp, type AppLifecycleInput } from "./app-lifecycle.ts";
 
 const pauseAppOp = makeAppLifecycleOp({
@@ -8,7 +7,8 @@ const pauseAppOp = makeAppLifecycleOp({
   actionLabel: "Pause replicas",
   shouldSkip: (app) => app.status === "paused",
   skipLog: (app) => `app ${app.name} already paused — no work needed`,
-  action: pauseApp,
+  action: "pause",
+  syncIngress: true,
 });
 
 export default pauseAppOp;

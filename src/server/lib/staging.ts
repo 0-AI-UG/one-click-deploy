@@ -11,7 +11,7 @@ export const STAGING_TARGET = "staging";
  *  user selected for staging (prod.webhook_staging_environment_id) — no live
  *  inheritance from production. Volumes/webhooks are NOT carried over: staging
  *  is a clean, isolated deploy. */
-function stagingDeployRequest(prod: db.AppRow, gitSha?: string): DeployRequest {
+export function stagingDeployRequest(prod: db.AppRow, gitSha?: string): DeployRequest {
   return {
     environment_id: prod.webhook_staging_environment_id ?? undefined,
     app_name: `${prod.name}-${STAGING_TARGET}`,

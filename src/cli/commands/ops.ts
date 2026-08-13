@@ -2,6 +2,9 @@ import { get, post, ApiError } from "../api.ts";
 import { newFollowRetryState, resetFollowRetryState, handleTransientFollowError, summarizeOperationError } from "../ops.ts";
 import { webConfirm } from "../confirm.ts";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW, colorStatus, table } from "../format.ts";
+import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
+import { operationLogQuery, parseLogArgs } from "../log-filters.ts";
+import { expectArray, expectRecord } from "../response.ts";
 
 interface Op {
   id: number;
@@ -113,22 +116,11 @@ function opMatchesApp(op: Op, needle: string): boolean {
 }
 
 async function opsList(args: string[]): Promise<void> {
-  let app = "";
-  let limit = 20;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--app") {
-      app = args[++i] || "";
-    } else if (arg.startsWith("--app=")) {
-      app = arg.slice(6);
-    } else if (arg === "--limit") {
-      const n = parseInt(args[++i] || "", 10);
-      if (!isNaN(n)) limit = n;
-    } else if (arg.startsWith("--limit=")) {
-      const n = parseInt(arg.slice(8), 10);
-      if (!isNaN(n)) limit = n;
-    }
-  }
+  const parsed = parseCliArgs(args, {
+    app: { type: "string" }, limit: { type: "string" },
+  }, { maxPositionals: 0 });
+  const app = (parsed.flags.app as string | undefined) ?? "";
+  const limit = positiveIntegerFlag(parsed.flags.limit, "limit", { defaultValue: 20, max: 1000 })!;
 
   const data = await get<OpsList>("/api/operations");
   console.log(
@@ -230,48 +222,26 @@ function printLog(log: OpLog): void {
 }
 
 async function opsLogs(args: string[]): Promise<void> {
-  let idStr = "";
-  let since = 0;
-  let follow = false;
-  let tail = 0;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--follow" || arg === "-f") {
-      follow = true;
-    } else if (arg === "--since") {
-      const n = parseInt(args[++i] || "", 10);
-      if (!isNaN(n)) since = n;
-    } else if (arg.startsWith("--since=")) {
-      const n = parseInt(arg.slice(8), 10);
-      if (!isNaN(n)) since = n;
-    } else if (arg === "--tail") {
-      const n = parseInt(args[++i] || "", 10);
-      if (!isNaN(n) && n > 0) tail = n;
-    } else if (arg.startsWith("--tail=")) {
-      const n = parseInt(arg.slice(7), 10);
-      if (!isNaN(n) && n > 0) tail = n;
-    } else if (!arg.startsWith("-") && !idStr) {
-      idStr = arg;
-    }
-  }
-
-  const id = parseInt(idStr, 10);
-  if (!idStr || isNaN(id)) {
-    console.error("Usage: ocd ops logs <id> [--since N] [--tail=N] [--follow]");
+  const filters = parseLogArgs(args);
+  const id = parseInt(filters.target, 10);
+  if (!Number.isInteger(id) || id <= 0 || String(id) !== filters.target) {
+    console.error("Usage: ocd ops logs <id> [--since TIME|CURSOR] [--tail N] [--child NAME|ID] [--phase STEP] [--follow]");
     process.exit(1);
   }
 
-  if (!follow) {
-    const tailQuery = tail > 0 ? `&tail=${tail}` : "";
-    const data = await get<{ status: string; logs: OpLog[] }>(`/api/operations/${id}/logs?since=${since}${tailQuery}`);
-    for (const log of data.logs) printLog(log);
+  if (!filters.follow) {
+    const payload = await get<unknown>(`/api/operations/${id}/logs?${operationLogQuery(filters)}`);
+    const data = expectRecord(payload, "Operation logs request");
+    const logs = expectArray(data.logs, "Operation logs request") as OpLog[];
+    for (const log of logs) printLog(log);
+    if (logs.length === 0) console.log(`${DIM}(no operation logs matched)${RESET}`);
     return;
   }
 
-  let cursor = since;
-  if (tail > 0) {
+  let cursor = filters.cursor;
+  if (filters.tail > 0) {
     const initial = await get<{ logs: OpLog[]; next_cursor?: number }>(
-      `/api/operations/${id}/logs?since=${since}&tail=${tail}`,
+      `/api/operations/${id}/logs?${operationLogQuery(filters)}`,
     );
     for (const log of initial.logs) {
       printLog(log);
@@ -284,7 +254,7 @@ async function opsLogs(args: string[]): Promise<void> {
     let data: { status: string; logs: OpLog[]; next_cursor?: number };
     try {
       data = await get<{ status: string; logs: OpLog[]; next_cursor?: number }>(
-        `/api/operations/${id}/logs?since=${cursor}&wait=15000`,
+        `/api/operations/${id}/logs?${operationLogQuery({ ...filters, cursor, tail: 0, wait: 15000 })}`,
       );
       resetFollowRetryState(retry);
     } catch (err) {
@@ -310,8 +280,10 @@ async function opsLogs(args: string[]): Promise<void> {
 }
 
 function parseOpId(args: string[], usageLine: string): number {
-  const id = parseInt(args[0] || "", 10);
-  if (!Number.isInteger(id) || id <= 0) {
+  const parsed = parseCliArgs(args, {}, { maxPositionals: 1 });
+  const raw = parsed.positionals[0] || "";
+  const id = parseInt(raw, 10);
+  if (!Number.isInteger(id) || id <= 0 || String(id) !== raw) {
     console.error(usageLine);
     process.exit(1);
   }
@@ -347,19 +319,15 @@ async function opsRetry(args: string[]): Promise<void> {
 }
 
 async function opsFinalize(args: string[]): Promise<void> {
-  const id = parseOpId(args, "Usage: ocd ops finalize <id> [--status auto|done|failed]");
-  let status: "auto" | "done" | "failed" = "auto";
-  for (let i = 1; i < args.length; i++) {
-    const arg = args[i];
-    const value = arg === "--status" ? args[++i] : arg.startsWith("--status=") ? arg.slice(9) : "";
-    if (value) {
-      if (value !== "auto" && value !== "done" && value !== "failed") {
-        console.error("--status must be auto, done, or failed");
-        process.exit(1);
-      }
-      status = value;
-    }
+  const parsed = parseCliArgs(args, { status: { type: "string" } }, { maxPositionals: 1 });
+  const rawId = parsed.positionals[0] || "";
+  const id = Number(rawId);
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Usage: ocd ops finalize <id> [--status auto|done|failed]");
+  const value = (parsed.flags.status as string | undefined) ?? "auto";
+  if (value !== "auto" && value !== "done" && value !== "failed") {
+    throw new Error("--status must be auto, done, or failed");
   }
+  const status: "auto" | "done" | "failed" = value;
   const result = await post<{ status: string; assessment: string }>(
     `/api/operations/${id}/finalize`,
     { status },
@@ -375,7 +343,7 @@ ${BOLD}Subcommands:${RESET}
   (list)                     List deploy engine operations (default)
   engine                     Show heartbeat, concurrency and operation kinds
   <id>                       Show an operation's steps and children
-  logs <id> [--tail=N] [--follow]  Print or reconnectingly stream operation logs
+  logs <id> [--tail N] [--since TIME] [--child X] [--phase X] [--follow]
   cancel <id>                Confirm in the web UI, then stop and compensate safely
   retry <id>                 Resume cleanup or create a fresh retry
   finalize <id>              Reconcile resources and close a stale operation`);
