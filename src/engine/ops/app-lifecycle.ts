@@ -30,7 +30,7 @@ type AppLifecycleConfig = {
   label: string;
   actionName: string;
   actionLabel: string;
-  action: AppLifecycleAction;
+  action: AppLifecycleAction | ((appId: number) => Promise<{ ok: boolean; error?: string }>);
   shouldSkip: (app: AppRow) => boolean;
   skipLog: (app: AppRow) => string;
   requireReplicas?: boolean;
@@ -148,6 +148,15 @@ export function makeAppLifecycleOp(config: AppLifecycleConfig): OpKindDefinition
       if (pre?.skip) return { childIds: [], skipped: true };
       const replicas = db.getReplicas(ctx.input.appId);
       if (config.requireReplicas && replicas.length === 0) throw new Error("App has no replicas");
+      // Environment reload remains a rolling, replica-coupled convergence
+      // routine (image distribution, drain/ingress, attestation). Keep that
+      // specialized routine behind the same operation wrapper while simple
+      // lifecycle actions fan out into durable child operations below.
+      if (typeof config.action === "function") {
+        const result = await config.action(ctx.input.appId);
+        if (!result.ok) throw new Error(result.error || `${config.kind} returned ok=false`);
+        return { childIds: [] };
+      }
       const childIds = replicas.map((replica) => enqueueOperation({
         kind: "app_replica_lifecycle",
         resourceKeys: [`server:${replica.server_id}`],
@@ -181,6 +190,9 @@ export function makeAppLifecycleOp(config: AppLifecycleConfig): OpKindDefinition
       const pre = prior["check_precondition"] as Precond | undefined;
       if (pre?.skip) return { status: db.getApp(ctx.input.appId)?.status || "unknown", skipped: true };
       const replicas = db.getReplicas(ctx.input.appId);
+      if (typeof config.action === "function") {
+        return { status: db.getApp(ctx.input.appId)?.status || "unknown" };
+      }
       const status = config.action === "pause"
         ? "paused"
         : replicas.length === 0 ? "stopped"
