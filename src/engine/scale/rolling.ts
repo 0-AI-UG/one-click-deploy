@@ -65,8 +65,12 @@ export async function rollingRedeploy(
       // servers to retain different revisions.
       const envVars = candidate?.envVars ?? await resolveAppEnvVars(app);
       await startAppReplica(server.ipv4, {
-        ...appReplicaRunOpts(app, server, { containerName: replica.container_name, hostPort: replica.host_port, envVars }),
-        image: imageName,
+        ...appReplicaRunOpts(app, server, {
+          containerName: replica.container_name,
+          hostPort: replica.host_port,
+          imageRef: imageName,
+          envVars,
+        }),
         configRevision: expectedRevision?.configRevision ?? app.config_revision,
         envHash: expectedRevision?.envHash,
       }, hostKey);

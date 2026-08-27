@@ -83,4 +83,41 @@ describe("managed-service aliases on every app container create/recreate", () =>
       { hostname: `redis-${suffix}.svc.ocd.internal`, address: "10.0.0.9" },
     ]));
   });
+
+  test("candidate rollouts can use their pulled digest before history is committed", () => {
+    const suffix = randomSuffix();
+    const server = db.insertServer({
+      name: `candidate-host-${suffix}`,
+      provider_id: `candidate-${suffix}`,
+      ipv4: "192.0.2.10",
+      ipv6: "",
+      private_ipv4: "10.0.0.10",
+      type: "cx22",
+      location: "fsn1",
+      status: "ready",
+    });
+    const candidateRef = "ghcr.io/ocd/candidate@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    const app = db.insertApp({
+      name: `candidate-${suffix}`,
+      domain: "",
+      image_ref: candidateRef,
+      container_port: 3000,
+      env_vars: "{}",
+    });
+    db.insertDeployment({
+      app_id: app.id,
+      image_tag: `${app.name}:latest`,
+      image_digest: "sha256:0123456789abcdef",
+      git_commit: "deadbeef",
+      source: "manifest",
+    });
+
+    const opts = appReplicaRunOpts(app, server, {
+      containerName: `${app.name}-r2`,
+      hostPort: 30002,
+      imageRef: candidateRef,
+      envVars: {},
+    });
+    expect(opts.image).toBe(candidateRef);
+  });
 });

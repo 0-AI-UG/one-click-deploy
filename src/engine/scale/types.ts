@@ -27,13 +27,18 @@ export function appReplicaRunOpts(
   opts: {
     containerName: string;
     hostPort: number;
+    imageRef?: string;
     envFilePath?: string;
     envVars?: Record<string, string>;
   },
 ) {
   return {
     containerName: opts.containerName,
-    image: latestDesiredImage(app),
+    // Candidate rollouts have pulled an exact digest that is intentionally
+    // newer than deployment history.  Let that forward image bypass the
+    // historical lookup; otherwise the first clean-cut release of a legacy
+    // multi-replica app fails while replacing its extra replicas.
+    image: opts.imageRef ?? latestDesiredImage(app),
     appName: app.name,
     // Initial deploys use startAppReplica's canonical ocd-net default. Keep
     // every reload/scale/recreate path on the same network.
