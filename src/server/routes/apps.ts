@@ -10,11 +10,12 @@ import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-
 import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
-import { applyAppConfig, classifyConfigOnlyChanges, diffAppConfig } from "../../shared/app-config.ts";
-import type { DeployRequest } from "../../shared/rpc.ts";
+import { applyAppConfig, classifyConfigOnlyChanges, deployRequestFromApp, diffAppConfig } from "../../shared/app-config.ts";
+import type { DeployRequest, ReleaseRequest } from "../../shared/rpc.ts";
 import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts";
 import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
 import { stackLockKeys, withOwningStackKeys } from "../lib/stack-operations.ts";
+import { reconcileAppDns } from "../../engine/dns-reconciler.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
  *  public raw TCP/UDP address, a boolean `auth_enabled` flag, and strips every
@@ -24,21 +25,7 @@ import { stackLockKeys, withOwningStackKeys } from "../lib/stack-operations.ts";
 export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
   const envRow = app.environment_id ? db.getEnvironment(app.environment_id as number) : null;
   const panelIp = app.public_port != null ? getPanelIngressIpv4() : null;
-  const { auth_password_hash, webhook_secret, ...safe } = app;
-  const webhookPaths = (() => {
-    const parsed = db.parseStoredWebhookPaths(app.webhook_paths as string | null, app.webhook_path as string);
-    return parsed ?? null;
-  })();
-  const webhookPathsIgnore = (() => {
-    try {
-      const parsed = JSON.parse(String(app.webhook_paths_ignore || "[]"));
-      return Array.isArray(parsed) ? parsed : [];
-    } catch { return []; }
-  })();
-  const lastWebhookDecision = (() => {
-    try { return app.last_webhook_decision ? JSON.parse(String(app.last_webhook_decision)) : null; }
-    catch { return null; }
-  })();
+  const { auth_password_hash, ...safe } = app;
   return {
     ...safe,
     env_vars: [],
@@ -46,24 +33,21 @@ export function enrichAppForResponse(app: AppRow & Record<string, unknown>) {
     environment_id: app.environment_id ?? null,
     environment_name: envRow?.name ?? null,
     deployed_commit: db.getDeployedCommit(app.id),
-    webhook_paths: webhookPaths,
-    webhook_paths_ignore: webhookPathsIgnore,
-    last_webhook_decision: lastWebhookDecision,
-    last_matching_paths: lastWebhookDecision?.matching_paths ?? [],
-    last_decision: lastWebhookDecision?.decision ?? null,
-    last_evaluated_commit: lastWebhookDecision?.head ?? null,
-    last_successfully_deployed_commit: db.getDeployedCommit(app.id),
     public_address: app.public_port != null && panelIp ? `${panelIp}:${app.public_port}` : null,
   };
+}
+
+async function withDnsInstruction<T extends { id: number }>(app: T): Promise<T & { dns_instruction: Awaited<ReturnType<typeof reconcileAppDns>> }> {
+  return { ...app, dns_instruction: await reconcileAppDns(app.id, { skipIfBusy: true }) };
 }
 
 export async function handleGetServers(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "fleet.view");
-    const result = getServersWithApps().map((s: any) => ({
+    const result = await Promise.all(getServersWithApps().map(async (s: any) => ({
       ...s,
-      apps: (s.apps || []).map((a: any) => enrichAppForResponse(a)),
-    }));
+      apps: await Promise.all((s.apps || []).map((a: any) => withDnsInstruction(enrichAppForResponse(a)))),
+    })));
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -73,15 +57,34 @@ export async function handleGetServers(request: Request): Promise<Response> {
 export async function handleGetDashboard(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "fleet.view");
-    // Staging siblings (target_of set) are auto-managed via the parent's webhook
-    // staging toggle — hide them from the main list so they read as an internal
-    // detail of the parent, not a separate app. They stay reachable via the
-    // parent's staging panel and /api/apps (which parent lookups still need).
-    const apps = db.getApps().filter((a) => a.target_of == null).map((a) => {
-      const reps = db.getReplicas(a.id);
-      return enrichAppForResponse({ ...a, desired_replicas: a.desired_replicas ?? reps.length });
-    });
+    const compact = new URL(request.url).searchParams.get("compact") === "1";
+    // Staging targets are shown through their production app's promotion view.
+    const visibleApps = db.getApps().filter((a) => a.target_of == null);
+    const apps = compact
+      ? await Promise.all(visibleApps.map((app) => withDnsInstruction({
+          id: app.id,
+          name: app.name,
+          status: app.status,
+          domain: app.domain,
+          public: app.public,
+          container_port: app.container_port,
+          internal_protocol: app.internal_protocol,
+          deployed_commit: db.getDeployedCommit(app.id),
+          environment_stale: app.environment_stale,
+        })))
+      : await Promise.all(visibleApps.map((app) => {
+          const reps = db.getReplicas(app.id);
+          return withDnsInstruction(enrichAppForResponse({ ...app, desired_replicas: app.desired_replicas ?? reps.length }));
+        }));
     const services = db.getServices().map((svc) => {
+      if (compact) {
+        return {
+          id: svc.id,
+          name: svc.name,
+          service_type: svc.service_type,
+          status: svc.status,
+        };
+      }
       const instances = db.getServiceInstances(svc.id);
       const links = db.getServiceLinks(svc.id);
       return {
@@ -100,12 +103,12 @@ export async function handleGetApps(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "apps.view");
     const apps = db.getApps();
-    const result = apps.map((a) => {
+    const result = await Promise.all(apps.map((a) => {
       const reps = db.getReplicas(a.id);
       const first = reps[0];
       const servers = db.getServersForApp(a.id).map((s) => s.id);
-      return enrichAppForResponse({ ...a, host_port: first?.host_port ?? 0, servers });
-    });
+      return withDnsInstruction(enrichAppForResponse({ ...a, host_port: first?.host_port ?? 0, servers }));
+    }));
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -198,7 +201,7 @@ async function applyExistingAppConfig(
   });
   await syncAppIngress(app.id);
   const updated = db.getApp(app.id)!;
-  if (plan.pendingBuild) db.requestAppRollout(app.id, updated.config_revision);
+  if (plan.pendingRollout) db.requestAppRollout(app.id, updated.config_revision);
   const { opId } = enqueue({
     kind: "apply_manifest",
     resourceKeys: [`manifest:${app.id}`, ...(owningStack ? stackLockKeys(owningStack) : [])],
@@ -207,7 +210,7 @@ async function applyExistingAppConfig(
       userId,
       deploy: false,
       rollout: plan.rollout,
-      pendingRollout: plan.pendingBuild,
+      pendingRollout: plan.pendingRollout,
     },
     trigger: "cli",
     triggeredBy: userId,
@@ -217,14 +220,13 @@ async function applyExistingAppConfig(
     applied: true,
     changes,
     rollout: plan.rollout,
-    pending_rollout: plan.pendingBuild,
+    pending_rollout: plan.pendingRollout,
     config_revision: updated.config_revision,
     op_id: opId,
   }, { headers: corsHeaders });
 }
 
-/** Rebuild an existing app from its stored source and desired configuration.
- * The stored environment and owning-stack association remain authoritative. */
+/** Re-run an app from its stored immutable artifact and desired configuration. */
 export async function handleRedeployApp(request: Request, appId: number): Promise<Response> {
   try {
     const payload = await requirePermission(request, "apps.deploy", appScope(appId));
@@ -238,6 +240,43 @@ export async function handleRedeployApp(request: Request, appId: number): Promis
       triggeredBy: payload.userId,
     }));
     return Response.json({ op_id: opId }, { headers: corsHeaders });
+  } catch (error) {
+    return handleError(error);
+  }
+}
+
+/** Publish one externally-built immutable artifact as the app's desired and
+ * running release. Configuration is reconstructed from persisted desired
+ * state and committed only after the candidate passes health checks. */
+export async function handleReleaseApp(request: Request, appId: number): Promise<Response> {
+  try {
+    const payload = await requireCliPermission(request, "apps.deploy", appScope(appId));
+    const app = db.getApp(appId);
+    if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
+    const body = await request.json() as ReleaseRequest;
+    const image = typeof body?.image === "string" ? body.image.trim() : "";
+    const commit = typeof body?.commit === "string" ? body.commit.trim() : undefined;
+    const candidate = { ...deployRequestFromApp(app), image_ref: image };
+    const validation = validateDeployRequest({ ...candidate, git_commit: commit });
+    if (!validation.valid) {
+      return Response.json({ error: validation.error }, { status: 400, headers: corsHeaders });
+    }
+    const requestedKey = request.headers.get("Idempotency-Key")?.trim();
+    if (requestedKey && (!/^[A-Za-z0-9._:-]{1,200}$/.test(requestedKey))) {
+      return Response.json(
+        { error: "Idempotency-Key must be 1-200 characters using letters, digits, '.', '_', ':', or '-'" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const { opId } = enqueue(withOwningStackKeys({
+      kind: "redeploy",
+      resourceKeys: [`app:${app.id}`],
+      input: { appId: app.id, userId: payload.userId, gitCommit: commit, candidate },
+      trigger: "release",
+      triggeredBy: payload.userId,
+      idempotencyKey: requestedKey ? `release:${app.id}:${requestedKey}` : undefined,
+    }));
+    return Response.json({ op_id: opId, image, commit: commit ?? null }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -425,8 +464,8 @@ export async function handleGetDeployments(request: Request, appId: number): Pro
  * POST /api/apps/promote — promote the exact version running in a SOURCE app
  * (e.g. `<name>-staging`) up to a DEST app (production). Validates both apps
  * exist, that they differ, and that the source has a successful deployment to
- * promote; then enqueues the promote op (which rebuilds `<dest>:latest` from the
- * source's git commit and swaps the DEST container(s)).
+ * promote; then enqueues the promote op, which pulls and runs the exact source
+ * artifact digest on the destination.
  */
 export async function handlePromoteApp(request: Request): Promise<Response> {
   try {
@@ -441,8 +480,7 @@ export async function handlePromoteApp(request: Request): Promise<Response> {
     const dest = db.getAppByName(body.dest_app);
     if (!dest) return Response.json({ error: `Destination app not found: ${body.dest_app}` }, { status: 404, headers: corsHeaders });
 
-    // The promote op acts on the destination app (it rebuilds and swaps DEST's
-    // containers), so that's the app the permission is scoped against. The body
+    // The promote op acts on the destination app, so that's the app the permission is scoped against. The body
     // has to be read first to know which app that is.
     await requirePermission(request, "apps.promote", appScope(dest.id));
 
@@ -450,8 +488,8 @@ export async function handlePromoteApp(request: Request): Promise<Response> {
       return Response.json({ error: "Source and destination must be different apps" }, { status: 400, headers: corsHeaders });
     }
 
-    const commit = db.getDeployments(source.id).find((d) => d.status === "deployed")?.git_commit;
-    if (!commit) {
+    const sourceDeployment = db.getDeployments(source.id).find((d) => d.status === "deployed");
+    if (!sourceDeployment?.image_digest?.includes("@sha256:")) {
       return Response.json({ error: `Source app "${source.name}" has no successful deployment to promote` }, { status: 400, headers: corsHeaders });
     }
     await enforceConfirmation(
@@ -462,10 +500,6 @@ export async function handlePromoteApp(request: Request): Promise<Response> {
       `${source.id}:${dest.id}`,
     );
 
-    // Different repos is unusual (promotions normally share a repo) but allowed;
-    // surface it in the response so the caller can notice.
-    const repo_mismatch = source.git_repo !== dest.git_repo;
-
     const { opId } = enqueue({
       kind: "promote",
       resourceKeys: [`app:${dest.id}`],
@@ -473,7 +507,7 @@ export async function handlePromoteApp(request: Request): Promise<Response> {
       trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
-    return Response.json({ op_id: opId, commit, repo_mismatch }, { headers: corsHeaders });
+    return Response.json({ op_id: opId, image: sourceDeployment.image_digest, commit: sourceDeployment.git_commit || null }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
@@ -485,10 +519,7 @@ function deployedCommit(appId: number): string | null {
 }
 
 /**
- * GET /api/apps/:id/staging — staging status for a production app. Backs the
- * Webhooks-tab staging panel: whether the webhook staging toggle is on, the
- * auto-managed `<name>-staging` sibling (if it's been deployed yet), and the
- * commit each side is running so the UI can show "staging is ahead — promote".
+ * GET /api/apps/:id/staging — explicit artifact staging target status.
  */
 export async function handleGetAppStaging(request: Request, appId: number): Promise<Response> {
   try {
@@ -509,8 +540,8 @@ export async function handleGetAppStaging(request: Request, appId: number): Prom
 
     return Response.json(
       {
-        staging_enabled: app.webhook_staging_environment_id != null,
-        staging_environment_id: app.webhook_staging_environment_id,
+        staging_enabled: siblingRow != null,
+        staging_environment_id: siblingRow?.environment_id ?? null,
         prod_commit: deployedCommit(app.id),
         sibling,
       },

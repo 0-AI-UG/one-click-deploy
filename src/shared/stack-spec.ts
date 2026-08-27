@@ -29,9 +29,8 @@ export function repoDirOf(path: string): string {
  * env_vars are NOT set here — the caller attaches the values collected from
  * manifest defaults, CLI flags, linked environments, and secure prompts.
  *
- * `manifestDir` is the app manifest's repo-root-relative directory; the
- * Dockerfile path is resolved against it so monorepo apps build the right file
- * (matching introspectRepo's behavior for single-app deploys).
+ * `repo` and `manifestDir` are retained in the helper signature until callers
+ * are simplified; source location never enters the deployment spec.
  */
 export function buildStackAppSpec(
   key: string,
@@ -48,16 +47,11 @@ export function buildStackAppSpec(
     apply_mode: "manifest",
     key,
     app_name: key, // server derives <stack>-<key>; sent only to satisfy the type
-    git_repo: repo,
-    container_port: manifest.build?.container_port ?? 3000,
+    image_ref: manifest.image.ref,
+    container_port: manifest.container_port ?? 3000,
     declared_env_keys: [...new Set((manifest.env ?? []).map((entry) => entry.key))],
   };
   if (manifest.environment !== undefined) spec.environment = manifest.environment;
-  if (manifest.image) {
-    spec.git_repo = "";
-    spec.image_ref = manifest.image.ref;
-  }
-  if (manifest.build?.cache_ref) spec.build_cache_ref = manifest.build.cache_ref;
 
   if (entry.needs) spec.needs = entry.needs;
   if (entry.env !== undefined) {
@@ -78,39 +72,6 @@ export function buildStackAppSpec(
   }
   const domain = entry.domain ?? manifest.domain;
   if (domain) spec.domain = domain;
-  const gitBranch = manifest.git_branch;
-  if (gitBranch) spec.git_branch = gitBranch;
-  const declaredContext = manifest.build?.context ?? ".";
-  const context = declaredContext === "."
-    ? (manifestDir || ".")
-    : manifestDir && (declaredContext === manifestDir || declaredContext.startsWith(`${manifestDir}/`))
-      ? declaredContext
-      : resolveRepoPath(manifestDir, declaredContext);
-  const declaredDockerfile = manifest.build?.dockerfile ?? "Dockerfile";
-  const dockerfileBase = manifestDir || (context === "." ? "" : context);
-  spec.docker_context = context;
-  spec.dockerfile_path = manifestDir && (
-    declaredDockerfile === manifestDir || declaredDockerfile.startsWith(`${manifestDir}/`)
-  )
-    ? declaredDockerfile
-    : resolveRepoPath(dockerfileBase, declaredDockerfile);
-
-  if (manifest.webhook?.enabled) {
-    spec.webhook_enabled = true;
-    spec.webhook_branch = manifest.webhook.branch || "main";
-    if (manifest.webhook.path) spec.webhook_path = manifest.webhook.path;
-    if (manifest.webhook.paths) spec.webhook_paths = manifest.webhook.paths;
-    if (manifest.webhook.paths_ignore) spec.webhook_paths_ignore = manifest.webhook.paths_ignore;
-    if (manifest.webhook.wait_for_ci) spec.webhook_wait_for_ci = true;
-    // Staging is opt-in per member, declared in the member's own manifest. The
-    // ENVIRONMENT it deploys with is not known here — it comes from the stack's
-    // shared staging env and is resolved in the deploy_stack op, exactly like
-    // env_vars.
-    if (manifest.webhook.staging) spec.webhook_staging = true;
-    if (manifest.webhook.staging_environment !== undefined) {
-      spec.webhook_staging_environment = manifest.webhook.staging_environment;
-    }
-  }
 
   const replicas = manifest.replicas;
   if (replicas) spec.replicas = replicas;

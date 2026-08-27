@@ -36,8 +36,7 @@ function makeApp(environmentId?: number): number {
   return db.insertApp({
     name: `app-${seq++}-${Math.random().toString(36).slice(2, 7)}`,
     domain: "x.example.com",
-    git_repo: "https://github.com/x/y",
-    dockerfile_path: "Dockerfile",
+    image_ref: `ghcr.io/acme/test@sha256:${"a".repeat(64)}`,
     container_port: 3000,
     env_vars: "{}",
     environment_id: environmentId,

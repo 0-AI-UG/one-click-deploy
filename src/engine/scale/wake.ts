@@ -1,14 +1,13 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  pullImmutableImageAndRun, sshExec,
-  probeAppHealth, startAppReplica,
+  pullImmutableImageAndRun,
+  probeAppHealth,
   startContainer, containerExists,
 } from "../../shared/remote/index.ts";
 import { pushProxyForApp } from "./proxy-manager.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
-import { log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { log, replicaBindHost } from "./types.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
 
 export async function wakeApp(appId: number, operationId?: number): Promise<{ ok: boolean; error?: string }> {
@@ -69,53 +68,21 @@ export async function wakeApp(appId: number, operationId?: number): Promise<{ ok
     // Slow path: full re-run when the container is absent or its attested
     // image/config no longer matches desired state.
     if (!startedFastPath) {
-      const githubPat = (await resolveGitHubToken(app.deployed_by)) || undefined;
-
-      if (app.source_mode === "image") {
-        if (app.image_ref) {
-          // Sleeping may have removed local tags, but immutable artifacts should
-          // still be recoverable. Pulling them and retagging to app.name:latest
-          // recreates the expected runtime assumptions without requiring local
-          // image history to be preserved.
-          await pullImmutableImageAndRun(server.ipv4, {
-            name: app.name,
-            imageRef: app.image_ref,
-            port: app.container_port,
-            hostPort,
-            envVars,
-            volumeMount: app.volume_mount || undefined,
-            extraVolumes: db.parseExtraVolumes(app.extra_volumes),
-            bindAddr,
-            memoryMb: app.memory_mb || undefined,
-            cpus: app.cpu_limit || undefined,
-            gitToken: githubPat,
-            hostKey,
-            configRevision: app.config_revision,
-            envHash: hashEnvironment(envVars),
-          });
-        } else {
-          // Backward compatibility for legacy records that only have a local
-          // app.name:latest image tag.
-          await startAppReplica(server.ipv4, {
-            ...appReplicaRunOpts(app, server, { containerName, hostPort, envVars }),
-          }, hostKey);
-        }
-      } else {
-        // A wake is not a source deployment. Reuse the recorded immutable
-        // revision; rebuilding a moving branch here could silently wake a
-        // different commit under the old deployment record.
-        const present = await sshExec(
-          server.ipv4,
-          `su - deploy -c ${JSON.stringify(`docker image inspect ${desiredImage} >/dev/null 2>&1 && echo yes || echo no`)}`,
-          hostKey,
-        );
-        if (present.stdout.trim() !== "yes") {
-          throw new Error(`Immutable image ${desiredImage} is missing; run a full deploy to restore this revision`);
-        }
-        await startAppReplica(server.ipv4, {
-          ...appReplicaRunOpts(app, server, { containerName, hostPort, envVars }),
-        }, hostKey);
-      }
+      await pullImmutableImageAndRun(server.ipv4, {
+        name: app.name,
+        imageRef: desiredImage,
+        port: app.container_port,
+        hostPort,
+        envVars,
+        volumeMount: app.volume_mount || undefined,
+        extraVolumes: db.parseExtraVolumes(app.extra_volumes),
+        bindAddr,
+        memoryMb: app.memory_mb || undefined,
+        cpus: app.cpu_limit || undefined,
+        hostKey,
+        configRevision: app.config_revision,
+        envHash: hashEnvironment(envVars),
+      });
     }
 
     // Health check (running-only when the app opted out of the HTTP probe)

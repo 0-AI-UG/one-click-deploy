@@ -68,8 +68,7 @@ describe("managed-service aliases on every app container create/recreate", () =>
     const app = db.insertApp({
       name: `api-${suffix}`,
       domain: `api-${suffix}.example.com`,
-      git_repo: "https://github.com/example/api",
-      dockerfile_path: "Dockerfile",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
     });

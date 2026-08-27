@@ -6,6 +6,7 @@ import { PermissionGate } from "../../components/permission-gate.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-server-types.ts";
 import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check } from "lucide-react";
 import type { PanelApp, DeploymentRecord } from "../../types.ts";
+import { DnsInstructionView } from "../../components/dns-instruction.tsx";
 
 function GitHubOAuthSettings({ form, setS }: {
   form: { github_oauth_client_id: string; github_oauth_client_secret: string };
@@ -58,11 +59,10 @@ export function UsersPage() {
 
   // --- Instance Settings ---
   const [settingsForm, setSettingsForm] = useState({
-    provider_token: "",
+    hetzner_api_token: "",
     github_oauth_client_id: "", github_oauth_client_secret: "",
-    dns_zone_id: "", default_server_type: "", default_location: "",
-    allow_archive_image_transfer: false,
-    oci_cache_ref: "", oci_artifact_ref: "", oci_registry_username: "", oci_registry_password: "",
+    default_domain_suffix: "", default_server_type: "", default_location: "",
+    oci_artifact_ref: "", oci_registry_username: "", oci_registry_password: "",
   });
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -73,6 +73,7 @@ export function UsersPage() {
   const [panelServer, setPanelServer] = useState<{ name: string; ipv4: string } | null>(null);
   const [panelDeployments, setPanelDeployments] = useState<DeploymentRecord[]>([]);
   const [panelBusy, setPanelBusy] = useState(false);
+  const [panelImage, setPanelImage] = useState("");
 
   const loadUsers = async () => {
     try {
@@ -87,10 +88,18 @@ export function UsersPage() {
 
   const refreshPanel = () => {
     get("/api/admin/panel")
-      .then((data) => { setPanel(data.panel); setPanelServer(data.server); })
+      .then((data) => {
+        setPanel(data.panel ? { ...data.panel, dns_instruction: data.dns_instruction } : null);
+        setPanelServer(data.server);
+      })
       .catch(() => {});
     get("/api/admin/panel/deployments")
-      .then((data) => setPanelDeployments(data || []))
+      .then((data) => {
+        const deployments = (data || []) as DeploymentRecord[];
+        setPanelDeployments(deployments);
+        const currentImage = deployments.find((deployment) => deployment.status === "deployed")?.image_tag;
+        if (currentImage) setPanelImage(currentImage);
+      })
       .catch(() => {});
   };
 
@@ -100,14 +109,12 @@ export function UsersPage() {
       .then((s) => {
         setRequire2fa(s.require_2fa !== false);
         setSettingsForm({
-          provider_token: s.provider_token ?? "",
+          hetzner_api_token: s.hetzner_api_token ?? "",
           github_oauth_client_id: s.github_oauth_client_id ?? "",
           github_oauth_client_secret: s.github_oauth_client_secret ?? "",
-          dns_zone_id: s.dns_zone_id ?? "",
+          default_domain_suffix: s.default_domain_suffix ?? "",
           default_server_type: s.default_server_type ?? "",
           default_location: s.default_location ?? "",
-          allow_archive_image_transfer: s.allow_archive_image_transfer === true,
-          oci_cache_ref: s.oci_cache_ref ?? "",
           oci_artifact_ref: s.oci_artifact_ref ?? "",
           oci_registry_username: s.oci_registry_username ?? "",
           oci_registry_password: s.oci_registry_password ?? "",
@@ -183,16 +190,21 @@ export function UsersPage() {
   };
 
   const redeployPanelNow = async () => {
+    const image = panelImage.trim();
+    if (!/@sha256:[0-9a-f]{64}$/i.test(image)) {
+      showToast("Enter an immutable image reference ending in @sha256:<64 hex characters>", "error");
+      return;
+    }
     if (!await confirm(
-      "Redeploy Panel",
-      "The panel will become unavailable for ~30–60s while it rebuilds. You will need to reload this page once it comes back.",
+      "Release Panel Image",
+      `Deploy ${image} to the panel? The panel will briefly become unavailable and you will need to reload this page once it comes back.`,
       true,
     )) return;
     setPanelBusy(true);
     try {
-      const result = await post("/api/admin/panel/redeploy");
+      const result = await post("/api/admin/panel/redeploy", { image });
       if (result?.ok) {
-        showToast("Panel rebuild dispatched", "success");
+        showToast("Panel release dispatched", "success");
         setTimeout(refreshPanel, 2000);
       } else {
         showToast(result?.error || "Failed to dispatch redeploy", "error");
@@ -215,9 +227,9 @@ export function UsersPage() {
 
       {/* Instance Settings */}
       <Card className="p-5 space-y-4">
-        <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">API Tokens</h3>
-        <Field label="Hetzner Cloud API Token">
-          <input type="password" value={settingsForm.provider_token} onChange={setS("provider_token")} placeholder="Enter token" />
+        <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Optional Infrastructure Provider</h3>
+        <Field label="Hetzner Cloud API Token" align="start" hint="Optional. Configure this only when OCD should create and own Hetzner servers and volumes. Leave empty to use connected servers.">
+          <input type="password" value={settingsForm.hetzner_api_token} onChange={setS("hetzner_api_token")} placeholder="Not configured" />
         </Field>
         <Divider />
         <GitHubOAuthSettings form={settingsForm} setS={setS} />
@@ -225,8 +237,8 @@ export function UsersPage() {
 
         <div className="pt-2">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Defaults</h3>
-          <Field label="DNS Zone ID">
-            <input type="text" value={settingsForm.dns_zone_id} onChange={setS("dns_zone_id")} placeholder="DNS Zone ID" />
+          <Field label="Default Domain Suffix" align="start" hint="OCD displays required DNS records but never modifies DNS.">
+            <input type="text" value={settingsForm.default_domain_suffix} onChange={setS("default_domain_suffix")} placeholder="apps.example.com" />
           </Field>
           <Field label="Default Server Type">
             <NeoSelect
@@ -248,28 +260,14 @@ export function UsersPage() {
               options={locationOptions(serverTypes, settingsForm.default_server_type)}
             />
           </Field>
-          <Field label="OCI build cache repository">
-            <input type="text" value={settingsForm.oci_cache_ref} onChange={setS("oci_cache_ref")} placeholder="registry.internal/ocd/cache:main" />
-          </Field>
-          <Field label="OCI release artifact repository">
-            <input type="text" value={settingsForm.oci_artifact_ref} onChange={setS("oci_artifact_ref")} placeholder="registry.internal/ocd/artifacts" />
-          </Field>
           <Field label="OCI registry username">
             <input type="text" value={settingsForm.oci_registry_username} onChange={setS("oci_registry_username")} placeholder="ocd" />
           </Field>
+          <Field label="OCI repository" align="start" hint="Repository prefix whose registry may receive the credentials below, for example ghcr.io/acme/apps.">
+            <input type="text" value={settingsForm.oci_artifact_ref} onChange={setS("oci_artifact_ref")} placeholder="ghcr.io/acme/apps" />
+          </Field>
           <Field label="OCI registry password/token">
             <input type="password" value={settingsForm.oci_registry_password} onChange={setS("oci_registry_password")} placeholder="Registry password or token" />
-          </Field>
-          <Field
-            label="Emergency archive transfer"
-            align="start"
-            hint="Off by default. Enable only when a registry-backed build.cache_ref cannot be used; archive transfers require substantially more disk."
-          >
-            <input
-              type="checkbox"
-              checked={settingsForm.allow_archive_image_transfer}
-              onChange={(e) => setSettingsForm((f) => ({ ...f, allow_archive_image_transfer: e.target.checked }))}
-            />
           </Field>
         </div>
 
@@ -303,54 +301,23 @@ export function UsersPage() {
             <div className="text-fg">{panel.name}</div>
             <div className="text-muted">Server</div>
             <div className="text-fg">{panelServer ? `${panelServer.name} (${panelServer.ipv4})` : "—"}</div>
-            <div className="text-muted">Branch</div>
-            <div className="text-fg">{panel.git_branch}</div>
+            <div className="text-muted">Image</div>
+            <div className="text-fg break-all">{panelDeployments.find((deployment) => deployment.status === "deployed")?.image_tag || panel.image_ref || "—"}</div>
             <div className="text-muted">Volume</div>
             <div className="text-fg break-all">{panel.volume_mount || "—"}</div>
           </div>
 
-          <PermissionGate permission="panel.manage">
-            <div className="pt-1">
-              <Btn variant="primary" loading={panelBusy} onClick={redeployPanelNow}>
-                <RefreshCw size={13} /> Redeploy panel
-              </Btn>
-            </div>
-          </PermissionGate>
+          {panel.dns_instruction && <DnsInstructionView value={panel.dns_instruction} />}
 
           <PermissionGate permission="panel.manage">
-          <div className="pt-1">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-mono text-[11px] text-fg font-bold">Auto-update from {panel.git_branch}</div>
-                <div className="font-mono text-[10px] text-muted mt-0.5">
-                  GitHub webhook on each push to <span className="text-fg">{panel.git_branch}</span>.
-                </div>
-              </div>
-              <Btn
-                variant={panel.webhook_enabled ? "default" : "primary"}
-                loading={panelBusy}
-                onClick={async () => {
-                  setPanelBusy(true);
-                  try {
-                    const path = panel.webhook_enabled ? "/api/admin/panel/webhook/disable" : "/api/admin/panel/webhook/enable";
-                    const r = await post(path);
-                    if (r?.ok) {
-                      showToast(panel.webhook_enabled ? "Webhook disabled" : "Webhook enabled", "success");
-                      refreshPanel();
-                    } else {
-                      showToast(r?.error || "Failed", "error");
-                    }
-                  } catch (err: any) {
-                    showToast(err.message, "error");
-                  } finally {
-                    setPanelBusy(false);
-                  }
-                }}
-              >
-                {panel.webhook_enabled ? "Disable" : "Enable"}
+            <div className="pt-1 space-y-2">
+              <Field label="Next immutable image" align="start" hint="Build and publish this image in CI, then paste its digest-qualified reference here.">
+                <input type="text" value={panelImage} onChange={(event) => setPanelImage(event.target.value)} placeholder="ghcr.io/owner/ocd@sha256:..." />
+              </Field>
+              <Btn variant="primary" loading={panelBusy} onClick={redeployPanelNow}>
+                <RefreshCw size={13} /> Release panel image
               </Btn>
             </div>
-          </div>
           </PermissionGate>
 
           {panelDeployments.length > 0 && (
@@ -361,7 +328,7 @@ export function UsersPage() {
                   <div key={d.id} className="flex justify-between gap-2">
                     <span className="text-muted truncate">{new Date(d.created_at + "Z").toLocaleString()}</span>
                     <span className="text-fg">{d.source}</span>
-                    <span className="text-muted truncate" title={d.git_commit}>{d.git_commit?.slice(0, 12) || "—"}</span>
+                    <span className="text-muted truncate" title={d.image_tag}>{d.image_tag?.split("@sha256:").pop()?.slice(0, 12) || "—"}</span>
                   </div>
                 ))}
               </div>

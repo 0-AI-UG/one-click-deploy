@@ -46,8 +46,7 @@ function makeAppOn(server: { id: number }, hostPort: number) {
   const app = db.insertApp({
     name: `nr-app-${randomSuffix()}`,
     domain: "",
-    git_repo: "https://x.git",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
   });
@@ -70,7 +69,7 @@ function ensurePanel() {
     server_id: server.id,
     name: "ocd-panel",
     domain: "panel.example.com",
-    git_repo: "https://x.git",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3001,
     host_port: 3001,
   });

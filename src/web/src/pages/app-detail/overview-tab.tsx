@@ -7,6 +7,7 @@ import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft
 import { Sparkline, InfoTip, CpuUsage, MemUsage } from "./shared.tsx";
 import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, MetricSample, ServerData } from "../../types.ts";
+import { DnsInstructionView } from "../../components/dns-instruction.tsx";
 
 interface OverviewTabProps {
   app: AppData;
@@ -52,12 +53,11 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Configuration</h3>
           <div className="space-y-2 text-[10px] font-mono">
             <div className="flex justify-between gap-4">
-              <span className="text-muted">{app.source_mode === "image" ? "Immutable Image" : "Git Repo"}</span>
-              <span className="text-fg font-bold truncate" title={app.image_ref || app.git_repo}>
-                {app.source_mode === "image" ? app.image_ref : app.git_repo}
+              <span className="text-muted">Immutable Image</span>
+              <span className="text-fg font-bold truncate" title={app.image_ref}>
+                {app.image_ref || "—"}
               </span>
             </div>
-            {app.build_cache_ref && <div className="flex justify-between gap-4"><span className="text-muted">Build Cache</span><span className="text-fg truncate" title={app.build_cache_ref}>{app.build_cache_ref}</span></div>}
             <div className="flex justify-between">
               <span className="text-muted">Configuration</span>
               <span className="text-fg">OCD revision {app.config_revision ?? 1}</span>
@@ -122,6 +122,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
               </span>
             </div>
           </div>
+          {app.dns_instruction && <DnsInstructionView value={app.dns_instruction} />}
         </Card>
       </div>
 

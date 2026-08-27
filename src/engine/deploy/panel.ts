@@ -6,11 +6,11 @@
 //
 // Two entry points:
 //   - bootstrapPanel(): run once from auto-deploy (headless bootstrap in a
-//     local Docker container). Provisions a Hetzner server, volume, DNS,
-//     builds the panel image, hands off a snapshot of the bootstrap DB to
+//     local Docker container). Provisions a Hetzner server and volume,
+//     pulls the panel artifact, hands off a snapshot of the bootstrap DB to
 //     the server's volume, then starts the hosted container.
 //   - redeployPanel(): run from inside the hosted panel when the operator
-//     clicks "Redeploy" in Settings. Dispatches a detached rebuild on the
+//     releases a new immutable image. Dispatches a detached replacement on the
 //     host via systemd-run so the panel can kill and replace itself without
 //     SSH blocking. All DB writes happen BEFORE dispatch so they land even
 //     if the panel container is destroyed seconds later.
@@ -19,15 +19,14 @@ import * as db from "../../shared/db.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import {
   sshExec, waitForServer, captureHostKey, getOrCreateLocalKeyPair,
-  cloneAndBuild, healthCheck, getContainerLogs,
+  pullImmutableImageAndRun, healthCheck, getContainerLogs,
 } from "../../shared/remote/index.ts";
 import { deployTraefikPanelSite, installTraefikOn } from "../scale/traefik-manager.ts";
 import { wakerPublishFlags } from "../scale/traefik-constants.ts";
-import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { ensureNetwork as ensureSharedNetwork } from "../network.ts";
 import { handoffDbToVolume } from "./self-deploy.ts";
-import { dockerLoginGhcr } from "../hetzner/registry.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
+import { dockerLoginRegistry } from "../hetzner/registry.ts";
+import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { DEFAULT_LOG_MAX_FILES, DEFAULT_LOG_MAX_SIZE } from "../hetzner/container-common.ts";
 
 type ProgressFn = (step: string, detail: string) => void;
@@ -72,16 +71,14 @@ export type BootstrapPanelOpts = {
   /** Public domain. When omitted, a `<server-ip>.nip.io` domain is derived
    *  after the server is created and served with a self-signed cert. */
   domain?: string;
-  gitRepo: string;
+  /** Exact externally-built panel artifact. */
+  imageRef: string;
   containerPort: number;
   envVars: Record<string, string>;
   serverType: string;
   serverLocation: string;
   volumeSize: number;
   volumePath: string;
-  dnsZoneId?: string;
-  webhookBranch?: string;
-  enableWebhook?: boolean;
 };
 
 /**
@@ -99,7 +96,6 @@ export async function bootstrapPanel(
   error?: string;
   domain?: string;
   serverIp?: string;
-  dnsAutoCreated?: boolean;
   dnsResolved?: boolean;
   internalTls?: boolean;
 }> {
@@ -114,6 +110,9 @@ export async function bootstrapPanel(
   }
   if (!opts.volumeSize || opts.volumeSize <= 0) {
     return { ok: false, error: "bootstrapPanel requires a persistent volume" };
+  }
+  if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(opts.imageRef)) {
+    return { ok: false, error: "bootstrapPanel requires an immutable image_ref digest" };
   }
   if (db.getPanel()) {
     return { ok: false, error: "Panel already bootstrapped in this DB" };
@@ -146,13 +145,6 @@ export async function bootstrapPanel(
       };
     }
 
-    // 0.5. Resolve the managed zone's name BEFORE the server is created:
-    //    cloud-init renders the Traefik static config from this DB, and the
-    //    cached `dns_zone_name` is what gates the wildcard (DNS-01) resolver
-    //    and derives the ACME email. Best-effort — "" falls back to the
-    //    per-domain HTTP-01 path exactly as before.
-    const zoneName = opts.dnsZoneId ? await getOrResolveZoneName() : "";
-
     // 1. SSH key + firewall + private network
     onProgress("server", "Ensuring SSH key + firewall + network...");
     const { publicKey } = await getOrCreateLocalKeyPair();
@@ -173,6 +165,8 @@ export async function bootstrapPanel(
       type: opts.serverType,
       location: opts.serverLocation,
       status: "creating",
+      provider: "hetzner",
+      ownership: "managed",
     });
     dbServerId = dbServer.id;
 
@@ -193,6 +187,7 @@ export async function bootstrapPanel(
       ipv6: providerServer.ipv6 || "",
       private_ipv4: providerServer.privateIpv4 || "",
       status: "provisioning",
+      management_address: serverIp,
     });
     onProgress("server", `Server created: ${serverIp}`);
 
@@ -220,15 +215,14 @@ export async function bootstrapPanel(
     if (hostKey) db.updateServerHostKey(dbServer.id, hostKey);
     db.updateServerStatus(dbServer.id, "ready");
 
-    // 5. DNS is durable desired state. The hosted controller creates and
-    //    repairs the panel record after the DB handoff; bootstrap does not
-    //    perform an untracked one-shot provider mutation.
-    if (opts.dnsZoneId && opts.domain) {
-      onProgress("dns", `DNS A record declared: ${domain} → ${serverIp} (controller will converge it)`);
+    // 5. DNS is always operator-owned. OCD reports the provider-neutral
+    //    instruction and observes propagation, but never mutates DNS.
+    if (opts.domain) {
+      onProgress("dns", `Create an A record with your DNS provider: ${domain} → ${serverIp}`);
     }
 
     // 6. Create + mount volume
-    onProgress("build", `Creating ${opts.volumeSize}GB persistent volume...`);
+    onProgress("artifact", `Creating ${opts.volumeSize}GB persistent volume...`);
     if (!compute.volumes) throw new Error("Compute provider does not support volumes");
     const vol = await compute.volumes.create({
       name: `ocd-${opts.appName}-data`,
@@ -251,20 +245,19 @@ export async function bootstrapPanel(
       });
     }
     const volumeMount = `${hostMountPath}:${opts.volumePath}`;
-    onProgress("build", `Volume ready (${volumeMount})`);
+    onProgress("artifact", `Volume ready (${volumeMount})`);
 
     // 7. Insert panel row in the BOOTSTRAP DB. Deliberately optimistic:
     //    status=running, an initial panel_deployment row. The snapshot we
     //    take in step 8 captures this, so the hosted instance boots already
-    //    knowing who it is. If the subsequent build/health-check fails we
+    //    knowing who it is. If the subsequent pull/health-check fails we
     //    roll back below and the volume (with snapshot) is destroyed.
     const hostPort = 3001;
     db.insertPanel({
       server_id: dbServer.id,
       name: opts.appName,
       domain: domain,
-      git_repo: opts.gitRepo,
-      git_branch: opts.webhookBranch || "main",
+      image_ref: opts.imageRef,
       container_port: opts.containerPort,
       host_port: hostPort,
       volume_id: volumeId,
@@ -273,8 +266,8 @@ export async function bootstrapPanel(
       status: "running",
     });
     db.insertPanelDeployment({
-      image_tag: `${opts.appName}:latest`,
-      git_commit: "bootstrap",
+      image_tag: opts.imageRef,
+      git_commit: "",
       status: "deployed",
       source: "bootstrap",
     });
@@ -283,20 +276,20 @@ export async function bootstrapPanel(
     // 8. Handoff: snapshot bootstrap DB onto the mounted volume BEFORE the
     //    hosted container starts (so it opens the handed-off DB on first
     //    boot rather than a fresh one).
-    onProgress("build", "Handing off DB to hosted volume...");
+    onProgress("artifact", "Handing off DB to hosted volume...");
     await handoffDbToVolume({
       serverIp,
       hostKey: hostKey || undefined,
       hostMountPath,
     });
 
-    // 9. Build image + run container
-    onProgress("build", "Cloning repo and building image...");
-    await cloneAndBuild(
+    // 9. Pull exact external image + run container.
+    onProgress("artifact", `Pulling ${opts.imageRef}...`);
+    await pullImmutableImageAndRun(
       serverIp,
       {
         name: opts.appName,
-        gitRepo: opts.gitRepo,
+        imageRef: opts.imageRef,
         port: opts.containerPort,
         hostPort,
         envVars: opts.envVars,
@@ -306,16 +299,13 @@ export async function bootstrapPanel(
         // until the private network is attached; the first redeploy backfills.
         extraPublish: wakerPublishFlags(providerServer.privateIpv4 || ""),
       },
-      (line) => onProgress("build", line),
+      (line) => onProgress("artifact", line),
     );
 
     // 10. Ingress + TLS: write the panel's own Traefik vhost (panel.yml).
     // The file is owned by bootstrap and never rewritten by app syncs.
-    // A panel domain under the managed zone selects the `*.<zone>` wildcard
-    // resolver; its HETZNER_API_KEY env file is NOT written here (secrets
-    // stay out of bootstrap SSH scripts shared with cloud-init) — the hosted
-    // panel's reconciler delivers it within one tick of first boot, so
-    // wildcard issuance may lag the health check by ~30s.
+    // Every public domain uses HTTP-01. DNS must point at the panel before
+    // Let's Encrypt can issue its certificate.
     onProgress("ingress", `Configuring reverse proxy for ${domain}...`);
     const useInternalTls = domain.endsWith(".nip.io");
     // Traefik runs on the panel ONLY and cloud-init no longer installs it, so
@@ -328,11 +318,10 @@ export async function bootstrapPanel(
       serverIp,
       domain,
       hostPort,
-      zoneName,
       hostKey || undefined,
     );
 
-    // 11. Health check. The panel container binds to 127.0.0.1 (cloneAndBuild
+    // 11. Health check. The panel container binds to 127.0.0.1 (pull helper
     // default), and the host Traefik reaches it via localhost, so we probe
     // the same address here.
     onProgress("health", "Checking panel health...");
@@ -385,7 +374,6 @@ export async function bootstrapPanel(
       ok: true,
       domain: domain,
       serverIp,
-      dnsAutoCreated: false,
       dnsResolved,
       internalTls: useInternalTls,
     };
@@ -423,44 +411,14 @@ export async function bootstrapPanel(
 }
 
 /**
- * Derive the GHCR image reference for the panel from its git repo URL.
- *
- * The CD workflow pushes the panel image to `ghcr.io/<owner>/<repo>` (see
- * .github/workflows/cd.yml). GHCR requires the path to be lowercase, so we
- * lowercase the owner/repo we extract from the (mixed-case) git URL.
- * Accepts https, ssh (`git@github.com:owner/repo.git`), and trailing `.git`.
+ * Build the detached release script for a panel self-update. The image has
+ * already been built by external CI and is identified by an immutable digest.
+ * A short pull retry handles transient registry/network failures while the
+ * current container keeps serving.
  */
-export function ghcrImageForRepo(gitRepo: string, tag: string): string {
-  const path = gitRepo
-    .trim()
-    .replace(/^git@github\.com:/i, "")
-    .replace(/^https?:\/\/github\.com\//i, "")
-    .replace(/\.git$/i, "")
-    .replace(/\/+$/, "");
-  const ownerRepo = path.split("/").filter(Boolean).slice(-2).join("/");
-  return `ghcr.io/${ownerRepo.toLowerCase()}:${tag}`;
-}
-
-/**
- * Build the detached rebuild script for a panel self-redeploy.
- *
- * KEY CHANGE vs the old behaviour: this NO LONGER runs `docker build` on the
- * panel's own host. Building cross-compiled the CLI + re-ran bun install and
- * pegged both cores for minutes, starving the live panel (Traefik 502/503).
- * Instead we `docker pull` the image the CD workflow already built and pushed
- * to GHCR, then swap. Pulling is I/O-bound and the OLD container keeps serving
- * for the whole pull, so there is no CPU starvation — only a seconds-long swap.
- *
- * The pull is retried because the webhook that triggers a redeploy fires on
- * *push*, ~15 min BEFORE CI finishes publishing the image. We pull an
- * immutable per-commit tag (`sha-<gitsha>`); that tag only exists once CI has
- * built and pushed it, so retrying the pull inherently waits for "image ready"
- * without polling GitHub. If the image never appears (e.g. CI failed) we give
- * up and leave the currently-running container untouched (fail-safe).
- */
-export function buildPanelRebuildScript(opts: {
+export function buildPanelReleaseScript(opts: {
   containerName: string;
-  /** Full GHCR ref including tag, e.g. ghcr.io/owner/repo:sha-<...>. */
+  /** Immutable OCI registry reference. */
   image: string;
   hostPort: number;
   containerPort: number;
@@ -476,9 +434,9 @@ export function buildPanelRebuildScript(opts: {
   volumeHostPath?: string;
   volumeDevicePath?: string;
   /** "DOCKER_CONFIG=<dir> " (trailing space) or "" for anonymous pulls. */
-  ghcrEnvPrefix: string;
+  registryEnvPrefix: string;
   /** Ephemeral DOCKER_CONFIG dir to remove when done, or "". */
-  ghcrConfigDir: string;
+  registryConfigDir: string;
   pullRetries: number;
   pullSleepSeconds: number;
   /** How many times to poll /api/health before declaring the new container bad
@@ -487,7 +445,7 @@ export function buildPanelRebuildScript(opts: {
 }): string {
   const {
     containerName, image, hostPort, containerPort, privateIpv4, envFilePath,
-    volumeFlag, ghcrEnvPrefix, ghcrConfigDir, pullRetries, pullSleepSeconds,
+    volumeFlag, registryEnvPrefix, registryConfigDir, pullRetries, pullSleepSeconds,
   } = opts;
   const healthRetries = opts.healthRetries ?? 30;
   // Publish the waker HTTP port (bound to the private IP) alongside the panel's
@@ -496,8 +454,8 @@ export function buildPanelRebuildScript(opts: {
   const wakerFlags = wakerPublishFlags(privateIpv4)
     .map((f) => ` ${f}`)
     .join("");
-  const cleanup = ghcrConfigDir
-    ? `su - deploy -c "rm -rf ${ghcrConfigDir}" 2>/dev/null || true`
+  const cleanup = registryConfigDir
+    ? `su - deploy -c "rm -rf ${registryConfigDir}" 2>/dev/null || true`
     : `true`;
   const logFlags = `--log-opt max-size=${DEFAULT_LOG_MAX_SIZE} --log-opt max-file=${DEFAULT_LOG_MAX_FILES}`;
   const migrationLines = opts.volumeHostPath && opts.volumeDevicePath
@@ -513,7 +471,7 @@ export function buildPanelRebuildScript(opts: {
     `set -uo pipefail`,
     `pull_ok=0`,
     `for i in $(seq 1 ${pullRetries}); do`,
-    `  if su - deploy -c "${ghcrEnvPrefix}docker pull ${image}"; then pull_ok=1; break; fi`,
+    `  if su - deploy -c "${registryEnvPrefix}docker pull ${image}"; then pull_ok=1; break; fi`,
     `  echo "[panel-redeploy] ${image} not ready (attempt $i/${pullRetries}); retrying in ${pullSleepSeconds}s"`,
     `  sleep ${pullSleepSeconds}`,
     `done`,
@@ -657,44 +615,22 @@ function buildPanelVolumeMigrationLines(opts: {
 }
 
 /**
- * Best-effort GitHub token for pulling the (possibly private) panel image from
- * GHCR. The self-redeploy runs with no user context (it's fired by a webhook),
- * so there is no `deployed_by` to key on. Fall back to any linked account,
- * preferring admins. Returns "" when nobody has linked GitHub — in which case
- * we pull anonymously, which succeeds for a public GHCR package.
- */
-async function resolvePanelGitHubToken(): Promise<string> {
-  try {
-    const users = [...db.getUsers()].sort(
-      (a, b) => (b.is_admin ? 1 : 0) - (a.is_admin ? 1 : 0),
-    );
-    for (const u of users) {
-      const tok = await resolveGitHubToken(u.id);
-      if (tok) return tok;
-    }
-  } catch (err) {
-    log("redeploy", `GitHub token resolution failed (continuing anonymous): ${err}`);
-  }
-  return "";
-}
-
-/**
  * Redeploy the hosted panel. This is called by the panel on itself, so
- * doing the rebuild inline would `docker rm -f` our own container mid-build
- * and the new container would never start. Instead we dispatch the rebuild
+ * doing the replacement inline would `docker rm -f` our own container
+ * and the new container would never start. Instead we dispatch the replacement
  * as a transient systemd unit on the host via SSH (truly fire-and-forget
- * with no lingering stdio fds for ssh to wait on) and return immediately.
+ * with no lingering stdio fds for SSH to wait on) and return immediately.
  *
  * CRITICAL: All DB writes (status, deploy_log, panel_deployments) happen
  * BEFORE the SSH dispatch call. If we wrote them after, they would race
- * the `docker rm -f` in the rebuild script — the panel container would be
+ * the `docker rm -f` in the release script — the panel container would be
  * killed before the writes landed, and the hosted instance would come back
  * with status="deploying" forever and no deployment_history entry. Put
  * writes first, dispatch last.
  */
 export async function redeployPanel(
   onProgress: ProgressFn,
-  opts: { source?: string; gitCommit?: string; gitSha?: string } = {},
+  opts: { image: string; source?: string; commit?: string },
 ): Promise<{ ok: boolean; error?: string }> {
   const source = opts.source ?? "manual";
   log("redeploy", `Redeploy requested (source=${source})`);
@@ -708,62 +644,57 @@ export async function redeployPanel(
     return { ok: false, error: "Panel server not found" };
   }
   const hostKey = server.ssh_host_key || undefined;
+  let pendingRegistryConfigDir = "";
 
   try {
-    // Pick the image to pull. A webhook redeploy carries the pushed commit's
-    // full SHA, so we pull the immutable per-commit tag (`sha-<gitsha>`) the CD
-    // workflow emits — this pins us to the SAME commit and, because that tag
-    // only exists once CI has published it, the pull-retry loop inherently
-    // waits for the image to be ready. A manual redeploy has no SHA, so it
-    // pulls `:latest` (the last successful default-branch build).
-    const gitSha = opts.gitSha && /^[0-9a-f]{7,40}$/i.test(opts.gitSha) ? opts.gitSha : "";
-    const tag = gitSha ? `sha-${gitSha}` : "latest";
-    const image = ghcrImageForRepo(panel.git_repo, tag);
+    const image = opts.image.trim();
+    if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(image)) {
+      return { ok: false, error: "Panel release requires an immutable image digest" };
+    }
+
+    // Use only the fleet's explicitly configured OCI pull credentials. Public
+    // registries remain anonymous; linked GitHub accounts are identity only.
+    let registryEnvPrefix = "";
+    let registryConfigDir = "";
+    const credentials = await resolveRegistryCredentialsForImage(image);
+    if (credentials.username && credentials.password) {
+      const auth = await dockerLoginRegistry(
+        server.ipv4,
+        image,
+        credentials.username,
+        credentials.password,
+        hostKey,
+      );
+      registryEnvPrefix = auth.envPrefix;
+      registryConfigDir = auth.dockerConfig;
+      pendingRegistryConfigDir = auth.dockerConfig;
+    }
 
     // === All persistent state updates FIRST, before the dispatch SSH call ===
-    onProgress("build", "Recording redeploy in DB...");
+    onProgress("artifact", "Recording panel release in DB...");
     db.appendPanelDeployLog(
       `[redeploy ${new Date().toISOString()}] ${source} redeploy dispatched (pull ${image})`,
     );
     db.insertPanelDeployment({
       image_tag: image,
-      git_commit: opts.gitCommit || source,
+      git_commit: opts.commit || "",
       status: "deployed",
       source,
     });
     // Optimistic: the new container will reach running state via the
-    // detached rebuild below. Nothing else updates panel.status, so write
+    // detached replacement below. Nothing else updates panel.status, so write
     // "running" now while we still have a live DB handle.
     db.updatePanelStatus("running");
 
-    // === GHCR auth: reuse the same ephemeral DOCKER_CONFIG login the app
-    // deploy path uses. Best-effort — a public GHCR package pulls anonymously.
-    // The login dir must OUTLIVE this call (the detached pull may retry for
-    // minutes), so we do NOT clean it up here; the rebuild script removes it.
-    let ghcrEnvPrefix = "";
-    let ghcrConfigDir = "";
-    const token = await resolvePanelGitHubToken();
-    if (token && image.startsWith("ghcr.io/")) {
-      try {
-        const auth = await dockerLoginGhcr(server.ipv4, token, hostKey);
-        ghcrEnvPrefix = auth.envPrefix;
-        ghcrConfigDir = auth.dockerConfig;
-      } catch (err) {
-        log("redeploy", `ghcr login failed (falling back to anonymous pull): ${err}`);
-      }
-    }
-
-    // === Build the rebuild script ===
+    // === Build the detached release script ===
     const appDir = `/home/deploy/apps/${panel.name}`;
     const envFilePath = `${appDir}/.env.deploy`;
     const volumeFlag = panel.volume_mount ? `-v ${panel.volume_mount}` : "";
     const volumeHostPath = panel.volume_mount?.split(":")[0] || "";
     const volumeDevicePath = panel.volume_id ? `/mnt/HC_Volume_${panel.volume_id}` : "";
-    // A webhook redeploy waits for CI (~15 min): retry ~30 min. A manual
-    // redeploy pulls an already-built tag: retry briefly for registry blips.
-    const pullRetries = gitSha ? 90 : 12;
-    const pullSleepSeconds = gitSha ? 20 : 10;
-    const rebuildScript = buildPanelRebuildScript({
+    const pullRetries = 3;
+    const pullSleepSeconds = 10;
+    const releaseScript = buildPanelReleaseScript({
       containerName: panel.name,
       image,
       hostPort: panel.host_port,
@@ -773,8 +704,8 @@ export async function redeployPanel(
       volumeFlag,
       volumeHostPath,
       volumeDevicePath,
-      ghcrEnvPrefix,
-      ghcrConfigDir,
+      registryEnvPrefix,
+      registryConfigDir,
       pullRetries,
       pullSleepSeconds,
     });
@@ -782,33 +713,42 @@ export async function redeployPanel(
     // === Dispatch via systemd-run (true detach) ===
     // systemd-run --no-block starts a transient unit and returns immediately;
     // the unit is owned by systemd, not the SSH session, so `sshExec` does
-    // not wait on the rebuild's lifetime.
+    // not wait on the release's lifetime.
     const unitName = `ocd-panel-redeploy-${Date.now()}`;
     const dispatch = [
       `set -e`,
       `cat > /tmp/${unitName}.sh <<'OCD_PANEL_EOF'`,
-      rebuildScript,
+      releaseScript,
       `OCD_PANEL_EOF`,
       `chmod +x /tmp/${unitName}.sh`,
       `systemd-run --unit=${unitName} --no-block --collect --property=StandardOutput=file:/tmp/${unitName}.log --property=StandardError=file:/tmp/${unitName}.log /bin/bash /tmp/${unitName}.sh`,
       `echo dispatched=${unitName}`,
     ].join("\n");
 
-    onProgress("dispatch", "Dispatching detached rebuild via systemd-run...");
+    onProgress("dispatch", "Dispatching detached release via systemd-run...");
     const result = await sshExec(server.ipv4, dispatch, hostKey);
     if (result.exitCode !== 0) {
       // The DB writes already happened; roll back panel_deployments so the
       // history doesn't lie.
       throw new Error(`systemd-run dispatch failed: ${result.stderr || result.stdout}`);
     }
+    // The detached script now owns credential cleanup.
+    pendingRegistryConfigDir = "";
 
     log("redeploy", `Dispatched as systemd unit ${unitName}`);
     onProgress(
       "done",
-      "Panel rebuild dispatched; the page will become unavailable briefly and then return on the new image.",
+      "Panel release dispatched; the page will become unavailable briefly and then return on the new image.",
     );
     return { ok: true };
   } catch (err) {
+    if (pendingRegistryConfigDir) {
+      await sshExec(
+        server.ipv4,
+        `su - deploy -c "rm -rf ${pendingRegistryConfigDir}"`,
+        hostKey,
+      ).catch(() => {});
+    }
     const msg = err instanceof Error ? err.message : String(err);
     log("error", `Redeploy failed: ${msg}`);
     db.updatePanelStatus("error");

@@ -4,7 +4,6 @@ import type { DeployRequest } from "./rpc.ts";
 import { parseEnvVars, processIncomingEnvVars, serializeEnvVars } from "./env-crypto.ts";
 import { resolveDurability } from "./durability.ts";
 import { validateDeployRequest } from "./validate.ts";
-import { legacyWebhookPathToPatterns, parseStoredWebhookPaths, parseStoredWebhookPathsIgnore } from "./webhook-paths.ts";
 
 export type AppConfigChange = {
   field: string;
@@ -12,12 +11,9 @@ export type AppConfigChange = {
   after: unknown;
 };
 
-export type AppReconcileMode = "control" | "runtime" | "build";
+export type AppReconcileMode = "control" | "runtime" | "artifact";
 
-const BUILD_CONFIG_FIELDS = new Set([
-  "git_repo", "git_branch", "dockerfile_path", "docker_context",
-  "image_ref", "build_cache_ref",
-]);
+const ARTIFACT_CONFIG_FIELDS = new Set(["image_ref"]);
 
 const RUNTIME_CONFIG_FIELDS = new Set([
   "container_port", "environment_id", "env_projection", "memory_mb", "cpu_limit",
@@ -27,26 +23,24 @@ const RUNTIME_CONFIG_FIELDS = new Set([
 ]);
 
 /** Classify the least disruptive convergence action for a desired-config diff.
- * Source identity always requires a build/pull; container execution settings
- * require recreation from the existing immutable image; ingress, webhook,
- * placement and autoscaling policy are control-plane only. */
+ * Artifact identity and runtime execution settings require container
+ * recreation; placement and autoscaling policy are control-plane only. */
 export function classifyAppConfigChanges(changes: AppConfigChange[]): AppReconcileMode {
-  if (changes.some((change) => BUILD_CONFIG_FIELDS.has(change.field))) return "build";
+  if (changes.some((change) => ARTIFACT_CONFIG_FIELDS.has(change.field))) return "artifact";
   if (changes.some((change) => RUNTIME_CONFIG_FIELDS.has(change.field))) return "runtime";
   return "control";
 }
 
-/** A config-only apply never builds source, but it must still make runtime
- * settings truthful by recreating containers from the current immutable
- * artifact. Source/build changes remain recorded as pending rollout intent. */
+/** A config-only apply keeps runtime settings truthful by recreating
+ * containers from the current immutable artifact. */
 export function classifyConfigOnlyChanges(
   changes: AppConfigChange[],
   options: { environmentChanged?: boolean } = {},
-): { rollout: "control" | "runtime"; pendingBuild: boolean } {
-  const pendingBuild = changes.some((change) => BUILD_CONFIG_FIELDS.has(change.field));
+): { rollout: "control" | "runtime"; pendingRollout: boolean } {
+  const pendingRollout = changes.some((change) => ARTIFACT_CONFIG_FIELDS.has(change.field));
   const runtime = options.environmentChanged === true ||
     changes.some((change) => RUNTIME_CONFIG_FIELDS.has(change.field));
-  return { rollout: runtime ? "runtime" : "control", pendingBuild };
+  return { rollout: runtime ? "runtime" : "control", pendingRollout };
 }
 
 export const AUTOSCALE_DEFAULTS = {
@@ -90,15 +84,6 @@ export function resolveDeployRequestEnvironmentIds(req: DeployRequest): DeployRe
     resolved.environment_id = resolved.environment === null
       ? null
       : environmentIdByName(resolved.environment);
-  }
-  if (
-    resolved.webhook_staging_environment_id === undefined &&
-    resolved.webhook_staging_environment !== undefined
-  ) {
-    resolved.webhook_staging_environment_id =
-      resolved.webhook_staging_environment === null
-        ? null
-        : environmentIdByName(resolved.webhook_staging_environment);
   }
   return resolved;
 }
@@ -156,7 +141,6 @@ export function mergeDeployRequestWithExistingApp(
   const supplied = resolveDeployRequestEnvironmentIds({
     ...manifest,
     app_name: manifest.app_name ?? app.name,
-    git_repo: manifest.git_repo ?? app.git_repo,
     container_port: manifest.container_port ?? app.container_port,
   });
   const publicApp = supplied.public !== undefined
@@ -166,12 +150,7 @@ export function mergeDeployRequestWithExistingApp(
     apply_mode: "manifest",
     app_name: supplied.app_name,
     domain: publicApp ? supplied.domain ?? app.domain : "",
-    git_repo: supplied.git_repo,
-    git_branch: supplied.git_branch ?? "",
-    dockerfile_path: supplied.dockerfile_path ?? "Dockerfile",
-    docker_context: supplied.docker_context ?? ".",
     image_ref: supplied.image_ref ?? "",
-    build_cache_ref: supplied.build_cache_ref ?? "",
     container_port: supplied.container_port,
     env_vars: supplied.env_vars,
     env_projection: supplied.env_projection ?? null,
@@ -192,20 +171,6 @@ export function mergeDeployRequestWithExistingApp(
     environment_id: supplied.environment_id !== undefined
       ? supplied.environment_id
       : app.environment_id,
-    webhook_enabled: supplied.webhook_enabled ?? false,
-    webhook_branch: supplied.webhook_branch ?? "main",
-    webhook_path: supplied.webhook_path ?? "",
-    webhook_paths: supplied.webhook_paths,
-    webhook_paths_ignore: supplied.webhook_paths_ignore ?? [],
-    webhook_wait_for_ci: supplied.webhook_wait_for_ci ?? false,
-    webhook_staging: supplied.webhook_staging ?? false,
-    webhook_staging_environment: supplied.webhook_staging_environment,
-    webhook_staging_environment_id:
-      supplied.webhook_staging_environment_id !== undefined
-        ? supplied.webhook_staging_environment_id
-        : supplied.webhook_staging === true
-          ? undefined
-          : null,
     internal_protocol: supplied.internal_protocol ?? "http",
     sticky: supplied.sticky ?? false,
     rate_limit_rps: supplied.rate_limit_rps ?? 0,
@@ -243,12 +208,7 @@ function normalizedSpec(req: DeployRequest) {
   const scaling = normalizeAppScaling(req);
   return {
     domain: req.domain ?? "",
-    git_repo: req.git_repo,
-    git_branch: req.git_branch ?? "",
-    dockerfile_path: req.dockerfile_path ?? "Dockerfile",
-    docker_context: req.docker_context ?? ".",
     image_ref: req.image_ref ?? "",
-    build_cache_ref: req.build_cache_ref ?? "",
     container_port: req.container_port,
     environment_id: req.environment_id,
     env_projection: req.env_projection ?? null,
@@ -283,15 +243,6 @@ function normalizedSpec(req: DeployRequest) {
     placement_pool: req.placement_pool ?? "general",
     scale_to_zero_after: scaling.scale_to_zero_after,
     extra_volumes: (req.extra_volumes ?? []).map((v) => `${v.host_path}:${v.container_path}`),
-    webhook_enabled: req.webhook_enabled ?? false,
-    webhook_branch: req.webhook_branch ?? "main",
-    webhook_path: (req.webhook_path ?? "").trim().replace(/^\/+/, "").replace(/\/+$/, ""),
-    webhook_paths: req.webhook_paths !== undefined
-      ? req.webhook_paths
-      : legacyWebhookPathToPatterns(req.webhook_path),
-    webhook_paths_ignore: req.webhook_paths_ignore ?? [],
-    webhook_wait_for_ci: req.webhook_wait_for_ci ?? false,
-    webhook_staging_environment_id: req.webhook_staging_environment_id ?? null,
     desired_volume_id: req.volume_id ?? "",
     desired_volume_size: req.volume_size ?? 0,
     desired_volume_path: req.volume_path ?? "/data",
@@ -301,12 +252,7 @@ function normalizedSpec(req: DeployRequest) {
 function comparableApp(app: AppRow) {
   return {
     domain: app.domain || "",
-    git_repo: app.git_repo,
-    git_branch: app.git_branch || "",
-    dockerfile_path: app.dockerfile_path || "Dockerfile",
-    docker_context: app.docker_context || ".",
     image_ref: app.image_ref || "",
-    build_cache_ref: app.build_cache_ref || "",
     container_port: app.container_port,
     environment_id: app.environment_id,
     env_projection: db.parseAppEnvProjection(app),
@@ -346,16 +292,60 @@ function comparableApp(app: AppRow) {
     placement_pool: app.placement_pool || "general",
     scale_to_zero_after: app.scale_to_zero_after ?? 0,
     extra_volumes: db.parseExtraVolumes(app.extra_volumes),
-    webhook_enabled: !!app.webhook_enabled,
-    webhook_branch: app.webhook_branch || "main",
-    webhook_path: app.webhook_path || "",
-    webhook_paths: parseStoredWebhookPaths(app.webhook_paths, app.webhook_path),
-    webhook_paths_ignore: parseStoredWebhookPathsIgnore(app.webhook_paths_ignore),
-    webhook_wait_for_ci: !!app.webhook_wait_for_ci,
-    webhook_staging_environment_id: app.webhook_staging_environment_id,
     desired_volume_id: app.desired_volume_id || "",
     desired_volume_size: app.desired_volume_size ?? 0,
     desired_volume_path: app.desired_volume_path || "/data",
+  };
+}
+
+/** Reconstruct the complete desired app spec from persisted state. Release
+ * endpoints use this as an atomic candidate and replace only `image_ref`, so
+ * publishing a new artifact can never reset unrelated configuration. */
+export function deployRequestFromApp(app: AppRow): DeployRequest {
+  const current = comparableApp(app);
+  return {
+    apply_mode: "manifest",
+    app_name: app.name,
+    domain: current.domain,
+    image_ref: app.image_ref,
+    container_port: app.container_port,
+    environment_id: app.environment_id,
+    env_projection: db.parseAppEnvProjection(app),
+    public: current.public,
+    memory_mb: current.memory_mb,
+    cpu_limit: current.cpu_limit,
+    health_check: current.health_check,
+    health_check_mode: current.health_check_mode as DeployRequest["health_check_mode"],
+    health_check_command: current.health_check_command,
+    health_check_file: current.health_check_file,
+    health_check_max_age_seconds: current.health_check_max_age_seconds,
+    health_check_expected_statuses: current.health_check_expected_statuses,
+    internal_protocol: current.internal_protocol as DeployRequest["internal_protocol"],
+    sticky: current.sticky,
+    rate_limit_rps: current.rate_limit_rps,
+    ip_allowlist: current.ip_allowlist,
+    health_check_path: current.health_check_path,
+    compress: current.compress,
+    public_port: current.public_port,
+    public_protocol: current.public_protocol as DeployRequest["public_protocol"],
+    replicas: app.desired_replicas,
+    min_replicas: app.min_replicas,
+    max_replicas: app.max_replicas,
+    autoscale_enabled: !!app.autoscale_enabled,
+    autoscale_cpu_threshold: app.autoscale_cpu_threshold,
+    autoscale_mem_threshold: app.autoscale_mem_threshold,
+    autoscale_req_threshold: app.autoscale_req_threshold,
+    autoscale_cooldown: app.autoscale_cooldown,
+    durability_class: app.durability_class as DeployRequest["durability_class"],
+    placement_pool: app.placement_pool,
+    scale_to_zero_after: app.scale_to_zero_after,
+    extra_volumes: db.parseExtraVolumes(app.extra_volumes).map((entry) => {
+      const separator = entry.indexOf(":");
+      return { host_path: entry.slice(0, separator), container_path: entry.slice(separator + 1) };
+    }),
+    volume_id: app.desired_volume_id,
+    volume_size: app.desired_volume_size,
+    volume_path: app.desired_volume_path,
   };
 }
 
@@ -402,68 +392,6 @@ async function applyEnvironment(app: AppRow, req: DeployRequest): Promise<void> 
   db.updateEnvironment(env.id, env.name, serializeEnvVars([...retained, ...incoming.entries]));
 }
 
-async function applyWebhook(
-  app: AppRow,
-  req: DeployRequest,
-  _userId?: string,
-  log: (line: string) => void = () => {},
-): Promise<void> {
-  const desired = normalizedSpec(req);
-  if (!desired.webhook_enabled) {
-    // Preserve the remote id until the webhook reconciler confirms deletion;
-    // clearing it here would turn a transient GitHub failure into an orphan.
-    db.updateAppWebhook(
-      app.id,
-      false,
-      app.webhook_secret,
-      desired.webhook_branch,
-      app.github_webhook_id,
-      desired.webhook_path,
-      desired.webhook_wait_for_ci,
-    );
-    db.updateAppWebhookPaths(app.id, desired.webhook_paths, desired.webhook_paths_ignore, {
-      clearLegacyPath: !desired.webhook_path,
-    });
-    db.updateAppWebhookStagingEnvironment(app.id, null);
-    return;
-  }
-
-  const secret = app.webhook_secret || crypto.randomUUID();
-  db.updateAppWebhook(
-    app.id,
-    true,
-    secret,
-    desired.webhook_branch,
-    app.github_webhook_id,
-    desired.webhook_path,
-    desired.webhook_wait_for_ci,
-  );
-  db.updateAppWebhookPaths(app.id, desired.webhook_paths, desired.webhook_paths_ignore, {
-    clearLegacyPath: !desired.webhook_path,
-  });
-
-  let stagingId = req.webhook_staging_environment_id;
-  if (stagingId === undefined && req.webhook_staging) {
-    stagingId = app.webhook_staging_environment_id;
-    if (stagingId == null) {
-      let name = `${app.name}-staging-env`;
-      let suffix = 1;
-      while (db.getEnvironments().some((e) => e.name === name)) {
-        name = `${app.name}-staging-env-${suffix++}`;
-      }
-      const created = app.environment_id
-        ? db.duplicateEnvironment(app.environment_id, name)
-        : db.insertEnvironment(name, "");
-      stagingId = created.id;
-      log(`created staging environment "${name}" (${created.id})`);
-    }
-  }
-  if (!req.webhook_staging && req.webhook_staging_environment_id === undefined) stagingId = null;
-  if (stagingId != null && !db.getEnvironment(stagingId)) throw new Error("Staging environment not found");
-  db.updateAppWebhookStagingEnvironment(app.id, stagingId ?? null);
-  log("webhook desired state recorded; provider reconciliation is asynchronous");
-}
-
 /** Apply a complete normalized desired spec to an existing app. It never
  * deploys code and never deletes an environment; callers decide whether to
  * enqueue a rollout after the configuration transaction succeeds. */
@@ -482,21 +410,12 @@ export async function applyAppConfig(
   const changes = diffAppConfig(app, effective);
   const changed = new Set(changes.map((c) => c.field));
   await applyEnvironment(app, effective);
-  if (["git_repo", "git_branch", "dockerfile_path", "docker_context"].some((f) => changed.has(f))) {
-    db.updateAppBuildSource(app.id, {
-      gitRepo: desired.git_repo,
-      gitBranch: desired.git_branch,
-      dockerfilePath: desired.dockerfile_path,
-      dockerContext: desired.docker_context,
-    });
-  }
   if ([
-    "image_ref", "build_cache_ref", "health_check_mode", "health_check_command",
+    "image_ref", "health_check_mode", "health_check_command",
     "health_check_file", "health_check_max_age_seconds", "health_check_expected_statuses",
   ].some((f) => changed.has(f))) {
     db.updateAppArtifactAndHealth(app.id, {
       imageRef: desired.image_ref,
-      buildCacheRef: desired.build_cache_ref,
       healthMode: desired.health_check_mode,
       healthCommand: desired.health_check_command,
       healthFile: desired.health_check_file,
@@ -569,19 +488,6 @@ export async function applyAppConfig(
       autoscale_cooldown: desired.autoscale_cooldown,
       scale_to_zero_after: desired.scale_to_zero_after,
     });
-  }
-  if (
-    [
-      "webhook_enabled", "webhook_branch", "webhook_path", "webhook_paths",
-      "webhook_paths_ignore", "webhook_wait_for_ci",
-    ].some((f) => changed.has(f)) ||
-    changed.has("webhook_staging_environment_id") ||
-    (
-      effective.webhook_staging === true &&
-      effective.webhook_staging_environment_id == null
-    )
-  ) {
-    await applyWebhook(db.getApp(app.id)!, effective, opts.userId, opts.log);
   }
   if (opts.userId) db.updateAppDeployedBy(app.id, opts.userId);
   db.normalizeAppConfigRevision(app.id, app.config_revision);

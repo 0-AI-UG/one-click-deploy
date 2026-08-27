@@ -13,7 +13,6 @@
 
 import * as db from "../../shared/db.ts";
 import { sshExec } from "../../shared/remote/index.ts";
-import { hetznerApiToken } from "../hetzner/api.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "../scheduler.ts";
 import {
   collectDesiredState,
@@ -21,7 +20,6 @@ import {
   renderPanelConfig,
 } from "./traefik-render.ts";
 import {
-  traefikEnvFile,
   traefikInstallScript,
   traefikLogrotateConfig,
   traefikStaticConfig,
@@ -29,7 +27,6 @@ import {
 } from "./traefik-provision.ts";
 import {
   TRAEFIK_DYNAMIC_CONFIG_PATH,
-  TRAEFIK_ENV_PATH,
   TRAEFIK_LOGROTATE_PATH,
   TRAEFIK_PANEL_CONFIG_PATH,
   TRAEFIK_STATIC_CONFIG_PATH,
@@ -247,7 +244,6 @@ type RemoteProbe = {
   unitSha: string;
   dynamicSha: string;
   panelSha: string;
-  envSha: string;
   logrotateSha: string;
 };
 
@@ -258,26 +254,16 @@ async function probeServerTraefik(server: ServerAccess): Promise<RemoteProbe> {
     `V=$(/usr/local/bin/traefik version 2>/dev/null | awk '/Version:/{print $2; exit}')`,
     `A=$(systemctl is-active ocd-traefik 2>/dev/null || true)`,
     `sha() { sha256sum "$1" 2>/dev/null | cut -d" " -f1; }`,
-    `echo "$V|$A|$(sha ${TRAEFIK_STATIC_CONFIG_PATH})|$(sha ${TRAEFIK_UNIT_PATH})|$(sha ${TRAEFIK_DYNAMIC_CONFIG_PATH})|$(sha ${TRAEFIK_PANEL_CONFIG_PATH})|$(sha ${TRAEFIK_ENV_PATH})|$(sha ${TRAEFIK_LOGROTATE_PATH})"`,
+    `echo "$V|$A|$(sha ${TRAEFIK_STATIC_CONFIG_PATH})|$(sha ${TRAEFIK_UNIT_PATH})|$(sha ${TRAEFIK_DYNAMIC_CONFIG_PATH})|$(sha ${TRAEFIK_PANEL_CONFIG_PATH})|$(sha ${TRAEFIK_LOGROTATE_PATH})"`,
   ].join("\n");
   const result = await sshExec(server.ipv4, cmd, server.hostKey);
   if (result.exitCode !== 0) {
     throw new Error(`probe failed on ${server.name}: ${result.stderr || result.stdout}`);
   }
   const line = result.stdout.trim().split("\n").pop() ?? "";
-  const [version = "", active = "", staticSha = "", unitSha = "", dynamicSha = "", panelSha = "", envSha = "", logrotateSha = ""] =
+  const [version = "", active = "", staticSha = "", unitSha = "", dynamicSha = "", panelSha = "", logrotateSha = ""] =
     line.split("|");
-  return { version, active, staticSha, unitSha, dynamicSha, panelSha, envSha, logrotateSha };
-}
-
-/** Desired content of the panel server's ${TRAEFIK_ENV_PATH}: the Hetzner
- *  API token (reused as HETZNER_API_KEY — DNS is part of the unified Cloud
- *  API) for wildcard DNS-01 issuance. "" when no DNS zone is configured or
- *  no token exists — the wildcard resolver is absent/inert then. */
-async function expectedPanelEnv(zoneName: string): Promise<string> {
-  if (!zoneName) return "";
-  const token = await hetznerApiToken();
-  return token ? traefikEnvFile(token) : "";
+  return { version, active, staticSha, unitSha, dynamicSha, panelSha, logrotateSha };
 }
 
 /**
@@ -355,7 +341,6 @@ async function restartTraefik(server: ServerAccess, daemonReload: boolean): Prom
 export async function convergeServerTraefik(
   server: ServerAccess,
   state: ReturnType<typeof collectDesiredState>,
-  expected: { panelEnv: string },
 ): Promise<void> {
   const probe = await probeServerTraefik(server);
   const panel = getPanelAccess();
@@ -370,20 +355,6 @@ export async function convergeServerTraefik(
     traefikLogrotateConfig(),
     probe.logrotateSha,
   );
-
-  // The ACME env file (HETZNER_API_KEY for the letsencrypt-dns resolver) is
-  // converged on the panel server ONLY — the sole server with public routers
-  // and ACME activity; workers' resolver config is inert without it and their
-  // unit tolerates the missing file (`EnvironmentFile=-`). systemd reads the
-  // file at service start, so a change needs a restart: write it before the
-  // install/restart branches below so one restart picks everything up.
-  let envDrift = false;
-  if (isPanel && expected.panelEnv) {
-    envDrift = await convergeRemoteFile(server, TRAEFIK_ENV_PATH, expected.panelEnv, probe.envSha, {
-      mode: "600",
-      onChange: () => log("reconcile", `${server.name}: ACME env file drift → rewrite`),
-    });
-  }
 
   if (probe.version !== TRAEFIK_VERSION || probe.active !== "active") {
     log(
@@ -401,8 +372,6 @@ export async function convergeServerTraefik(
     if (staticChanged || unitChanged) {
       log("reconcile", `${server.name}: static config/unit drift → rewrite + restart`);
       await restartTraefik(server, true);
-    } else if (envDrift) {
-      await restartTraefik(server, false);
     }
   }
 
@@ -423,7 +392,6 @@ export async function convergeServerTraefik(
       const expectedPanel = renderPanelConfig(
         panelRow.domain,
         panelRow.host_port,
-        state.zoneName,
       );
       if (probe.panelSha !== remoteFileSha(expectedPanel)) {
         clearCachedHash(server.ipv4, TRAEFIK_PANEL_CONFIG_PATH);
@@ -498,14 +466,9 @@ export async function reconcileWorkerTeardown(): Promise<void> {
  */
 export async function reconcileTraefik(): Promise<void> {
   const state = collectDesiredState();
-  const expected = {
-    // "" (no zone, or no token) means the env file is left unmanaged — a
-    // stale file on a former panel is harmless and never restart-looped.
-    panelEnv: await expectedPanelEnv(state.zoneName),
-  };
   const panel = getPanelAccess();
   const converge = panel
-    ? convergeServerTraefik(panel, state, expected).catch((err) =>
+    ? convergeServerTraefik(panel, state).catch((err) =>
         log("reconcile", `convergence failed on ${panel.name}: ${err}`),
       )
     : Promise.resolve();
@@ -528,7 +491,6 @@ export async function reconcilePanelSite(): Promise<void> {
   const content = renderPanelConfig(
     panel.domain,
     panel.host_port,
-    db.getSettings()["dns_zone_name"] ?? "",
   );
   const hash = contentHash(content);
   if (getCachedHash(server.ipv4, TRAEFIK_PANEL_CONFIG_PATH) === hash) return;
@@ -548,10 +510,9 @@ export async function deployTraefikPanelSite(
   serverIp: string,
   domain: string,
   hostPort: number,
-  zoneName: string = "",
   hostKey?: string,
 ): Promise<void> {
-  log("panel", `Deploying panel vhost: domain=${domain} port=${hostPort} zone=${zoneName || "none"}`);
+  log("panel", `Deploying panel vhost: domain=${domain} port=${hostPort}`);
   const server: ServerAccess = {
     name: serverIp,
     ipv4: serverIp,
@@ -560,7 +521,7 @@ export async function deployTraefikPanelSite(
   await writeRemoteConfigAtomic(
     server,
     TRAEFIK_PANEL_CONFIG_PATH,
-    renderPanelConfig(domain, hostPort, zoneName),
+    renderPanelConfig(domain, hostPort),
   );
   log("panel", "Panel vhost written (Traefik hot-reloads via the file provider)");
 }

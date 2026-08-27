@@ -5,15 +5,11 @@ import { describe, expect, test } from "bun:test";
 import * as db from "../../shared/db.ts";
 import {
   enqueueOperation,
-  getOperation,
   markOperationFinished,
-  markOperationRunning,
 } from "../../shared/db/operations.ts";
 import {
   findLatestRelatedStackOperation,
-  isStackDestructionActiveForApp,
   stackLockKeys,
-  suspendStackWebhookOperations,
   withOwningStackKeys,
 } from "./stack-operations.ts";
 import { release, tryAcquire } from "../../engine/scheduler.ts";
@@ -25,8 +21,7 @@ function fixture() {
   const app = db.insertApp({
     name: `${name}-web`,
     domain: "",
-    git_repo: "https://github.com/example/web",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
   });
@@ -41,13 +36,13 @@ describe("stack operation association and locking", () => {
       kind: "redeploy",
       resourceKeys: [`app:${app.id}`],
       input: { appId: app.id },
-      trigger: "webhook",
+      trigger: "cli",
     });
 
     expect(args.resourceKeys).toContain(`app:${app.id}`);
     expect(args.resourceKeys).toEqual(expect.arrayContaining(stackLockKeys(stack)));
 
-    // Regression guard: destroy/reconcile and webhook/member operations now
+    // Regression guard: destroy/reconcile and member operations
     // contend on a shared key instead of running concurrently.
     const overlap = args.resourceKeys.filter((key) => stackLockKeys(stack).includes(key));
     expect(overlap).toHaveLength(2);
@@ -107,34 +102,5 @@ describe("stack operation association and locking", () => {
     markOperationFinished(child.id, "failed", { message: "renderer failed" });
 
     expect(findLatestRelatedStackOperation(stack)?.id).toBe(parent.id);
-  });
-
-  test("stack destroy drops queued webhook work and requests cancellation of running work", () => {
-    const { stack, app } = fixture();
-    const pending = enqueueOperation(withOwningStackKeys({
-      kind: "redeploy",
-      resourceKeys: [`app:${app.id}`],
-      input: { appId: app.id },
-      trigger: "webhook",
-    }));
-    const running = enqueueOperation(withOwningStackKeys({
-      kind: "redeploy",
-      resourceKeys: [`app:${app.id}`],
-      input: { appId: app.id },
-      trigger: "webhook",
-      idempotencyKey: `running-${randomSuffix()}`,
-    }));
-    markOperationRunning(running.id);
-    enqueueOperation({
-      kind: "destroy_stack",
-      resourceKeys: stackLockKeys(stack),
-      input: { stackId: stack.id, suspendWebhooks: true },
-      trigger: "ui",
-    });
-
-    expect(isStackDestructionActiveForApp(app.id)).toBe(true);
-    expect(suspendStackWebhookOperations(stack)).toEqual([pending.id, running.id]);
-    expect(getOperation(pending.id)?.status).toBe("cancelled");
-    expect(getOperation(running.id)?.error_json).toContain("cancel_requested");
   });
 });

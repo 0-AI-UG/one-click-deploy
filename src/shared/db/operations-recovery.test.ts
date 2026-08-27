@@ -82,8 +82,7 @@ describe("operation recovery persistence", () => {
     const app = db.insertApp({
       name,
       domain: `${name}.example.com`,
-      git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile",
+      image_ref: `ghcr.io/acme/test@sha256:${"a".repeat(64)}`,
       container_port: 3000,
       env_vars: "{}",
     });

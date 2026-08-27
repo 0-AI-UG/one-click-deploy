@@ -3,6 +3,7 @@ import { apps } from "./commands/apps.ts";
 import { status } from "./commands/status.ts";
 import { logs } from "./commands/logs.ts";
 import { deploy } from "./commands/deploy.ts";
+import { release } from "./commands/release.ts";
 import { deleteCmd } from "./commands/delete.ts";
 import { restart } from "./commands/restart.ts";
 import { rollback } from "./commands/rollback.ts";
@@ -18,7 +19,6 @@ import { skill } from "./commands/skill.ts";
 import { app } from "./commands/app.ts";
 import { scale } from "./commands/scale.ts";
 import { resources, volumes } from "./commands/resources.ts";
-import { webhook } from "./commands/webhook.ts";
 import { gc } from "./commands/gc.ts";
 import { manifest } from "./commands/manifest.ts";
 import { BOLD, DIM, RESET } from "./format.ts";
@@ -30,6 +30,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   status,
   logs,
   deploy,
+  release,
   delete: deleteCmd,
   restart,
   rollback,
@@ -48,7 +49,6 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   scale,
   resources,
   volumes,
-  webhook,
   gc,
   manifest,
 };
@@ -63,9 +63,9 @@ ${BOLD}Commands:${RESET}
   status                 Dashboard overview
   apps                   List all apps
   app <command>          Inspect and manage an existing app
-  webhook plan           Preview change-aware stack deployment selection
   logs <app> [--tail=N]  View app logs
-  deploy [manifest]      Apply desired config, then deploy current Git code
+  deploy [manifest]      Apply desired config and its immutable image
+  release <app> --image  Publish an externally-built image digest from CI
   deploy stack [manifest]  Deploy a multi-app stack
   manifest validate [path] Validate an app or stack manifest (including children)
   delete <app>           Destroy an app
@@ -73,7 +73,7 @@ ${BOLD}Commands:${RESET}
   envs                   Manage environments and variables
   restart <app>          Restart an app
   rollback <app>         Roll back to previous deployment
-  promote                Promote the webhook-staging sibling to production
+  promote                Promote an explicit staging app to production
   pause <app>            Pause an app
   unpause <app>          Unpause an app
   scale <command>        Wake apps, inspect policy, or migrate replicas

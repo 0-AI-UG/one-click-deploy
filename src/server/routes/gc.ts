@@ -53,9 +53,8 @@ export async function handleGcInventory(request: Request): Promise<Response> {
   }
 }
 
-/** Explicit execution removes the docker-image-prune-a class of unused OCD and
- * foreign/unlabelled images, while preserving all container ancestors and OCD
- * current/rollback assets, plus unused BuildKit cache. */
+/** Explicit execution removes inventory-proven unused OCD and foreign images
+ * while preserving every container ancestor and protected deployment artifact. */
 export async function handleGcExecute(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "servers.manage");

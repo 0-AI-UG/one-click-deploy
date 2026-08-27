@@ -13,17 +13,16 @@ export {
 } from "./container-common.ts";
 export type { DockerRunVolume, DockerRunOpts } from "./container-common.ts";
 
-export type { GhcrAuth } from "./registry.ts";
+export type { RegistryAuth } from "./registry.ts";
 
 export { writeEnvDeployFile, startAppReplica } from "./docker-run.ts";
 export type { StartAppReplicaOpts } from "./docker-run.ts";
 
-export { pruneAfterBuild, pruneServer } from "./prune.ts";
+export { pruneServer } from "./prune.ts";
 
-export { transferImage } from "./image-transfer.ts";
 export { ensureHostLogPolicy } from "./prune.ts";
 
-export { findDockerfile, buildAppImage, cloneRepo, cloneAndBuild, pullImmutableImage, pullImmutableImageAndRun } from "./build.ts";
+export { pullImmutableImage, pullImmutableImageAndRun } from "./build.ts";
 
 export {
   healthCheck,

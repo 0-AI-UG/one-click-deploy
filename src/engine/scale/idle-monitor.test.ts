@@ -68,8 +68,7 @@ function makeApp(opts: { healthCheck?: boolean; authPassword?: string; internalP
   return insertApp({
     name: `idle-app-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
     domain: "",
-    git_repo: "https://x.git",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
     health_check: opts.healthCheck ?? true,
@@ -87,7 +86,7 @@ function markMetricsFresh(serverId: number) {
     server_id: serverId,
     name: "ocd-panel",
     domain: "panel.example.com",
-    git_repo: "https://x.git",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3001,
     host_port: 3001,
   });

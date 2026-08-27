@@ -83,8 +83,7 @@ describe("resolveAppEnvVars platform injection", () => {
     return db.insertApp({
       name,
       domain: `${name}.example.com`,
-      git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
       environment_id: opts.environment_id,

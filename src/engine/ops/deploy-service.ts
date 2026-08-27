@@ -28,6 +28,7 @@ import { registerOp } from "./registry.ts";
 import { FatalProbeError, type OpKindDefinition, type Step } from "../types.ts";
 import { createMasker } from "../../shared/mask.ts";
 import dbInstance from "../../shared/db/connection.ts";
+import { isManagedHetznerServer } from "../../shared/infrastructure.ts";
 
 // Public request shape for the `deploy_service` engine op — consumed by the
 // HTTP route that enqueues the op and by the op implementation itself.
@@ -172,7 +173,7 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
     const panelServerId = db.getPanel()?.server_id;
     const pool = req.placement_pool || "general";
     const existingReady = db.getServers().find((s) =>
-      s.status === "ready" && s.id !== panelServerId && s.pool === pool
+      s.status === "ready" && s.id !== panelServerId && s.pool === pool && isManagedHetznerServer(s)
     );
     if (existingReady) {
       return {

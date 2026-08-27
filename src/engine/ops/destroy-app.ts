@@ -1,6 +1,5 @@
 import * as db from "../../shared/db.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
-import * as github from "../../shared/github.ts";
 import {
   sshExec,
   removeContainer,
@@ -8,7 +7,6 @@ import {
 import { awaitChildren } from "./_children.ts";
 import { syncAllTraefik } from "../scale/traefik-manager.ts";
 import { hetzner } from "../../shared/providers/index.ts";
-import { reconcileAppDns } from "../dns-reconciler.ts";
 import { registerOp } from "./registry.ts";
 import { assertCleanupComplete, softStep, runDbCleanupGate, makeGcEmptyServersStep } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
@@ -23,7 +21,13 @@ const markDeleting: Step<DestroyInput, { ok: true }> = {
   name: "mark_deleting",
   label: "Mark deletion intent",
   async run(ctx) {
-    if (db.getApp(ctx.input.appId)) db.markAppDeletionRequested(ctx.input.appId);
+    const app = db.getApp(ctx.input.appId);
+    if (app) {
+      if (app.public && app.domain && !app.domain.endsWith(".nip.io")) {
+        ctx.log(`DNS cleanup is manual: remove the A record for ${app.domain} when it is no longer needed`);
+      }
+      db.markAppDeletionRequested(ctx.input.appId);
+    }
     return { ok: true };
   },
 };
@@ -32,7 +36,7 @@ const markDeleting: Step<DestroyInput, { ok: true }> = {
  * Tear down the app's hidden `<name>-staging` sibling first, as a child
  * `destroy_app`.
  *
- * A webhook-staging sibling deliberately carries no `stack_id` and is filtered
+ * A staging sibling deliberately carries no `stack_id` and is filtered
  * out of every app listing, so nothing else would ever reach it: destroying the
  * production app (directly, or via `destroy_stack`, which fans out to this very
  * op) used to leave the sibling running and invisible, still holding its
@@ -96,32 +100,6 @@ const destroyStagingSibling: Step<DestroyInput, { ok: boolean; childIds: number[
   },
 };
 
-const removeGithubWebhook: Step<DestroyInput, { ok: boolean; error?: string }> = {
-  name: "remove_github_webhook",
-  label: "Remove GitHub webhook",
-  async run(ctx) {
-    const app = db.getApp(ctx.input.appId);
-    if (!app) return { ok: true };
-    if (!app.github_webhook_id) return { ok: true };
-    const r = await softStep(ctx, "remove_github_webhook", async () => {
-      const pat = await github.getGitHubPat(app.deployed_by || undefined);
-      if (!pat) throw new Error("GitHub token unavailable; refusing to orphan the configured webhook");
-      await github.deleteWebhook({
-        gitRepo: app.github_webhook_repo || app.git_repo,
-        webhookId: app.github_webhook_id,
-        token: pat,
-      });
-    });
-    if (r.ok) {
-      db.updateAppWebhook(
-        app.id, false, "", app.webhook_branch, "", app.webhook_path,
-        !!app.webhook_wait_for_ci, !!app.webhook_staging,
-      );
-    }
-    return r.ok ? { ok: true } : { ok: false, error: r.error };
-  },
-};
-
 const stopAndRemoveContainers: Step<DestroyInput, { affectedServerIds: number[]; failed: boolean }> = {
   name: "stop_and_remove_containers",
   label: "Stop and remove containers",
@@ -160,17 +138,6 @@ const removeIngressRoute: Step<DestroyInput, { ok: boolean; error?: string }> = 
       await syncAllTraefik();
     });
     return r.ok ? { ok: true } : { ok: false, error: r.error };
-  },
-};
-
-const deleteDnsRecords: Step<DestroyInput, { ok: boolean; failed: boolean }> = {
-  name: "delete_dns_records",
-  label: "Delete DNS records",
-  async run(ctx) {
-    const result = await softStep(ctx, "delete_dns_records", async () => {
-      await reconcileAppDns(ctx.input.appId, { alreadyLocked: true });
-    });
-    return { ok: result.ok, failed: !result.ok };
   },
 };
 
@@ -263,9 +230,7 @@ const destroyAppOp: OpKindDefinition<DestroyInput> = {
   steps: [
     markDeleting,
     destroyStagingSibling,
-    removeGithubWebhook,
     stopAndRemoveContainers,
-    deleteDnsRecords,
     deleteVolume,
     deleteDbRows,
     removeIngressRoute,

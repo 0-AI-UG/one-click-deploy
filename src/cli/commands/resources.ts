@@ -5,6 +5,7 @@ import { webConfirm } from "../confirm.ts";
 
 type ResourceServer = {
   id: number; name: string; provider_id: string; type: string; location: string;
+  provider: "hetzner" | "external"; ownership: "managed" | "connected";
   status: string; replica_count: number; disk_free_gb: number | null;
   disk_total_gb: number | null; monthly_eur: number | null;
 };
@@ -39,10 +40,12 @@ async function listResources(): Promise<void> {
   }
   console.log(`\n${BOLD}Servers${RESET}`);
   table(
-    ["ID", "NAME", "TYPE", "LOCATION", "REPLICAS", "DISK FREE", "COST"],
+    ["ID", "NAME", "PROVIDER", "OWNERSHIP", "TYPE", "LOCATION", "REPLICAS", "DISK FREE", "COST"],
     data.servers.map((server) => [
       String(server.id),
       server.name,
+      server.provider,
+      server.ownership,
       server.type,
       server.location,
       String(server.replica_count),
@@ -108,9 +111,10 @@ async function deleteResource(args: string[]): Promise<void> {
   const type = args[0];
   const id = args[1];
   if (!type || !id || !["server", "volume"].includes(type)) {
-    throw new Error("Usage: ocd resources delete <server|volume> <provider-id>");
+    throw new Error("Usage: ocd resources delete <server|volume> <id>");
   }
   let headers: Record<string, string> | undefined;
+  let resultVerb = "deleted";
   if (type === "volume") {
     const confirmation = await webConfirm("delete_volume", "volume", id);
     if (!confirmation) {
@@ -122,6 +126,7 @@ async function deleteResource(args: string[]): Promise<void> {
     const inventory = await get<ResourceInventory>("/api/resources");
     const server = inventory.servers.find((row) => row.provider_id === id || String(row.id) === id);
     if (!server) throw new Error(`Server not found: ${id}`);
+    if (server.ownership === "connected") resultVerb = "disconnected";
     const confirmation = await webConfirm("delete_server", "server", server.id);
     if (!confirmation) return;
     headers = { "X-OCD-Confirmation": confirmation };
@@ -136,7 +141,7 @@ async function deleteResource(args: string[]): Promise<void> {
     const op = await followOp(result.op_id);
     if (!op.ok) throw new Error(op.error || `${type} deletion failed`);
   }
-  console.log(`${GREEN}${type} deleted.${RESET}`);
+  console.log(`${GREEN}${type} ${resultVerb}.${RESET}`);
 }
 
 function formatBytes(value: number): string {
@@ -238,7 +243,7 @@ ${BOLD}Commands:${RESET}
   ls                              Inventory and estimated monthly cost
   volume <provider-id>            Volume detail
   volumes <command>               Volume inspection, files, and deletion
-  delete <server|volume> <id>     Permanently delete an unused provider resource`);
+  delete <server|volume> <id>     Delete a provider resource or disconnect an external server`);
 }
 
 export async function resources(args: string[] = []): Promise<void> {

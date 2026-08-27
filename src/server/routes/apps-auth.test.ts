@@ -30,16 +30,19 @@ mock.module("../../engine/scale/traefik-manager.ts", () => ({
 }));
 
 import * as db from "../../shared/db.ts";
-import { handleDeploy, handleGetApps } from "./apps.ts";
+import { getOperation } from "../../shared/db/operations.ts";
+import { handleDeploy, handleGetApps, handleGetDashboard, handleReleaseApp } from "./apps.ts";
+
+const DIGEST_A = `ghcr.io/acme/app@sha256:${"a".repeat(64)}`;
+const DIGEST_B = `ghcr.io/acme/app@sha256:${"b".repeat(64)}`;
 
 function makeApp(overrides: Partial<Parameters<typeof db.insertApp>[0]> = {}) {
   return db.insertApp({
     name: `app-${Math.random().toString(36).slice(2, 8)}`,
     domain: "gated.example.com",
-    git_repo: "https://github.com/x/y",
-    dockerfile_path: "Dockerfile",
     container_port: 3000,
     env_vars: "{}",
+    image_ref: DIGEST_A,
     health_check: true,
     ...overrides,
   });
@@ -56,7 +59,7 @@ function deployRequest(
     body: JSON.stringify({
       app_name: app.name,
       apply_mode: "manifest",
-      git_repo: app.git_repo,
+      image_ref: app.image_ref,
       container_port: app.container_port,
       volume_id: "",
       volume_size: 0,
@@ -70,7 +73,6 @@ function deployRequest(
 describe("app response scrubbing", () => {
   test("secrets never leave the server; auth_enabled is derived", async () => {
     const app = makeApp({ auth_password: "hunter2" });
-    db.updateAppWebhook(app.id, true, "whsec_shhh", "main", "gh-1");
     db.updateAppSleepingState(app.id, 1, 10001);
 
     const response = await handleGetApps(new Request("http://x/api/apps"));
@@ -78,9 +80,107 @@ describe("app response scrubbing", () => {
     expect(row).not.toHaveProperty("auth_password");
     expect(row).not.toHaveProperty("auth_password_hash");
     expect(row).not.toHaveProperty("wake_token");
-    expect(row).not.toHaveProperty("webhook_secret");
     expect(row.env_vars).toEqual([]);
     expect(row.auth_enabled).toBe(true);
+  });
+
+  test("compact dashboard omits large and sensitive fields needed only by the web UI", async () => {
+    const app = makeApp({
+      domain: "compact.example.com",
+      public: true,
+      internal_protocol: "http",
+    });
+    db.appendDeployLog(app.id, "x".repeat(256_000));
+    const service = db.insertService({
+      name: `service-${Math.random().toString(36).slice(2, 8)}`,
+      service_type: "postgres",
+      version: "16",
+      port: 5432,
+      env_vars: '{"VISIBLE":"no"}',
+      credentials: '{"PASSWORD":"secret"}',
+    });
+
+    const response = await handleGetDashboard(new Request("http://x/api/dashboard?compact=1"));
+    expect(response.status).toBe(200);
+    const raw = await response.text();
+    const body = JSON.parse(raw) as {
+      apps: Array<Record<string, unknown>>;
+      services: Array<Record<string, unknown>>;
+    };
+    const appRow = body.apps.find((row) => row.id === app.id)!;
+    const serviceRow = body.services.find((row) => row.id === service.id)!;
+
+    expect(Object.keys(appRow).sort()).toEqual([
+      "container_port",
+      "deployed_commit",
+      "dns_instruction",
+      "domain",
+      "environment_stale",
+      "id",
+      "internal_protocol",
+      "name",
+      "public",
+      "status",
+    ]);
+    expect(Object.keys(serviceRow).sort()).toEqual(["id", "name", "service_type", "status"]);
+    expect(raw).not.toContain("x".repeat(1_000));
+    expect(raw).not.toContain("secret");
+    expect(raw.length).toBeLessThan(10_000);
+
+    const fullResponse = await handleGetDashboard(new Request("http://x/api/dashboard"));
+    const fullBody = await fullResponse.json() as {
+      apps: Array<Record<string, unknown>>;
+      services: Array<Record<string, unknown>>;
+    };
+    expect(fullBody.apps.find((row) => row.id === app.id)?.deploy_log).toContain("x".repeat(1_000));
+    expect(fullBody.services.find((row) => row.id === service.id)?.credentials).toContain("secret");
+  });
+});
+
+describe("external artifact release endpoint", () => {
+  test("enqueues an atomic immutable-image candidate and preserves configuration", async () => {
+    const app = makeApp({ sticky: true, placement_pool: "workers" });
+    db.updateAppMemory(app.id, 768);
+    const request = new Request(`http://x/api/apps/${app.id}/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "github-42-1" },
+      body: JSON.stringify({ image: DIGEST_B, commit: "c".repeat(40) }),
+    });
+    const response = await handleReleaseApp(request, app.id);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { op_id: number; image: string };
+    expect(body.image).toBe(DIGEST_B);
+    const operation = getOperation(body.op_id)!;
+    const input = JSON.parse(operation.input_json) as {
+      gitCommit: string;
+      candidate: { image_ref: string; sticky: boolean; memory_mb: number; placement_pool: string };
+    };
+    expect(input.gitCommit).toBe("c".repeat(40));
+    expect(input.candidate).toMatchObject({
+      image_ref: DIGEST_B,
+      sticky: true,
+      memory_mb: 768,
+      placement_pool: "workers",
+    });
+    expect(operation.idempotency_key).toBe(`release:${app.id}:github-42-1`);
+    expect(db.getApp(app.id)!.image_ref).toBe(DIGEST_A);
+  });
+
+  test("rejects tags and malformed replay keys before enqueue", async () => {
+    const app = makeApp();
+    const tagged = await handleReleaseApp(new Request(`http://x/api/apps/${app.id}/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image: "ghcr.io/acme/app:latest" }),
+    }), app.id);
+    expect(tagged.status).toBe(400);
+
+    const badKey = await handleReleaseApp(new Request(`http://x/api/apps/${app.id}/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "contains spaces" },
+      body: JSON.stringify({ image: DIGEST_B }),
+    }), app.id);
+    expect(badKey.status).toBe(400);
   });
 });
 

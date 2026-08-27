@@ -35,8 +35,6 @@ import {
   TRAEFIK_UNIT_PATH,
   TRAEFIK_DYNAMIC_DIR,
   TRAEFIK_ACME_PATH,
-  TRAEFIK_ACME_DNS_PATH,
-  TRAEFIK_ENV_PATH,
 } from "./traefik-constants.ts";
 
 // --- Static config -----------------------------------------------------------
@@ -45,12 +43,12 @@ import {
  *  reuses the account persisted in acme.json and registers a fresh LE account
  *  on every process start's first issuance — burning LE's 10-accounts/IP/3h
  *  limit under restart loops. Operator-set `acme_email` wins; else derive a
- *  stable address from the configured DNS zone; else none (nip.io-only
+ *  stable address from the configured default domain suffix; else none (nip.io-only
  *  fleets never issue). */
 export function acmeEmail(): string {
   const settings = db.getSettings();
   if (settings["acme_email"]) return settings["acme_email"];
-  if (settings["dns_zone_name"]) return `admin@${settings["dns_zone_name"]}`;
+  if (settings["default_domain_suffix"]) return `admin@${settings["default_domain_suffix"]}`;
   return "";
 }
 
@@ -75,11 +73,6 @@ export function traefikStaticConfig(): string {
   // cloud firewall keeps the block open (BASE_FIREWALL_RULES); the proxy's
   // DNAT catches the traffic before Traefik's sockets ever see it.
   const email = acmeEmail();
-  // Wildcard resolver only when a DNS zone is managed — `*.<zone>` needs
-  // DNS-01, and without a zone there is nothing to issue for. The resolver
-  // is inert on workers (no router references it there) and on the panel
-  // until the reconciler delivers HETZNER_API_KEY via the env file.
-  const zone = db.getSettings()["dns_zone_name"] ?? "";
   const config = {
     entryPoints,
     providers: {
@@ -93,17 +86,6 @@ export function traefikStaticConfig(): string {
           httpChallenge: { entryPoint: "web" },
         },
       },
-      ...(zone
-        ? {
-            "letsencrypt-dns": {
-              acme: {
-                ...(email ? { email } : {}),
-                storage: TRAEFIK_ACME_DNS_PATH,
-                dnsChallenge: { provider: "hetzner" },
-              },
-            },
-          }
-        : {}),
     },
     // Per-service request counters (traefik_service_requests_total) feed the
     // idle monitor's traffic-based sleep decisions.
@@ -129,7 +111,6 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-EnvironmentFile=-${TRAEFIK_ENV_PATH}
 ExecStart=/usr/local/bin/traefik --configFile=${TRAEFIK_STATIC_CONFIG_PATH}
 Restart=always
 RestartSec=2
@@ -184,8 +165,8 @@ OCD_TRAEFIK_LOGROTATE
 cat > ${TRAEFIK_STATIC_CONFIG_PATH} <<'OCD_TRAEFIK_STATIC'
 ${traefikStaticConfig()}
 OCD_TRAEFIK_STATIC
-touch ${TRAEFIK_ACME_PATH} ${TRAEFIK_ACME_DNS_PATH}
-chmod 600 ${TRAEFIK_ACME_PATH} ${TRAEFIK_ACME_DNS_PATH}
+touch ${TRAEFIK_ACME_PATH}
+chmod 600 ${TRAEFIK_ACME_PATH}
 cat > ${TRAEFIK_UNIT_PATH} <<'OCD_TRAEFIK_UNIT'
 ${traefikSystemdUnit()}
 OCD_TRAEFIK_UNIT
@@ -193,16 +174,4 @@ systemctl daemon-reload
 systemctl enable ocd-traefik
 systemctl restart ocd-traefik
 `;
-}
-
-/**
- * Content of ${TRAEFIK_ENV_PATH}: the Hetzner API token the `letsencrypt-dns`
- * resolver's lego provider reads as HETZNER_API_KEY. Deliberately NOT part of
- * traefikInstallScript()/cloud-init — user data is shared verbatim by every
- * provisioned server and the secret belongs on the panel server only. The
- * reconciler delivers it there within one tick of first boot (wildcard
- * issuance simply starts a tick later on a fresh panel).
- */
-export function traefikEnvFile(hetznerToken: string): string {
-  return `HETZNER_API_KEY=${hetznerToken}`;
 }

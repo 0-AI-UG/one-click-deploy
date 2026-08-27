@@ -19,7 +19,7 @@ export {
   getRecentServerMetrics,
   pruneOldServerMetrics,
 } from "./servers.ts";
-export type { AppRow, AppIngressSettings, DnsRecordRow, PublicProtocol, InternalProtocol } from "./apps.ts";
+export type { AppRow, AppIngressSettings, PublicProtocol, InternalProtocol } from "./apps.ts";
 export {
   getApps,
   getApp,
@@ -44,13 +44,10 @@ export {
   appendDeployLog,
   getDeployLog,
   deleteApp,
-  insertDnsRecord,
-  getDnsRecords,
-  deleteDnsRecord,
   updateAppEnvVars,
   updateAppContainerPort,
-  updateAppBuildSource,
   updateAppArtifactAndHealth,
+  updateAppImageRef,
   recordAppManifestApplied,
   updateAppStackManifestPath,
   normalizeAppConfigRevision,
@@ -64,13 +61,6 @@ export {
   updateAppAuthPassword,
   updateAppPublic,
   updateAppInternalProtocol,
-  updateAppWebhook,
-  updateAppWebhookProviderIdentity,
-  updateAppWebhookWaitForCi,
-  updateAppWebhookPaths,
-  recordAppWebhookReceived,
-  recordAppWebhookDecision,
-  updateAppWebhookStagingEnvironment,
   updateAppScaling,
   updateAppDurability,
   updateAppPlacementPool,
@@ -199,11 +189,6 @@ export {
   updatePanelEnvVars,
   appendPanelDeployLog,
   getPanelDeployLog,
-  updatePanelWebhook,
-  updatePanelWebhookProviderIdentity,
-  finalizePanelWebhookDisabled,
-  updatePanelDnsRecord,
-  clearPanelDnsRecord,
   deletePanel,
   insertPanelDeployment,
   getPanelDeployments,
@@ -283,16 +268,3 @@ export {
   getAvailabilityStats,
   pruneOldAvailabilitySamples,
 } from "./availability.ts";
-export type { WebhookCandidateRow, WebhookCandidateStatus } from "./webhooks.ts";
-export {
-  getWebhookCandidate,
-  getWebhookCandidateByHead,
-  createWebhookCandidate,
-  setWebhookCandidateOperation,
-  updateWebhookCandidate,
-  isWebhookCandidateCurrent,
-} from "./webhooks.ts";
-export {
-  parseStoredWebhookPaths,
-  parseStoredWebhookPathsIgnore,
-} from "../webhook-paths.ts";

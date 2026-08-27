@@ -6,8 +6,8 @@ import { topoLevels } from "./deploy-stack.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
-// Bulk promote: for every production member of a stack that has a webhook
-// staging sibling holding a deployed commit, run the existing per-app `promote`
+// Bulk promote: for every production member of a stack that has an explicit
+// staging target holding a deployed immutable artifact, run the per-app `promote`
 // op as a child. No promotion logic lives here — this op only decides WHICH
 // members are promotable and fans out.
 type PromoteStackInput = { stackId: number; userId?: string };
@@ -18,7 +18,8 @@ export type Promotion = {
   appName: string;
   sourceAppId: number; // its staging sibling
   sourceAppName: string;
-  commit: string;      // the sibling's currently-deployed commit
+  image: string;       // the staging target's immutable artifact
+  commit: string | null; // optional external-CI provenance
 };
 
 /** A member that was considered but cannot be promoted, plus why. */
@@ -31,7 +32,6 @@ export type PromotionPlan = { promotions: Promotion[]; skipped: Skip[]; levels?:
  * the selection rules are unit-testable:
  *  - members that are themselves deploy targets (`target` of 'staging'/'dev')
  *    are not production apps and are skipped silently — they ARE the siblings;
- *  - a member with staging turned OFF is skipped even if a sibling row survives;
  *  - a member with no staging sibling has nothing to promote;
  *  - a member whose sibling has no successful deployment is skipped rather than
  *    promoted, because the child `promote` op would throw and fail the whole
@@ -40,7 +40,7 @@ export type PromotionPlan = { promotions: Promotion[]; skipped: Skip[]; levels?:
 export function planPromotions(
   members: AppRow[],
   siblingOf: (appId: number) => AppRow | null,
-  deployedCommitOf: (appId: number) => string | null,
+  deployedArtifactOf: (appId: number) => { image: string; commit: string | null } | null,
 ): PromotionPlan {
   const promotions: Promotion[] = [];
   const skipped: Skip[] = [];
@@ -49,22 +49,13 @@ export function planPromotions(
     // '' | 'production' | 'staging' | 'dev'; `target_of` points at the prod app.
     if (member.target_of != null) continue;
     if (member.target === "staging" || member.target === "dev") continue;
-    // Staging OFF: turning it off (dropping webhook.staging, or clearing the
-    // stack's staging_environment) nulls this column but LEAVES the sibling row and
-    // its deployment history behind. Promoting from that stale sibling would
-    // silently roll production back to whatever it last held, so an existing
-    // sibling is not on its own a licence to promote.
-    if (member.webhook_staging_environment_id == null) {
-      skipped.push({ appName: member.name, reason: "webhook staging is off" });
-      continue;
-    }
     const sibling = siblingOf(member.id);
     if (!sibling) {
       skipped.push({ appName: member.name, reason: "no staging sibling" });
       continue;
     }
-    const commit = deployedCommitOf(sibling.id);
-    if (!commit) {
+    const artifact = deployedArtifactOf(sibling.id);
+    if (!artifact?.image.includes("@sha256:")) {
       skipped.push({ appName: member.name, reason: `${sibling.name} has no successful deployment` });
       continue;
     }
@@ -73,7 +64,8 @@ export function planPromotions(
       appName: member.name,
       sourceAppId: sibling.id,
       sourceAppName: sibling.name,
-      commit,
+      image: artifact.image,
+      commit: artifact.commit,
     });
   }
   return { promotions, skipped };
@@ -131,7 +123,12 @@ const plan: Step<PromoteStackInput, PromotionPlan & { stackName: string }> = {
     const { promotions, skipped } = planPromotions(
       members,
       (id) => db.getStagingSibling(id),
-      db.getDeployedCommit,
+      (id) => {
+        const deployment = db.getLastSuccessfulDeployment(id);
+        return deployment?.image_digest
+          ? { image: deployment.image_digest, commit: deployment.git_commit || null }
+          : null;
+      },
     );
 
     if (promotions.length === 0) {
@@ -197,7 +194,7 @@ const promoteMembers: Step<PromoteStackInput, { childIds: number[] }> = {
           idempotencyKey: idk,
         });
         childIds.push(op.id);
-        db.appendStackLog(stackId, `[promote] ${p.sourceAppName} @ ${p.commit} → ${p.appName}`);
+        db.appendStackLog(stackId, `[promote] ${p.sourceAppName} @ ${p.image} → ${p.appName}`);
       }
       allChildIds.push(...childIds);
       if (levels.length > 1) {

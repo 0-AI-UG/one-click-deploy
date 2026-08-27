@@ -4,6 +4,8 @@ import { isNotFoundError } from "../shared/providers/errors.ts";
 import { ensureNetwork as ensureSharedNetwork } from "./network.ts";
 import { bindMountStatus, ensureVolumeBindMount } from "./hetzner/host-mounts.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "./scheduler.ts";
+import { isManagedHetznerServer, serverCapabilities } from "../shared/infrastructure.ts";
+import { secretStore } from "../shared/secret-store.ts";
 
 function log(context: string, ...args: unknown[]): void {
   console.log(`[${new Date().toISOString()}] [infra-reconciler:${context}]`, ...args);
@@ -25,6 +27,9 @@ function serverHasReferences(serverId: number): boolean {
 /** Observe provider truth, repair private-network attachment, and make a
  * confirmed missing server unavailable to schedulers and routing. */
 export async function reconcileServersAndNetwork(): Promise<void> {
+  const managedServers = db.getServers().filter((server) => isManagedHetznerServer(server) && server.provider_id);
+  if (managedServers.length === 0) return;
+  if (!await secretStore.get(hetzner.tokenKey).catch(() => null)) return;
   let networkId = "";
   if (hetzner.networks) {
     try {
@@ -36,7 +41,7 @@ export async function reconcileServersAndNetwork(): Promise<void> {
       log("network", `shared network reconciliation failed: ${error}`);
     }
   }
-  for (const snapshot of db.getServers().filter((server) => server.provider_id)) {
+  for (const snapshot of managedServers) {
     await withLock([`server:${snapshot.id}`], "reconcile:server", async () => {
       const server = db.getServer(snapshot.id);
       if (!server) return;
@@ -89,8 +94,11 @@ export async function reconcileServersAndNetwork(): Promise<void> {
 
 /** Continuously reassert both firewall rules and server attachments. */
 export async function reconcileFirewall(): Promise<void> {
-  const servers = db.getServers().filter((server) => server.provider_id && server.status !== "cleanup_failed");
+  const servers = db.getServers().filter((server) =>
+    isManagedHetznerServer(server) && server.provider_id && server.status !== "cleanup_failed"
+  );
   if (servers.length === 0) return;
+  if (!await secretStore.get(hetzner.tokenKey).catch(() => null)) return;
   const firewallId = await hetzner.ensureFirewall();
   await Promise.all(servers.map(async (server) => {
     try {
@@ -119,7 +127,10 @@ export async function reconcileServerGc(
         return;
       }
       try {
-        if (server.provider_id) await provider.deleteServer(server.provider_id);
+        if (isManagedHetznerServer(server) && server.provider_id) {
+          if (provider === hetzner && !await secretStore.get(hetzner.tokenKey).catch(() => null)) return;
+          await provider.deleteServer(server.provider_id);
+        }
       } catch (error) {
         if (!isNotFoundError(error)) {
           log("gc", `${server.name}: provider deletion failed: ${error}`);
@@ -198,12 +209,13 @@ function activeVolumeOwners(): VolumeOwner[] {
  * reattached to its recorded host; a volume attached elsewhere is never moved
  * automatically and is surfaced as degraded instead. */
 export async function reconcileActiveVolumes(): Promise<void> {
+  if (!await secretStore.get(hetzner.tokenKey).catch(() => null)) return;
   for (const owner of activeVolumeOwners()) {
     const keys = [owner.key, `server:${owner.serverId}`, `volume:${owner.volumeId}`];
     try {
       await withLock([...new Set(keys)], "reconcile:volume", async () => {
         const server = db.getServer(owner.serverId);
-        if (!server?.provider_id || server.status !== "ready") return;
+        if (!server?.provider_id || server.status !== "ready" || !serverCapabilities(server).providerVolumes) return;
         let volume;
         try {
           volume = await hetzner.volumes.get(owner.volumeId);

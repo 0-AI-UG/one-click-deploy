@@ -182,8 +182,7 @@ function insertRealApp(): AppRow {
   return db.insertApp({
     name: `waker-secret-${randomSuffix()}`,
     domain: "",
-    git_repo: "https://x.git",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
   });

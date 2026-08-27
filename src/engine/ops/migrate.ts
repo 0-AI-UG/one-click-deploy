@@ -1,11 +1,12 @@
 import * as db from "../../shared/db.ts";
 import { migrateReplica, type MigrateResult, rollbackMigrateWithVolume, type VolumeMigrationContext } from "../scale/migrate.ts";
 import { syncAppIngress } from "../scale/traefik-manager.ts";
-import { sshExec, healthCheck, containerRunningCheck } from "../../shared/remote/index.ts";
+import { pullImmutableImage, healthCheck, containerRunningCheck } from "../../shared/remote/index.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 import { latestDesiredImage } from "../revision.ts";
+import { assertConnectedStatelessWorkload } from "../../shared/infrastructure.ts";
 
 type MigrateInput = { appId: number; replicaId: number; targetServerId: number };
 
@@ -29,6 +30,14 @@ const loadAndValidate: Step<MigrateInput, ValidateOut> = {
     if (!target || target.status !== "ready") {
       throw new Error("Target server not found or not ready");
     }
+    const app = db.getApp(ctx.input.appId);
+    if (!app) throw new Error("App not found");
+    const source = db.getServer(replica.server_id);
+    if (!source) throw new Error("Source server not found");
+    const hasHostMounts = db.parseExtraVolumes(app.extra_volumes).length > 0;
+    const storageRequest = { managedVolume: !!app.volume_id, hostMounts: hasHostMounts };
+    assertConnectedStatelessWorkload(source, storageRequest);
+    assertConnectedStatelessWorkload(target, storageRequest);
     if (replica.server_id === ctx.input.targetServerId) {
       throw new Error("Replica is already on the target server");
     }
@@ -36,9 +45,8 @@ const loadAndValidate: Step<MigrateInput, ValidateOut> = {
   },
 };
 
-// For volume-backed apps we must verify the source can rebuild/serve the image
-// BEFORE anything destructive runs. Otherwise a failed scaleUp on target leaves
-// the app with no running container (image gone from source, volume detached).
+// For volume-backed apps, pull the exact registry digest to the target before
+// any destructive volume move begins.
 const preflightImage: Step<MigrateInput, PreflightOut> = {
   name: "preflight_image",
   label: "Preflight image availability",
@@ -46,22 +54,14 @@ const preflightImage: Step<MigrateInput, PreflightOut> = {
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
     if (!app.volume_id) return { ok: true }; // stateless path is safe
-    if (app.git_repo) {
-      ctx.log(`Volume-backed app has git_repo; rebuild on target is available as fallback`);
-      return { ok: true };
-    }
-    const replica = db.getReplicas(ctx.input.appId).find((r) => r.id === ctx.input.replicaId);
-    if (!replica) throw new Error("Replica not found");
-    const sourceServer = db.getServer(replica.server_id);
-    if (!sourceServer) throw new Error("Source server not found");
     const image = latestDesiredImage(app);
-    const probe = `su - deploy -c ${JSON.stringify(`docker image inspect ${image} >/dev/null 2>&1`)}`;
-    const res = await sshExec(sourceServer.ipv4, probe, sourceServer.ssh_host_key || undefined);
-    if (res.exitCode !== 0) {
-      throw new Error(
-        `Cannot migrate volume-backed app: immutable image '${image}' is missing on source server '${sourceServer.name}' and no git_repo is configured for rebuild. Redeploy first.`,
-      );
-    }
+    const target = db.getServer(ctx.input.targetServerId);
+    if (!target) throw new Error("Target server not found");
+    await pullImmutableImage(target.ipv4, {
+      name: app.name,
+      imageRef: image,
+      hostKey: target.ssh_host_key || undefined,
+    }, (line) => ctx.log(`[preflight-pull] ${line}`));
     return { ok: true };
   },
 };

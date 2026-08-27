@@ -1,4 +1,4 @@
-import { requireConfig } from "./config.ts";
+import { requireConfig, type CLIConfig } from "./config.ts";
 import { VERSION } from "./version.ts";
 import { DIM, RESET, YELLOW } from "./format.ts";
 import { expectArray, expectRecord } from "./response.ts";
@@ -93,6 +93,49 @@ export function shouldRetryPanelTransport(method: string, kind: PanelTransportFa
   return kind !== "certificate_validation" && kind !== "local_trust_store";
 }
 
+/** A single GET attempt must not wait forever after receiving response headers.
+ * This deadline covers both connection setup and downloading the full body. */
+export const PANEL_GET_TIMEOUT_MS = 30_000;
+
+export class PanelRequestTimeoutError extends Error {
+  constructor(public readonly timeoutMs: number) {
+    super(
+      `panel request timed out after ${Math.ceil(timeoutMs / 1000)}s while waiting for the response; ` +
+        "check the panel connection or proxy and retry",
+    );
+    this.name = "PanelRequestTimeoutError";
+  }
+}
+
+/** Fetch and consume one response under the same deadline. `fetch()` resolves
+ * as soon as headers arrive, so timing out fetch alone still permits a stalled
+ * response body to hang a CLI command indefinitely. */
+export async function fetchPanelResponse(
+  fetcher: typeof fetch,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<{ response: Response; bodyText: string }> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new PanelRequestTimeoutError(timeoutMs);
+      controller.abort(error);
+      reject(error);
+    }, timeoutMs);
+  });
+  const request = (async () => {
+    const response = await fetcher(url, { ...init, signal: controller.signal });
+    return { response, bodyText: await response.text() };
+  })();
+  try {
+    return await Promise.race([request, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function errorChain(err: unknown): { text: string; codes: string[] } {
   const texts: string[] = [];
   const codes: string[] = [];
@@ -165,24 +208,38 @@ export function describePanelTransportError(
   return { kind, message: `${label}${code}: ${chain.text || String(err)}${chainHint}` };
 }
 
-async function apiRequest<T>(
+export interface ApiRequestOptions {
+  config?: CLIConfig;
+  fetcher?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  getTimeoutMs?: number;
+}
+
+export async function apiRequest<T>(
   method: string,
   path: string,
   body?: unknown,
   headers?: Record<string, string>,
+  options: ApiRequestOptions = {},
 ): Promise<T> {
-  const config = requireConfig();
+  const config = options.config ?? requireConfig();
+  const fetcher = options.fetcher ?? fetch;
+  const sleep = options.sleep ?? Bun.sleep;
+  const getTimeoutMs = options.getTimeoutMs ?? PANEL_GET_TIMEOUT_MS;
   const url = `${config.panel_url}${path}`;
 
   let res: Response | undefined;
+  let responseBodyText: string | undefined;
   let lastTransport: ReturnType<typeof describePanelTransportError> | undefined;
   // GETs are safe to replay and comprise operation streams/status polling.
   // Keep POST/PUT/PATCH/DELETE single-shot so a dropped response cannot create
   // duplicate side effects (their operation IDs remain recoverable server-side).
   const attempts = method === "GET" ? 3 : 1;
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    res = undefined;
+    responseBodyText = undefined;
     try {
-      res = await fetch(url, {
+      const requestInit: RequestInit = {
         method,
         headers: {
           "Authorization": `Bearer ${config.token}`,
@@ -194,21 +251,39 @@ async function apiRequest<T>(
           ...(headers || {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
-      break;
+      };
+      if (method === "GET") {
+        const result = await fetchPanelResponse(fetcher, url, requestInit, getTimeoutMs);
+        res = result.response;
+        responseBodyText = result.bodyText;
+      } else {
+        res = await fetcher(url, requestInit);
+        responseBodyText = await res.text();
+      }
     } catch (err) {
-      lastTransport = describePanelTransportError(err, config.panel_url);
+      lastTransport = err instanceof PanelRequestTimeoutError
+        ? { kind: "timeout", message: err.message }
+        : describePanelTransportError(err, config.panel_url);
       const retryable = shouldRetryPanelTransport(method, lastTransport.kind);
       if (!retryable || attempt === attempts) break;
-      await Bun.sleep(250 * 2 ** (attempt - 1));
+      await sleep(250 * 2 ** (attempt - 1));
+      continue;
     }
+
+    checkBackendVersion(res);
+    // Retry temporary gateway responses only for replay-safe reads. The body
+    // was already consumed inside the attempt deadline, so each attempt is
+    // independently bounded even through a slow or buffering proxy.
+    if (method === "GET" && [502, 503, 504].includes(res.status) && attempt < attempts) {
+      await sleep(250 * 2 ** (attempt - 1));
+      continue;
+    }
+    break;
   }
   if (!res) {
     const detail = lastTransport ?? describePanelTransportError("unknown transport failure", config.panel_url);
     throw new ApiError(0, method, path, `${method} ${path} — ${detail.message}`, detail.kind);
   }
-
-  checkBackendVersion(res);
 
   if (res.status === 401) {
     console.error("Session expired. Run `ocd login` again.");
@@ -216,7 +291,13 @@ async function apiRequest<T>(
   }
 
   if (!res.ok) {
-    const err = (await res.json().catch(() => null)) as ({ error?: string } & Record<string, unknown>) | null;
+    const err = (() => {
+      try {
+        return JSON.parse(responseBodyText || "null") as ({ error?: string } & Record<string, unknown>) | null;
+      } catch {
+        return null;
+      }
+    })();
 
     // The server rejects every CLI-minted token whose user lacks `cli.access`.
     // That is an account-configuration problem, not a bad request, so print the
@@ -237,7 +318,16 @@ async function apiRequest<T>(
     );
   }
 
-  return res.json() as Promise<T>;
+  try {
+    return JSON.parse(responseBodyText || "") as T;
+  } catch {
+    throw new ApiError(
+      res.status,
+      method,
+      path,
+      `${method} ${path} → panel returned an empty or malformed JSON response`,
+    );
+  }
 }
 
 export interface App {
@@ -245,7 +335,7 @@ export interface App {
   name: string;
   status: string;
   domain: string;
-  git_repo: string;
+  image_ref?: string;
   desired_replicas: number;
   servers: number[];
   created_at: string;

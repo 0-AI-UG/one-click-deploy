@@ -27,25 +27,9 @@ export async function resolveRegistryCredentialsForImage(
   imageRef: string,
 ): Promise<Pick<RegistryResolution, "username" | "password">> {
   const settings = db.getSettings();
-  const allowedHosts = [settings.oci_artifact_ref, settings.oci_cache_ref]
+  const allowedHosts = [settings.oci_artifact_ref]
     .filter((ref): ref is string => !!ref)
     .map(registryHost);
   if (!allowedHosts.includes(registryHost(imageRef))) return {};
   return credentials();
-}
-
-/** Per-app cache refs remain authoritative; the fleet default fills only an
- * omitted manifest value. */
-export async function resolveBuildRegistry(appCacheRef?: string): Promise<RegistryResolution> {
-  const ref = appCacheRef || db.getSettings().oci_cache_ref || undefined;
-  return { ref, ...(ref ? await credentials() : {}) };
-}
-
-/** Release artifacts use their own repository. For backwards compatibility,
- * an app cache ref is still a valid distribution repository when no fleet
- * artifact repository has been configured. */
-export async function resolveArtifactRegistry(appCacheRef?: string): Promise<RegistryResolution> {
-  const settings = db.getSettings();
-  const ref = settings.oci_artifact_ref || appCacheRef || settings.oci_cache_ref || undefined;
-  return { ref, ...(ref ? await credentials() : {}) };
 }

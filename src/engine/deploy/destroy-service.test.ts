@@ -6,13 +6,6 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 const compute = makeFakeComputeProvider();
 mock.module("../../shared/providers/index.ts", () => ({
   hetzner: compute,
-  hetznerDns: ({
-    id: "x",
-    name: "x",
-    listZones: async () => [],
-    createRecord: async () => ({ id: "", name: "", type: "", value: "" }),
-    deleteRecord: async () => {},
-  }),
 }));
 
 const sshExec = mock(async () => ({ exitCode: 0, stdout: "", stderr: "" }));

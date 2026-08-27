@@ -12,12 +12,12 @@ type ApplyManifestInput = {
   userId?: string;
   deploy: boolean;
   spec?: DeployRequest;
-  rollout?: "control" | "runtime" | "build";
-  /** Desired source/build config was persisted without building it. */
+  rollout?: "control" | "runtime" | "artifact";
+  /** Desired artifact was persisted without rolling it out. */
   pendingRollout?: boolean;
 };
 type ApplyOut = { childOpIds: number[] };
-type ManifestPlanOut = { rollout: "control" | "runtime" | "build" };
+type ManifestPlanOut = { rollout: "control" | "runtime" | "artifact" };
 
 async function runChild(
   ctx: OpContext<ApplyManifestInput>,
@@ -52,7 +52,7 @@ const validateManifest: Step<ApplyManifestInput, ManifestPlanOut> = {
   async run(ctx) {
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
-    const rollout = ctx.input.rollout ?? (ctx.input.deploy ? "build" : "control");
+    const rollout = ctx.input.rollout ?? (ctx.input.deploy ? "artifact" : "control");
     if (ctx.input.deploy && rollout === "control") {
       throw new Error("A deploy request cannot use a control-only rollout");
     }
@@ -71,9 +71,9 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
     let app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App not found");
     const rollout = (prior["validate_manifest"] as ManifestPlanOut | undefined)?.rollout ??
-      (ctx.input.rollout ?? (ctx.input.deploy ? "build" : "control"));
+      (ctx.input.rollout ?? (ctx.input.deploy ? "artifact" : "control"));
     if (ctx.input.pendingRollout) db.requestAppRollout(app.id);
-    if (ctx.input.spec && rollout === "build") {
+    if (ctx.input.spec && rollout === "artifact") {
       childOpIds.push(await runChild(
         ctx,
         "candidate-redeploy",
@@ -82,7 +82,6 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
         {
           appId: app.id,
           userId: ctx.input.userId,
-          gitSha: ctx.input.spec.git_sha,
           candidate: ctx.input.spec,
         },
       ));
@@ -195,7 +194,7 @@ const recordRuntimeDeployment: Step<ApplyManifestInput, { recorded: boolean }> =
   },
   async run(ctx, prior) {
     const rollout = (prior["validate_manifest"] as ManifestPlanOut | undefined)?.rollout ??
-      (ctx.input.rollout ?? (ctx.input.deploy ? "build" : "control"));
+      (ctx.input.rollout ?? (ctx.input.deploy ? "artifact" : "control"));
     if (rollout !== "runtime") return { recorded: false };
     const app = db.getApp(ctx.input.appId);
     if (!app) throw new Error("App disappeared after runtime rollout");

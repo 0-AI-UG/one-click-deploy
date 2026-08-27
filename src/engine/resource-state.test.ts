@@ -87,8 +87,7 @@ describe("resource-derived stack state", () => {
     const app = db.insertApp({
       name: `${name}-web`,
       domain: "",
-      git_repo: "https://github.com/example/web",
-      dockerfile_path: "Dockerfile",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
     });
@@ -162,8 +161,7 @@ describe("stale app state reconciliation", () => {
     const app = db.insertApp({
       name,
       domain: "",
-      git_repo: "https://github.com/example/web",
-      dockerfile_path: "Dockerfile",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
     });

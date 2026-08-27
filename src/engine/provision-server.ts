@@ -78,6 +78,8 @@ export async function provisionServer(opts: {
       location,
       status: "creating",
       pool: opts.pool ?? "general",
+      provider: "hetzner",
+      ownership: "managed",
     });
 
   log("server", `Creating ${compute.name} server: name=${serverName} type=${serverType} location=${location}`);
@@ -129,6 +131,7 @@ export async function provisionServer(opts: {
     ipv6: providerServer.ipv6 || "",
     private_ipv4: providerServer.privateIpv4 || "",
     status: "provisioning",
+    management_address: serverIp,
   });
   log("server", `Server saved to DB: id=${dbServer.id}`);
   emit("server", `Server created: ${serverName} (${serverIp})`);

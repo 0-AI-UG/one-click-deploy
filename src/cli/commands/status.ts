@@ -27,7 +27,10 @@ interface Dashboard {
 }
 
 export async function status(): Promise<void> {
-  const payload = await get<unknown>("/api/dashboard");
+  // The browser dashboard needs enriched app/service rows, including history
+  // fields that can grow to several megabytes. Status needs only this compact
+  // projection, so do not make a slow link download the web payload first.
+  const payload = await get<unknown>("/api/dashboard?compact=1");
   const row = expectRecord(payload, "Status request");
   const apps = expectArray(row.apps, "Status apps") as DashboardApp[];
   const services = expectArray(row.services, "Status services") as DashboardService[];

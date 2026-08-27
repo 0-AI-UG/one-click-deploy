@@ -74,7 +74,10 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
   // Staging siblings are hidden implementation detail of their production app —
   // they belong to the member, not to the stack's member list.
   const memberApps = stack.apps.filter((a) => a.target_of == null);
-  const promotable = memberApps.filter((a) => (a.webhook_staging_environment_id ?? null) != null).length;
+  const stagingTargets = new Set(
+    stack.apps.map((app) => app.target_of).filter((id): id is number => id != null),
+  );
+  const promotable = memberApps.filter((app) => stagingTargets.has(app.id)).length;
 
   // Stack configuration and membership come exclusively from ocd-stack.json.
   const tabs = [
@@ -121,7 +124,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
               onClick={async () => {
                 if (await confirm(
                   "Promote Stack",
-                  `Promote the staging sibling of ${promotable} member(s) of "${stack.name}" to production? Each member is rebuilt from the commit its staging app is running. Members are promoted concurrently, not in dependency order.`,
+                  `Promote the staging sibling of ${promotable} member(s) of "${stack.name}" to production? Each production app will receive the exact immutable image running in staging.`,
                 )) await action("promote", () => serverConfirmedAction(
                   `/api/stacks/${stackId}/promote`,
                   "POST",

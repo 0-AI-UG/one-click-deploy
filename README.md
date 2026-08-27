@@ -2,9 +2,9 @@
 
 # One-Click Deploy
 
-**Self-hosted PaaS for Hetzner Cloud. Git repo in, live HTTPS app out.**
+**Self-hosted PaaS for Docker hosts, with optional Hetzner provisioning.**
 
-No Kubernetes. No YAML. Just your Hetzner account.
+Bring existing VPSs or let OCD provision managed capacity on Hetzner.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/0-AI-UG/one-click-deploy/pkgs/container/one-click-deploy)
@@ -14,44 +14,74 @@ No Kubernetes. No YAML. Just your Hetzner account.
 
 ---
 
-A lightweight, self-hostable alternative to Heroku, Railway, and Render, built exclusively for [Hetzner Cloud](https://www.hetzner.com/cloud). Git supplies application code; OCD stores the desired runtime configuration used by every rollout. Versioned manifests explicitly apply that configuration, while the web panel edits the same stored specification. One provider, deeply integrated: Hetzner servers, volumes, private networks, firewalls, and DNS.
+A lightweight, self-hostable alternative to Heroku, Railway, and Render. Git supplies versioned runtime configuration and CI publishes immutable application images; OCD deploys those images to connected servers. Existing VPSs can be connected directly, while [Hetzner Cloud](https://www.hetzner.com/cloud) remains an optional convenience for provisioning servers and volumes. DNS stays operator-owned and provider-neutral.
 
 ## Quick Start
 
-You'll need a [Hetzner Cloud API token](https://docs.hetzner.cloud/#getting-started) (Read & Write) from your project's **Security → API Tokens**.
+The headless bootstrap below creates the panel server on Hetzner and therefore
+needs a [Hetzner Cloud API token](https://docs.hetzner.cloud/#getting-started)
+with Read & Write access. Normal account setup and connected-host operation do
+not require cloud credentials.
 
 ```bash
+PANEL_IMAGE='ghcr.io/0-ai-ug/one-click-deploy@sha256:<64-hex-digest>'
 docker run --rm \
-  -e OCD_AUTO_DEPLOY='{"provider_token":"<hetzner_token>","domain":"panel.example.com"}' \
-  ghcr.io/0-ai-ug/one-click-deploy:latest
+  -e OCD_AUTO_DEPLOY="{\"hetzner_api_token\":\"<hetzner_token>\",\"panel_image_ref\":\"$PANEL_IMAGE\",\"domain\":\"panel.example.com\"}" \
+  "$PANEL_IMAGE"
 ```
 
 Bootstrap provisions the server and prints its IP. Open `https://<domain>` and create your admin account. That's it.
 
+> **Existing installation:** this is a clean-cut release. Back up the OCD
+> database and ensure every app and the panel itself have a real
+> `repository@sha256:<digest>` recorded before starting the new version.
+> Migration 105 deliberately refuses to start when any immutable artifact is
+> missing; it never reconstructs or invents one from legacy source state.
+
 ### DNS
 
-The panel needs `<domain>` to resolve to the new server so Let's Encrypt can issue a TLS certificate. You have two options:
-
-- **Automatic** — add `"dns_zone_id":"<zone_id>"` to the config and the A record is created for you. Find the zone ID in the [Hetzner DNS Console](https://dns.hetzner.com) → your zone → the ID in the URL (`dns.hetzner.com/zone/<zone_id>`).
-- **Manual** — leave `dns_zone_id` out and create an `A` record for `<domain>` → the server IP printed at the end of bootstrap. TLS is issued automatically once DNS propagates.
+The panel needs `<domain>` to resolve to the new server so Let's Encrypt can
+issue a TLS certificate. Bootstrap prints the exact `A` record to create with
+your DNS provider. OCD observes propagation and reports whether the record is
+pending, correct, or conflicting, but it never modifies or deletes DNS.
 
 > **No domain?** Omit `domain` entirely. Bootstrap derives a `<server-ip>.nip.io` domain once the server exists and serves it with a self-signed certificate — no DNS setup and no real domain needed (your browser will warn on first visit). Just:
 > ```bash
+> PANEL_IMAGE='ghcr.io/0-ai-ug/one-click-deploy@sha256:<64-hex-digest>'
 > docker run --rm \
->   -e OCD_AUTO_DEPLOY='{"provider_token":"<hetzner_token>"}' \
->   ghcr.io/0-ai-ug/one-click-deploy:latest
+>   -e OCD_AUTO_DEPLOY="{\"hetzner_api_token\":\"<hetzner_token>\",\"panel_image_ref\":\"$PANEL_IMAGE\"}" \
+>   "$PANEL_IMAGE"
 > ```
 
 Prefer bash? Copy `example.panel.json` to `panel.json` and run `./scripts/bootstrap.sh`.
 
+### Connect an existing VPS
+
+After logging the CLI into the panel, print OCD's enrollment key, install it
+for root on the VPS, independently verify the VPS's Ed25519 host-key
+fingerprint, then connect it:
+
+```bash
+ocd servers enrollment-key
+ocd servers connect \
+  --name=app-1 \
+  --address=203.0.113.10 \
+  --private-address=10.0.0.11 \
+  --host-key='203.0.113.10 ssh-ed25519 AAAA...'
+```
+
+Connected VPSs are stateless app capacity. OCD never deletes them or attaches
+managed provider volumes; `ocd servers delete app-1` only disconnects the host.
+
 ## Features
 
-- Deploy from any Git repo with a Dockerfile
-- Auto-provisioned Hetzner Cloud servers, volumes, private networks, and firewalls
-- Auto TLS (Traefik + Let's Encrypt) and auto DNS via Hetzner DNS
+- Deploy immutable OCI images published by your CI system
+- Connect operator-owned stateless VPSs without cloud credentials
+- Optionally provision managed Hetzner Cloud servers, volumes, networks, and firewalls
+- Automatic TLS via Traefik and Let's Encrypt HTTP-01; provider-neutral DNS instructions
 - Horizontal scaling, auto-scaling, pause/resume
 - Managed services: Postgres, Redis, MySQL, and more
-- Web terminal, log streaming, rollbacks, webhooks
+- Web terminal, log streaming, exact-image releases, promotions, and rollbacks
 - Passkeys, TOTP, GitHub OAuth, multi-user RBAC
 - `ocd` CLI for Linux, macOS, Windows
 - Self-managing: the panel deploys itself

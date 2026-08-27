@@ -89,8 +89,7 @@ function makeApp(overrides: Partial<Parameters<typeof insertApp>[0]> = {}) {
   return insertApp({
     name: `app-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     domain: "",
-    git_repo: "https://github.com/x/y",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
     ...overrides,

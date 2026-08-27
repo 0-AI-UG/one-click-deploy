@@ -46,7 +46,7 @@ export type DockerRunVolume = { host: string; container: string };
 export type DockerRunOpts = {
   /** Container name (--name). */
   name: string;
-  /** Image reference (e.g. "myapp:latest" or "postgres:17-alpine"). */
+  /** Image reference. App workloads use immutable digests; managed services may use catalog tags. */
   image: string;
   /** App name used to scope the volume host-path allowlist. */
   appName: string;

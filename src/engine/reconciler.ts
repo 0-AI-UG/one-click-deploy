@@ -21,7 +21,6 @@ import {
 } from "./infrastructure-reconciler.ts";
 import { reconcileServiceInstances } from "./service-reconciler.ts";
 import { reconcileAppRuntime } from "./app-runtime-reconciler.ts";
-import { reconcileWebhooks } from "./webhook-reconciler.ts";
 
 function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [reconciler:${context}]`, ...args);
@@ -351,7 +350,6 @@ export function startReconciler(): void {
   startController({ name: "server-gc", intervalMs: 30_000, timeoutMs: 25_000, run: reconcileServerGc });
   startController({ name: "volumes", intervalMs: 120_000, timeoutMs: 90_000, run: reconcileActiveVolumes });
   startController({ name: "firewall", intervalMs: 300_000, timeoutMs: 60_000, run: reconcileFirewall });
-  startController({ name: "webhooks", intervalMs: 300_000, timeoutMs: 120_000, run: reconcileWebhooks });
   startController({ name: "stuck-operations", intervalMs: 30_000, run: sweepStuckStates });
   startController({ name: "maintenance", intervalMs: 300_000, timeoutMs: 240_000, run: maintenanceTick });
 }

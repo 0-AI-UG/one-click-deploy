@@ -1,41 +1,47 @@
 # Concepts
 
-## One desired manifest
+## Configuration and releases are separate
 
 Each app has one server-side desired manifest. A local `.ocd-deploy.json` is a
-complete declaration, not a patch. `ocd deploy` resolves names and secrets,
-sends `apply_mode: "manifest"`, updates the stored manifest, and invokes the
-canonical deploy engine path.
+complete declaration, not a patch. It includes an exact OCI image digest for
+first creation. `ocd deploy` validates the manifest, resolves names and secret
+inputs, then converges the app without building an image.
 
-Omitted nullable links become `null`; omitted booleans, counters, arrays, and
-other fields are sent with their documented defaults. This prevents hidden
-server state from surviving a complete manifest application.
-
-## One mutation path
+Later image delivery is a release, not a configuration rewrite:
 
 | Intent | Command |
 | --- | --- |
-| Preview local versus stored desired state | `ocd deploy --dry-run` |
-| Apply desired state and deploy code | `ocd deploy` |
-| Apply desired state without code deployment | `ocd deploy --config-only` |
+| Preview local versus stored configuration | `ocd deploy --dry-run` |
+| Create an app or apply complete configuration | `ocd deploy` |
+| Apply configuration while retaining the deployed image | `ocd deploy --config-only` |
+| Release one externally built digest | `ocd release <app> --image <repository@sha256:digest>` |
+| Copy one deployed digest between apps | `ocd promote --from=<source> --to=<destination>` |
+| Restore a successful deployment | `ocd rollback <app> [--deployment=<id>]` |
 
-The web UI cannot create apps, redeploy code, or mutate manifest-owned app
-configuration. It renders desired configuration read-only and exposes only
-operational actions. The server accepts manifest applications only from
-CLI-minted tokens.
+The web UI renders manifest-owned configuration read-only. Operational actions
+such as restart, rollback, pause, wake, promotion, replica migration, and
+operation recovery do not redefine desired configuration.
 
-## Desired versus operational state
+## Immutable artifact rule
 
-Desired state includes source/build settings, domains and ingress, environment
-linkage, environment declarations, health checks, resources, replica count,
-autoscaling policy, storage, placement, webhooks, and staging linkage.
+OCD accepts only `repository@sha256:<64 hex digest>`. Tags are mutable and are
+rejected. The registry may be GitHub Container Registry or any other OCI
+registry reachable by the fleet. CI owns source checkout, testing, building,
+publishing, and push authentication. OCD owns pulling the selected digest,
+health validation, rollout, and deployment history. Public pulls require no
+configuration; private pulls use the fleet credential configured in panel
+Settings for one explicitly configured repository host.
 
-Operational actions do not redefine desired state. Examples are waking a
-sleeping app, restarting containers, rolling back a deployment, promoting
-staging, migrating a replica, and recovering an engine operation.
+## Explicit staging targets
 
-## First and later deploys
+Staging is an ordinary, separately deployed app such as `api-staging`; it has
+its own manifest, environment, domain, and deployment history. OCD does not
+create a hidden staging app from a production manifest or release. Release the
+candidate to that explicit app and promote its deployed digest with
+`ocd promote --from=api-staging --to=api`.
 
-The same request and engine path handles both. If the app does not exist, the
-engine creates it from the stored manifest. If it exists, the engine stores the
-new manifest and converges the app. There is no separate redeploy mental model.
+## Provider boundaries
+
+DNS remains at the operator's chosen provider; OCD only reports required
+records. Hetzner credentials are optional and are used only for managed
+infrastructure. Existing stateless Docker hosts can be enrolled instead.

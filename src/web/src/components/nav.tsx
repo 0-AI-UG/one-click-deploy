@@ -295,7 +295,7 @@ function MobileNav({ hash }: { hash: string }) {
       </nav>
 
       <MobileActionSheet open={moreOpen} onClose={() => setMoreOpen(false)} title="OCD Menu" subtitle={user?.username}>
-        <MobileSheetAction icon={<TerminalSquare size={19} />} label="Web CLI" detail="Build and run OCD commands" onClick={() => { window.location.hash = "#/cli"; }} />
+        <MobileSheetAction icon={<TerminalSquare size={19} />} label="Web CLI" detail="Compose and run OCD commands" onClick={() => { window.location.hash = "#/cli"; }} />
         <MobileSheetAction icon={<Cpu size={19} />} label="Engine" detail="Operations and recovery" onClick={() => { window.location.hash = "#/engine"; }} />
         {user?.isAdmin && <MobileSheetAction icon={<Users size={19} />} label="Admin" detail="Users and permissions" onClick={() => { window.location.hash = "#/admin"; }} />}
         <MobileSheetAction icon={<User size={19} />} label="Account" detail="Security and profile" onClick={() => { window.location.hash = "#/account"; }} />

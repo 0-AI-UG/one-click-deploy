@@ -54,6 +54,7 @@ async function adoptCloudServerByName(
     ipv6: adopted.ipv6,
     private_ipv4: adopted.privateIpv4,
     status: "provisioning",
+    management_address: adopted.ipv4,
   });
   return adopted;
 }
@@ -97,6 +98,8 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
       type: ctx.input.serverType,
       location: ctx.input.location,
       status: "creating",
+      provider: "hetzner",
+      ownership: "managed",
     });
     return { serverId: row.id, serverName };
   },
@@ -175,6 +178,7 @@ const createCloudServer: Step<ProvisionInput, CreateCloudOut> = {
       ipv6: created.ipv6 || "",
       private_ipv4: created.privateIpv4 || "",
       status: "provisioning",
+      management_address: created.ipv4,
     });
     ctx.log(`Server created: ${row.serverName} (${created.ipv4})`);
     return {

@@ -18,10 +18,12 @@ export function OverviewTab({
   const envName = (id: number | null) =>
     id == null ? null : environments.find((e) => e.id === id)?.name ?? `#${id}`;
   const prodEnv = envName(stack.environment_id);
-  const staging = memberApps.filter((a) => (a.webhook_staging_environment_id ?? null) != null).length;
-  // Every member is deployed from the same repo (the one holding ocd-stack.json),
-  // so the first member's repo is the stack's source of truth.
-  const repo = memberApps.find((a) => a.git_repo)?.git_repo;
+  const stagingTargets = new Set(
+    stack.apps
+      .map((app) => app.target_of)
+      .filter((id): id is number => id != null),
+  );
+  const staging = memberApps.filter((app) => stagingTargets.has(app.id)).length;
   // `needs` edges from the stack manifest, persisted per member. They are what
   // orders deploys and promotes into levels, so they belong on this page even
   // though they're only editable in `ocd-stack.json`.
@@ -40,12 +42,6 @@ export function OverviewTab({
         <Card className="p-4 space-y-3">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Configuration</h3>
           <div className="space-y-2 text-[10px] font-mono">
-            {repo && (
-              <div className="flex justify-between gap-4 items-center">
-                <span className="text-muted">Source Repo</span>
-                <span className="text-fg font-bold truncate">{repo}</span>
-              </div>
-            )}
             <div className="flex justify-between"><span className="text-muted">Created</span><span className="text-fg">{new Date(stack.created_at).toLocaleString()}</span></div>
             <div className="flex justify-between">
               <span className="text-muted">Environment</span>
@@ -104,7 +100,7 @@ export function OverviewTab({
                   {needsOf(a).length ? needsOf(a).join(", ") : "—"}
                 </td>
                 <td className="py-2 px-3 font-mono text-[10px]">
-                  {(a.webhook_staging_environment_id ?? null) != null
+                  {stagingTargets.has(a.id)
                     ? <span className="text-accent-amber font-bold">on</span>
                     : <span className="text-fg-dim">off</span>}
                 </td>

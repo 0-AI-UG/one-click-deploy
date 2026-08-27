@@ -49,7 +49,7 @@ describe("web CLI command catalog", () => {
   test("rejects malformed numbers, key-value entries and disabled commands", () => {
     expect(() => buildWebCliArgv(command("app.logs"), { app: "api", tail: "1.5" })).toThrow("whole number");
     expect(() => buildWebCliArgv(command("envs.create"), { name: "prod", vars: "NOT_A_PAIR" })).toThrow("KEY=VALUE");
-    expect(() => buildWebCliArgv(command("app.deploy"), {})).toThrow("local repository manifest");
+    expect(() => buildWebCliArgv(command("app.deploy"), {})).toThrow("local manifest");
   });
 
   test("rejects missing required resource selectors and invalid select values", () => {

@@ -1,15 +1,13 @@
-import { resolve } from "node:path";
 import { get, post, resolveApp } from "../api.ts";
 import { followOp } from "../ops.ts";
-import { BOLD, DIM, GREEN, RED, RESET, YELLOW } from "../format.ts";
-import { getGitRepo, readManifest } from "../manifest.ts";
+import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
 import { webConfirm } from "../confirm.ts";
 import type { PromoteRequest } from "../../shared/rpc.ts";
 
 interface Deployment {
   id: number;
   status: string;
-  git_commit: string;
+  image_digest?: string;
 }
 
 function parseFlags(args: string[]): { from?: string; to?: string; help: boolean } {
@@ -50,7 +48,7 @@ async function resolveStack(nameOrId: string): Promise<StackListItem> {
 
 /**
  * `ocd promote stack <name>` — promote every member of a stack that has a
- * webhook-staging sibling with a deployed commit. Member selection lives
+ * staging sibling with a deployed image. Member selection lives
  * server-side in the promote_stack op; this only resolves + follows.
  */
 async function promoteStack(args: string[]): Promise<void> {
@@ -60,7 +58,7 @@ async function promoteStack(args: string[]): Promise<void> {
   if (help || !name) {
     console.error(`${BOLD}Usage:${RESET} ocd promote stack <name|id>
 
-Promotes every member of the stack that has a webhook-staging sibling holding a
+Promotes every member of the stack that has a staging sibling holding a
 successful deployment. Members without a sibling (or whose sibling has never
 deployed) are skipped and reported in the stack log.
 
@@ -105,16 +103,11 @@ export async function promote(args: string[]): Promise<void> {
   const { from, to, help } = parseFlags(args);
 
   if (help) {
-    console.error(`${BOLD}Usage:${RESET} ocd promote
-       ocd promote --from=<app> --to=<app>
+    console.error(`${BOLD}Usage:${RESET} ocd promote --from=<app> --to=<app>
        ocd promote stack <name|id>
 
-Promotes the exact version running in a source (e.g. staging) app up to a
-destination (production) app by rebuilding it from the source's git commit.
-
-Run with no arguments inside a repo to promote its webhook-staging sibling:
-source = <name>-staging, destination = <name>, where <name> comes from the
-manifest. Use --from/--to to promote between any two apps explicitly.
+Promotes the exact immutable image running in a source (e.g. staging) app to a
+destination (production) app. Both --from and --to are required.
 
 Use \`ocd promote stack <name>\` to promote ready staging siblings in one stack
 operation, respecting dependency levels.
@@ -127,34 +120,20 @@ Promotion always requires approval in the OCD web UI.`);
     process.exit(0);
   }
 
-  // Resolve source/destination names: explicit --from/--to wins; otherwise
-  // promote the webhook-staging sibling derived from the manifest.
-  let sourceName: string;
-  let destName: string;
-  if (from || to) {
-    if (!from || !to) {
-      console.error(`${RED}Both --from and --to are required together.${RESET}`);
-      process.exit(1);
-    }
-    sourceName = from;
-    destName = to;
-  } else {
-    const repo = getGitRepo();
-    const manifest = readManifest(resolve(".ocd-deploy.json"));
-    const name = manifest.suggested_app_name || repo.replace(/.*\//, "");
-    sourceName = `${name}-staging`;
-    destName = name;
+  if (!from || !to) {
+    console.error(`${RED}Both --from and --to are required.${RESET}`);
+    process.exit(1);
   }
 
-  const source = await resolveApp(sourceName);
-  const dest = await resolveApp(destName);
+  const source = await resolveApp(from);
+  const dest = await resolveApp(to);
 
   if (source.id === dest.id) {
     console.error(`${RED}Source and destination must be different apps.${RESET}`);
     process.exit(1);
   }
 
-  // Show the commit that will be promoted (source's latest successful deploy).
+  // Show the immutable image that will be promoted.
   const deployments = await get<Deployment[]>(`/api/apps/${source.id}/deployments`);
   const current = deployments.find((d) => d.status === "deployed");
   if (!current) {
@@ -163,11 +142,8 @@ Promotion always requires approval in the OCD web UI.`);
   }
 
   console.log(
-    `Promote ${BOLD}${source.name}${RESET} ${DIM}(commit ${current.git_commit})${RESET} → ${BOLD}${dest.name}${RESET}`,
+    `Promote ${BOLD}${source.name}${RESET} ${DIM}(${current.image_digest || "immutable image"})${RESET} → ${BOLD}${dest.name}${RESET}`,
   );
-  if (source.git_repo !== dest.git_repo) {
-    console.log(`${YELLOW}Warning: source and destination have different git repos.${RESET}`);
-  }
 
   const confirmation = await webConfirm("promote_app", "promotion", `${source.id}:${dest.id}`);
   if (!confirmation) return;

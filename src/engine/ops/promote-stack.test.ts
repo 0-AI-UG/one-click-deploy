@@ -29,25 +29,24 @@ function makeCtx(input: Input): OpContext<Input> {
 
 const planStep = promoteStackOp.steps.find((s) => s.name === "plan")!;
 const promoteMembersStep = promoteStackOp.steps.find((s) => s.name === "promote_members")!;
+const DIGEST = `ghcr.io/ocd/test@sha256:${"a".repeat(64)}`;
 
 /** Minimal AppRow stand-in for the pure selection tests. */
 function row(id: number, name: string, extra: Partial<AppRow> = {}): AppRow {
   return { id, name, target: "", target_of: null, ...extra } as AppRow;
 }
 
-/** A production member with webhook staging currently ON (the column is the
- *  on/off switch the webhook receiver reads). */
 function prodRow(id: number, name: string, extra: Partial<AppRow> = {}): AppRow {
-  return row(id, name, { webhook_staging_environment_id: 7, ...extra });
+  return row(id, name, extra);
 }
 
 describe("planPromotions (member/sibling selection)", () => {
   test("promotes a production member whose sibling has a deployed commit", () => {
     const prod = prodRow(1, "s-web");
     const sib = row(2, "s-web-staging", { target: "staging", target_of: 1 });
-    const plan = planPromotions([prod, sib], (id) => (id === 1 ? sib : null), () => "abc123");
+    const plan = planPromotions([prod, sib], (id) => (id === 1 ? sib : null), () => ({ image: DIGEST, commit: "abc123" }));
     expect(plan.promotions).toEqual([
-      { appId: 1, appName: "s-web", sourceAppId: 2, sourceAppName: "s-web-staging", commit: "abc123" },
+      { appId: 1, appName: "s-web", sourceAppId: 2, sourceAppName: "s-web-staging", image: DIGEST, commit: "abc123" },
     ]);
     expect(plan.skipped).toEqual([]);
   });
@@ -55,25 +54,14 @@ describe("planPromotions (member/sibling selection)", () => {
   test("skips staging/dev rows themselves (they are the sources, not destinations)", () => {
     const sib = row(2, "s-web-staging", { target: "staging", target_of: 1 });
     const dev = row(3, "s-web-dev", { target: "dev", target_of: 1 });
-    const plan = planPromotions([sib, dev], () => null, () => "abc123");
+    const plan = planPromotions([sib, dev], () => null, () => ({ image: DIGEST, commit: "abc123" }));
     // Not promotable AND not reported as skipped — they aren't candidates at all.
     expect(plan.promotions).toEqual([]);
     expect(plan.skipped).toEqual([]);
   });
 
-  test("skips a member whose staging is OFF even though a sibling survives", () => {
-    // Dropping webhook.staging nulls the column but leaves the sibling row and
-    // its deployment history behind. Promoting from it would roll production
-    // back to whatever that stale sibling last held.
-    const stale = row(1, "s-web", { webhook_staging_environment_id: null });
-    const sib = row(2, "s-web-staging", { target: "staging", target_of: 1 });
-    const plan = planPromotions([stale, sib], () => sib, () => "old-commit");
-    expect(plan.promotions).toEqual([]);
-    expect(plan.skipped).toEqual([{ appName: "s-web", reason: "webhook staging is off" }]);
-  });
-
   test("skips a member with no staging sibling", () => {
-    const plan = planPromotions([prodRow(1, "s-web")], () => null, () => "abc123");
+    const plan = planPromotions([prodRow(1, "s-web")], () => null, () => ({ image: DIGEST, commit: "abc123" }));
     expect(plan.promotions).toEqual([]);
     expect(plan.skipped).toEqual([{ appName: "s-web", reason: "no staging sibling" }]);
   });
@@ -97,7 +85,7 @@ describe("planPromotions (member/sibling selection)", () => {
     const plan = planPromotions(
       [a, aSib, b, bSib, c],
       (id) => siblings.get(id) ?? null,
-      (id) => (id === 2 ? "sha-a" : null), // only s-api-staging has deployed
+      (id) => (id === 2 ? { image: DIGEST, commit: "sha-a" } : null),
     );
     expect(plan.promotions.map((p) => p.appName)).toEqual(["s-api"]);
     expect(plan.skipped).toEqual([
@@ -113,6 +101,7 @@ describe("orderPromotions (dependency levels)", () => {
     appName: name,
     sourceAppId: id + 100,
     sourceAppName: `${name}-staging`,
+    image: DIGEST,
     commit: "abc",
   });
 
@@ -171,8 +160,7 @@ function seedApp(name: string, envId: number): AppRow {
   return db.insertApp({
     name,
     domain: `${name}.example.com`,
-    git_repo: "https://github.com/x/y",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
     environment_id: envId,
@@ -189,16 +177,13 @@ function seedStack() {
   const web = seedApp(`s-${suffix}-web`, env.id);
   const webSib = seedApp(`s-${suffix}-web-staging`, env.id);
   db.setAppTarget(webSib.id, web.id, "staging");
-  db.updateAppWebhookStagingEnvironment(web.id, env.id); // staging ON
-  db.insertDeployment({ app_id: webSib.id, image_tag: "t", git_commit: "deadbeef", source: "webhook" });
+  db.insertDeployment({ app_id: webSib.id, image_tag: DIGEST, image_digest: DIGEST, git_commit: "deadbeef", source: "release" });
 
   const api = seedApp(`s-${suffix}-api`, env.id);
   const apiSib = seedApp(`s-${suffix}-api-staging`, env.id);
   db.setAppTarget(apiSib.id, api.id, "staging");
-  db.updateAppWebhookStagingEnvironment(api.id, env.id); // staging ON, sibling never deployed
 
   const worker = seedApp(`s-${suffix}-worker`, env.id);
-  db.updateAppWebhookStagingEnvironment(worker.id, env.id); // staging ON, no sibling at all
 
   for (const a of [web, webSib, api, apiSib, worker]) db.setAppStack(a.id, stack.id);
   return { stack, web, webSib, api, apiSib, worker };
@@ -283,8 +268,7 @@ describe("promote_stack promote_members step", () => {
       const app = seedApp(`${stackName}-${key}`, env.id);
       const sib = seedApp(`${stackName}-${key}-staging`, env.id);
       db.setAppTarget(sib.id, app.id, "staging");
-      db.updateAppWebhookStagingEnvironment(app.id, env.id);
-      db.insertDeployment({ app_id: sib.id, image_tag: "t", git_commit: `sha-${key}`, source: "webhook" });
+      db.insertDeployment({ app_id: sib.id, image_tag: DIGEST, image_digest: DIGEST, git_commit: `sha-${key}`, source: "release" });
       db.setAppStack(app.id, stack.id); // siblings deliberately carry no stack_id
       if (withNeeds) db.setAppStackNeeds(app.id, needs[key]);
       ids[key] = app.id;

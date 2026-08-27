@@ -1,22 +1,27 @@
 import { describe, test, expect } from "bun:test";
 import {
   validateAppName,
-  validateGitRepo,
   validateDomain,
   validatePort,
   validateEnvVars,
   validateHetznerToken,
   validateDeployRequest,
   validateGitHubPat,
-  validateDeployManifest,
+  validateDeployManifest as validateDeployManifestRaw,
   assertSafeHostPath,
   validateIpAllowlist,
   validateHealthCheckPath,
   validatePublicPort,
   isPublicProtocol,
   validateIngressFields,
-  validateRepoBuildPath,
 } from "./validate.ts";
+
+const TEST_IMAGE_REF = `ghcr.io/acme/test@sha256:${"a".repeat(64)}`;
+const validateDeployManifest = (raw: unknown) => validateDeployManifestRaw(
+  raw !== null && typeof raw === "object" && !Array.isArray(raw)
+    ? { image: { ref: TEST_IMAGE_REF }, ...raw }
+    : raw,
+);
 
 describe("assertSafeHostPath", () => {
   test("accepts per-app volume root", () => {
@@ -84,52 +89,6 @@ describe("validateAppName", () => {
     expect(validateAppName("my_app").valid).toBe(false);
     expect(validateAppName("my app").valid).toBe(false);
     expect(validateAppName("my.app").valid).toBe(false);
-  });
-});
-
-describe("validateRepoBuildPath", () => {
-  test("accepts repository-relative Docker paths", () => {
-    expect(validateRepoBuildPath("apps/api/Dockerfile", "Dockerfile")).toEqual({
-      valid: true,
-      value: "apps/api/Dockerfile",
-    });
-    expect(validateRepoBuildPath(".", "Docker context").valid).toBe(true);
-  });
-
-  test("rejects absolute, traversing, and shell-unsafe paths", () => {
-    expect(validateRepoBuildPath("/etc/passwd", "Dockerfile").valid).toBe(false);
-    expect(validateRepoBuildPath("apps/../Dockerfile", "Dockerfile").valid).toBe(false);
-    expect(validateRepoBuildPath("Dockerfile;reboot", "Dockerfile").valid).toBe(false);
-  });
-});
-
-describe("validateGitRepo", () => {
-  test("accepts HTTPS URLs", () => {
-    expect(validateGitRepo("https://github.com/user/repo.git").valid).toBe(true);
-    expect(validateGitRepo("https://gitlab.com/user/repo").valid).toBe(true);
-  });
-
-  test("accepts git@ SSH URLs", () => {
-    expect(validateGitRepo("git@github.com:user/repo.git").valid).toBe(true);
-  });
-
-  test("rejects empty", () => {
-    expect(validateGitRepo("").valid).toBe(false);
-  });
-
-  test("rejects file:// protocol", () => {
-    expect(validateGitRepo("file:///etc/passwd").valid).toBe(false);
-  });
-
-  test("rejects plain text", () => {
-    expect(validateGitRepo("just-a-string").valid).toBe(false);
-  });
-
-  test("rejects shell metacharacters", () => {
-    expect(validateGitRepo("https://github.com/user/repo;rm -rf /").valid).toBe(false);
-    expect(validateGitRepo("https://github.com/user/repo$(whoami)").valid).toBe(false);
-    expect(validateGitRepo("https://github.com/user/repo`id`").valid).toBe(false);
-    expect(validateGitRepo("https://github.com/user/repo|cat /etc/passwd").valid).toBe(false);
   });
 });
 
@@ -240,7 +199,7 @@ describe("validateHetznerToken", () => {
 describe("validateDeployRequest", () => {
   const validRequest = {
     app_name: "my-app",
-    git_repo: "https://github.com/user/repo.git",
+    image_ref: `ghcr.io/acme/my-app@sha256:${"a".repeat(64)}`,
     container_port: 3000,
     env_vars: { NODE_ENV: "production" },
   };
@@ -257,14 +216,12 @@ describe("validateDeployRequest", () => {
     expect(validateDeployRequest({ ...validRequest, app_name: "" }).valid).toBe(false);
   });
 
-  test("rejects invalid git repo", () => {
-    expect(validateDeployRequest({ ...validRequest, git_repo: "not-a-url" }).valid).toBe(false);
+  test("rejects a mutable image tag", () => {
+    expect(validateDeployRequest({ ...validRequest, image_ref: "ghcr.io/acme/my-app:latest" }).valid).toBe(false);
   });
 
-  test("rejects unsafe build paths and malformed immutable commits", () => {
-    expect(validateDeployRequest({ ...validRequest, dockerfile_path: "../Dockerfile" }).valid).toBe(false);
-    expect(validateDeployRequest({ ...validRequest, docker_context: "/tmp" }).valid).toBe(false);
-    expect(validateDeployRequest({ ...validRequest, git_sha: "not-a-sha" }).valid).toBe(false);
+  test("rejects malformed provenance commits", () => {
+    expect(validateDeployRequest({ ...validRequest, git_commit: "not-a-sha" }).valid).toBe(false);
   });
 
   test("rejects invalid port", () => {
@@ -534,15 +491,19 @@ describe("validateDeployManifest", () => {
     expect(r.ok).toBe(true);
   });
 
+  test("requires an immutable external image", () => {
+    expect(validateDeployManifestRaw({ volume: null, name: "demo" }).ok).toBe(false);
+    expect(validateDeployManifestRaw({ volume: null, name: "demo", image: { ref: "ghcr.io/acme/demo:latest" } }).ok).toBe(false);
+  });
+
   test("accepts a full manifest", () => {
     const r = validateDeployManifest({
       $schema: 1,
       name: "app",
       description: "desc",
-      build: { dockerfile: "Dockerfile", context: ".", container_port: 3000 },
+      container_port: 3000,
       env: [{ key: "DATABASE_URL", required: true }, { key: "API_KEY", secret: true, default: "" }],
       volume: { size: 5, path: "/data" },
-      webhook: { enabled: true, branch: "main" },
       replicas: 3,
     });
     expect(r.ok).toBe(true);
@@ -579,13 +540,9 @@ describe("validateDeployManifest", () => {
   });
 
   test("rejects non-integer container_port", () => {
-    expect(validateDeployManifest({ volume: null, name: "x", build: { container_port: 3.14 } }).ok).toBe(false);
-    expect(validateDeployManifest({ volume: null, name: "x", build: { container_port: 0 } }).ok).toBe(false);
-    expect(validateDeployManifest({ volume: null, name: "x", build: { container_port: 99999 } }).ok).toBe(false);
-  });
-
-  test("rejects build paths containing .. (path traversal)", () => {
-    expect(validateDeployManifest({ volume: null, name: "x", build: { dockerfile: "../evil/Dockerfile" } }).ok).toBe(false);
+    expect(validateDeployManifest({ volume: null, name: "x", container_port: 3.14 }).ok).toBe(false);
+    expect(validateDeployManifest({ volume: null, name: "x", container_port: 0 }).ok).toBe(false);
+    expect(validateDeployManifest({ volume: null, name: "x", container_port: 99999 }).ok).toBe(false);
   });
 
   test("rejects env entries with invalid keys", () => {
@@ -687,7 +644,7 @@ describe("validateIngressFields (shared by deploy + ingress endpoint)", () => {
 
   test("deploy and ingress agree: same rule yields the same error string", () => {
     const viaDeploy = validateDeployRequest({
-      app_name: "a", git_repo: "https://github.com/x/y.git", container_port: 3000,
+      app_name: "a", image_ref: `ghcr.io/acme/a@sha256:${"a".repeat(64)}`, container_port: 3000,
       auth_password: "pw", internal_protocol: "tcp",
     });
     const viaHelper = validateIngressFields({ auth_password: "pw" }, { httpRouted: false });

@@ -4,6 +4,7 @@ import { recreateAppContainer } from "../deploy/index.ts";
 import { registerOp } from "./registry.ts";
 import { ensureBindMount, removeBindMount, removeBindMountBestEffort } from "./_volumes.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
+import { assertProviderVolumesSupported } from "../../shared/infrastructure.ts";
 
 // Move a volume through small, durable transitions. The source transitions are
 // intentionally ordered so their reverse compensations form a valid restore:
@@ -62,6 +63,8 @@ const validate: Step<ReattachVolumeInput, ValidateOut> = {
     const fromServer = fromReps[0] ? db.getServer(fromReps[0].server_id) : null;
     const toServer = toReps[0] ? db.getServer(toReps[0].server_id) : null;
     if (!fromServer || !toServer) throw new Error("Server not found");
+    assertProviderVolumesSupported(fromServer);
+    assertProviderVolumesSupported(toServer);
     if (fromServer.location !== toServer.location) {
       throw new Error(`Cannot reattach: volume in ${fromServer.location}, target in ${toServer.location}`);
     }

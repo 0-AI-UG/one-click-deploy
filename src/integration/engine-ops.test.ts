@@ -14,11 +14,6 @@
 //       fixture has not yet been merged.
 //   OCD_TEST_DOCKER_CONTEXT=<path>
 //     — defaults to "test/fixtures/hello-app" (the shipped nginx fixture).
-//   OCD_TEST_DNS_ZONE=<zone-id-in-hetzner-dns> e.g. "a1b2c3d4"
-//     — optional. When unset, app deploys fall back to `<app>.<ip>.nip.io`
-//       (no real DNS record is created). Only the DNS-compensation negative-path
-//       test requires this to be set.
-//
 // Cost estimate: one CX22 for ~20 minutes plus one 10 GB volume → ~0.01 EUR.
 // All resources are prefixed `ocd-itest-<tag>` so leaks are identifiable.
 //
@@ -37,12 +32,8 @@ const RUN =
 // Defaults point at this repo's shipped fixture so the suite runs out of the box.
 const DEFAULT_GIT_REPO = "https://github.com/0-AI-UG/one-click-deploy.git";
 const DEFAULT_DOCKER_CONTEXT = "test/fixtures/hello-app";
-// The DNS compensation negative-path test needs a real zone to seed a bad value.
-const HAS_DNS = !!process.env.OCD_TEST_DNS_ZONE;
-
 const d = RUN ? describe : describe.skip;
 const appTest = RUN ? test : test.skip;
-const dnsTest = RUN && HAS_DNS ? test : test.skip;
 
 // ---- Shared state ---------------------------------------------------------
 
@@ -53,8 +44,6 @@ type Ctx = {
   serviceId: number;
   appName: string;
   serviceName: string;
-  domain: string;
-  dnsZone: string;
   gitRepo: string;
   gitBranch: string;
   dockerContext: string;
@@ -81,7 +70,7 @@ async function getStepsForOp(opId: number) {
 // ---- Suite -----------------------------------------------------------------
 
 d(
-  "engine-ops integration (requires RUN_INTEGRATION=1 + HCLOUD_TOKEN; app-deploy tests also need OCD_TEST_DNS_ZONE + OCD_TEST_GIT_REPO)",
+  "engine-ops integration (requires RUN_INTEGRATION=1 + HCLOUD_TOKEN)",
   () => {
     // 15-minute timeout for beforeAll (provision-server takes ~5-8 min)
     beforeAll(async () => {
@@ -89,16 +78,13 @@ d(
       await import("../engine/ops/index.ts");
 
       const tag = randomSuffix();
-      const dnsZone = process.env.OCD_TEST_DNS_ZONE ?? "";
       const gitRepo = process.env.OCD_TEST_GIT_REPO || DEFAULT_GIT_REPO;
       const gitBranch = process.env.OCD_TEST_GIT_BRANCH || "main";
       const dockerContext = process.env.OCD_TEST_DOCKER_CONTEXT || DEFAULT_DOCKER_CONTEXT;
       const appName = `ocd-itest-${tag}`;
       const serviceName = `ocd-itest-svc-${tag}`;
-      const domain = `app-${tag}.itest.example.com`;
-
       console.log(
-        `[itest:engine-ops] starting suite, tag=${tag}, repo=${gitRepo}, context=${dockerContext}, dns=${HAS_DNS ? "on" : "nip.io fallback"}`,
+        `[itest:engine-ops] starting suite, tag=${tag}, repo=${gitRepo}, context=${dockerContext}`,
       );
 
       // Seed Hetzner token in secret store.
@@ -106,8 +92,7 @@ d(
 
       const db = await import("../shared/db.ts");
 
-      // Seed global settings: DNS zone (if provided), default server type/location.
-      if (dnsZone) db.saveSetting("dns_zone_id", dnsZone);
+      // Seed global infrastructure defaults. DNS is always operator-owned.
       db.saveSetting("default_server_type", SERVER_TYPE);
       db.saveSetting("default_location", LOCATION);
 
@@ -141,8 +126,6 @@ d(
         serviceId: 0,
         appName,
         serviceName,
-        domain,
-        dnsZone,
         gitRepo,
         gitBranch,
         dockerContext,
@@ -245,10 +228,7 @@ d(
           "deploy",
           {
             app_name: ctx!.appName,
-            git_repo: ctx!.gitRepo,
-            git_branch: ctx!.gitBranch,
-            docker_context: ctx!.dockerContext,
-            dockerfile_path: `${ctx!.dockerContext}/Dockerfile`,
+            image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             container_port: 8080,
             server_id: ctx!.serverId,
           },
@@ -305,7 +285,7 @@ d(
     );
 
     // ---- 4. scale-up -------------------------------------------------------
-    dnsTest(
+    appTest(
       "4. scale-up: 3 replicas running",
       async () => {
         expect(ctx).not.toBeNull();
@@ -327,7 +307,7 @@ d(
     );
 
     // ---- 5. scale-down -----------------------------------------------------
-    dnsTest(
+    appTest(
       "5. scale-down: 1 replica",
       async () => {
         expect(ctx).not.toBeNull();
@@ -576,57 +556,5 @@ d(
       10 * 60_000,
     );
 
-    // ---- Negative-path: compensation on DNS failure ------------------------
-    dnsTest(
-      "negative-path: compensation runs when DNS zone is revoked mid-op",
-      async () => {
-        expect(ctx).not.toBeNull();
-        const db = await import("../shared/db.ts");
-
-        // Temporarily replace the DNS zone with an invalid one so createDnsRecord fails.
-        db.saveSetting("dns_zone_id", "invalid-zone-id-for-compensation-test");
-
-        const badAppName = `ocd-itest-neg-${ctx!.tag}`;
-        const result = await enqueueAndWait(
-          "deploy",
-          {
-            app_name: badAppName,
-            git_repo: ctx!.gitRepo,
-            git_branch: ctx!.gitBranch,
-            docker_context: ctx!.dockerContext,
-            dockerfile_path: `${ctx!.dockerContext}/Dockerfile`,
-            container_port: 8080,
-            server_id: ctx!.serverId,
-            domain: `bad-dns-${ctx!.tag}.invalid.example.com`,
-          },
-          { timeoutMs: 5 * 60_000 },
-        );
-
-        if (result.status === "failed" || result.status === "compensated") {
-          const steps = await getStepsForOp(result.opId);
-          const compensateSteps = steps.filter((s) => s.phase === "compensate");
-          expect(compensateSteps.length).toBeGreaterThan(0);
-          console.log(
-            `[itest:engine-ops] compensation ran: ${compensateSteps.map((s) => s.step).join(", ")}`,
-          );
-        } else {
-          console.log(
-            `[itest:engine-ops] negative-path: deploy continued with best-effort DNS skip (status=${result.status})`,
-          );
-          const badApp = db.getAppByName(badAppName);
-          if (badApp) {
-            await enqueueAndWait(
-              "destroy_app",
-              { appId: badApp.id },
-              { timeoutMs: 2 * 60_000 },
-            ).catch((e) => console.warn(`[itest] cleanup bad app: ${e}`));
-          }
-        }
-
-        // Restore valid DNS zone.
-        db.saveSetting("dns_zone_id", ctx!.dnsZone);
-      },
-      6 * 60_000,
-    );
   },
 );

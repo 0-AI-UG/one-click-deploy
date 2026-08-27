@@ -3,15 +3,15 @@ import { get, post } from "../api/client.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
-import { Globe, GitBranch, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, Check, Database, Box, Boxes, ChevronDown, ChevronRight, ArrowUpFromLine, MoreVertical, Settings2 } from "lucide-react";
+import { Globe, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, Check, Database, Box, Boxes, ChevronDown, ChevronRight, ArrowUpFromLine, MoreVertical, Settings2 } from "lucide-react";
 import { serverConfirmedAction, serverConfirmedDelete } from "../api/server-confirmation.ts";
 import { useMobileLayout } from "../hooks/use-mobile-layout.ts";
 import { MobileActionSheet, MobileSheetAction } from "../components/mobile-action-sheet.tsx";
 import { ContextActionItem, ContextActionMenu } from "../components/context-action-menu.tsx";
 
 type AppData = {
-  id: number; name: string; domain: string; git_repo: string; status: string;
-  container_port: number; webhook_enabled: number;
+  id: number; name: string; domain: string; image_ref?: string; status: string;
+  container_port: number;
   desired_replicas: number; volume_id: string;
   public: number; health_check: number;
   internal_protocol?: string;
@@ -29,7 +29,7 @@ type ServiceData = {
 type StackData = {
   id: number; name: string; status: string; created_at: string;
   environment_id: number | null; app_count: number; service_count: number;
-  // Production members that currently have a webhook-staging sibling. 0 = the
+  // Production members that currently have a staging sibling. 0 = the
   // "Promote staging" bulk action has nothing to do.
   staging_sibling_count?: number;
 };
@@ -177,14 +177,14 @@ export function DashboardPage() {
     }
   };
 
-  // Bulk promote: every member with a webhook-staging sibling holding a deployed
-  // commit moves to production. Members are promoted concurrently — stack
+  // Bulk promote: every member with a staging sibling holding a deployed
+  // image moves to production. Members are promoted concurrently — stack
   // dependency edges are not persisted, so there is no order to respect.
   const stackPromote = async (stack: StackData) => {
     const n = stack.staging_sibling_count ?? 0;
     if (!(await confirm(
       "Promote Staging",
-      `Promote the staging sibling of ${n} member(s) of "${stack.name}" to production? Each member is rebuilt from the commit its staging app is running. Members are promoted concurrently, not in dependency order.`,
+      `Promote the staging sibling of ${n} member(s) of "${stack.name}" to production? Each production app will receive the exact image digest running in staging.`,
     ))) return;
     const key = `stack-promote-${stack.id}`;
     setActionLoading(key);
@@ -294,7 +294,6 @@ export function DashboardPage() {
               status={app.status}
               subLabel={app.environment_stale ? "stale environment" : undefined}
             /></span>
-            {app.webhook_enabled ? <span className="shrink-0" title="Webhook active"><GitBranch size={10} className="text-accent" /></span> : null}
             {app.desired_replicas > 1 && (
               <span className="shrink-0 font-mono text-[9px] font-bold border border-fg px-1">{app.desired_replicas}x</span>
             )}
@@ -337,7 +336,7 @@ export function DashboardPage() {
                 disabled={disableRow}
                 onClick={async () => {
                   close();
-                  if (await confirm("Destroy App", `Permanently destroy "${app.name}"? This removes all containers, DNS records, and webhooks.`, true)) {
+                  if (await confirm("Destroy App", `Permanently destroy "${app.name}"? This removes all containers. DNS remains unchanged and must be cleaned up manually.`, true)) {
                     appAction("delete", app.id);
                   }
                 }}
@@ -683,7 +682,7 @@ export function DashboardPage() {
               <MobileSheetAction icon={<Settings2 size={19} />} label="Open app" detail="Metrics, logs and deployments" primary onClick={() => closeAnd(() => { window.location.hash = `#/apps/${selectedApp.id}`; })} />
               <PermissionGate permission="apps.restart" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<RotateCcw size={19} />} label="Restart" loading={isAppActionLoading(selectedApp.id, "restart")} disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction("restart", selectedApp.id))} /></PermissionGate>
               <PermissionGate permission="apps.pause" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={selectedApp.status === "paused" ? <Play size={19} /> : <Pause size={19} />} label={selectedApp.status === "paused" ? "Unpause" : "Pause"} disabled={!!appBusyKind(selectedApp.id)} onClick={() => closeAnd(() => appAction(selectedApp.status === "paused" ? "unpause" : "pause", selectedApp.id))} /></PermissionGate>
-              <PermissionGate permission="apps.destroy" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<Trash2 size={19} />} label="Destroy app" danger disabled={!!appBusyKind(selectedApp.id)} onClick={async () => { if (await confirm("Destroy App", `Permanently destroy "${selectedApp.name}"? This removes all containers, DNS records, and webhooks.`, true)) closeAnd(() => appAction("delete", selectedApp.id)); }} /></PermissionGate>
+              <PermissionGate permission="apps.destroy" appId={selectedApp.id} environmentId={selectedApp.environment_id}><MobileSheetAction icon={<Trash2 size={19} />} label="Destroy app" danger disabled={!!appBusyKind(selectedApp.id)} onClick={async () => { if (await confirm("Destroy App", `Permanently destroy "${selectedApp.name}"? This removes all containers. DNS remains unchanged and must be cleaned up manually.`, true)) closeAnd(() => appAction("delete", selectedApp.id)); }} /></PermissionGate>
             </>
           )}
           {selectedService && (

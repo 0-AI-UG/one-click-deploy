@@ -1,6 +1,6 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
-import { hetzner, hetznerDns } from "../../shared/providers/index.ts";
+import { hetzner } from "../../shared/providers/index.ts";
 import {
   sshExec,
   removeContainer,
@@ -9,15 +9,11 @@ import {
   unpauseContainer,
   probeAppHealth,
   startAppReplica,
-  transferImage,
   pullImmutableImage,
 } from "../../shared/remote/index.ts";
 import { syncAllTraefik, syncAppIngress } from "../scale/traefik-manager.ts";
 import { replicaBindHost, appReplicaRunOpts } from "../scale/types.ts";
-import * as github from "../../shared/github.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
-import { resolveArtifactRegistry } from "../registry-config.ts";
 
 function log(context: string, ...args: any[]) {
   console.log(`[${new Date().toISOString()}] [deploy:${context}]`, ...args);
@@ -36,27 +32,11 @@ export async function destroyAppCore(appId: number): Promise<{ ok: boolean; erro
     }
     db.markAppDeletionRequested(app.id);
 
-    let cleanupFailed = false;
-
-    // Clean up GitHub webhook if enabled
-    if (app.github_webhook_id) {
-      try {
-        const pat = await github.getGitHubPat(app.deployed_by || undefined);
-        if (!pat) throw new Error("GitHub token unavailable; refusing to orphan the configured webhook");
-        await github.deleteWebhook({
-          gitRepo: app.github_webhook_repo || app.git_repo,
-          webhookId: app.github_webhook_id,
-          token: pat,
-        });
-        db.updateAppWebhook(
-          app.id, false, "", app.webhook_branch, "", app.webhook_path,
-          !!app.webhook_wait_for_ci, !!app.webhook_staging,
-        );
-      } catch (err) {
-        log("destroyApp", `Failed to delete GitHub webhook: ${err instanceof Error ? err.message : err}`);
-        cleanupFailed = true;
-      }
+    if (app.public && app.domain && !app.domain.endsWith(".nip.io")) {
+      log("destroyApp", `DNS cleanup is manual: remove the A record for ${app.domain} when it is no longer needed`);
     }
+
+    let cleanupFailed = false;
 
     // Destroy all replicas across all servers, tracking which servers we touched
     const replicas = db.getReplicas(appId);
@@ -91,22 +71,6 @@ export async function destroyAppCore(appId: number): Promise<{ ok: boolean; erro
       await syncAllTraefik();
     } catch (err) {
       log("destroyApp", `Failed to remove panel ingress route: ${err}`);
-    }
-
-    const dnsRecords = db.getDnsRecords(appId);
-    const dns = hetznerDns;
-    for (const record of dnsRecords) {
-      try {
-        await dns.deleteRecord({
-          zoneId: record.zone_id,
-          name: record.name,
-          type: record.type,
-          value: record.value,
-        });
-      } catch (err) {
-        log("destroyApp", `Failed to delete DNS record ${record.name}/${record.type}:`, err instanceof Error ? err.message : err);
-        cleanupFailed = true;
-      }
     }
 
     // Delete volume if attached. A volume ATTACHED via attach_existing_volume
@@ -218,8 +182,6 @@ export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean
       envHash: hashEnvironment(envVars),
       configRevision: app.config_revision,
     };
-    const registryToken = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
-    const distribution = await resolveArtifactRegistry(app.build_cache_ref);
     let allHealthy = true;
 
     for (const replica of replicas) {
@@ -232,49 +194,11 @@ export async function reloadAppEnvironment(appId: number): Promise<{ ok: boolean
         db.updateReplicaStatus(replica.id, "draining");
         await syncAppIngress(appId).catch(() => {});
       }
-      const present = await sshExec(
-        server.ipv4,
-        `su - deploy -c ${JSON.stringify(`docker image inspect ${desiredImage} >/dev/null 2>&1 && echo yes || echo no`)}`,
-        server.ssh_host_key || undefined,
-      );
-      if (present.stdout.trim() !== "yes") {
-        if (desiredImage.includes("@sha256:")) {
-          await pullImmutableImage(server.ipv4, {
-            name: app.name,
-            imageRef: desiredImage,
-            gitToken: registryToken,
-            hostKey: server.ssh_host_key || undefined,
-          });
-        } else {
-          const source = replicas
-            .map((candidate) => ({ candidate, host: db.getServer(candidate.server_id) }))
-            .find(({ host }) => host && host.id !== server.id);
-          if (!source?.host) throw new Error(`Immutable image ${desiredImage} is missing and no replica can supply it`);
-          await transferImage(
-            source.host.ipv4,
-            server.ipv4,
-            desiredImage,
-            source.host.ssh_host_key || undefined,
-            server.ssh_host_key || undefined,
-            {
-              registryRef: distribution.ref,
-              registryUsername: distribution.username,
-              registryPassword: distribution.password,
-              registryToken,
-              allowArchiveFallback: db.getSettings().allow_archive_image_transfer === "1",
-              onProgress: (line) => log("reloadAppEnvironment", line),
-              onStorage: (storage) => {
-                const deployment = db.getLastSuccessfulDeployment(app.id);
-                if (deployment) db.updateDeploymentStorage(deployment.id, {
-                  image_size_bytes: storage.imageBytes,
-                  archive_size_bytes: storage.archiveBytes,
-                  transfer_size_bytes: storage.transferBytes,
-                });
-              },
-            },
-          );
-        }
-      }
+      await pullImmutableImage(server.ipv4, {
+        name: app.name,
+        imageRef: desiredImage,
+        hostKey: server.ssh_host_key || undefined,
+      });
       await startAppReplica(
         server.ipv4,
         appReplicaRunOpts(app, server, {

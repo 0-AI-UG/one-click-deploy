@@ -1,6 +1,7 @@
 import { sshExec } from "./ssh.ts";
 import { asUser, log, buildDockerRunArgs } from "./container-common.ts";
-import { dockerLoginGhcr, type GhcrAuth } from "./registry.ts";
+import { dockerLoginRegistry, type RegistryAuth } from "./registry.ts";
+import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { writeEnvDeployFile, ensureVolumeOwnership } from "./docker-run.ts";
 import { ensureOcdNetwork } from "./lifecycle.ts";
 
@@ -18,7 +19,6 @@ export async function pullAndRunService(
     cmd?: string[];          // custom entrypoint/cmd args
     bindAddress?: string;    // "127.0.0.1" (default) or "0.0.0.0"
     extraVolumes?: string[]; // additional -v mounts (e.g. config files)
-    gitToken?: string;       // GitHub token for ghcr.io private images
     /** Override memory ceiling (MB). Infra services may need more than the app default. */
     memoryMb?: number;
     /** Override CPU ceiling. */
@@ -30,17 +30,27 @@ export async function pullAndRunService(
 ): Promise<{ containerId: string }> {
   const bindAddr = opts.bindAddress || "127.0.0.1";
 
-  // Authenticate with ghcr.io for private GitHub Container Registry images.
-  // Credentials live in a per-pull DOCKER_CONFIG dir and are wiped after.
-  let ghcrAuth: GhcrAuth | null = null;
-  if (opts.gitToken && opts.image.startsWith("ghcr.io/")) {
-    ghcrAuth = await dockerLoginGhcr(ip, opts.gitToken, hostKey);
+  // Configured OCI credentials live in a per-pull DOCKER_CONFIG directory and
+  // are sent only when the image registry matches the configured repository.
+  let registryAuth: RegistryAuth | null = null;
+  const credentials = await resolveRegistryCredentialsForImage(opts.image);
+  if (credentials.username && credentials.password) {
+    registryAuth = await dockerLoginRegistry(
+      ip,
+      opts.image,
+      credentials.username,
+      credentials.password,
+      hostKey,
+    );
   }
 
   log("service", `Pulling image ${opts.image}...`);
-  const ghcrPrefix = ghcrAuth?.envPrefix ?? "";
-  const pullResult = await sshExec(ip, asUser(`${ghcrPrefix}docker pull ${opts.image}`), hostKey);
-  if (ghcrAuth) await ghcrAuth.cleanup();
+  let pullResult: Awaited<ReturnType<typeof sshExec>>;
+  try {
+    pullResult = await sshExec(ip, asUser(`${registryAuth?.envPrefix ?? ""}docker pull ${opts.image}`), hostKey);
+  } finally {
+    if (registryAuth) await registryAuth.cleanup();
+  }
   if (pullResult.exitCode !== 0) {
     throw new Error(`Failed to pull image ${opts.image}: ${pullResult.stderr}`);
   }

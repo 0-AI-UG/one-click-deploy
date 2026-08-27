@@ -82,12 +82,3 @@ export const TRAEFIK_DYNAMIC_DIR = "/etc/traefik/dynamic";
 export const TRAEFIK_DYNAMIC_CONFIG_PATH = `${TRAEFIK_DYNAMIC_DIR}/ocd.yml`;
 export const TRAEFIK_PANEL_CONFIG_PATH = `${TRAEFIK_DYNAMIC_DIR}/panel.yml`;
 export const TRAEFIK_ACME_PATH = "/etc/traefik/acme.json";
-/** Separate cert storage for the DNS-01 wildcard resolver — Traefik requires
- *  a distinct storage file per certificatesResolver (two resolvers sharing
- *  one acme.json corrupt each other's state). */
-export const TRAEFIK_ACME_DNS_PATH = "/etc/traefik/acme-dns.json";
-/** systemd EnvironmentFile carrying the Hetzner DNS token (HETZNER_API_KEY)
- *  for the wildcard resolver's lego provider. Delivered by the reconciler to
- *  the panel server ONLY (see traefik-manager.ts); the unit references it
- *  with a `-` prefix so workers without the file still boot. */
-export const TRAEFIK_ENV_PATH = "/etc/traefik/traefik.env";

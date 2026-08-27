@@ -1,12 +1,19 @@
 import db from "./connection.ts";
 
+const IMMUTABLE_IMAGE = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
+
+function assertImmutableImageRef(imageRef: string): void {
+  if (!IMMUTABLE_IMAGE.test(imageRef)) {
+    throw new Error("image_ref must be an immutable OCI reference ending in @sha256:<64 hex digest>");
+  }
+}
+
 export type PanelRow = {
   id: number;
   server_id: number;
   name: string;
   domain: string;
-  git_repo: string;
-  git_branch: string;
+  image_ref: string;
   container_port: number;
   host_port: number;
   volume_id: string;
@@ -15,15 +22,6 @@ export type PanelRow = {
   status: string;
   deploy_log: string;
   created_at: string;
-  dns_zone_id: string;
-  dns_name: string;
-  dns_type: string;
-  dns_value: string;
-  webhook_secret: string;
-  webhook_enabled: number;
-  github_webhook_id: string;
-  webhook_owner_user_id: string;
-  github_webhook_repo: string;
 };
 
 export type PanelDeploymentRow = {
@@ -44,8 +42,7 @@ export function insertPanel(panel: {
   server_id: number;
   name: string;
   domain: string;
-  git_repo: string;
-  git_branch?: string;
+  image_ref: string;
   container_port: number;
   host_port: number;
   volume_id?: string;
@@ -53,17 +50,17 @@ export function insertPanel(panel: {
   env_vars?: string;
   status?: string;
 }): PanelRow {
+  assertImmutableImageRef(panel.image_ref);
   return db
     .query(
-      "INSERT INTO panel (id, server_id, name, domain, git_repo, git_branch, container_port, host_port, volume_id, volume_mount, env_vars, status) " +
-        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO panel (id, server_id, name, domain, image_ref, container_port, host_port, volume_id, volume_mount, env_vars, status) " +
+        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       panel.server_id,
       panel.name,
       panel.domain,
-      panel.git_repo,
-      panel.git_branch ?? "main",
+      panel.image_ref,
       panel.container_port,
       panel.host_port,
       panel.volume_id ?? "",
@@ -90,54 +87,6 @@ export function getPanelDeployLog(): string {
   return row?.deploy_log ?? "";
 }
 
-export function updatePanelWebhook(
-  enabled: boolean,
-  secret: string,
-  githubWebhookId: string,
-  ownerUserId?: string,
-): void {
-  db.query(
-    `UPDATE panel SET webhook_enabled = ?, webhook_secret = ?, github_webhook_id = ?,
-       webhook_owner_user_id = COALESCE(?, webhook_owner_user_id) WHERE id = 1`,
-  ).run(enabled ? 1 : 0, secret, githubWebhookId, ownerUserId ?? null);
-}
-
-export function updatePanelWebhookProviderIdentity(repo: string, webhookId?: string): void {
-  if (webhookId === undefined) {
-    db.query("UPDATE panel SET github_webhook_repo = ? WHERE id = 1").run(repo);
-  } else {
-    db.query(
-      "UPDATE panel SET github_webhook_repo = ?, github_webhook_id = ? WHERE id = 1",
-    ).run(repo, webhookId);
-  }
-}
-
-/** Clear provider identity only after the reconciler confirmed remote absence. */
-export function finalizePanelWebhookDisabled(): void {
-  db.query(
-    `UPDATE panel SET webhook_secret = '', github_webhook_id = '',
-       github_webhook_repo = '', webhook_owner_user_id = ''
-     WHERE id = 1 AND webhook_enabled = 0`,
-  ).run();
-}
-
-export function updatePanelDnsRecord(rec: {
-  zone_id: string;
-  name: string;
-  type: string;
-  value: string;
-}): void {
-  db.query(
-    "UPDATE panel SET dns_zone_id = ?, dns_name = ?, dns_type = ?, dns_value = ? WHERE id = 1",
-  ).run(rec.zone_id, rec.name, rec.type, rec.value);
-}
-
-export function clearPanelDnsRecord(): void {
-  db.query(
-    "UPDATE panel SET dns_zone_id = '', dns_name = '', dns_type = '', dns_value = '' WHERE id = 1",
-  ).run();
-}
-
 export function deletePanel(): void {
   db.query("DELETE FROM panel WHERE id = 1").run();
 }
@@ -149,17 +98,26 @@ export function insertPanelDeployment(deployment: {
   source?: string;
   deploy_log?: string;
 }): PanelDeploymentRow {
-  return db
-    .query(
-      "INSERT INTO panel_deployments (image_tag, git_commit, status, source, deploy_log) VALUES (?, ?, ?, ?, ?) RETURNING *",
-    )
-    .get(
-      deployment.image_tag,
-      deployment.git_commit,
-      deployment.status ?? "deployed",
-      deployment.source ?? "manual",
-      deployment.deploy_log ?? "",
-    ) as PanelDeploymentRow;
+  assertImmutableImageRef(deployment.image_tag);
+  const status = deployment.status ?? "deployed";
+  const tx = db.transaction(() => {
+    const row = db
+      .query(
+        "INSERT INTO panel_deployments (image_tag, git_commit, status, source, deploy_log) VALUES (?, ?, ?, ?, ?) RETURNING *",
+      )
+      .get(
+        deployment.image_tag,
+        deployment.git_commit,
+        status,
+        deployment.source ?? "manual",
+        deployment.deploy_log ?? "",
+      ) as PanelDeploymentRow;
+    if (status === "deployed") {
+      db.query("UPDATE panel SET image_ref = ? WHERE id = 1").run(deployment.image_tag);
+    }
+    return row;
+  });
+  return tx();
 }
 
 export function getPanelDeployments(): PanelDeploymentRow[] {

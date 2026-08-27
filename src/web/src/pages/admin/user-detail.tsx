@@ -105,7 +105,7 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
     label: "Control Plane",
     permissions: [
       { key: "panel.view", label: "View panel status, logs and deployments" },
-      { key: "panel.manage", label: "Redeploy the panel, manage its webhook" },
+      { key: "panel.manage", label: "Release immutable panel images" },
     ],
   },
   {

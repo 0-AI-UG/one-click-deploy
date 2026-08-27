@@ -5,6 +5,7 @@ import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import { assertCleanupComplete, softStep, runDbCleanupGate } from "./_shared.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
+import { isManagedHetznerServer } from "../../shared/infrastructure.ts";
 
 type DestroyServerInput = { serverId: number };
 
@@ -110,7 +111,10 @@ const deleteCloudServer: Step<DestroyServerInput, { ok: boolean; error?: string 
   label: "Delete cloud server",
   async run(ctx) {
     const server = db.getServer(ctx.input.serverId);
-    if (!server || !server.provider_id) return { ok: true };
+    if (!server || !isManagedHetznerServer(server) || !server.provider_id) {
+      if (server?.ownership === "connected") ctx.log(`Disconnecting externally owned server ${server.name}; provider resources are untouched`);
+      return { ok: true };
+    }
     const r = await softStep(ctx, "delete_cloud_server", async () => {
       const compute = hetzner;
       await compute.deleteServer(server.provider_id);

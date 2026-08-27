@@ -1,159 +1,112 @@
 import { useTempDataDir, randomSuffix } from "../shared/test-helpers.ts";
 useTempDataDir();
 
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-const createRecord = mock(async (opts: { name: string; type: string; value: string }) => ({
-  id: `${opts.name}/${opts.type}/${opts.value}`,
-  ...opts,
-}));
-const deleteRecord = mock(async () => {});
-const listZones = mock(async () => [{ id: "zone-1", name: "example.com" }]);
 let answers: string[] = [];
 
-mock.module("../shared/providers/index.ts", () => ({
-  hetznerDns: { createRecord, deleteRecord, listZones },
-}));
-mock.module("./scale/traefik-manager.ts", () => ({
-  getPanelIngressIpv4: () => "203.0.113.10",
-}));
 mock.module("node:dns/promises", () => ({
   resolve4: mock(async () => answers),
 }));
 
 import * as db from "../shared/db.ts";
-const { reconcileAppDns, reconcilePanelDns } = await import("./dns-reconciler.ts");
+const { reconcileAppDns, reconcilePanelDns, reconcileServiceDns } = await import("./dns-reconciler.ts");
+const observerSource = readFileSync(new URL("./dns-reconciler.ts", import.meta.url), "utf8");
 
-function makeApp(domain: string) {
+function makeApp(domain: string, isPublic = true) {
   return db.insertApp({
     name: `dns-${randomSuffix()}`,
     domain,
-    git_repo: "https://github.com/example/app",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
-    public: true,
+    public: isPublic,
   });
 }
 
 beforeEach(() => {
   answers = [];
-  createRecord.mockClear();
-  createRecord.mockImplementation(async (opts: { name: string; type: string; value: string }) => ({
-    id: `${opts.name}/${opts.type}/${opts.value}`,
-    ...opts,
-  }));
-  deleteRecord.mockClear();
-  listZones.mockClear();
-  db.saveSetting("dns_zone_id", "zone-1");
-  db.saveSetting("dns_zone_name", "example.com");
+  db.deletePanel();
+  const server = db.insertServer({
+    name: `dns-panel-${randomSuffix()}`,
+    provider_id: `dns-panel-provider-${randomSuffix()}`,
+    ipv4: "203.0.113.10",
+    ipv6: "",
+    type: "cx23",
+    location: "nbg1",
+    status: "ready",
+  });
+  db.insertPanel({
+    server_id: server.id,
+    name: "ocd-panel",
+    domain: "panel.example.com",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    container_port: 3000,
+    host_port: 3001,
+  });
 });
 
-describe("DNS desired-state reconciliation", () => {
-  test("creates and tracks a missing record for an existing app", async () => {
-    const app = makeApp("docs.example.com");
-    const result = await reconcileAppDns(app.id);
+function expectNoProviderMutation() {
+  expect(observerSource).not.toContain("providers/");
+  expect(observerSource).not.toContain("createRecord");
+  expect(observerSource).not.toContain("deleteRecord");
+}
 
-    expect(result.managed).toBe(true);
-    expect(result.ready).toBe(false);
-    expect(createRecord).toHaveBeenCalledWith({
-      zoneId: "zone-1",
-      name: "docs",
-      type: "A",
-      value: "203.0.113.10",
+describe("provider-neutral DNS instructions", () => {
+  test("reports a copyable pending instruction without writing DNS", async () => {
+    const result = await reconcileAppDns(makeApp("docs.example.com").id);
+    expect(result).toMatchObject({
+      status: "pending",
+      record: { type: "A", name: "docs.example.com", value: "203.0.113.10" },
+      observedValues: [],
+      ready: false,
     });
-    expect(db.getDnsRecords(app.id)).toHaveLength(1);
-    expect(db.getApp(app.id)?.public_endpoint_status).toBe("degraded");
+    expectNoProviderMutation();
   });
 
-  test("repairs a provider record that disappeared after deployment", async () => {
-    const app = makeApp("repair.example.com");
-    db.insertDnsRecord({
-      app_id: app.id,
-      zone_id: "zone-1",
-      record_id: "repair/A/203.0.113.10",
-      name: "repair",
-      type: "A",
-      value: "203.0.113.10",
-    });
-
-    await reconcileAppDns(app.id);
-    expect(createRecord).toHaveBeenCalledTimes(1);
-  });
-
-  test("resolves and caches a configured zone name by id on upgraded panels", async () => {
-    db.saveSetting("dns_zone_name", "");
-    const app = makeApp("upgrade.example.com");
-
+  test("reports correct only when the observed RRSet is the exact target", async () => {
+    answers = ["203.0.113.10"];
+    const app = makeApp("ready.example.com");
     const result = await reconcileAppDns(app.id);
-
-    expect(result.managed).toBe(true);
-    expect(listZones).toHaveBeenCalledTimes(1);
-    expect(db.getSettings().dns_zone_name).toBe("example.com");
-    expect(createRecord).toHaveBeenCalledWith(expect.objectContaining({ name: "upgrade" }));
-  });
-
-  test("accepts a canonical zone name as the provider selector", async () => {
-    db.saveSetting("dns_zone_id", "example.com");
-    db.saveSetting("dns_zone_name", "");
-    const app = makeApp("named.example.com");
-
-    const result = await reconcileAppDns(app.id);
-
-    expect(result.managed).toBe(true);
-    expect(listZones).not.toHaveBeenCalled();
-    expect(db.getSettings().dns_zone_name).toBe("example.com");
-    expect(createRecord).toHaveBeenCalledWith(expect.objectContaining({
-      zoneId: "example.com",
-      name: "named",
-    }));
-  });
-
-  test("never writes an explicit domain outside the configured zone", async () => {
-    const app = makeApp("docs.other.example");
-    const result = await reconcileAppDns(app.id);
-
-    expect(result.managed).toBe(false);
-    expect(createRecord).not.toHaveBeenCalled();
-    expect(result.error).toMatch(/unmanaged domain/i);
-  });
-
-  test("persists and surfaces provider failures", async () => {
-    const app = makeApp("broken.example.com");
-    createRecord.mockImplementationOnce(async () => { throw new Error("provider unavailable"); });
-
-    await expect(reconcileAppDns(app.id)).rejects.toThrow(/provider unavailable/i);
-    expect(db.getApp(app.id)?.public_endpoint_status).toBe("degraded");
-    expect(db.getApp(app.id)?.public_endpoint_error).toMatch(/provider unavailable/i);
-  });
-
-  test("removes a tracked record when an app becomes private", async () => {
-    const app = makeApp("private.example.com");
-    await reconcileAppDns(app.id);
-    createRecord.mockClear();
-
-    db.updateAppPublic(app.id, false);
-    const result = await reconcileAppDns(app.id);
-
+    expect(result.status).toBe("correct");
     expect(result.ready).toBe(true);
-    expect(deleteRecord).toHaveBeenCalledTimes(1);
-    expect(createRecord).not.toHaveBeenCalled();
-    expect(db.getDnsRecords(app.id)).toHaveLength(0);
+    expect(db.getApp(app.id)?.public_endpoint_status).toBe("ready");
+    expectNoProviderMutation();
   });
 
-  test("removes a tracked record after deletion intent is recorded", async () => {
+  test("reports conflicting values and does not replace them", async () => {
+    answers = ["198.51.100.8", "203.0.113.10"];
+    const result = await reconcileAppDns(makeApp("conflict.example.com").id);
+    expect(result.status).toBe("conflicting");
+    expect(result.observedValues).toEqual(["198.51.100.8", "203.0.113.10"]);
+    expectNoProviderMutation();
+  });
+
+  test("private apps have no instruction", async () => {
+    const result = await reconcileAppDns(makeApp("private.example.com", false).id);
+    expect(result.status).toBe("not_applicable");
+    expect(result.record).toBeNull();
+    expectNoProviderMutation();
+  });
+
+  test("nip.io fallback domains have no manual instruction", async () => {
+    const result = await reconcileAppDns(makeApp("app.203.0.113.10.nip.io").id);
+    expect(result.status).toBe("not_applicable");
+    expect(result.record).toBeNull();
+    expectNoProviderMutation();
+  });
+
+  test("deletion intent leaves DNS untouched and gives manual cleanup guidance", async () => {
     const app = makeApp("delete.example.com");
-    await reconcileAppDns(app.id);
-    createRecord.mockClear();
-
     db.markAppDeletionRequested(app.id);
-    await reconcileAppDns(app.id);
-
-    expect(deleteRecord).toHaveBeenCalledTimes(1);
-    expect(createRecord).not.toHaveBeenCalled();
+    const result = await reconcileAppDns(app.id);
+    expect(result.status).toBe("not_applicable");
+    expect(result.message).toMatch(/delete.*manually/i);
+    expectNoProviderMutation();
   });
 
-  test("repairs panel DNS after bootstrap without a one-shot record", async () => {
+  test("reports the panel record against its server IP", async () => {
     const server = db.insertServer({
       name: `panel-${randomSuffix()}`,
       provider_id: `provider-${randomSuffix()}`,
@@ -168,18 +121,36 @@ describe("DNS desired-state reconciliation", () => {
       server_id: server.id,
       name: "ocd-panel",
       domain: "panel.example.com",
-      git_repo: "https://github.com/example/ocd",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       host_port: 3001,
     });
 
-    await reconcilePanelDns();
-
-    expect(createRecord).toHaveBeenCalledWith(expect.objectContaining({
-      name: "panel",
-      value: "203.0.113.20",
-    }));
-    expect(db.getPanel()?.dns_value).toBe("203.0.113.20");
+    const result = await reconcilePanelDns();
+    expect(result.record).toEqual({ type: "A", name: "panel.example.com", value: "203.0.113.20" });
+    expectNoProviderMutation();
     db.deletePanel();
+  });
+
+  test("HTTP services receive instructions while raw services do not", async () => {
+    const http = db.insertService({
+      name: `flowise-${randomSuffix()}`,
+      service_type: "flowise",
+      version: "latest",
+      port: 3000,
+      env_vars: "{}",
+      credentials: JSON.stringify({ domain: "flow.example.com" }),
+    });
+    const raw = db.insertService({
+      name: `postgres-${randomSuffix()}`,
+      service_type: "postgresql",
+      version: "16",
+      port: 5432,
+      env_vars: "{}",
+      credentials: JSON.stringify({ domain: "db.example.com" }),
+    });
+    expect((await reconcileServiceDns(http.id)).record?.name).toBe("flow.example.com");
+    expect((await reconcileServiceDns(raw.id)).status).toBe("not_applicable");
+    expectNoProviderMutation();
   });
 });

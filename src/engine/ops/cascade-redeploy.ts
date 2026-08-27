@@ -20,10 +20,10 @@ type WaitOut = ChildSummary;
 
 function shouldRedeploy(status: string): boolean {
   // Redeploy the actively-serving apps plus paused and sleeping (scale-to-zero)
-  // ones — a redeploy rebuilds and starts them, so a cascade (env-var change or
-  // a stack redeploy) brings dormant members back up on the new config instead
-  // of deferring to the next manual wake. Error / failed / destroying apps are
-  // left alone.
+  // ones — a redeploy recreates them from the current immutable image, so a
+  // cascade (env-var change or stack redeploy) brings dormant members back up
+  // on the new config instead of deferring to the next manual wake. Error /
+  // failed / destroying apps are left alone.
   return (
     status === "running" ||
     status === "unhealthy" ||

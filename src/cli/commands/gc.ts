@@ -7,9 +7,6 @@ type GcInventory = {
   reclaimable_image_bytes: number;
   reclaimable_ocd_image_bytes: number;
   reclaimable_foreign_image_bytes: number;
-  buildkit_reclaimable_bytes: number | null;
-  buildkit_reclaimable_display: string;
-  buildkit_policy: string;
   size_caveat: string;
   free_bytes_delta: number;
   reclaimed_bytes: number;
@@ -54,7 +51,6 @@ export async function gc(args: string[]): Promise<void> {
       ]),
     );
     console.log(`${DIM}${row.size_caveat}${RESET}`);
-    console.log(`${DIM}BuildKit reclaimable: ${row.buildkit_reclaimable_display} (${row.buildkit_policy})${RESET}`);
     if (execute) {
       console.log(
         `${GREEN}GC completed: ${formatSize(row.reclaimed_bytes)} observed reclaimed ` +

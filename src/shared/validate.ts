@@ -52,79 +52,6 @@ export function validateAppName(name: string): ValidationResult<string> {
   return { valid: true, value: trimmed };
 }
 
-export function validateGitRepo(repo: string): ValidationResult<string> {
-  const trimmed = repo.trim();
-  if (!trimmed) return { valid: false, error: "Git repository URL is required" };
-
-  // Allow https:// and git@ protocols only
-  const isHttps = /^https:\/\/[^\s]+$/.test(trimmed);
-  const isGitSsh = /^git@[^\s:]+:[^\s]+$/.test(trimmed);
-  if (!isHttps && !isGitSsh)
-    return {
-      valid: false,
-      error:
-        "Git repository must use https:// or git@ protocol",
-    };
-
-  // Reject shell metacharacters that could break command strings
-  if (/[;|&`$(){}[\]!#<>\\]/.test(trimmed))
-    return {
-      valid: false,
-      error: "Git repository URL contains invalid characters",
-    };
-
-  return { valid: true, value: trimmed };
-}
-
-/**
- * Validate a git ref / branch name. Subset of git's ref rules, intentionally
- * strict because the value is interpolated into a shell command on the build
- * host (see deploy.ts `git checkout ${branch}`). Anything that doesn't match
- * this pattern is rejected before reaching the shell.
- *
- * Allowed: ASCII letters, digits, and `_./-` (no leading `-`, `/`, `.`; no
- * `..`; no whitespace or shell metacharacters; <= 244 chars).
- */
-export function validateGitBranch(branch: string): ValidationResult<string> {
-  const trimmed = branch.trim();
-  if (!trimmed) return { valid: false, error: "Branch is required" };
-  if (trimmed.length > 244)
-    return { valid: false, error: "Branch must be 244 characters or fewer" };
-  if (trimmed.startsWith("-") || trimmed.startsWith("/") || trimmed.startsWith("."))
-    return { valid: false, error: "Branch must not start with '-', '/', or '.'" };
-  if (trimmed.endsWith("/") || trimmed.endsWith("."))
-    return { valid: false, error: "Branch must not end with '/' or '.'" };
-  if (trimmed.includes(".."))
-    return { valid: false, error: "Branch must not contain '..'" };
-  if (!/^[A-Za-z0-9_./-]+$/.test(trimmed))
-    return {
-      valid: false,
-      error:
-        "Branch may only contain letters, digits, and '_./-'",
-    };
-  return { valid: true, value: trimmed };
-}
-
-/** Build inputs are interpolated into remote Docker commands, so keep them
- * repo-relative and shell-safe. `.` is valid for a build context. */
-export function validateRepoBuildPath(
-  path: string,
-  label: "Dockerfile" | "Docker context",
-): ValidationResult<string> {
-  const trimmed = path.trim();
-  if (!trimmed) return { valid: false, error: `${label} path is required` };
-  if (trimmed.startsWith("/")) {
-    return { valid: false, error: `${label} path must be relative to the repository root` };
-  }
-  if (trimmed.split("/").includes("..")) {
-    return { valid: false, error: `${label} path must not contain '..'` };
-  }
-  if (!/^[A-Za-z0-9._/-]+$/.test(trimmed)) {
-    return { valid: false, error: `${label} path contains invalid characters` };
-  }
-  return { valid: true, value: trimmed.replace(/^\.\//, "") };
-}
-
 export function validateDomain(domain: string): ValidationResult<string> {
   const trimmed = domain.trim().toLowerCase();
   if (!trimmed) return { valid: false, error: "Domain is required" };
@@ -444,8 +371,7 @@ export function assertSafeHostPath(hostPath: string, appName: string): void {
  * canonical `DeployManifestSchema`. The schema is the single source of truth
  * for the manifest SHAPE and numeric BOUNDS — this function no longer restates
  * them. It then layers the web-path-only semantic checks the schema doesn't
- * encode: the `build.dockerfile` path-traversal guard, and the shared ingress
- * rules (IP-allowlist format, health-check-path shape, public-port pool range,
+ * encode: the shared ingress rules (IP-allowlist format, health-check-path shape, public-port pool range,
  * and the HTTP-routing cross-field constraints). Unknown keys are tolerated
  * (forward-compat), matching the old behavior.
  */
@@ -468,14 +394,6 @@ export function validateDeployManifest(
   }
 
   const obj = raw as Record<string, unknown>;
-
-  // Path-traversal guard on the Dockerfile path is a web-path-only security
-  // check the shape schema doesn't encode.
-  if (obj.build && typeof obj.build === "object" && !Array.isArray(obj.build)) {
-    const dockerfile = (obj.build as Record<string, unknown>).dockerfile;
-    if (typeof dockerfile === "string" && dockerfile.includes(".."))
-      return { ok: false, error: '"build.dockerfile" must not contain ".."' };
-  }
 
   // Rate limit / allowlist / health-check path / public port+protocol share the
   // deploy request's rules — one validator, one set of error strings. The
@@ -514,13 +432,8 @@ export function validateDeployRequest(req: {
   apply_mode?: "manifest";
   app_name: string;
   domain?: string;
-  git_repo: string;
   image_ref?: string;
-  build_cache_ref?: string;
-  git_branch?: string;
-  git_sha?: string;
-  dockerfile_path?: string;
-  docker_context?: string;
+  git_commit?: string;
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   environment?: string | null;
@@ -555,61 +468,15 @@ export function validateDeployRequest(req: {
   compress?: boolean;
   public_port?: number | "auto" | null;
   public_protocol?: string;
-  webhook_path?: string;
-  webhook_paths?: string[];
-  webhook_paths_ignore?: string[];
 }): ValidationResult<void> {
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };
 
-  if (req.webhook_path !== undefined && req.webhook_paths !== undefined) {
-    return { valid: false, error: "webhook_path and webhook_paths cannot be used together" };
+  if (!req.image_ref || !/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(req.image_ref)) {
+    return { valid: false, error: "Image must be an immutable OCI reference ending in @sha256:<64 hex digest>" };
   }
-  if (req.webhook_paths !== undefined && req.webhook_paths.length === 0) {
-    return { valid: false, error: "webhook_paths must contain at least one pattern" };
-  }
-  for (const [field, patterns] of [
-    ["webhook_paths", req.webhook_paths],
-    ["webhook_paths_ignore", req.webhook_paths_ignore],
-  ] as const) {
-    if (patterns === undefined) continue;
-    if (!Array.isArray(patterns) || patterns.some((pattern) => typeof pattern !== "string" || !pattern)) {
-      return { valid: false, error: `${field} must be an array of non-empty strings` };
-    }
-    const invalid = patterns.find((pattern) =>
-      pattern.startsWith("!") || pattern.startsWith("/") || pattern.startsWith("./") ||
-      pattern.includes("\\") || pattern.split("/").includes("..")
-    );
-    if (invalid) return { valid: false, error: `${field} contains invalid repository glob: ${invalid}` };
-  }
-
-  if (req.image_ref) {
-    if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(req.image_ref)) {
-      return { valid: false, error: "Image must be an immutable OCI reference ending in @sha256:<64 hex digest>" };
-    }
-    if (req.git_repo) return { valid: false, error: "Prebuilt image deployments must not also specify a Git repository" };
-  } else {
-    const repoResult = validateGitRepo(req.git_repo);
-    if (!repoResult.valid) return { valid: false, error: `Git repo: ${repoResult.error}` };
-  }
-  if (req.build_cache_ref && !/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+(?::[A-Za-z0-9._-]+)?$/i.test(req.build_cache_ref)) {
-    return { valid: false, error: "Build cache must be an OCI registry repository/tag reference" };
-  }
-
-  if (req.git_branch) {
-    const branchResult = validateGitBranch(req.git_branch);
-    if (!branchResult.valid) return { valid: false, error: `Git branch: ${branchResult.error}` };
-  }
-  if (req.git_sha && !/^[0-9a-f]{7,64}$/i.test(req.git_sha)) {
+  if (req.git_commit && !/^[0-9a-f]{7,64}$/i.test(req.git_commit)) {
     return { valid: false, error: "Git commit SHA must contain 7-64 hexadecimal characters" };
-  }
-  if (req.dockerfile_path) {
-    const pathResult = validateRepoBuildPath(req.dockerfile_path, "Dockerfile");
-    if (!pathResult.valid) return pathResult;
-  }
-  if (req.docker_context) {
-    const contextResult = validateRepoBuildPath(req.docker_context, "Docker context");
-    if (!contextResult.valid) return contextResult;
   }
 
   if (req.domain) {

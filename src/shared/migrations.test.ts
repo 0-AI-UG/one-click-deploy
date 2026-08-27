@@ -2,6 +2,26 @@ import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations, migrations, type Migration } from "./migrations.ts";
 
+const IMAGE_REF = `ghcr.io/acme/test@sha256:${"a".repeat(64)}`;
+
+/** Historical-fixture tests seed v0 source rows. Give those rows their manual
+ * cutover artifact immediately before the clean-cut migration runs. */
+function runMigrationsWithImageCutover(db: Database): void {
+  db.run("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL DEFAULT 0)");
+  if (!db.query("SELECT version FROM schema_version").get()) {
+    db.run("INSERT INTO schema_version (version) VALUES (0)");
+  }
+  for (const migration of migrations) {
+    if (migration.version === 105) {
+      db.run("UPDATE apps SET image_ref = ?", [IMAGE_REF]);
+    }
+    if (migration.disableForeignKeys) db.run("PRAGMA foreign_keys = OFF");
+    migration.up(db);
+    db.run("UPDATE schema_version SET version = ?", [migration.version]);
+    if (migration.disableForeignKeys) db.run("PRAGMA foreign_keys = ON");
+  }
+}
+
 function freshDb(): Database {
   const db = new Database(":memory:");
   db.run("PRAGMA foreign_keys = ON");
@@ -30,13 +50,17 @@ function freshDb(): Database {
     deploy_log TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`);
+  db.run(`CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+  )`);
   return db;
 }
 
 describe("runMigrations", () => {
   test("creates schema_version table", () => {
     const db = freshDb();
-    runMigrations(db);
+    runMigrationsWithImageCutover(db);
     const row = db.query("SELECT version FROM schema_version").get() as any;
     expect(row).toBeTruthy();
     expect(row.version).toBeGreaterThanOrEqual(0);
@@ -44,14 +68,14 @@ describe("runMigrations", () => {
 
   test("applies all migrations", () => {
     const db = freshDb();
-    runMigrations(db);
+    runMigrationsWithImageCutover(db);
     const row = db.query("SELECT version FROM schema_version").get() as any;
     expect(row.version).toBeGreaterThan(0);
   });
 
   test("adds ssh_host_key column to servers", () => {
     const db = freshDb();
-    runMigrations(db);
+    runMigrationsWithImageCutover(db);
     // Should not throw when querying the new column
     db.run("INSERT INTO servers (name, provider_id, ssh_host_key) VALUES ('test', '123', 'key-data')");
     const server = db.query("SELECT ssh_host_key FROM servers WHERE provider_id = '123'").get() as any;
@@ -63,7 +87,7 @@ describe("runMigrations", () => {
     runMigrations(db);
     // Insert a server and app first for the FK
     db.run("INSERT INTO servers (name, provider_id) VALUES ('s1', 'h1')");
-    db.run("INSERT INTO apps (name, domain, git_repo) VALUES ('app1', 'app.com', 'https://x.git')");
+    db.run("INSERT INTO apps (name, domain, image_ref) VALUES ('app1', 'app.com', ?)", [IMAGE_REF]);
     db.run("INSERT INTO deployment_history (app_id, image_tag, git_commit) VALUES (1, 'app:latest', 'abc123')");
     const dep = db.query("SELECT * FROM deployment_history WHERE app_id = 1").get() as any;
     expect(dep.image_tag).toBe("app:latest");
@@ -74,7 +98,7 @@ describe("runMigrations", () => {
     const db = freshDb();
     runMigrations(db);
     db.run("INSERT INTO servers (name, provider_id) VALUES ('s1', 'h1')");
-    db.run("INSERT INTO apps (name, domain, git_repo, volume_id, volume_mount) VALUES ('app1', 'app.com', 'https://x.git', 'vol-123', '/mnt/data:/data')");
+    db.run("INSERT INTO apps (name, domain, image_ref, volume_id, volume_mount) VALUES ('app1', 'app.com', ?, 'vol-123', '/mnt/data:/data')", [IMAGE_REF]);
     const app = db.query("SELECT volume_id, volume_mount FROM apps WHERE name = 'app1'").get() as any;
     expect(app.volume_id).toBe("vol-123");
     expect(app.volume_mount).toBe("/mnt/data:/data");
@@ -82,7 +106,7 @@ describe("runMigrations", () => {
 
   test("is idempotent — running twice does not error", () => {
     const db = freshDb();
-    runMigrations(db);
+    runMigrationsWithImageCutover(db);
     runMigrations(db); // Should not throw
     const row = db.query("SELECT version FROM schema_version").get() as any;
     expect(row.version).toBeGreaterThan(0);
@@ -107,7 +131,7 @@ describe("runMigrations", () => {
     // Pre-seed an app at the legacy schema before any migrations have run.
     db.run("INSERT INTO servers (name, hetzner_id) VALUES ('s1', 'h1')");
     db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'app1', 'a.com', 'https://x.git')");
-    runMigrations(db);
+    runMigrationsWithImageCutover(db);
     // After migration 14, server_id/host_port should not exist on apps.
     const cols = db.query("PRAGMA table_info(apps)").all() as any[];
     const colNames = cols.map((c) => c.name);
@@ -122,33 +146,30 @@ describe("runMigrations", () => {
     expect(replica.server_id).toBe(1);
   });
 
-  test("migration 15 adds panel webhook columns and rewrites self-redeploy source", () => {
+  test("migration 105 removes build/webhook state and gives the panel an immutable image", () => {
     const db = freshDb();
     runMigrations(db);
-    // Insert a panel row + a legacy self-redeploy panel_deployment.
     db.run("INSERT INTO servers (name, provider_id) VALUES ('s1', 'h-panel')");
     db.run(
-      "INSERT INTO panel (id, server_id, name, domain, git_repo, container_port, host_port) VALUES (1, 1, 'p', 'p.example.com', 'https://github.com/x/y', 3000, 3001)",
+      "INSERT INTO panel (id, server_id, name, domain, image_ref, container_port, host_port) VALUES (1, 1, 'p', 'p.example.com', ?, 3000, 3001)",
+      [IMAGE_REF],
     );
-    // Pretend a legacy row got written before migration 15 ran (we can't
-    // actually re-rerun the migration, but we can validate the columns + a
-    // forward-write of a webhook-source row works post-migration).
-    const cols = db.query("PRAGMA table_info(panel)").all() as any[];
-    const colNames = cols.map((c) => c.name);
-    expect(colNames).toContain("webhook_secret");
-    expect(colNames).toContain("webhook_enabled");
-    expect(colNames).toContain("github_webhook_id");
-
-    db.run(
-      "INSERT INTO panel_deployments (image_tag, git_commit, status, source) VALUES ('p:latest', 'abc', 'deployed', 'webhook')",
-    );
-    const row = db.query("SELECT source FROM panel_deployments WHERE git_commit = 'abc'").get() as any;
-    expect(row.source).toBe("webhook");
+    const panelCols = (db.query("PRAGMA table_info(panel)").all() as any[]).map((c) => c.name);
+    expect(panelCols).toContain("image_ref");
+    expect(panelCols).not.toContain("git_repo");
+    expect(panelCols).not.toContain("webhook_secret");
+    const appCols = (db.query("PRAGMA table_info(apps)").all() as any[]).map((c) => c.name);
+    expect(appCols).toContain("image_ref");
+    expect(appCols).not.toContain("git_repo");
+    expect(appCols).not.toContain("source_mode");
+    expect(appCols).not.toContain("build_cache_ref");
+    expect(appCols.some((column) => column.startsWith("webhook"))).toBe(false);
+    expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='webhook_candidates'").get()).toBeNull();
   });
 
   test("skips already applied migrations", () => {
     const db = freshDb();
-    runMigrations(db);
+    runMigrationsWithImageCutover(db);
     const v1 = (db.query("SELECT version FROM schema_version").get() as any).version;
     runMigrations(db);
     const v2 = (db.query("SELECT version FROM schema_version").get() as any).version;
@@ -161,7 +182,7 @@ describe("runMigrations", () => {
     db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a1', 'a1.com', 'https://x.git')");
     db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a2', 'a2.com', 'https://x.git')");
     db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a3', 'a3.com', 'https://x.git')");
-    runMigrations(db);
+    runMigrationsWithImageCutover(db);
     const rows = db.query("SELECT internal_port FROM apps ORDER BY id ASC").all() as any[];
     expect(rows.map((r) => r.internal_port)).toEqual([20000, 20001, 20002]);
   });
@@ -169,13 +190,13 @@ describe("runMigrations", () => {
   test("migration 60 unique index rejects duplicate internal ports but allows 0", () => {
     const db = freshDb();
     runMigrations(db);
-    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a1', 'a1.com', 'https://x.git', 20005)");
+    db.run("INSERT INTO apps (name, domain, image_ref, internal_port) VALUES ('a1', 'a1.com', ?, 20005)", [IMAGE_REF]);
     expect(() =>
-      db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a2', 'a2.com', 'https://x.git', 20005)"),
+      db.run("INSERT INTO apps (name, domain, image_ref, internal_port) VALUES ('a2', 'a2.com', ?, 20005)", [IMAGE_REF]),
     ).toThrow();
     // The index is partial (internal_port > 0) — unallocated rows don't collide.
-    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a3', 'a3.com', 'https://x.git', 0)");
-    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a4', 'a4.com', 'https://x.git', 0)");
+    db.run("INSERT INTO apps (name, domain, image_ref, internal_port) VALUES ('a3', 'a3.com', ?, 0)", [IMAGE_REF]);
+    db.run("INSERT INTO apps (name, domain, image_ref, internal_port) VALUES ('a4', 'a4.com', ?, 0)", [IMAGE_REF]);
   });
 
   test("migration 78 backfills unique sequential virtual IPs", () => {
@@ -184,7 +205,7 @@ describe("runMigrations", () => {
     db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a1', 'a1.com', 'https://x.git')");
     db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a2', 'a2.com', 'https://x.git')");
     db.run("INSERT INTO apps (server_id, name, domain, git_repo) VALUES (1, 'a3', 'a3.com', 'https://x.git')");
-    runMigrations(db);
+    runMigrationsWithImageCutover(db);
     const rows = db.query("SELECT virtual_ip FROM apps ORDER BY id ASC").all() as any[];
     expect(rows.map((r) => r.virtual_ip)).toEqual(["10.96.0.1", "10.96.0.2", "10.96.0.3"]);
   });
@@ -192,13 +213,13 @@ describe("runMigrations", () => {
   test("migration 78 unique index rejects duplicate virtual IPs but allows ''", () => {
     const db = freshDb();
     runMigrations(db);
-    db.run("INSERT INTO apps (name, domain, git_repo, internal_port, virtual_ip) VALUES ('a1', 'a1.com', 'https://x.git', 20005, '10.96.0.5')");
+    db.run("INSERT INTO apps (name, domain, image_ref, internal_port, virtual_ip) VALUES ('a1', 'a1.com', ?, 20005, '10.96.0.5')", [IMAGE_REF]);
     expect(() =>
-      db.run("INSERT INTO apps (name, domain, git_repo, internal_port, virtual_ip) VALUES ('a2', 'a2.com', 'https://x.git', 20006, '10.96.0.5')"),
+      db.run("INSERT INTO apps (name, domain, image_ref, internal_port, virtual_ip) VALUES ('a2', 'a2.com', ?, 20006, '10.96.0.5')", [IMAGE_REF]),
     ).toThrow();
     // The index is partial (virtual_ip != '') — unallocated rows don't collide.
-    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a3', 'a3.com', 'https://x.git', 20007)");
-    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('a4', 'a4.com', 'https://x.git', 20008)");
+    db.run("INSERT INTO apps (name, domain, image_ref, internal_port) VALUES ('a3', 'a3.com', ?, 20007)", [IMAGE_REF]);
+    db.run("INSERT INTO apps (name, domain, image_ref, internal_port) VALUES ('a4', 'a4.com', ?, 20008)", [IMAGE_REF]);
   });
 
   test("migration 61 blanks domains of private apps only", () => {
@@ -206,8 +227,8 @@ describe("runMigrations", () => {
     runMigrations(db);
     // Re-apply migration 61 against post-migration rows (runMigrations already
     // ran it on an empty table).
-    db.run("INSERT INTO apps (name, domain, git_repo, public, internal_port) VALUES ('pub', 'pub.example.com', 'https://x.git', 1, 20000)");
-    db.run("INSERT INTO apps (name, domain, git_repo, public, internal_port) VALUES ('priv', 'priv.example.com', 'https://x.git', 0, 20001)");
+    db.run("INSERT INTO apps (name, domain, image_ref, public, internal_port) VALUES ('pub', 'pub.example.com', ?, 1, 20000)", [IMAGE_REF]);
+    db.run("INSERT INTO apps (name, domain, image_ref, public, internal_port) VALUES ('priv', 'priv.example.com', ?, 0, 20001)", [IMAGE_REF]);
     migrations.find((m) => m.version === 61)!.up(db);
     const pub = db.query("SELECT domain FROM apps WHERE name = 'pub'").get() as any;
     const priv = db.query("SELECT domain FROM apps WHERE name = 'priv'").get() as any;
@@ -244,7 +265,7 @@ describe("runMigrations", () => {
     const cols = (db.query("PRAGMA table_info(apps)").all() as any[]).map((c) => c.name);
     expect(cols).toContain("internal_protocol");
     // New rows that don't specify it get the column default.
-    db.run("INSERT INTO apps (name, domain, git_repo, internal_port) VALUES ('defapp', 'd.example.com', 'https://x.git', 20000)");
+    db.run("INSERT INTO apps (name, domain, image_ref, internal_port) VALUES ('defapp', 'd.example.com', ?, 20000)", [IMAGE_REF]);
     const row = db.query("SELECT internal_protocol FROM apps WHERE name = 'defapp'").get() as any;
     expect(row.internal_protocol).toBe("http");
   });
@@ -350,12 +371,13 @@ describe("runMigrations", () => {
     expect(cols).not.toContain("sibling_of");
     // Insert/read round-trip through the renamed columns.
     db.run(
-      "INSERT INTO apps (name, domain, git_repo, internal_port, virtual_ip, target) VALUES ('prod80', 'p.example.com', 'https://x.git', 20080, '10.96.0.80', 'production')",
+      "INSERT INTO apps (name, domain, image_ref, internal_port, virtual_ip, target) VALUES ('prod80', 'p.example.com', ?, 20080, '10.96.0.80', 'production')",
+      [IMAGE_REF],
     );
     const parent = db.query("SELECT id FROM apps WHERE name = 'prod80'").get() as any;
     db.run(
-      "INSERT INTO apps (name, domain, git_repo, internal_port, virtual_ip, target, target_of) VALUES ('prod80-staging', '', 'https://x.git', 20081, '10.96.0.81', 'staging', ?)",
-      [parent.id],
+      "INSERT INTO apps (name, domain, image_ref, internal_port, virtual_ip, target, target_of) VALUES ('prod80-staging', '', ?, 20081, '10.96.0.81', 'staging', ?)",
+      [IMAGE_REF, parent.id],
     );
     const child = db.query("SELECT target, target_of FROM apps WHERE name = 'prod80-staging'").get() as any;
     expect(child.target).toBe("staging");

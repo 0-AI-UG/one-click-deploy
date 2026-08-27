@@ -14,6 +14,8 @@ import {
   type PublicProtocol,
 } from "./apps.ts";
 
+const IMAGE_REF = `ghcr.io/acme/test@sha256:${"a".repeat(64)}`;
+
 function makeApp(
   name = `app-${randomSuffix()}`,
   extra: { public_port?: number | "auto" | null; public_protocol?: PublicProtocol } = {},
@@ -21,13 +23,30 @@ function makeApp(
   return db.insertApp({
     name,
     domain: `${name}.example.com`,
-    git_repo: "https://github.com/x/y",
-    dockerfile_path: "Dockerfile",
+    image_ref: IMAGE_REF,
     container_port: 3000,
     env_vars: "{}",
     ...extra,
   });
 }
+
+describe("immutable image contract", () => {
+  test("rejects mutable tags on insert and artifact updates", () => {
+    expect(() => db.insertApp({
+      name: `mutable-${randomSuffix()}`,
+      domain: "",
+      image_ref: "ghcr.io/acme/test:latest",
+      container_port: 3000,
+      env_vars: "{}",
+    })).toThrow(/immutable OCI reference/);
+
+    const app = makeApp();
+    expect(() => db.updateAppImageRef(app.id, "ghcr.io/acme/test:latest"))
+      .toThrow(/immutable OCI reference/);
+    expect(db.getApp(app.id)?.image_ref).toBe(IMAGE_REF);
+    db.deleteApp(app.id);
+  });
+});
 
 // The db module (and its temp data dir) is shared across all test files in
 // the bun test process, so assertions are relative to the current state
@@ -70,8 +89,7 @@ describe("internal port allocation", () => {
       {
         name,
         domain: `${name}.example.com`,
-        git_repo: "https://github.com/x/y",
-        dockerfile_path: "Dockerfile",
+        image_ref: IMAGE_REF,
         container_port: 3000,
         env_vars: "{}",
       },
@@ -119,8 +137,7 @@ describe("environment staleness", () => {
     const all = db.insertApp({
       name: `all-${randomSuffix()}`,
       domain: "",
-      git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile",
+      image_ref: IMAGE_REF,
       container_port: 3000,
       env_vars: "{}",
       environment_id: env.id,
@@ -128,8 +145,7 @@ describe("environment staleness", () => {
     const consumesA = db.insertApp({
       name: `a-${randomSuffix()}`,
       domain: "",
-      git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile",
+      image_ref: IMAGE_REF,
       container_port: 3000,
       env_vars: "{}",
       environment_id: env.id,
@@ -138,8 +154,7 @@ describe("environment staleness", () => {
     const onlyB = db.insertApp({
       name: `b-${randomSuffix()}`,
       domain: "",
-      git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile",
+      image_ref: IMAGE_REF,
       container_port: 3000,
       env_vars: "{}",
       environment_id: env.id,
@@ -321,8 +336,7 @@ describe("deploy targets: setAppTarget / getAppTargets", () => {
     const child = db.insertApp({
       name,
       domain: "",
-      git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile",
+      image_ref: IMAGE_REF,
       container_port: 3000,
       env_vars: "{}",
       target: "staging",

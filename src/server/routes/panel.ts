@@ -5,6 +5,7 @@ import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { redeployPanel, getPanelContainerLogs } from "../../engine/deploy/panel.ts";
+import { reconcilePanelDns } from "../../engine/dns-reconciler.ts";
 
 export async function handleGetPanel(request: Request): Promise<Response> {
   try {
@@ -15,7 +16,6 @@ export async function handleGetPanel(request: Request): Promise<Response> {
     }
     const {
       env_vars: _envVars,
-      webhook_secret: _webhookSecret,
       ...safePanel
     } = panel;
     const server = db.getServer(panel.server_id);
@@ -24,6 +24,7 @@ export async function handleGetPanel(request: Request): Promise<Response> {
         panel: safePanel,
         server: server || null,
         deploy_log: db.getPanelDeployLog(),
+        dns_instruction: await reconcilePanelDns(),
       },
       { headers: corsHeaders },
     );
@@ -37,9 +38,13 @@ export async function handleRedeployPanel(request: Request): Promise<Response> {
     // Redeploying the control plane itself — governed by its own grant, not by
     // any app-level permission.
     await requirePermission(request, "panel.manage");
+    const body = await request.json() as { image?: string; commit?: string };
+    if (!body.image) {
+      return Response.json({ ok: false, error: "image is required" }, { status: 400, headers: corsHeaders });
+    }
     const result = await redeployPanel((_step, _detail) => {
       // Progress goes to logs; no SSE for the minimal panel UI.
-    });
+    }, { image: body.image, commit: body.commit, source: "release" });
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

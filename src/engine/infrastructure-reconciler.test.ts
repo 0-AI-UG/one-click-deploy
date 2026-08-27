@@ -18,6 +18,8 @@ function makeServer() {
     type: "cx23",
     location: "nbg1",
     status: "ready",
+    provider: "hetzner",
+    ownership: "managed",
   });
 }
 
@@ -65,5 +67,24 @@ describe("infrastructure reconciliation", () => {
 
     expect(deleteServer).not.toHaveBeenCalled();
     expect(db.getServer(server.id)?.gc_requested_at).toBeNull();
+  });
+
+  test("disconnects an unreferenced external server without provider deletion", async () => {
+    const server = db.insertServer({
+      name: `connected-${randomSuffix()}`,
+      provider_id: "",
+      provider: "external",
+      ownership: "connected",
+      ipv4: "203.0.113.2",
+      ipv6: "",
+      private_ipv4: "10.0.0.2",
+      type: "external",
+      location: "external",
+      status: "ready",
+    });
+    db.requestServerGc(server.id);
+    await reconcileServerGc(fakeProvider);
+    expect(deleteServer).not.toHaveBeenCalled();
+    expect(db.getServer(server.id)).toBeNull();
   });
 });

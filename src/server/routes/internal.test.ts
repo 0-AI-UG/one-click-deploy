@@ -10,8 +10,7 @@ function makeApp() {
   return db.insertApp({
     name: `wake-${randomSuffix()}`,
     domain: "x.example.com",
-    git_repo: "https://github.com/x/y",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
   });

@@ -3,17 +3,19 @@ import type { ServerRow } from "./servers.ts";
 import type { ReplicaRow } from "./replicas.ts";
 import { validatePublicPort } from "../validate.ts";
 
+const IMMUTABLE_IMAGE = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
+
+function assertImmutableImageRef(imageRef: string): void {
+  if (!IMMUTABLE_IMAGE.test(imageRef)) {
+    throw new Error("image_ref must be an immutable OCI reference ending in @sha256:<64 hex digest>");
+  }
+}
+
 export type AppRow = {
   id: number;
   name: string;
   domain: string;
-  git_repo: string;
-  git_branch: string;
-  dockerfile_path: string;
-  docker_context: string;
-  source_mode: string;
   image_ref: string;
-  build_cache_ref: string;
   container_port: number;
   env_vars: string;
   status: string;
@@ -30,14 +32,6 @@ export type AppRow = {
   desired_volume_id: string;
   desired_volume_size: number;
   desired_volume_path: string;
-  webhook_enabled: number;
-  webhook_secret: string;
-  webhook_branch: string;
-  webhook_path: string;
-  /** JSON array of repository-relative globs. NULL means unfiltered. */
-  webhook_paths: string | null;
-  webhook_paths_ignore: string;
-  github_webhook_id: string;
   /** htpasswd bcrypt hash of the app password for Traefik's basicAuth
    *  middleware. This hash is the sole source of truth for "auth on" — non-empty
    *  ⇔ basic auth enabled. The plaintext is never stored (write-only at the API).
@@ -58,15 +52,6 @@ export type AppRow = {
   sleeping_server_id: number | null;
   sleeping_host_port: number | null;
   scale_to_zero_after: number;
-  webhook_wait_for_ci: number;
-  /** When set, a webhook push deploys to this app's <name>-staging sibling and
-   *  holds; production is swapped only on manual Promote. 0 = deploy prod.
-   *  Mirror of webhook_staging_environment_id != null. */
-  webhook_staging: number;
-  /** The environment the webhook staging sibling deploys with. NULL = staging
-   *  off. The user selects this explicitly (often a copy of production's env);
-   *  the sibling links to exactly this environment — no live inheritance. */
-  webhook_staging_environment_id: number | null;
   environment_id: number | null;
   /** NULL = inherit every linked-environment key (legacy). JSON array = only
    *  those keys; [] = platform-injected OCD_INTERNAL_* variables only. */
@@ -126,18 +111,11 @@ export type AppRow = {
   last_manifest_hash: string | null;
   last_manifest_applied_at: string | null;
   last_manifest_config_revision: number | null;
-  /** Canonical repository-relative control-file paths used by webhooks. */
   manifest_path: string | null;
   stack_manifest_path: string | null;
-  last_webhook_head: string | null;
-  last_webhook_decision: string | null;
-  last_webhook_received_at: string | null;
-  last_webhook_evaluated_at: string | null;
-  last_webhook_ci_result: string | null;
   rollout_requested_revision: number;
   rollout_requested_after_deployment_id: number;
   deletion_requested_at: string | null;
-  github_webhook_repo: string;
 };
 
 /** Internal ingress port block: every app owns one port in
@@ -251,16 +229,6 @@ export function updateAppPublicExposure(id: number, port: number | null, protoco
   db.query("UPDATE apps SET public_port = ?, public_protocol = ? WHERE id = ?").run(port, protocol, id);
 }
 
-export type DnsRecordRow = {
-  id: number;
-  app_id: number;
-  zone_id: string;
-  record_id: string;
-  name: string;
-  type: string;
-  value: string;
-};
-
 export function getApps(serverId?: number): AppRow[] {
   if (serverId) {
     return db
@@ -302,17 +270,12 @@ export type AppIngressSettings = {
   health_check_file?: string;
   health_check_max_age_seconds?: number;
   health_check_expected_statuses?: number[];
-  image_ref?: string;
-  build_cache_ref?: string;
 };
 
 type InsertAppFields = {
   name: string;
   domain: string;
-  git_repo: string;
-  git_branch?: string;
-  dockerfile_path: string;
-  docker_context?: string;
+  image_ref: string;
   container_port: number;
   env_vars: string;
   /** Write-only plaintext: hashed into auth_password_hash on insert, never
@@ -362,6 +325,7 @@ function resolvePublicPort(app: InsertAppFields): number | null {
 // tx). resolvePublicPort/allocateInternalPort run here so both paths allocate
 // identically.
 function insertAppRow(app: InsertAppFields): AppRow {
+  assertImmutableImageRef(app.image_ref);
   const healthCheck = app.health_check_mode
     ? app.health_check_mode === "http"
     : (app.health_check ?? true);
@@ -371,18 +335,12 @@ function insertAppRow(app: InsertAppFields): AppRow {
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, git_repo, git_branch, dockerfile_path, docker_context, source_mode, image_ref, build_cache_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, health_check_expected_statuses, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, image_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, health_check_expected_statuses, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
       app.domain,
-      app.git_repo,
-      app.git_branch || "",
-      app.dockerfile_path,
-      app.docker_context || ".",
-      app.image_ref ? "image" : "git",
-      app.image_ref || "",
-      app.build_cache_ref || "",
+      app.image_ref,
       app.container_port,
       app.env_vars,
       hashAuthPassword(app.auth_password || ""),
@@ -577,38 +535,6 @@ export function deleteApp(id: number): void {
   db.query("DELETE FROM apps WHERE id = ?").run(id);
 }
 
-export function insertDnsRecord(record: {
-  app_id: number;
-  zone_id: string;
-  record_id: string;
-  name: string;
-  type: string;
-  value: string;
-}): DnsRecordRow {
-  return db
-    .query(
-      "INSERT INTO dns_records (app_id, zone_id, record_id, name, type, value) VALUES (?, ?, ?, ?, ?, ?) RETURNING *"
-    )
-    .get(
-      record.app_id,
-      record.zone_id,
-      record.record_id,
-      record.name,
-      record.type,
-      record.value
-    ) as DnsRecordRow;
-}
-
-export function getDnsRecords(appId: number): DnsRecordRow[] {
-  return db
-    .query("SELECT * FROM dns_records WHERE app_id = ?")
-    .all(appId) as DnsRecordRow[];
-}
-
-export function deleteDnsRecord(recordId: string): void {
-  db.query("DELETE FROM dns_records WHERE record_id = ?").run(recordId);
-}
-
 export function updateAppEnvVars(id: number, envVars: string): void {
   db.query("UPDATE apps SET env_vars = ? WHERE id = ?").run(envVars, id);
 }
@@ -670,21 +596,10 @@ export function updateAppContainerPort(id: number, port: number): void {
   db.query("UPDATE apps SET container_port = ? WHERE id = ?").run(port, id);
 }
 
-/** Update the build source used by later code-only redeploys. */
-export function updateAppBuildSource(
-  id: number,
-  fields: { gitRepo: string; gitBranch: string; dockerfilePath: string; dockerContext: string },
-): void {
-  db.query(
-    "UPDATE apps SET git_repo = ?, git_branch = ?, dockerfile_path = ?, docker_context = ? WHERE id = ?",
-  ).run(fields.gitRepo, fields.gitBranch, fields.dockerfilePath, fields.dockerContext, id);
-}
-
 export function updateAppArtifactAndHealth(
   id: number,
   fields: {
     imageRef: string;
-    buildCacheRef: string;
     healthMode: string;
     healthCommand: string;
     healthFile: string;
@@ -692,14 +607,12 @@ export function updateAppArtifactAndHealth(
     healthExpectedStatuses?: number[];
   },
 ): void {
+  assertImmutableImageRef(fields.imageRef);
   db.query(
-    `UPDATE apps SET source_mode = ?, image_ref = ?, build_cache_ref = ?,
-       health_check_mode = ?, health_check_command = ?, health_check_file = ?,
+    `UPDATE apps SET image_ref = ?, health_check_mode = ?, health_check_command = ?, health_check_file = ?,
        health_check_max_age_seconds = ?, health_check_expected_statuses = ? WHERE id = ?`,
   ).run(
-    fields.imageRef ? "image" : "git",
     fields.imageRef,
-    fields.buildCacheRef,
     fields.healthMode,
     fields.healthCommand,
     fields.healthFile,
@@ -709,12 +622,19 @@ export function updateAppArtifactAndHealth(
   );
 }
 
+/** Commit one externally-published immutable artifact as desired state. */
+export function updateAppImageRef(id: number, imageRef: string): void {
+  assertImmutableImageRef(imageRef);
+  db.query("UPDATE apps SET image_ref = ? WHERE id = ?")
+    .run(imageRef, id);
+}
+
 /** Record provenance after an explicit manifest apply. This metadata is not
  * itself runtime configuration and therefore does not bump config_revision. */
 export function recordAppManifestApplied(id: number, path: string, hash: string): void {
   db.query(
-    "UPDATE apps SET last_manifest_path = ?, manifest_path = ?, last_manifest_hash = ?, last_manifest_applied_at = datetime('now'), last_manifest_config_revision = config_revision WHERE id = ?",
-  ).run(path, path, hash, id);
+    "UPDATE apps SET last_manifest_path = ?, last_manifest_hash = ?, last_manifest_applied_at = datetime('now'), last_manifest_config_revision = config_revision WHERE id = ?",
+  ).run(path, hash, id);
 }
 
 export function updateAppStackManifestPath(id: number, path: string | null): void {
@@ -805,82 +725,6 @@ export function updateAppPublic(id: number, isPublic: boolean): void {
  *  refreshes on its next (re)deploy. Callers re-sync ingress after persisting. */
 export function updateAppInternalProtocol(id: number, protocol: InternalProtocol): void {
   db.query("UPDATE apps SET internal_protocol = ? WHERE id = ?").run(protocol, id);
-}
-
-export function updateAppWebhook(
-  id: number,
-  enabled: boolean,
-  secret: string,
-  branch: string,
-  githubWebhookId: string,
-  path: string = "",
-  waitForCi: boolean = false,
-  staging: boolean = false
-): void {
-  db.query(
-    "UPDATE apps SET webhook_enabled = ?, webhook_secret = ?, webhook_branch = ?, webhook_path = ?, github_webhook_id = ?, webhook_wait_for_ci = ?, webhook_staging = ? WHERE id = ?"
-  ).run(enabled ? 1 : 0, secret, branch, path, githubWebhookId, waitForCi ? 1 : 0, staging ? 1 : 0, id);
-}
-
-/** Persist the repository before touching GitHub so a crash between remote
- * creation and id persistence still leaves enough ownership information for
- * the next pass to find and converge the hook. */
-export function updateAppWebhookProviderIdentity(id: number, repo: string, webhookId?: string): void {
-  if (webhookId === undefined) {
-    db.query("UPDATE apps SET github_webhook_repo = ? WHERE id = ?").run(repo, id);
-  } else {
-    db.query(
-      "UPDATE apps SET github_webhook_repo = ?, github_webhook_id = ? WHERE id = ?",
-    ).run(repo, webhookId, id);
-  }
-}
-
-export function updateAppWebhookWaitForCi(id: number, waitForCi: boolean): void {
-  db.query("UPDATE apps SET webhook_wait_for_ci = ? WHERE id = ?").run(waitForCi ? 1 : 0, id);
-}
-
-/** Store the new glob arrays. NULL paths preserves the historical unfiltered behavior. */
-export function updateAppWebhookPaths(
-  id: number,
-  paths: string[] | null,
-  pathsIgnore: string[],
-  opts: { clearLegacyPath?: boolean } = {},
-): void {
-  db.query(
-    "UPDATE apps SET webhook_paths = ?, webhook_paths_ignore = ?, webhook_path = CASE WHEN ? THEN '' ELSE webhook_path END WHERE id = ?",
-  ).run(
-    paths === null ? null : JSON.stringify(paths),
-    JSON.stringify(pathsIgnore),
-    opts.clearLegacyPath === false ? 0 : 1,
-    id,
-  );
-}
-
-export function recordAppWebhookReceived(id: number, headSha: string): void {
-  db.query(
-    "UPDATE apps SET last_webhook_head = ?, last_webhook_received_at = datetime('now') WHERE id = ?",
-  ).run(headSha, id);
-}
-
-export function recordAppWebhookDecision(
-  id: number,
-  headSha: string,
-  ciResult: string,
-  decision: unknown,
-): void {
-  db.query(
-    `UPDATE apps SET last_webhook_head = ?, last_webhook_ci_result = ?,
-       last_webhook_decision = ?, last_webhook_evaluated_at = datetime('now')
-     WHERE id = ?`,
-  ).run(headSha, ciResult, JSON.stringify(decision), id);
-}
-
-/** Select the environment the webhook staging sibling deploys with, or null to
- *  turn staging off. The legacy webhook_staging flag is kept in sync so readers
- *  that only check "is staging on" keep working. */
-export function updateAppWebhookStagingEnvironment(id: number, environmentId: number | null): void {
-  db.query("UPDATE apps SET webhook_staging_environment_id = ?, webhook_staging = ? WHERE id = ?")
-    .run(environmentId, environmentId != null ? 1 : 0, id);
 }
 
 export type AppScalingUpdate = {
@@ -976,8 +820,7 @@ export function getAppTargets(appId: number): AppRow[] {
     .all(appId) as AppRow[];
 }
 
-/** The app's staging sibling (target='staging', target_of=appId), or null. The
- *  webhook staging flow deploys to and promotes from exactly this row. */
+/** The app's staging sibling (target='staging', target_of=appId), or null. */
 export function getStagingSibling(appId: number): AppRow | null {
   return (db
     .query("SELECT * FROM apps WHERE target_of = ? AND target = 'staging' ORDER BY created_at ASC LIMIT 1")

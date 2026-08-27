@@ -38,7 +38,7 @@ function makeApp() {
   });
   const name = `rm-${randomSuffix()}`;
   const { app } = db.insertAppWithFirstReplica(
-    { name, domain: `${name}.example.com`, git_repo: "https://github.com/x/y", dockerfile_path: "Dockerfile", container_port: 3000, env_vars: "{}" },
+    { name, domain: `${name}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000, env_vars: "{}" },
     server.id,
   );
   db.updateAppVolume(app.id, "v-1", `/mnt/ocd-${name}-data:/old`, true);

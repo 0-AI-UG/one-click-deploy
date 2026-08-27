@@ -1,57 +1,74 @@
 ---
 name: ocd-deploy
-description: Deploy, configure, operate, recover, and troubleshoot apps and stacks on One-Click Deploy (OCD).
+description: Deploy, configure, operate, recover, and troubleshoot externally built OCI images on One-Click Deploy (OCD).
 ---
 
 # OCD Deploy
 
-Use the `ocd` CLI for One-Click Deploy panels.
+Use the `ocd` CLI for One-Click Deploy panels. OCD runs images; it never
+checks out source code or builds an image.
 
 ## Safety contract
 
 - Inspect before mutating live resources.
-- Use `ocd deploy --dry-run` before a material desired-configuration change.
-- Treat `.ocd-deploy.json` as the complete desired app configuration.
-- Use `ocd deploy` as the only CLI mutation for desired app configuration.
-- Never put plaintext secrets in a manifest. Use `--set`, `--auth-password-env`, environment secrets, or interactive prompts.
-- Do not delete, purge, rollback, migrate, promote, or recover resources without explicit user intent.
+- Use `ocd deploy --dry-run` before material configuration changes.
+- Use immutable `repository@sha256:<digest>` image references. Never deploy a
+  mutable tag.
+- Keep plaintext secrets out of manifests and logs. Use environment secrets,
+  `--set`, `--auth-password-env`, or protected process environment variables.
+- Before upgrading an older OCD panel, back up its database and
+  verify every app plus the panel itself has a recorded immutable digest.
+  The clean-cut schema upgrade refuses missing digests; never invent one.
+- Do not delete, purge, rollback, migrate, promote, or recover resources
+  without explicit user intent.
 
 ## Core model
 
-The panel stores one desired manifest per app. `ocd deploy` reads the local
-manifest, resolves environment names, sends a complete manifest application,
-stores that desired state, and invokes the canonical deploy path.
+`.ocd-deploy.json` is the complete desired configuration for one app and
+contains its initial immutable `image.ref`. `ocd deploy` creates an app or
+changes its configuration. It never builds the image.
 
-`ocd deploy --dry-run` compares local desired state with the stored server
-manifest. `ocd deploy --config-only` stores and applies the same manifest
-without rebuilding code; runtime changes recreate containers from the current
-immutable image, while source/build changes remain pending. Both are modes of `ocd deploy`, not separate mutation
-commands.
+CI publishes an image to any OCI registry, captures the registry digest, and
+calls `ocd release`. A release changes only the app image and uses its stored
+configuration. `ocd promote` copies the exact deployed digest between explicit
+apps. `ocd rollback` selects an earlier successful deployment; it does not
+rebuild or resolve a tag.
 
-App creation and desired-configuration mutation are CLI-only. The server
-rejects browser deploy requests, and the UI renders manifest-owned app
-configuration read-only. There is no UI redeploy/config/settings/ingress path.
+Public registries need no OCD credentials. For a private registry, an
+administrator configures one OCI repository, username, and pull password/token
+under panel Settings. OCD sends those credentials only when the image host
+matches the configured repository host; credentials never belong in a
+manifest or image reference.
 
-Operational actions remain separate because they do not redefine desired app
-configuration: wake, restart, rollback, pause, unpause, promotion, replica
-migration, operation recovery, and inspection.
+DNS is operator-owned. OCD displays the records to create but never changes a
+DNS provider. Hetzner is optional: OCD can provision managed Hetzner servers,
+or an operator can enroll existing stateless Docker hosts.
+
+Staging is explicit. Deploy staging as a separate app with its own manifest,
+environment, and domain, release it by name, then promote its exact digest to
+the production app. OCD does not infer or create a staging app from a
+production deployment.
 
 ## Typical workflow
 
+Initial app creation or configuration update:
+
 ```bash
 ocd login https://panel.example.com
-ocd status
+ocd manifest validate .ocd-deploy.json
 ocd deploy --dry-run
 ocd deploy
-ocd status
-ocd logs my-app --tail=200
+ocd app show my-app
 ```
 
-Configuration-only application:
+CI release:
 
 ```bash
-ocd deploy --dry-run
-ocd deploy --config-only
+export OCD_PANEL_URL=https://panel.example.com
+export OCD_TOKEN="$OCD_CI_TOKEN"
+ocd release my-app \
+  --image ghcr.io/example/my-app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --commit "$GITHUB_SHA"
 ```
 
 ## Command map
@@ -60,20 +77,19 @@ ocd deploy --config-only
 ocd deploy [manifest] [--set=KEY=VALUE] [--auth-password-env=KEY]
     [--server=ID] [--app=EXISTING_APP] [--dry-run] [--config-only]
 ocd deploy stack [manifest] [--config-only]
-ocd app redeploy <app>
+ocd release <app> --image <repository@sha256:digest>
+    [--commit <sha>] [--idempotency-key <key>]
 ocd apps
-ocd app show <app>
+ocd app show <app> [--storage]
 ocd app deployments <app>
 ocd app replicas <app>
 ocd app metrics <app>
 ocd app availability <app>
 ocd app scaling-events <app>
-ocd app staging <app>
-ocd app webhook status <app>
 ocd logs <app> [--tail=N]
 ocd restart <app>
-ocd rollback <app> [--deployment=ID]
-ocd promote <app>
+ocd rollback <app> [--deployment=<id>]
+ocd promote --from=<source-app> --to=<destination-app>
 ocd pause <app>
 ocd unpause <app>
 ocd scale wake <app>
@@ -82,8 +98,15 @@ ocd scale migrate <app> <replica-id> --to=<server-id>
 ocd envs <list|show|create|copy|rename|set|unset|deleted|restore|remove|purge>
 ocd services
 ocd stack <ls|status|logs>
-ocd ops
+ocd manifest validate [path] [--allow-unknown]
+ocd gc [--server=<name|id|ip>] [--execute]
+ocd ops [--app=<app>]
+ocd ops <id>
+ocd ops logs <id> [--tail N] [--since TIME|CURSOR] [--child NAME|ID]
+    [--phase STEP] [--follow]
 ocd servers
+ocd servers enrollment-key
+ocd servers connect --name=X --address=X --private-address=X --host-key='...'
 ocd resources
 ocd volumes
 ocd ssh
@@ -94,9 +117,11 @@ ocd ssh
 - [Concepts](docs/concepts.md)
 - [Deploy and config](docs/deploy-and-config.md)
 - [App manifest](docs/app-manifest.md)
+- [Immutable images and health](docs/immutable-images-and-health.md)
+- [Releases, promotion, and rollback](docs/releases-promotion-and-rollback.md)
 - [CLI reference](docs/cli-reference.md)
 - [Environments and secrets](docs/environments-and-secrets.md)
+- [Infrastructure and server enrollment](docs/infrastructure-and-enrollment.md)
 - [Scaling, storage, and placement](docs/scaling-storage-and-placement.md)
-- [Webhooks and promotion](docs/webhooks-and-promotion.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Reference index](reference.md)

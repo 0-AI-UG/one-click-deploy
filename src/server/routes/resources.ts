@@ -7,18 +7,23 @@ import { enqueue } from "../ipc/enqueue.ts";
 import { sshExec } from "../../shared/remote/index.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { serverProvisioningResourceId } from "../../shared/server-provisioning.ts";
+import { isManagedHetznerServer } from "../../shared/infrastructure.ts";
+import { secretStore } from "../../shared/secret-store.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
 
     const compute = hetzner;
+    const providerConfigured = !!await secretStore.get(compute.tokenKey).catch(() => null);
+    const dbServers = db.getServers();
+    const hasManagedHetzner = providerConfigured && dbServers.some(isManagedHetznerServer);
 
     // Fetch pricing once and build lookup maps.
     // If pricing fetch fails (no token, network), monthly_eur falls back to null.
     let serverPriceMap = new Map<string, number>();
     let volumePerGbMonth: number | null = null;
     let currency = "EUR";
-    try {
+    if (hasManagedHetzner) try {
       const pricing = await compute.getPricing?.();
       if (pricing) {
         currency = pricing.currency;
@@ -37,32 +42,11 @@ export async function handleGetResources(request: Request): Promise<Response> {
     // vCPU count per server type, so the UI can render server load as
     // "cores used / total" instead of a bare percentage.
     const coresByType = new Map<string, number>();
-    try {
+    if (hasManagedHetzner) try {
       const types = await compute.listServerTypes?.();
       for (const t of types ?? []) coresByType.set(t.name, t.cores);
     } catch (e) {
       console.error("resources: failed to fetch server types:", e);
-    }
-
-    let dbServers = db.getServers();
-    try {
-      const remoteServers = await compute.listServers();
-      for (const rs of remoteServers) {
-        const providerId = String(rs.providerId);
-        if (dbServers.find((s) => s.provider_id === providerId)) continue;
-        db.insertServer({
-          name: rs.name,
-          provider_id: providerId,
-          ipv4: rs.ipv4 || "",
-          ipv6: rs.ipv6 || "",
-          type: rs.type || "",
-          location: rs.location || "",
-          status: rs.status || "running",
-        });
-      }
-      dbServers = db.getServers();
-    } catch (e) {
-      console.error("resources: failed to sync servers from provider:", e);
     }
 
     // Get latest metric sample per server from the reconciler-collected history
@@ -83,6 +67,12 @@ export async function handleGetResources(request: Request): Promise<Response> {
         id: s.id,
         name: s.name,
         provider_id: s.provider_id,
+        provider: s.provider,
+        ownership: s.ownership,
+        management_address: s.management_address,
+        private_ipv4: s.private_ipv4,
+        ssh_user: s.ssh_user,
+        ssh_port: s.ssh_port,
         ipv4: s.ipv4,
         type: s.type,
         location: s.location,
@@ -96,7 +86,7 @@ export async function handleGetResources(request: Request): Promise<Response> {
           ? Math.round((usage.disk_total_gb - usage.disk_used_gb) * 10) / 10
           : null,
         replica_count: db.getReplicasByServer(s.id).length,
-        monthly_eur: priceForServer(s.type, s.location),
+        monthly_eur: isManagedHetznerServer(s) ? priceForServer(s.type, s.location) : null,
       };
     });
 
@@ -115,14 +105,69 @@ export async function handleGetResources(request: Request): Promise<Response> {
       monthly_eur: number | null;
     }
 
-    let volumes: VolumeResource[] = [];
-    try {
+    const trackedVolumes = new Map<string, VolumeResource>();
+    for (const app of db.getApps()) {
+      if (!app.volume_id) continue;
+      const serverId = db.getReplicas(app.id)[0]?.server_id;
+      trackedVolumes.set(app.volume_id, {
+        id: app.volume_id,
+        name: app.volume_id,
+        size: app.desired_volume_size || 0,
+        server_name: serverId ? db.getServer(serverId)?.name || "" : "",
+        app_name: app.name,
+        location: serverId ? db.getServer(serverId)?.location || "" : "",
+        app_id: app.id,
+        retired_state: "",
+        retired_from: "",
+        purge_after: "",
+        retention_class: "",
+        monthly_eur: null,
+      });
+    }
+    const serviceById = new Map(db.getServices().map((service) => [service.id, service]));
+    for (const instance of db.getAllServiceInstances()) {
+      if (!instance.volume_id || trackedVolumes.has(instance.volume_id)) continue;
+      const server = db.getServer(instance.server_id);
+      trackedVolumes.set(instance.volume_id, {
+        id: instance.volume_id,
+        name: instance.volume_id,
+        size: 0,
+        server_name: server?.name || "",
+        app_name: serviceById.get(instance.service_id)?.name || "",
+        location: server?.location || "",
+        app_id: 0,
+        retired_state: "",
+        retired_from: "",
+        purge_after: "",
+        retention_class: "",
+        monthly_eur: null,
+      });
+    }
+    for (const retired of db.getRetiredVolumes()) {
+      if (trackedVolumes.has(retired.provider_volume_id)) continue;
+      trackedVolumes.set(retired.provider_volume_id, {
+        id: retired.provider_volume_id,
+        name: retired.provider_volume_id,
+        size: 0,
+        server_name: "",
+        app_name: "",
+        location: "",
+        app_id: 0,
+        retired_state: retired.state,
+        retired_from: `${retired.former_resource_type}:${retired.former_resource_name}`,
+        purge_after: retired.purge_after,
+        retention_class: retired.retention_class,
+        monthly_eur: null,
+      });
+    }
+    let volumes: VolumeResource[] = [...trackedVolumes.values()];
+    if (providerConfigured) try {
       const vols = await compute.volumes?.list() ?? [];
       const allApps = db.getApps();
       const retiredById = new Map(
         db.getRetiredVolumes().map((row) => [row.provider_volume_id, row]),
       );
-      volumes = vols.map((v) => {
+      const providerVolumes: VolumeResource[] = vols.map((v) => {
         const serverName = v.serverId ? dbServers.find((s) => s.provider_id === v.serverId)?.name || `server-${v.serverId}` : "";
         const app = allApps.find((a) => a.volume_id === v.providerId);
         const retired = retiredById.get(v.providerId);
@@ -143,6 +188,8 @@ export async function handleGetResources(request: Request): Promise<Response> {
           monthly_eur: volumePerGbMonth != null ? volumePerGbMonth * v.sizeGb : null,
         };
       });
+      const observedIds = new Set(providerVolumes.map((volume) => volume.id));
+      volumes = [...providerVolumes, ...volumes.filter((volume) => !observedIds.has(volume.id))];
     } catch (e) {
       console.error("resources: failed to fetch volumes:", e);
     }
@@ -594,7 +641,8 @@ export async function handleGetServerDetail(request: Request, serverId: number):
     const compute = hetzner;
     let monthly_eur: number | null = null;
     let currency = "EUR";
-    try {
+    const providerConfigured = !!await secretStore.get(compute.tokenKey).catch(() => null);
+    if (providerConfigured && isManagedHetznerServer(server)) try {
       const pricing = await compute.getPricing?.();
       if (pricing) {
         currency = pricing.currency;
@@ -657,6 +705,11 @@ export async function handleGetServerDetail(request: Request, serverId: number):
       id: server.id,
       name: server.name,
       provider_id: server.provider_id,
+      provider: server.provider,
+      ownership: server.ownership,
+      management_address: server.management_address,
+      ssh_user: server.ssh_user,
+      ssh_port: server.ssh_port,
       ipv4: server.ipv4,
       ipv6: server.ipv6,
       private_ipv4: server.private_ipv4,
@@ -687,6 +740,13 @@ export async function handleGetServerDetail(request: Request, serverId: number):
 export async function handleCreateServer(request: Request): Promise<Response> {
   try {
     const payload = await requirePermission(request, "servers.create");
+    const providerToken = await secretStore.get(hetzner.tokenKey).catch(() => null);
+    if (!providerToken) {
+      return Response.json(
+        { error: "Hetzner infrastructure is not configured. Add a token in Settings or connect an existing server." },
+        { status: 409, headers: corsHeaders },
+      );
+    }
     const body = await request.json() as { server_type: string; location: string; name?: string };
 
     if (!body.server_type || !body.location) {

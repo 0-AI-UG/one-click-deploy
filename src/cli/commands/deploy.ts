@@ -1,18 +1,13 @@
-import { posix } from "node:path";
 import { get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "../format.ts";
 import {
-  getGitCommit,
-  getGitRepo,
-  assertLocalBuildPaths,
   manifestRepoLocation,
   readManifest,
   promptRequired,
   resolveAuthPassword,
   manifestHash,
 } from "../manifest.ts";
-import { resolveRepoPath } from "../../shared/stack-spec.ts";
 import { mergeEnv } from "../../shared/env-merge.ts";
 import { withWebConfirmation } from "../confirm.ts";
 import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
@@ -21,29 +16,6 @@ interface Environment {
   id: number;
   name: string;
   env_vars?: Array<{ key: string }>;
-}
-
-export function resolveDockerfilePath(context = ".", dockerfile = "Dockerfile"): string {
-  return context === "." ? dockerfile : posix.join(context, dockerfile);
-}
-
-export function resolveManifestBuildPaths(
-  manifestDir: string,
-  context = ".",
-  dockerfile = "Dockerfile",
-): { context: string; dockerfile: string } {
-  const resolvedContext = context === "."
-    ? (manifestDir || ".")
-    : manifestDir && (context === manifestDir || context.startsWith(`${manifestDir}/`))
-      ? context
-      : resolveRepoPath(manifestDir, context);
-  const dockerfileBase = manifestDir || (resolvedContext === "." ? "" : resolvedContext);
-  return {
-    context: resolvedContext,
-    dockerfile: manifestDir && (dockerfile === manifestDir || dockerfile.startsWith(`${manifestDir}/`))
-      ? dockerfile
-      : resolveRepoPath(dockerfileBase, dockerfile),
-  };
 }
 
 async function resolveEnvironment(name: string): Promise<Environment> {
@@ -111,8 +83,8 @@ export async function deploy(args: string[]): Promise<void> {
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
 
-Deploys the current git repo using a local .ocd-deploy.json manifest.
-Run from inside a git repo with an "origin" remote.
+Deploys the exact immutable OCI image declared by a local .ocd-deploy.json manifest.
+OCD never clones source or builds images.
 
 Env vars from the manifest's env[] section are included automatically:
 defaults are sent as-is, --set overrides or adds values, and required
@@ -137,66 +109,24 @@ ${BOLD}Options:${RESET}
                              its stored environment and stack association.
   --set=KEY=VALUE            Set an env var (repeatable)
   --dry-run                  Show the desired-configuration diff without applying or deploying
-  --config-only              Apply config without rebuilding code; runtime
-                             changes reuse the current immutable image
+  --config-only              Apply config; runtime changes reuse the current image
   --allow-unknown            Compatibility escape hatch for newer manifest keys`);
     process.exit(0);
   }
 
   const location = manifestRepoLocation(manifestPath);
   const manifest = readManifest(location.fullPath, { allowUnknown });
-  const repo = manifest.image ? "" : getGitRepo();
-  const gitCommit = manifest.image ? undefined : getGitCommit();
-  const buildPaths = resolveManifestBuildPaths(
-    location.dir,
-    manifest.build?.context,
-    manifest.build?.dockerfile,
-  );
-  if (!manifest.image) assertLocalBuildPaths(buildPaths.dockerfile, buildPaths.context);
-
-  console.log(`${DIM}${manifest.image ? "Image" : "Repo"}:${RESET}    ${manifest.image?.ref || repo}`);
+  console.log(`${DIM}Image:${RESET}    ${manifest.image.ref}`);
   console.log(`${DIM}Manifest:${RESET} ${location.path} ${BOLD}(${manifest.name})${RESET}`);
-  if (gitCommit) console.log(`${DIM}Commit:${RESET}   ${gitCommit}`);
-  if (!manifest.image) {
-    console.log(`${DIM}Build:${RESET}    ${buildPaths.dockerfile} ${DIM}(context ${buildPaths.context})${RESET}`);
-  }
 
   const name = appName || manifest.suggested_app_name ||
-    (manifest.image ? manifest.image.ref.split("/").pop()!.split("@")[0] : repo.replace(/.*\//, ""));
-  const port = manifest.build?.container_port ?? 3000;
+    manifest.image.ref.split("/").pop()!.split("@")[0];
+  const port = manifest.container_port ?? 3000;
   const authPassword = await resolveAuthPassword(manifest.auth, authPasswordEnv);
   const environment = typeof manifest.environment === "string"
     ? await resolveEnvironment(manifest.environment)
     : null;
   if (environment) console.log(`${DIM}Env:${RESET}      ${environment.name}`);
-
-  const webhookEnabled = manifest.webhook?.enabled ?? false;
-  if (manifest.webhook?.path !== undefined) {
-    console.warn(`${DIM}Deprecated:${RESET} webhook.path; use webhook.paths: [\"${manifest.webhook.path.replace(/\/+$/, "")}/**\"]`);
-  }
-  let webhookStaging = manifest.webhook?.staging ?? false;
-  let webhookStagingEnvironmentId: number | null | undefined;
-  const stagingEnvironmentName = manifest.webhook?.staging_environment;
-  if (typeof stagingEnvironmentName === "string") {
-    if (!webhookEnabled) {
-      console.error(`${RED}webhook.staging_environment requires webhook.enabled.${RESET}`);
-      process.exit(1);
-    }
-    const stagingEnvironment = await resolveEnvironment(stagingEnvironmentName);
-    webhookStaging = true;
-    webhookStagingEnvironmentId = stagingEnvironment.id;
-    console.log(`${DIM}Staging:${RESET}  ${stagingEnvironment.name}`);
-  } else if (stagingEnvironmentName === null) {
-    webhookStaging = false;
-    webhookStagingEnvironmentId = null;
-  }
-  if (webhookStaging && !webhookEnabled) {
-    console.error(`${RED}webhook.staging requires webhook.enabled.${RESET}`);
-    process.exit(1);
-  }
-  if (webhookStaging && webhookStagingEnvironmentId === undefined) {
-    console.log(`${DIM}Staging:${RESET}  ${name}-staging-env ${DIM}(auto-created)${RESET}`);
-  }
 
   const desiredReplicas = manifest.replicas ?? 1;
   const autoscaling = manifest.autoscaling;
@@ -208,15 +138,9 @@ ${BOLD}Options:${RESET}
   const body = {
     apply_mode: "manifest" as const,
     app_name: name,
-    git_repo: repo,
     container_port: port,
     domain: manifest.domain,
-    git_branch: manifest.git_branch ?? "",
-    git_sha: gitCommit,
-    dockerfile_path: buildPaths.dockerfile,
-    docker_context: buildPaths.context,
-    image_ref: manifest.image?.ref ?? "",
-    build_cache_ref: manifest.build?.cache_ref ?? "",
+    image_ref: manifest.image.ref,
     env_projection: manifest.env_projection ?? null,
     environment_id: environment?.id ??
       (manifest.environment === null ? null : undefined),
@@ -246,14 +170,6 @@ ${BOLD}Options:${RESET}
     volume_size: manifest.volume?.size ?? 0,
     volume_path: manifest.volume?.path ?? "/data",
     extra_volumes: manifest.extra_volumes ?? [],
-    webhook_enabled: webhookEnabled,
-    webhook_branch: manifest.webhook?.branch ?? "main",
-    webhook_path: manifest.webhook?.path ?? "",
-    webhook_paths: manifest.webhook?.paths,
-    webhook_paths_ignore: manifest.webhook?.paths_ignore ?? [],
-    webhook_wait_for_ci: manifest.webhook?.wait_for_ci ?? false,
-    webhook_staging: webhookStaging,
-    webhook_staging_environment_id: webhookStagingEnvironmentId,
     autoscale_enabled: autoscaling?.enabled ?? false,
     min_replicas: minReplicas,
     max_replicas: maxReplicas,
@@ -329,12 +245,9 @@ ${BOLD}Options:${RESET}
       console.log(`  ${change.field}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`);
     }
     if (applied.rollout === "runtime") {
-      console.log(`${DIM}Containers were recreated from the existing immutable image; code was not rebuilt.${RESET}`);
+      console.log(`${DIM}Containers were recreated from the existing immutable image.${RESET}`);
     } else {
-      console.log(`${DIM}No container rollout was required; code was not rebuilt.${RESET}`);
-    }
-    if (applied.pending_rollout) {
-      console.log(`${DIM}Source/build changes are stored and remain pending until the next code deployment.${RESET}`);
+      console.log(`${DIM}No container rollout was required.${RESET}`);
     }
     return;
   }

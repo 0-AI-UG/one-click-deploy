@@ -100,22 +100,6 @@ function nonEmptyString(phrase: string) {
 
 // --- deploy manifest --------------------------------------------------------
 
-/** Build config. Nested unknown keys are silently stripped (only TOP-LEVEL
- *  unknown keys warn), matching the old validator. */
-const buildSchema = z.object(
-  {
-    dockerfile: z.string({ error: "expected string" }).optional(),
-    context: z.string({ error: "expected string" }).optional(),
-    container_port: guardedNumber(
-      "expected integer 1-65535",
-      (v) => Number.isInteger(v) && v >= 1 && v <= 65535,
-    ).optional(),
-    /** Registry cache shared between build hosts via BuildKit. */
-    cache_ref: nonEmptyString("expected an OCI registry cache reference").optional(),
-  },
-  { error: "expected object { dockerfile?, context?, container_port? }" },
-);
-
 const imageSchema = z.object({
   ref: z.string({ error: "expected immutable OCI image reference" }).refine(
     (value) => /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(value),
@@ -155,52 +139,6 @@ const volumeSchema = z.object(
   },
   { error: "expected object { size, id?, path? }" },
 );
-
-/** Auto-deploy webhook config. `staging: true` holds each pushed commit in the
- *  `<name>-staging` sibling for manual promotion instead of redeploying
- *  production directly — it requires a staging environment to be selected at
- *  deploy time through `webhook.staging_environment`. */
-const webhookPatternSchema = nonEmptyString("expected a non-empty repository-relative glob")
-  .superRefine((value, ctx) => {
-    if (value.startsWith("!")) {
-      ctx.addIssue({ code: "custom", message: "inline !patterns are not supported; use webhook.paths_ignore" });
-    }
-    if (value.includes("\\")) {
-      ctx.addIssue({ code: "custom", message: 'patterns must use "/", not "\\\\"' });
-    }
-    if (value.startsWith("/") || value.startsWith("./") || value.split("/").includes("..")) {
-      ctx.addIssue({ code: "custom", message: "expected a repository-root-relative pattern" });
-    }
-  });
-
-const webhookSchema = z.object(
-  {
-    enabled: z.boolean({ error: "expected boolean" }).optional(),
-    branch: z.string({ error: "expected string" }).optional(),
-    path: z.string({ error: "expected string" }).optional(),
-    paths: z.array(webhookPatternSchema, {
-      error: "expected a non-empty array of repository-relative glob patterns",
-    }).min(1, { error: "expected at least one pattern" }).optional(),
-    paths_ignore: z.array(webhookPatternSchema, {
-      error: "expected an array of repository-relative glob patterns",
-    }).optional(),
-    wait_for_ci: z.boolean({ error: "expected boolean" }).optional(),
-    staging: z.boolean({ error: "expected boolean" }).optional(),
-    staging_environment: z.union([
-      nonEmptyString("expected a non-empty environment name"),
-      z.null(),
-    ]).optional(),
-  },
-  { error: "expected object { enabled?, branch?, path?, paths?, paths_ignore?, wait_for_ci?, staging?, staging_environment? }" },
-).superRefine((value, ctx) => {
-  if (value.path !== undefined && value.paths !== undefined) {
-    ctx.addIssue({
-      code: "custom",
-      message: "cannot be used together with webhook.paths",
-      path: ["path"],
-    });
-  }
-});
 
 const autoscalingSchema = z.object({
   enabled: z.boolean({ error: "expected boolean" }).optional(),
@@ -331,9 +269,12 @@ export const DeployManifestSchema = z
     name: nonEmptyString("expected a non-empty string"),
     description: z.string({ error: "expected string" }).optional(),
     icon: z.string({ error: "expected string" }).optional(),
-    build: buildSchema.optional(),
-    /** Prebuilt artifact mode: pull and run this exact immutable OCI digest. */
-    image: imageSchema.optional(),
+    /** The exact externally-built artifact. Tags and source builds are unsupported. */
+    image: imageSchema,
+    container_port: guardedNumber(
+      "expected integer 1-65535",
+      (v) => Number.isInteger(v) && v >= 1 && v <= 65535,
+    ).optional(),
     env: z
       .array(envEntrySchema, {
         error: "expected array of { key, description?, default?, required?, secret? }",
@@ -348,12 +289,9 @@ export const DeployManifestSchema = z
     volume: z.union([volumeSchema, z.null()], {
       error: "expected null or object { size, id?, path? }",
     }),
-    webhook: webhookSchema.optional(),
     suggested_app_name: z.string({ error: "expected string" }).optional(),
     /** Custom public domain. */
     domain: z.string({ error: "expected string" }).optional(),
-    /** Source branch used for deploys. */
-    git_branch: z.string({ error: "expected string" }).optional(),
     /** Limit a linked environment to selected keys. null/omit = all, [] = none. */
     env_projection: z.array(z.string({ error: "expected an environment key string" }), {
       error: "expected array of environment variable keys",
@@ -418,13 +356,6 @@ export const DeployManifestSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.image && (value.build?.dockerfile || value.build?.context || value.build?.cache_ref)) {
-      ctx.addIssue({
-        code: "custom",
-        message: "prebuilt image mode cannot also configure source-build dockerfile, context, or cache_ref",
-        path: ["image"],
-      });
-    }
     if (
       value.autoscaling?.max_replicas !== undefined &&
       value.replicas !== undefined &&
@@ -434,16 +365,6 @@ export const DeployManifestSchema = z
         code: "custom",
         message: "must be greater than or equal to replicas",
         path: ["autoscaling", "max_replicas"],
-      });
-    }
-    if (
-      value.webhook?.staging_environment != null &&
-      value.webhook.enabled !== true
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "requires webhook.enabled to be true",
-        path: ["webhook", "staging_environment"],
       });
     }
   });

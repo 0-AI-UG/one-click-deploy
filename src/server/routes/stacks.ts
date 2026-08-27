@@ -8,11 +8,7 @@ import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { findActiveOperationByResourceKey, listChildOperations } from "../../shared/db/operations.ts";
 import { getContainerLogs, sshExec } from "../../shared/remote/index.ts";
 import { deriveStackResourceState } from "../../engine/resource-state.ts";
-import {
-  findLatestRelatedStackOperation,
-  stackLockKeys,
-  suspendStackWebhookOperations,
-} from "../lib/stack-operations.ts";
+import { findLatestRelatedStackOperation, stackLockKeys } from "../lib/stack-operations.ts";
 import { validatePublicEndpoint } from "../../engine/dns-reconciler.ts";
 import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
 import { enrichAppForResponse } from "./apps.ts";
@@ -75,7 +71,7 @@ export async function handleDeployStack(request: Request): Promise<Response> {
       ? req.services.filter((service) => req.selected_service_keys!.includes(service.key))
       : req.services;
     const hasNewServices = selectedServices.some((service) => !db.getServiceByName(`${req.name}-${service.key}`));
-    const wantsStagingServices = req.apps.some((app) => app.webhook_staging === true);
+    const wantsStagingServices = false;
     const hasNewStagingServices = wantsStagingServices && selectedServices.some(
       (service) => !db.getServiceByName(`${req.name}-${service.key}-staging`),
     );
@@ -119,13 +115,12 @@ export async function handleGetStacks(request: Request): Promise<Response> {
         app_count: apps.length,
         service_count: db.getServicesByStackId(s.id).length,
         // How many members `promote_stack` would actually promote. This applies
-        // the SAME three rules as planPromotions (production row + staging on +
-        // a sibling holding a deployed commit) so the dashboard button and the
+        // the same artifact-target rule as planPromotions so the dashboard button and the
         // CLI pre-check can't offer a promote the op then rejects.
         staging_sibling_count: apps.filter((a) => {
-          if (a.target_of != null || a.webhook_staging_environment_id == null) return false;
+          if (a.target_of != null) return false;
           const sibling = db.getStagingSibling(a.id);
-          return sibling != null && db.getDeployedCommit(sibling.id) != null;
+          return sibling != null && db.getLastSuccessfulDeployment(sibling.id)?.image_digest?.includes("@sha256:") === true;
         }).length,
       };
     });
@@ -309,25 +304,18 @@ export async function handleDestroyStack(request: Request, stackId: number): Pro
     const { opId } = enqueue({
       kind: "destroy_stack",
       resourceKeys: stackLockKeys(stack),
-      input: { stackId, suspendWebhooks: true },
+      input: { stackId },
       trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,
     });
-    // Enqueue first so this newer row is the durable superseding owner before
-    // running webhook work is asked to cancel and compensate.
-    const suspendedWebhookOperationIds = suspendStackWebhookOperations(stack);
-    return Response.json({
-      op_id: opId,
-      webhooks_suspended: true,
-      suspended_webhook_operation_ids: suspendedWebhookOperationIds,
-    }, { headers: corsHeaders });
+    return Response.json({ op_id: opId }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }
 }
 
-// Promote every stack member that has a webhook-staging sibling holding a
-// deployed commit. Fans out to the per-app `promote` op; member selection (and
+// Promote every stack member that has an explicit staging sibling holding a
+// deployed artifact. Fans out to the per-app `promote` op; member selection (and
 // the "nothing to promote" error) lives in the promote_stack op itself so the
 // CLI and the UI get identical behaviour.
 export async function handlePromoteStack(request: Request, stackId: number): Promise<Response> {
@@ -344,7 +332,7 @@ export async function handlePromoteStack(request: Request, stackId: number): Pro
       // destroy_stack, `stack:<name>` against deploy_stack (which keys on the
       // name). Without the name key a concurrent stack deploy would enqueue a
       // `redeploy` on the same member as our `promote`, and if the redeploy
-      // landed last production would sit on branch HEAD, not the promoted commit.
+      // landed last production would no longer match the promoted artifact.
       resourceKeys: stackLockKeys(stack),
       input: { stackId, userId: payload.userId },
       trigger: payload.client === "cli" ? "cli" : "ui",

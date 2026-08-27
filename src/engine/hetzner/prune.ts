@@ -1,6 +1,5 @@
 import { sshExec } from "./ssh.ts";
 import { asUser, log, OCD_IMAGE_LABEL, withExclusiveImageGc } from "./container-common.ts";
-import { runDeploymentPreflightGc } from "./disk-space.ts";
 
 const JOURNALD_LIMITS = `[Journal]\nSystemMaxUse=500M\nSystemKeepFree=1G\nRuntimeMaxUse=100M\nMaxRetentionSec=7day\n`;
 
@@ -28,43 +27,8 @@ export async function ensureHostLogPolicy(ip: string, hostKey?: string): Promise
 // removes superseded commit tags explicitly; the periodic sweep only removes
 // dangling layers.
 /**
- * Prune dangling Docker images and trim the git repo after a successful build.
- * Runs in the background (fire-and-forget) so it doesn't slow down deploys.
- */
-export function pruneAfterBuild(ip: string, appName: string, hostKey?: string) {
-  const appDir = `/home/deploy/apps/${appName}`;
-
-  // Remove old commit-tagged images for this app (keep only :latest which the
-  // running container uses), prune dangling images, and compact the git repo.
-  const cmd = [
-    // Remove all tags for this app except :latest and :rollback — old commit
-    // tags are no longer needed since rollback rebuilds from git. The
-    // `:rollback` tag pins the previous image so a failed redeploy can restore
-    // it. The next redeploy atomically replaces this tag with the then-current
-    // image, so exactly one rollback image remains pinned.
-    `docker images ${appName} --format '{{.Repository}}:{{.Tag}}' | grep -vE ':(latest|rollback)$' | xargs -r docker rmi 2>/dev/null || true`,
-    // Prune dangling images (untagged layers from previous builds). Scoped to
-    // OCD-labeled layers so we never drop intermediate layers that belong to
-    // other applications on this host.
-    `docker image prune -f --filter label=${OCD_IMAGE_LABEL}`,
-    // Compact the git repo
-    `cd ${appDir} && git gc --auto 2>/dev/null || true`,
-  ].join(" && ");
-
-  sshExec(ip, asUser(withExclusiveImageGc(cmd)), hostKey).catch((err) => {
-    log("prune", `Post-build cleanup on ${ip} failed (non-fatal): ${err}`);
-  });
-}
-
-/**
- * Periodic disk cleanup. Two tiers based on disk pressure:
- *
- *   - Normal (root fs < 75% used): removes dangling images, foreign stopped
- *     containers, stale OCD commit tags, and unused build cache older than a
- *     week.
- *
- *   - Pressure (root fs >= 75%): additionally prunes all unused BuildKit cache,
- *     but still preserves running/stopped-anchor, current, and rollback images.
+ * Periodic disk cleanup removes unused image data while preserving running,
+ * stopped-anchor, current, and rollback images.
  *
  * NOTE: the container prune always excludes OCD-managed containers
  * (label!=ocd.managed=true). A sleeping app keeps its last container as a
@@ -84,7 +48,6 @@ export type PruneServerOptions = {
    * image plus one previous revision. Panel images are registry-built and do
    * not carry the ocd.managed label used by app image GC. */
   panelContainerName?: string;
-  /** Reclaim all unused BuildKit cache instead of only cache older than a week. */
   underPressure?: boolean;
 };
 
@@ -109,9 +72,6 @@ export type ServerGcInventory = {
   reclaimable_image_bytes: number;
   reclaimable_ocd_image_bytes: number;
   reclaimable_foreign_image_bytes: number;
-  buildkit_reclaimable_bytes: number | null;
-  buildkit_reclaimable_display: string;
-  buildkit_policy: string;
   free_bytes_before: number;
   free_bytes_after: number;
   free_bytes_delta: number;
@@ -189,8 +149,6 @@ export function buildServerGcScript(opts: GcRunOptions): string {
     `  printf 'OCD_GC\\t%s\\t%s\\t%s\\t%s\\n' "$category" "$id" "$size" "$refs"`,
     `  case "$category" in reclaimable-ocd|reclaimable-foreign) reclaimable_ids="$reclaimable_ids $id" ;; esac`,
     "done",
-    `buildkit_reclaimable=$(docker system df --format '{{.Type}}|{{.Reclaimable}}' 2>/dev/null | awk -F '|' '$1 == "Build Cache" { print $2; exit }' || true)`,
-    `printf 'OCD_BUILDKIT\\t%s\\n' "${"${buildkit_reclaimable:-unknown}"}"`,
   ];
   if (opts.execute) {
     lines.push(
@@ -206,7 +164,6 @@ export function buildServerGcScript(opts: GcRunOptions): string {
       `  docker image rm "$id" >/dev/null 2>&1 || { docker image inspect "$id" >/dev/null 2>&1 && removal_ok=false || true; }`,
       `  if [ "$removal_ok" = true ]; then printf 'OCD_REMOVED\\t%s\\n' "$id"; else printf 'OCD_SKIPPED\\t%s\\n' "$id"; fi`,
       "done",
-      "docker builder prune -af >/dev/null",
     );
   }
   lines.push(
@@ -225,11 +182,9 @@ async function runServerGc(ip: string, hostKey: string | undefined, opts: GcRunO
   const images: GcImageAsset[] = [];
   const removedImageIds: string[] = [];
   const skippedImageIds: string[] = [];
-  let buildkitDisplay = "unknown";
   let freeBefore = 0;
   let freeAfter = 0;
   let sawSpace = false;
-  let sawBuildkit = false;
   const categories = new Set<GcImageCategory>([
     "running", "stopped-anchor", "current", "rollback", "reclaimable-ocd", "reclaimable-foreign",
   ]);
@@ -249,9 +204,6 @@ async function runServerGc(ip: string, hostKey: string | undefined, opts: GcRunO
         throw new Error(`Docker returned malformed image metadata on ${ip}`);
       }
       images.push({ category: category as GcImageCategory, id, size_bytes: Math.max(0, Number(sizeRaw) || 0), refs });
-    } else if (line.startsWith("OCD_BUILDKIT\t")) {
-      buildkitDisplay = line.slice("OCD_BUILDKIT\t".length).trim() || "unknown";
-      sawBuildkit = true;
     } else if (line.startsWith("OCD_REMOVED\t")) {
       removedImageIds.push(line.slice("OCD_REMOVED\t".length).trim());
     } else if (line.startsWith("OCD_SKIPPED\t")) {
@@ -263,7 +215,7 @@ async function runServerGc(ip: string, hostKey: string | undefined, opts: GcRunO
       sawSpace = /^\d+$/.test(beforeRaw) && /^\d+$/.test(afterRaw);
     }
   }
-  if (!sawSpace || !sawBuildkit) throw new Error(`Docker storage inventory on ${ip} returned an incomplete response`);
+  if (!sawSpace) throw new Error(`Docker storage inventory on ${ip} returned an incomplete response`);
   const isReclaimable = (image: GcImageAsset) => image.category.startsWith("reclaimable-");
   const reclaimableOcd = images.filter((image) => image.category === "reclaimable-ocd").reduce((sum, image) => sum + image.size_bytes, 0);
   const reclaimableForeign = images.filter((image) => image.category === "reclaimable-foreign").reduce((sum, image) => sum + image.size_bytes, 0);
@@ -279,9 +231,6 @@ async function runServerGc(ip: string, hostKey: string | undefined, opts: GcRunO
     reclaimable_image_bytes: images.filter(isReclaimable).reduce((sum, image) => sum + image.size_bytes, 0),
     reclaimable_ocd_image_bytes: reclaimableOcd,
     reclaimable_foreign_image_bytes: reclaimableForeign,
-    buildkit_reclaimable_bytes: parseDockerSize(buildkitDisplay),
-    buildkit_reclaimable_display: buildkitDisplay,
-    buildkit_policy: "all unused BuildKit cache is reclaimable; execute prunes it after image revalidation",
     free_bytes_before: freeBefore,
     free_bytes_after: freeAfter,
     free_bytes_delta: freeDelta,
@@ -395,17 +344,11 @@ export function buildServerPruneSteps(opts: PruneServerOptions = {}): string[] {
   steps.push(
     `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
     `docker image prune -f 2>&1 | tail -1`,
-    opts.underPressure
-      ? `docker builder prune -af 2>&1 | tail -1`
-      : `docker builder prune -f --filter until=168h 2>&1 | tail -1`,
   );
   return steps;
 }
 
 export async function pruneServer(ip: string, hostKey?: string, opts: PruneServerOptions = {}) {
-  // Clear abandoned operation archives and old reconstructible builder state
-  // before the ordinary pressure-based pass below.
-  await runDeploymentPreflightGc(ip, hostKey);
   // Probe disk usage on the root fs (where /var/lib/docker lives).
   const usage = await sshExec(ip, `df -P / | awk 'NR==2 {gsub("%",""); print $5}'`, hostKey);
   const usedPct = parseInt(usage.stdout.trim(), 10) || 0;

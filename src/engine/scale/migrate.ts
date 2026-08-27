@@ -1,5 +1,5 @@
 import * as db from "../../shared/db.ts";
-import { sshExec, ensureOcdNetwork, startAppReplica } from "../../shared/remote/index.ts";
+import { sshExec, ensureOcdNetwork, pullImmutableImage, startAppReplica } from "../../shared/remote/index.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { scaleUp } from "./scale-up.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost } from "./types.ts";
@@ -474,21 +474,20 @@ export async function rollbackMigrateWithVolume(
     }
   }
 
-  // 3. If we destroyed the source container, try to bring it back using the
-  // existing local image. We don't trigger a rebuild here — that's a redeploy.
+  // 3. If we destroyed the source container, restore it from the exact
+  // registry digest recorded for the app.
   if (rb.sourceContainerDestroyed) {
     try {
       const desiredImage = latestDesiredImage(app);
-      const probe = `su - deploy -c ${JSON.stringify(`docker image inspect ${desiredImage} >/dev/null 2>&1`)}`;
-      const res = await sshExec(sourceServer.ipv4, probe, sourceHostKey);
-      if (res.exitCode !== 0) {
-        logLine(`MANUAL RECOVERY NEEDED: source container destroyed and immutable image '${desiredImage}' missing — redeploy required`);
-      } else {
-        try {
-          await restartSourceReplica(rb, logLine);
-        } catch (err) {
-          logLine(`MANUAL RECOVERY NEEDED: failed to restart source container: ${err}`);
-        }
+      await pullImmutableImage(sourceServer.ipv4, {
+        name: app.name,
+        imageRef: desiredImage,
+        hostKey: sourceHostKey,
+      }, (line) => logLine(`[restore-pull] ${line}`));
+      try {
+        await restartSourceReplica(rb, logLine);
+      } catch (err) {
+        logLine(`MANUAL RECOVERY NEEDED: failed to restart source container: ${err}`);
       }
     } catch (err) {
       logLine(`MANUAL RECOVERY NEEDED: source container restore threw: ${err}`);

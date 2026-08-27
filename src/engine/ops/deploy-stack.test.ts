@@ -48,7 +48,7 @@ const preflightAppsStep = deployStackOp.steps.find((s) => s.name === "preflight_
 const validatePlanStep = deployStackOp.steps.find((s) => s.name === "validate_plan")!;
 
 function app(key: string, needs?: string[]) {
-  return { key, needs, app_name: key, git_repo: "https://github.com/x/y", container_port: 3000 };
+  return { key, needs, app_name: key, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000 };
 }
 
 function req(name: string, apps: ReturnType<typeof app>[], services: Array<{ key: string; type: string }> = []): StackDeployRequest {
@@ -171,15 +171,13 @@ describe("stack member convergence checkpoints", () => {
     const insertedApp = db.insertApp({
       name: `checkpoint-${randomSuffix()}`,
       domain: "",
-      git_repo: "",
-      dockerfile_path: "",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
     });
     db.updateAppStatus(insertedApp.id, "running");
     db.updateAppArtifactAndHealth(insertedApp.id, {
       imageRef: digest,
-      buildCacheRef: "",
       healthMode: "container",
       healthCommand: "",
       healthFile: "",
@@ -223,9 +221,9 @@ describe("deploy_stack plan step", () => {
     );
     const name = `s-${randomSuffix()}`;
     const input = {
-      ...req(name, [{ ...app("web"), webhook_staging: true } as any]),
+      ...req(name, [{ ...app("web"), internal_protocol: "smtp" } as any]),
     } as StackDeployRequest;
-    await expect(validatePlanStep.run(makeCtx(input), {})).rejects.toThrow(/webhook\.enabled/);
+    await expect(validatePlanStep.run(makeCtx(input), {})).rejects.toThrow(/internal protocol/i);
     expect(db.getStackByName(name)).toBeNull();
     expect(db.getEnvironments().some((environment) => environment.name.startsWith(name))).toBe(false);
   });
@@ -331,21 +329,6 @@ describe("deploy_stack plan step", () => {
   });
 });
 
-describe("deploy_stack app preflight", () => {
-  test("runs before service deployment and rejects unsafe build inputs", async () => {
-    expect(deployStackOp.steps.indexOf(preflightAppsStep)).toBeLessThan(
-      deployStackOp.steps.indexOf(reconcileServicesStep),
-    );
-    const input = {
-      ...req(`pre-${randomSuffix()}`, [app("api")]),
-      apps: [{ ...app("api"), dockerfile_path: "../Dockerfile" }],
-    } as StackDeployRequest;
-    await expect(preflightAppsStep.run(makeCtx(input), {
-      plan: { stackId: 1 },
-    })).rejects.toThrow(/Dockerfile path must not contain/i);
-  });
-});
-
 describe("deploy_stack service adoption", () => {
   test("adopts a recovered existing service instead of enqueueing service:create again", async () => {
     const name = `adopt-${randomSuffix()}`;
@@ -395,70 +378,6 @@ describe("deploy_stack service adoption", () => {
 
     await expect(reconcileServicesStep.run(ctx, { plan: planOut }))
       .rejects.toThrow(/immutable managed-service drift.*17-alpine.*17-pgmq.*confirmation is required/i);
-  });
-
-  test("injects explicitly-owned staging counterparts only into the staging environment", async () => {
-    const name = `staging-svc-${randomSuffix()}`;
-    const input = req(
-      name,
-      [{ ...app("web"), webhook_enabled: true, webhook_staging: true } as any],
-      [{ key: "db", type: "postgresql" }],
-    );
-    const ctx = makeCtx(input);
-    const planOut = await planStep.run(ctx, {}) as any;
-    const production = db.insertService({
-      name: `${name}-db`, service_type: "postgresql", version: "17-alpine", port: 5432,
-      env_vars: "{}", credentials: JSON.stringify({
-        host: `${name}-db.svc.ocd.internal`, port: 15000,
-        username: "prod", password: "prod-secret", database: "prod",
-        connection_url: `postgresql://prod:prod-secret@${name}-db.svc.ocd.internal:15000/prod`,
-      }),
-    });
-    const staging = db.insertService({
-      name: `${name}-db-staging`, service_type: "postgresql", version: "17-alpine", port: 5432,
-      env_vars: "{}", credentials: JSON.stringify({
-        host: `${name}-db-staging.svc.ocd.internal`, port: 15001,
-        username: "stage", password: "stage-secret", database: "stage",
-        connection_url: `postgresql://stage:stage-secret@${name}-db-staging.svc.ocd.internal:15001/stage`,
-      }),
-      stack_id: planOut.stackId,
-      target: "staging",
-      target_of: production.id,
-      placement_pool: "staging",
-    });
-
-    const out = await reconcileServicesStep.run(ctx, { plan: planOut }) as { childIds: number[] };
-    expect(out.childIds).toEqual([]);
-    expect(db.getStagingService(production.id)?.id).toBe(staging.id);
-    const prodVars = await resolveEnvVarsForDeploy(db.getEnvironment(planOut.environmentId)!.env_vars);
-    const stageVars = await resolveEnvVarsForDeploy(db.getEnvironment(planOut.stagingEnvironmentId)!.env_vars);
-    expect(prodVars.DB_HOST).toBe(`${name}-db.svc.ocd.internal`);
-    expect(stageVars.DB_HOST).toBe(`${name}-db-staging.svc.ocd.internal`);
-    expect(stageVars.DB_URL).toContain("stage-secret");
-    expect(db.getServiceLinks(production.id).map((link) => link.environment_id)).toEqual([planOut.environmentId]);
-    expect(db.getServiceLinks(staging.id).map((link) => link.environment_id)).toEqual([planOut.stagingEnvironmentId]);
-  });
-
-  test("refuses to adopt an unowned same-name service as a staging counterpart", async () => {
-    const name = `staging-conflict-${randomSuffix()}`;
-    const input = req(
-      name,
-      [{ ...app("web"), webhook_enabled: true, webhook_staging: true } as any],
-      [{ key: "cache", type: "redis" }],
-    );
-    const ctx = makeCtx(input);
-    const planOut = await planStep.run(ctx, {}) as any;
-    db.insertService({
-      name: `${name}-cache`, service_type: "redis", version: "7-alpine", port: 6379,
-      env_vars: "{}", credentials: "{}",
-    });
-    db.insertService({
-      name: `${name}-cache-staging`, service_type: "redis", version: "7-alpine", port: 6379,
-      env_vars: "{}", credentials: "{}",
-      // Defaults to production/general: it is deliberately not adoptable.
-    });
-    await expect(reconcileServicesStep.run(ctx, { plan: planOut }))
-      .rejects.toThrow(/identity conflict.*refusing to adopt/i);
   });
 
   test("grows a declared existing service volume and waits for provider confirmation", async () => {
@@ -561,9 +480,9 @@ describe("deploy_stack compensation retains already-deployed members", () => {
 
     const aName = `${name}-postgres`;
     const appA = db.insertApp({
-      name: aName, domain: `${aName}.example.com`, git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile", container_port: 3000, env_vars: "{}",
+      name: aName, domain: `${aName}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       environment_id: planOut.environmentId,
+      container_port: 3000, env_vars: "{}",
     });
     db.setAppStack(appA.id, planOut.stackId);
     enqueueOperation({
@@ -594,9 +513,9 @@ describe("deploy_stack compensation retains already-deployed members", () => {
 
     const aName = `${name}-postgres`;
     const appA = db.insertApp({
-      name: aName, domain: `${aName}.example.com`, git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile", container_port: 3000, env_vars: "{}",
+      name: aName, domain: `${aName}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       environment_id: planOut.environmentId,
+      container_port: 3000, env_vars: "{}",
     });
     db.setAppStack(appA.id, planOut.stackId);
     enqueueOperation({
@@ -667,9 +586,9 @@ describe("deploy_stack compensation preserves reconciliation checkpoints", () =>
     // Member A (postgres) deployed new & tagged; its `deploy` child is 'done'.
     const aName = `${name}-postgres`;
     const appA = db.insertApp({
-      name: aName, domain: `${aName}.example.com`, git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile", container_port: 3000, env_vars: "{}",
+      name: aName, domain: `${aName}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       environment_id: planOut.environmentId,
+      container_port: 3000, env_vars: "{}",
     });
     db.setAppStack(appA.id, planOut.stackId);
     enqueueOperation({
@@ -795,12 +714,6 @@ describe("deploy_stack compensation preserves reconciliation checkpoints", () =>
 
 
 describe("deploy_stack shared staging environment", () => {
-  /** A member that opted into webhook staging via its OWN manifest. That opt-in
-   *  is the only staging input a member has — there is no per-app override. */
-  function stagingApp(key: string) {
-    return { ...app(key), webhook_enabled: true, webhook_staging: true };
-  }
-
   function planOf(
     name: string,
     apps: unknown[],
@@ -821,24 +734,7 @@ describe("deploy_stack shared staging environment", () => {
     environmentId: number;
   };
 
-  test("auto-creates the staging env as a copy of the stack env when a member opts in", async () => {
-    const name = `s-${randomSuffix()}`;
-    const out = (await planOf(name, [stagingApp("web"), app("api")], {
-      envVars: [{ key: "SHARED", value: "yes" }],
-    })) as Out;
-
-    expect(out.createdStagingEnv).toBe(true);
-    expect(out.stagingEnvironmentId).not.toBeNull();
-    expect(db.getStackByName(name)!.staging_environment_id).toBe(out.stagingEnvironmentId);
-
-    const staging = db.getEnvironment(out.stagingEnvironmentId!)!;
-    expect(staging.name).toBe(`${name}-stack-staging-env`);
-    // Seeded from the production stack env, so members boot with real values.
-    expect(staging.env_vars).toContain("SHARED");
-    expect(out.stagingEnvironmentId).not.toBe(out.environmentId);
-  });
-
-  test("creates no staging env when no member opts in", async () => {
+  test("creates no staging environment implicitly", async () => {
     const name = `s-${randomSuffix()}`;
     const out = (await planOf(name, [app("web"), app("api")])) as Out;
     expect(out.createdStagingEnv).toBe(false);
@@ -849,17 +745,18 @@ describe("deploy_stack shared staging environment", () => {
   test("reuses an explicitly named staging env instead of auto-creating one", async () => {
     const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
     const name = `s-${randomSuffix()}`;
-    const out = (await planOf(name, [stagingApp("web")], { staging: chosen.id })) as Out;
+    const out = (await planOf(name, [app("web")], { staging: chosen.id })) as Out;
     expect(out.createdStagingEnv).toBe(false);
     expect(out.stagingEnvironmentId).toBe(chosen.id);
   });
 
-  test("a re-up without the flag keeps the stored staging env (and mints no second one)", async () => {
+  test("a re-up without the selector keeps the stored staging environment", async () => {
     const name = `s-${randomSuffix()}`;
-    const first = (await planOf(name, [stagingApp("web")])) as Out;
+    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
+    const first = (await planOf(name, [app("web")], { staging: chosen.id })) as Out;
     const before = db.getEnvironments().length;
 
-    const second = (await planOf(name, [stagingApp("web")])) as Out;
+    const second = (await planOf(name, [app("web")])) as Out;
     expect(second.stagingEnvironmentId).toBe(first.stagingEnvironmentId);
     expect(second.createdStagingEnv).toBe(false);
     expect(db.getEnvironments().length).toBe(before);
@@ -867,38 +764,26 @@ describe("deploy_stack shared staging environment", () => {
 
   test("an explicit null clears the stored staging env", async () => {
     const name = `s-${randomSuffix()}`;
-    await planOf(name, [stagingApp("web")]);
+    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
+    await planOf(name, [app("web")], { staging: chosen.id });
     const out = (await planOf(name, [app("web")], { staging: null })) as Out;
     expect(out.stagingEnvironmentId).toBeNull();
     expect(db.getStackByName(name)!.staging_environment_id).toBeNull();
   });
 
-  test("every opted-in member resolves to the SAME stack staging env", async () => {
-    const name = `s-${randomSuffix()}`;
-    const out = (await planOf(name, [stagingApp("web"), stagingApp("api"), app("worker")])) as Out;
-    expect(out.stagingByKey.web).toBe(out.stagingEnvironmentId);
-    expect(out.stagingByKey.api).toBe(out.stagingEnvironmentId);
-    // Not opted in → staging stays off for that member.
-    expect(out.stagingByKey.worker).toBeNull();
-  });
-
   test("rejects an unknown staging environment id", async () => {
     const name = `s-${randomSuffix()}`;
-    await expect(planOf(name, [stagingApp("web")], { staging: 999_999 })).rejects.toThrow(
+    await expect(planOf(name, [app("web")], { staging: 999_999 })).rejects.toThrow(
       /staging environment 999999 not found/i,
     );
   });
 
-  test("rejects webhook.staging without webhook.enabled", async () => {
+  test("applies staging-only overrides to the explicitly selected environment", async () => {
     const name = `s-${randomSuffix()}`;
-    const broken = { ...app("web"), webhook_staging: true };
-    await expect(planOf(name, [broken])).rejects.toThrow(/webhook\.enabled/i);
-  });
-
-  test("applies staging-only overrides after copying the production environment", async () => {
-    const name = `s-${randomSuffix()}`;
+    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
     const input = {
-      ...req(name, [stagingApp("web")]),
+      ...req(name, [app("web")]),
+      staging_environment_id: chosen.id,
       env_vars: [{ key: "DATABASE_URL", value: "postgres://production" }],
       staging_env_vars: [{ key: "DATABASE_URL", value: "postgres://staging", secret: true }],
       staging_env_keys: ["DATABASE_URL"],
@@ -909,10 +794,12 @@ describe("deploy_stack shared staging environment", () => {
     expect(JSON.parse(db.getStackByName(name)!.staging_env_keys)).toEqual(["DATABASE_URL"]);
   });
 
-  test("cannot certify a copied production key without applying a staging value", async () => {
+  test("cannot certify a production key without applying a staging value", async () => {
     const name = `s-${randomSuffix()}`;
+    const chosen = db.insertEnvironment(`staging-${randomSuffix()}`, "");
     const input = {
-      ...req(name, [stagingApp("web")]),
+      ...req(name, [app("web")]),
+      staging_environment_id: chosen.id,
       env_vars: [{ key: "DATABASE_URL", value: "postgres://production" }],
       staging_env_keys: ["DATABASE_URL"],
     } as StackDeployRequest;

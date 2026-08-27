@@ -211,7 +211,7 @@ function GitHubSection() {
         <div className="flex items-center justify-between">
           <div>
             <span className="font-mono text-[11px] text-fg font-bold">Not linked</span>
-            <p className="font-mono text-[9px] text-muted mt-0.5">Link your GitHub to deploy private repos and pull private ghcr.io images.</p>
+            <p className="font-mono text-[9px] text-muted mt-0.5">Link your GitHub identity to your OCD account.</p>
           </div>
           <Btn size="xs" loading={busy} onClick={linkGitHub}>
             <LinkIcon size={11} /> Link GitHub

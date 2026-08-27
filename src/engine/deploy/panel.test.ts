@@ -5,43 +5,26 @@ import path from "path";
 process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-panel-test-"));
 
 import { describe, test, expect } from "bun:test";
-import { buildPanelRebuildScript, ghcrImageForRepo } from "./panel.ts";
+import { buildPanelReleaseScript } from "./panel.ts";
 
-describe("ghcrImageForRepo", () => {
-  test("derives a lowercase ghcr ref from an https URL with .git", () => {
-    expect(ghcrImageForRepo("https://github.com/0-AI-UG/one-click-deploy.git", "latest"))
-      .toBe("ghcr.io/0-ai-ug/one-click-deploy:latest");
-  });
-
-  test("handles no .git suffix", () => {
-    expect(ghcrImageForRepo("https://github.com/x/one-click-deploy", "sha-abc"))
-      .toBe("ghcr.io/x/one-click-deploy:sha-abc");
-  });
-
-  test("handles ssh (git@) form", () => {
-    expect(ghcrImageForRepo("git@github.com:Org/Repo.git", "main"))
-      .toBe("ghcr.io/org/repo:main");
-  });
-});
-
-describe("buildPanelRebuildScript", () => {
+describe("buildPanelReleaseScript", () => {
   const base = {
     containerName: "ocd-panel",
-    image: "ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef",
+    image: "ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     hostPort: 3001,
     containerPort: 3001,
     privateIpv4: "10.0.0.2",
     envFilePath: "/home/deploy/apps/ocd-panel/.env.deploy",
     volumeFlag: "-v /mnt/data:/app/data",
-    ghcrEnvPrefix: "DOCKER_CONFIG=/home/deploy/.docker-ocd-xyz ",
-    ghcrConfigDir: "/home/deploy/.docker-ocd-xyz",
+    registryEnvPrefix: "DOCKER_CONFIG=/home/deploy/.docker-ocd-xyz ",
+    registryConfigDir: "/home/deploy/.docker-ocd-xyz",
     pullRetries: 90,
     pullSleepSeconds: 20,
   };
 
   test("pulls the prebuilt image and no longer runs docker build", () => {
-    const script = buildPanelRebuildScript(base);
-    expect(script).toContain("docker pull ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef");
+    const script = buildPanelReleaseScript(base);
+    expect(script).toContain("docker pull ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     // The whole point of the change: never build on the panel's own host.
     expect(script).not.toContain("docker build");
     // And no longer git-pulls the source tree.
@@ -49,9 +32,9 @@ describe("buildPanelRebuildScript", () => {
   });
 
   test("runs the new container on the same loopback port Traefik targets", () => {
-    const script = buildPanelRebuildScript(base);
+    const script = buildPanelReleaseScript(base);
     expect(script).toContain(
-      "docker run -d --name ocd-panel --restart unless-stopped --log-opt max-size=20m --log-opt max-file=3 -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef",
+      "docker run -d --name ocd-panel --restart unless-stopped --log-opt max-size=20m --log-opt max-file=3 -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     );
     // Old container is removed only after a successful pull (pull-then-swap).
     expect(script).toContain("docker rm -f ocd-panel");
@@ -66,7 +49,7 @@ describe("buildPanelRebuildScript", () => {
   // the previous image back automatically.
   describe("health gate and rollback", () => {
     test("captures the running image before destroying the container", () => {
-      const script = buildPanelRebuildScript(base);
+      const script = buildPanelReleaseScript(base);
       const capture = script.indexOf("PREV_IMAGE=$(docker inspect");
       const destroy = script.indexOf("docker rm -f ocd-panel");
       expect(capture).toBeGreaterThan(-1);
@@ -75,43 +58,43 @@ describe("buildPanelRebuildScript", () => {
     });
 
     test("polls /api/health on the loopback port after the swap", () => {
-      const script = buildPanelRebuildScript(base);
+      const script = buildPanelReleaseScript(base);
       expect(script).toContain("curl -fsS -m 3 http://127.0.0.1:3001/api/health");
     });
 
     test("restarts the previous image when the new one never becomes healthy", () => {
-      const script = buildPanelRebuildScript(base);
+      const script = buildPanelReleaseScript(base);
       expect(script).toContain('docker run -d --name ocd-panel --restart unless-stopped --log-opt max-size=20m --log-opt max-file=3 -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data $PREV_IMAGE');
       expect(script).toContain("rolling back to $PREV_IMAGE");
     });
 
     test("dumps the failed container's logs so the cause is in the deploy output", () => {
-      const script = buildPanelRebuildScript(base);
+      const script = buildPanelReleaseScript(base);
       expect(script).toContain("docker logs --tail 50 ocd-panel");
     });
 
     test("does not roll back onto the same image it just failed to start", () => {
-      const script = buildPanelRebuildScript(base);
+      const script = buildPanelReleaseScript(base);
       // A first-ever deploy, or a redeploy of the identical tag, has no distinct
       // previous image — rolling back would just reproduce the failure.
-      expect(script).toContain('[ -z "$PREV_IMAGE" ] || [ "$PREV_IMAGE" = "ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef" ]');
+      expect(script).toContain('[ -z "$PREV_IMAGE" ] || [ "$PREV_IMAGE" = "ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ]');
     });
 
     test("exits non-zero when it had to roll back, so the deploy is recorded as failed", () => {
-      const script = buildPanelRebuildScript(base);
+      const script = buildPanelReleaseScript(base);
       const lines = script.trim().split("\n");
       expect(lines[lines.length - 1]).toBe("exit 1");
       expect(script).toContain("exit 0");
     });
 
     test("health retries are configurable", () => {
-      const script = buildPanelRebuildScript({ ...base, healthRetries: 5 });
+      const script = buildPanelReleaseScript({ ...base, healthRetries: 5 });
       expect(script).toContain("for i in $(seq 1 5); do");
     });
   });
 
   test("publishes the HTTP waker port on the private IP so sleeping apps can wake", () => {
-    const script = buildPanelRebuildScript(base);
+    const script = buildPanelReleaseScript(base);
     // Bound to the private IP (not 0.0.0.0): the waker bypasses Traefik's auth /
     // allowlist middleware, so it must never be exposed on the public interface.
     expect(script).toContain("-p 10.0.0.2:8896:8896");
@@ -123,7 +106,7 @@ describe("buildPanelRebuildScript", () => {
   });
 
   test("migrates historical panel data before swapping containers", () => {
-    const script = buildPanelRebuildScript({
+    const script = buildPanelReleaseScript({
       ...base,
       volumeHostPath: "/mnt/ocd-ocd-panel-data",
       volumeDevicePath: "/mnt/HC_Volume_105361466",
@@ -143,7 +126,7 @@ describe("buildPanelRebuildScript", () => {
   });
 
   test("removes the legacy root-disk copy only after the replacement is healthy", () => {
-    const script = buildPanelRebuildScript({
+    const script = buildPanelReleaseScript({
       ...base,
       volumeHostPath: "/mnt/ocd-ocd-panel-data",
       volumeDevicePath: "/mnt/HC_Volume_105361466",
@@ -154,13 +137,13 @@ describe("buildPanelRebuildScript", () => {
   });
 
   test("caps panel container logs on both forward and rollback runs", () => {
-    const script = buildPanelRebuildScript(base);
+    const script = buildPanelReleaseScript(base);
     expect(script.match(/--log-opt max-size=20m/g)?.length).toBe(2);
     expect(script.match(/--log-opt max-file=3/g)?.length).toBe(2);
   });
 
   test("emits syntactically valid bash with the migration path enabled", async () => {
-    const script = buildPanelRebuildScript({
+    const script = buildPanelReleaseScript({
       ...base,
       volumeHostPath: "/mnt/ocd-ocd-panel-data",
       volumeDevicePath: "/mnt/HC_Volume_105361466",
@@ -175,26 +158,26 @@ describe("buildPanelRebuildScript", () => {
   });
 
   test("omits the waker port when the private IP is unknown", () => {
-    const script = buildPanelRebuildScript({ ...base, privateIpv4: "" });
+    const script = buildPanelReleaseScript({ ...base, privateIpv4: "" });
     expect(script).not.toContain(":8896:8896");
     // Still runs the panel on its loopback port.
     expect(script).toContain("-p 127.0.0.1:3001:3001");
   });
 
   test("retries the pull the requested number of times and gives up cleanly", () => {
-    const script = buildPanelRebuildScript(base);
+    const script = buildPanelReleaseScript(base);
     expect(script).toContain("for i in $(seq 1 90); do");
     expect(script).toContain("sleep 20");
     expect(script).toContain("leaving current container running");
-    // Uses the ephemeral GHCR creds for the pull...
+    // Uses the ephemeral registry creds for the pull...
     expect(script).toContain("DOCKER_CONFIG=/home/deploy/.docker-ocd-xyz docker pull");
     // ...and removes the credential dir when done.
     expect(script).toContain("rm -rf /home/deploy/.docker-ocd-xyz");
   });
 
-  test("omits GHCR auth wiring for an anonymous pull", () => {
-    const script = buildPanelRebuildScript({ ...base, ghcrEnvPrefix: "", ghcrConfigDir: "" });
-    expect(script).toContain("su - deploy -c \"docker pull ghcr.io/0-ai-ug/one-click-deploy:sha-deadbeef\"");
+  test("omits registry auth wiring for an anonymous pull", () => {
+    const script = buildPanelReleaseScript({ ...base, registryEnvPrefix: "", registryConfigDir: "" });
+    expect(script).toContain("su - deploy -c \"docker pull ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"");
     expect(script).not.toContain("DOCKER_CONFIG=");
     expect(script).not.toContain("rm -rf /home/deploy/.docker-ocd-");
   });

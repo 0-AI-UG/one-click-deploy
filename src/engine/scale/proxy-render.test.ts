@@ -50,8 +50,7 @@ function makeApp(opts: {
   const app = db.insertApp({
     name,
     domain: "",
-    git_repo: "https://github.com/x/y",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: opts.containerPort ?? 3000,
     env_vars: "{}",
     public: false,

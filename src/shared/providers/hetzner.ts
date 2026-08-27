@@ -18,11 +18,6 @@ import {
   deleteVolume,
 } from "../../engine/hetzner/volumes.ts";
 import {
-  createDnsRecord,
-  deleteDnsRecord,
-  listDnsZones,
-} from "../../engine/hetzner/dns.ts";
-import {
   ensureNetwork,
   attachServerToNetwork,
   getPrivateIpv4,
@@ -260,47 +255,4 @@ export const hetzner = {
   },
 };
 
-export const hetznerDns = {
-  id: "hetzner-dns",
-  name: "Hetzner DNS",
-
-  async listZones() {
-    const zones = await listDnsZones();
-    return (zones ?? []).map((z: any) => ({ id: z.id, name: z.name }));
-  },
-
-  async createRecord(opts: {
-    zoneId: string;
-    name: string;
-    type: string;
-    value: string;
-    ttl?: number;
-  }) {
-    return createDnsRecord({
-      zone_id: opts.zoneId,
-      name: opts.name,
-      type: opts.type,
-      value: opts.value,
-      ttl: opts.ttl,
-    });
-  },
-
-  async deleteRecord(opts: {
-    zoneId: string;
-    name: string;
-    type: string;
-    value: string;
-  }) {
-    await deleteDnsRecord({
-      zone_id: opts.zoneId,
-      name: opts.name,
-      type: opts.type,
-      value: opts.value,
-    });
-  },
-};
-
-/** The single concrete Hetzner compute/DNS modules — there is no provider
- *  abstraction; these are imported directly. */
 export type Hetzner = typeof hetzner;
-export type HetznerDns = typeof hetznerDns;

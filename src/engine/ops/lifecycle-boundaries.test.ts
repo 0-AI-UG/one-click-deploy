@@ -46,8 +46,7 @@ describe("lifecycle operation boundaries", () => {
     const app = db.insertApp({
       name: `app-lifecycle-${randomSuffix()}`,
       domain: "",
-      git_repo: "",
-      dockerfile_path: "",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
     });

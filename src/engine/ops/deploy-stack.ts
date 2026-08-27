@@ -21,10 +21,7 @@ import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 import { classifyAppConfigChanges, classifyConfigOnlyChanges, diffAppConfig, type AppReconcileMode } from "../../shared/app-config.ts";
-import { validateDeployRequest, assertSafeHostPath, validateRepoBuildPath } from "../../shared/validate.ts";
-import { cloneRepo, findDockerfile, sshExec } from "../../shared/remote/index.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
-import type { Server } from "../../shared/rpc.ts";
+import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate.ts";
 import { getCatalogEntry } from "../../shared/services/catalog.ts";
 import { hetzner } from "../../shared/providers/index.ts";
 import { allReplicasAttested, hashEnvironment } from "../revision.ts";
@@ -35,18 +32,15 @@ type DeployStackInput = StackDeployRequest;
 type PlanOut = {
   stackId: number;
   environmentId: number;
-  /** The stack's shared staging environment (null = none). Members that opted
-   *  into webhook staging inherit this unless they carry their own override. */
+  /** The stack's explicitly selected staging environment (null = none). */
   stagingEnvironmentId: number | null;
   /** Each member key → the staging environment its sibling deploys with (the
-   *  stack's one staging env, or null when that member didn't opt in — which is
-   *  also what TURNS IT OFF on a re-up that dropped the opt-in). */
+   *  stack's one staging env, or null when no staging target is requested. */
   stagingByKey: Record<string, number | null>;
   /** True only when this run minted the staging environment, so rollback
    *  deletes it while a reused one survives (mirrors `createdEnv`). */
   createdStagingEnv: boolean;
-  /** True when at least one member currently opts into webhook staging. The
-   * retained environment alone does not keep staging service counterparts. */
+  /** Whether this deployment includes explicit staging service counterparts. */
   stagingServicesEnabled: boolean;
   levels: string[][];
   createdStack: boolean;
@@ -67,7 +61,7 @@ type EnqueueChildrenOut = { childIds: number[] };
 type PreflightOut = {
   checkedApps: string[];
   skippedRemoteApps: string[];
-  /** Git short SHA, or `artifact:<immutable-ref>` for image-mode members. */
+  /** Immutable artifact identity for each app member. */
   sourceRevisionByKey: Record<string, string>;
 };
 
@@ -340,15 +334,17 @@ const validatePlan: Step<DeployStackInput, ValidatePlanOut> = {
     }
     for (const app of req.apps) {
       if (!NAME_RE.test(app.key)) throw new Error(`Invalid app key "${app.key}"`);
+      const validation = validateDeployRequest({
+        ...app,
+        app_name: memberName(req.name, app.key),
+      });
+      if (!validation.valid) {
+        throw new Error(`App "${app.key}": ${validation.error}`);
+      }
       for (const dependency of app.needs ?? []) {
         if (!appKeys.has(dependency) && !serviceKeys.has(dependency)) {
           throw new Error(`App "${app.key}" needs unknown key "${dependency}"`);
         }
-      }
-      if (app.webhook_staging && !app.webhook_enabled) {
-        throw new Error(
-          `App "${app.key}" sets webhook.staging but not webhook.enabled — staging holds pushed commits, so it needs the webhook.`,
-        );
       }
     }
     for (const service of req.services) {
@@ -361,13 +357,12 @@ const validatePlan: Step<DeployStackInput, ValidatePlanOut> = {
     if (req.staging_environment_id != null && !db.getEnvironment(req.staging_environment_id)) {
       throw new Error(`Staging environment ${req.staging_environment_id} not found`);
     }
-    const wantsStaging = req.apps.some((app) => app.webhook_staging);
     const existing = db.getStackByName(req.name);
     const effectiveStagingId = req.staging_environment_id !== undefined
       ? req.staging_environment_id
       : existing?.staging_environment_id ?? null;
-    if (req.staging_env_vars?.length && effectiveStagingId == null && !wantsStaging) {
-      throw new Error("staging_env values require at least one webhook-staging member or a selected staging environment");
+    if (req.staging_env_vars?.length && effectiveStagingId == null) {
+      throw new Error("staging_env values require a selected staging environment");
     }
     const activeApps = selectedApps(req);
     const levels = topoLevels(activeApps);
@@ -398,13 +393,6 @@ const plan: Step<DeployStackInput, PlanOut> = {
     // Keep direct step invocation safe as well as normal runner execution:
     // every validation that depends only on input/current state precedes the
     // first stack/environment mutation.
-    for (const app of req.apps) {
-      if (app.webhook_staging && !app.webhook_enabled) {
-        throw new Error(
-          `App "${app.key}" sets webhook.staging but not webhook.enabled — staging holds pushed commits, so it needs the webhook.`,
-        );
-      }
-    }
     if (req.staging_environment_id != null && !db.getEnvironment(req.staging_environment_id)) {
       throw new Error(`Staging environment ${req.staging_environment_id} not found`);
     }
@@ -491,21 +479,11 @@ const plan: Step<DeployStackInput, PlanOut> = {
         ctx.log(`created stack #${stack.id} (env ${envId})`);
       }
     }
-    // The owning stack control file is an implicit webhook input for every
-    // member, including members omitted from a partial reconcile.
+    // Keep manifest provenance synchronized for every member, including
+    // members omitted from a partial reconcile.
     if (req.stack_manifest_path !== undefined) {
       for (const member of db.getAppsByStackId(stackId)) {
         db.updateAppStackManifestPath(member.id, req.stack_manifest_path);
-      }
-    }
-
-    // Staging needs the webhook: it holds PUSHED commits, so an opt-in without
-    // one can never fire. Checked before anything deploys.
-    for (const a of req.apps) {
-      if (a.webhook_staging && !a.webhook_enabled) {
-        throw new Error(
-          `App "${a.key}" sets webhook.staging but not webhook.enabled — staging holds pushed commits, so it needs the webhook.`,
-        );
       }
     }
 
@@ -526,8 +504,8 @@ const plan: Step<DeployStackInput, PlanOut> = {
     // otherwise the stack keeps what it already had — so a re-up needn't
     // repeat the staging_environment field, exactly like environment.
     //
-    // Runs AFTER the env-var write so an auto-created copy inherits them.
-    const wantsStaging = req.apps.some((a) => a.webhook_staging);
+    // Staging targets are created explicitly; selecting an environment alone
+    // never creates or deploys additional workloads.
     let stagingEnvId: number | null =
       req.staging_environment_id !== undefined
         ? req.staging_environment_id
@@ -535,34 +513,11 @@ const plan: Step<DeployStackInput, PlanOut> = {
     if (stagingEnvId != null && !db.getEnvironment(stagingEnvId)) {
       throw new Error(`Staging environment ${stagingEnvId} not found`);
     }
-    let createdStagingEnv = false;
-    if (stagingEnvId == null && wantsStaging) {
-      // Auto-create, mirroring `<name>-stack-env`. Seeded as a COPY of the
-      // production environment (ciphertext included, never round-tripped
-      // through a client) so siblings boot with working values instead of an
-      // empty bag — then diverge freely as you set staging-only values.
-      let stagingName = `${req.name}-stack-staging-env`;
-      let suffix = 1;
-      while (db.getEnvironments().find((e) => e.name === stagingName)) {
-        stagingName = `${req.name}-stack-staging-env-${suffix++}`;
-      }
-      const created = dbInstance.transaction(() => {
-        const environment = db.duplicateEnvironment(envId, stagingName);
-        // Environment creation and ownership publication are one crash-safe
-        // boundary: a retry can discover it through the stack row and cannot
-        // leak suffix-named staging environments.
-        db.updateStackStagingEnvironment(stackId, environment.id);
-        return environment;
-      })();
-      stagingEnvId = created.id;
-      createdStagingEnv = true;
-      ctx.log(`created staging environment "${stagingName}" (${created.id}) as a copy of the stack env`);
-      db.appendStackLog(stackId, `[plan] created staging environment "${stagingName}"`);
-    }
+    const createdStagingEnv = false;
     const appliedStagingKeys: string[] = [];
     if (req.staging_env_vars?.length) {
       if (stagingEnvId == null) {
-        throw new Error("staging_env values require at least one webhook-staging member or a selected staging environment");
+        throw new Error("staging_env values require a selected staging environment");
       }
       const changedKeys = await applyEnvironmentOverlayIfChanged(stagingEnvId, req.staging_env_vars);
       appliedStagingKeys.push(...req.staging_env_vars.map((entry) => entry.key));
@@ -590,11 +545,10 @@ const plan: Step<DeployStackInput, PlanOut> = {
       ctx.log(`staging environment: "${db.getEnvironment(stagingEnvId)?.name}" (${stagingEnvId})`);
     }
 
-    // One entry per member: the stack's staging env for members that opted in,
-    // null for everyone else (which is also what TURNS STAGING OFF on a re-up
-    // that dropped the opt-in).
+    // Stack deployment reconciles production members only. Explicit staging
+    // apps are released and promoted independently.
     const stagingByKey: Record<string, number | null> = {};
-    for (const a of req.apps) stagingByKey[a.key] = a.webhook_staging ? stagingEnvId : null;
+    for (const a of req.apps) stagingByKey[a.key] = null;
 
     db.appendStackLog(stackId, `[plan] ${req.services.length} service(s), ${req.apps.length} app(s), ${levels.length} level(s)`);
     return {
@@ -603,7 +557,7 @@ const plan: Step<DeployStackInput, PlanOut> = {
       stagingEnvironmentId: stagingEnvId,
       stagingByKey,
       createdStagingEnv,
-      stagingServicesEnabled: wantsStaging && stagingEnvId != null,
+      stagingServicesEnabled: false,
       levels,
       createdStack,
       createdEnv,
@@ -626,21 +580,17 @@ const plan: Step<DeployStackInput, PlanOut> = {
 };
 
 /**
- * Validate every child before a managed service can allocate persistent
- * storage. When a ready build host exists, also clone each Git source into an
- * operation-scoped scratch directory and verify its Dockerfile/context. This
- * catches repository, branch and monorepo path mistakes without creating any
- * service volume. Scratch checkouts are always removed in the same attempt.
+ * Validate every immutable child artifact before a managed service can
+ * allocate persistent storage. OCD never fetches source during preflight.
  */
 const preflightApps: Step<DeployStackInput, PreflightOut> = {
   name: "preflight_apps",
-  label: "Validate app sources",
+  label: "Validate app artifacts",
   async run(ctx, prior) {
     const req = ctx.input;
     const checkedApps: string[] = [];
     const skippedRemoteApps: string[] = [];
     const sourceRevisionByKey: Record<string, string> = {};
-    let githubToken: string | null | undefined;
 
     for (const appReq of selectedApps(req)) {
       const name = memberName(req.name, appReq.key);
@@ -649,105 +599,8 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
       for (const volume of appReq.extra_volumes ?? []) {
         assertSafeHostPath(volume.host_path, name);
       }
-      const existingApp = db.getAppByName(name);
-      if (existingApp && (
-        req.config_only || appReq.reconcile_mode === "control" || appReq.reconcile_mode === "runtime"
-      )) {
-        const deployed = db.getDeployments(existingApp.id).find((row) => row.status === "deployed");
-        sourceRevisionByKey[appReq.key] = appReq.image_ref
-          ? `artifact:${appReq.image_ref}`
-          : deployed?.git_commit || "";
-        checkedApps.push(appReq.key);
-        ctx.log(`${appReq.key}: source preflight skipped (${appReq.reconcile_mode || "configuration-only"} reconciliation)`);
-        continue;
-      }
-      if (appReq.image_ref) {
-        checkedApps.push(appReq.key);
-        sourceRevisionByKey[appReq.key] = `artifact:${appReq.image_ref}`;
-        continue;
-      }
-
-      let server: Server | undefined;
-      if (appReq.server_id) {
-        const target = db.getServer(appReq.server_id) as Server | null;
-        if (!target || target.status !== "ready") {
-          throw new Error(`App "${appReq.key}": target server not found or not ready`);
-        }
-        server = target;
-      } else {
-        const panelServerId = db.getPanel()?.server_id;
-        server = db.getServers().find((candidate: Server) =>
-          candidate.status === "ready" && candidate.id !== panelServerId
-        ) as Server | undefined;
-      }
-      if (!server) {
-        skippedRemoteApps.push(appReq.key);
-        ctx.log(`${appReq.key}: source check deferred because no build server is ready`);
-        continue;
-      }
-
-      if (githubToken === undefined) {
-        githubToken = await resolveGitHubToken(ctx.triggeredBy || undefined);
-      }
-
-      const scratchName = `preflight-${ctx.opId}-${name}`;
-      const scratchDir = `/home/deploy/apps/${scratchName}`;
-      let preflightFailure: unknown;
-      try {
-        const revision = await cloneRepo(
-          server.ipv4,
-          scratchName,
-          appReq.git_repo,
-          githubToken || undefined,
-          (line) => ctx.log(`[preflight:${appReq.key}] ${line}`),
-          appReq.git_branch,
-          server.ssh_host_key || undefined,
-          appReq.git_sha,
-        );
-
-        let dockerfile = appReq.dockerfile_path;
-        if (dockerfile) {
-          const pathResult = validateRepoBuildPath(dockerfile, "Dockerfile");
-          if (!pathResult.valid) throw new Error(pathResult.error);
-          dockerfile = pathResult.value;
-        } else {
-          dockerfile = await findDockerfile(server.ipv4, scratchDir, server.ssh_host_key || undefined);
-        }
-        if (!dockerfile) throw new Error("No Dockerfile found in the repository");
-        const discoveredPath = validateRepoBuildPath(dockerfile, "Dockerfile");
-        if (!discoveredPath.valid) throw new Error(discoveredPath.error);
-        dockerfile = discoveredPath.value;
-        const contextResult = validateRepoBuildPath(appReq.docker_context || ".", "Docker context");
-        if (!contextResult.valid) throw new Error(contextResult.error);
-        const paths = await sshExec(
-          server.ipv4,
-          `su - deploy -c ${JSON.stringify(
-            `cd ${scratchDir} && test -f ${dockerfile} && test -d ${contextResult.value}`,
-          )}`,
-          server.ssh_host_key || undefined,
-        );
-        if (paths.exitCode !== 0) {
-          throw new Error(
-            `Dockerfile "${dockerfile}" or build context "${contextResult.value}" does not exist in the repository`,
-          );
-        }
-        sourceRevisionByKey[appReq.key] = revision.slice(0, 12);
-        checkedApps.push(appReq.key);
-      } catch (error) {
-        preflightFailure = error;
-      }
-      const cleanup = await sshExec(
-        server.ipv4,
-        `su - deploy -c ${JSON.stringify(`rm -rf ${scratchDir}`)}`,
-        server.ssh_host_key || undefined,
-      );
-      if (cleanup.exitCode !== 0) {
-        const original = preflightFailure
-          ? `; original preflight error: ${preflightFailure instanceof Error ? preflightFailure.message : String(preflightFailure)}`
-          : "";
-        throw new Error(`Could not remove preflight checkout ${scratchDir}${original}`);
-      }
-      if (preflightFailure) throw preflightFailure;
+      checkedApps.push(appReq.key);
+      sourceRevisionByKey[appReq.key] = `artifact:${appReq.image_ref}`;
     }
     const existingStack = db.getStackByName(req.name);
     if (existingStack) {
@@ -1062,14 +915,12 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
             app_name: name,
             environment_id: environmentId,
             env_projection: effectiveProjection,
-            webhook_staging: false,
-            webhook_staging_environment_id: stagingEnvFor(key),
             stack_manifest_path: req.stack_manifest_path ?? null,
           };
           const configChanges = diffAppConfig(existingApp, candidate);
-          const requestedMode: AppReconcileMode = appReq.reconcile_mode ?? "build";
+          const requestedMode: AppReconcileMode = appReq.reconcile_mode ?? "artifact";
           const configMode = classifyAppConfigChanges(configChanges);
-          const modeRank: Record<AppReconcileMode, number> = { control: 0, runtime: 1, build: 2 };
+          const modeRank: Record<AppReconcileMode, number> = { control: 0, runtime: 1, artifact: 2 };
           const configOnlyPlan = req.config_only
             ? classifyConfigOnlyChanges(configChanges, {
                 environmentChanged: requestedMode === "runtime" || (req.env_vars?.length ?? 0) > 0,
@@ -1097,9 +948,9 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
             input: {
               appId: existingApp.id,
               userId: ctx.triggeredBy || undefined,
-              deploy: reconcileMode === "build",
+              deploy: reconcileMode === "artifact",
               rollout: reconcileMode,
-              pendingRollout: configOnlyPlan?.pendingBuild === true,
+              pendingRollout: configOnlyPlan?.pendingRollout === true,
               spec: candidate,
             },
             trigger: "stack",
@@ -1110,13 +961,11 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
         } else {
           // Drop per-app env_vars: the stack merged them into the shared env in
           // `plan` (with conflict checks), so members deploy against it directly.
-          // `webhook_staging` is stack-only intent — the child deploy takes the
-          // RESOLVED staging environment id instead.
+          // The child deploy takes the resolved environment id.
           const {
             key: _k,
             needs: _n,
             env_vars: _e,
-            webhook_staging: _s,
             env_projection_mode: _projectionMode,
             declared_env_keys: _declaredKeys,
             reconcile_mode: _reconcileMode,
@@ -1130,7 +979,6 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
               app_name: name,
               environment_id: environmentId,
               env_projection: effectiveProjection,
-              webhook_staging_environment_id: stagingEnvFor(key) ?? undefined,
               stack_manifest_path: req.stack_manifest_path ?? null,
               server_provisioning_approved: req.server_provisioning_approved === true,
             },
@@ -1167,35 +1015,7 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
         // here (topoLevels) and forgotten, which left promote_stack unable to
         // order anything — see promote-stack.ts `orderPromotions`.
         db.setAppStackNeeds(app.id, appByKey.get(key)?.needs ?? null);
-        // Re-point the member at the stack's staging env every deploy. The
-        // child `deploy` above already carries it for NEW members, but reused
-        // members took the `redeploy` path (which never touches webhook config),
-        // so this is what actually reconciles them — and what turns staging OFF
-        // when a deploy drops webhook.staging or clears staging_environment.
-        let desiredStagingEnv = stagingEnvFor(key);
-        // Staging is driven by the webhook, and only the `deploy` path registers
-        // one — `redeploy` (the path every pre-existing member takes) touches no
-        // webhook config. So a member that newly asks for webhooks in its
-        // manifest has no webhook registered yet; recording staging against it
-        // would report staging as ON while no push can ever reach it.
-        if (desiredStagingEnv != null && !app.webhook_enabled) {
-          db.appendStackLog(
-            stackId,
-            `[apps] ${key}: staging requested but no webhook is registered for this member — ` +
-              `staging stays off until the webhook exists`,
-          );
-          ctx.log(`${key}: staging skipped — no webhook registered`);
-          desiredStagingEnv = null;
-        }
-        if ((app.webhook_staging_environment_id ?? null) !== desiredStagingEnv) {
-          db.updateAppWebhookStagingEnvironment(app.id, desiredStagingEnv);
-          db.appendStackLog(
-            stackId,
-            desiredStagingEnv == null
-              ? `[apps] ${key}: webhook staging disabled`
-              : `[apps] ${key}: webhook staging → environment ${desiredStagingEnv}`,
-          );
-        }
+        const desiredStagingEnv = stagingEnvFor(key);
         injectAppUrl(environmentId, key, app);
         // Mirror the wiring into the staging env so a staged stack resolves to
         // its own siblings rather than to production.

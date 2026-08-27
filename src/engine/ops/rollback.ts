@@ -4,22 +4,17 @@ import {
   probeAppHealth,
   startAppReplica,
   writeEnvDeployFile,
-  buildAppImage,
-  findDockerfile,
   pullImmutableImage,
 } from "../../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { replicaBindHost } from "../scale/types.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
-import { preflightBuildDiskSpace } from "../hetzner/disk-space.ts";
 import { attestReplica, hashEnvironment } from "../revision.ts";
 import {
   captureRemoteRevisionSnapshot,
   discardRemoteRevisionSnapshot,
   probeRemoteRevisionSnapshot,
-  restoreSnapshotGitCheckout,
   type RemoteRevisionSnapshot,
 } from "./_revision-snapshot.ts";
 
@@ -38,8 +33,8 @@ type TargetOut = {
   previousStatus: string;
 };
 
-type CheckoutOut = { envFilePath: string | null };
-type RebuildOut = { dockerfilePath: string | null };
+type EnvironmentOut = { envFilePath: string | null };
+type ImageOut = { imageRef: string };
 type PriorContainerSnapshot = {
   remote: RemoteRevisionSnapshot;
   containerName: string;
@@ -67,8 +62,8 @@ const loadTargetDeployment: Step<RollbackInput, TargetOut> = {
     const deployment = db.getDeployment(ctx.input.deploymentId);
     if (!deployment) throw new Error("Deployment not found");
     if (deployment.app_id !== ctx.input.appId) throw new Error("Deployment does not belong to this app");
-    if (app.source_mode !== "image" && !/^[a-f0-9]{7,64}$/i.test(deployment.git_commit)) {
-      throw new Error(`Deployment ${deployment.id} does not contain a valid Git revision`);
+    if (!deployment.image_digest?.includes("@sha256:")) {
+      throw new Error(`Deployment ${deployment.id} does not contain an immutable image digest`);
     }
     return {
       appId: ctx.input.appId,
@@ -104,7 +99,7 @@ function rollbackSnapshotTarget(ctx: { input: { appId: number }; opId: number },
       appName: app.name,
       containerName: replica.container_name,
       opId: ctx.opId,
-      sourceMode: app.source_mode,
+      currentImageRef: app.image_ref,
     },
   };
 }
@@ -162,14 +157,11 @@ const snapshotCurrentRevision: Step<{ appId: number }, PriorContainerSnapshot | 
     const server = db.getServer(target.serverId);
     if (!app || !server) return;
     const hostKey = server.ssh_host_key || undefined;
-    await restoreSnapshotGitCheckout({
-      ip: server.ipv4,
+    await pullImmutableImage(server.ipv4, {
+      name: app.name,
+      imageRef: snap.remote.image,
       hostKey,
-      appName: app.name,
-      containerName: snap.containerName,
-      opId: ctx.opId,
-      sourceMode: app.source_mode,
-    }, snap.remote.gitCommit);
+    }, (line) => ctx.log(`[restore-pull] ${line}`));
     await startAppReplica(server.ipv4, {
       containerName: snap.containerName,
       image: snap.remote.image,
@@ -186,18 +178,6 @@ const snapshotCurrentRevision: Step<{ appId: number }, PriorContainerSnapshot | 
       configRevision: snap.configRevision,
       envHash: snap.envHash,
     }, hostKey);
-    const retag = await sshExec(
-      server.ipv4,
-      asUser(
-        `docker image rm ${app.name}:latest 2>/dev/null || true; ` +
-          `docker tag ${snap.remote.image} ${app.name}:latest; ` +
-          `docker image prune -f --filter label=ocd.managed=true >/dev/null 2>&1 || true`,
-      ),
-      hostKey,
-    );
-    if (retag.exitCode !== 0) {
-      throw new Error(`Failed to restore ${app.name}:latest from ${snap.remote.image}: ${retag.stderr.trim() || retag.stdout.trim()}`);
-    }
     const health = await probeAppHealth(app, server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey);
     const replica = db.getReplica(target.replicaId);
     if (replica) db.updateReplicaStatus(replica.id, health.healthy ? "running" : "unhealthy");
@@ -211,13 +191,13 @@ const snapshotCurrentRevision: Step<{ appId: number }, PriorContainerSnapshot | 
 
 // Reused by the promote op. These steps mutate the DEST/target app purely from
 // its `load_target_deployment` prior output (a TargetOut carrying the app id,
-// first replica/server, the git commit to check out, and the pre-op status), so
+// first replica/server, optional commit provenance, and the pre-op status), so
 // they only need `{ appId }` on the input — the promote op supplies its own
 // first step producing the same `load_target_deployment` shape. Runtime
 // behaviour is identical to before; only the input type param was widened.
-const checkoutTarget: Step<{ appId: number }, CheckoutOut> = {
-  name: "checkout_target",
-  label: "Checkout target commit",
+const prepareEnvironment: Step<{ appId: number }, EnvironmentOut> = {
+  name: "prepare_environment",
+  label: "Prepare target environment",
   async run(ctx, prior) {
     const target = prior["load_target_deployment"] as TargetOut;
     const app = db.getApp(target.appId);
@@ -225,15 +205,6 @@ const checkoutTarget: Step<{ appId: number }, CheckoutOut> = {
     const server = db.getServer(target.serverId);
     if (!server) throw new Error("Server not found");
     const hostKey = server.ssh_host_key || undefined;
-    const appDir = `/home/deploy/apps/${app.name}`;
-
-    if (app.source_mode !== "image") {
-      const checkout = await sshExec(server.ipv4, asUser(`cd ${appDir} && git checkout ${target.gitCommit}`), hostKey);
-      if (checkout.exitCode !== 0) {
-        throw new Error(`Git checkout failed for ${app.name}: ${checkout.stderr.trim() || checkout.stdout.trim()}`);
-      }
-    }
-
     const envVars = await resolveAppEnvVars(app);
     const envFilePath = (await writeEnvDeployFile(server.ipv4, app.name, envVars, hostKey)) ?? null;
     if (envFilePath) {
@@ -244,9 +215,9 @@ const checkoutTarget: Step<{ appId: number }, CheckoutOut> = {
   },
 };
 
-const rebuildImage: Step<{ appId: number }, RebuildOut> = {
-  name: "rebuild_image",
-  label: "Rebuild image",
+const pullTargetImage: Step<{ appId: number }, ImageOut> = {
+  name: "pull_target_image",
+  label: "Pull immutable image",
   async run(ctx, prior) {
     const target = prior["load_target_deployment"] as TargetOut;
     const app = db.getApp(target.appId);
@@ -254,49 +225,15 @@ const rebuildImage: Step<{ appId: number }, RebuildOut> = {
     const server = db.getServer(target.serverId);
     if (!server) throw new Error("Server not found");
     const hostKey = server.ssh_host_key || undefined;
-    const appDir = `/home/deploy/apps/${app.name}`;
-    if (app.source_mode === "image") {
-      if (!target.imageDigest?.includes("@sha256:")) {
-        throw new Error("Rollback target predates immutable image digest history");
-      }
-      const token = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
-      await pullImmutableImage(server.ipv4, {
-        name: app.name,
-        imageRef: target.imageDigest,
-        gitToken: token,
-        hostKey,
-      }, (line) => ctx.log(`[pull] ${line}`));
-      return { dockerfilePath: null };
+    if (!target.imageDigest?.includes("@sha256:")) {
+      throw new Error("Rollback target has no immutable image digest");
     }
-
-    let dockerfilePath = app.dockerfile_path?.replace(/^\/+/, "");
-    if (!dockerfilePath) {
-      dockerfilePath = await findDockerfile(server.ipv4, appDir, hostKey);
-      if (!dockerfilePath) throw new Error("No Dockerfile found in repository for rollback");
-    }
-    // Shares cloneAndBuild's build invocation so the rebuilt image carries the
-    // OCD_IMAGE_LABEL — without it a rollback image escapes the scoped prune.
-    const reservation = await preflightBuildDiskSpace({
-      ip: server.ipv4,
-      appName: app.name,
-      contextPath: `${appDir}/${app.docker_context || "."}`,
-      registryBacked: true,
+    await pullImmutableImage(server.ipv4, {
+      name: app.name,
+      imageRef: target.imageDigest,
       hostKey,
-      onProgress: (line) => ctx.log(`[disk] ${line}`),
-    });
-    try {
-      await buildAppImage(server.ipv4, {
-        appDir,
-        imageTag: `${app.name}:latest`,
-        dockerfilePath,
-        dockerContext: app.docker_context || undefined,
-        onHeartbeat: () => { void reservation.refresh(); },
-      }, hostKey);
-      await reservation.replace(0);
-    } finally {
-      await reservation.release();
-    }
-    return { dockerfilePath };
+    }, (line) => ctx.log(`[pull] ${line}`));
+    return { imageRef: target.imageDigest };
   },
 };
 
@@ -305,7 +242,7 @@ const swapContainer: Step<{ appId: number }, SwapOut> = {
   label: "Swap container",
   async run(ctx, prior) {
     const target = prior["load_target_deployment"] as TargetOut;
-    const checkout = prior["checkout_target"] as CheckoutOut;
+    const prepared = prior["prepare_environment"] as EnvironmentOut;
     const app = db.getApp(target.appId);
     if (!app) throw new Error("App not found");
     const server = db.getServer(target.serverId);
@@ -316,7 +253,7 @@ const swapContainer: Step<{ appId: number }, SwapOut> = {
     const bindAddr = replicaBindHost(server);
     const hostKey = server.ssh_host_key || undefined;
     const envVars = await resolveAppEnvVars(app);
-    const image = app.source_mode === "image" ? target.imageDigest : `${app.name}:latest`;
+    const image = target.imageDigest;
     if (!image) throw new Error("Immutable rollback target is missing its image digest");
 
     await startAppReplica(server.ipv4, {
@@ -327,7 +264,7 @@ const swapContainer: Step<{ appId: number }, SwapOut> = {
       bindAddr,
       hostPort,
       containerPort: app.container_port,
-      envFilePath: checkout.envFilePath || undefined,
+      envFilePath: prepared.envFilePath || undefined,
       volumeMount: app.volume_mount || undefined,
       extraVolumes: db.parseExtraVolumes(app.extra_volumes),
       memoryMb: app.memory_mb || undefined,
@@ -422,6 +359,7 @@ const recordRollback: Step<RollbackInput, { deploymentId: number }> = {
       config_revision: db.getApp(target.appId)?.config_revision ?? 1,
       source: `rollback-from-deployment-${ctx.input.deploymentId}`,
     });
+    db.updateAppImageRef(target.appId, swap.imageDigest);
     db.appendDeployLog(
       target.appId,
       `[rollback] Rolled back to deployment ${ctx.input.deploymentId} (${target.imageTag})`,
@@ -451,8 +389,8 @@ const rollbackOp: OpKindDefinition<RollbackInput> = {
   steps: [
     loadTargetDeployment,
     snapshotCurrentRevision,
-    checkoutTarget,
-    rebuildImage,
+    prepareEnvironment,
+    pullTargetImage,
     swapContainer,
     syncIngressStep,
     healthCheckStep,
@@ -466,12 +404,12 @@ registerOp(rollbackOp as OpKindDefinition<any>);
 export default rollbackOp;
 export type { RollbackInput, TargetOut };
 // Shared with ops/promote.ts, which supplies its own `load_target_deployment`
-// step (producing a TargetOut for the DEST app pinned to the source commit) and
-// reuses these to check out / rebuild / swap / sync / health-check it.
+// step (producing a TargetOut for the destination app pinned to the source
+// artifact) and reuses these to pull / swap / sync / health-check it.
 export {
   snapshotCurrentRevision,
-  checkoutTarget,
-  rebuildImage,
+  prepareEnvironment,
+  pullTargetImage,
   swapContainer,
   syncIngressStep,
   healthCheckStep,

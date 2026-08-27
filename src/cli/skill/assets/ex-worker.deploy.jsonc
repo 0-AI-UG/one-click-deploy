@@ -2,14 +2,15 @@
   "$schema": 1,
   "name": "Queue Worker",
   "description": "Background job worker that speaks no HTTP",
-  "build": { "dockerfile": "Dockerfile", "container_port": 3000 },
+  "image": {
+    "ref": "ghcr.io/example/worker@sha256:123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0"
+  },
   "env": [
     { "key": "REDIS_URL", "description": "Redis connection string", "required": true, "secret": true },
     { "key": "CONCURRENCY", "default": "4" }
   ],
   "volume": null,
   "public": false,
-  "health_check": { "enabled": false },
-  "webhook": { "enabled": true, "branch": "main" },
+  "health_check": { "mode": "container" },
   "suggested_app_name": "myapp-worker"
 }

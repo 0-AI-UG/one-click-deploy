@@ -61,7 +61,7 @@ function stepByName(name: string) {
   return step;
 }
 
-function makeApp(location: string, withVolume: string | null) {
+function makeApp(location: string, withVolume: string | null, connected = false) {
   const server = db.insertServer({
     name: `srv-${randomSuffix()}`,
     provider_id: `h-${randomSuffix()}`,
@@ -70,10 +70,12 @@ function makeApp(location: string, withVolume: string | null) {
     type: "cx22",
     location,
     status: "ready",
+    provider: connected ? "external" : "hetzner",
+    ownership: connected ? "connected" : "managed",
   });
   const name = `ra-${randomSuffix()}`;
   const { app } = db.insertAppWithFirstReplica(
-    { name, domain: `${name}.example.com`, git_repo: "https://github.com/x/y", dockerfile_path: "Dockerfile", container_port: 3000, env_vars: "{}" },
+    { name, domain: `${name}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000, env_vars: "{}" },
     server.id,
   );
   if (withVolume) db.updateAppVolume(app.id, withVolume, `/mnt/ocd-${name}-data:/old`, true);
@@ -118,6 +120,13 @@ describe("reattach_volume: validate", () => {
     const to = makeApp("nbg1", null);
     const { ctx } = makeCtx({ volumeId: "v-1", fromAppId: from.app.id, toAppId: to.app.id });
     expect(stepByName("validate").run(ctx, {})).rejects.toThrow(/Cannot reattach/i);
+  });
+
+  test("rejects provider-volume reattachment onto a connected host", async () => {
+    const from = makeApp("fsn1", "v-1");
+    const to = makeApp("fsn1", null, true);
+    const { ctx } = makeCtx({ volumeId: "v-1", fromAppId: from.app.id, toAppId: to.app.id });
+    expect(stepByName("validate").run(ctx, {})).rejects.toThrow(/externally connected/);
   });
 
   test("rejects a source that does not own the requested volume", async () => {

@@ -2,35 +2,22 @@
 
 ## Apply the manifest
 
-Run from a Git repository with an `origin` remote:
+Run from the directory containing `.ocd-deploy.json`, or pass a path:
 
 ```bash
 ocd deploy
 ocd deploy path/to/app.json
 ```
 
-For image deployments, set `image.ref`; a Git remote is then unnecessary.
+The manifest must contain an externally published immutable `image.ref`. OCD:
 
-`ocd deploy` performs one sequence:
+1. reads and validates the complete local manifest;
+2. resolves the named environment and protected secret inputs;
+3. sends the exact image digest and complete desired configuration;
+4. pulls that digest and starts a candidate;
+5. commits the configuration revision only after readiness succeeds.
 
-1. Read and validate the local manifest.
-2. Resolve `environment` and `webhook.staging_environment` by name.
-3. Resolve secret values from allowed local inputs.
-4. Resolve the exact local Git commit and canonical repo-relative build paths.
-5. Send a complete manifest payload with `apply_mode: "manifest"`.
-6. Build and health-check the candidate while the stored configuration remains unchanged.
-7. Commit the desired configuration as one revision only after readiness passes.
-
-The same sequence handles first deploys and later deploys.
-
-Git deployments use a fresh detached checkout of the exact selected commit;
-OCD never runs `git pull` in an existing app worktree. Dockerfile and context
-paths are always resolved relative to the manifest that declared them.
-
-App deployment and desired-configuration application are CLI-only. The web UI
-cannot submit this endpoint; it shows the last applied manifest and current
-runtime state, plus operational controls such as restart, rollback, wake,
-pause, promotion, and replica migration.
+OCD does not need a source repository and never builds an image.
 
 ## Preview changes
 
@@ -38,20 +25,19 @@ pause, promotion, and replica migration.
 ocd deploy --dry-run
 ```
 
-Dry-run compares the local manifest with the stored desired manifest. It does
-not apply configuration and does not deploy code.
+Dry-run compares the local manifest with stored desired state. It does not
+apply configuration or start a rollout.
 
-## Apply without deploying code
+## Retain the current deployed image
 
 ```bash
 ocd deploy --config-only
 ```
 
-Config-only stores and applies the same complete manifest without rebuilding
-code. Control-plane changes apply in place. Runtime/environment changes
-recreate containers from the current immutable image. Source/build changes are
-recorded as pending until the next ordinary deployment. It requires an
-existing app.
+Config-only requires an existing app. It applies complete configuration while
+retaining the currently deployed immutable image. Control-plane changes may
+apply in place; container-injected changes recreate containers from that same
+digest.
 
 ## Allowed deploy flags
 
@@ -59,15 +45,13 @@ existing app.
 --set=KEY=VALUE
 --auth-password-env=KEY
 --server=ID
+--app=EXISTING_APP
 --dry-run
 --config-only
+--allow-unknown
 ```
 
 `--set` and `--auth-password-env` supply values that must not be committed.
-`--server` is a one-deploy operational placement override. All persistent
-desired settings belong in the manifest.
-
-## Repeated deploys
-
-Run `ocd deploy` again after changing code or desired configuration. There is
-no UI redeploy command and no separate config/settings/ingress mutation.
+`--server` is a one-deploy placement override. Persistent settings belong in
+the manifest. Use `ocd release`, not `ocd deploy`, for routine CI delivery of a
+new digest.

@@ -40,8 +40,7 @@ function makeApp() {
   return db.insertApp({
     name: `m-app-${Math.random().toString(36).slice(2, 6)}`,
     domain: "",
-    git_repo: "https://x.git",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
   });

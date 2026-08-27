@@ -215,8 +215,7 @@ export function platformEnvVars(
  *  app row exists.
  *
  *  Staging siblings are no different from any other app here: they link to an
- *  environment the user selected explicitly (webhook_staging_environment_id on
- *  the production app) and resolve only that env. User vars win over the
+ *  environment the user selected explicitly and resolve only that env. User vars win over the
  *  sibling's own platform vars (its OCD_INTERNAL_* point at itself). */
 export async function resolveAppEnvVars(app: AppRow): Promise<Record<string, string>> {
   const db = await import("./db.ts");

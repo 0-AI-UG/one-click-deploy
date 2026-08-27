@@ -1,152 +1,85 @@
-# `ocd-stack.json` stack manifest
+# `ocd-stack.json` Stack Manifest
 
-## Contents
+Use a stack for apps and managed services that share dependency ordering and
+environment wiring. Each app entry references its own `.ocd-deploy.json`; each
+child manifest must contain its own immutable image digest.
 
-- [Purpose and naming](#purpose-and-naming)
-- [Complete field reference](#complete-field-reference)
-- [Dependency graph](#dependency-graph)
-- [Shared environment and projections](#shared-environment-and-projections)
-- [Reconciliation semantics](#reconciliation-semantics)
-- [Example](#example)
-
-## Purpose and naming
-
-Use `ocd-stack.json` to deploy multiple apps and managed services with
-dependency ordering, shared variables, generated credentials, and internal URL
-wiring.
-
-The stack name and member key form globally unique resource names:
-
-- stack `blog`, app key `api` → app `blog-api`;
-- stack `blog`, service key `database` → service `blog-database`.
-
-Each app entry references its own `.ocd-deploy.json`. Do not inline app build or
-runtime configuration into the stack manifest.
+Stack `blog`, app key `api` becomes `blog-api`; service key `database` becomes
+`blog-database`.
 
 ## Complete field reference
 
-| Field | Type/default | Exact behavior |
-|---|---|---|
-| `$schema` | `1`, optional | Stack schema version. |
-| `name` | non-empty string, required | Stack identifier and resource-name prefix. |
-| `description` | string | Human metadata. |
-| `environment` | non-empty string | Existing shared production environment by name. Omit to retain it on later deploys or create one on first deploy. |
-| `staging_environment` | non-empty string or `null` | Existing shared webhook-staging environment by name. `null` disables it; omission retains it. |
-| `staging_env` | env declaration array | Staging-only desired values. Declarations are dormant until a member enables webhook staging. Required values prompt securely and `--staging-set=KEY=VALUE` overrides them. |
-| `services` | object map, optional | Managed-service members keyed by the desired injection prefix. |
-| `services.<key>.type` | non-empty catalog key, required | Query `ocd service catalog`; use `postgresql`, not `postgres`. |
-| `services.<key>.version` | string | Catalog-supported image version/tag. |
-| `services.<key>.volume_size` | number `>=1` | Managed data volume size in GB. |
-| `services.<key>.env_overrides` | string map | Override generated service environment values. |
-| `services.<key>.domain` | string | Custom domain for an HTTP-facing service. |
-| `services.<key>.staging` | object | Optional overrides for the isolated staging counterpart. |
-| `services.<key>.staging.volume_size` | number `>=1` | Staging volume size; defaults to the production declaration. |
-| `services.<key>.staging.env_overrides` | string map | Staging service container overrides layered over production service overrides. |
-| `services.<key>.staging.domain` | string | Staging-only HTTP hostname. Production domains are never inherited. |
-| `apps` | non-empty object map, required | App members. |
-| `apps.<key>.manifest` | non-empty string, required | Child app manifest path relative to `ocd-stack.json`. |
-| `apps.<key>.needs` | string[] | Declared app/service keys that must become healthy first. |
-| `apps.<key>.env` | string[] | Explicit shared-environment projection. `[]` means platform/dependency variables only. |
-| `apps.<key>.env_all` | boolean, `false` | Explicitly send every shared key to this member. Cannot be combined with `env`. |
-| `apps.<key>.domain` | string | Override the child manifest domain. |
-| `apps.<key>.public` | boolean | Override the child manifest public setting. |
+| Field | Meaning |
+| --- | --- |
+| `$schema` | Optional schema version; currently `1`. |
+| `$llm` | Optional tooling metadata ignored by the engine. |
+| `name` | Required stack identifier and resource prefix. |
+| `description` | Optional human metadata. |
+| `environment` | Existing shared production environment name. |
+| `staging_environment` | Optional existing shared staging environment name; `null` clears the link. It does not create an environment or app. |
+| `staging_env` | Values applied to the selected staging environment. It requires that environment and does not trigger a release. |
+| `services` | Optional managed-service map. |
+| `apps` | Required non-empty app map. |
 
-Unknown nested fields are rejected. Every `needs` target must name a declared
-app or service.
+Service entries support:
 
-## Dependency graph
+- `services.<key>.type`: required catalog key;
+- `services.<key>.version`: supported catalog version;
+- `services.<key>.volume_size`: desired data size in GB;
+- `services.<key>.env_overrides`: string-to-string container overrides;
+- `services.<key>.domain`: custom HTTP domain;
+- `services.<key>.staging`: reserved staging-counterpart configuration
+  containing `volume_size`, `env_overrides`, and `domain`; declaring it does
+  not enable or create a staging service.
 
-`needs` forms a directed acyclic graph:
+App entries support:
 
-- cycles are rejected before deployment;
-- dependencies deploy before consumers;
-- a consumer starts only after all dependencies are deployed and healthy;
-- independent members in the same level may run concurrently;
-- promotion uses the persisted dependency levels as well.
+- `apps.<key>.manifest`: required child manifest path relative to the stack;
+- `apps.<key>.needs`: app/service keys that must become healthy first;
+- `apps.<key>.env`: explicit shared-environment key projection;
+- `apps.<key>.env_all`: explicitly expose every shared key; mutually exclusive
+  with `env`;
+- `apps.<key>.domain`: override the child domain;
+- `apps.<key>.public`: override child public routing.
 
-A managed service usually appears in the `needs` list of apps that consume its
-generated URL. An app dependency publishes its private URL under the uppercased
-member key.
+Unknown nested fields and unknown `needs` targets are rejected.
 
-## Shared environment and projections
+## Dependency and environment behavior
 
-A stack has one production environment. OCD creates
-`<stack>-stack-env` when needed, or adopts the environment named by
-`environment` on the first deploy. Later deploys keep the remembered
-environment when the field is omitted.
+`needs` must form an acyclic graph. Dependencies become healthy before their
+consumers; independent members can proceed concurrently. Dependency variables
+use the stack member key: `api` publishes `API_URL`; `database` publishes
+`DATABASE_URL`, `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USER`,
+`DATABASE_PASSWORD`, and `DATABASE_NAME`.
 
-All child manifest `env[]` declarations merge into this bag:
+All child `env[]` declarations merge into the shared environment. Explicit
+sets win, existing values beat defaults, and conflicting defaults fail unless
+resolved. New members receive only child-declared and dependency-generated
+keys by default. Use `env_all` only when the member genuinely needs the full
+bag.
 
-- `--set` wins over everything;
-- an existing environment value wins over manifest defaults;
-- one non-empty manifest default supplies a missing key;
-- conflicting non-empty defaults are rejected unless an existing value or
-  `--set` resolves the conflict;
-- unresolved required variables prompt once.
+Treat staging as a separate delivery target. `ocd deploy stack` reconciles the
+declared production app members; it does not synthesize staging siblings.
+Create staging apps separately with their own manifests, environment, and
+domain, then release their exact digests explicitly. Promote between explicit
+app names only after validation; see
+[Releases, promotion, and rollback](releases-promotion-and-rollback.md).
 
-Dependency injection names are derived from stack keys:
+## Reconciliation
 
-- app key `api`: `API_URL`;
-- service key `database`: `DATABASE_URL`, `DATABASE_HOST`,
-  `DATABASE_PORT`, `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
+`ocd deploy stack` submits complete desired membership:
 
-`_URL` and `_PASSWORD` service values are secret.
+- new members are created from their child digest manifests;
+- existing member configuration is reconciled;
+- omitted recorded members are destroyed;
+- dependency ordering and shared ingress are reconciled;
+- newly created side effects are compensated on failure;
+- environments are retained on member or stack destruction;
+- managed volumes are detached and retained, never silently destroyed.
 
-New stack members use least privilege by default:
-
-- omit both `env` and `env_all`: receive keys declared in the child manifest
-  plus variables generated for entries in `needs`;
-- `[]`: receive no child-declared shared keys, but still receive dependency and
-  platform-injected values;
-- `["API_URL", "NODE_ENV"]`: receive only those shared keys.
-- `"env_all": true`: explicitly receive the entire shared environment.
-
-For backward compatibility, an existing stored member keeps its current
-projection when a re-up omits both fields. Add `env` or `env_all` to make a
-projection change explicit. OCD warns in stack logs when a public app receives
-suspicious unrelated names such as `*_PASSWORD`, `*_TOKEN`, `*_SECRET`,
-`*_PRIVATE_KEY`, or `*_API_KEY`; warning output contains names, never values.
-
-Do not mark dependency-generated variables as `required` in a child manifest;
-they do not exist at initial CLI prompt time.
-
-When any member enables webhook staging, OCD creates/reconciles one isolated
-`<stack>-<service>-staging` counterpart for every declared managed service. It
-has separate generated credentials and persistent volume, runs only in the
-`staging` server pool, and injects its credentials only into the shared staging
-environment. Removing the service, disabling all staging members, or destroying
-the stack tears down the counterpart through the normal recoverable-volume
-lifecycle. Existing same-name services are never adopted unless their stored
-production/staging ownership relationship matches.
-
-`staging_env` is applied after an automatically-created staging environment is
-copied from production. Keep secret values out of the manifest: declare them
-with `"required": true, "secret": true` and enter them at the prompt or pass
-`--staging-set` from a protected process environment. Existing values in an
-explicit/reused staging environment satisfy required declarations only after
-OCD has previously applied that key through `staging_env`; copied production
-keys do not. A declared `"default": ""` is meaningful and clears any copied
-value, which is useful for disabling email, alerts, and other side effects.
-
-## Reconciliation semantics
-
-Re-running `ocd deploy stack` is a complete reconciliation:
-
-- existing apps receive the complete child-manifest configuration and a
-  code rollout;
-- new apps/services are created;
-- recorded members omitted from the new manifest are destroyed;
-- reused/adopted resources are protected from stale compensation;
-- newly created resources are compensated when the stack deployment fails;
-- the production and staging environments are never deleted by member or stack
-  destruction;
-- managed volumes are detached and retained rather than provider-deleted.
-- stack deletion automatically suspends pending member webhook deployments,
-  cancels/compensates running webhook deployments, and drops pushes received
-  after destruction begins.
-
-Review the manifest diff before removing a member key. Renaming a key is
-equivalent to destroying the old member and creating a new one.
+Review the diff before removing or renaming a key; a rename is remove-plus-
+create. Use `ocd release <fully-qualified-app-name> --image <digest>` for later
+CI image delivery to an individual member.
 
 ## Example
 
@@ -154,26 +87,19 @@ equivalent to destroying the old member and creating a new one.
 {
   "$schema": 1,
   "name": "blog",
-  "description": "Public web app and private API",
   "environment": "production",
-  "staging_environment": "staging",
-  "staging_env": [
-    { "key": "PUBLIC_BASE_URL", "default": "https://staging.example.com" },
-    { "key": "STRIPE_SECRET_KEY", "required": true, "secret": true }
-  ],
   "services": {
     "database": {
       "type": "postgresql",
       "version": "17",
-      "volume_size": 20,
-      "staging": { "volume_size": 10 }
+      "volume_size": 20
     }
   },
   "apps": {
     "api": {
       "manifest": "services/api/.ocd-deploy.json",
       "needs": ["database"],
-      "env": ["DATABASE_URL", "JWT_SECRET", "NODE_ENV"],
+      "env": ["DATABASE_URL", "JWT_SECRET"],
       "public": false
     },
     "web": {

@@ -34,6 +34,15 @@ export function saveConfig(config: CLIConfig): void {
 }
 
 export function requireConfig(): CLIConfig {
+  const envPanelUrl = process.env.OCD_PANEL_URL?.trim();
+  const envToken = process.env.OCD_TOKEN?.trim();
+  if (envPanelUrl || envToken) {
+    if (!envPanelUrl || !envToken) {
+      console.error("OCD_PANEL_URL and OCD_TOKEN must be set together.");
+      process.exit(1);
+    }
+    return { panel_url: envPanelUrl.replace(/\/+$/, ""), token: envToken };
+  }
   const config = loadConfig();
   if (!config || !config.token || !config.panel_url) {
     console.error("Not logged in. Run `ocd login <panel-url>` first.");

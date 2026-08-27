@@ -2,17 +2,16 @@
   "$schema": 1,
   "name": "My App",
   "description": "A Node.js web application",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "container_port": 3000
+  "image": {
+    "ref": "ghcr.io/example/my-app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
+  "container_port": 3000,
   "env": [
     { "key": "DATABASE_URL", "description": "Postgres connection string", "required": true, "secret": true },
     { "key": "NODE_ENV", "default": "production" }
   ],
   "volume": { "size": 5, "path": "/data" },
   "health_check": { "path": "/healthz" },
-  "webhook": { "enabled": true, "branch": "main" },
   "suggested_app_name": "my-app",
   "replicas": 1,
   "memory_mb": 512,

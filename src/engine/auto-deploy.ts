@@ -9,7 +9,8 @@ import { hetzner } from "../shared/providers/index.ts";
 import { bootstrapPanel } from "./deploy/panel.ts";
 
 export type AutoDeployConfig = {
-  provider_token: string;
+  hetzner_api_token: string;
+  panel_image_ref: string;
   /**
    * Public domain for the panel. Optional: when omitted, bootstrap derives a
    * `<server-ip>.nip.io` domain after the server is created and serves it with
@@ -18,10 +19,9 @@ export type AutoDeployConfig = {
   domain?: string;
   server_type?: string;
   server_location?: string;
-  dns_zone_id?: string;
+  default_domain_suffix?: string;
   app_name?: string;
   volume_size?: number;
-  webhook_branch?: string;
 };
 
 function log(...args: unknown[]) {
@@ -46,8 +46,12 @@ export function loadAutoDeployConfig(raw: string): AutoDeployConfig {
   }
 
   const cfg = parsed as Record<string, unknown>;
-  if (!cfg.provider_token || typeof cfg.provider_token !== "string") {
-    throw new Error("auto-deploy config missing required field: provider_token");
+  if (!cfg.hetzner_api_token || typeof cfg.hetzner_api_token !== "string") {
+    throw new Error("auto-deploy config missing required field: hetzner_api_token");
+  }
+  if (typeof cfg.panel_image_ref !== "string" ||
+      !/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(cfg.panel_image_ref)) {
+    throw new Error("auto-deploy config missing immutable field: panel_image_ref");
   }
   // `domain` is optional (omit it for a self-signed <ip>.nip.io panel), but if
   // present it must be a string.
@@ -68,7 +72,7 @@ export async function runAutoDeploy(
   // authenticates against the Hetzner API BEFORE we start provisioning
   // anything. Otherwise a typo surfaces as a cryptic mid-pipeline error after
   // a server has already been created.
-  const validation = hetzner.validateToken(config.provider_token);
+  const validation = hetzner.validateToken(config.hetzner_api_token);
   if (!validation.valid) {
     const error = `Invalid ${hetzner.name} API token: ${validation.error}`;
     log(`✗ ${error}`);
@@ -76,7 +80,7 @@ export async function runAutoDeploy(
   }
   try {
     log("Verifying provider token...");
-    await hetzner.verifyToken(config.provider_token);
+    await hetzner.verifyToken(config.hetzner_api_token);
   } catch (err) {
     const error = (err as Error).message;
     log(`✗ Provider token verification failed: ${error}`);
@@ -92,16 +96,16 @@ export async function runAutoDeploy(
     crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   process.env.JWT_SECRET = jwtSecret;
 
-  await secretStore.set(hetzner.tokenKey, config.provider_token);
-  if (config.dns_zone_id) {
-    db.saveSetting("dns_zone_id", config.dns_zone_id);
+  await secretStore.set(hetzner.tokenKey, config.hetzner_api_token);
+  if (config.default_domain_suffix) {
+    db.saveSetting("default_domain_suffix", config.default_domain_suffix);
   }
 
   const result = await bootstrapPanel(
     {
       appName: config.app_name || "ocd-panel",
       domain: config.domain,
-      gitRepo: "https://github.com/0-AI-UG/one-click-deploy.git",
+      imageRef: config.panel_image_ref,
       containerPort: 3001,
       envVars: {
         NODE_ENV: "production",
@@ -113,8 +117,6 @@ export async function runAutoDeploy(
       serverLocation: config.server_location || "nbg1",
       volumeSize: config.volume_size ?? 10,
       volumePath: "/app/data",
-      dnsZoneId: config.dns_zone_id,
-      webhookBranch: config.webhook_branch || "main",
     },
     (step, detail) => console.log(`[${step}] ${detail}`),
   );

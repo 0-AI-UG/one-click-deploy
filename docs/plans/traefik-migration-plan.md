@@ -318,3 +318,7 @@ range.)
 7. **Dynamic-config reload semantics**: full-file rewrite on any replica change; Traefik hot-reloads without dropping established connections on unchanged routers, but verify WebSocket behavior on *changed* routers during rolling deploys (same exposure Caddy had; the panel is insulated via `panel.yml`).
 8. **Private apps + scale-to-zero**: no public wake page ⇒ internal callers hitting a sleeping private app get connection refused until a dashboard/CLI wake. Consider defaulting `scale_to_zero_after=0` for private apps or an internal wake-on-connect in a future iteration.
 9. **Migration 60 assumes ≤200 existing apps** — safe (fleet is small), but the migration throws loudly rather than corrupting.
+> Historical design record — superseded. OCD now uses provider-neutral manual
+> DNS instructions and Let's Encrypt HTTP-01 only. Do not use the DNS-provider
+> or wildcard-certificate proposals below as current operational guidance; see
+> `src/cli/skill/assets/docs/networking-and-ingress.md`.

@@ -39,13 +39,8 @@ const fakeProvider = {
   deleteServer: async () => {},
   listServers: async () => [],
 };
-const listZonesMock = mock(async () => [
-  { id: "zone-abc", name: "example.org" },
-  { id: "zone-def", name: "other.dev" },
-]);
 mock.module("../../shared/providers/index.ts", () => ({
   hetzner: fakeProvider,
-  hetznerDns: ({ id: "", name: "", listZones: listZonesMock, createRecord: async () => ({}), deleteRecord: async () => {} }),
 }));
 
 import * as db from "../../shared/db.ts";
@@ -71,27 +66,27 @@ beforeEach(async () => {
 });
 
 describe("handleGetSettings", () => {
-  test("returns masked provider token (never the raw value)", async () => {
+  test("returns a masked Hetzner token (never the raw value)", async () => {
     const token = "hetz-" + "x".repeat(40);
     await secretStore.set("hetzner_api_token", token);
     const r = await handleGetSettings(req());
     expect(r.status).toBe(200);
-    const body = (await r.json()) as { provider_token: string };
-    expect(body.provider_token).not.toContain(token);
-    expect(body.provider_token).toMatch(/\.\.\./);
-    expect(body.provider_token.startsWith("hetz")).toBe(true);
+    const body = (await r.json()) as { hetzner_api_token: string };
+    expect(body.hetzner_api_token).not.toContain(token);
+    expect(body.hetzner_api_token).toMatch(/\.\.\./);
+    expect(body.hetzner_api_token.startsWith("hetz")).toBe(true);
   });
 
   test("returns empty string when no token has been set", async () => {
     const r = await handleGetSettings(req());
-    const body = (await r.json()) as { provider_token: string };
-    expect(body.provider_token).toBe("");
+    const body = (await r.json()) as { hetzner_api_token: string };
+    expect(body.hetzner_api_token).toBe("");
   });
 
-  test("exposes provider metadata", async () => {
+  test("reports Hetzner as unconfigured without provider credentials", async () => {
     const r = await handleGetSettings(req());
-    const body = (await r.json()) as { provider: { id: string; name: string } };
-    expect(body.provider).toMatchObject({ id: "hetzner", name: "Hetzner" });
+    const body = (await r.json()) as { hetzner_configured: boolean };
+    expect(body.hetzner_configured).toBe(false);
   });
 
   test("masks github_oauth_client_secret", async () => {
@@ -103,16 +98,16 @@ describe("handleGetSettings", () => {
   });
 });
 
-describe("handleSaveSettings: provider_token", () => {
+describe("handleSaveSettings: hetzner_api_token", () => {
   test("rejects an invalid token shape without persisting", async () => {
-    const r = await handleSaveSettings(req({ provider_token: "too-short" }));
+    const r = await handleSaveSettings(req({ hetzner_api_token: "too-short" }));
     expect(r.status).toBe(400);
     expect(await secretStore.get("hetzner_api_token")).toBeNull();
   });
 
   test("persists a valid token", async () => {
     const tok = "a".repeat(40);
-    const r = await handleSaveSettings(req({ provider_token: tok }));
+    const r = await handleSaveSettings(req({ hetzner_api_token: tok }));
     expect(r.status).toBe(200);
     expect(await secretStore.get("hetzner_api_token")).toBe(tok);
   });
@@ -120,7 +115,7 @@ describe("handleSaveSettings: provider_token", () => {
   test("ignores a masked token (user re-submitting the GET payload)", async () => {
     const tok = "b".repeat(40);
     await secretStore.set("hetzner_api_token", tok);
-    const r = await handleSaveSettings(req({ provider_token: "a123...zzzz" }));
+    const r = await handleSaveSettings(req({ hetzner_api_token: "a123...zzzz" }));
     expect(r.status).toBe(200);
     // Original token must be preserved.
     expect(await secretStore.get("hetzner_api_token")).toBe(tok);
@@ -129,7 +124,7 @@ describe("handleSaveSettings: provider_token", () => {
   test("overwrites an existing token on a fresh valid value", async () => {
     await secretStore.set("hetzner_api_token", "c".repeat(40));
     const fresh = "d".repeat(40);
-    await handleSaveSettings(req({ provider_token: fresh }));
+    await handleSaveSettings(req({ hetzner_api_token: fresh }));
     expect(await secretStore.get("hetzner_api_token")).toBe(fresh);
   });
 });
@@ -154,15 +149,13 @@ describe("handleSaveSettings: github_oauth_client_secret", () => {
 });
 
 describe("handleSaveSettings: plain db settings", () => {
-  test("stores separate OCI cache/artifact repositories and masks credentials", async () => {
+  test("stores an OCI repository allowlist and masks credentials", async () => {
     const r = await handleSaveSettings(req({
-      oci_cache_ref: "registry.example/ocd/cache:main",
       oci_artifact_ref: "registry.example/ocd/artifacts",
       oci_registry_username: "deployer",
       oci_registry_password: "registry-secret-value",
     }));
     expect(r.status).toBe(200);
-    expect(db.getSettings().oci_cache_ref).toBe("registry.example/ocd/cache:main");
     expect(db.getSettings().oci_artifact_ref).toBe("registry.example/ocd/artifacts");
     expect(await secretStore.get("oci_registry_password")).toBe("registry-secret-value");
     const shown = await (await handleGetSettings(req())).json() as Record<string, unknown>;
@@ -170,53 +163,36 @@ describe("handleSaveSettings: plain db settings", () => {
   });
 
   test("rejects invalid OCI repository defaults", async () => {
-    const r = await handleSaveSettings(req({ oci_cache_ref: "not-a-repository" }));
+    const r = await handleSaveSettings(req({ oci_artifact_ref: "not-a-repository" }));
     expect(r.status).toBe(400);
   });
 
-  test("saves dns_zone_id and default_server_type to the settings table", async () => {
+  test("saves the provider-neutral default domain suffix and server defaults", async () => {
     const r = await handleSaveSettings(
       req({
-        dns_zone_id: "zone-abc",
+        default_domain_suffix: "apps.example.org",
         default_server_type: "cx22",
         default_location: "fsn1",
       }),
     );
     expect(r.status).toBe(200);
     const s = db.getSettings();
-    expect(s.dns_zone_id).toBe("zone-abc");
+    expect(s.default_domain_suffix).toBe("apps.example.org");
     expect(s.default_server_type).toBe("cx22");
     expect(s.default_location).toBe("fsn1");
   });
 
-  test("saving a dns_zone_id resolves and caches the zone name", async () => {
-    const r = await handleSaveSettings(req({ dns_zone_id: "zone-def" }));
-    expect(r.status).toBe(200);
-    expect(db.getSettings().dns_zone_id).toBe("zone-def");
-    expect(db.getSettings().dns_zone_name).toBe("other.dev");
+  test("rejects invalid default domain suffixes", async () => {
+    const r = await handleSaveSettings(req({ default_domain_suffix: "https://bad.example/path" }));
+    expect(r.status).toBe(400);
   });
 
-  test("clearing dns_zone_id clears the cached zone name", async () => {
-    db.saveSetting("dns_zone_id", "zone-abc");
-    db.saveSetting("dns_zone_name", "example.org");
-    const r = await handleSaveSettings(req({ dns_zone_id: "" }));
-    expect(r.status).toBe(200);
-    expect(db.getSettings().dns_zone_id).toBe("");
-    expect(db.getSettings().dns_zone_name).toBe("");
-  });
-
-  test("unknown zone id leaves the zone name empty", async () => {
-    const r = await handleSaveSettings(req({ dns_zone_id: "zone-nope" }));
-    expect(r.status).toBe(200);
-    expect(db.getSettings().dns_zone_name).toBe("");
-  });
-
-  test("zone name lookup failure does not fail the save", async () => {
-    listZonesMock.mockImplementationOnce(async () => { throw new Error("dns api down"); });
-    const r = await handleSaveSettings(req({ dns_zone_id: "zone-abc" }));
-    expect(r.status).toBe(200);
-    expect(db.getSettings().dns_zone_id).toBe("zone-abc");
-    expect(db.getSettings().dns_zone_name).toBe("");
+  test("rejects removed provider and DNS settings instead of persisting them", async () => {
+    for (const key of ["provider_token", "compute_provider", "dns_provider", "dns_zone_id", "dns_zone_name"]) {
+      const r = await handleSaveSettings(req({ [key]: "legacy-value" }));
+      expect(r.status).toBe(400);
+      expect(db.getSettings()[key]).toBeUndefined();
+    }
   });
 
   test("require_2fa is coerced to '1' / '0' string", async () => {
@@ -226,24 +202,20 @@ describe("handleSaveSettings: plain db settings", () => {
     expect(db.getSettings().require_2fa).toBe("0");
   });
 
-  test("archive image transfer is an explicit emergency opt-in", async () => {
-    await handleSaveSettings(req({ allow_archive_image_transfer: true }));
-    expect(db.getSettings().allow_archive_image_transfer).toBe("1");
-    const enabled = (await (await handleGetSettings(req())).json()) as {
-      allow_archive_image_transfer: boolean;
-    };
-    expect(enabled.allow_archive_image_transfer).toBe(true);
-
-    await handleSaveSettings(req({ allow_archive_image_transfer: false }));
-    expect(db.getSettings().allow_archive_image_transfer).toBe("0");
-  });
 });
 
 describe("handleGetServerTypes", () => {
   test("returns the server types from the active compute provider", async () => {
+    await secretStore.set("hetzner_api_token", "x".repeat(40));
     const r = await handleGetServerTypes(req());
     expect(r.status).toBe(200);
     const body = (await r.json()) as { server_types: Array<{ name: string }> };
     expect(body.server_types.map((t) => t.name)).toContain("cx22");
+  });
+
+  test("returns an empty provider-neutral result when Hetzner is not configured", async () => {
+    const r = await handleGetServerTypes(req());
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ server_types: [] });
   });
 });

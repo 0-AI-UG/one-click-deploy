@@ -8,8 +8,6 @@ import {
 } from "../../shared/app-config.ts";
 import {
   sshExec,
-  cloneRepo,
-  cloneAndBuild,
   pullImmutableImageAndRun,
   removeContainer,
   healthCheck,
@@ -25,14 +23,12 @@ import { validateDeployRequest, assertSafeHostPath } from "../../shared/validate
 import { createMasker } from "../../shared/mask.ts";
 import { processIncomingEnvVars, serializeEnvVars, parseEnvVars, platformEnvVars, projectEnvVars } from "../../shared/env-crypto.ts";
 import { getProviderToken } from "../../shared/secret-store.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
-import { getOrResolveZoneName } from "../../shared/dns-zone.ts";
 import { provisionServer } from "../provision-server.ts";
 import { registerOp } from "./registry.ts";
 import { FatalProbeError, type OpContext, type OpKindDefinition, type Step } from "../types.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
 import { scaleUp } from "../scale/scale-up.ts";
-import { resolveBuildRegistry } from "../registry-config.ts";
+import { assertConnectedStatelessWorkload, assertProviderVolumesSupported } from "../../shared/infrastructure.ts";
 
 type DeployInput = DeployRequest;
 
@@ -43,19 +39,7 @@ type ServerOut = {
   provisioned: boolean;
   providerServerId?: string;
   ingressIp: string;
-  /** DNS zone name for auto-domains, resolved once in this step so every
-   *  later step (and crash-replay probes) sees the same value. "" when no
-   *  zone is configured or the deploy doesn't need an auto-domain. */
-  zoneName?: string;
 };
-
-type DnsOut = {
-  recordId: string;
-  zoneId: string;
-  name: string;
-  type: string;
-  value: string;
-} | null;
 
 type VolumeOut = {
   volumeId: string;
@@ -74,12 +58,9 @@ type InsertAppOut = {
   useInternalTls: boolean;
   environmentId: number | null;
   flatEnvVars: Record<string, string>;
-  dockerfilePath: string;
 };
 
-type CloneOut = { ok: true; revision?: string };
-
-type BuildOut = {
+type ArtifactOut = {
   imageTag: string;
   imageDigest?: string;
   imageBytes?: number;
@@ -105,10 +86,8 @@ export function appVolumeName(appName: string, opId: number): string {
   return `ocd-${appName}-op${opId}`;
 }
 
-async function buildMasker(input: DeployInput, userId: string, additionalSecrets: string[] = []) {
+async function deploymentMasker(input: DeployInput, userId: string, additionalSecrets: string[] = []) {
   const providerToken = await getProviderToken();
-  const resolvedGitToken = await resolveGitHubToken(userId || undefined);
-  const githubPat = resolvedGitToken || undefined;
   const envVarValues = input.env_vars
     ? Array.isArray(input.env_vars)
       ? input.env_vars.map((e) => e.value)
@@ -116,47 +95,32 @@ async function buildMasker(input: DeployInput, userId: string, additionalSecrets
     : [];
   const secretValues = [
     providerToken,
-    ...(githubPat ? [githubPat] : []),
     ...envVarValues,
     ...additionalSecrets,
   ];
-  return { mask: createMasker(secretValues), githubPat };
+  return { mask: createMasker(secretValues) };
 }
 
 /** Resolve where the app is reachable from outside. Private apps get no
  *  domain at all — no DNS record, no public route, internal ingress only.
- *  Public apps without an explicit domain get the auto-domain
- *  `<app>.<zone>` when a DNS zone is configured; nip.io remains the
- *  fallback only when no zone is configured (or its name is unresolvable). */
+ *  Public apps without an explicit domain get `<app>.<default suffix>` when
+ *  configured; otherwise nip.io remains the zero-configuration fallback.
+ *  In either case OCD only reports DNS instructions and never changes DNS. */
 export function resolveAppDomain(
   req: { app_name: string; domain?: string; public?: boolean },
-  settings: { dns_zone_id?: string; dns_zone_name?: string },
+  settings: { default_domain_suffix?: string },
   ingressIp: string,
-): { domain: string; managedDns: boolean } {
-  if (req.public === false) return { domain: "", managedDns: false };
-  if (req.domain) {
-    const zone = (settings.dns_zone_name || "").replace(/\.$/, "").toLowerCase();
-    const domain = req.domain.replace(/\.$/, "").toLowerCase();
-    return {
-      domain: req.domain,
-      managedDns: !!settings.dns_zone_id && !!zone && (domain === zone || domain.endsWith(`.${zone}`)),
-    };
-  }
-  if (settings.dns_zone_id && settings.dns_zone_name) {
-    return { domain: `${req.app_name}.${settings.dns_zone_name}`, managedDns: true };
-  }
-  return { domain: `${req.app_name}.${ingressIp}.nip.io`, managedDns: false };
+): { domain: string } {
+  if (req.public === false) return { domain: "" };
+  if (req.domain) return { domain: req.domain };
+  const suffix = (settings.default_domain_suffix || "").replace(/^\.+|\.+$/g, "").toLowerCase();
+  if (suffix) return { domain: `${req.app_name}.${suffix}` };
+  return { domain: `${req.app_name}.${ingressIp}.nip.io` };
 }
 
-/** Settings view for resolveAppDomain inside deploy steps: the zone name from
- *  the pick_or_provision_server output wins over the live setting so domain
- *  resolution is deterministic across run+probe replays of the saga. */
-function domainSettings(server: ServerOut): { dns_zone_id?: string; dns_zone_name?: string } {
+function domainSettings(_server: ServerOut): { default_domain_suffix?: string } {
   const settings = db.getSettings();
-  return {
-    dns_zone_id: settings.dns_zone_id,
-    dns_zone_name: server.zoneName ?? settings.dns_zone_name,
-  };
+  return { default_domain_suffix: settings.default_domain_suffix };
 }
 
 // --- Steps ----------------------------------------------------------------
@@ -191,23 +155,15 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
     const panel = db.getPanel();
     const panelServerRow = panel ? db.getServer(panel.server_id) : null;
 
-    // Auto-domain zone name: resolve (and cache) it once in this step so the
-    // whole saga — including crash-replay probes of later steps — sees one
-    // consistent value via this step's persisted output. Only needed when the
-    // deploy would actually mint an auto-domain.
-    const zoneName =
-      req.public === false || req.domain ? "" : await getOrResolveZoneName();
-    if (req.public !== false && !req.domain && settings.dns_zone_id && !zoneName) {
-      ctx.log(
-        `dns_zone_id is set but the zone name could not be resolved — falling back to nip.io`,
-      );
-    }
-
     if (req.server_id) {
       const target = db.getServer(req.server_id) as Server | null;
       if (!target || target.status !== "ready") {
         throw new Error("Target server not found or not ready");
       }
+      assertConnectedStatelessWorkload(target, {
+        managedVolume: (req.volume_size ?? 0) > 0 || !!req.volume_id,
+        hostMounts: (req.extra_volumes?.length ?? 0) > 0,
+      });
       const ingressIp = panelServerRow?.ipv4 || target.ipv4;
       return {
         serverId: target.id,
@@ -215,7 +171,6 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
         serverHostKey: target.ssh_host_key || "",
         provisioned: false,
         ingressIp,
-        zoneName,
       };
     }
     const desiredPool = req.placement_pool || "general";
@@ -225,6 +180,10 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
       s.pool === desiredPool
     );
     if (existingReady) {
+      assertConnectedStatelessWorkload(existingReady, {
+        managedVolume: (req.volume_size ?? 0) > 0 || !!req.volume_id,
+        hostMounts: (req.extra_volumes?.length ?? 0) > 0,
+      });
       const ingressIp = panelServerRow?.ipv4 || existingReady.ipv4;
       return {
         serverId: existingReady.id,
@@ -232,7 +191,6 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
         serverHostKey: existingReady.ssh_host_key || "",
         provisioned: false,
         ingressIp,
-        zoneName,
       };
     }
     const serverType = settings.default_server_type;
@@ -256,7 +214,6 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
       provisioned: true,
       providerServerId: newServer.provider_id,
       ingressIp,
-      zoneName,
     };
   },
   async compensate(ctx, out) {
@@ -269,12 +226,6 @@ const pickOrProvisionServer: Step<DeployInput, ServerOut> = {
   },
 };
 
-const createDnsRecord: Step<DeployInput, DnsOut> = {
-  name: "create_dns_record",
-  label: "Declare DNS intent",
-  async run() { return null; },
-};
-
 const createVolume: Step<DeployInput, VolumeOut> = {
   name: "create_volume",
   label: "Create volume",
@@ -282,6 +233,9 @@ const createVolume: Step<DeployInput, VolumeOut> = {
     const req = ctx.input;
     if (!req.volume_size || req.volume_size <= 0) return null;
     const server = prior["pick_or_provision_server"] as ServerOut;
+    const serverRow = db.getServer(server.serverId);
+    if (!serverRow) throw new FatalProbeError(`Server ${server.serverId} not found`);
+    assertProviderVolumesSupported(serverRow);
     const settings = db.getSettings();
     let providerServerId = server.providerServerId;
     if (!providerServerId) providerServerId = db.getServer(server.serverId)?.provider_id;
@@ -348,6 +302,9 @@ const createVolume: Step<DeployInput, VolumeOut> = {
     if (!req.volume_size || req.volume_size <= 0) return null;
 
     const server = prior["pick_or_provision_server"] as ServerOut;
+    const volumeServer = db.getServer(server.serverId);
+    if (!volumeServer) throw new Error(`Server ${server.serverId} not found`);
+    assertProviderVolumesSupported(volumeServer);
     const settings = db.getSettings();
     const compute = hetzner;
     if (!compute.volumes) {
@@ -453,7 +410,6 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const useDomain =
       existing.domain || resolveAppDomain(req, domainSettings(server), server.ingressIp).domain;
     const useInternalTls = useDomain.endsWith(".nip.io");
-    const dockerfilePath = existing.dockerfile_path || req.dockerfile_path || "Dockerfile";
 
     // Resolve flat env vars from the existing app's environment (idempotent).
     const flatEnvVars: Record<string, string> = {};
@@ -476,7 +432,6 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       useInternalTls,
       environmentId: existing.environment_id,
       flatEnvVars,
-      dockerfilePath,
     };
   },
   async probeCompensated(_ctx, out) {
@@ -487,12 +442,10 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     const req = resolveDeployRequestEnvironmentIds(ctx.input);
     Object.assign(ctx.input, req);
     const server = prior["pick_or_provision_server"] as ServerOut;
-    const dns = prior["create_dns_record"] as DnsOut;
     const volume = prior["create_volume"] as VolumeOut;
 
     const { domain: useDomain } = resolveAppDomain(req, domainSettings(server), server.ingressIp);
     const useInternalTls = useDomain.endsWith(".nip.io");
-    const dockerfilePath = req.dockerfile_path || "Dockerfile";
 
     // Resolve environment + flat env vars (must be reproducible; idempotent
     // env creation uses unique-name retry). A deploy's env_vars are the caller's
@@ -550,7 +503,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
     // Durability policy -> concrete placement-spread + replica floors, applied
     // AT INSERT so the SLO/placement layer enforces them from the first tick.
     const scaling = normalizeAppScaling(req);
-    // Single atomic commit: app row + first replica + DNS record + volume
+    // Single atomic commit: app row + first replica + volume intent.
     // metadata. Without the transaction a mid-step crash could leave the DB
     // with an app but no DNS / volume / extra-volume rows.
     const { app, replica } = dbInstance.transaction(() => {
@@ -558,12 +511,7 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
         {
           name: req.app_name,
           domain: useDomain,
-          git_repo: req.git_repo,
-          git_branch: req.git_branch,
-          dockerfile_path: dockerfilePath,
-          docker_context: req.docker_context,
-          image_ref: req.image_ref,
-          build_cache_ref: req.build_cache_ref,
+          image_ref: req.image_ref!,
           container_port: req.container_port,
           env_vars: serializeEnvVars([]),
           auth_password: req.auth_password,
@@ -608,16 +556,6 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
         autoscale_cooldown: scaling.autoscale_cooldown,
         scale_to_zero_after: scaling.scale_to_zero_after,
       });
-      if (dns) {
-        db.insertDnsRecord({
-          app_id: result.app.id,
-          zone_id: dns.zoneId,
-          record_id: `${dns.name}/${dns.type}/${dns.value}`,
-          name: dns.name,
-          type: dns.type,
-          value: dns.value,
-        });
-      }
       if (volume) {
         db.updateAppVolume(result.app.id, volume.volumeId, volume.volumeMount, volume.attached);
         if (volume.attached) db.deleteRetiredVolume(volume.volumeId);
@@ -643,7 +581,6 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
       useInternalTls,
       environmentId,
       flatEnvVars: projectedFlatEnvVars,
-      dockerfilePath,
     };
   },
   async compensate(ctx, out) {
@@ -727,67 +664,9 @@ const setupVolumeBindMount: Step<DeployInput, { ok: true }> = {
   },
 };
 
-const cloneRepoStep: Step<DeployInput, CloneOut> = {
-  name: "clone_repo",
-  label: "Clone repository",
-  async probe(ctx, prior) {
-    const req = ctx.input;
-    if (req.image_ref) return { ok: true };
-    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
-    if (!server) return null;
-    const check = await sshExec(
-      server.serverIp,
-      req.git_sha
-        ? `su - deploy -c ${JSON.stringify(`cd /home/deploy/apps/${req.app_name} 2>/dev/null && git rev-parse HEAD || true`)}`
-        : `[ -d /home/deploy/apps/${req.app_name}/.git ] && echo yes || echo no`,
-      server.serverHostKey || undefined,
-    );
-    const existingRevision = check.stdout.trim();
-    if (existingRevision === "yes" || (req.git_sha && existingRevision.toLowerCase().startsWith(req.git_sha.toLowerCase()))) {
-      ctx.log(`repo already cloned at /home/deploy/apps/${req.app_name} — adopting`);
-      return { ok: true, revision: req.git_sha || undefined };
-    }
-    return null;
-  },
-  async run(ctx, prior) {
-    const req = ctx.input;
-    if (req.image_ref) {
-      ctx.log("Immutable image deployment: no Git clone required");
-      return { ok: true };
-    }
-    const server = prior["pick_or_provision_server"] as ServerOut;
-    const appOut = prior["insert_app_row"] as InsertAppOut;
-    const { mask, githubPat } = await buildMasker(
-      req,
-      ctx.triggeredBy,
-      Object.values(appOut.flatEnvVars),
-    );
-    const revision = await cloneRepo(server.serverIp, req.app_name, req.git_repo, githubPat, (line) => {
-      db.appendDeployLog(appOut.appId, mask(`[clone] ${line}`));
-      ctx.log(`[clone] ${mask(line)}`);
-    }, req.git_branch, server.serverHostKey || undefined, req.git_sha);
-    ctx.log(`Immutable source revision: ${revision}`);
-    return { ok: true, revision };
-  },
-  async compensate(ctx, _out, prior) {
-    const req = ctx.input;
-    const server = prior["pick_or_provision_server"] as ServerOut | undefined;
-    if (!server) return;
-    try {
-      await sshExec(
-        server.serverIp,
-        `su - deploy -c "rm -rf /home/deploy/apps/${req.app_name}"`,
-        server.serverHostKey || undefined,
-      );
-    } catch (err) {
-      ctx.log(`Failed to remove cloned repo dir: ${err}`);
-    }
-  },
-};
-
-const buildAndRunContainer: Step<DeployInput, BuildOut> = {
-  name: "build_and_run_container",
-  label: "Build and run container",
+const pullAndRunContainer: Step<DeployInput, ArtifactOut> = {
+  name: "pull_and_run_container",
+  label: "Pull and run immutable image",
   async probe(ctx, prior) {
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut | undefined;
@@ -802,7 +681,8 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     if (await containerRunning(server.serverIp, req.app_name, hostKey)) {
       ctx.log(`adopting existing running container ${req.app_name}`);
       return {
-        imageTag: `${req.app_name}:latest`,
+        imageTag: req.image_ref!,
+        imageDigest: req.image_ref!,
       };
     }
     return null;
@@ -821,7 +701,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     const volume = prior["create_volume"] as VolumeOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
 
-    const { mask, githubPat } = await buildMasker(
+    const { mask } = await deploymentMasker(
       req,
       ctx.triggeredBy,
       Object.values(appOut.flatEnvVars),
@@ -846,7 +726,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         }
       : appOut.flatEnvVars;
 
-    let imageTag = `${req.app_name}:latest`;
+    const imageTag = req.image_ref!;
     const common = {
         name: req.app_name,
         port: req.container_port,
@@ -854,46 +734,22 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         envVars,
         volumeMount: volume?.volumeMount,
         extraVolumes: (req.extra_volumes || []).map((v) => `${v.host_path}:${v.container_path}`),
-        dockerfilePath: req.dockerfile_path,
-        dockerContext: req.docker_context,
-        gitToken: githubPat,
-        gitBranch: req.git_branch,
         bindAddr: containerBindAddr,
-        skipClone: true,
         memoryMb: req.memory_mb || undefined,
         cpus: req.cpu_limit || undefined,
         hostKey: server.serverHostKey || undefined,
         configRevision: appRow?.config_revision ?? 1,
         envHash: hashEnvironment(envVars),
     };
-    const buildRegistry = await resolveBuildRegistry(req.build_cache_ref);
     let result;
     try {
-      result = req.image_ref
-        ? await pullImmutableImageAndRun(server.serverIp, {
-            ...common,
-            imageRef: req.image_ref,
-            gitToken: githubPat,
-          }, (line) => {
-            maskedLog(`[pull] ${line}`);
-            ctx.log(`[pull] ${mask(line)}`);
-          })
-        : await cloneAndBuild(
-          server.serverIp,
-          {
-            ...common,
-            gitRepo: req.git_repo,
-            buildCacheRef: buildRegistry.ref,
-            registryUsername: buildRegistry.username,
-            registryPassword: buildRegistry.password,
-            reserveArchiveSpace:
-              (req.replicas ?? 1) > 1 && db.getSettings().allow_archive_image_transfer === "1",
-          },
-          (line) => {
-            maskedLog(`[build] ${line}`);
-            ctx.log(`[build] ${mask(line)}`);
-          },
-        );
+      result = await pullImmutableImageAndRun(server.serverIp, {
+        ...common,
+        imageRef: req.image_ref!,
+      }, (line) => {
+        maskedLog(`[pull] ${line}`);
+        ctx.log(`[pull] ${mask(line)}`);
+      });
     } catch (error) {
       // A helper may fail after replacing/creating the container. Because this
       // step has not returned, its normal compensate hook is ineligible; own
@@ -906,14 +762,12 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
         );
       } catch (rollbackError) {
         throw new Error(
-          `Build/run failed and its partial container could not be removed: ${rollbackError}`,
+          `Pull/run failed and its partial container could not be removed: ${rollbackError}`,
           { cause: error },
         );
       }
       throw error;
     }
-    if (result.imageTag) imageTag = result.imageTag;
-
     return {
       imageTag,
       imageDigest: "imageDigest" in result ? result.imageDigest : undefined,
@@ -926,7 +780,7 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     const appOut = prior["insert_app_row"] as InsertAppOut;
     if (!server || !appOut) return;
     try {
-      const { mask } = await buildMasker(
+      const { mask } = await deploymentMasker(
         ctx.input,
         ctx.triggeredBy,
         Object.values(appOut.flatEnvVars),
@@ -952,13 +806,11 @@ const buildAndRunContainer: Step<DeployInput, BuildOut> = {
     // container is gone, so re-running the compensate is safe.
     await removeContainer(server.serverIp, appOut.containerName, server.serverHostKey || undefined);
     // The app row/container are operation-owned and are being compensated, so
-    // its local convenience/candidate tags are reconstructible. Removing them
-    // prevents failed first deploys from permanently consuming host disk.
+    // an unreferenced OCD-managed layer is safe to prune.
     await sshExec(
       server.serverIp,
       `su - deploy -c ${JSON.stringify(
-        `docker image rm ${ctx.input.app_name}:latest ${ctx.input.app_name}:rollback 2>/dev/null || true; ` +
-          `docker image prune -f --filter label=ocd.managed=true >/dev/null 2>&1 || true`,
+        `docker image prune -f --filter label=ocd.managed=true >/dev/null 2>&1 || true`,
       )}`,
       server.serverHostKey || undefined,
     );
@@ -1013,7 +865,7 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
     );
 
     if (health.healthy) {
-      const build = prior["build_and_run_container"] as BuildOut | undefined;
+      const build = prior["pull_and_run_container"] as ArtifactOut | undefined;
       const replica = db.getReplica(appOut.replicaId);
       if (!replica) throw new Error("Replica row missing during attestation");
       db.updateReplicaStatus(replica.id, "attesting");
@@ -1077,17 +929,9 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
     const req = ctx.input;
     const server = prior["pick_or_provision_server"] as ServerOut;
     const appOut = prior["insert_app_row"] as InsertAppOut;
-    const build = prior["build_and_run_container"] as BuildOut;
+    const build = prior["pull_and_run_container"] as ArtifactOut;
 
-    let gitCommit = "artifact";
-    if (!req.image_ref) {
-      const gitCommitResult = await sshExec(
-        server.serverIp,
-        `su - deploy -c "cd /home/deploy/apps/${req.app_name} && git rev-parse --short=12 HEAD 2>/dev/null || echo unknown"`,
-        server.serverHostKey || undefined,
-      );
-      gitCommit = gitCommitResult.stdout.trim();
-    }
+    const gitCommit = req.git_commit || "";
     const row = db.insertDeployment({
       operation_id: ctx.opId,
       app_id: appOut.appId,
@@ -1110,103 +954,6 @@ const recordDeploymentHistory: Step<DeployInput, { deploymentId: number; gitComm
       dbInstance.run("DELETE FROM deployment_history WHERE id = ?", [out.deploymentId]);
     } catch (err) {
       ctx.log(`Failed to delete deployment history row ${out.deploymentId}: ${err}`);
-    }
-  },
-};
-
-/**
- * The environment this app's `<name>-staging` sibling will deploy with, or null
- * when staging isn't wanted.
- *
- * An explicit `webhook_staging_environment_id` wins. Otherwise a manifest that
- * only declares intent (`webhook.staging: true` → `webhook_staging`) gets an
- * environment MINTED here, as a copy of the app's own — the same bargain the
- * app's production environment already gets on the no-`--env` path above, and
- * the same one a stack makes for its members. So `webhook.staging: true` is
- * self-sufficient: it means the same thing standalone as it does in a stack.
- *
- * An app with no environment of its own has nothing to copy, so it gets an
- * empty one — a non-null id IS the staging on-switch, so there must be a row.
- */
-export function resolveStagingEnvironment(
-  ctx: Pick<OpContext<DeployInput>, "log">,
-  req: DeployInput,
-  appId: number,
-): number | null {
-  if (req.webhook_staging_environment_id !== undefined) {
-    return req.webhook_staging_environment_id;
-  }
-  if (!req.webhook_staging) return null;
-
-  let envName = `${req.app_name}-staging-env`;
-  let suffix = 1;
-  while (db.getEnvironments().find((e) => e.name === envName)) {
-    envName = `${req.app_name}-staging-env-${suffix++}`;
-  }
-  const source = db.getApp(appId)?.environment_id ?? null;
-  const created = source != null
-    ? db.duplicateEnvironment(source, envName)
-    : db.insertEnvironment(envName, "");
-  ctx.log(
-    source != null
-      ? `created staging environment "${envName}" (${created.id}) as a copy of the app's environment`
-      : `created empty staging environment "${envName}" (${created.id}) — the app has no environment to copy`,
-  );
-  return created.id;
-}
-
-const setupGithubWebhook: Step<DeployInput, { ok: boolean; error?: string; webhookId?: string }> = {
-  name: "setup_github_webhook",
-  label: "Configure webhook",
-  async probe(ctx, prior) {
-    const req = ctx.input;
-    if (!req.webhook_enabled) return null;
-    const appOut = prior["insert_app_row"] as InsertAppOut | undefined;
-    if (!appOut) return null;
-    const app = db.getApp(appOut.appId);
-    if (!app || !app.github_webhook_id) return null;
-    ctx.log(`adopting existing github webhook id=${app.github_webhook_id}`);
-    return { ok: true, webhookId: app.github_webhook_id };
-  },
-  async run(ctx, prior) {
-    const req = ctx.input;
-    if (!req.webhook_enabled) return { ok: true };
-    const appOut = prior["insert_app_row"] as InsertAppOut;
-
-    try {
-      const webhookBranch = req.webhook_branch || "main";
-      const webhookPath = (req.webhook_path || "").trim().replace(/^\/+/, "").replace(/\/+$/, "");
-      const webhookSecret = crypto.randomUUID();
-      db.updateAppWebhook(
-        appOut.appId,
-        true,
-        webhookSecret,
-        webhookBranch,
-        "",
-        webhookPath,
-        !!req.webhook_wait_for_ci,
-      );
-      db.updateAppWebhookPaths(
-        appOut.appId,
-        req.webhook_paths !== undefined
-          ? req.webhook_paths
-          : (webhookPath ? [`${webhookPath}/**`] : null),
-        req.webhook_paths_ignore ?? [],
-        { clearLegacyPath: !webhookPath },
-      );
-      db.appendDeployLog(appOut.appId, `[webhook] Auto-redeploy enabled on branch ${webhookBranch}`);
-      const stagingEnvId = resolveStagingEnvironment(ctx, req, appOut.appId);
-      if (stagingEnvId != null) {
-        db.updateAppWebhookStagingEnvironment(appOut.appId, stagingEnvId);
-        db.appendDeployLog(appOut.appId, `[webhook] Staging enabled — pushes hold in ${req.app_name}-staging for manual promotion`);
-      }
-      ctx.log("Webhook desired state recorded; provider reconciliation is asynchronous");
-      return { ok: true };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      db.appendDeployLog(appOut.appId, `[webhook] Warning: failed to set up webhook: ${msg}`);
-      ctx.log(`Webhook setup failed (non-fatal): ${msg}`);
-      return { ok: false, error: msg };
     }
   },
 };
@@ -1267,16 +1014,13 @@ const deployOp: OpKindDefinition<DeployInput> = {
   resourceKeys: (input) => [`app:create:${input.app_name}`],
   steps: [
     pickOrProvisionServer,
-    createDnsRecord,
     createVolume,
     insertAppRow,
     setupVolumeBindMount,
-    cloneRepoStep,
-    buildAndRunContainer,
+    pullAndRunContainer,
     syncIngressStep,
     healthCheckStep,
     recordDeploymentHistory,
-    setupGithubWebhook,
     finalizeDeploy,
   ],
 };

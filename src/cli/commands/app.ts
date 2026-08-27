@@ -9,13 +9,6 @@ type AppDetail = App & {
   memory_mb?: number;
   cpu_limit?: number;
   internal_protocol?: string;
-  webhook_enabled?: boolean | number;
-  webhook_branch?: string;
-  webhook_path?: string;
-  webhook_paths?: string[] | null;
-  webhook_paths_ignore?: string[];
-  webhook_wait_for_ci?: boolean | number;
-  webhook_staging_environment_id?: number | null;
   autoscale_enabled?: boolean | number;
   min_replicas?: number;
   max_replicas?: number;
@@ -25,9 +18,7 @@ type AppDetail = App & {
   autoscale_req_threshold?: number;
   scale_to_zero_after?: number;
   config_revision?: number;
-  source_mode?: string;
   image_ref?: string;
-  build_cache_ref?: string;
   health_check_mode?: string;
   health_check?: boolean | number;
   health_check_command?: string;
@@ -38,14 +29,6 @@ type AppDetail = App & {
   desired_volume_id?: string;
   desired_volume_size?: number;
   desired_volume_path?: string;
-  last_webhook_head?: string | null;
-  last_webhook_received_at?: string | null;
-  last_webhook_evaluated_at?: string | null;
-  last_webhook_ci_result?: string | null;
-  last_matching_paths?: string[];
-  last_decision?: string | null;
-  last_evaluated_commit?: string | null;
-  last_successfully_deployed_commit?: string | null;
 };
 
 export type ParsedFlags = {
@@ -117,10 +100,7 @@ async function showApp(args: string[]): Promise<void> {
     ["ID", String(app.id)],
     ["Name", app.name],
     ["Status", app.status],
-    ["Repository", app.git_repo || "-"],
-    ["Source mode", app.source_mode || "git"],
     ["Immutable image", app.image_ref || "-"],
-    ["Build cache", app.build_cache_ref || "-"],
     ["Domain", app.domain || "-"],
     ["Public", String(!!app.public)],
     ["Container port", String(app.container_port ?? "-")],
@@ -141,7 +121,6 @@ async function showApp(args: string[]): Promise<void> {
     ["Health marker", app.health_check_file
       ? `${app.health_check_file} (max ${app.health_check_max_age_seconds}s)`
       : "-"],
-    ["Webhook", app.webhook_enabled ? "enabled" : "disabled"],
   ]);
   if (parsed.switches.has("storage")) {
     const storage = await get<{
@@ -336,48 +315,19 @@ async function staging(args: string[]): Promise<void> {
   const result = await get<{
     staging_enabled: boolean;
     staging_environment_id: number | null;
-    prod_commit: string | null;
     sibling: {
       id: number;
       name: string;
       status: string;
       domain?: string;
-      commit: string | null;
     } | null;
   }>(`/api/apps/${app.id}/staging`);
   table(["Field", "Value"], [
     ["Enabled", String(result.staging_enabled)],
     ["Environment", result.staging_environment_id == null ? "-" : `#${result.staging_environment_id}`],
-    ["Production commit", result.prod_commit || "-"],
     ["Sibling", result.sibling ? `${result.sibling.name} (#${result.sibling.id})` : "-"],
     ["Sibling status", result.sibling?.status || "-"],
-    ["Sibling commit", result.sibling?.commit || "-"],
     ["Preview domain", result.sibling?.domain || "-"],
-  ]);
-}
-
-async function webhook(args: string[]): Promise<void> {
-  const parsed = parseAppFlags(args);
-  const [action, appName] = parsed.positional;
-  if (action !== "status" || !appName) {
-    throw new Error("Usage: ocd app webhook status <app>");
-  }
-  const app = await resolveApp(appName) as AppDetail;
-  await staging([appName]);
-  console.log();
-  table(["Webhook", "Value"], [
-    ["Status", app.webhook_enabled ? "enabled" : "disabled"],
-    ["Branch", app.webhook_branch || "main"],
-    ["Paths", app.webhook_paths?.length ? app.webhook_paths.join("\n") : "(all pushes)"],
-    ["Paths ignore", app.webhook_paths_ignore?.length ? app.webhook_paths_ignore.join("\n") : "-"],
-    ...(app.webhook_path ? [["Legacy path (deprecated)", app.webhook_path]] : []),
-    ["Wait for CI", String(!!app.webhook_wait_for_ci)],
-    ["Last received push", app.last_webhook_head ? `${app.last_webhook_head.slice(0, 12)} ${app.last_webhook_received_at || ""}`.trim() : "-"],
-    ["Last evaluated commit", app.last_evaluated_commit?.slice(0, 12) || "-"],
-    ["Last CI result", app.last_webhook_ci_result || "-"],
-    ["Last matching paths", app.last_matching_paths?.join("\n") || "-"],
-    ["Last decision", app.last_decision || "-"],
-    ["Last successfully deployed commit", app.last_successfully_deployed_commit || "-"],
   ]);
 }
 
@@ -390,10 +340,9 @@ function usage(): void {
   metrics <app> [--since=SEC]   Current metrics or sampled history
   availability <app>           Show trailing availability and placement
   scaling-events <app>         List recent manual/autoscale events
-  staging <app>                Inspect the webhook staging sibling
-  webhook status <app>         Inspect stored webhook configuration
+  staging <app>                Inspect the staging sibling
   reload-env <app> --force     Recreate only this app from its immutable image
-  redeploy <app>               Rebuild using stored source, environment, and stack ownership${RESET}`);
+  redeploy <app>               Recreate using the stored immutable image and configuration${RESET}`);
 }
 
 export async function app(args: string[]): Promise<void> {
@@ -413,7 +362,6 @@ export async function app(args: string[]): Promise<void> {
     case "scaling-events":
     case "events": return scalingEvents(rest);
     case "staging": return staging(rest);
-    case "webhook": return webhook(rest);
     case "reload-env": return reloadEnvironment(rest);
     case "deploy":
     case "redeploy": return redeployExisting(rest);

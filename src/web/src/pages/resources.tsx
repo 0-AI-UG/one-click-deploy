@@ -115,7 +115,12 @@ export function ResourcesPage() {
   useEffect(() => { load(); }, []);
 
   const handleDelete = async (type: string, id: string, name: string) => {
-    if (!await confirm("Delete Resource", `Delete ${type.replace("_", " ")} "${name}"? This cannot be undone.`, true)) return;
+    const connectedServer = type === "server" && data?.servers.find((server) => String(server.id) === id)?.ownership === "connected";
+    const verb = connectedServer ? "Disconnect" : "Delete";
+    const consequence = connectedServer
+      ? "The VPS itself will not be changed or deleted."
+      : "This cannot be undone.";
+    if (!await confirm(`${verb} Resource`, `${verb} ${type.replace("_", " ")} "${name}"? ${consequence}`, !connectedServer)) return;
     let typedVolumeId: string | undefined;
     if (type === "volume") {
       typedVolumeId = window.prompt(`Type the provider volume ID "${id}" to permanently delete its data:`)?.trim();
@@ -139,11 +144,11 @@ export function ResourcesPage() {
             `/api/resources/${type}/${id}`,
             "delete_server",
             "server",
-            data?.servers.find((server) => server.provider_id === id)?.id ?? id,
+            id,
           );
       if (res.ok) {
         if (type === "server" && res.op_id) {
-          trackOperationInToast(res.op_id, `Destroying ${name}`);
+          trackOperationInToast(res.op_id, connectedServer ? `Disconnecting ${name}` : `Destroying ${name}`);
           ops.track(res.op_id);
         } else {
           showToast(`${name} deleted`, "success");
@@ -257,7 +262,7 @@ export function ResourcesPage() {
           </div>
         </div>
         {!data?.servers?.length ? <EmptyState message="No servers" /> : (
-          <Table headers={["Name", "Type", "Location", "Replicas", "Disk", "€/mo", ""]}>
+          <Table headers={["Name", "Provider", "Ownership", "Replicas", "Disk", "€/mo", ""]}>
             {data.servers.map((s) => (
               <tr key={s.id} className="hover:bg-alt/50">
                 <td className="py-2 px-3">
@@ -268,8 +273,8 @@ export function ResourcesPage() {
                     {s.name}
                   </a>
                 </td>
-                <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.type}</span></td>
-                <td className="py-2 px-3 text-fg-dim">{s.location}</td>
+                <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.provider}</span></td>
+                <td className="py-2 px-3 text-fg-dim">{s.ownership}</td>
                 <td className="py-2 px-3 text-fg-dim">{s.replica_count}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">
                   {s.disk_free_gb != null && s.disk_total_gb != null ? (
@@ -295,8 +300,8 @@ export function ResourcesPage() {
                       variant="danger"
                       disabled={s.replica_count > 0}
                       title={s.replica_count > 0 ? "In use by replicas" : undefined}
-                      loading={deleting === `server-${s.provider_id}` || !!ops.byResourceKey(`server:${s.id}`)}
-                      onClick={() => handleDelete("server", s.provider_id, s.name)}
+                      loading={deleting === `server-${s.id}` || !!ops.byResourceKey(`server:${s.id}`)}
+                      onClick={() => handleDelete("server", String(s.id), s.name)}
                     >
                       <Trash2 size={11} />
                     </Btn>

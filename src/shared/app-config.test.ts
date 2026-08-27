@@ -11,25 +11,27 @@ import {
 } from "./app-config.ts";
 import { serializeEnvVars } from "./env-crypto.ts";
 
+const IMAGE_REF = `ghcr.io/acme/app@sha256:${"a".repeat(64)}`;
+
 describe("classifyAppConfigChanges", () => {
-  test("separates control, runtime, and build changes", () => {
-    expect(classifyAppConfigChanges([{ field: "webhook_enabled", before: false, after: true }])).toBe("control");
+  test("separates control, runtime, and artifact changes", () => {
+    expect(classifyAppConfigChanges([{ field: "sticky", before: false, after: true }])).toBe("control");
     expect(classifyAppConfigChanges([{ field: "container_port", before: 3000, after: 4000 }])).toBe("runtime");
-    expect(classifyAppConfigChanges([{ field: "docker_context", before: ".", after: "apps/api" }])).toBe("build");
+    expect(classifyAppConfigChanges([{ field: "image_ref", before: "old", after: "new" }])).toBe("artifact");
     expect(classifyAppConfigChanges([
       { field: "container_port", before: 3000, after: 4000 },
       { field: "image_ref", before: "", after: "registry/app@sha256:abc" },
-    ])).toBe("build");
+    ])).toBe("artifact");
   });
 
-  test("config-only recreates runtime state while deferring source builds", () => {
+  test("config-only recreates runtime state while deferring artifact rollout", () => {
     const runtime = { field: "memory_mb", before: 512, after: 1024 };
-    const build = { field: "dockerfile_path", before: "Dockerfile", after: "ops/Dockerfile" };
-    expect(classifyConfigOnlyChanges([runtime])).toEqual({ rollout: "runtime", pendingBuild: false });
-    expect(classifyConfigOnlyChanges([build])).toEqual({ rollout: "control", pendingBuild: true });
-    expect(classifyConfigOnlyChanges([runtime, build])).toEqual({ rollout: "runtime", pendingBuild: true });
+    const artifact = { field: "image_ref", before: "old", after: "new" };
+    expect(classifyConfigOnlyChanges([runtime])).toEqual({ rollout: "runtime", pendingRollout: false });
+    expect(classifyConfigOnlyChanges([artifact])).toEqual({ rollout: "control", pendingRollout: true });
+    expect(classifyConfigOnlyChanges([runtime, artifact])).toEqual({ rollout: "runtime", pendingRollout: true });
     expect(classifyConfigOnlyChanges([], { environmentChanged: true }))
-      .toEqual({ rollout: "runtime", pendingBuild: false });
+      .toEqual({ rollout: "runtime", pendingRollout: false });
   });
 });
 
@@ -39,9 +41,7 @@ function seedApp() {
   const app = db.insertApp({
     name: `app-${suffix}`,
     domain: `${suffix}.example.com`,
-    git_repo: "https://github.com/acme/old",
-    git_branch: "main",
-    dockerfile_path: "Dockerfile",
+    image_ref: IMAGE_REF,
     container_port: 3000,
     env_vars: "{}",
     environment_id: env.id,
@@ -54,10 +54,7 @@ describe("desired app configuration", () => {
     const { app, env } = seedApp();
     const req = {
       app_name: app.name,
-      git_repo: "https://github.com/acme/new",
-      git_branch: "release",
-      dockerfile_path: "ops/Dockerfile",
-      docker_context: "services/api",
+      image_ref: `ghcr.io/acme/app@sha256:${"b".repeat(64)}`,
       container_port: 8080,
       environment_id: env.id,
       env_projection: ["API_KEY"],
@@ -83,13 +80,11 @@ describe("desired app configuration", () => {
       autoscale_cooldown: 180,
     };
 
-    expect(diffAppConfig(app, req).map((c) => c.field)).toContain("git_repo");
+    expect(diffAppConfig(app, req).map((c) => c.field)).toContain("image_ref");
     await applyAppConfig(app.id, req);
 
     const updated = db.getApp(app.id)!;
-    expect(updated.git_repo).toBe(req.git_repo);
-    expect(updated.git_branch).toBe("release");
-    expect(updated.dockerfile_path).toBe("ops/Dockerfile");
+    expect(updated.image_ref).toBe(req.image_ref);
     expect(updated.container_port).toBe(8080);
     expect(updated.public).toBe(0);
     expect(updated.memory_mb).toBe(1024);
@@ -115,7 +110,7 @@ describe("desired app configuration", () => {
     const { app, env } = seedApp();
     await applyAppConfig(app.id, {
       app_name: app.name,
-      git_repo: app.git_repo,
+      image_ref: app.image_ref,
       container_port: 3000,
     });
     expect(db.getApp(app.id)?.environment_id).toBe(env.id);
@@ -135,7 +130,7 @@ describe("desired app configuration", () => {
     await applyAppConfig(app.id, {
       apply_mode: "manifest",
       app_name: app.name,
-      git_repo: app.git_repo,
+      image_ref: app.image_ref,
       container_port: 3000,
       environment_id: null,
       health_check: false,
@@ -163,7 +158,7 @@ describe("desired app configuration", () => {
     const req = {
       apply_mode: "manifest" as const,
       app_name: app.name,
-      git_repo: app.git_repo,
+      image_ref: app.image_ref,
       container_port: 3000,
       volume_id: "vol-new",
       volume_size: 40,

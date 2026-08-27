@@ -14,6 +14,7 @@ import {
 import type { ServiceData, ServiceInstance, LinkedEnvironment } from "../types.ts";
 import { CpuUsage, MemUsage } from "./app-detail/shared.tsx";
 import { serverConfirmedDelete } from "../api/server-confirmation.ts";
+import { DnsInstructionView } from "../components/dns-instruction.tsx";
 
 type EnvironmentRef = { id: number; name: string };
 
@@ -284,6 +285,9 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
                 </div>
               )}
             </div>
+            {service.dns_instruction && (
+              <div className="p-4"><DnsInstructionView value={service.dns_instruction} /></div>
+            )}
           </Card>
 
           {/* Container */}

@@ -6,9 +6,7 @@ export type StackRow = {
   id: number;
   name: string;
   environment_id: number | null;
-  /** The stack's shared staging environment. Members that opt into webhook
-   *  staging deploy their sibling with this env unless they carry a per-app
-   *  override in apps.webhook_staging_environment_id. NULL = none selected. */
+  /** The stack's explicitly selected staging environment. NULL = none. */
   staging_environment_id: number | null;
   /** JSON string array of keys explicitly applied through stack staging_env.
    * Copied production keys are intentionally absent. */

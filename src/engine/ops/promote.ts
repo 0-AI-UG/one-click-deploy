@@ -6,8 +6,8 @@ import { hashEnvironment } from "../revision.ts";
 import { registerOp } from "./registry.ts";
 import {
   snapshotCurrentRevision,
-  checkoutTarget,
-  rebuildImage,
+  prepareEnvironment,
+  pullTargetImage,
   swapContainer,
   syncIngressStep,
   healthCheckStep,
@@ -16,22 +16,17 @@ import {
 } from "./rollback.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
 
-// Promote = "redeploy the DEST (production) app pinned to the exact git commit
-// currently running in the SOURCE (staging) app". There is no registry: images
-// are built on-host as `<app>:latest`, so version identity is the git commit.
-// This op therefore checks out the source's commit in the DEST repo, rebuilds
-// `<dest>:latest`, and swaps the DEST container(s) — exactly the rollback
-// machinery, which it imports rather than duplicates.
+// Promotion pulls and runs the exact immutable digest proven in the source
+// environment. Source revisions are optional provenance only.
 type PromoteInput = {
   appId: number; // DEST (production) app id — the app being mutated
   sourceAppId: number; // SOURCE (e.g. staging) app whose running commit we promote
   userId?: string;
 };
 
-// First step: resolve the commit running in SOURCE and package it as the same
+// First step: resolve the artifact running in SOURCE and package it as the same
 // `load_target_deployment` output the reused rollback steps consume — but
-// targeting the DEST app + its server, and pinning `<dest>:latest` as the image
-// tag the rebuild/record steps use.
+// targeting the DEST app and its server.
 const loadPromotionTarget: Step<PromoteInput, TargetOut> = {
   name: "load_target_deployment",
   label: "Resolve source version",
@@ -41,9 +36,6 @@ const loadPromotionTarget: Step<PromoteInput, TargetOut> = {
     const source = db.getApp(ctx.input.sourceAppId);
     if (!source) throw new Error("Source app not found");
     if (source.id === dest.id) throw new Error("Source and destination must be different apps");
-    if (source.source_mode !== dest.source_mode) {
-      throw new Error("Source and destination apps use different artifact modes");
-    }
 
     const replicas = db.getReplicas(dest.id);
     if (replicas.length === 0) throw new Error("Destination app has no replicas");
@@ -53,21 +45,18 @@ const loadPromotionTarget: Step<PromoteInput, TargetOut> = {
     const sourceDeployment = db
       .getDeployments(source.id)
       .find((d) => d.status === "deployed");
-    const sourceCommit = sourceDeployment?.git_commit;
-    if (!sourceCommit) {
+    if (!sourceDeployment) {
       throw new Error(`Source app ${source.name} has no successful deployment to promote`);
     }
-    if (dest.source_mode !== "image" && !/^[a-f0-9]{7,64}$/i.test(sourceCommit)) {
-      throw new Error(`Source app ${source.name} has no valid Git revision to promote`);
-    }
-    if (dest.source_mode === "image" && !sourceDeployment?.image_digest?.includes("@sha256:")) {
+    const sourceCommit = sourceDeployment.git_commit || "";
+    if (!sourceDeployment?.image_digest?.includes("@sha256:")) {
       throw new Error(`Source app ${source.name} has no immutable image digest to promote`);
     }
 
     if (ctx.input.userId) db.updateAppDeployedBy(dest.id, ctx.input.userId);
     db.appendDeployLog(
       dest.id,
-      `[promote] Promoting ${source.name} @ ${sourceCommit} → ${dest.name}`,
+      `[promote] Promoting ${source.name} image ${sourceDeployment.image_digest} → ${dest.name}`,
     );
 
     return {
@@ -75,16 +64,16 @@ const loadPromotionTarget: Step<PromoteInput, TargetOut> = {
       replicaId: first.id,
       serverId: first.server_id,
       gitCommit: sourceCommit,
-      imageTag: `${dest.name}:latest`,
+      imageTag: sourceDeployment.image_digest,
       imageDigest: sourceDeployment?.image_digest || undefined,
       previousStatus: dest.status,
     };
   },
 };
 
-// Multi-replica: after swap_container rebuilds `<dest>:latest` and swaps the
-// first replica, mirror redeploy's rolling update to cover the rest — it
-// transfers the freshly built image to each other server and recreates its
+// Multi-replica: after swap_container pulls and swaps the first replica,
+// mirror redeploy's rolling update to cover the rest. Each server pulls the
+// same immutable registry digest and recreates its
 // container one at a time (draining via ingress between). No-op for single
 // replica. Mirrors redeploy.ts's roll_extra_replicas, including its compensate.
 const rollExtraReplicas: Step<PromoteInput, { ok: true }> = {
@@ -150,6 +139,7 @@ const recordPromotion: Step<PromoteInput, { deploymentId: number }> = {
       config_revision: db.getApp(target.appId)?.config_revision ?? 1,
       source: `promote-from-${sourceName}@${target.gitCommit}`,
     });
+    db.updateAppImageRef(target.appId, swap.imageDigest);
     db.appendDeployLog(target.appId, `[done] Promoted ${sourceName} @ ${target.gitCommit}`);
     return { deploymentId: row.id };
   },
@@ -162,8 +152,8 @@ const promoteOp: OpKindDefinition<PromoteInput> = {
   steps: [
     loadPromotionTarget,
     snapshotCurrentRevision,
-    checkoutTarget,
-    rebuildImage,
+    prepareEnvironment,
+    pullTargetImage,
     swapContainer,
     rollExtraReplicas,
     syncIngressStep,

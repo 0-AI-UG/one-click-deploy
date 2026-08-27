@@ -1,4 +1,4 @@
-import { handleSetupStatus, handleSetupComplete, handleSetupServerTypes } from "./routes/setup.ts";
+import { handleSetupStatus, handleSetupComplete } from "./routes/setup.ts";
 import { handleLogin, handleMe, handleUpdateMe } from "./routes/auth.ts";
 import {
   handleWebAuthnRegisterOptions,
@@ -19,6 +19,7 @@ import {
   handleGetApps,
   handleDeploy,
   handleRedeployApp,
+  handleReleaseApp,
   handleDestroyApp,
   handleRestartApp,
   handleReloadAppEnvironment,
@@ -31,18 +32,11 @@ import {
   handlePromoteApp,
   handleGetAppStaging,
 } from "./routes/apps.ts";
-import { handleDeleteServer, handleRefreshServers, handleSetServerPool } from "./routes/servers.ts";
+import { handleConnectServer, handleDeleteServer, handleGetServerEnrollmentKey, handleRefreshServers, handleSetServerPool } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail, handleGetVolumeDeletionAudit } from "./routes/resources.ts";
 import { handleWakeApp, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
 import { handleGetAvailability } from "./routes/availability.ts";
-import {
-  handleGithubWebhook,
-  handlePanelGithubWebhook,
-  handleEnablePanelWebhook,
-  handleDisablePanelWebhook,
-  handleWebhookPlan,
-} from "./routes/webhooks.ts";
 import {
   handleGetPanel,
   handleRedeployPanel,
@@ -192,7 +186,6 @@ export const apiRoutes = {
   // --- Setup ---
   "/api/setup/status": { GET: (req: Request) => handleSetupStatus(req) },
   "/api/setup/complete": { POST: (req: Request) => handleSetupComplete(req) },
-  "/api/setup/server-types": { POST: (req: Request) => handleSetupServerTypes(req) },
 
   // --- Auth ---
   "/api/auth/login": { POST: (req: Request) => handleLogin(req) },
@@ -248,6 +241,8 @@ export const apiRoutes = {
   // --- Servers ---
   "/api/servers": { GET: (req: Request) => handleGetServers(req) },
   "/api/servers/refresh": { POST: (req: Request) => handleRefreshServers(req) },
+  "/api/servers/enrollment-key": { GET: (req: Request) => handleGetServerEnrollmentKey(req) },
+  "/api/servers/connect": { POST: (req: Request) => handleConnectServer(req) },
   "/api/servers/:id": { DELETE: (req: Request) => handleDeleteServer(req, serverIdFrom(req)) },
   "/api/servers/:id/pool": { PATCH: (req: Request) => handleSetServerPool(req, serverPathIdFrom(req)) },
   "/api/gc": {
@@ -264,6 +259,7 @@ export const apiRoutes = {
   "/api/apps/:appId": { DELETE: (req: Request) => handleDestroyApp(req, appIdFrom(req)) },
   "/api/apps/:appId/restart": { POST: (req: Request) => handleRestartApp(req, appIdFrom(req)) },
   "/api/apps/:appId/redeploy": { POST: (req: Request) => handleRedeployApp(req, appIdFrom(req)) },
+  "/api/apps/:appId/release": { POST: (req: Request) => handleReleaseApp(req, appIdFrom(req)) },
   "/api/apps/:appId/reload-env": { POST: (req: Request) => handleReloadAppEnvironment(req, appIdFrom(req)) },
   "/api/apps/:appId/pause": { POST: (req: Request) => handlePauseApp(req, appIdFrom(req)) },
   "/api/apps/:appId/unpause": { POST: (req: Request) => handleUnpauseApp(req, appIdFrom(req)) },
@@ -283,20 +279,6 @@ export const apiRoutes = {
   "/api/apps/:appId/metrics/history": { GET: (req: Request) => handleGetAppMetricsHistory(req, appIdFrom(req)) },
   "/api/apps/:appId/availability": { GET: (req: Request) => handleGetAvailability(req, appIdFrom(req)) },
 
-  // Public GitHub webhook receiver for the panel itself (HMAC verified)
-  "/webhooks/github/panel": {
-    POST: (req: Request) => handlePanelGithubWebhook(req),
-  },
-
-  // Public GitHub webhook receiver (no auth — HMAC verified per app)
-  "/webhooks/github/:appId": {
-    POST: (req: Request) => {
-      const m = new URL(req.url).pathname.match(/\/webhooks\/github\/(\d+)/);
-      return handleGithubWebhook(req, m ? parseInt(m[1], 10) : 0);
-    },
-  },
-  "/api/webhooks/plan": { GET: (req: Request) => handleWebhookPlan(req) },
-
   // Fleet-internal: ocd-proxy wake endpoint (shared-secret auth, no user token)
   "/api/internal/wake": { POST: (req: Request) => handleInternalWake(req) },
 
@@ -315,8 +297,6 @@ export const apiRoutes = {
   // --- Admin: Panel (hosted self) ---
   "/api/admin/panel": { GET: (req: Request) => handleGetPanel(req) },
   "/api/admin/panel/redeploy": { POST: (req: Request) => handleRedeployPanel(req) },
-  "/api/admin/panel/webhook/enable": { POST: (req: Request) => handleEnablePanelWebhook(req) },
-  "/api/admin/panel/webhook/disable": { POST: (req: Request) => handleDisablePanelWebhook(req) },
   "/api/admin/panel/logs": { GET: (req: Request) => handleGetPanelLogs(req) },
   "/api/admin/panel/deployments": { GET: (req: Request) => handleGetPanelDeployments(req) },
 

@@ -2,17 +2,15 @@ import { describe, expect, test } from "bun:test";
 import type { DeployManifest, StackManifest } from "./rpc.ts";
 import { buildStackAppSpec } from "./stack-spec.ts";
 
+const IMAGE_REF = `ghcr.io/acme/app@sha256:${"a".repeat(64)}`;
+
 describe("buildStackAppSpec", () => {
   test("carries the full canonical app manifest deployment spec into a stack", () => {
     const manifest: DeployManifest = {
       name: "API",
+      image: { ref: IMAGE_REF },
       domain: "manifest.example.com",
-      git_branch: "release",
-      build: {
-        dockerfile: "Dockerfile.prod",
-        context: "services/api",
-        container_port: 8080,
-      },
+      container_port: 8080,
       env_projection: ["DATABASE_URL"],
       environment: "production",
       replicas: 3,
@@ -41,14 +39,6 @@ describe("buildStackAppSpec", () => {
       },
       volume: { size: 20, path: "/var/lib/app" },
       extra_volumes: [{ host_path: "/srv/shared", container_path: "/shared" }],
-      webhook: {
-        enabled: true,
-        branch: "release",
-        path: "services/api",
-        wait_for_ci: true,
-        staging: true,
-        staging_environment: "staging",
-      },
     };
     const entry: StackManifest["apps"][string] = {
       manifest: "services/api/.ocd-deploy.json",
@@ -71,9 +61,7 @@ describe("buildStackAppSpec", () => {
       apply_mode: "manifest",
       needs: ["database"],
       domain: "stack.example.com",
-      git_branch: "release",
-      dockerfile_path: "services/api/Dockerfile.prod",
-      docker_context: "services/api",
+      image_ref: IMAGE_REF,
       container_port: 8080,
       env_projection: ["DATABASE_URL", "JWT_SECRET"],
       environment: "production",
@@ -103,12 +91,6 @@ describe("buildStackAppSpec", () => {
       volume_size: 20,
       volume_path: "/var/lib/app",
       extra_volumes: [{ host_path: "/srv/shared", container_path: "/shared" }],
-      webhook_enabled: true,
-      webhook_branch: "release",
-      webhook_path: "services/api",
-      webhook_wait_for_ci: true,
-      webhook_staging: true,
-      webhook_staging_environment: "staging",
     });
   });
 
@@ -118,6 +100,7 @@ describe("buildStackAppSpec", () => {
       { manifest: ".ocd-deploy.json" },
       {
         name: "Web",
+        image: { ref: IMAGE_REF },
         volume: null,
         domain: "web.example.com",
         env_projection: [],
@@ -137,6 +120,7 @@ describe("buildStackAppSpec", () => {
       { manifest: "docs/.ocd-deploy.json", needs: ["api"] },
       {
         name: "Docs",
+        image: { ref: IMAGE_REF },
         volume: null,
         env: [
           { key: "DOCS_THEME", default: "light" },
@@ -155,7 +139,7 @@ describe("buildStackAppSpec", () => {
     const spec = buildStackAppSpec(
       "legacy",
       { manifest: ".ocd-deploy.json", env_all: true },
-      { name: "Legacy", volume: null },
+      { name: "Legacy", volume: null, image: { ref: IMAGE_REF } },
       "https://github.com/acme/legacy",
       "",
     );

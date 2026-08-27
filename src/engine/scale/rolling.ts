@@ -1,14 +1,12 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  transferImage, probeAppHealth, startAppReplica,
+  pullImmutableImage, probeAppHealth, startAppReplica,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { type ProgressFn, log, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 import { attestReplica } from "../revision.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
-import { resolveArtifactRegistry } from "../registry-config.ts";
 
 export async function rollingRedeploy(
   appId: number,
@@ -28,13 +26,8 @@ export async function rollingRedeploy(
       return { ok: true }; // Single replica handled by normal redeploy
     }
 
-    // Use the first replica's server as the image source for transferImage.
-    const primaryServer = db.getServer(replicas[0].server_id);
-    if (!primaryServer) throw new Error("First replica's server not found");
-
-    const imageName = expectedRevision?.imageDigest || `${app.name}:latest`;
-    const registryToken = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
-    const distribution = await resolveArtifactRegistry(app.build_cache_ref);
+    const imageName = expectedRevision?.imageDigest || app.image_ref;
+    if (!imageName?.includes("@sha256:")) throw new Error("Rolling update requires an immutable image digest");
 
     for (let i = 0; i < replicas.length; i++) {
       const replica = replicas[i];
@@ -44,32 +37,11 @@ export async function rollingRedeploy(
       const hostKey = server.ssh_host_key || undefined;
       emit("scale", `Rolling update ${i + 1}/${replicas.length}: ${replica.container_name}...`);
 
-      // Transfer new image
-      if (server.id !== primaryServer.id) {
-        await transferImage(
-          primaryServer.ipv4,
-          server.ipv4,
-          imageName,
-          primaryServer.ssh_host_key || undefined,
-          hostKey,
-          {
-            registryRef: distribution.ref,
-            registryUsername: distribution.username,
-            registryPassword: distribution.password,
-            registryToken,
-            allowArchiveFallback: db.getSettings().allow_archive_image_transfer === "1",
-            onProgress: (line) => emit("transfer", line),
-            onStorage: (storage) => {
-              const deployment = db.getLastSuccessfulDeployment(app.id);
-              if (deployment) db.updateDeploymentStorage(deployment.id, {
-                image_size_bytes: storage.imageBytes,
-                archive_size_bytes: storage.archiveBytes,
-                transfer_size_bytes: storage.transferBytes,
-              });
-            },
-          },
-        );
-      }
+      await pullImmutableImage(server.ipv4, {
+        name: app.name,
+        imageRef: imageName,
+        hostKey,
+      }, (line) => emit("pull", line));
 
       // Drop from the ingress upstream pool so in-flight requests drain
       // via the other replicas before we tear this one down.

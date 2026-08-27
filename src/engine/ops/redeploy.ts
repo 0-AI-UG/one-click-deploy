@@ -1,8 +1,5 @@
 import * as db from "../../shared/db.ts";
 import {
-  sshExec,
-  cloneRepo,
-  cloneAndBuild,
   pullImmutableImageAndRun,
   probeAppHealth,
   startAppReplica,
@@ -13,7 +10,6 @@ import {
   resolveAppEnvVars,
   resolveEnvVarsForDeploy,
 } from "../../shared/env-crypto.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { rollingRedeploy } from "../scale/index.ts";
 import { wakeApp } from "../scale/wake.ts";
 import { syncAppIngress } from "../scale/traefik-manager.ts";
@@ -28,28 +24,25 @@ import {
   mergeDeployRequestWithExistingApp,
   resolveDeployRequestEnvironmentIds,
 } from "../../shared/app-config.ts";
-import { resolveBuildRegistry } from "../registry-config.ts";
 import {
   captureRemoteRevisionSnapshot,
   discardRemoteRevisionSnapshot,
   probeRemoteRevisionSnapshot,
-  restoreSnapshotGitCheckout,
   type RemoteRevisionSnapshot,
 } from "./_revision-snapshot.ts";
 
 type RedeployInput = {
   appId: number;
   userId?: string;
-  /** Immutable commit selected by a webhook. Manual redeploys follow git_branch. */
-  gitSha?: string;
+  /** Optional source provenance supplied by external CI. Never used to fetch source. */
+  gitCommit?: string;
   candidate?: DeployRequest;
 };
 
 type WakeOut = { woke: boolean };
 type SetDeployingOut = { previousStatus: string };
-// Everything needed to re-run the previous (last-known-good) container if the
-// new build fails its health check. `image` is a dedicated `:rollback` tag we
-// pin before building so the new `docker build -t :latest` can't orphan it.
+// Everything needed to re-run the previous immutable artifact if the candidate
+// fails its health check.
 type RollbackSnapshot = {
   remote: RemoteRevisionSnapshot;
   containerName: string;
@@ -63,14 +56,12 @@ type RollbackSnapshot = {
   configRevision: number;
   envHash: string;
 };
-type BuildOut = {
+type ArtifactOut = {
   imageTag: string;
   imageDigest?: string;
   imageBytes?: number;
 };
 type HealthOut = { healthy: boolean; statusCode?: number };
-
-const asUser = (cmd: string) => `su - deploy -c ${JSON.stringify(cmd)}`;
 
 function effectiveCandidate(app: AppRow, input: RedeployInput): DeployRequest | null {
   return input.candidate
@@ -83,13 +74,7 @@ function candidateApp(app: AppRow, candidate: DeployRequest | null): AppRow {
   const mode = candidate.health_check_mode ?? (candidate.health_check === false ? "container" : "http");
   return {
     ...app,
-    git_repo: candidate.git_repo,
-    git_branch: candidate.git_branch ?? "",
-    dockerfile_path: candidate.dockerfile_path ?? "Dockerfile",
-    docker_context: candidate.docker_context ?? ".",
-    source_mode: candidate.image_ref ? "image" : "git",
-    image_ref: candidate.image_ref ?? "",
-    build_cache_ref: candidate.build_cache_ref ?? "",
+    image_ref: candidate.image_ref || "",
     container_port: candidate.container_port,
     environment_id: candidate.environment_id !== undefined ? candidate.environment_id : app.environment_id,
     env_projection: candidate.env_projection == null ? null : JSON.stringify(candidate.env_projection),
@@ -137,32 +122,6 @@ const wakeIfSleeping: Step<RedeployInput, WakeOut> = {
   },
 };
 
-const cloneRepoStep: Step<RedeployInput, { ok: true }> = {
-  name: "clone_repo",
-  label: "Clone repository",
-  async run(ctx) {
-    const stored = db.getApp(ctx.input.appId);
-    if (!stored) throw new Error("App not found");
-    const app = candidateApp(stored, effectiveCandidate(stored, ctx.input));
-    if (app.source_mode === "image") {
-      if (ctx.input.gitSha) throw new Error("Webhook commit redeploy is not valid for an image artifact app");
-      ctx.log("Immutable image deployment: no Git clone required");
-      return { ok: true };
-    }
-    const replicas = db.getReplicas(ctx.input.appId);
-    if (replicas.length === 0) throw new Error("App has no replicas");
-    const server = db.getServer(replicas[0].server_id);
-    if (!server) throw new Error("Server not found");
-    const githubPat = (await resolveGitHubToken(ctx.input.userId)) || undefined;
-    const revision = await cloneRepo(server.ipv4, app.name, app.git_repo, githubPat, (line) => {
-      db.appendDeployLog(ctx.input.appId, `[clone] ${line}`);
-      ctx.log(`[clone] ${line}`);
-    }, app.git_branch || undefined, server.ssh_host_key || undefined, ctx.input.gitSha || ctx.input.candidate?.git_sha);
-    ctx.log(`Immutable source revision: ${revision}`);
-    return { ok: true };
-  },
-};
-
 const setDeploying: Step<RedeployInput, SetDeployingOut> = {
   name: "set_deploying",
   label: "Mark deploying",
@@ -177,7 +136,7 @@ const setDeploying: Step<RedeployInput, SetDeployingOut> = {
   async compensate(ctx, _out, prior) {
     const info = prior["set_deploying"] as SetDeployingOut | undefined;
     if (!info) return;
-    // If a later compensation (e.g. pull_and_build's rollback) already set a
+    // If a later compensation already set a
     // concrete running/unhealthy status, don't clobber it with the stale one.
     const app = db.getApp(ctx.input.appId);
     if (app && app.status !== "deploying") return;
@@ -204,7 +163,7 @@ function redeploySnapshotTarget(ctx: { input: RedeployInput; opId: number }) {
       appName: app.name,
       containerName: first.container_name,
       opId: ctx.opId,
-      sourceMode: app.source_mode,
+      currentImageRef: app.image_ref,
     },
   };
 }
@@ -259,14 +218,6 @@ const snapshotCurrentRevision: Step<RedeployInput, RollbackSnapshot | null> = {
     const server = first ? db.getServer(first.server_id) : null;
     if (!app || !server) return;
     const hostKey = server.ssh_host_key || undefined;
-    await restoreSnapshotGitCheckout({
-      ip: server.ipv4,
-      hostKey,
-      appName: app.name,
-      containerName: snap.containerName,
-      opId: ctx.opId,
-      sourceMode: app.source_mode,
-    }, snap.remote.gitCommit);
     await startAppReplica(server.ipv4, {
       containerName: snap.containerName,
       image: snap.remote.image,
@@ -283,18 +234,6 @@ const snapshotCurrentRevision: Step<RedeployInput, RollbackSnapshot | null> = {
       configRevision: snap.configRevision,
       envHash: snap.envHash,
     }, hostKey);
-    const retag = await sshExec(
-      server.ipv4,
-      asUser(
-        `docker image rm ${app.name}:latest 2>/dev/null || true; ` +
-          `docker tag ${snap.remote.image} ${app.name}:latest; ` +
-          `docker image prune -f --filter label=ocd.managed=true >/dev/null 2>&1 || true`,
-      ),
-      hostKey,
-    );
-    if (retag.exitCode !== 0) {
-      throw new Error(`Failed to restore ${app.name}:latest from ${snap.remote.image}: ${retag.stderr.trim() || retag.stdout.trim()}`);
-    }
     const health = await probeAppHealth(app, server.ipv4, snap.containerName, snap.bindAddr, snap.hostPort, 5, hostKey);
     if (first) db.updateReplicaStatus(first.id, health.healthy ? "running" : "unhealthy");
     db.updateAppStatus(ctx.input.appId, health.healthy ? "running" : "unhealthy");
@@ -306,9 +245,9 @@ const snapshotCurrentRevision: Step<RedeployInput, RollbackSnapshot | null> = {
   },
 };
 
-const pullAndBuild: Step<RedeployInput, BuildOut> = {
-  name: "pull_and_build",
-  label: "Build container",
+const pullAndRunCandidate: Step<RedeployInput, ArtifactOut> = {
+  name: "pull_and_run_candidate",
+  label: "Pull immutable image",
   async run(ctx) {
     const { appId } = ctx.input;
     const storedApp = db.getApp(appId);
@@ -323,24 +262,19 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
 
     const containerPort = app.container_port;
     const envVars = await candidateEnvVars(storedApp, candidate);
-    const githubPat = (await resolveGitHubToken(ctx.input.userId)) || undefined;
     const bindAddr = replicaBindHost(server);
     const extraVolumes = db.parseExtraVolumes(app.extra_volumes);
-    let imageTag = `${app.name}:latest`;
+    const imageTag = app.image_ref;
 
-    const buildOpts = {
+    const runOpts = {
       name: app.name,
-      gitRepo: app.git_repo,
       port: containerPort,
       hostPort: first.host_port,
       envVars,
       volumeMount: app.volume_mount || undefined,
       extraVolumes,
-      gitToken: githubPat,
-      gitBranch: app.git_branch || undefined,
       bindAddr,
       containerName: first.container_name,
-      skipClone: true,
       memoryMb: app.memory_mb || undefined,
       cpus: app.cpu_limit || undefined,
       hostKey: server.ssh_host_key || undefined,
@@ -349,26 +283,13 @@ const pullAndBuild: Step<RedeployInput, BuildOut> = {
     };
     const logLine = (line: string) => {
       db.appendDeployLog(appId, `[redeploy] ${line}`);
-      ctx.log(`[build] ${line}`);
+      ctx.log(`[pull] ${line}`);
     };
 
-    const buildRegistry = await resolveBuildRegistry(app.build_cache_ref);
-    const r = app.source_mode === "image"
-      ? await pullImmutableImageAndRun(server.ipv4, {
-          ...buildOpts,
-          imageRef: app.image_ref,
-        }, logLine)
-      : await cloneAndBuild(server.ipv4, {
-          ...buildOpts,
-          dockerfilePath: app.dockerfile_path || undefined,
-          dockerContext: app.docker_context || undefined,
-          buildCacheRef: buildRegistry.ref,
-          registryUsername: buildRegistry.username,
-          registryPassword: buildRegistry.password,
-          reserveArchiveSpace:
-            app.desired_replicas > 1 && db.getSettings().allow_archive_image_transfer === "1",
-        }, logLine);
-    if (r.imageTag) imageTag = r.imageTag;
+    const r = await pullImmutableImageAndRun(server.ipv4, {
+      ...runOpts,
+      imageRef: app.image_ref,
+    }, logLine);
 
     return {
       imageTag,
@@ -418,7 +339,7 @@ const rollExtraReplicas: Step<RedeployInput, { ok: true }> = {
     if (!stored) throw new Error("App not found");
     const candidate = effectiveCandidate(stored, ctx.input);
     const app = candidateApp(stored, candidate);
-    const build = prior["pull_and_build"] as BuildOut;
+    const build = prior["pull_and_run_candidate"] as ArtifactOut;
     const envVars = await candidateEnvVars(stored, candidate);
     const rolling = await rollingRedeploy(
       ctx.input.appId,
@@ -492,7 +413,7 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
     if (!app) throw new Error("App not found");
     const replicas = db.getReplicas(ctx.input.appId);
     if (replicas.length === 0) throw new Error("App has no replicas");
-    const build = prior["pull_and_build"] as BuildOut | undefined;
+    const build = prior["pull_and_run_candidate"] as ArtifactOut | undefined;
     const envVars = await resolveAppEnvVars(app);
     const expected = {
       imageDigest: build?.imageDigest || build?.imageTag || latestDesiredImage(app),
@@ -536,20 +457,8 @@ const recordDeploymentHistory: Step<RedeployInput, { deploymentId: number; gitCo
     const replicas = db.getReplicas(ctx.input.appId);
     const first = replicas[0];
     const server = first ? db.getServer(first.server_id) : null;
-    const build = prior["pull_and_build"] as BuildOut;
-    let gitCommit = app.source_mode === "image" ? "artifact" : "unknown";
-    if (server && app.source_mode !== "image") {
-      try {
-        const r = await sshExec(
-          server.ipv4,
-          `su - deploy -c "cd /home/deploy/apps/${app.name} && git rev-parse --short=12 HEAD 2>/dev/null || echo unknown"`,
-          server.ssh_host_key || undefined,
-        );
-        gitCommit = r.stdout.trim() || "unknown";
-      } catch (err) {
-        ctx.log(`Failed to capture git commit: ${err}`);
-      }
-    }
+    const build = prior["pull_and_run_candidate"] as ArtifactOut;
+    const gitCommit = ctx.input.gitCommit || "";
     const row = db.insertDeployment({
       operation_id: ctx.opId,
       app_id: ctx.input.appId,
@@ -575,9 +484,8 @@ const discardRevisionSnapshot: Step<RedeployInput, { ok: true }> = {
       const target = redeploySnapshotTarget(ctx);
       await discardRemoteRevisionSnapshot(target.remote);
     } catch (err) {
-      // Recovery material is harmless after every fallible deployment step has
-      // completed. Metadata cleanup must never turn a successful rollout into
-      // a rollback; the protected last-known-good image remains pinned.
+      // Recovery metadata is harmless after every fallible deployment step has
+      // completed. Cleanup must never turn a successful rollout into a rollback.
       ctx.log(`Failed to discard revision snapshot: ${err}`);
     }
     return { ok: true };
@@ -591,9 +499,8 @@ const redeployOp: OpKindDefinition<RedeployInput> = {
   steps: [
     wakeIfSleeping,
     snapshotCurrentRevision,
-    cloneRepoStep,
     setDeploying,
-    pullAndBuild,
+    pullAndRunCandidate,
     validateCandidate,
     rollExtraReplicas,
     commitCandidateConfig,

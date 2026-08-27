@@ -53,8 +53,7 @@ describe("transactional host-port reservations", () => {
     const app = db.insertApp({
       name: `app-${randomSuffix()}`,
       domain: "",
-      git_repo: "https://github.com/example/app",
-      dockerfile_path: "Dockerfile",
+      image_ref: `ghcr.io/acme/test@sha256:${"a".repeat(64)}`,
       container_port: 3000,
       env_vars: "{}",
       public: false,

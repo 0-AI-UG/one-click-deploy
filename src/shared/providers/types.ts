@@ -25,11 +25,6 @@ export type ServerType = {
   locations: string[];
 };
 
-export type DnsZone = {
-  id: string;
-  name: string;
-};
-
 export type VolumeInfo = {
   providerId: string;
   name: string;

@@ -6,9 +6,7 @@ function log(context: string, ...args: unknown[]) {
   console.log(`[${new Date().toISOString()}] [hetzner:${context}]`, ...args);
 }
 
-/** The Hetzner API token (secret store, settings fallback). Also reused by
- *  the Traefik manager as HETZNER_API_KEY for wildcard DNS-01 issuance —
- *  DNS lives in the unified Cloud API, so one token serves both. */
+/** The Hetzner infrastructure API token (secret store, settings fallback). */
 export async function hetznerApiToken(): Promise<string> {
   const token = await secretStore.get("hetzner_api_token");
   if (token) return token;

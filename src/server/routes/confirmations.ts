@@ -64,7 +64,7 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
     if (action === "delete_app") {
       const app = db.getApp(Number(resourceId));
       if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
-      summary = `Destroy app "${app.name}" (id ${app.id}) — removes its container(s) and DNS records; managed volumes are detached and retained for recovery.`;
+      summary = `Destroy app "${app.name}" (id ${app.id}) — removes its container(s); managed volumes are detached and retained for recovery. DNS is never changed, so remove ${app.domain || "its record"} manually if needed.`;
     } else if (action === "delete_service") {
       const service = db.getService(Number(resourceId));
       if (!service) return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
@@ -74,7 +74,9 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       if (!server) return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
       const apps = db.getApps(server.id);
       const services = db.getServicesOnServer(server.id);
-      summary = `Permanently delete server "${server.name}" (${server.provider_id || `id ${server.id}`}) and destroy ${apps.length} app(s) plus ${services.length} service(s) assigned to it.`;
+      summary = server.ownership === "connected"
+        ? `Disconnect externally owned server "${server.name}" (id ${server.id}) after destroying ${apps.length} app(s) plus ${services.length} service(s) assigned to it. The VPS itself will not be changed or deleted.`
+        : `Permanently delete managed server "${server.name}" (${server.provider_id || `id ${server.id}`}) and destroy ${apps.length} app(s) plus ${services.length} service(s) assigned to it.`;
     } else if (action === "delete_stack") {
       const s = db.getStack(Number(resourceId));
       if (!s) return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });

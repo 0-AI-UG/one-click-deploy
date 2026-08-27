@@ -10,10 +10,15 @@ export type ServerRow = {
   location: string;
   status: string;
   ssh_host_key: string;
-  /** Private IPv4 on the shared `ocd-net` Hetzner network. Empty string until
-   *  the reconciler attaches the server. Used by ingress upstreams + internal
-   *  DNS so traffic stays off the public NIC. */
+  /** Private IPv4 used for fleet routing. Managed Hetzner hosts receive it
+   *  from `ocd-net`; connected hosts must supply an RFC1918 address that the
+   *  panel verifies before enrollment. */
   private_ipv4: string;
+  provider: "hetzner" | "external";
+  ownership: "managed" | "connected";
+  management_address: string;
+  ssh_user: string;
+  ssh_port: number;
   /** Named capacity pool this server belongs to. 'general' is the default pool
    *  every server lands in; apps schedule onto servers whose pool matches their
    *  placement_pool. */
@@ -51,10 +56,15 @@ export function insertServer(server: {
   status: string;
   private_ipv4?: string;
   pool?: string;
+  provider?: "hetzner" | "external";
+  ownership?: "managed" | "connected";
+  management_address?: string;
+  ssh_user?: string;
+  ssh_port?: number;
 }): ServerRow {
   return db
     .query(
-      "INSERT INTO servers (name, provider_id, ipv4, ipv6, type, location, status, private_ipv4, pool) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
+      "INSERT INTO servers (name, provider_id, ipv4, ipv6, type, location, status, private_ipv4, pool, provider, ownership, management_address, ssh_user, ssh_port) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .get(
       server.name,
@@ -66,6 +76,11 @@ export function insertServer(server: {
       server.status,
       server.private_ipv4 ?? "",
       server.pool ?? "general",
+      server.provider ?? "external",
+      server.ownership ?? "connected",
+      server.management_address ?? server.ipv4,
+      server.ssh_user ?? "root",
+      server.ssh_port ?? 22,
     ) as ServerRow;
 }
 
@@ -79,6 +94,9 @@ export function updateServer(id: number, fields: {
   ipv6?: string;
   status?: string;
   private_ipv4?: string;
+  management_address?: string;
+  ssh_user?: string;
+  ssh_port?: number;
 }): void {
   const setClauses: string[] = [];
   const values: (string | number)[] = [];
@@ -87,6 +105,9 @@ export function updateServer(id: number, fields: {
   if (fields.ipv6 !== undefined) { setClauses.push("ipv6 = ?"); values.push(fields.ipv6); }
   if (fields.status !== undefined) { setClauses.push("status = ?"); values.push(fields.status); }
   if (fields.private_ipv4 !== undefined) { setClauses.push("private_ipv4 = ?"); values.push(fields.private_ipv4); }
+  if (fields.management_address !== undefined) { setClauses.push("management_address = ?"); values.push(fields.management_address); }
+  if (fields.ssh_user !== undefined) { setClauses.push("ssh_user = ?"); values.push(fields.ssh_user); }
+  if (fields.ssh_port !== undefined) { setClauses.push("ssh_port = ?"); values.push(fields.ssh_port); }
   if (setClauses.length === 0) return;
   values.push(id);
   db.query(`UPDATE servers SET ${setClauses.join(", ")} WHERE id = ?`).run(...values);

@@ -51,7 +51,9 @@ export async function handleGitHubAuthorize(request: Request): Promise<Response>
     const state = await createStateToken(userId);
     const origin = getPanelOrigin(request);
     const redirectUri = `${origin}/api/auth/github/callback`;
-    const scope = "repo,read:packages";
+    // Account linking is identity-only. Runtime registry access uses the
+    // administrator-configured OCI pull credential, never a user's OAuth token.
+    const scope = "read:user";
 
     const url = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}`;
 
@@ -138,8 +140,8 @@ export async function handleGitHubCallback(request: Request): Promise<Response> 
     const githubUsername = ghUser.login;
     const avatarUrl = ghUser.avatar_url;
 
-    // Store encrypted token and update user
-    await secretStore.set(`github_oauth:${userId}`, accessToken);
+    // Persist only the identity fields. The short-lived OAuth token is not a
+    // registry credential and is deliberately not retained.
     db.updateUserGitHub(userId, githubId, githubUsername, avatarUrl);
 
     log("callback", `Linked GitHub account @${githubUsername} to user ${userId}`);
@@ -155,6 +157,7 @@ export async function handleGitHubUnlink(request: Request): Promise<Response> {
   try {
     const { userId } = await authenticateRequest(request);
 
+    // Delete any token retained by older versions.
     await secretStore.delete(`github_oauth:${userId}`);
     db.clearUserGitHub(userId);
 

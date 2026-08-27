@@ -76,15 +76,19 @@ instead of reconstructing service URLs.
 With `public: true`, an app receives either:
 
 - its explicitly configured domain;
-- an auto-domain from the configured DNS zone;
-- a fallback address when no managed zone is resolvable.
+- `<app>.<default_domain_suffix>` when a suffix is configured;
+- a `<app>.<panel-ip>.nip.io` fallback when no suffix is configured.
 
-OCD manages routing and, where configured, DNS records. Custom domain and
-auto-domain routing use the app's HTTP service over the private network.
+OCD manages routing, but never creates, replaces, or deletes DNS records. For
+every public HTTP hostname, the panel displays a provider-neutral `A` record
+instruction with copyable type, name, and target plus its observed status:
+`pending`, `correct`, or `conflicting`. Private apps, raw-only endpoints, and
+`nip.io` fallbacks require no manual record. Public domains use Let's Encrypt
+HTTP-01 after the record resolves.
 
 Setting `public: false` removes public routing while retaining private access.
-An existing domain may remain stored so public access can be re-enabled, but no
-public router should serve the private app.
+OCD reports DNS as not applicable and leaves any existing external record
+untouched.
 
 ## Internal protocol
 
@@ -160,8 +164,8 @@ values such as `OCD_INTERNAL_URL` update only when a container is recreated.
 
 Examples:
 
-- changing an allowlist or compression can take effect without a build;
+- changing an allowlist or compression can take effect without an image release;
 - changing `internal_protocol` resyncs ingress, but recreate the container so
   its `OCD_INTERNAL_*` values match;
-- changing `container_port`, environment, memory, CPU, or build settings needs
-  a rollout to affect running containers.
+- changing `container_port`, environment, memory, or CPU needs a rollout to
+  affect running containers.

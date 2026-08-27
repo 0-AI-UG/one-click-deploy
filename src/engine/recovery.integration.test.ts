@@ -8,7 +8,7 @@
 // suite would replace `host-mounts.ts` etc. for every test in the process.
 // Run with:  RUN_ENGINE_INTEGRATION=1 bun test src/engine/recovery.integration.test.ts
 
-import { useTempDataDir, makeFakeComputeProvider, makeFakeDnsProvider, randomSuffix } from "../shared/test-helpers.ts";
+import { useTempDataDir, makeFakeComputeProvider, randomSuffix } from "../shared/test-helpers.ts";
 
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
@@ -20,10 +20,8 @@ if (RUN) useTempDataDir();
 // ---- Provider + remote stubs (must register before importing ops) ----------
 
 const compute = makeFakeComputeProvider();
-const dns = makeFakeDnsProvider();
 if (RUN) mock.module("../shared/providers/index.ts", () => ({
   hetzner: compute,
-  hetznerDns: dns,
 }));
 
 // provisionServer is only called when no ready server exists; stub it.
@@ -137,7 +135,7 @@ async function runOp(kind: string, input: unknown) {
 
 const baseDeployReq = (name: string) => ({
   app_name: name,
-  git_repo: "https://github.com/x/y",
+  image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   container_port: 3000,
   domain: "",
 });
@@ -150,7 +148,6 @@ beforeEach(() => {
     if (typeof m === "function" && "mockClear" in (m as any)) (m as any).mockClear();
   }
   for (const m of Object.values(compute._mocks)) m.mockClear();
-  for (const m of Object.values(dns._mocks)) m.mockClear();
   provisionServer.mockClear();
 });
 
@@ -212,9 +209,7 @@ d("deploy: probe adopts orphaned side effect on resume", () => {
       {
         name,
         domain: `${name}.${server.ipv4}.nip.io`,
-        git_repo: "https://github.com/x/y",
-        dockerfile_path: "Dockerfile",
-        docker_context: "",
+        image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         container_port: 3000,
         env_vars: "{}",
         auth_password: "",
@@ -252,9 +247,8 @@ d("deploy: probe adopts orphaned side effect on resume", () => {
 // ---- 3. Compensation rolls back in reverse on a failure --------------------
 
 d("deploy: compensation rolls back side effects on forward failure", () => {
-  test("a forward failure triggers reverse compensation: container, app row, volume, DNS", async () => {
+  test("a forward failure triggers reverse compensation for app and volume", async () => {
     seedReadyServer();
-    db.saveSetting("dns_zone_id", "zone-1");
 
     const name = `rollback-${randomSuffix()}`;
     world.shouldBuildFail = true; // build step throws → triggers rollback
@@ -266,8 +260,6 @@ d("deploy: compensation rolls back side effects on forward failure", () => {
     });
 
     expect(["compensated", "compensating"]).toContain(fin.status);
-    // DNS compensate called (forward step succeeded → compensate undoes it).
-    expect(dns._mocks.deleteRecord).toHaveBeenCalled();
     // Volume compensate called.
     expect(compute._mocks.volumeDelete).toHaveBeenCalled();
     // App row was undone (deleted by insert_app_row.compensate).
@@ -276,11 +268,8 @@ d("deploy: compensation rolls back side effects on forward failure", () => {
     // Compensate steps appear in REVERSE order in the steps table.
     const steps = getSteps(fin.id).filter((s) => s.phase === "compensate" && s.status === "ok");
     const order = steps.map((s) => s.step);
-    // create_dns_record must appear AFTER create_volume in compensate phase
-    // (since it ran BEFORE create_volume in forward phase, reverse order).
     const volIdx = order.indexOf("create_volume");
-    const dnsIdx = order.indexOf("create_dns_record");
-    if (volIdx >= 0 && dnsIdx >= 0) expect(dnsIdx).toBeGreaterThan(volIdx);
+    expect(volIdx).toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -289,7 +278,6 @@ d("deploy: compensation rolls back side effects on forward failure", () => {
 d("deploy: compensation is resumable across simulated crashes", () => {
   test("compensate steps marked 'ok' from a prior crash are not re-run on resume", async () => {
     seedReadyServer();
-    db.saveSetting("dns_zone_id", "zone-1");
     const name = `resumecomp-${randomSuffix()}`;
     world.shouldBuildFail = true;
 
@@ -301,9 +289,7 @@ d("deploy: compensation is resumable across simulated crashes", () => {
     });
     expect(first.status).toBe("compensated");
 
-    const dnsDeletesAfterFirst = dns._mocks.deleteRecord.mock.calls.length;
     const volDeletesAfterFirst = compute._mocks.volumeDelete.mock.calls.length;
-    expect(dnsDeletesAfterFirst).toBeGreaterThan(0);
     expect(volDeletesAfterFirst).toBeGreaterThan(0);
 
     // Simulate a crash that left the op in 'compensating' with the existing
@@ -322,7 +308,6 @@ d("deploy: compensation is resumable across simulated crashes", () => {
     const fin = getOperation(first.id)!;
     expect(fin.status).toBe("compensated");
     // No additional provider calls — every compensate row was already 'ok'.
-    expect(dns._mocks.deleteRecord.mock.calls.length).toBe(dnsDeletesAfterFirst);
     expect(compute._mocks.volumeDelete.mock.calls.length).toBe(volDeletesAfterFirst);
   });
 });
@@ -337,9 +322,7 @@ d("pause_app: precondition guard avoids duplicate work", () => {
       {
         name,
         domain: `${name}.${server.ipv4}.nip.io`,
-        git_repo: "https://github.com/x/y",
-        dockerfile_path: "Dockerfile",
-        docker_context: "",
+        image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         container_port: 3000,
         env_vars: "{}",
         auth_password: "",

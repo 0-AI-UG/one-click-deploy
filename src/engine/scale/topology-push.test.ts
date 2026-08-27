@@ -14,7 +14,12 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 import * as realRemote from "../../shared/remote/index.ts";
 import * as realTraefikManager from "./traefik-manager.ts";
 
-let attestationTarget: { name: string; configRevision: number; envHash: string } | null = null;
+let attestationTarget: {
+  name: string;
+  imageRef: string;
+  configRevision: number;
+  envHash: string;
+} | null = null;
 
 const sshExec = mock(async (_host: string, cmd: string, _hostKey?: string) => {
   let stdout = "";
@@ -27,7 +32,7 @@ const sshExec = mock(async (_host: string, cmd: string, _hostKey?: string) => {
         Labels: {
           "ocd.app": attestationTarget?.name || "",
           "ocd.image-id": "sha256:test-image",
-          "ocd.image-ref": attestationTarget ? `${attestationTarget.name}:latest` : "",
+          "ocd.image-ref": attestationTarget?.imageRef || "",
           "ocd.env-hash": attestationTarget?.envHash || "",
           "ocd.config-revision": String(attestationTarget?.configRevision || 0),
         },
@@ -43,6 +48,12 @@ mock.module("../../shared/remote/index.ts", () => ({
   healthCheck: mock(async () => ({ healthy: true })),
   probeAppHealth: mock(async () => ({ healthy: true })),
   startAppReplica: mock(async () => {}),
+  pullImmutableImageAndRun: mock(async (_host: string, opts: { imageRef: string }) => ({
+    containerId: "test-container",
+    imageTag: opts.imageRef,
+    imageDigest: opts.imageRef,
+    imageBytes: 1,
+  })),
   startContainer: mock(async () => true),
   containerExists: mock(async () => true),
   stopContainer: mock(async () => {}),
@@ -76,12 +87,16 @@ function makeApp() {
   const app = db.insertApp({
     name: `tp-app-${randomSuffix()}`,
     domain: "",
-    git_repo: "https://x.git",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
   });
-  attestationTarget = { name: app.name, configRevision: app.config_revision, envHash: "" };
+  attestationTarget = {
+    name: app.name,
+    imageRef: app.image_ref,
+    configRevision: app.config_revision,
+    envHash: "",
+  };
   return app;
 }
 

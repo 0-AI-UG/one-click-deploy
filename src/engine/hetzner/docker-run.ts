@@ -117,7 +117,7 @@ export async function ensureVolumeOwnership(
 export type StartAppReplicaOpts = {
   /** Container name (--name). */
   containerName: string;
-  /** Image ref to run (e.g. "app:latest", "app:rollback", a prior image id). */
+  /** Immutable OCI digest reference to run. */
   image: string;
   appName: string;
   bindAddr: string;

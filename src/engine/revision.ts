@@ -20,7 +20,11 @@ export function hashEnvironment(env: Record<string, string>): string {
 
 export function latestDesiredImage(app: Pick<AppRow, "id" | "name" | "image_ref">): string {
   const deployed = db.getDeployments(app.id).find((row) => row.status === "deployed");
-  return deployed?.image_digest || app.image_ref || `${app.name}:latest`;
+  const image = deployed?.image_digest || app.image_ref;
+  if (!image?.includes("@sha256:")) {
+    throw new Error(`App ${app.name} has no immutable registry image digest`);
+  }
+  return image;
 }
 
 export type ReplicaAttestation = {
@@ -81,11 +85,7 @@ export async function attestReplica(
   if (inspected?.State?.Running !== true) errors.push("container is not running");
   if (labels[REVISION_LABELS.app] !== app.name) errors.push("app label mismatch");
   if (!imageId || observed.imageDigest !== imageId) errors.push("image id label mismatch");
-  // Source-built revisions are Docker content ids. Registry manifest digests
-  // are verified by the immutable image-ref label plus the local image id.
-  if (expected.imageDigest.startsWith("sha256:") && imageId !== expected.imageDigest) {
-    errors.push(`image ${imageId || "<missing>"} != ${expected.imageDigest}`);
-  } else if (expected.imageDigest.includes("@sha256:") && labels[REVISION_LABELS.imageRef] !== expected.imageDigest) {
+  if (expected.imageDigest.includes("@sha256:") && labels[REVISION_LABELS.imageRef] !== expected.imageDigest) {
     errors.push(`image ref ${labels[REVISION_LABELS.imageRef] || "<missing>"} != ${expected.imageDigest}`);
   }
   if (observed.envHash !== expected.envHash) errors.push(`environment ${observed.envHash || "<missing>"} != ${expected.envHash}`);

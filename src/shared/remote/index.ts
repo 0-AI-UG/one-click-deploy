@@ -16,8 +16,6 @@ export { spawnSshPty, type PtySession } from "../../engine/hetzner/ssh-pty.ts";
 
 // Containers (Docker, health checks)
 export {
-  cloneRepo,
-  cloneAndBuild,
   pullImmutableImageAndRun,
   pullImmutableImage,
   removeContainer,
@@ -28,8 +26,6 @@ export {
   assessMarkerFreshness,
   startAppReplica,
   writeEnvDeployFile,
-  buildAppImage,
-  findDockerfile,
   getContainerLogs,
   restartContainer,
   pauseContainer,
@@ -38,7 +34,6 @@ export {
   startContainer,
   containerExists,
   containerRunning,
-  transferImage,
   ensureOcdNetwork,
   buildDockerRunArgs,
   pullAndRunService,

@@ -9,8 +9,7 @@ function makeApp() {
   return db.insertApp({
     name: `intent-${randomSuffix()}`,
     domain: "old.example.com",
-    git_repo: "https://github.com/example/app",
-    dockerfile_path: "Dockerfile",
+    image_ref: `ghcr.io/acme/test@sha256:${"a".repeat(64)}`,
     container_port: 3000,
     env_vars: "{}",
   });

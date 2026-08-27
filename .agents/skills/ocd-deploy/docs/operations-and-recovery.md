@@ -67,7 +67,7 @@ Use detail to inspect:
 `ops engine` shows engine heartbeat, concurrency, and registered operation
 kinds.
 
-Use log follow during long builds or recovery. A numeric `--since` is the
+Use log follow during long rollouts or recovery. A numeric `--since` is the
 operation-log cursor, not a timestamp.
 
 ## Cancellation
@@ -97,9 +97,13 @@ Retry either resumes recoverable cleanup/work or enqueues a fresh attempt,
 depending on operation state. The command returns the operation ID and whether
 it resumed. Follow the returned ID.
 
+For a failed stack deployment, retry is a checkpointed continuation: successful
+members are retained and convergence skips them, while failed/unreconciled
+members continue from the dependency level that still needs work.
+
 Prefer retry when steps are idempotent/resumable and the external cause has
-been fixed: capacity, Git access, provider/API availability, health endpoint,
-or invalid dependent state.
+been fixed: capacity, registry access, provider/API availability, health
+endpoint, or invalid dependent state.
 
 ## Finalize
 
@@ -138,15 +142,13 @@ This provisional-deploy rollback is distinct from explicit app/stack deletion.
 Explicit deletion never deletes linked environments.
 
 Before stateful services are provisioned, stack deployment validates every app
-request. When a ready build host exists, it also clones each Git source into an
-operation-scoped scratch directory and verifies the selected branch/commit,
-Dockerfile, and build context. The scratch checkout is removed in the same
-attempt.
+request and child manifest, including each immutable image reference. Source
+checkout and artifact creation occur outside OCD.
 
 ## App/stack cleanup failure
 
-App destruction uses best-effort cleanup for webhook, containers, DNS, volume
-detach, ingress, and empty-server GC. If upstream cleanup fails, OCD does not
+App destruction uses best-effort cleanup for containers, volume detach,
+ingress, and empty-server GC. If upstream cleanup fails, OCD does not
 blindly erase database rows; it marks the app `cleanup_failed` so the reconciler
 and operator retain a target for recovery.
 

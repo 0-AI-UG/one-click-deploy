@@ -4,7 +4,14 @@ import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
 import { secretStore, maskToken } from "../../shared/secret-store.ts";
 import { hetzner } from "../../shared/providers/index.ts";
-import { syncZoneNameSetting } from "../../shared/dns-zone.ts";
+
+const PLAIN_SETTING_KEYS = new Set([
+  "github_oauth_client_id",
+  "default_server_type",
+  "default_location",
+  "oci_artifact_ref",
+  "oci_registry_username",
+]);
 
 export async function handleGetSettings(request: Request): Promise<Response> {
   try {
@@ -13,18 +20,15 @@ export async function handleGetSettings(request: Request): Promise<Response> {
     const providerToken = await secretStore.getProviderToken();
     const githubOauthClientSecret = await secretStore.get("github_oauth_client_secret");
     const registryPassword = await secretStore.get("oci_registry_password");
-    const provider = hetzner;
     return Response.json(
       {
-        provider_token: maskToken(providerToken),
-        provider: { id: provider.id, name: provider.name },
+        hetzner_api_token: maskToken(providerToken),
+        hetzner_configured: !!providerToken,
         github_oauth_client_id: s.github_oauth_client_id ?? "",
         github_oauth_client_secret: maskToken(githubOauthClientSecret ?? ""),
-        dns_zone_id: s.dns_zone_id ?? "",
+        default_domain_suffix: s.default_domain_suffix ?? "",
         default_server_type: s.default_server_type ?? "",
         default_location: s.default_location ?? "",
-        allow_archive_image_transfer: (s.allow_archive_image_transfer ?? "0") === "1",
-        oci_cache_ref: s.oci_cache_ref ?? "",
         oci_artifact_ref: s.oci_artifact_ref ?? "",
         oci_registry_username: s.oci_registry_username ?? "",
         oci_registry_password: maskToken(registryPassword ?? ""),
@@ -41,6 +45,8 @@ export async function handleGetServerTypes(request: Request): Promise<Response> 
   try {
     await requireAdmin(request);
     const compute = hetzner;
+    const token = await secretStore.get(compute.tokenKey);
+    if (!token) return Response.json({ server_types: [] }, { headers: corsHeaders });
     const types = await compute.listServerTypes();
     return Response.json({ server_types: types }, { headers: corsHeaders });
   } catch (error) {
@@ -55,19 +61,19 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
 
     const provider = hetzner;
     for (const [key, rawValue] of Object.entries(settings)) {
-      if (key === "require_2fa" || key === "allow_archive_image_transfer") {
+      if (key === "require_2fa") {
         db.saveSetting(key, rawValue ? "1" : "0");
         continue;
       }
       const value = String(rawValue ?? "");
-      if ((key === "oci_cache_ref" || key === "oci_artifact_ref") && value &&
+      if (key === "oci_artifact_ref" && value &&
           !/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+(?::[A-Za-z0-9._-]+)?$/i.test(value)) {
         return Response.json(
           { error: `${key} must be an OCI repository reference` },
           { status: 400, headers: corsHeaders },
         );
       }
-      if (key === "provider_token") {
+      if (key === "hetzner_api_token") {
         if (value.includes("...") || value === "****") continue;
         if (value) {
           const validation = provider.validateToken(value);
@@ -77,15 +83,18 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
               { status: 400, headers: corsHeaders },
             );
           }
+          await provider.verifyToken(value);
           await secretStore.set(provider.tokenKey, value);
+        } else await secretStore.delete(provider.tokenKey);
+      } else if (key === "default_domain_suffix") {
+        const suffix = value.trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+        if (suffix && !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(suffix)) {
+          return Response.json(
+            { error: "default_domain_suffix must be a valid DNS suffix such as apps.example.com" },
+            { status: 400, headers: corsHeaders },
+          );
         }
-      } else if (key === "github_oauth_client_id") {
-        db.saveSetting(key, value);
-      } else if (key === "dns_zone_id") {
-        db.saveSetting(key, value);
-        // Cache the zone *name* for auto-domains (<app>.<zone>); an empty
-        // zone id clears it.
-        await syncZoneNameSetting(value);
+        db.saveSetting(key, suffix);
       } else if (key === "github_oauth_client_secret") {
         if (value.includes("...") || value === "****") continue;
         if (value) {
@@ -97,8 +106,13 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
         if (value.includes("...") || value === "****") continue;
         if (value) await secretStore.set(key, value);
         else await secretStore.delete(key);
+      } else if (PLAIN_SETTING_KEYS.has(key)) {
+        db.saveSetting(key, value);
       } else {
-        db.saveSetting(key, String(value));
+        return Response.json(
+          { error: `Unknown setting: ${key}` },
+          { status: 400, headers: corsHeaders },
+        );
       }
     }
 

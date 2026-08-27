@@ -8,6 +8,10 @@ interface Server {
   id: number;
   name: string;
   provider_id: string;
+  provider?: "hetzner" | "external";
+  ownership?: "managed" | "connected";
+  management_address?: string;
+  private_ipv4?: string;
   ipv4: string;
   type: string;
   location: string;
@@ -75,13 +79,13 @@ export function parseServerCreateArgs(
 async function listServers(): Promise<void> {
   const list = await get<Server[]>("/api/servers");
   table(
-    ["ID", "NAME", "IP", "TYPE", "LOCATION", "POOL", "APPS"],
+    ["ID", "NAME", "IP", "PROVIDER", "OWNERSHIP", "POOL", "APPS"],
     list.map((s) => [
       String(s.id),
       s.name,
       s.ipv4,
-      s.type,
-      s.location,
+      s.provider || "external",
+      s.ownership || "connected",
       s.pool || "general",
       s.apps?.map((a) => a.name).join(", ") || "-",
     ]),
@@ -120,7 +124,7 @@ async function showServer(ref: string, diagnosticsOnly = false): Promise<void> {
   const detail = await get<ServerDetail>(`/api/resources/servers/${server.id}`);
   const host = detail.host;
   console.log(`${BOLD}${detail.name}${RESET}  ${colorStatus(detail.status)}  ${DIM}#${detail.id}${RESET}`);
-  console.log(`${DIM}Provider:${RESET} ${detail.provider_id}  ${DIM}Type:${RESET} ${detail.type}  ${DIM}Location:${RESET} ${detail.location}  ${DIM}Pool:${RESET} ${detail.pool || "general"}`);
+  console.log(`${DIM}Provider:${RESET} ${detail.provider || "external"}${detail.provider_id ? ` (${detail.provider_id})` : ""}  ${DIM}Ownership:${RESET} ${detail.ownership || "connected"}  ${DIM}Pool:${RESET} ${detail.pool || "general"}`);
   console.log(`${DIM}Network:${RESET} ${detail.ipv4}${detail.private_ipv4 ? ` / ${detail.private_ipv4}` : ""}`);
   console.log(`${DIM}Usage:${RESET} CPU ${fmtPct(detail.cpu_percent)}  memory ${fmtPct(detail.memory_percent)}  disk ${detail.disk_free_gb ?? "-"}/${detail.disk_total_gb ?? "-"} GB free`);
   console.log(`${DIM}Cost:${RESET} ${detail.monthly_eur == null ? "-" : `${detail.currency} ${detail.monthly_eur.toFixed(2)}/month`}`);
@@ -193,7 +197,7 @@ async function deleteServer(args: string[]): Promise<void> {
   const confirmation = await webConfirm("delete_server", "server", server.id);
   if (!confirmation) return;
   const result = await del<{ ok: boolean; error?: string; op_id?: number }>(
-    `/api/resources/server/${encodeURIComponent(server.provider_id)}`,
+    `/api/servers/${server.id}`,
     undefined,
     { "X-OCD-Confirmation": confirmation },
   );
@@ -202,7 +206,43 @@ async function deleteServer(args: string[]): Promise<void> {
     const op = await followOp(result.op_id);
     if (!op.ok) throw new Error(op.error || "Server deletion failed");
   }
-  console.log(`${GREEN}Server deleted.${RESET}`);
+  console.log(
+    server.ownership === "connected"
+      ? `${GREEN}Server disconnected; the external VPS was not deleted.${RESET}`
+      : `${GREEN}Managed server deleted.${RESET}`,
+  );
+}
+
+function valueFlag(args: string[], name: string): string | undefined {
+  const equals = args.find((arg) => arg.startsWith(`--${name}=`));
+  if (equals) return equals.slice(name.length + 3);
+  const index = args.indexOf(`--${name}`);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+async function printEnrollmentKey(): Promise<void> {
+  const result = await get<{ public_key: string }>("/api/servers/enrollment-key");
+  console.log(result.public_key);
+}
+
+async function connectServer(args: string[]): Promise<void> {
+  const name = valueFlag(args, "name");
+  const managementAddress = valueFlag(args, "address");
+  const privateIpv4 = valueFlag(args, "private-address");
+  const sshHostKey = valueFlag(args, "host-key");
+  if (!name || !managementAddress || !privateIpv4 || !sshHostKey) {
+    throw new Error("Usage: ocd servers connect --name=X --address=X --private-address=X --host-key='X ssh-ed25519 AAAA...' [--pool=general]");
+  }
+  const result = await post<{ server: Server }>("/api/servers/connect", {
+    name,
+    management_address: managementAddress,
+    private_ipv4: privateIpv4,
+    ssh_host_key: sshHostKey,
+    ssh_user: valueFlag(args, "ssh-user") || "root",
+    ssh_port: Number(valueFlag(args, "ssh-port") || "22"),
+    pool: valueFlag(args, "pool") || "general",
+  });
+  console.log(`${GREEN}Connected ${result.server.name} as an externally owned stateless host.${RESET}`);
 }
 
 async function setPool(ref: string, pool: string): Promise<void> {
@@ -242,7 +282,9 @@ ${BOLD}Commands:${RESET}
   show <name|id>                  Detail, workloads and host diagnostics
   diagnose <name|id>              Host diagnostics
   create --type=X --location=X    Provision a server
-  delete <name|id>                Confirm in the web UI, then destroy an unused server
+  enrollment-key                  Print the public key to install on an external host
+  connect --name=X --address=X --private-address=X --host-key='...'  Connect an existing stateless host
+  delete <name|id>                Destroy a managed host or disconnect an external host
   refresh                         Refresh provider-backed server inventory
   pool <name|id> <pool>           Change future-placement capacity pool
   metrics [name|id] [--since=N]   Server metric history`);
@@ -265,6 +307,10 @@ export async function servers(args: string[] = []): Promise<void> {
       return showServer(rest[0], true);
     case "create":
       return createServer(rest);
+    case "enrollment-key":
+      return printEnrollmentKey();
+    case "connect":
+      return connectServer(rest);
     case "delete":
     case "remove":
       return deleteServer(rest);

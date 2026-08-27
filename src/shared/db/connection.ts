@@ -89,9 +89,17 @@ function initSchema(instance: Database) {
     location TEXT NOT NULL DEFAULT 'nbg1',
     status TEXT NOT NULL DEFAULT 'provisioning',
     private_ipv4 TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT 'external',
+    ownership TEXT NOT NULL DEFAULT 'connected',
+    management_address TEXT NOT NULL DEFAULT '',
+    ssh_user TEXT NOT NULL DEFAULT 'root',
+    ssh_port INTEGER NOT NULL DEFAULT 22,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`);
 
+  // Historical v0 bootstrap shape. New databases immediately run the complete
+  // migration chain; migration 105 removes these source-build columns before
+  // createDatabase returns, so callers only ever observe the digest-only schema.
   instance.run(`CREATE TABLE IF NOT EXISTS apps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -105,16 +113,6 @@ function initSchema(instance: Database) {
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`);
 
-  instance.run(`CREATE TABLE IF NOT EXISTS dns_records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
-    zone_id TEXT NOT NULL,
-    record_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL DEFAULT 'A',
-    value TEXT NOT NULL
-  )`);
-
   instance.run(`CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
@@ -122,8 +120,7 @@ function initSchema(instance: Database) {
 
   const defaults: Record<string, string> = {
     ssh_public_key: "",
-    dns_zone_id: "",
-    dns_zone_name: "",
+    default_domain_suffix: "",
     default_server_type: "",
     default_location: "",
     require_2fa: "1",

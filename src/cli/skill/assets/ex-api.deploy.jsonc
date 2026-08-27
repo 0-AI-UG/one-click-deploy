@@ -1,14 +1,16 @@
 {
   "$schema": 1,
   "name": "API Server",
-  "description": "REST API backend. In a stack it reads DATABASE_URL and REDIS_URL from the shared environment (injected by the `database` and `redis` services), so those are NOT declared here.",
-  "build": { "dockerfile": "Dockerfile", "context": ".", "container_port": 8080 },
+  "description": "REST API backend using stack-injected service URLs",
+  "image": {
+    "ref": "ghcr.io/example/blog-api@sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01"
+  },
+  "container_port": 8080,
   "env": [
-    { "key": "JWT_SECRET", "description": "Signing key for auth tokens; supply at deploy time", "required": true, "secret": true },
+    { "key": "JWT_SECRET", "description": "Signing key for auth tokens", "required": true, "secret": true },
     { "key": "LOG_LEVEL", "default": "info" }
   ],
   "volume": null,
   "health_check": { "path": "/health" },
-  "webhook": { "enabled": true, "branch": "main", "paths": ["services/api/**"] },
   "suggested_app_name": "myapp-api"
 }

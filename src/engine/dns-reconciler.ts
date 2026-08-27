@@ -1,52 +1,83 @@
 import { resolve4 } from "node:dns/promises";
 import * as db from "../shared/db.ts";
-import { hetznerDns } from "../shared/providers/index.ts";
-import { getOrResolveZoneName } from "../shared/dns-zone.ts";
+import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { getPanelIngressIpv4 } from "./scale/traefik-manager.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "./scheduler.ts";
 
-export type DnsReadiness = {
-  managed: boolean;
+export type DnsInstructionStatus = "pending" | "correct" | "conflicting" | "not_applicable";
+
+export type DnsInstruction = {
+  status: DnsInstructionStatus;
+  record: { type: "A"; name: string; value: string } | null;
+  observedValues: string[];
+  message: string;
+};
+
+export type DnsReadiness = DnsInstruction & {
   domain: string;
   expectedTarget: string;
   resolved: string[];
   ready: boolean;
-  error?: string;
 };
 
 type ReconcileOptions = { alreadyLocked?: boolean; skipIfBusy?: boolean };
 
-function withinZone(domain: string, zone: string): boolean {
-  const d = domain.replace(/\.$/, "").toLowerCase();
-  const z = zone.replace(/\.$/, "").toLowerCase();
-  return !!z && (d === z || d.endsWith(`.${z}`));
+function notApplicable(message: string, domain = ""): DnsReadiness {
+  return {
+    status: "not_applicable",
+    record: null,
+    observedValues: [],
+    message,
+    domain,
+    expectedTarget: "",
+    resolved: [],
+    ready: true,
+  };
 }
 
-function recordName(domain: string, zone: string): string {
-  const d = domain.replace(/\.$/, "");
-  const z = zone.replace(/\.$/, "");
-  return d.toLowerCase() === z.toLowerCase() ? "@" : d.slice(0, -(z.length + 1));
-}
-
-async function resolvedIps(domain: string): Promise<string[]> {
-  try { return await resolve4(domain); } catch { return []; }
-}
-
-async function deleteTrackedAppRecords(appId: number): Promise<void> {
-  for (const record of db.getDnsRecords(appId)) {
-    await hetznerDns.deleteRecord({
-      zoneId: record.zone_id,
-      name: record.name,
-      type: record.type,
-      value: record.value,
-    });
-    db.deleteDnsRecord(record.record_id);
+async function observeARecord(domain: string, target: string): Promise<DnsReadiness> {
+  if (!domain || !target) return notApplicable("No public HTTP DNS record is required", domain);
+  if (domain.endsWith(".nip.io")) {
+    return notApplicable("nip.io resolves automatically; no DNS record needs to be created", domain);
   }
+
+  let resolved: string[] = [];
+  try {
+    resolved = Array.from(new Set(await resolve4(domain))).sort();
+  } catch {
+    // An absent/unpropagated record and a temporary resolver failure are both
+    // operator-observable pending states. OCD never writes to a DNS provider.
+  }
+
+  const exact = resolved.length === 1 && resolved[0] === target;
+  const status: DnsInstructionStatus = exact
+    ? "correct"
+    : resolved.length === 0
+      ? "pending"
+      : "conflicting";
+  const message = status === "correct"
+    ? `${domain} resolves to ${target}`
+    : status === "pending"
+      ? `Create this record with your DNS provider; no A record is currently observed`
+      : `${domain} resolves to ${resolved.join(", ")}; replace it with ${target}`;
+
+  return {
+    status,
+    record: { type: "A", name: domain, value: target },
+    observedValues: resolved,
+    message,
+    domain,
+    expectedTarget: target,
+    resolved,
+    ready: exact,
+  };
 }
 
-/** Reconcile an app's public A record in both directions. The app lock prevents
- * this controller from recreating a record while a destroy/redeploy operation
- * owns the same app. */
+/**
+ * Return provider-neutral DNS guidance for a public HTTP app. This controller
+ * only performs recursive A-record lookups; it has no provider dependency and
+ * cannot create, replace, or delete DNS records.
+ */
 export async function reconcileAppDns(
   appId: number,
   options: ReconcileOptions = {},
@@ -54,101 +85,49 @@ export async function reconcileAppDns(
   const keys = [`app:${appId}`];
   let acquired = false;
   if (!options.alreadyLocked) {
-    const lock = tryAcquire(keys, NON_OP_HOLDER, "reconcile:dns");
+    const lock = tryAcquire(keys, NON_OP_HOLDER, "observe:dns");
     if (!lock.ok) {
       const app = db.getApp(appId);
-      const error = `DNS reconciliation deferred: ${lock.busyKey} is held by ${lock.heldBy.kind}`;
+      const message = `DNS observation deferred: ${lock.busyKey} is held by ${lock.heldBy.kind}`;
       if (options.skipIfBusy) {
         return {
-          managed: false,
-          domain: app?.domain || "",
-          expectedTarget: "",
-          resolved: [],
+          ...notApplicable(message, app?.domain || ""),
           ready: false,
-          error,
         };
       }
-      throw new Error(error);
+      throw new Error(message);
     }
     acquired = true;
   }
+
   try {
     const app = db.getApp(appId);
     if (!app) throw new Error(`App ${appId} not found`);
     if (app.deletion_requested_at || !app.public || !app.domain) {
-      await deleteTrackedAppRecords(app.id);
+      const result = notApplicable(
+        app.deletion_requested_at
+          ? "The app is being removed; delete its DNS record manually if it is no longer needed"
+          : "Private and raw-only apps do not require a DNS instruction",
+        app.domain || "",
+      );
       db.updateAppPublicEndpointStatus(app.id, "not_applicable");
-      return { managed: false, domain: app.domain || "", expectedTarget: "", resolved: [], ready: true };
+      return result;
     }
+
     const target = getPanelIngressIpv4() || "";
     if (!target) {
-      const error = "panel ingress IPv4 is unavailable";
-      db.updateAppPublicEndpointStatus(app.id, "degraded", error);
-      throw new Error(error);
+      const message = "Panel ingress IPv4 is unavailable";
+      db.updateAppPublicEndpointStatus(app.id, "degraded", message);
+      return {
+        ...notApplicable(message, app.domain),
+        ready: false,
+      };
     }
-    const settings = db.getSettings();
-    const zoneId = settings.dns_zone_id || "";
-    let zoneName = settings.dns_zone_name || "";
-    if (zoneId && !zoneName) {
-      zoneName = await getOrResolveZoneName();
-      if (!zoneName) {
-        const error = `DNS zone resolution failed: configured zone ${zoneId} was not found`;
-        db.updateAppPublicEndpointStatus(app.id, "degraded", error);
-        throw new Error(error);
-      }
-    }
-    const managed = !!zoneId && withinZone(app.domain, zoneName);
-    let resolved = await resolvedIps(app.domain);
-    const name = managed ? recordName(app.domain, zoneName) : "";
-    if (!managed) await deleteTrackedAppRecords(app.id);
-    if (managed) {
-      try {
-        // Remove OCD's obsolete recorded values before converging the target.
-        for (const stale of db.getDnsRecords(app.id).filter((r) =>
-          r.zone_id !== zoneId || r.name !== name || r.type !== "A" || r.value !== target
-        )) {
-          await hetznerDns.deleteRecord({
-            zoneId: stale.zone_id,
-            name: stale.name,
-            type: stale.type,
-            value: stale.value,
-          });
-          db.deleteDnsRecord(stale.record_id);
-        }
-        // createRecord performs an authoritative RRSet lookup and is
-        // idempotent. Run it even when recursive DNS still has the expected
-        // value cached so a provider-side deletion is repaired immediately.
-        const record = await hetznerDns.createRecord({ zoneId, name, type: "A", value: target });
-        const tracked = db.getDnsRecords(app.id).some((r) =>
-          r.zone_id === zoneId && r.name === name && r.type === "A" && r.value === target
-        );
-        if (!tracked) {
-          db.insertDnsRecord({
-            app_id: app.id,
-            zone_id: zoneId,
-            record_id: record.id,
-            name,
-            type: "A",
-            value: target,
-          });
-        }
-        // DNS propagation can lag the authoritative write; the resource is
-        // converged, while public readiness remains pending until resolution.
-        resolved = await resolvedIps(app.domain);
-      } catch (err) {
-        const error = `DNS reconciliation failed for ${app.domain}: ${err instanceof Error ? err.message : err}`;
-        db.updateAppPublicEndpointStatus(app.id, "degraded", error);
-        throw new Error(error);
-      }
-    }
-    const ready = resolved.includes(target);
-    const error = ready
-      ? ""
-      : managed
-        ? `DNS change pending: ${app.domain} must resolve to ${target}`
-        : `Unmanaged domain ${app.domain} resolves to ${resolved.join(", ") || "nothing"}; expected ${target}`;
-    db.updateAppPublicEndpointStatus(app.id, ready ? "ready" : "degraded", error);
-    return { managed, domain: app.domain, expectedTarget: target, resolved, ready, error: error || undefined };
+
+    const result = await observeARecord(app.domain, target);
+    const error = result.ready ? "" : result.message;
+    db.updateAppPublicEndpointStatus(app.id, result.ready ? "ready" : "degraded", error);
+    return result;
   } finally {
     if (acquired) release(keys);
   }
@@ -161,65 +140,40 @@ export async function reconcileAllAppDns(): Promise<void> {
     while (next < apps.length) {
       const app = apps[next++];
       try { await reconcileAppDns(app.id, { skipIfBusy: true }); }
-      catch (err) { console.warn(`[dns:reconcile] app ${app.id}: ${err}`); }
+      catch (err) { console.warn(`[dns:observe] app ${app.id}: ${err}`); }
     }
   });
   await Promise.all(workers);
 }
 
-async function deleteTrackedPanelRecord(): Promise<void> {
+export async function reconcilePanelDns(): Promise<DnsReadiness> {
   const panel = db.getPanel();
-  if (!panel?.dns_zone_id || !panel.dns_name || !panel.dns_type || !panel.dns_value) return;
-  await hetznerDns.deleteRecord({
-    zoneId: panel.dns_zone_id,
-    name: panel.dns_name,
-    type: panel.dns_type,
-    value: panel.dns_value,
-  });
-  db.clearPanelDnsRecord();
+  if (!panel) return notApplicable("The panel has not been deployed");
+  const server = db.getServer(panel.server_id);
+  if (!server?.ipv4 || !panel.domain || panel.domain.endsWith(".nip.io")) {
+    return notApplicable(
+      panel.domain.endsWith(".nip.io")
+        ? "nip.io resolves automatically; no DNS record needs to be created"
+        : "The panel does not yet have a public DNS target",
+      panel.domain,
+    );
+  }
+  return observeARecord(panel.domain, server.ipv4);
 }
 
-/** The panel is not an apps-table row, so its bootstrap DNS record has its own
- * desired-state adapter. This repairs the historical best-effort bootstrap
- * path and removes obsolete records when the configured zone changes. */
-export async function reconcilePanelDns(): Promise<void> {
-  const panel = db.getPanel();
-  if (!panel) return;
-  const keys = [`server:${panel.server_id}`];
-  const lock = tryAcquire(keys, NON_OP_HOLDER, "reconcile:panel-dns");
-  if (!lock.ok) return;
-  try {
-    const server = db.getServer(panel.server_id);
-    const settings = db.getSettings();
-    const zoneId = settings.dns_zone_id || "";
-    let zoneName = settings.dns_zone_name || "";
-    if (zoneId && !zoneName) zoneName = await getOrResolveZoneName();
-    const desired = !!server?.ipv4 && !!zoneId && withinZone(panel.domain, zoneName);
-    if (!desired) {
-      await deleteTrackedPanelRecord();
-      return;
-    }
-    const name = recordName(panel.domain, zoneName);
-    const stale = panel.dns_zone_id && (
-      panel.dns_zone_id !== zoneId || panel.dns_name !== name ||
-      panel.dns_type !== "A" || panel.dns_value !== server!.ipv4
-    );
-    if (stale) await deleteTrackedPanelRecord();
-    await hetznerDns.createRecord({
-      zoneId,
-      name,
-      type: "A",
-      value: server!.ipv4,
-    });
-    db.updatePanelDnsRecord({
-      zone_id: zoneId,
-      name,
-      type: "A",
-      value: server!.ipv4,
-    });
-  } finally {
-    release(keys);
+export async function reconcileServiceDns(serviceId: number): Promise<DnsReadiness> {
+  const service = db.getService(serviceId);
+  if (!service) throw new Error(`Service ${serviceId} not found`);
+  const catalog = getCatalogEntry(service.service_type);
+  let domain = "";
+  try { domain = String(JSON.parse(service.credentials || "{}")?.domain || ""); }
+  catch { /* malformed credentials are not a public endpoint */ }
+  if (!catalog?.http || !domain) {
+    return notApplicable("Private and raw-only services do not require a DNS instruction", domain);
   }
+  const target = getPanelIngressIpv4() || "";
+  if (!target) return { ...notApplicable("Panel ingress IPv4 is unavailable", domain), ready: false };
+  return observeARecord(domain, target);
 }
 
 export type PublicEndpointReadiness = DnsReadiness & {
@@ -230,13 +184,9 @@ export type PublicEndpointReadiness = DnsReadiness & {
 
 export async function validatePublicEndpoint(appId: number): Promise<PublicEndpointReadiness> {
   const dns = await reconcileAppDns(appId);
-  if (!dns.ready) return { ...dns, tlsReady: false, tlsError: dns.error };
+  if (!dns.ready) return { ...dns, tlsReady: false, tlsError: dns.message };
   const app = db.getApp(appId)!;
-  if (app.domain.endsWith(".nip.io")) {
-    // nip.io deliberately uses a self-signed certificate; DNS is the public
-    // readiness contract for that development-only domain class.
-    return { ...dns, tlsReady: true };
-  }
+  if (app.domain.endsWith(".nip.io")) return { ...dns, tlsReady: true };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {

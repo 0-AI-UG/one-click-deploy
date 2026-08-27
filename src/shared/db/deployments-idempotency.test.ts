@@ -18,8 +18,7 @@ test("deployment history is idempotent for an operation id", () => {
   const { app } = db.insertAppWithFirstReplica({
     name,
     domain: `${name}.example.com`,
-    git_repo: "https://github.com/example/repo",
-    dockerfile_path: "Dockerfile",
+    image_ref: `ghcr.io/acme/test@sha256:${"a".repeat(64)}`,
     container_port: 3000,
     env_vars: "{}",
   }, server.id);

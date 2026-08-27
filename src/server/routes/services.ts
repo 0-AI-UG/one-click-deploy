@@ -11,6 +11,7 @@ import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
+import { reconcileServiceDns } from "../../engine/dns-reconciler.ts";
 
 // --- Catalog ---
 
@@ -43,15 +44,16 @@ export async function handleGetServices(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "services.view");
     const services = db.getServices();
-    const result = services.map((s) => {
+    const result = await Promise.all(services.map(async (s) => {
       const instances = db.getServiceInstances(s.id);
       const links = db.getServiceLinks(s.id);
       return {
         ...s,
         primary_instance: instances[0] || null,
         linked_environments: links.map((l) => ({ id: l.environment_id, name: l.environment_name, env_prefix: l.env_prefix })),
+        dns_instruction: await reconcileServiceDns(s.id),
       };
-    });
+    }));
     return Response.json(result, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
@@ -79,6 +81,7 @@ export async function handleGetService(request: Request, serviceId: number): Pro
       credentials: JSON.parse(service.credentials || "{}"),
       instances,
       linked_environments: links.map((l) => ({ id: l.environment_id, name: l.environment_name, env_prefix: l.env_prefix })),
+      dns_instruction: await reconcileServiceDns(service.id),
     }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);

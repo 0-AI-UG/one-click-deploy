@@ -55,8 +55,7 @@ function makeApp(
   return insertApp({
     name: `app-${suffix}-${Math.random().toString(36).slice(2, 6)}`,
     domain: `${suffix}.example.com`,
-    git_repo: "https://x.git",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
     placement_pool: overrides.placement_pool,
@@ -158,7 +157,7 @@ describe("pickTargetServer", () => {
       server_id: panelServer.id,
       name: "ocd-panel",
       domain: "panel.example.com",
-      git_repo: "https://github.com/example/panel",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       host_port: 3000,
     });

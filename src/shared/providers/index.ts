@@ -1,12 +1,11 @@
-// Hetzner Cloud is the only supported provider. There is no provider
-// abstraction — these concrete modules are imported directly. Tests swap in
-// fakes by mocking this module.
-export { hetzner, hetznerDns } from "./hetzner.ts";
-export type { Hetzner, HetznerDns } from "./hetzner.ts";
+// Hetzner is the optional managed-infrastructure provisioner. Connected hosts
+// do not have a provider module; their runtime and ownership are persisted in
+// the server row. Keep this export concrete instead of inventing a plugin SDK.
+export { hetzner } from "./hetzner.ts";
+export type { Hetzner } from "./hetzner.ts";
 
 export type {
   ServerType,
-  DnsZone,
   ProviderServer,
   ProviderVolume,
   VolumeInfo,

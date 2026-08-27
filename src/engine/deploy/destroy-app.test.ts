@@ -1,4 +1,4 @@
-import { useTempDataDir, makeFakeComputeProvider, makeFakeDnsProvider, randomSuffix } from "../../shared/test-helpers.ts";
+import { useTempDataDir, makeFakeComputeProvider, randomSuffix } from "../../shared/test-helpers.ts";
 useTempDataDir();
 
 import { describe, test, expect, mock, beforeEach } from "bun:test";
@@ -7,10 +7,8 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 // imports resolve to the mocks.
 
 const compute = makeFakeComputeProvider();
-const dns = makeFakeDnsProvider();
 mock.module("../../shared/providers/index.ts", () => ({
   hetzner: compute,
-  hetznerDns: dns,
 }));
 
 const sshExec = mock(async (..._args: unknown[]) => ({ exitCode: 0, stdout: "", stderr: "" }));
@@ -111,6 +109,8 @@ function freshServer() {
     type: "cx22",
     location: "fsn1",
     status: "ready",
+    provider: "hetzner",
+    ownership: "managed",
   });
 }
 
@@ -118,8 +118,7 @@ function freshApp() {
   return db.insertApp({
     name: `app-${randomSuffix()}`,
     domain: "x.example.com",
-    git_repo: "https://github.com/x/y",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
   });
@@ -144,31 +143,20 @@ beforeEach(() => {
   compute._mocks.volumeDelete.mockClear();
   compute._mocks.volumeDetach.mockClear();
   compute._mocks.deleteServer.mockClear();
-  dns._mocks.deleteRecord.mockClear();
 
   // Restore default successful behaviour (tests override as needed).
   removeContainer.mockImplementation(async () => {});
   syncAllTraefik.mockImplementation(async () => {});
-  dns._mocks.deleteRecord.mockImplementation(async () => {});
   compute._mocks.volumeDelete.mockImplementation(async () => {});
   compute._mocks.volumeDetach.mockImplementation(async () => {});
   sshExec.mockImplementation(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
 });
 
 describe("destroyApp: happy path", () => {
-  test("removes containers, ingress route, DNS records, and DB rows for an app with one replica", async () => {
+  test("removes containers, ingress route, and DB rows while leaving DNS operator-owned", async () => {
     const server = freshServer();
     const app = freshApp();
     const replica = attachReplica(app.id, server.id, app.name);
-    db.insertDnsRecord({
-      app_id: app.id,
-      zone_id: "zone-1",
-      record_id: "rec-1",
-      name: "x",
-      type: "A",
-      value: "1.2.3.4",
-    });
-
     const result = await destroyApp(app.id);
 
     expect(result.ok).toBe(true);
@@ -176,12 +164,10 @@ describe("destroyApp: happy path", () => {
     expect(removeContainer.mock.calls[0][0]).toBe("1.2.3.4");
     expect(removeContainer.mock.calls[0][1]).toBe(app.name);
     expect(syncAllTraefik).toHaveBeenCalledTimes(1);
-    expect(dns._mocks.deleteRecord).toHaveBeenCalledTimes(1);
 
     // DB rows gone.
     expect(db.getApp(app.id)).toBeNull();
     expect(db.getReplica(replica.id)).toBeNull();
-    expect(db.getDnsRecords(app.id)).toEqual([]);
   });
 
   test("returns ok:false when the app does not exist", async () => {
@@ -190,28 +176,6 @@ describe("destroyApp: happy path", () => {
     expect(result.error).toMatch(/not found/i);
   });
 
-  test("invokes GitHub webhook deletion when webhook was enabled", async () => {
-    const server = freshServer();
-    const app = freshApp();
-    attachReplica(app.id, server.id, app.name);
-    db.updateAppWebhook(app.id, true, "wh-secret", "main", "123");
-    await destroyApp(app.id);
-    expect(getGitHubPat).toHaveBeenCalled();
-    expect(deleteGithubWebhook).toHaveBeenCalledTimes(1);
-    expect(deleteGithubWebhook.mock.calls[0][0]).toMatchObject({ webhookId: "123" });
-  });
-
-  test("retains deletion state when no PAT is available rather than orphaning the webhook", async () => {
-    const server = freshServer();
-    const app = freshApp();
-    attachReplica(app.id, server.id, app.name);
-    db.updateAppWebhook(app.id, true, "wh", "main", "456");
-    getGitHubPat.mockImplementationOnce(async () => null);
-    const result = await destroyApp(app.id);
-    expect(deleteGithubWebhook).not.toHaveBeenCalled();
-    expect(result.ok).toBe(false);
-    expect(db.getApp(app.id)?.deletion_requested_at).toBeTruthy();
-  });
 });
 
 describe("destroyApp: volume cleanup", () => {
@@ -255,30 +219,6 @@ describe("destroyApp: volume cleanup", () => {
 });
 
 describe("destroyApp: partial failure handling", () => {
-  test("marks app as cleanup_failed when DNS deletion fails", async () => {
-    const server = freshServer();
-    const app = freshApp();
-    attachReplica(app.id, server.id, app.name);
-    db.insertDnsRecord({
-      app_id: app.id,
-      zone_id: "z",
-      record_id: "r",
-      name: "x",
-      type: "A",
-      value: "1",
-    });
-    dns._mocks.deleteRecord.mockImplementationOnce(async () => {
-      throw new Error("dns boom");
-    });
-    const result = await destroyApp(app.id);
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/cleanup/i);
-    // App row NOT deleted on failure — so user can retry.
-    const appRow = db.getApp(app.id);
-    expect(appRow).not.toBeNull();
-    expect(appRow?.status).toBe("cleanup_failed");
-  });
-
   test("marks app cleanup_failed when a container removal fails", async () => {
     const server = freshServer();
     const app = freshApp();
@@ -337,7 +277,7 @@ describe("destroyApp: multi-server GC", () => {
       server_id: panelSrv.id,
       name: "ocd-panel",
       domain: "panel.example.com",
-      git_repo: "https://github.com/x/one-click-deploy",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3001,
       host_port: 3001,
     });
@@ -372,7 +312,7 @@ describe("destroyServer", () => {
       server_id: panelSrv.id,
       name: "ocd-panel",
       domain: "panel.example.com",
-      git_repo: "https://github.com/x/one-click-deploy",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3001,
       host_port: 3001,
     });

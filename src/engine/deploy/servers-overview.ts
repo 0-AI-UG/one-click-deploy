@@ -5,7 +5,6 @@ type DbApp = {
   id: number;
   name: string;
   domain: string;
-  git_repo: string;
   container_port: number;
   env_vars: string;
   status: string;

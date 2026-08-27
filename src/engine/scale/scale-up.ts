@@ -1,15 +1,13 @@
 import * as db from "../../shared/db.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import {
-  sshExec, cloneAndBuild, pullImmutableImageAndRun,
-  transferImage, probeAppHealth, startAppReplica,
+  sshExec, pullImmutableImage,
+  probeAppHealth, startAppReplica,
 } from "../../shared/remote/index.ts";
-import { resolveGitHubToken } from "../../shared/github-token.ts";
 import { type ProgressFn, log, type App, type Replica, replicaBindHost, appReplicaRunOpts } from "./types.ts";
 import { pickTargetServer } from "./server-picker.ts";
 import { syncAppIngress } from "./traefik-manager.ts";
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
-import { resolveArtifactRegistry, resolveBuildRegistry } from "../registry-config.ts";
 
 export async function scaleUp(
   app: App,
@@ -23,11 +21,7 @@ export async function scaleUp(
   provisioningKey?: string,
 ) {
   const settings = db.getSettings();
-  const githubPat = (await resolveGitHubToken(app.deployed_by || undefined)) || undefined;
-  // The "primary" is just whichever server hosts the first (oldest) replica.
   const firstReplica = currentReplicas[0];
-  const primaryServer = firstReplica ? db.getServer(firstReplica.server_id) : null;
-  if (firstReplica && !primaryServer) throw new Error("First replica's server not found");
   const primaryHostPort = firstReplica?.host_port;
 
   for (let i = currentCount; i < targetCount; i++) {
@@ -65,7 +59,7 @@ export async function scaleUp(
     const replicaBindAddr = replicaBindHost(targetServer);
     const containerName = `${app.name}-r${replicaNum}`;
 
-    // Claim and verify the complete bind tuple before image transfer. The DB
+    // Claim and verify the complete bind tuple before pulling the image. The DB
     // reservation serializes OCD operations; the Docker probe catches an
     // orphan or out-of-band workload unknown to the DB.
     const ownsReservation = !preReservedPort;
@@ -98,107 +92,24 @@ export async function scaleUp(
         );
       }
 
-    // Transfer the immutable deployed image, never a mutable convenience tag.
-    emit("scale", `Ensuring image revision on ${targetServer.name}...`);
+    // Every host pulls the exact registry digest with the fleet's configured
+    // OCI credentials when the registry matches.
     const imageName = latestDesiredImage(app);
+    emit("scale", `Pulling ${imageName} on ${targetServer.name}...`);
+    await pullImmutableImage(targetServer.ipv4, {
+      name: app.name,
+      imageRef: imageName,
+      hostKey: targetHostKey,
+    }, (line) => emit("pull", line));
 
-    const scaleExtraVols = db.parseExtraVolumes(app.extra_volumes);
-    // Set when transferImage fails and we successfully rebuild from git on the
-    // target — the build helper runs the replica container itself, so the
-    // manual env-file/docker-run block below is skipped.
-    let rebuildFallback = false;
-    try {
-      if (!primaryServer) throw new Error("no healthy source replica is available");
-      const distribution = await resolveArtifactRegistry(app.build_cache_ref);
-      await transferImage(
-        primaryServer.ipv4,
-        targetServer.ipv4,
-        imageName,
-        primaryServer.ssh_host_key || undefined,
-        targetHostKey,
-        {
-          registryRef: distribution.ref,
-          registryUsername: distribution.username,
-          registryPassword: distribution.password,
-          registryToken: githubPat,
-          allowArchiveFallback: db.getSettings().allow_archive_image_transfer === "1",
-          onProgress: (line) => emit("transfer", line),
-          onStorage: (storage) => {
-            const deployment = db.getLastSuccessfulDeployment(app.id);
-            if (deployment) db.updateDeploymentStorage(deployment.id, {
-              image_size_bytes: storage.imageBytes,
-              archive_size_bytes: storage.archiveBytes,
-              transfer_size_bytes: storage.transferBytes,
-            });
-          },
-        },
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      emit("scale", `Image transfer from primary failed: ${msg}`);
-      if (!app.git_repo && app.source_mode !== "image") {
-        throw new Error(`Image '${imageName}' missing on source server and app has no git_repo configured for rebuild fallback.`);
-      }
-      // Rebuild on the target from git. Match the dispatch in
-      // ops/redeploy.ts so the rebuilt image is identical to what an
-      // initial deploy would produce.
-      emit("scale", app.source_mode === "image"
-        ? `Falling back to immutable registry pull on ${targetServer.name}...`
-        : `Falling back to rebuild from git on ${targetServer.name}...`);
-      rebuildFallback = true;
-    }
-
-    if (rebuildFallback) {
-      const containerNameForBuild = containerName;
-      const rebuildEnv = await resolveAppEnvVars(app);
-      const buildOpts = {
-        name: app.name,
-        gitRepo: app.git_repo,
-        port: app.container_port,
-        hostPort,
-        envVars: rebuildEnv,
-        volumeMount: app.volume_mount || undefined,
-        extraVolumes: scaleExtraVols,
-        gitToken: githubPat,
-        gitBranch: app.git_branch || undefined,
-        bindAddr: replicaBindAddr,
-        containerName: containerNameForBuild,
-        memoryMb: app.memory_mb || undefined,
-        cpus: app.cpu_limit || undefined,
-        hostKey: targetHostKey,
-        configRevision: app.config_revision,
-        envHash: hashEnvironment(rebuildEnv),
-      };
-      const logLine = (line: string) => emit("scale", line);
-      if (app.source_mode === "image") {
-        await pullImmutableImageAndRun(targetServer.ipv4, {
-          ...buildOpts,
-          imageRef: app.image_ref,
-        }, logLine);
-      } else {
-        const buildRegistry = await resolveBuildRegistry(app.build_cache_ref);
-        await cloneAndBuild(targetServer.ipv4, {
-          ...buildOpts,
-          dockerfilePath: app.dockerfile_path || undefined,
-          dockerContext: app.docker_context || undefined,
-          buildCacheRef: buildRegistry.ref,
-          registryUsername: buildRegistry.username,
-          registryPassword: buildRegistry.password,
-        }, logLine);
-      }
-    }
-
-    // On the transfer (non-rebuild) path we start the replica ourselves.
     // startAppReplica force-removes any same-named squatter first: a previous
     // failed scale-up or migration may have left one holding the private-IP
     // host port, which would make the run fail with "port already allocated".
-    // Skipped on rebuildFallback: cloneAndBuild already started the container.
     const resolvedEnv = await resolveAppEnvVars(app);
-    if (!rebuildFallback) {
-      await startAppReplica(targetServer.ipv4, {
-        ...appReplicaRunOpts(app, targetServer, { containerName, hostPort, envVars: resolvedEnv }),
-      }, targetHostKey);
-    }
+    await startAppReplica(targetServer.ipv4, {
+      ...appReplicaRunOpts(app, targetServer, { containerName, hostPort, envVars: resolvedEnv }),
+      image: imageName,
+    }, targetHostKey);
 
     // Health check
     emit("scale", `Health checking replica ${replicaNum}...`);

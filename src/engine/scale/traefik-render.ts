@@ -102,10 +102,6 @@ export type DesiredState = {
    *  intercepts 30000-30099 on the panel. Null until a panel server exists.
    *  Consumed by the ocd-proxy renderer only; Traefik rendering ignores it. */
   panelPublicIpv4: string | null;
-  /** Managed DNS zone name (settings `dns_zone_name`); "" when none. Drives
-   *  the wildcard-cert TLS selection in publicTls — threaded through the
-   *  snapshot so the renderer stays pure. */
-  zoneName: string;
 };
 
 /**
@@ -198,7 +194,6 @@ export function collectDesiredState(): DesiredState {
     panelHostPort: panel?.host_port ?? null,
     panelPrivateIpv4: panelServer?.private_ipv4 || null,
     panelPublicIpv4: panelServer?.ipv4 || null,
-    zoneName: db.getSettings()["dns_zone_name"] ?? "",
   };
 }
 
@@ -212,24 +207,10 @@ type TlsConfig = Record<string, unknown>;
  *   - nip.io           — can't get Let's Encrypt certs; `tls: {}` serves
  *                        Traefik's built-in default self-signed certificate
  *                        instead of a handshake error.
- *   - `<zone>` or one label under it — the shared `*.<zone>` wildcard cert
- *                        via DNS-01 (`letsencrypt-dns`): instant TLS on
- *                        deploy for auto-domains, one cert, no LE rate-limit
- *                        exposure. `*.<zone>` covers exactly ONE label, so
- *                        multi-level subdomains (a.b.zone) fall through.
- *   - anything else    — per-domain HTTP-01 (`letsencrypt`), as before.
+ *   - anything else    — per-domain HTTP-01 (`letsencrypt`).
  */
-export function publicTls(domain: string, zoneName: string): TlsConfig {
+export function publicTls(domain: string): TlsConfig {
   if (domain.endsWith(".nip.io")) return {};
-  if (zoneName && (domain === zoneName || domain.endsWith(`.${zoneName}`))) {
-    const label = domain === zoneName ? "" : domain.slice(0, -(zoneName.length + 1));
-    if (!label.includes(".")) {
-      return {
-        certResolver: "letsencrypt-dns",
-        domains: [{ main: zoneName, sans: [`*.${zoneName}`] }],
-      };
-    }
-  }
   return { certResolver: "letsencrypt" };
 }
 
@@ -353,7 +334,7 @@ export function renderDynamicConfig(
       rule: `Host(\`${app.domain}\`)`,
       middlewares: [...pubMiddlewares, "sec-headers", "retry"],
       service: routeToWaker ? WAKER_HTTP_SERVICE : svcName,
-      tls: publicTls(app.domain, state.zoneName),
+      tls: publicTls(app.domain),
     };
     needRetry = true;
     needSecHeaders = true;
@@ -371,7 +352,7 @@ export function renderDynamicConfig(
         rule: `Host(\`${svc.domain}\`)`,
         middlewares: ["svc-headers", "retry"],
         service: svcName,
-        tls: publicTls(svc.domain, state.zoneName),
+        tls: publicTls(svc.domain),
       };
       needRetry = true;
       needSvcHeaders = true;
@@ -449,7 +430,6 @@ export function renderDynamicConfig(
 export function renderPanelConfig(
   domain: string,
   hostPort: number,
-  zoneName: string,
 ): string {
   const config = {
     http: {
@@ -458,9 +438,7 @@ export function renderPanelConfig(
           entryPoints: ["websecure"],
           rule: `Host(\`${domain}\`)`,
           service: "panel",
-          // Same TLS selection as app vhosts: a panel domain under the
-          // managed zone rides the wildcard cert; nip.io self-signs.
-          tls: publicTls(domain, zoneName),
+          tls: publicTls(domain),
         },
         // Explicit :80 redirect so the panel redirects even before the
         // engine writes ocd.yml's global redirect (bootstrap ordering).

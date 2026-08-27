@@ -17,8 +17,6 @@ import {
 import {
   BASIC_AUTH_USER,
   TRAEFIK_ACCESS_LOG_PATH,
-  TRAEFIK_ACME_DNS_PATH,
-  TRAEFIK_ENV_PATH,
   TRAEFIK_LOGROTATE_PATH,
   TRAEFIK_METRICS_PORT,
   WAKER_HTTP_PORT,
@@ -63,8 +61,7 @@ function makeApp(opts: {
   const app = db.insertApp({
     name,
     domain: opts.domain ?? `${name}.example.com`,
-    git_repo: "https://github.com/x/y",
-    dockerfile_path: "Dockerfile",
+    image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     container_port: 3000,
     env_vars: "{}",
     public: opts.isPublic ?? true,
@@ -284,7 +281,7 @@ describe("renderDynamicConfig", () => {
       server_id: panelServer.id,
       name: `panel-${randomSuffix()}`,
       domain: "panel.example.com",
-      git_repo: "https://github.com/x/panel",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3001,
       host_port: 3001,
     });
@@ -325,7 +322,7 @@ describe("renderDynamicConfig", () => {
     db.deletePanel();
     db.insertPanel({
       server_id: panelServer.id, name: `panel-${randomSuffix()}`,
-      domain: "panel.example.com", git_repo: "https://github.com/x/panel",
+      domain: "panel.example.com", image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3001, host_port: 3001,
     });
     const app = makeApp({
@@ -513,7 +510,7 @@ describe("renderDynamicConfig", () => {
     db.deletePanel();
     db.insertPanel({
       server_id: panelServer.id, name: `panel-${randomSuffix()}`,
-      domain: "panel.example.com", git_repo: "https://github.com/x/panel",
+      domain: "panel.example.com", image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3001, host_port: 3001,
     });
     const app = makeApp({
@@ -545,7 +542,7 @@ describe("renderDynamicConfig", () => {
 
 describe("renderPanelConfig", () => {
   test("panel vhost: websecure router + web redirect, names disjoint from ocd.yml", () => {
-    const cfg = parse(renderPanelConfig("panel.example.com", 3001, ""));
+    const cfg = parse(renderPanelConfig("panel.example.com", 3001));
     expect(cfg.http.routers.panel.rule).toBe("Host(`panel.example.com`)");
     expect(cfg.http.routers.panel.tls).toEqual({ certResolver: "letsencrypt" });
     expect(cfg.http.routers["panel-web"].entryPoints).toEqual(["web"]);
@@ -553,101 +550,50 @@ describe("renderPanelConfig", () => {
       { url: "http://127.0.0.1:3001" },
     ]);
     // nip.io → default self-signed cert
-    const nip = parse(renderPanelConfig("1-2-3-4.nip.io", 3001, ""));
+    const nip = parse(renderPanelConfig("1-2-3-4.nip.io", 3001));
     expect(nip.http.routers.panel.tls).toEqual({});
   });
 
-  test("panel domain under the managed zone rides the wildcard cert", () => {
-    const cfg = parse(renderPanelConfig("panel.zone-test.dev", 3001, "zone-test.dev"));
-    expect(cfg.http.routers.panel.tls).toEqual({
-      certResolver: "letsencrypt-dns",
-      domains: [{ main: "zone-test.dev", sans: ["*.zone-test.dev"] }],
-    });
-    // Outside the zone: per-domain HTTP-01 as before.
-    const outside = parse(renderPanelConfig("panel.example.com", 3001, "zone-test.dev"));
-    expect(outside.http.routers.panel.tls).toEqual({ certResolver: "letsencrypt" });
+  test("every real panel domain uses HTTP-01", () => {
+    const cfg = parse(renderPanelConfig("panel.zone-test.dev", 3001));
+    expect(cfg.http.routers.panel.tls).toEqual({ certResolver: "letsencrypt" });
   });
 });
 
-describe("publicTls (zone-aware TLS selection)", () => {
-  const wildcard = {
-    certResolver: "letsencrypt-dns",
-    domains: [{ main: "zone-test.dev", sans: ["*.zone-test.dev"] }],
-  };
-
-  test("single label under the zone (and the apex itself) → wildcard DNS-01", () => {
-    expect(publicTls("myapp.zone-test.dev", "zone-test.dev")).toEqual(wildcard);
-    expect(publicTls("zone-test.dev", "zone-test.dev")).toEqual(wildcard);
+describe("publicTls (HTTP-01 only)", () => {
+  test("every real domain uses HTTP-01 and nip.io stays self-signed", () => {
+    expect(publicTls("myapp.zone-test.dev")).toEqual({ certResolver: "letsencrypt" });
+    expect(publicTls("a.b.zone-test.dev")).toEqual({ certResolver: "letsencrypt" });
+    expect(publicTls("x.1-2-3-4.nip.io")).toEqual({});
   });
 
-  test("multi-level subdomain under the zone is NOT covered by *.<zone> → HTTP-01", () => {
-    expect(publicTls("a.b.zone-test.dev", "zone-test.dev")).toEqual({
-      certResolver: "letsencrypt",
-    });
-  });
-
-  test("custom domain outside the zone keeps per-domain HTTP-01", () => {
-    expect(publicTls("shop.example.com", "zone-test.dev")).toEqual({
-      certResolver: "letsencrypt",
-    });
-    // Suffix look-alike is not under the zone.
-    expect(publicTls("evilzone-test.dev", "zone-test.dev")).toEqual({
-      certResolver: "letsencrypt",
-    });
-  });
-
-  test("no zone configured → HTTP-01; nip.io → self-signed regardless of zone", () => {
-    expect(publicTls("myapp.zone-test.dev", "")).toEqual({ certResolver: "letsencrypt" });
-    expect(publicTls("x.1-2-3-4.nip.io", "")).toEqual({});
-    expect(publicTls("x.1-2-3-4.nip.io", "zone-test.dev")).toEqual({});
-  });
-
-  test("renderDynamicConfig threads the snapshot's zone into public routers", () => {
+  test("renderDynamicConfig uses HTTP-01 for default-suffix and custom domains", () => {
     const server = makeServer("10.0.1.12");
     const auto = makeApp({ server, domain: "auto.zone-test.dev", hostPort: 10090 });
     const custom = makeApp({ server, domain: "shop.custom-domain.io", hostPort: 10091 });
-    db.saveSetting("dns_zone_name", "zone-test.dev");
-    try {
-      const state = collectDesiredState();
-      expect(state.zoneName).toBe("zone-test.dev");
-      const cfg = parse(
-        renderDynamicConfig(
-          { ...state, apps: state.apps.filter((a) => [auto.name, custom.name].includes(a.name)), services: [] },
-          { isPanel: true },
-        ),
-      );
-      expect(cfg.http.routers[`pub-${auto.name}`].tls).toEqual(wildcard);
-      expect(cfg.http.routers[`pub-${custom.name}`].tls).toEqual({
-        certResolver: "letsencrypt",
-      });
-    } finally {
-      db.saveSetting("dns_zone_name", "");
-    }
+    const state = collectDesiredState();
+    const cfg = parse(renderDynamicConfig(
+      { ...state, apps: state.apps.filter((a) => [auto.name, custom.name].includes(a.name)), services: [] },
+      { isPanel: true },
+    ));
+    expect(cfg.http.routers[`pub-${auto.name}`].tls).toEqual({ certResolver: "letsencrypt" });
+    expect(cfg.http.routers[`pub-${custom.name}`].tls).toEqual({ certResolver: "letsencrypt" });
   });
 });
 
-describe("wildcard resolver static config / unit / install script", () => {
-  test("letsencrypt-dns resolver present only when a zone is configured, with separate storage + hetzner dnsChallenge", () => {
-    expect(parse(traefikStaticConfig()).certificatesResolvers["letsencrypt-dns"]).toBeUndefined();
-    db.saveSetting("dns_zone_name", "zone-test.dev");
-    try {
-      const cfg = parse(traefikStaticConfig());
-      const dns = cfg.certificatesResolvers["letsencrypt-dns"];
-      expect(dns.acme.dnsChallenge).toEqual({ provider: "hetzner" });
-      // Distinct storage per resolver — Traefik forbids sharing acme.json.
-      expect(dns.acme.storage).toBe(TRAEFIK_ACME_DNS_PATH);
-      expect(cfg.certificatesResolvers.letsencrypt.acme.storage).toBe("/etc/traefik/acme.json");
-      expect(dns.acme.email).toBe("admin@zone-test.dev");
-    } finally {
-      db.saveSetting("dns_zone_name", "");
-    }
+describe("HTTP-01 static config / unit / install script", () => {
+  test("only the HTTP-01 resolver is configured", () => {
+    const cfg = parse(traefikStaticConfig());
+    expect(Object.keys(cfg.certificatesResolvers)).toEqual(["letsencrypt"]);
+    expect(cfg.certificatesResolvers.letsencrypt.acme.httpChallenge).toEqual({ entryPoint: "web" });
+    expect(cfg.certificatesResolvers.letsencrypt.acme.storage).toBe("/etc/traefik/acme.json");
   });
 
-  test("systemd unit references the optional env file; install script locks down acme-dns.json but never writes the secret", () => {
-    expect(traefikSystemdUnit()).toContain(`EnvironmentFile=-${TRAEFIK_ENV_PATH}`);
+  test("systemd and install script contain no DNS provider secret plumbing", () => {
+    expect(traefikSystemdUnit()).not.toContain("EnvironmentFile");
     const script = traefikInstallScript();
-    expect(script).toContain(`chmod 600 /etc/traefik/acme.json ${TRAEFIK_ACME_DNS_PATH}`);
-    // The token must not land in cloud-init user data (shared by all servers).
+    expect(script).toContain("chmod 600 /etc/traefik/acme.json");
+    expect(script).not.toContain("acme-dns.json");
     expect(script).not.toContain("HETZNER_API_KEY");
   });
 

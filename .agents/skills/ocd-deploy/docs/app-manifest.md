@@ -1,139 +1,113 @@
 # App Manifest
 
 The default file is `.ocd-deploy.json`. It is the complete desired
-configuration for one app.
+configuration for one app. Unknown fields are rejected by default.
 
 ## Example
 
 ```json
 {
+  "$schema": 1,
+  "name": "API",
+  "description": "Public API",
   "suggested_app_name": "api",
-  "domain": "api.example.com",
-  "git_branch": "main",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": ".",
-    "container_port": 3000,
-    "cache_ref": ""
+  "image": {
+    "ref": "ghcr.io/example/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
+  "container_port": 3000,
   "environment": "production",
   "env": [
-    {
-      "key": "DATABASE_URL",
-      "required": true,
-      "secret": true
-    }
+    { "key": "DATABASE_URL", "required": true, "secret": true }
   ],
-  "env_projection": null,
-  "auth": {
-    "enabled": false
-  },
+  "domain": "api.example.com",
   "public": true,
-  "memory_mb": 512,
-  "cpu_limit": 1,
+  "replicas": 2,
   "health_check": {
     "mode": "http",
-    "path": "/health"
+    "path": "/health",
+    "expected_statuses": [200]
   },
-  "internal_protocol": "http",
-  "sticky": false,
-  "rate_limit_rps": 0,
-  "ip_allowlist": "",
-  "compress": false,
-  "public_port": null,
-  "public_protocol": "tcp",
-  "replicas": 2,
-  "autoscaling": {
-    "enabled": true,
-    "min_replicas": 1,
-    "max_replicas": 5,
-    "cpu_threshold": 80,
-    "memory_threshold": 85,
-    "requests_per_minute": 0,
-    "cooldown_seconds": 300
-  },
-  "durability_class": "none",
-  "placement_pool": "general",
-  "scale_to_zero_after": 0,
-  "volume": null,
-  "extra_volumes": [],
-  "webhook": {
-    "enabled": true,
-    "branch": "main",
-    "path": "",
-    "wait_for_ci": false,
-    "staging": true,
-    "staging_environment": "staging"
-  }
+  "volume": null
 }
 ```
 
-Use `image.ref` instead of Git/build source fields for a prebuilt image:
+`image.ref` is mandatory and must be an immutable
+`repository@sha256:<64 hex digest>` reference. `container_port` is a top-level
+field; it is not nested under an image or build object. Tags are rejected.
 
-```json
-{
-  "suggested_app_name": "worker",
-  "image": {
-    "ref": "ghcr.io/example/worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  },
-  "volume": null,
-  "public": false
-}
+## Complete top-level field reference
+
+| Field | Meaning |
+| --- | --- |
+| `$schema` | Optional schema version; currently `1`. |
+| `$llm` | Optional agent/tooling metadata ignored by the engine. |
+| `name` | Required human-readable manifest name. |
+| `description` | Optional description metadata. |
+| `icon` | Optional icon URL metadata. |
+| `image` | Required object containing immutable `image.ref`. |
+| `container_port` | Container listener port, default `3000`. |
+| `env` | Declared environment inputs and secret metadata. |
+| `environment` | Existing environment name; `null` detaches it. |
+| `volume` | Required primary-volume intent; use `null` for none. |
+| `suggested_app_name` | Name proposed when creating the app. |
+| `domain` | Desired custom domain; `""` clears it. |
+| `env_projection` | Environment keys exposed to this app; `[]` exposes none. |
+| `auth` | Basic-auth intent; plaintext passwords stay outside the manifest. |
+| `replicas` | Desired replica count. |
+| `autoscaling` | Autoscaling enablement, range, thresholds, and cooldown. |
+| `public` | Whether public HTTP ingress is exposed. |
+| `extra_volumes` | Additional host-to-container mounts. |
+| `memory_mb` | Per-container memory ceiling in MB. |
+| `cpu_limit` | Per-container CPU ceiling in cores. |
+| `health_check` | HTTP, command, file, container, or periodic readiness policy. |
+| `internal_protocol` | `http` or raw `tcp` private routing. |
+| `sticky` | Cookie-based public HTTP stickiness. |
+| `rate_limit_rps` | Public request limit; `0` disables it. |
+| `ip_allowlist` | Comma-separated IP/CIDR allowlist; `""` clears it. |
+| `compress` | Public HTTP response compression. |
+| `public_port` | Public raw TCP/UDP port, `"auto"`, or `null`. |
+| `public_protocol` | `tcp` or `udp`. |
+| `durability_class` | `none`, `standard`, or `high`. |
+| `placement_pool` | Scheduler pool name. |
+| `scale_to_zero_after` | Idle seconds before scale-to-zero; `0` disables delay. |
+
+## Nested fields
+
+- `image.ref`: exact OCI digest reference.
+- `env[]`: `key`, optional `description`, `default`, `required`, and `secret`.
+- `auth`: required `enabled`, optional `password_env`.
+- `volume`: required `size`, optional provider `id` and mount `path`.
+- `extra_volumes[]`: `host_path` and `container_path`.
+- `health_check`: optional `enabled`, `mode`, `path`, `command`, `file`,
+  `max_age_seconds`, and `expected_statuses`.
+- `autoscaling`: optional `enabled`, `min_replicas`, `max_replicas`,
+  `cpu_threshold`, `memory_threshold`, `requests_per_minute`, and
+  `cooldown_seconds`.
+
+HTTP readiness accepts only `expected_statuses`, defaulting to `[200]`. A 404
+does not count as ready unless explicitly listed. Non-HTTP modes have their own
+required fields: `exec` requires `command`; `heartbeat` and `periodic_job`
+require `file` and `max_age_seconds`.
+
+## Replacement and retention
+
+The manifest is complete desired state. `volume` is deliberately required so
+a partial manifest cannot silently detach data:
+
+- `null`: no primary volume;
+- `{ "size": 20, "path": "/data" }`: create/manage a provider volume;
+- `{ "id": "provider-id", "size": 20, "path": "/data" }`: adopt that
+  retained provider volume.
+
+Provider volumes grow only; shrinking is rejected. `environment` and `domain`
+are retention exceptions: omission retains an existing value, while explicit
+`null`/`""` clears it.
+
+## Validation
+
+```text
+ocd manifest validate [path]
 ```
 
-## Manifest-owned fields
-
-- `$schema`: Manifest schema version; currently `1`.
-- `name`: Human-readable manifest name.
-- `description`: Human-readable description metadata.
-- `icon`: Icon URL metadata.
-- `suggested_app_name`: App name used by deploy.
-- `domain`: Desired custom domain; `""` clears it.
-- `git_branch`: Git branch.
-- `image`: Prebuilt image source.
-- `build`: Dockerfile, context, container port, and cache reference.
-- `environment`: Environment name, or `null` to detach.
-- `env`: Declared environment values and secret metadata.
-- `env_projection`: Environment projection mode or `null`.
-- `auth`: Basic-auth intent; passwords stay outside the manifest.
-- `public`: Whether HTTP ingress is exposed.
-- `memory_mb`: Memory limit.
-- `cpu_limit`: CPU limit.
-- `health_check`: HTTP, command, file, or container health policy.
-- `internal_protocol`: Upstream protocol.
-- `sticky`: Sticky sessions.
-- `rate_limit_rps`: Request limit; `0` disables it.
-- `ip_allowlist`: Allowlist; `""` clears it.
-- `compress`: Response compression.
-- `public_port`: Public TCP/UDP port or `null`.
-- `public_protocol`: `tcp` or `udp`.
-- `replicas`: Desired replica count.
-- `autoscaling`: Autoscaling enablement, range, thresholds, and cooldown.
-- `volume`: Required primary-volume desired state. Use `null` for no volume,
-  `{ "size": 20, "path": "/data" }` for an OCD-managed volume, or
-  `{ "id": "provider-id", "size": 20, "path": "/data" }` to adopt one
-  exact retained/provider volume.
-- `extra_volumes`: Additional persistent volumes.
-- `durability_class`: Durability policy.
-- `placement_pool`: Scheduling pool.
-- `scale_to_zero_after`: Idle seconds; `0` disables scale-to-zero.
-- `webhook`: Webhook and staging policy.
-- `webhook.staging_environment`: Staging environment name or `null`.
-
-## Autoscaling defaults
-
-When omitted, autoscaling is disabled. Threshold defaults are CPU `80`, memory
-`85`, requests `0`, and cooldown `300`. Minimum defaults to `1`; maximum is at
-least the desired `replicas` value.
-
-## Complete replacement
-
-Omission normally means the documented default. `volume` is intentionally
-required: an app must say either `null` or declare the exact desired volume so
-a partial or stale manifest cannot silently detach data. `ocd deploy` creates,
-adopts, grows, remounts, or detaches-and-retains the volume to match. Provider
-volumes are grow-only; reducing `size` is rejected.
-
-The other durable-state exceptions
-are `environment` and `domain`: omit them to retain the existing link/domain,
-or use an explicit value (`environment: null`, `domain: ""`) to clear one.
+`--allow-unknown` is an explicit version-skew escape hatch. Unknown keys remain
+warnings and should be resolved by updating the CLI.

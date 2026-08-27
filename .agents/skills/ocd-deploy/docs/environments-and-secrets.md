@@ -31,9 +31,9 @@ ocd deploy --dry-run
 ocd deploy
 ```
 
-Use `"environment": null` or omit the field to declare no shared environment.
-The CLI resolves names to IDs only for the wire request; names remain the
-portable manifest model.
+Use `"environment": null` to detach the current environment. On an existing
+app, omission retains its link. The CLI resolves names to IDs only for the wire
+request; names remain the portable manifest model.
 
 ## Declared app variables
 

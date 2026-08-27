@@ -163,10 +163,6 @@ import {
 } from "./confirmations.ts";
 import { handleListOperations, handleCancelOperation } from "./operations.ts";
 import { handleGetPanel, handleRedeployPanel } from "./panel.ts";
-import {
-  handleEnablePanelWebhook,
-  handleDisablePanelWebhook,
-} from "./webhooks.ts";
 import { handleTerminalExec } from "./terminal-exec.ts";
 
 // ---------------------------------------------------------------------------
@@ -270,8 +266,7 @@ function seedFleet(): void {
     db.insertApp({
       name: `perm-app-${uid()}`,
       domain: `${uid()}.example.com`,
-      git_repo: "https://github.com/x/y",
-      dockerfile_path: "Dockerfile",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
       environment_id: environmentId,
@@ -353,7 +348,7 @@ describe("GUARD: the real permission layer is what the routes see", () => {
   test("a user with NO permissions is refused by a handler another suite stubs out", async () => {
     const ctx = await userWith([]);
     const res = await handleDeploy(req("/api/apps/deploy", {
-      body: { app_name: db.getApp(appA)!.name, apply_mode: "manifest", git_repo: db.getApp(appA)!.git_repo, container_port: 3000 },
+      body: { app_name: db.getApp(appA)!.name, apply_mode: "manifest", image_ref: db.getApp(appA)!.image_ref, container_port: 3000 },
       token: ctx.token,
     }));
     expect(res.status).toBe(403);
@@ -407,7 +402,7 @@ const CASES: Case[] = [
       body: {
         app_name: db.getApp(appA)!.name,
         apply_mode: "manifest",
-        git_repo: db.getApp(appA)!.git_repo,
+        image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         container_port: db.getApp(appA)!.container_port,
         deploy: false,
       },
@@ -835,21 +830,6 @@ const CASES: Case[] = [
     call: (c) => handleRedeployPanel(req("/api/panel/redeploy", { body: {}, token: c.token })),
   },
 
-  // --- webhooks -------------------------------------------------------------
-  {
-    name: "webhooks: handleEnablePanelWebhook",
-    permission: "panel.manage",
-    call: (c) => handleEnablePanelWebhook(req("/api/panel/webhook", { body: {}, token: c.token })),
-  },
-  {
-    name: "webhooks: handleDisablePanelWebhook",
-    permission: "panel.manage",
-    call: (c) =>
-      handleDisablePanelWebhook(
-        req("/api/panel/webhook", { method: "DELETE", token: c.token }),
-      ),
-  },
-
   // --- terminal -------------------------------------------------------------
   {
     name: "terminal-exec: host shell",
@@ -1024,7 +1004,7 @@ describe("permission splits are enforced (the old coarse grant is not enough)", 
   test("apps.redeploy does NOT allow changing stored configuration", async () => {
     const ctx = await userWith(["apps.redeploy", "cli.access"], { cli: true });
     const res = await handleDeploy(req("/api/apps/deploy", {
-      body: { app_name: db.getApp(appA)!.name, apply_mode: "manifest", git_repo: db.getApp(appA)!.git_repo, container_port: 3000, sticky: true },
+      body: { app_name: db.getApp(appA)!.name, apply_mode: "manifest", image_ref: db.getApp(appA)!.image_ref, container_port: 3000, sticky: true },
       token: ctx.token,
     }));
     expect(res.status).toBe(403);
@@ -1033,7 +1013,7 @@ describe("permission splits are enforced (the old coarse grant is not enough)", 
   test("apps.ingress does NOT allow changing stored configuration", async () => {
     const ctx = await userWith(["apps.ingress", "cli.access"], { cli: true });
     const res = await handleDeploy(req("/api/apps/deploy", {
-      body: { app_name: db.getApp(appA)!.name, apply_mode: "manifest", git_repo: db.getApp(appA)!.git_repo, container_port: 3000, sticky: true },
+      body: { app_name: db.getApp(appA)!.name, apply_mode: "manifest", image_ref: db.getApp(appA)!.image_ref, container_port: 3000, sticky: true },
       token: ctx.token,
     }));
     expect(res.status).toBe(403);
@@ -1059,32 +1039,6 @@ describe("permission splits are enforced (the old coarse grant is not enough)", 
       appA,
     );
     expect(deployLog.status).toBe(403);
-  });
-
-  test("webhooks.manage neither mutates app config nor changes the panel webhook", async () => {
-    const ctx = await userWith(["webhooks.manage", "cli.access"], { cli: true });
-
-    const appLevel = await handleDeploy(req("/api/apps/deploy", {
-      body: {
-        app_name: db.getApp(appA)!.name,
-        apply_mode: "manifest",
-        git_repo: db.getApp(appA)!.git_repo,
-        container_port: 3000,
-        webhook_wait_for_ci: true,
-      },
-      token: ctx.token,
-    }));
-    expect(appLevel.status).toBe(403);
-
-    const enable = await handleEnablePanelWebhook(
-      req("/api/panel/webhook", { body: {}, token: ctx.token }),
-    );
-    expect(enable.status).toBe(403);
-
-    const disable = await handleDisablePanelWebhook(
-      req("/api/panel/webhook", { method: "DELETE", token: ctx.token }),
-    );
-    expect(disable.status).toBe(403);
   });
 
   test("servers.delete does NOT allow pool assignment (needs servers.manage)", async () => {

@@ -13,7 +13,7 @@ Declare replicas and autoscaling in `.ocd-deploy.json`:
     "max_replicas": 6,
     "cpu_threshold": 70,
     "memory_threshold": 80,
-    "request_threshold": 0,
+    "requests_per_minute": 0,
     "cooldown_seconds": 300
   },
   "scale_to_zero_after": 900
@@ -57,3 +57,7 @@ Use `ocd volumes` and `ocd resources` only to inspect volumes, browse files,
 review deletion audit records, or permanently delete
 an unused volume. The browser shows manifest intent and observed attachment as
 separate read-only state; it has no volume controls.
+
+OCD-managed volumes require managed Hetzner servers. Externally connected
+servers accept stateless app containers only; placement and replica migration
+fail before mutation if a volume or host mount would land on one.

@@ -18,15 +18,13 @@ describe("buildServerGcScript", () => {
     expect(script).toContain('"($active_pattern):(latest|rollback)"');
     expect(script).toContain('docker image rm "$ref"');
     expect(script).not.toContain("docker image rm -f");
-    expect(script).toContain("docker builder prune -af");
     expect(script).toContain("OCD_SPACE");
   });
 
   test("dry-run does not contain removal or prune commands", () => {
     const script = buildServerGcScript({ activeAppNames: ["api"], execute: false });
     expect(script).not.toContain('docker image rm "$ref"');
-    expect(script).not.toContain("docker builder prune -af");
-    expect(script).toContain("docker system df");
+    expect(script).toContain("docker image ls");
   });
 
   test("fails closed for an unsafe protection name", () => {
@@ -81,14 +79,5 @@ describe("buildServerPruneSteps", () => {
     const steps = buildServerPruneSteps({ activeAppNames: ["api"] });
     expect(steps[0]).toContain("docker container rm");
     expect(steps[1]).toContain("docker image rm");
-  });
-
-  test("pressure mode reclaims all unused build cache while normal mode is age bounded", () => {
-    expect(buildServerPruneSteps({ underPressure: false }).join("; ")).toContain(
-      "docker builder prune -f --filter until=168h",
-    );
-    expect(buildServerPruneSteps({ underPressure: true }).join("; ")).toContain(
-      "docker builder prune -af",
-    );
   });
 });

@@ -1,7 +1,7 @@
 import { sshExec, sshExecWithStdin } from "./ssh.ts";
-import { asUser, log } from "./container-common.ts";
+import { asUser } from "./container-common.ts";
 
-export type GhcrAuth = {
+export type RegistryAuth = {
   /** Absolute path on the remote host to a DOCKER_CONFIG dir holding the ephemeral creds. */
   dockerConfig: string;
   /** Shell prefix to prepend to docker invocations so they pick up the ephemeral creds. */
@@ -21,7 +21,7 @@ export async function dockerLoginRegistry(
   username: string,
   password: string,
   hostKey?: string,
-): Promise<GhcrAuth> {
+): Promise<RegistryAuth> {
   const host = registryHost(registryRef);
   const rand = Math.random().toString(36).slice(2, 12);
   const dockerConfig = `/home/deploy/.docker-ocd-${rand}`;
@@ -48,27 +48,4 @@ export async function dockerLoginRegistry(
       await sshExec(ip, asUser(`rm -rf ${dockerConfig}`), hostKey).catch(() => {});
     },
   };
-}
-
-/**
- * Authenticate against ghcr.io into a *per-deploy* DOCKER_CONFIG dir instead
- * of the user's persistent `~/.docker/config.json`. The returned `envPrefix`
- * must be prepended to subsequent `docker pull` / `docker build` invocations
- * that need the credentials; `cleanup()` removes the
- * config dir so the token never outlives the deploy.
- */
-export async function dockerLoginGhcr(
-  ip: string,
-  token: string,
-  hostKey?: string,
-): Promise<GhcrAuth> {
-  try {
-    const auth = await dockerLoginRegistry(ip, "ghcr.io", "x-access-token", token, hostKey);
-    log("registry", "ghcr.io login succeeded (ephemeral DOCKER_CONFIG)");
-    return auth;
-  } catch {
-    throw new Error(
-      "Failed to authenticate with GitHub Container Registry (ghcr.io). Check your GitHub token has the read:packages scope.",
-    );
-  }
 }

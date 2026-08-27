@@ -15,10 +15,8 @@ const fakeProvider = {
   name: "Hetzner",
   deleteServer,
 };
-const fakeDnsProvider = { id: "hetzner-dns", name: "Hetzner DNS", listZones: async () => [], createRecord: async () => ({ id: "1", name: "", type: "", value: "" }), deleteRecord: async () => {} };
 mock.module("./providers/index.ts", () => ({
   hetzner: fakeProvider,
-  hetznerDns: fakeDnsProvider,
 }));
 
 import * as db from "./db.ts";
@@ -54,7 +52,7 @@ describe("gcServerIfEmpty", () => {
       server_id: server.id,
       name: "ocd-panel",
       domain: "panel.example.com",
-      git_repo: "https://github.com/x/one-click-deploy",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       host_port: 10000,
     });
@@ -70,8 +68,7 @@ describe("gcServerIfEmpty", () => {
     const app = db.insertApp({
       name: `app-${Date.now()}`,
       domain: "x.com",
-      git_repo: "https://x.git",
-      dockerfile_path: "Dockerfile",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
     });
@@ -91,8 +88,7 @@ describe("gcServerIfEmpty", () => {
     const app = db.insertApp({
       name: `app-sleep-${Date.now()}`,
       domain: "x.com",
-      git_repo: "https://x.git",
-      dockerfile_path: "Dockerfile",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
     });
@@ -139,8 +135,7 @@ describe("gcServerIfEmpty", () => {
     const app = db.insertApp({
       name: `app-toggle-${Date.now()}`,
       domain: "x.com",
-      git_repo: "https://x.git",
-      dockerfile_path: "Dockerfile",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
     });

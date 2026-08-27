@@ -64,7 +64,7 @@ Scopes:
 
 ## Sensitive permissions
 
-- Desired app settings, ingress, public ports, webhooks and scaling policy all
+- Desired app settings, ingress, public ports, image releases, and scaling policy all
   use `apps.deploy`, and deployment endpoints additionally require a CLI token.
 - `volumes.files.read` grants application-data access.
 - `terminal.host` is effectively root-equivalent infrastructure access.
@@ -110,10 +110,11 @@ provider volume ID before the server marks the confirmation approved.
 
 | Action | Confirmation | Environment | Managed volume | Other effects |
 |---|---|---|---|---|
-| Delete app | Web UI always | retained | detached/retained | staging sibling, containers, DNS, ingress, webhook removed |
+| Delete app | Web UI always | retained | detached/retained | containers and ingress removed; DNS cleanup shown as manual |
 | Delete service | Web UI always | retained | detached/retained | containers and injected variables removed |
-| Delete server | Web UI always | retained | workload volumes retained | may cascade through assigned workloads before provider deletion |
-| Delete stack | Web UI always | production and staging retained | member volumes detached/retained | member webhooks suspended; all recorded apps/services destroyed |
+| Delete managed server | Web UI always | retained | workload volumes retained | cascades through assigned workloads, then deletes the provider VPS |
+| Disconnect external server | Web UI always | retained | unsupported | cascades through assigned stateless workloads; never deletes the VPS |
+| Delete stack | Web UI always | production and staging retained | member volumes detached/retained | all recorded apps/services destroyed |
 | Delete environment | Web UI always | explicitly deleted only if unused | n/a | fails while apps link it |
 | Cancel operation | Web UI always once compensation is possible | compensation depends on provisional ownership | compensation may detach created volume | runs operation rollback |
 | Delete provider volume | Web UI + typed provider ID | n/a | provider data destroyed | irreversible; verify backup/ownership |
@@ -121,15 +122,14 @@ provider volume ID before the server marks the confirmation approved.
 
 ## App deletion
 
-App deletion cascades to its hidden webhook-staging sibling, then:
+App deletion:
 
-1. attempts GitHub webhook removal;
-2. stops/removes containers and app directories;
-3. removes managed DNS records;
-4. detaches and retains volumes;
-5. deletes app/replica rows only if cleanup gates succeed;
-6. rerenders ingress;
-7. garbage-collects eligible empty servers.
+1. stops/removes containers and app directories;
+2. logs the DNS record the operator may remove; it never changes DNS;
+3. detaches and retains volumes;
+4. deletes app/replica rows only if cleanup gates succeed;
+5. rerenders ingress;
+6. garbage-collects eligible empty servers.
 
 It never calls environment deletion. If cleanup partially fails, keep the app
 row as `cleanup_failed`.
@@ -140,17 +140,12 @@ Stack deletion:
 
 1. requires web UI confirmation;
 2. enqueues a durable stack-wide destroy operation;
-3. drops pending member webhook deployments and requests cancellation of
-   running ones;
-4. rejects/drops later webhook pushes, including pushes finishing a CI wait;
-5. enqueues child destroy operations for every app/service;
-6. waits for children;
-7. logs retention of production/staging environments;
-8. deletes only the stack row.
+3. enqueues child destroy operations for every app/service;
+4. waits for children;
+5. logs retention of production/staging environments;
+6. deletes only the stack row.
 
 Confirmation text explicitly states environment and volume retention.
-`--suspend-webhooks` is an explicit alias for the automatic default, not an
-option that weakens the barrier.
 
 ## Environment deletion
 
@@ -195,7 +190,12 @@ provider error. Inspect it with `ocd volumes audit`.
 ## Secret safety
 
 - Store environment secrets encrypted; do not commit them.
-- Keep GitHub tokens and webhook secrets out of logs.
+- Keep registry and CI tokens out of logs.
+- Store `OCD_TOKEN` as a protected CI secret and scope it to the apps the job
+  releases.
+- Store the private-registry pull password/token only in panel Settings. OCD
+  sends that credential only to the host selected by the configured OCI
+  repository; review the host before saving it.
 - Prefer container-side access to connection URLs.
 - Prefer `--secret-file`, `--secret-stdin`, `--from-env`, or `--from-dotenv` so
   secret values do not appear in process arguments or shell history.

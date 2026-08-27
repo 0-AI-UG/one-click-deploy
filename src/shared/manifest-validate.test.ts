@@ -4,11 +4,13 @@ import type { DeployManifest, StackManifest } from "./rpc.ts";
 
 // Compile-time guard: the `z.infer`-derived types must stay structurally
 // compatible with how the rest of the codebase reads a manifest (e.g.
-// stack-spec.ts reads health_check?.enabled, build?.container_port). If the
+// stack-spec.ts reads health_check?.enabled and container_port). If the
 // schema drifts from these shapes, this file stops type-checking.
+const IMAGE_REF = `ghcr.io/acme/web@sha256:${"a".repeat(64)}`;
 const _deploy: DeployManifest = {
   name: "web",
-  build: { container_port: 3000 },
+  image: { ref: IMAGE_REF },
+  container_port: 3000,
   env: [{ key: "PORT", default: "3000", required: false, secret: false }],
   volume: { size: 5, path: "/data" },
   health_check: { enabled: false, path: "/healthz" },
@@ -16,7 +18,6 @@ const _deploy: DeployManifest = {
   public_port: "auto",
   public_protocol: "tcp",
   domain: "web.example.com",
-  git_branch: "release",
   env_projection: ["DATABASE_URL"],
   environment: "production",
   auth: { enabled: true, password_env: "OCD_BASIC_AUTH_PASSWORD" },
@@ -33,7 +34,7 @@ const _deploy: DeployManifest = {
   },
 };
 const _enabled: boolean | undefined = _deploy.health_check?.enabled;
-const _port: number | undefined = _deploy.build?.container_port;
+const _port: number | undefined = _deploy.container_port;
 const _stack: StackManifest = {
   name: "s",
   services: { db: { type: "postgres" } },
@@ -46,7 +47,8 @@ void _stack;
 const validApp = {
   name: "web",
   volume: null,
-  build: { container_port: 3000 },
+  image: { ref: IMAGE_REF },
+  container_port: 3000,
   env: [{ key: "PORT", default: "3000" }],
   health_check: { enabled: false },
   internal_protocol: "http" as const,
@@ -89,7 +91,7 @@ describe("validateDeployManifest", () => {
   test("validates truthful worker and job health contracts", () => {
     expect(() =>
       validateDeployManifest(
-        { name: "worker", volume: null, health_check: { mode: "exec", command: "test -f /tmp/ready" } },
+        { name: "worker", volume: null, image: { ref: IMAGE_REF }, health_check: { mode: "exec", command: "test -f /tmp/ready" } },
         ".ocd-deploy.json",
       ),
     ).not.toThrow();
@@ -104,6 +106,7 @@ describe("validateDeployManifest", () => {
         {
           name: "cron",
           volume: null,
+          image: { ref: IMAGE_REF },
           health_check: {
             mode: "periodic_job",
             file: "/run/last-success",
@@ -160,9 +163,9 @@ describe("validateDeployManifest", () => {
     expect(msg).toContain("health_check: expected health-check object");
   });
 
-  test("wrong-typed build / container_port fails", () => {
-    expect(() => validateDeployManifest({ volume: null, name: "web", build: { container_port: "3000" } }, "a")).toThrow(
-      /build\.container_port: expected integer 1-65535, got "3000"/,
+  test("wrong-typed container_port fails", () => {
+    expect(() => validateDeployManifest({ volume: null, name: "web", image: { ref: IMAGE_REF }, container_port: "3000" }, "a")).toThrow(
+      /container_port: expected integer 1-65535, got "3000"/,
     );
   });
 
@@ -172,7 +175,7 @@ describe("validateDeployManifest", () => {
       .toThrow(/futureField: unknown key/);
     expect(warn).not.toHaveBeenCalled();
     expect(() => validateDeployManifest(
-      { volume: null, name: "web", futureField: 1 },
+      { volume: null, name: "web", image: { ref: IMAGE_REF }, futureField: 1 },
       "a/.ocd-deploy.json",
       { allowUnknown: true },
     )).not.toThrow();
@@ -184,17 +187,17 @@ describe("validateDeployManifest", () => {
 
   test("durability_class validates", () => {
     expect(() =>
-      validateDeployManifest({ volume: null, name: "web", durability_class: "high" }, "a/.ocd-deploy.json"),
+      validateDeployManifest({ volume: null, name: "web", image: { ref: IMAGE_REF }, durability_class: "high" }, "a/.ocd-deploy.json"),
     ).not.toThrow();
   });
 
-  test("CLI-focused domain, branch, environment projection, auth and placement fields validate", () => {
+  test("CLI-focused domain, environment projection, auth and placement fields validate", () => {
     expect(() =>
       validateDeployManifest({
         name: "web",
         volume: null,
+        image: { ref: IMAGE_REF },
         domain: "web.example.com",
-        git_branch: "release",
         env_projection: [],
         auth: { enabled: true, password_env: "OCD_BASIC_AUTH_PASSWORD" },
         placement_pool: "production",
@@ -205,44 +208,10 @@ describe("validateDeployManifest", () => {
       validateDeployManifest({
         name: "web",
         volume: null,
+        image: { ref: IMAGE_REF },
         auth: { enabled: true, password_env: "not-valid!" },
       }, "a/.ocd-deploy.json"),
     ).toThrow(/auth\.password_env/);
-  });
-
-  test("webhook.staging boolean validates", () => {
-    expect(() =>
-      validateDeployManifest(
-        { name: "web", volume: null, webhook: { enabled: true, branch: "main", staging: true } },
-        "a/.ocd-deploy.json",
-      ),
-    ).not.toThrow();
-  });
-
-  test("webhook paths and paths_ignore validate as repository globs", () => {
-    expect(() => validateDeployManifest({
-      name: "web",
-      volume: null,
-      webhook: {
-        enabled: true,
-        paths: ["services/web/**", "packages/core/**", "package.json"],
-        paths_ignore: ["services/web/**/*.md"],
-      },
-    }, "a/.ocd-deploy.json")).not.toThrow();
-    expect(() => validateDeployManifest({
-      name: "web", volume: null, webhook: { paths: [] },
-    }, "a/.ocd-deploy.json")).toThrow(/at least one pattern/);
-    expect(() => validateDeployManifest({
-      name: "web", volume: null, webhook: { paths: ["!ios/**"] },
-    }, "a/.ocd-deploy.json")).toThrow(/inline !patterns/);
-  });
-
-  test("rejects path and paths together", () => {
-    expect(() => validateDeployManifest({
-      name: "web",
-      volume: null,
-      webhook: { path: "services/web", paths: ["services/web/**"] },
-    }, "a/.ocd-deploy.json")).toThrow(/cannot be used together/);
   });
 
   test("environment selectors and complete autoscaling policy validate", () => {
@@ -250,6 +219,7 @@ describe("validateDeployManifest", () => {
       validateDeployManifest({
         name: "web",
         volume: null,
+        image: { ref: IMAGE_REF },
         environment: "production",
         replicas: 2,
         autoscaling: {
@@ -261,30 +231,17 @@ describe("validateDeployManifest", () => {
           requests_per_minute: 100,
           cooldown_seconds: 300,
         },
-        webhook: {
-          enabled: true,
-          staging: true,
-          staging_environment: "staging",
-        },
       }, "a/.ocd-deploy.json"),
     ).not.toThrow();
     expect(() =>
       validateDeployManifest({
         name: "web",
         volume: null,
+        image: { ref: IMAGE_REF },
         replicas: 3,
         autoscaling: { max_replicas: 2 },
       }, "a/.ocd-deploy.json"),
     ).toThrow(/autoscaling\.max_replicas/);
-  });
-
-  test("wrong-typed webhook.staging fails", () => {
-    expect(() =>
-      validateDeployManifest(
-        { name: "web", volume: null, webhook: { staging: "yes" } },
-        "a/.ocd-deploy.json",
-      ),
-    ).toThrow(/staging|boolean/i);
   });
 
   test("bad durability_class enum fails", () => {
@@ -298,14 +255,14 @@ describe("validateDeployManifest", () => {
   });
 
   test("minimal explicit no-volume manifest validates", () => {
-    expect(() => validateDeployManifest({ volume: null, name: "web" }, "a/.ocd-deploy.json")).not.toThrow();
+    expect(() => validateDeployManifest({ volume: null, name: "web", image: { ref: IMAGE_REF } }, "a/.ocd-deploy.json")).not.toThrow();
   });
 
   test("legacy top-level `environments` key is rejected", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     expect(() =>
       validateDeployManifest(
-        { name: "web", volume: null, environments: { staging: { branch: "develop" } } },
+        { name: "web", volume: null, image: { ref: IMAGE_REF }, environments: { staging: { branch: "develop" } } },
         "a/.ocd-deploy.json",
       ),
     ).toThrow(/environments: unknown key/);

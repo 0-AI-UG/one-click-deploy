@@ -6,11 +6,10 @@ import { BOLD, GREEN, RED, RESET } from "../format.ts";
 
 function usage(): void {
   console.error(`${BOLD}Usage:${RESET} ocd delete <app>
-       ocd delete stack <name> [--suspend-webhooks]
+       ocd delete stack <name>
 
-Destroys an app (its container(s), DNS records, and managed volumes) or a
-whole stack. Stack deletion always suspends and supersedes member webhook
-deployments; --suspend-webhooks explicitly requests this safe default.
+Destroys an app (its container(s) and managed volumes) or a
+whole stack.
 Stack deletion always requires confirmation in the OCD web UI.
 App and stack deletion always require confirmation in the OCD web UI.`);
 }

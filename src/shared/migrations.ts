@@ -284,20 +284,10 @@ export const migrations: Migration[] = [
           );
         }
 
-        // Cascade-deletes via FK: deployment_history, dns_records, replicas,
+        // Cascade-deletes via FK: deployment_history, replicas,
         // metrics_samples, scaling_events.
         db.query("DELETE FROM apps WHERE id = ?").run(panelApp.id);
       }
-    },
-  },
-  {
-    version: 13,
-    description: "Track panel DNS record on the panel row so destroyServer can clean it up",
-    up: (db) => {
-      db.run("ALTER TABLE panel ADD COLUMN dns_zone_id TEXT NOT NULL DEFAULT ''");
-      db.run("ALTER TABLE panel ADD COLUMN dns_name TEXT NOT NULL DEFAULT ''");
-      db.run("ALTER TABLE panel ADD COLUMN dns_type TEXT NOT NULL DEFAULT ''");
-      db.run("ALTER TABLE panel ADD COLUMN dns_value TEXT NOT NULL DEFAULT ''");
     },
   },
   {
@@ -2327,6 +2317,139 @@ export const migrations: Migration[] = [
         "CREATE UNIQUE INDEX scaling_events_operation_id_unique " +
         "ON scaling_events(operation_id) WHERE operation_id IS NOT NULL",
       );
+    },
+  },
+  {
+    version: 104,
+    description: "Separate server runtime identity from infrastructure ownership",
+    up: (db) => {
+      db.run("ALTER TABLE servers ADD COLUMN provider TEXT NOT NULL DEFAULT 'external'");
+      db.run("ALTER TABLE servers ADD COLUMN ownership TEXT NOT NULL DEFAULT 'connected'");
+      db.run("ALTER TABLE servers ADD COLUMN management_address TEXT NOT NULL DEFAULT ''");
+      db.run("ALTER TABLE servers ADD COLUMN ssh_user TEXT NOT NULL DEFAULT 'root'");
+      db.run("ALTER TABLE servers ADD COLUMN ssh_port INTEGER NOT NULL DEFAULT 22");
+      // Rows created by previous OCD versions are provider-created Hetzner
+      // machines. This is a data classification, not a compatibility mode.
+      db.run("UPDATE servers SET provider = 'hetzner', ownership = 'managed', management_address = ipv4");
+      db.run("INSERT OR IGNORE INTO settings (key, value) VALUES ('default_domain_suffix', '')");
+      db.run(
+        "DELETE FROM settings WHERE key IN ('compute_provider', 'dns_provider', 'dns_zone_id', 'dns_zone_name', 'provider_token')",
+      );
+    },
+  },
+  {
+    version: 105,
+    description: "Remove source-build and webhook state; make immutable images the only deployment source",
+    disableForeignKeys: true,
+    up: (db) => {
+      const immutableImage = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
+      const apps = db.query("SELECT id, name, image_ref FROM apps").all() as Array<{
+        id: number;
+        name: string;
+        image_ref: string;
+      }>;
+      const invalidApp = apps.find((app) => !immutableImage.test(app.image_ref));
+      if (invalidApp) {
+        throw new Error(
+          `App ${invalidApp.name} (${invalidApp.id}) has no immutable image_ref; publish and record an @sha256 image before upgrading`,
+        );
+      }
+
+      const panel = db.query("SELECT id FROM panel WHERE id = 1").get() as { id: number } | null;
+      let panelImage = "";
+      if (panel) {
+        const deployment = db.query(
+          "SELECT image_tag FROM panel_deployments WHERE status = 'deployed' ORDER BY created_at DESC, id DESC LIMIT 1",
+        ).get() as { image_tag: string } | null;
+        panelImage = deployment?.image_tag ?? "";
+        if (!immutableImage.test(panelImage)) {
+          throw new Error(
+            "The panel has no immutable deployed image; record an @sha256 panel deployment before upgrading",
+          );
+        }
+      }
+
+      db.run("DROP TRIGGER IF EXISTS apps_bump_config_revision");
+      db.run("DROP TRIGGER IF EXISTS environments_bump_linked_app_config_revision");
+      db.run("DROP TABLE IF EXISTS webhook_candidates");
+      db.run("DELETE FROM settings WHERE key IN ('oci_cache_ref', 'allow_archive_image_transfer')");
+
+      for (const column of [
+        "git_repo",
+        "git_branch",
+        "dockerfile_path",
+        "docker_context",
+        "source_mode",
+        "build_cache_ref",
+        "webhook_enabled",
+        "webhook_secret",
+        "webhook_branch",
+        "webhook_path",
+        "webhook_paths",
+        "webhook_paths_ignore",
+        "github_webhook_id",
+        "webhook_wait_for_ci",
+        "webhook_staging",
+        "webhook_staging_environment_id",
+        "last_webhook_head",
+        "last_webhook_decision",
+        "last_webhook_received_at",
+        "last_webhook_evaluated_at",
+        "last_webhook_ci_result",
+        "github_webhook_repo",
+      ]) {
+        db.run(`ALTER TABLE apps DROP COLUMN ${column}`);
+      }
+
+      db.run("ALTER TABLE panel ADD COLUMN image_ref TEXT NOT NULL DEFAULT ''");
+      if (panel) db.run("UPDATE panel SET image_ref = ? WHERE id = 1", [panelImage]);
+      for (const column of [
+        "git_repo",
+        "git_branch",
+        "webhook_secret",
+        "webhook_enabled",
+        "github_webhook_id",
+        "webhook_owner_user_id",
+        "github_webhook_repo",
+      ]) {
+        db.run(`ALTER TABLE panel DROP COLUMN ${column}`);
+      }
+
+      db.run(`CREATE TRIGGER apps_bump_config_revision
+        AFTER UPDATE OF
+          domain, image_ref, container_port, auth_password_hash,
+          environment_id, env_projection, public, health_check,
+          health_check_mode, health_check_command, health_check_file,
+          health_check_max_age_seconds, health_check_expected_statuses,
+          internal_protocol, sticky, rate_limit_rps, ip_allowlist,
+          health_check_path, compress, public_port, public_protocol,
+          desired_replicas, min_replicas, max_replicas, autoscale_enabled,
+          autoscale_cpu_threshold, autoscale_mem_threshold,
+          autoscale_cooldown, autoscale_req_threshold, scale_to_zero_after,
+          desired_volume_id, desired_volume_size, desired_volume_path,
+          extra_volumes, memory_mb, cpu_limit, durability_class,
+          max_per_host, min_locations, placement_pool
+        ON apps
+        BEGIN
+          UPDATE apps SET
+            config_revision = config_revision + 1,
+            rollout_requested_revision = CASE
+              WHEN rollout_requested_revision > 0 THEN config_revision + 1
+              ELSE 0
+            END
+          WHERE id = NEW.id;
+        END`);
+      db.run(`CREATE TRIGGER environments_bump_linked_app_config_revision
+        AFTER UPDATE OF env_vars ON environments
+        BEGIN
+          UPDATE apps SET
+            config_revision = config_revision + 1,
+            rollout_requested_revision = CASE
+              WHEN rollout_requested_revision > 0 THEN config_revision + 1
+              ELSE 0
+            END
+          WHERE environment_id = NEW.id;
+        END`);
     },
   },
 ];

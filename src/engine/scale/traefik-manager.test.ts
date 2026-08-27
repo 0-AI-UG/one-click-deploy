@@ -18,27 +18,12 @@ mock.module("../../shared/remote/index.ts", () => ({
 import rawDb from "../../shared/db/connection.ts";
 import { insertServer } from "../../shared/db/servers.ts";
 import { insertPanel, getPanel } from "../../shared/db/panel.ts";
-import { saveSetting } from "../../shared/db/settings.ts";
 import {
-  convergeServerTraefik,
   reconcilePanelSite,
   reconcileWorkerTeardown,
-  type ServerAccess,
 } from "./traefik-manager.ts";
 import {
-  collectDesiredState,
-  renderDynamicConfig,
-  renderPanelConfig,
-} from "./traefik-render.ts";
-import {
-  traefikStaticConfig,
-  traefikSystemdUnit,
-  traefikLogrotateConfig,
-} from "./traefik-provision.ts";
-import {
-  TRAEFIK_ENV_PATH,
   TRAEFIK_PANEL_CONFIG_PATH,
-  TRAEFIK_VERSION,
 } from "./traefik-constants.ts";
 
 function makePanelServer(ipv4: string) {
@@ -71,7 +56,7 @@ describe("reconcilePanelSite", () => {
       server_id: server.id,
       name: "ocd-panel",
       domain: "panel.example.com",
-      git_repo: "https://x.git",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3001,
       host_port: 3001,
     });
@@ -94,7 +79,7 @@ describe("reconcilePanelSite", () => {
       server_id: server.id,
       name: "ocd-panel",
       domain: "old.example.com",
-      git_repo: "https://x.git",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3001,
       host_port: 3001,
     });
@@ -123,7 +108,7 @@ describe("reconcileTraefik worker teardown", () => {
       server_id: panelSrv.id,
       name: "ocd-panel",
       domain: "panel.example.com",
-      git_repo: "https://x.git",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3001,
       host_port: 3001,
     });
@@ -137,122 +122,6 @@ describe("reconcileTraefik worker teardown", () => {
     // Every teardown call is stop+disable only — never deletes binary/config.
     for (const [, cmd] of disables) {
       expect(cmd).toContain("systemctl disable --now ocd-traefik");
-    }
-  });
-});
-
-describe("convergeServerTraefik ACME env file convergence", () => {
-  // sha of a remote file as probeServerTraefik reports it (content + the
-  // trailing newline every writer appends).
-  function remoteSha(content: string): string {
-    const hasher = new Bun.CryptoHasher("sha256");
-    hasher.update(content + "\n");
-    return hasher.digest("hex");
-  }
-
-  function access(ipv4: string): ServerAccess {
-    return { name: `host-${ipv4}`, ipv4, hostKey: undefined };
-  }
-
-  /** Answer probes with an in-sync server (binary, static, unit, dynamic,
-   *  panel.yml all converged) whose env file has the given sha — so the env
-   *  file is the only thing left to converge. */
-  function probeImplementation(panelIp: string, envShaByHost: Record<string, string>) {
-    return async (host: string, cmd: string, _hostKey?: string) => {
-      if (cmd.includes("systemctl is-active")) {
-        const state = collectDesiredState();
-        const dynSha = remoteSha(renderDynamicConfig(state, { isPanel: host === panelIp }));
-        const panel = getPanel();
-        const panelSha =
-          host === panelIp && panel
-            ? remoteSha(renderPanelConfig(panel.domain, panel.host_port, state.zoneName))
-            : "";
-        const staticSha = remoteSha(traefikStaticConfig());
-        const unitSha = remoteSha(traefikSystemdUnit());
-        const line = `${TRAEFIK_VERSION}|active|${staticSha}|${unitSha}|${dynSha}|${panelSha}|${envShaByHost[host] ?? ""}|${remoteSha(traefikLogrotateConfig())}`;
-        return { exitCode: 0, stdout: line, stderr: "" };
-      }
-      return { exitCode: 0, stdout: "", stderr: "" };
-    };
-  }
-
-  function envWrites(): Array<[string, string]> {
-    return (sshExec.mock.calls as unknown as Array<[string, string]>).filter(
-      ([, cmd]) => cmd.includes("printf") && cmd.includes(TRAEFIK_ENV_PATH),
-    );
-  }
-
-  function expectedFor(panelEnv: string) {
-    return { panelEnv };
-  }
-
-  test("delivers the token to the panel server only (chmod 600) and restarts it; steady state writes nothing", async () => {
-    const panelSrv = makePanelServer("198.51.100.20");
-    insertPanel({
-      server_id: panelSrv.id,
-      name: "ocd-panel",
-      domain: "panel.zone-test.dev",
-      git_repo: "https://x.git",
-      container_port: 3001,
-      host_port: 3001,
-    });
-    saveSetting("dns_zone_name", "zone-test.dev");
-    const expectedEnv = "HETZNER_API_KEY=test-token-123";
-
-    try {
-      // Env file missing everywhere → panel gets it, worker does not.
-      sshExec.mockImplementation(probeImplementation("198.51.100.20", {}));
-      const state = collectDesiredState();
-      await convergeServerTraefik(access("198.51.100.20"), state, expectedFor(expectedEnv));
-      await convergeServerTraefik(access("198.51.100.21"), state, expectedFor(expectedEnv));
-
-      const writes = envWrites();
-      expect(writes).toHaveLength(1);
-      const [host, cmd] = writes[0];
-      expect(host).toBe("198.51.100.20");
-      expect(cmd).toContain(expectedEnv);
-      expect(cmd).toContain("chmod 600");
-      // Env file feeds the systemd unit → its change restarts the service.
-      const restarts = (sshExec.mock.calls as unknown as Array<[string, string]>).filter(
-        ([, c]) => c.includes("systemctl restart ocd-traefik"),
-      );
-      expect(restarts).toHaveLength(1);
-      expect(restarts[0][0]).toBe("198.51.100.20");
-
-      // Steady state: probe reports the delivered env file → no write, no restart.
-      sshExec.mockClear();
-      sshExec.mockImplementation(
-        probeImplementation("198.51.100.20", { "198.51.100.20": remoteSha(expectedEnv) }),
-      );
-      await convergeServerTraefik(access("198.51.100.20"), state, expectedFor(expectedEnv));
-      expect(envWrites()).toHaveLength(0);
-      expect(
-        (sshExec.mock.calls as unknown as Array<[string, string]>).some(([, c]) =>
-          c.includes("systemctl restart"),
-        ),
-      ).toBe(false);
-    } finally {
-      saveSetting("dns_zone_name", "");
-      sshExec.mockImplementation(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
-    }
-  });
-
-  test("empty expected env (no zone / no token) → env file is left unmanaged", async () => {
-    const panelSrv = makePanelServer("198.51.100.30");
-    insertPanel({
-      server_id: panelSrv.id,
-      name: "ocd-panel",
-      domain: "panel.example.com",
-      git_repo: "https://x.git",
-      container_port: 3001,
-      host_port: 3001,
-    });
-    try {
-      sshExec.mockImplementation(probeImplementation("198.51.100.30", {}));
-      await convergeServerTraefik(access("198.51.100.30"), collectDesiredState(), expectedFor(""));
-      expect(envWrites()).toHaveLength(0);
-    } finally {
-      sshExec.mockImplementation(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
     }
   });
 });

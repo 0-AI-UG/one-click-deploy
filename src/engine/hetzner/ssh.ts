@@ -88,6 +88,7 @@ export function buildSshArgs(opts: {
   hostKey?: string;
   interactive?: boolean;
   user?: string;
+  port?: number;
 }): { args: string[]; tmpKnownHostsPath: string | null } {
   const keyPath = getSshKeyPath();
   const { knownHostsFile, strictHostKeyChecking, tmpPath } = writeKnownHostsTmp(opts.ip, opts.hostKey);
@@ -100,6 +101,7 @@ export function buildSshArgs(opts: {
     "-o", `UserKnownHostsFile=${knownHostsFile}`,
     "-o", "ConnectTimeout=10",
   ];
+  if (opts.port && opts.port !== 22) args.push("-p", String(opts.port));
   if (opts.interactive) {
     args.push("-tt");
     // Detect dead connections (no keepalive response for 30s * 3 = 90s)
@@ -133,13 +135,18 @@ export function describeFailure(
 export async function sshExec(
   ip: string,
   command: string,
-  hostKey?: string
+  hostKey?: string,
+  connection?: { user?: string; port?: number },
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const shortCmd = command.length > 120 ? command.slice(0, 120) + "..." : command;
   log("ssh", `Exec on ${ip}: ${shortCmd}`);
   const start = Date.now();
 
-  const { args, tmpKnownHostsPath } = buildSshArgs({ ip, command, hostKey, interactive: false });
+  const { args, tmpKnownHostsPath } = buildSshArgs({
+    ip, command, hostKey, interactive: false,
+    user: connection?.user,
+    port: connection?.port,
+  });
 
   try {
     const proc = Bun.spawn(

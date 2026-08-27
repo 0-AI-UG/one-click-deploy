@@ -10,7 +10,7 @@ import { OverviewTab } from "./overview-tab.tsx";
 import { LogsTab } from "./logs-tab.tsx";
 import { DeploymentsTab } from "./deployments-tab.tsx";
 import { ScalingTab } from "./scaling-tab.tsx";
-import { WebhooksTab } from "./webhooks-tab.tsx";
+import { PromotionTab } from "./promotion-tab.tsx";
 import type { AppData, ServerData, ReplicaData, MetricSample, ScalingEvent, DeploymentRecord } from "../../types.ts";
 import { useMobileLayout } from "../../hooks/use-mobile-layout.ts";
 import { MobileActionSheet, MobileSheetAction } from "../../components/mobile-action-sheet.tsx";
@@ -23,7 +23,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   const isMobile = useMobileLayout();
   const [app, setApp] = useState<AppData | null>(null);
   const [server, setServer] = useState<ServerData | null>(null);
-  const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "webhooks">("overview");
+  const [tab, setTab] = useState<"overview" | "logs" | "deployments" | "scaling" | "promotion">("overview");
   const [logs, setLogs] = useState("");
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
   const [replicas, setReplicas] = useState<ReplicaData[]>([]);
@@ -136,7 +136,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
     { key: "logs", label: "Logs" },
     { key: "deployments", label: "Deployments" },
     { key: "scaling", label: "Scaling" },
-    { key: "webhooks", label: "Webhooks" },
+    { key: "promotion", label: "Promotion" },
   ] as const;
 
   return (
@@ -262,8 +262,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
         />
       )}
 
-      {tab === "webhooks" && (
-        <WebhooksTab
+      {tab === "promotion" && (
+        <PromotionTab
           app={app}
           appId={appId}
           action={action}
@@ -279,7 +279,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
           <MobileSheetAction icon={app.status === "paused" ? <Play size={19} /> : <Pause size={19} />} label={app.status === "paused" ? "Unpause" : "Pause"} detail={app.status === "paused" ? "Resume serving traffic" : "Stop serving traffic without destroying the app"} disabled={ops.isBusy} onClick={() => { const next = app.status === "paused" ? "unpause" : "pause"; setMobileActionsOpen(false); action(next, () => post(`/api/apps/${appId}/${next}`)); }} />
         </PermissionGate>
         <PermissionGate permission="apps.destroy" appId={appId} environmentId={app.environment_id}>
-          <MobileSheetAction icon={<Trash2 size={19} />} label="Destroy app" detail="Remove containers, DNS records and webhooks" danger loading={actionLoading === "destroy" || ops.isBusyWith("destroy_app")} disabled={ops.isBusy} onClick={async () => {
+          <MobileSheetAction icon={<Trash2 size={19} />} label="Destroy app" detail="Remove containers; DNS stays manual" danger loading={actionLoading === "destroy" || ops.isBusyWith("destroy_app")} disabled={ops.isBusy} onClick={async () => {
             if (await confirm("Destroy App", `Permanently destroy "${app.name}"?`, true)) {
               setMobileActionsOpen(false);
               await action("destroy", () => del(`/api/apps/${appId}`));

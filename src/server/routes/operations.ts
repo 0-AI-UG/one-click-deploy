@@ -30,10 +30,10 @@ import { previewCompensation } from "../../engine/compensation-safety.ts";
 import { enforceConfirmation } from "../lib/action-confirm.ts";
 
 // Keys whose values may contain secrets (connection strings, passwords,
-// tokens, webhook secrets, env-var values). Redacted in any op input/output
+// tokens, credentials, and env-var values). Redacted in any op input/output
 // JSON returned to API clients.
 const SENSITIVE_KEY_RE =
-  /(password|passwd|secret|token|credential|connection_url|webhook_secret|auth_password|api_key|access_key|private_key|env_vars?|env_overrides)/i;
+  /(password|passwd|secret|token|credential|connection_url|auth_password|api_key|access_key|private_key|env_vars?|env_overrides)/i;
 
 const REDACTED = "[redacted]";
 

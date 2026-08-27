@@ -4,7 +4,7 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { mock } from "bun:test";
-import type { Hetzner, HetznerDns } from "./providers/hetzner.ts";
+import type { Hetzner } from "./providers/hetzner.ts";
 import type { OperationRow } from "./db/operations.ts";
 
 /** Return the test run's temp data dir. Setting OCD_DATA_DIR here would be
@@ -190,31 +190,4 @@ export async function waitForReplicaHealthy(
   throw new Error(
     `waitForReplicaHealthy: replica ${replicaId} did not become healthy within ${timeout}ms`,
   );
-}
-
-export function makeFakeDnsProvider(
-  overrides: Partial<HetznerDns> = {},
-): HetznerDns & {
-  _mocks: { createRecord: ReturnType<typeof mock>; deleteRecord: ReturnType<typeof mock> };
-} {
-  const _mocks = {
-    createRecord: mock(
-      async (opts: { zoneId: string; name: string; type: string; value: string }) => ({
-        id: `rec-${opts.name}`,
-        name: opts.name,
-        type: opts.type,
-        value: opts.value,
-      }),
-    ),
-    deleteRecord: mock(async () => {}),
-  };
-  const provider: HetznerDns = {
-    id: "hetzner-dns",
-    name: "Hetzner DNS",
-    listZones: async () => [{ id: "zone-1", name: "example.com" }],
-    createRecord: _mocks.createRecord,
-    deleteRecord: _mocks.deleteRecord,
-    ...overrides,
-  };
-  return Object.assign(provider, { _mocks }) as any;
 }

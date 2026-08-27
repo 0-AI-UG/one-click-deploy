@@ -29,7 +29,7 @@ const ROOT_META: Record<string, { label: string; description: string }> = {
   apps: { label: "Apps", description: "List deployed applications" },
   app: { label: "App", description: "Inspect and operate an application" },
   logs: { label: "Logs", description: "Read application logs" },
-  deploy: { label: "Deploy", description: "Apply repository manifests" },
+  deploy: { label: "Deploy", description: "Apply manifests with immutable image digests" },
   delete: { label: "Delete", description: "Remove apps or stacks" },
   restart: { label: "Restart", description: "Restart application replicas" },
   rollback: { label: "Rollback", description: "Restore an earlier deployment" },
@@ -104,10 +104,10 @@ function mapDeployments(value: unknown): ResourceOption[] {
     if (!row || typeof row !== "object") return [];
     const item = row as Record<string, unknown>;
     if (item.id === undefined || item.id === null) return [];
-    const commit = typeof item.git_commit === "string" && item.git_commit
-      ? ` · ${item.git_commit.slice(0, 10)}`
+    const digest = typeof item.image_digest === "string" && item.image_digest
+      ? ` · ${item.image_digest.split("@sha256:").pop()?.slice(0, 10)}`
       : "";
-    return [{ value: String(item.id), label: `Deployment #${item.id} · ${item.status ?? "unknown"}${commit}` }];
+    return [{ value: String(item.id), label: `Deployment #${item.id} · ${item.status ?? "unknown"}${digest}` }];
   });
 }
 

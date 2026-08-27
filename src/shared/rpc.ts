@@ -5,6 +5,11 @@ export type Server = {
   ipv4: string;
   ipv6: string;
   private_ipv4: string;
+  provider: "hetzner" | "external";
+  ownership: "managed" | "connected";
+  management_address: string;
+  ssh_user: string;
+  ssh_port: number;
   type: string;
   location: string;
   status: string;
@@ -18,21 +23,11 @@ export type App = {
   servers: number[];
   name: string;
   domain: string;
-  git_repo: string;
-  git_branch: string;
-  dockerfile_path: string;
   container_port: number;
   /** Host port of the first replica (derived for display continuity). */
   host_port: number;
   env_vars: string;
   status: string;
-  webhook_enabled: number;
-  webhook_branch: string;
-  webhook_path: string;
-  webhook_paths: string[] | null;
-  webhook_paths_ignore: string[];
-  webhook_wait_for_ci: number;
-  github_webhook_id: string;
   /** Whether HTTP basic auth is on (derived from the password hash server-side).
    *  The password and its hash are secrets and never leave the server. */
   auth_enabled: boolean;
@@ -58,15 +53,6 @@ export type App = {
   public_port: number | null; // public raw TCP/UDP port on the panel IP; null = not exposed
   public_protocol: string; // 'tcp' | 'udp'
   created_at: string;
-  last_webhook_head?: string | null;
-  last_webhook_received_at?: string | null;
-  last_webhook_evaluated_at?: string | null;
-  last_webhook_ci_result?: string | null;
-  last_webhook_decision?: Record<string, unknown> | null;
-  last_matching_paths?: string[];
-  last_decision?: string | null;
-  last_evaluated_commit?: string | null;
-  last_successfully_deployed_commit?: string | null;
 };
 
 export type Replica = {
@@ -90,16 +76,6 @@ export type ScalingEvent = {
   to_count: number;
   reason: string;
   created_at: string;
-};
-
-export type DnsRecord = {
-  id: number;
-  app_id: number;
-  zone_id: string;
-  record_id: string;
-  name: string;
-  type: string;
-  value: string;
 };
 
 export type DeploymentRecord = {
@@ -127,9 +103,6 @@ export type DeployRequest = {
   apply_mode?: "manifest";
   app_name: string;
   domain?: string;
-  git_repo: string;
-  git_branch?: string; // Branch to clone/build from, defaults to repo default branch
-  git_sha?: string; // Immutable commit selected by a webhook; omit for branch HEAD
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
   /** Portable manifest selector. Resolved server-side when environment_id is omitted. */
@@ -141,22 +114,6 @@ export type DeployRequest = {
   volume_id?: string; // Explicit provider volume to adopt; empty = OCD-managed or none
   volume_size?: number; // Desired GB; 0 = explicitly no primary volume
   volume_path?: string; // Container mount path, defaults to /data
-  dockerfile_path?: string; // Path to Dockerfile in repo, auto-discovered if omitted
-  docker_context?: string; // Docker build context path relative to repo root, defaults to "."
-  webhook_enabled?: boolean;
-  webhook_branch?: string; // Branch to watch, defaults to "main"
-  webhook_path?: string; // Optional path prefix filter; only push events touching files under it trigger redeploy
-  webhook_paths?: string[]; // Repository-root-relative glob filters. Omit to deploy on every push.
-  webhook_paths_ignore?: string[]; // Changed paths removed before webhook_paths selection.
-  webhook_wait_for_ci?: boolean; // Wait for CI checks to pass before deploying
-  webhook_staging_environment_id?: number | null; // Environment the webhook staging sibling deploys with. Set = enable staging (pushes hold in <name>-staging for manual promotion). Requires webhook_enabled.
-  /** Portable manifest selector for the webhook staging environment. */
-  webhook_staging_environment?: string | null;
-  /** The manifest's staging opt-in (`webhook.staging`) with no environment named.
-   *  The deploy op then mints `<app>-staging-env` as a copy of the app's own
-   *  environment — so the manifest field is self-sufficient, exactly as it is
-   *  for a stack member. Ignored when webhook_staging_environment_id is set. */
-  webhook_staging?: boolean;
   auth_password?: string; // If set, the ingress enforces HTTP basic auth (username "admin"). Requires internal_protocol 'http' (the default)
   replicas?: number; // Number of replicas (default 1, >1 creates LB)
   autoscale_enabled?: boolean;
@@ -183,8 +140,8 @@ export type DeployRequest = {
   /** Immutable prebuilt OCI image. Production artifact deployments require
    * an @sha256 digest; tags are never accepted as deploy identity. */
   image_ref?: string;
-  /** Registry-backed BuildKit cache shared across build hosts. */
-  build_cache_ref?: string;
+  /** Optional source provenance supplied by external CI. Never fetched by OCD. */
+  git_commit?: string;
   internal_protocol?: "http" | "tcp"; // Internal routing protocol (independent of health_check); omit → "http". Raw-TCP apps must set "tcp".
   sticky?: boolean; // Sticky sessions (cookie-based) on the app's ingress service
   rate_limit_rps?: number; // Public-router rate limit in req/s; omit / 0 = unlimited
@@ -210,19 +167,25 @@ export type DeployRequest = {
   stack_manifest_path?: string | null;
 };
 
+export type ReleaseRequest = {
+  image: string;
+  /** Optional source revision for audit/provenance only. */
+  commit?: string;
+};
+
 export type PromoteRequest = {
   source_app: string; // app name to promote FROM (e.g. "myapp-staging")
   dest_app: string; // app name to promote TO (e.g. "myapp")
 };
 
 export type AppStagingResponse = {
-  /** Whether webhook staging is on (an environment is selected). */
+  /** Whether an explicit staging target exists. */
   staging_enabled: boolean;
-  /** The environment the staging sibling deploys with, or null when off. */
+  /** The staging target's environment, or null when absent. */
   staging_environment_id: number | null;
   /** Git commit of production's most recent successful deployment, or null. */
   prod_commit: string | null;
-  /** The auto-managed <name>-staging sibling, once it has been deployed. */
+  /** The explicit <name>-staging target, once deployed. */
   sibling: { id: number; name: string; status: string; domain: string; commit: string | null } | null;
 };
 
@@ -231,8 +194,7 @@ export type PanelInfo = {
   server_id: number;
   name: string;
   domain: string;
-  git_repo: string;
-  git_branch: string;
+  image_ref: string;
   container_port: number;
   host_port: number;
   volume_id: string;
@@ -269,16 +231,11 @@ export type StackDeployRequest = {
   selected_service_keys?: string[];
   /** Partial runs never interpret omitted members as desired removals. */
   partial?: boolean;
-  /** Apply desired configuration without rebuilding code. Runtime settings
-   * recreate containers from the current immutable artifact; source/build
-   * changes remain pending for a later code deployment. */
+  /** Apply desired configuration without changing the released artifact. */
   config_only?: boolean;
   environment_id?: number; // Reuse an existing environment instead of auto-creating one (only honored when the stack is first created)
-  /** The stack's shared staging environment from the stack manifest — the
-   *  exact same model as `environment_id` above: one per stack, used by every
-   *  member that opts into webhook staging, and NOT overridable per member.
-   *  Omit to keep what the stack already has (auto-created as a copy of the
-   *  stack env on first use); null explicitly clears it. */
+  /** The stack's explicit shared staging environment. Omit to retain the
+   * current selection; null explicitly clears it. */
   staging_environment_id?: number | null;
   env_vars?: Array<{ key: string; value: string; secret?: boolean }>; // Already-merged member env (manifest defaults + --set), written into the shared environment
   /** Staging-only desired values, applied after a staging environment is
@@ -291,18 +248,13 @@ export type StackDeployRequest = {
                     env_overrides?: Record<string, string>; domain?: string;
                     staging?: { volume_size?: number; env_overrides?: Record<string, string>; domain?: string };
                     needs?: string[] }>;
-  /** Members. `webhook_staging` is the member manifest's opt-in intent
-   *  (webhook.staging) — the ONLY staging input a member has. The environment
-   *  is the stack's; any inherited `webhook_staging_environment_id` on an
-   *  element is ignored (deploy_stack overwrites it with the resolved value),
-   *  exactly as members cannot override `environment_id` either. */
+  /** Stack members with externally-built immutable artifacts. */
   apps: Array<Omit<DeployRequest, "environment_id"> & {
     key: string;
     needs?: string[];
     /** Client preflight hint. The server promotes this mode when an
      * authoritative config diff requires a more disruptive action. */
-    reconcile_mode?: "control" | "runtime" | "build";
-    webhook_staging?: boolean;
+    reconcile_mode?: "control" | "runtime" | "artifact";
     /** Stack-only projection intent. `declared` is the safe default for a new
      * member; existing members preserve their stored projection for backwards
      * compatibility until env/env_all is explicit. */
@@ -322,8 +274,8 @@ export type ParsedManifest = {
 };
 
 export type Settings = {
-  provider_token: string;
-  dns_zone_id: string;
+  hetzner_api_token: string;
+  default_domain_suffix: string;
   default_server_type: string;
   default_location: string;
 };

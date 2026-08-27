@@ -3,7 +3,7 @@ import * as db from "../../shared/db.ts";
 import type { OpContext } from "../types.ts";
 import applyManifestOp from "./apply-manifest.ts";
 
-function context(input: { appId: number; deploy: boolean; rollout?: "control" | "runtime" | "build" }) {
+function context(input: { appId: number; deploy: boolean; rollout?: "control" | "runtime" | "artifact" }) {
   return {
     opId: 7001,
     kind: "apply_manifest",
@@ -35,8 +35,7 @@ describe("apply_manifest coordinator boundaries", () => {
     const app = db.insertApp({
       name: `manifest-boundary-${crypto.randomUUID()}`,
       domain: "",
-      git_repo: "https://github.com/acme/app",
-      dockerfile_path: "Dockerfile",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       container_port: 3000,
       env_vars: "{}",
     });

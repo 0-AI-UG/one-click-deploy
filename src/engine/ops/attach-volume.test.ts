@@ -62,7 +62,7 @@ function makeApp(opts: { minReplicas?: number; maxReplicas?: number; withVolume?
   });
   const name = `av-${randomSuffix()}`;
   const { app, replica } = db.insertAppWithFirstReplica(
-    { name, domain: `${name}.example.com`, git_repo: "https://github.com/x/y", dockerfile_path: "Dockerfile", container_port: 3000, env_vars: "{}" },
+    { name, domain: `${name}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000, env_vars: "{}" },
     server.id,
   );
   if (opts.minReplicas !== undefined || opts.maxReplicas !== undefined) {

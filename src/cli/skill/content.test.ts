@@ -29,6 +29,15 @@ describe("embedded OCD skill", () => {
     expect(skill.split("\n").length).toBeLessThan(200);
     expect(skill).toMatch(/^---\nname: ocd-deploy\ndescription: .+\n---\n/);
     expect(skill).not.toContain("{{PANEL_URL}}");
+    for (const command of [
+      "ocd app show <app> [--storage]",
+      "ocd manifest validate [path] [--allow-unknown]",
+      "ocd gc [--server=<name|id|ip>] [--execute]",
+      "ocd ops logs <id> [--tail N] [--since TIME|CURSOR] [--child NAME|ID]",
+      "[--phase STEP] [--follow]",
+    ]) {
+      expect(skill).toContain(command);
+    }
     for (const contents of Object.values(files)) {
       expect(contents).not.toContain("{{PANEL_URL}}");
     }
@@ -38,7 +47,10 @@ describe("embedded OCD skill", () => {
     }
     expect(appManifest).toContain("`environment`");
     expect(appManifest).toContain("`autoscaling`");
-    expect(appManifest).toContain("`webhook.staging_environment`");
+    expect(appManifest).toContain("`image.ref`");
+    expect(appManifest).toContain("`container_port`");
+    expect(appManifest).not.toContain("Dockerfile");
+    expect(appManifest).not.toContain("`build`");
 
     const documentedStackTokens = [
       ...stackManifest.matchAll(/`([^`]+)`/g),
@@ -58,7 +70,13 @@ describe("embedded OCD skill", () => {
     for (const link of overviewLinks) {
       expect(files[link]).toBeDefined();
     }
-    expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(14);
+    expect(files["docs/infrastructure-and-enrollment.md"]).toContain("ocd servers connect");
+    expect(files["docs/releases-promotion-and-rollback.md"]).toContain("OCD_PANEL_URL");
+    expect(files["docs/releases-promotion-and-rollback.md"]).toContain("OCD_TOKEN");
+    expect(files["docs/immutable-images-and-health.md"]).toContain("OCI repository");
+    expect(files["docs/immutable-images-and-health.md"]).toContain("OCI registry username");
+    expect(files["docs/immutable-images-and-health.md"]).toContain("OCI registry password/token");
+    expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(15);
   });
 
   test("documents the unified desired-configuration surface", () => {
@@ -70,7 +88,7 @@ describe("embedded OCD skill", () => {
     );
     const cli = files["docs/cli-reference.md"];
     for (const command of [
-      "deploy", "apps", "logs", "restart", "rollback", "promote", "pause",
+      "deploy", "release", "apps", "logs", "restart", "rollback", "promote", "pause",
       "unpause", "envs", "services", "service", "stack", "ops", "servers",
       "ssh", "app", "scale", "resources", "volumes",
     ]) {
@@ -86,9 +104,56 @@ describe("embedded OCD skill", () => {
       "ocd config", "ocd redeploy", "ocd envs attach", "ocd envs detach",
       "ocd scale policy set", "ocd app webhook enable",
       "ocd app webhook set", "ocd app webhook disable",
+      "ocd app redeploy", "ocd webhook plan",
     ]) {
       expect(cli).not.toContain(removed);
     }
+    expect(cli).toContain("ocd release <app> --image <repository@sha256:digest>");
+    expect(cli).toContain("ocd promote --from=<source-app> --to=<destination-app>");
+    expect(cli).toContain("ocd rollback <app> [--deployment=<id>]");
+    expect(cli).toContain("Private-image pull credentials have no CLI mutation command");
+  });
+
+  test("contains no source-build or automatic webhook delivery guidance", () => {
+    const files = renderSkillFiles("https://panel.example.com");
+    const manual = files
+      .filter((file) => file.path.endsWith(".md"))
+      .map((file) => file.contents)
+      .join("\n");
+
+    for (const removed of [
+      "Dockerfile",
+      "cache_ref",
+      "git_branch",
+      "wait_for_ci",
+      "webhook",
+    ]) {
+      expect(manual.toLowerCase()).not.toContain(removed.toLowerCase());
+    }
+    expect(manual).toContain("repository@sha256:<digest>");
+    expect(manual).toContain("ocd release");
+  });
+
+  test("documents private pull credentials and explicit staging boundaries", () => {
+    const files = Object.fromEntries(
+      renderSkillFiles("https://panel.example.com").map((file) => [
+        file.path,
+        file.contents,
+      ]),
+    );
+    const images = files["docs/immutable-images-and-health.md"];
+    const releases = files["docs/releases-promotion-and-rollback.md"];
+    const stack = files["docs/stack-manifest.md"];
+
+    expect(images).toContain("Settings → Defaults");
+    expect(images).toContain("Matching images receive the configured pull");
+    expect(images).toContain("images on any other host are pulled without it");
+    expect(images).toContain("from `OCD_TOKEN`");
+    expect(releases).toContain("A production deploy or release never creates the staging");
+    expect(releases).toContain("ocd deploy path/to/api-staging.ocd-deploy.json");
+    expect(releases).toContain("ocd promote --from=api-staging --to=api");
+    expect(stack).toContain("does not synthesize staging siblings");
+    expect(stack).toContain("not enable or create a staging service");
   });
 
   test("has no broken local markdown links", () => {

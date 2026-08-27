@@ -5,6 +5,13 @@ export type EnvVarEntry = {
   updated_at: string;
 };
 
+export type DnsInstruction = {
+  status: "pending" | "correct" | "conflicting" | "not_applicable";
+  record: { type: "A"; name: string; value: string } | null;
+  observedValues: string[];
+  message: string;
+};
+
 export type EnvironmentData = {
   id: number;
   name: string;
@@ -18,23 +25,9 @@ export type AppData = {
   id: number;
   name: string;
   domain: string;
-  git_repo: string;
-  source_mode?: string;
   image_ref?: string;
-  build_cache_ref?: string;
   status: string;
   container_port: number;
-  webhook_enabled: number | boolean;
-  webhook_branch?: string;
-  webhook_path?: string;
-  webhook_paths?: string[] | null;
-  webhook_paths_ignore?: string[];
-  webhook_wait_for_ci?: number | boolean;
-  /** When set, webhook pushes deploy to the <name>-staging sibling and hold for
-   *  manual promotion instead of redeploying production. */
-  webhook_staging?: number | boolean;
-  /** The environment the staging sibling deploys with; null/absent = staging off. */
-  webhook_staging_environment_id?: number | null;
   /** App id this app is a staging sibling of; set = it's a hidden sibling. */
   target_of?: number | null;
   desired_replicas: number;
@@ -80,6 +73,7 @@ export type AppData = {
   public_protocol?: string;
   /** `<panel-ip>:<public_port>` when raw TCP/UDP exposed (server-derived). */
   public_address?: string | null;
+  dns_instruction?: DnsInstruction;
   config_revision?: number;
   last_manifest_path?: string | null;
   last_manifest_hash?: string | null;
@@ -87,14 +81,6 @@ export type AppData = {
   last_manifest_config_revision?: number | null;
   manifest_path?: string | null;
   stack_manifest_path?: string | null;
-  last_webhook_head?: string | null;
-  last_webhook_received_at?: string | null;
-  last_webhook_evaluated_at?: string | null;
-  last_webhook_ci_result?: string | null;
-  last_matching_paths?: string[];
-  last_decision?: string | null;
-  last_evaluated_commit?: string | null;
-  last_successfully_deployed_commit?: string | null;
 };
 
 export type ReplicaData = {
@@ -194,6 +180,7 @@ export type ServiceData = {
     admin_password?: string;
     admin_token?: string;
   };
+  dns_instruction?: DnsInstruction;
 };
 
 export type ResourceServer = {
@@ -211,6 +198,12 @@ export type ResourceServer = {
   replica_count: number;
   monthly_eur?: number;
   provider_id: string;
+  provider: "hetzner" | "external";
+  ownership: "managed" | "connected";
+  management_address: string;
+  private_ipv4: string;
+  ssh_user: string;
+  ssh_port: number;
 };
 
 export type ResourceVolume = {
@@ -268,9 +261,7 @@ export type StackMemberApp = {
   status: string;
   domain?: string | null;
   public?: boolean | number;
-  git_repo?: string;
-  webhook_enabled?: number | boolean;
-  webhook_staging_environment_id?: number | null;
+  image_ref?: string;
   /** JSON array of member keys this app depends on, as declared by `needs` in
    *  the stack manifest. Drives the level-by-level deploy/promote order. */
   stack_needs?: string | null;
@@ -348,7 +339,7 @@ export type PanelApp = {
   name: string;
   domain: string;
   status: string;
-  git_branch: string;
+  image_ref?: string;
   volume_mount?: string;
-  webhook_enabled: number | boolean;
+  dns_instruction?: DnsInstruction;
 };
