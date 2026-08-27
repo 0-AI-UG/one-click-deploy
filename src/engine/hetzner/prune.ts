@@ -341,10 +341,13 @@ export function buildServerPruneSteps(opts: PruneServerOptions = {}): string[] {
     );
   }
 
-  steps.push(
-    `docker container prune -f --filter "label!=${OCD_IMAGE_LABEL}" 2>&1 | tail -1`,
-    `docker image prune -f 2>&1 | tail -1`,
-  );
+  // Maintenance must not run Docker-wide prune commands. A digest-only image
+  // is briefly unreferenced between `docker pull` and `docker run`, so even
+  // `docker image prune -f` can race a release and delete its candidate.
+  // Likewise, `label!=ocd.managed=true` includes operator-owned stopped
+  // containers (and removed the pre-upgrade panel rollback container in
+  // production). The targeted loops above own only known OCD resources;
+  // broader cleanup remains an explicit, inventoried `ocd gc --execute`.
   return steps;
 }
 

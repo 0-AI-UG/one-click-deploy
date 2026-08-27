@@ -64,6 +64,14 @@ describe("buildServerPruneSteps", () => {
     expect(script).toContain('case "$repo" in api)');
     expect(script).toContain('case "$tag" in latest|rollback)');
     expect(script).toContain('docker ps -aq --filter ancestor="$ref"');
+    expect(script).not.toContain("docker container prune");
+    expect(script).not.toContain("docker image prune");
+  });
+
+  test("never races releases or deletes operator-owned stopped resources with broad maintenance prune", () => {
+    const script = buildServerPruneSteps({ activeAppNames: [] }).join("; ");
+    expect(script).not.toContain("docker container prune");
+    expect(script).not.toContain("docker image prune");
   });
 
   test("retains the current and one previous registry-built panel image", () => {
