@@ -257,7 +257,15 @@ export async function handleReleaseApp(request: Request, appId: number): Promise
     const image = typeof body?.image === "string" ? body.image.trim() : "";
     const commit = typeof body?.commit === "string" ? body.commit.trim() : undefined;
     const candidate = { ...deployRequestFromApp(app), image_ref: image };
-    const validation = validateDeployRequest({ ...candidate, git_commit: commit });
+    // Migration 97 deliberately represents pre-manifest volume attachments
+    // with desired_volume_size=-1: OCD knows the attachment is real but does
+    // not guess its provider size.  A release changes only the image, so
+    // validate the rest of the stored configuration as volume-neutral while
+    // retaining the sentinel in the candidate passed to the operation.
+    const validationCandidate = app.desired_volume_size < 0
+      ? { ...candidate, volume_id: "", volume_size: 0 }
+      : candidate;
+    const validation = validateDeployRequest({ ...validationCandidate, git_commit: commit });
     if (!validation.valid) {
       return Response.json({ error: validation.error }, { status: 400, headers: corsHeaders });
     }

@@ -166,6 +166,32 @@ describe("external artifact release endpoint", () => {
     expect(db.getApp(app.id)!.image_ref).toBe(DIGEST_A);
   });
 
+  test("preserves legacy attached-volume intent during an image-only release", async () => {
+    const app = makeApp();
+    db.updateAppDesiredVolume(app.id, {
+      volumeId: "legacy-volume-42",
+      sizeGb: -1,
+      mountPath: "/data",
+    });
+    const response = await handleReleaseApp(new Request(`http://x/api/apps/${app.id}/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image: DIGEST_B, commit: "d".repeat(40) }),
+    }), app.id);
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { op_id: number };
+    const operation = getOperation(body.op_id)!;
+    const input = JSON.parse(operation.input_json) as {
+      candidate: { volume_id: string; volume_size: number; volume_path: string };
+    };
+    expect(input.candidate).toMatchObject({
+      volume_id: "legacy-volume-42",
+      volume_size: -1,
+      volume_path: "/data",
+    });
+  });
+
   test("rejects tags and malformed replay keys before enqueue", async () => {
     const app = makeApp();
     const tagged = await handleReleaseApp(new Request(`http://x/api/apps/${app.id}/release`, {
