@@ -39,10 +39,14 @@ export async function authenticateRequest(request: Request): Promise<TokenPayloa
 }
 
 export async function createToken(payload: TokenPayload): Promise<string> {
+  // CLI credentials are explicitly approved through the device flow and are
+  // also used by unattended CI. Keep them long-lived enough for automation,
+  // while retaining immediate revocation through the user's token_version.
+  const expiration = payload.client === "cli" ? "365d" : "7d";
   return new SignJWT(payload as unknown as Record<string, unknown>)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime("7d")
+    .setExpirationTime(expiration)
     .sign(JWT_SECRET);
 }
 
