@@ -15,10 +15,11 @@ describe("buildServerGcScript", () => {
     expect(script).toContain("ghcr.io/acme/ocd:sha-abc123");
     expect(script).toContain('printf \'%b\\n\' "$protected_images"');
     expect(script).toContain('docker ps -aq --filter ancestor="$id"');
-    expect(script).toContain('"($active_pattern):(latest|rollback)"');
+    expect(script).toContain('\\"($active_pattern):(latest|rollback)\\"');
     expect(script).toContain('docker image rm "$ref"');
     expect(script).not.toContain("docker image rm -f");
     expect(script).toContain("OCD_SPACE");
+    expect(Bun.spawnSync({ cmd: ["bash", "-n"], stdin: new Blob([script]) }).exitCode).toBe(0);
   });
 
   test("dry-run does not contain removal or prune commands", () => {
