@@ -82,6 +82,7 @@ const reconcile: Step<ApplyManifestInput, ApplyOut> = {
         {
           appId: app.id,
           userId: ctx.input.userId,
+          gitCommit: ctx.input.spec.git_commit,
           candidate: ctx.input.spec,
         },
       ));

@@ -20,6 +20,11 @@ function context(input: { appId: number; deploy: boolean; rollout?: "control" | 
 }
 
 describe("apply_manifest coordinator boundaries", () => {
+  test("forwards manifest source provenance to the artifact rollout", () => {
+    const source = (applyManifestOp.steps[1]?.run.toString() ?? "").replace(/\s+/g, "");
+    expect(source).toContain("gitCommit:ctx.input.spec.git_commit");
+  });
+
   test("validates before child reconciliation and records runtime history separately", async () => {
     expect(applyManifestOp.steps.map((step) => step.name)).toEqual([
       "validate_manifest",
