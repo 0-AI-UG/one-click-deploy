@@ -26,6 +26,24 @@ import { operationLogQuery, parseLogArgs } from "../log-filters.ts";
 import { expectArray, expectRecord, expectStringField } from "../response.ts";
 
 type AppElement = StackDeployRequest["apps"][number];
+const IMMUTABLE_IMAGE_REF = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
+
+export function parseStackImageOverrides(values: string[], appKeys: ReadonlySet<string>): Map<string, string> {
+  const overrides = new Map<string, string>();
+  for (const value of values) {
+    const separator = value.indexOf("=");
+    if (separator < 1) throw new Error(`Invalid --image value (expected MEMBER=repository@sha256:digest): ${value}`);
+    const key = value.slice(0, separator).trim();
+    const image = value.slice(separator + 1).trim();
+    if (!appKeys.has(key)) throw new Error(`Unknown stack member in --image: ${key}`);
+    if (!IMMUTABLE_IMAGE_REF.test(image)) {
+      throw new Error(`--image for ${key} must be an immutable repository@sha256:<64 hex digest> reference`);
+    }
+    if (overrides.has(key)) throw new Error(`Duplicate --image override for stack member ${key}`);
+    overrides.set(key, image);
+  }
+  return overrides;
+}
 
 /** Pure manifest→wire mapping kept exported for parity regression tests. */
 export function buildStackServiceSpecs(
@@ -183,6 +201,9 @@ ${BOLD}Options:${RESET}
   --with-dependents          Include downstream app dependents of --only
   --changed                  Reconcile members whose manifest or image changed
   --all                      Reconcile every member (disables changed-only default)
+  --image=MEMBER=<digest>    Override one member's image in memory (repeatable);
+                             CI uses this to apply config with newly built digests
+  --commit=<sha>             Record one source revision for the selected artifacts
   --config-only              Apply config without changing the image; runtime changes
                              reuse the current immutable images
   --allow-unknown            Compatibility escape hatch for newer manifest keys
@@ -363,6 +384,8 @@ export async function stackUp(args: string[]): Promise<void> {
     all: { type: "boolean" },
     "config-only": { type: "boolean" },
     "allow-unknown": { type: "boolean" },
+    image: { type: "string", repeatable: true },
+    commit: { type: "string" },
   }, { maxPositionals: 1 });
   if (parsed.flags.help === true) {
     upUsage();
@@ -377,6 +400,11 @@ export async function stackUp(args: string[]): Promise<void> {
   const forceAll = parsed.flags.all === true;
   const configOnly = parsed.flags["config-only"] === true;
   const allowUnknown = parsed.flags["allow-unknown"] === true;
+  const rawImageOverrides = (parsed.flags.image as string[] | undefined) ?? [];
+  const commit = parsed.flags.commit as string | undefined;
+  if (commit !== undefined && !/^[a-f0-9]{7,64}$/i.test(commit)) {
+    throw new Error("--commit must contain 7-64 hexadecimal characters");
+  }
 
   const stackLocation = manifestRepoLocation(manifestPath);
   const manifestFullPath = stackLocation.fullPath;
@@ -393,6 +421,10 @@ export async function stackUp(args: string[]): Promise<void> {
   }
 
   const appKeys = new Set(Object.keys(manifest.apps));
+  const imageOverrides = parseStackImageOverrides(rawImageOverrides, appKeys);
+  if (configOnly && imageOverrides.size > 0) {
+    throw new Error("--image cannot be combined with --config-only; image overrides are artifact rollouts");
+  }
 
   // Parse --set into per-app (<app>.KEY) and global (KEY) buckets. A plain
   // KEY is a fallback applied to any app that declares it; an <app>.KEY targets
@@ -438,6 +470,9 @@ export async function stackUp(args: string[]): Promise<void> {
       entry.manifest,
       childManifestPath,
     );
+    const imageOverride = imageOverrides.get(key);
+    if (imageOverride) appElement.image_ref = imageOverride;
+    if (commit && imageOverride) appElement.git_commit = commit;
     const authPassword = await resolveAuthPassword(appManifest.auth);
     if (authPassword !== undefined) appElement.auth_password = authPassword;
     apps.push(appElement);
@@ -599,6 +634,11 @@ export async function stackUp(args: string[]): Promise<void> {
       }
     }
     selectionReason = "changed manifests or immutable images plus dependents";
+  }
+
+  for (const key of imageOverrides.keys()) {
+    selectedKeys.add(key);
+    modes.set(key, "artifact");
   }
 
   for (const app of apps) {

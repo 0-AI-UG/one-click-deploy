@@ -100,6 +100,12 @@ import {
 import { VERSION } from "../shared/version.ts";
 import { handleGcExecute, handleGcInventory } from "./routes/gc.ts";
 import { handleGetAppStorage } from "./routes/app-storage.ts";
+import {
+  handleGetGitHubRunners,
+  handleInstallGitHubRunner,
+  handleRemoveGitHubRunner,
+  handleGetGitHubRunnerLogs,
+} from "./routes/github-runners.ts";
 
 function appIdFrom(req: Request): number {
   const url = new URL(req.url);
@@ -127,6 +133,11 @@ function serverIdFrom(req: Request): number {
 function serverPathIdFrom(req: Request): number {
   const url = new URL(req.url);
   const match = url.pathname.match(/\/api\/servers\/(\d+)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function runnerIdFrom(req: Request): number {
+  const match = new URL(req.url).pathname.match(/\/api\/runners\/(\d+)/);
   return match ? parseInt(match[1], 10) : 0;
 }
 
@@ -245,6 +256,12 @@ export const apiRoutes = {
   "/api/servers/connect": { POST: (req: Request) => handleConnectServer(req) },
   "/api/servers/:id": { DELETE: (req: Request) => handleDeleteServer(req, serverIdFrom(req)) },
   "/api/servers/:id/pool": { PATCH: (req: Request) => handleSetServerPool(req, serverPathIdFrom(req)) },
+  "/api/runners": {
+    GET: (req: Request) => handleGetGitHubRunners(req),
+    POST: (req: Request) => handleInstallGitHubRunner(req),
+  },
+  "/api/runners/:id": { DELETE: (req: Request) => handleRemoveGitHubRunner(req, runnerIdFrom(req)) },
+  "/api/runners/:id/logs": { GET: (req: Request) => handleGetGitHubRunnerLogs(req, runnerIdFrom(req)) },
   "/api/gc": {
     GET: (req: Request) => handleGcInventory(req),
     POST: (req: Request) => handleGcExecute(req),

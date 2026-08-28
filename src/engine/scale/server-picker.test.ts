@@ -76,6 +76,7 @@ beforeEach(() => {
   db.deletePanel();
   conn.run("DELETE FROM replicas");
   conn.run("DELETE FROM server_metrics_samples");
+  conn.run("DELETE FROM github_runners");
   conn.run("DELETE FROM servers");
   conn.run("DELETE FROM apps");
   provisionServer.mockClear();
@@ -166,6 +167,23 @@ describe("pickTargetServer", () => {
     setServerMetrics(worker.id, 70, 70);
     const app = makeApp("off-panel");
 
+    const picked = await pickTargetServer(app, {}, noopEmit);
+    expect(picked.id).toBe(worker.id);
+  });
+
+  test("build runners are excluded from explicit and automatic app placement", async () => {
+    const runnerServer = makeServer("runner");
+    db.insertGitHubRunner({
+      serverId: runnerServer.id,
+      name: "ocd-runner-1",
+      scopeUrl: "https://github.com/0-AI-UG",
+      previousPool: "general",
+    });
+    db.updateServerPool(runnerServer.id, "build-runners");
+    const worker = makeServer("app-worker");
+    const app = makeApp("runner-isolation");
+
+    await expect(pickTargetServer(app, {}, noopEmit, runnerServer.id)).rejects.toThrow(/reserved for GitHub Actions builds/);
     const picked = await pickTargetServer(app, {}, noopEmit);
     expect(picked.id).toBe(worker.id);
   });

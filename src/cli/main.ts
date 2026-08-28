@@ -21,6 +21,7 @@ import { scale } from "./commands/scale.ts";
 import { resources, volumes } from "./commands/resources.ts";
 import { gc } from "./commands/gc.ts";
 import { manifest } from "./commands/manifest.ts";
+import { runners } from "./commands/runners.ts";
 import { BOLD, DIM, RESET } from "./format.ts";
 import { VERSION } from "./version.ts";
 
@@ -51,6 +52,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   volumes,
   gc,
   manifest,
+  runners,
 };
 
 function printUsage(): void {
@@ -85,6 +87,7 @@ ${BOLD}Commands:${RESET}
   ops <id> | logs <id>   Inspect an operation or stream its logs
   ops cancel|retry|finalize <id>  Recover a stuck operation
   servers                Inspect and manage servers
+  runners                Manage dedicated GitHub Actions build runners
   resources              Inventory and estimated cost
   volumes                Manage attached and retained volumes
   gc [--server X]        Preview safe disk garbage collection (--execute to apply)

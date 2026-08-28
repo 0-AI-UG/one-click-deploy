@@ -130,6 +130,18 @@ describe("gcServerIfEmpty", () => {
     expect(db.getServer(server.id)?.gc_requested_at).toBeNull();
   });
 
+  test("does NOT request GC for a dedicated GitHub build runner", async () => {
+    const server = freshServer("withrunner");
+    db.insertGitHubRunner({
+      serverId: server.id,
+      name: `runner-${Date.now()}`,
+      scopeUrl: "https://github.com/acme",
+      previousPool: "general",
+    });
+    await db.gcServerIfEmpty(server.id);
+    expect(db.getServer(server.id)?.gc_requested_at).toBeNull();
+  });
+
   test("markReplicaStopped sets stopped_at and markReplicaRunning clears it", () => {
     const server = freshServer("toggle");
     const app = db.insertApp({

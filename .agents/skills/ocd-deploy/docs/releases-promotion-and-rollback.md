@@ -26,6 +26,13 @@ The release endpoint preserves the stored environment, ingress, storage,
 resources, placement, and health configuration. It commits the new digest only
 after the candidate becomes healthy.
 
+That preservation is intentional: `ocd release` never reads
+`.ocd-deploy.json` or `ocd-stack.json`. When a commit can also change manifest
+configuration or environment projections, use `ocd deploy --image=<digest>` or
+repeatable stack `--image=MEMBER=<digest>` overrides instead. Those commands
+apply configuration and fresh immutable artifacts together without editing the
+checked-in manifests.
+
 The registry login used by this workflow pushes the artifact from CI. For a
 private image, configure OCD's separate fleet pull credential under panel
 **Settings → Defaults → OCI repository**; see

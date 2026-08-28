@@ -600,7 +600,7 @@ const preflightApps: Step<DeployStackInput, PreflightOut> = {
         assertSafeHostPath(volume.host_path, name);
       }
       checkedApps.push(appReq.key);
-      sourceRevisionByKey[appReq.key] = `artifact:${appReq.image_ref}`;
+      sourceRevisionByKey[appReq.key] = appReq.git_commit || `artifact:${appReq.image_ref}`;
     }
     const existingStack = db.getStackByName(req.name);
     if (existingStack) {

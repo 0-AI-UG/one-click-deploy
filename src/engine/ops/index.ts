@@ -31,3 +31,5 @@ import "./resize-volume.ts";
 import "./remount-volume.ts";
 import "./apply-manifest.ts";
 import "./apply-app-config.ts";
+import "./install-github-runner.ts";
+import "./remove-github-runner.ts";

@@ -2452,6 +2452,26 @@ export const migrations: Migration[] = [
         END`);
     },
   },
+  {
+    version: 106,
+    description: "Track dedicated GitHub Actions build runners",
+    up: (db) => {
+      db.run(`CREATE TABLE github_runners (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL UNIQUE REFERENCES servers(id) ON DELETE RESTRICT,
+        name TEXT NOT NULL UNIQUE,
+        scope_url TEXT NOT NULL,
+        labels TEXT NOT NULL DEFAULT 'ocd-builder',
+        runner_version TEXT NOT NULL DEFAULT '',
+        architecture TEXT NOT NULL DEFAULT '',
+        previous_pool TEXT NOT NULL DEFAULT 'general',
+        status TEXT NOT NULL DEFAULT 'installing',
+        last_error TEXT NOT NULL DEFAULT '',
+        last_checked_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

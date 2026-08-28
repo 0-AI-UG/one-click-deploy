@@ -4,7 +4,7 @@ import { Card, Btn, Table, Spinner, Field, Divider, showToast, confirm } from ".
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-server-types.ts";
-import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check } from "lucide-react";
+import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check, Hammer } from "lucide-react";
 import type { PanelApp, DeploymentRecord } from "../../types.ts";
 import { DnsInstructionView } from "../../components/dns-instruction.tsx";
 
@@ -47,6 +47,17 @@ type User = {
   webauthnEnabled: boolean; permissions: string[]; createdAt: string;
 };
 
+type RunnerServer = {
+  id: number; name: string; ipv4: string; status: string; pool: string;
+  apps?: Array<{ id: number; name: string }>;
+};
+
+type GitHubRunner = {
+  id: number; name: string; scope_url: string; labels: string; status: string;
+  runner_version: string; architecture: string; last_error: string;
+  disk_free_bytes?: number; server: RunnerServer | null;
+};
+
 export function UsersPage() {
   // --- Users ---
   const [users, setUsers] = useState<User[]>([]);
@@ -70,10 +81,33 @@ export function UsersPage() {
 
   // --- Panel ---
   const [panel, setPanel] = useState<PanelApp | null>(null);
-  const [panelServer, setPanelServer] = useState<{ name: string; ipv4: string } | null>(null);
+  const [panelServer, setPanelServer] = useState<{ id: number; name: string; ipv4: string } | null>(null);
   const [panelDeployments, setPanelDeployments] = useState<DeploymentRecord[]>([]);
   const [panelBusy, setPanelBusy] = useState(false);
   const [panelImage, setPanelImage] = useState("");
+
+  // --- GitHub Actions build runners ---
+  const [runners, setRunners] = useState<GitHubRunner[]>([]);
+  const [runnerServers, setRunnerServers] = useState<RunnerServer[]>([]);
+  const [runnerBusy, setRunnerBusy] = useState(false);
+  const [runnerForm, setRunnerForm] = useState({
+    server_id: "", scope_url: "", name: "", registration_token: "",
+  });
+  const [runnerRemovalToken, setRunnerRemovalToken] = useState("");
+  const availableRunnerServers = runnerServers.filter((server) =>
+    server.status === "ready" &&
+    !server.apps?.length &&
+    server.id !== panelServer?.id &&
+    !runners.some((runner) => runner.server?.id === server.id),
+  );
+
+  const refreshRunners = () => Promise.all([
+    get("/api/runners").then((data) => setRunners(data || [])),
+    get("/api/servers").then((data) => {
+      const servers = (data || []) as RunnerServer[];
+      setRunnerServers(servers);
+    }),
+  ]).catch(() => {});
 
   const loadUsers = async () => {
     try {
@@ -123,7 +157,14 @@ export function UsersPage() {
       .catch(() => {})
       .finally(() => setSettingsLoading(false));
     refreshPanel();
+    refreshRunners();
   }, []);
+
+  useEffect(() => {
+    if (!runners.some((runner) => ["installing", "removing"].includes(runner.status))) return;
+    const timer = window.setInterval(refreshRunners, 5000);
+    return () => window.clearInterval(timer);
+  }, [runners]);
 
   useEffect(() => {
     if (serverTypes.length > 0 && !settingsForm.default_server_type) {
@@ -216,6 +257,43 @@ export function UsersPage() {
     }
   };
 
+  const installRunner = async () => {
+    if (!runnerForm.server_id || !runnerForm.scope_url || !runnerForm.registration_token) {
+      return showToast("Server, GitHub scope and registration token are required", "error");
+    }
+    setRunnerBusy(true);
+    try {
+      const result = await post("/api/runners", {
+        ...runnerForm,
+        server_id: Number(runnerForm.server_id),
+        name: runnerForm.name || undefined,
+      });
+      setRunnerForm((current) => ({ ...current, registration_token: "" }));
+      showToast(`Runner installation queued as operation #${result.op_id}`, "success");
+      await refreshRunners();
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setRunnerBusy(false);
+    }
+  };
+
+  const removeRunner = async (runner: GitHubRunner) => {
+    if (!runnerRemovalToken) return showToast("Paste a fresh GitHub removal token first", "error");
+    if (!await confirm("Remove Build Runner", `Deregister ${runner.name} and release ${runner.server?.name || "its server"} back to its previous capacity pool?`, true)) return;
+    setRunnerBusy(true);
+    try {
+      const result = await del(`/api/runners/${runner.id}`, { removal_token: runnerRemovalToken });
+      setRunnerRemovalToken("");
+      showToast(`Runner removal queued as operation #${result.op_id}`, "success");
+      await refreshRunners();
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setRunnerBusy(false);
+    }
+  };
+
   if (loading || settingsLoading) return <div className="flex justify-center py-20"><Spinner /></div>;
 
   return (
@@ -273,6 +351,61 @@ export function UsersPage() {
 
         <div className="pt-2">
           <Btn variant="primary" loading={saving} onClick={saveSettings}><Save size={13} /> Save Settings</Btn>
+        </div>
+      </Card>
+
+      {/* GitHub Actions runners */}
+      <Card className="p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-2">
+            <Hammer size={12} /> GitHub Actions build runners
+          </h3>
+          <Btn size="xs" onClick={refreshRunners}><RefreshCw size={11} /> Refresh</Btn>
+        </div>
+        <p className="font-mono text-[10px] text-muted">
+          OCD installs GitHub's official runner on an empty dedicated server. GitHub checks out and builds; OCD still deploys only immutable registry images.
+        </p>
+
+        {runners.length > 0 && (
+          <Table headers={["Runner", "Server", "Scope", "Status", "Version", ""]}>
+            {runners.map((runner) => (
+              <tr key={runner.id}>
+                <td className="py-2 px-3 font-mono text-[10px]">{runner.name}<div className="text-muted">{runner.labels}</div></td>
+                <td className="py-2 px-3 font-mono text-[10px]">{runner.server?.name || "Missing"}</td>
+                <td className="py-2 px-3 font-mono text-[10px] break-all">{runner.scope_url.replace("https://github.com/", "")}</td>
+                <td className="py-2 px-3 font-mono text-[10px]">{runner.status}{runner.last_error && <div className="text-red-600 max-w-xs break-words">{runner.last_error}</div>}</td>
+                <td className="py-2 px-3 font-mono text-[10px]">{runner.runner_version || "—"}<div className="text-muted">{runner.architecture || "—"}</div></td>
+                <td className="py-2 px-3"><Btn size="xs" variant="danger" disabled={runnerBusy} onClick={() => removeRunner(runner)}><Trash2 size={11} /></Btn></td>
+              </tr>
+            ))}
+          </Table>
+        )}
+
+        <div className="grid md:grid-cols-2 gap-3">
+          <Field label="Dedicated server" align="start" hint="The backend rejects the panel host and any server with apps or services.">
+            <select value={runnerForm.server_id} onChange={(event) => setRunnerForm((current) => ({ ...current, server_id: event.target.value }))}>
+              <option value="">Select server</option>
+              {availableRunnerServers.map((server) => <option key={server.id} value={server.id}>{server.name} ({server.pool || "general"})</option>)}
+            </select>
+          </Field>
+          <Field label="GitHub scope URL" align="start" hint="Organization or one repository.">
+            <input value={runnerForm.scope_url} onChange={(event) => setRunnerForm((current) => ({ ...current, scope_url: event.target.value }))} placeholder="https://github.com/OWNER" />
+          </Field>
+          <Field label="Runner name" align="start" hint="Optional; defaults to ocd-<server>.">
+            <input value={runnerForm.name} onChange={(event) => setRunnerForm((current) => ({ ...current, name: event.target.value }))} placeholder="ocd-build-1" />
+          </Field>
+          <Field label="One-hour registration token" align="start" hint="GitHub Settings → Actions → Runners → New self-hosted runner. It is never retained after installation.">
+            <input type="password" value={runnerForm.registration_token} onChange={(event) => setRunnerForm((current) => ({ ...current, registration_token: event.target.value }))} placeholder="Registration token" />
+          </Field>
+        </div>
+        <Btn variant="primary" loading={runnerBusy} onClick={installRunner}><Hammer size={13} /> Install runner</Btn>
+
+        <div className="border-2 border-fg/20 p-3 space-y-2">
+          <div className="font-mono text-[9px] font-bold uppercase">Workflow selector</div>
+          <code className="font-mono text-[10px] select-all">runs-on: [self-hosted, ocd-builder]</code>
+          <Field label="Removal token" align="start" hint="Only needed when removing a runner; obtain it from GitHub runner settings.">
+            <input type="password" value={runnerRemovalToken} onChange={(event) => setRunnerRemovalToken(event.target.value)} placeholder="Fresh removal token" />
+          </Field>
         </div>
       </Card>
 

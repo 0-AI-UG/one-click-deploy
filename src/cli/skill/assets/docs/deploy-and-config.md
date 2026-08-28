@@ -9,6 +9,28 @@ ocd deploy
 ocd deploy path/to/app.json
 ```
 
+CI can replace only the manifest's pinned image in memory while applying the
+rest of the committed desired state:
+
+```bash
+ocd deploy .ocd-deploy.json \
+  --image="ghcr.io/example/app@sha256:$DIGEST" \
+  --commit="$GITHUB_SHA"
+```
+
+For a stack, pass one override per freshly built member:
+
+```bash
+ocd deploy stack ocd-stack.json \
+  --image=api="$API_IMAGE_REF" \
+  --image=worker="$WORKER_IMAGE_REF" \
+  --commit="$GITHUB_SHA"
+```
+
+Overrides never edit the manifest file. They prevent a committed bootstrap
+digest from rolling production backward while configuration and environment
+projections are reconciled from that same checkout.
+
 The manifest must contain an externally published immutable `image.ref`. OCD:
 
 1. reads and validates the complete local manifest;
@@ -46,6 +68,8 @@ digest.
 --auth-password-env=KEY
 --server=ID
 --app=EXISTING_APP
+--image=repository@sha256:DIGEST
+--commit=SOURCE_SHA
 --dry-run
 --config-only
 --allow-unknown
@@ -53,5 +77,6 @@ digest.
 
 `--set` and `--auth-password-env` supply values that must not be committed.
 `--server` is a one-deploy placement override. Persistent settings belong in
-the manifest. Use `ocd release`, not `ocd deploy`, for routine CI delivery of a
-new digest.
+the manifest. Prefer `ocd deploy --image` in CI when the same commit may change
+configuration. Use `ocd release` only for an image-only change after stored
+configuration is already synchronized.

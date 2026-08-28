@@ -58,4 +58,4 @@ export const get = (path: string) => api("GET", path);
 export const post = (path: string, body?: unknown) => api("POST", path, body);
 export const put = (path: string, body?: unknown) => api("PUT", path, body);
 export const patch = (path: string, body?: unknown) => api("PATCH", path, body);
-export const del = (path: string) => api("DELETE", path);
+export const del = (path: string, body?: unknown) => api("DELETE", path, body);

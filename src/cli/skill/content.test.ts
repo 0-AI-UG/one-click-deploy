@@ -71,12 +71,14 @@ describe("embedded OCD skill", () => {
       expect(files[link]).toBeDefined();
     }
     expect(files["docs/infrastructure-and-enrollment.md"]).toContain("ocd servers connect");
+    expect(files["docs/github-actions-runners.md"]).toContain("runs-on: [self-hosted, ocd-builder]");
+    expect(files["docs/github-actions-runners.md"]).toContain("untrusted fork pull requests");
     expect(files["docs/releases-promotion-and-rollback.md"]).toContain("OCD_PANEL_URL");
     expect(files["docs/releases-promotion-and-rollback.md"]).toContain("OCD_TOKEN");
     expect(files["docs/immutable-images-and-health.md"]).toContain("OCI repository");
     expect(files["docs/immutable-images-and-health.md"]).toContain("OCI registry username");
     expect(files["docs/immutable-images-and-health.md"]).toContain("OCI registry password/token");
-    expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(15);
+    expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(16);
   });
 
   test("documents the unified desired-configuration surface", () => {
@@ -90,7 +92,7 @@ describe("embedded OCD skill", () => {
     for (const command of [
       "deploy", "release", "apps", "logs", "restart", "rollback", "promote", "pause",
       "unpause", "envs", "services", "service", "stack", "ops", "servers",
-      "ssh", "app", "scale", "resources", "volumes",
+      "ssh", "app", "scale", "resources", "volumes", "runners",
     ]) {
       expect(cli).toContain(`ocd ${command}`);
     }
@@ -114,24 +116,21 @@ describe("embedded OCD skill", () => {
     expect(cli).toContain("Private-image pull credentials have no CLI mutation command");
   });
 
-  test("contains no source-build or automatic webhook delivery guidance", () => {
+  test("keeps source builds outside the OCD deployment runtime", () => {
     const files = renderSkillFiles("https://panel.example.com");
     const manual = files
       .filter((file) => file.path.endsWith(".md"))
       .map((file) => file.contents)
       .join("\n");
 
-    for (const removed of [
-      "Dockerfile",
-      "cache_ref",
-      "git_branch",
-      "wait_for_ci",
-      "webhook",
-    ]) {
+    for (const removed of ["cache_ref", "git_branch", "wait_for_ci", "webhook"]) {
       expect(manual.toLowerCase()).not.toContain(removed.toLowerCase());
     }
     expect(manual).toContain("repository@sha256:<digest>");
     expect(manual).toContain("ocd release");
+    expect(files.find((file) => file.path === "docs/github-actions-runners.md")?.contents.toLowerCase().replace(/\s+/g, " ")).toContain(
+      "ocd itself still never checks out source or builds an image",
+    );
   });
 
   test("documents private pull credentials and explicit staging boundaries", () => {

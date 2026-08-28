@@ -19,6 +19,9 @@ export async function pickTargetServer(
   if (preferredServerId) {
     const preferred = db.getServer(preferredServerId);
     if (!preferred) throw new Error(`Target server ${preferredServerId} not found`);
+    if (db.getGitHubRunnerByServerId(preferred.id)) {
+      throw new Error(`Target server ${preferred.name} is reserved for GitHub Actions builds`);
+    }
     if (preferred.status !== "ready") throw new Error(`Target server ${preferred.name} is not ready (status: ${preferred.status})`);
     emit("scale", `Placing replica on ${preferred.name} (user-selected)`);
     return preferred;
@@ -73,6 +76,7 @@ export async function pickTargetServer(
   let bestScore = Infinity;
   for (const server of allServers) {
     if (server.status !== "ready") continue;
+    if (db.getGitHubRunnerByServerId(server.id)) continue;
     // The control-plane host is a reserved failure domain. Explicit placement
     // above may still opt into it, but automatic scheduling never does.
     if (server.id === panelServerId) continue;

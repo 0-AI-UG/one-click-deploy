@@ -75,8 +75,10 @@ ocd release my-app \
 
 ```text
 ocd deploy [manifest] [--set=KEY=VALUE] [--auth-password-env=KEY]
+    [--image=repository@sha256:digest] [--commit=sha]
     [--server=ID] [--app=EXISTING_APP] [--dry-run] [--config-only]
 ocd deploy stack [manifest] [--config-only]
+    [--image=MEMBER=repository@sha256:digest]... [--commit=sha]
 ocd release <app> --image <repository@sha256:digest>
     [--commit <sha>] [--idempotency-key <key>]
 ocd apps
@@ -107,6 +109,7 @@ ocd ops logs <id> [--tail N] [--since TIME|CURSOR] [--child NAME|ID]
 ocd servers
 ocd servers enrollment-key
 ocd servers connect --name=X --address=X --private-address=X --host-key='...'
+ocd runners <ls|install|remove|logs>
 ocd resources
 ocd volumes
 ocd ssh
@@ -122,6 +125,7 @@ ocd ssh
 - [CLI reference](docs/cli-reference.md)
 - [Environments and secrets](docs/environments-and-secrets.md)
 - [Infrastructure and server enrollment](docs/infrastructure-and-enrollment.md)
+- [GitHub Actions build runners](docs/github-actions-runners.md)
 - [Scaling, storage, and placement](docs/scaling-storage-and-placement.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Reference index](reference.md)

@@ -12,6 +12,7 @@ contains complete app configuration and the initial digest; CI uses
 - [CLI reference](docs/cli-reference.md)
 - [Environments and secrets](docs/environments-and-secrets.md)
 - [Infrastructure and server enrollment](docs/infrastructure-and-enrollment.md)
+- [GitHub Actions build runners](docs/github-actions-runners.md)
 - [Scaling, storage, and placement](docs/scaling-storage-and-placement.md)
 - [Networking and ingress](docs/networking-and-ingress.md)
 - [Stack manifest](docs/stack-manifest.md)

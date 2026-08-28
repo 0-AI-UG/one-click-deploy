@@ -10,10 +10,12 @@ ocd deploy [manifest]
     [--dry-run]
     [--config-only]
     [--app=EXISTING_APP]
+    [--image=repository@sha256:digest] [--commit=sha]
     [--allow-unknown]
 ocd deploy stack [manifest]
     [--only=web,worker] [--with-dependents]
     [--changed | --all] [--config-only]
+    [--image=MEMBER=repository@sha256:digest]... [--commit=sha]
 ocd release <app> --image <repository@sha256:digest>
     [--commit <sha>] [--idempotency-key <key>]
 ```
@@ -95,11 +97,18 @@ ocd servers connect --name=X --address=X --private-address=X --host-key='...'
 ocd servers delete <name|id>
 ocd servers pool <name|id> <pool>
 ocd servers metrics [name|id] [--since=N]
+ocd runners ls
+ocd runners install --server=<name|id> --scope=https://github.com/OWNER
+    [--name=X] [--token-env=GITHUB_RUNNER_TOKEN]
+ocd runners remove <name|id> [--token-env=GITHUB_RUNNER_REMOVE_TOKEN]
+ocd runners logs <name|id> [--tail=N]
 ```
 
 `create` requires optional Hetzner provider configuration. `connect` enrolls
 an operator-owned stateless Docker host with a verified Ed25519 host key.
 `delete` destroys a managed provider VPS but only disconnects an external host.
+`runners install` reserves an empty server for trusted GitHub Actions builds;
+registration and removal tokens are read from environment variables, not argv.
 
 ## Other surfaces
 

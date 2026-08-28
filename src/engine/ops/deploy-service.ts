@@ -173,7 +173,8 @@ const pickOrProvisionServer: Step<DeployServiceInput, ServerOut> = {
     const panelServerId = db.getPanel()?.server_id;
     const pool = req.placement_pool || "general";
     const existingReady = db.getServers().find((s) =>
-      s.status === "ready" && s.id !== panelServerId && s.pool === pool && isManagedHetznerServer(s)
+      s.status === "ready" && s.id !== panelServerId && s.pool === pool &&
+      !db.getGitHubRunnerByServerId(s.id) && isManagedHetznerServer(s)
     );
     if (existingReady) {
       return {

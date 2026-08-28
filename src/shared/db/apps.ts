@@ -452,6 +452,11 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
     clearServerGcRequest(serverId);
     return;
   }
+  const { getGitHubRunnerByServerId } = await import("./github-runners.ts");
+  if (getGitHubRunnerByServerId(serverId)) {
+    clearServerGcRequest(serverId);
+    return;
+  }
   const sleepingRow = db.query("SELECT COUNT(*) as c FROM apps WHERE sleeping_server_id = ?").get(serverId) as { c: number } | null;
   const sleepingCount = sleepingRow?.c ?? 0;
   if (sleepingCount > 0) {

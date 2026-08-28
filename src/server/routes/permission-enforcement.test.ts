@@ -151,6 +151,12 @@ import {
 } from "./scaling.ts";
 import { handleDeleteServer, handleSetServerPool, handleGetServers } from "./servers.ts";
 import {
+  handleGetGitHubRunners,
+  handleInstallGitHubRunner,
+  handleRemoveGitHubRunner,
+  handleGetGitHubRunnerLogs,
+} from "./github-runners.ts";
+import {
   handleGetResources,
   handleDeleteResource,
   handleListVolumeFiles,
@@ -736,6 +742,53 @@ const CASES: Case[] = [
         }),
         serverS,
       ),
+  },
+  {
+    name: "runners: handleGetGitHubRunners",
+    permission: "fleet.view",
+    call: (c) => handleGetGitHubRunners(req("/api/runners", { token: c.token })),
+  },
+  {
+    name: "runners: handleInstallGitHubRunner",
+    permission: "servers.manage",
+    call: (c) => {
+      const suffix = uid();
+      const server = db.insertServer({
+        name: `runner-${suffix}`,
+        provider_id: `runner-${suffix}`,
+        ipv4: "203.0.113.90",
+        ipv6: "",
+        type: "cx32",
+        location: "fsn1",
+        status: "ready",
+      });
+      return handleInstallGitHubRunner(req("/api/runners", {
+        body: {
+          server_id: server.id,
+          scope_url: "https://github.com/0-AI-UG",
+          registration_token: "Registration_Token_123456789012345",
+          name: `ocd-${suffix}`.slice(0, 63).replace(/-+$/, ""),
+        },
+        token: c.token,
+      }));
+    },
+  },
+  {
+    name: "runners: handleRemoveGitHubRunner",
+    permission: "servers.manage",
+    call: (c) => handleRemoveGitHubRunner(
+      req("/api/runners/999999", {
+        method: "DELETE",
+        body: { removal_token: "Removal_Token_123456789012345678" },
+        token: c.token,
+      }),
+      999999,
+    ),
+  },
+  {
+    name: "runners: handleGetGitHubRunnerLogs",
+    permission: "terminal.host",
+    call: (c) => handleGetGitHubRunnerLogs(req("/api/runners/999999/logs", { token: c.token }), 999999),
   },
   {
     name: "resources: handleCreateServer",

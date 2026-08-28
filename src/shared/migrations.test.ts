@@ -167,6 +167,16 @@ describe("runMigrations", () => {
     expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='webhook_candidates'").get()).toBeNull();
   });
 
+  test("migration 106 tracks one dedicated GitHub runner per server without token columns", () => {
+    const db = freshDb();
+    runMigrations(db);
+    const columns = (db.query("PRAGMA table_info(github_runners)").all() as any[]).map((column) => column.name);
+    expect(columns).toContain("server_id");
+    expect(columns).toContain("scope_url");
+    expect(columns).toContain("previous_pool");
+    expect(columns.some((column) => column.includes("token"))).toBe(false);
+  });
+
   test("skips already applied migrations", () => {
     const db = freshDb();
     runMigrationsWithImageCutover(db);

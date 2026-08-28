@@ -66,3 +66,10 @@ to configure Hetzner or connect an existing host.
 DNS stays operator-owned regardless of infrastructure provider. Configure an
 optional default domain suffix, then create the A/AAAA records OCD displays at
 the DNS provider of your choice.
+
+## Dedicated build capacity
+
+An empty managed or connected server can be reserved as a GitHub Actions
+runner. OCD excludes it from app and managed-service placement and prevents
+deletion until the runner is deregistered. See [GitHub Actions build
+runners](github-actions-runners.md) for the trust boundary and commands.

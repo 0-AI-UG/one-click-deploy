@@ -30,6 +30,12 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
     if (!db.getServer(serverId)) {
       return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
     }
+    if (db.getGitHubRunnerByServerId(serverId)) {
+      return Response.json(
+        { error: "Remove the GitHub Actions runner before deleting its server" },
+        { status: 409, headers: corsHeaders },
+      );
+    }
     await enforceConfirmation(request, payload, "delete_server", "server", String(serverId));
     const apps = db.getApps(serverId);
     const services = db.getServicesOnServer(serverId);
@@ -67,6 +73,13 @@ export async function handleSetServerPool(request: Request, serverId: number): P
       return Response.json(
         { ok: false, error: "pool must be a lowercase slug (letters, digits, hyphens; e.g. general or staging)" },
         { status: 400, headers: corsHeaders },
+      );
+    }
+    const runner = db.getGitHubRunnerByServerId(serverId);
+    if (runner && pool !== "build-runners") {
+      return Response.json(
+        { ok: false, error: `Server hosts GitHub runner ${runner.name}; remove it before changing the dedicated pool` },
+        { status: 409, headers: corsHeaders },
       );
     }
 
