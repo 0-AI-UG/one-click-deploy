@@ -46,7 +46,9 @@ export type ServiceDefinition = {
    * Linux capabilities to add back after the platform's `--cap-drop=ALL`.
    * Needed by official images whose entrypoint runs as root then drops to a
    * service user (postgres/mysql/mongo/redis): `["CHOWN","SETUID","SETGID"]`
-   * lets it chown its data dir and gosu/su-exec down. Omit for images that
+   * lets it chown its data dir and gosu/su-exec down. Images that normalize
+   * an existing service-owned directory before dropping privileges may also
+   * need `DAC_OVERRIDE` and `FOWNER`. Omit for images that
    * already run as a fixed non-root USER — those just need a writable volume
    * root, which the host-side chown handles.
    */

@@ -45,7 +45,7 @@
     { "key": "POSTGRES_EXTENSIONS", "label": "Extensions (comma-separated)" }
   ],
   "volumePath": "/var/lib/postgresql/data",
-  "extraCaps": ["CHOWN", "SETUID", "SETGID"],
+  "extraCaps": ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER"],
   "healthCmd": "pg_isready",
   "postStartCmd": "set -f; old_ifs=$IFS; IFS=,; for extension in $POSTGRES_EXTENSIONS; do extension=$(printf \"%s\" \"$extension\" | tr -d \"[:space:]\"); [ -z \"$extension\" ] && continue; case \"$extension\" in *[!A-Za-z0-9_-]*) echo \"Invalid extension name: $extension\"; exit 1 ;; esac; psql -v ON_ERROR_STOP=1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -c \"CREATE EXTENSION IF NOT EXISTS \\\"$extension\\\"\" || exit 1; done; IFS=$old_ifs; set +f",
   "defaultVolumeSize": 10,

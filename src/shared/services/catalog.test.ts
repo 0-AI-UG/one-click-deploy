@@ -14,13 +14,25 @@ describe("service catalog extraCaps", () => {
   // fail to cold-start on a fresh (root-owned) volume.
   const ROOT_THEN_DROP = ["postgresql", "mysql", "mariadb", "mongodb", "redis", "rabbitmq", "clickhouse"];
 
-  for (const type of ROOT_THEN_DROP) {
+  for (const type of ROOT_THEN_DROP.filter((type) => type !== "postgresql")) {
     test(`${type} grants CHOWN/SETUID/SETGID`, () => {
       const def = getCatalogEntry(type);
       expect(def, `catalog entry "${type}" missing`).toBeTruthy();
       expect(def!.extraCaps).toEqual(["CHOWN", "SETUID", "SETGID"]);
     });
   }
+
+  test("postgresql can normalize an existing postgres-owned PGDATA directory", () => {
+    const def = getCatalogEntry("postgresql");
+    expect(def).toBeTruthy();
+    expect(def!.extraCaps).toEqual([
+      "CHOWN",
+      "SETUID",
+      "SETGID",
+      "DAC_OVERRIDE",
+      "FOWNER",
+    ]);
+  });
 
   test("extraCaps, when present, is a subset of the allowed capability set", () => {
     // Guard against a typo silently widening the hardening surface.
