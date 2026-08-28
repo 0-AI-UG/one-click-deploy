@@ -39,6 +39,11 @@ describe("GitHub Actions runner installer", () => {
     expect(script).toContain("sha256sum -c -");
     expect(script).toContain("--labels ocd-builder");
     expect(script).toContain("ocd-github-runner.service");
+    const hookMatch = script.match(/printf '%s' '([^']+)' \| base64 -d > \/opt\/ocd-actions-runner\/ocd-post-job\.sh/);
+    expect(hookMatch).not.toBeNull();
+    const hook = Buffer.from(hookMatch![1], "base64").toString("utf8");
+    expect(hook).toContain("docker image prune -af");
+    expect(hook).toContain("docker builder prune -af --keep-storage 12GB");
     expect(script).not.toContain("/releases/latest");
     expect(script).not.toContain("set -x");
   });

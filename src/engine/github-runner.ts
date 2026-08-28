@@ -52,7 +52,7 @@ function runnerUnit(): string {
 }
 
 function postJobHook(): string {
-  return `#!/usr/bin/env bash\nset -u\nexec 9>/var/lock/ocd-github-runner-gc.lock\nflock -n 9 || exit 0\ndocker builder prune -af --filter until=24h >/dev/null 2>&1 || true\ndocker image prune -af --filter until=24h >/dev/null 2>&1 || true\n`;
+  return `#!/usr/bin/env bash\nset -u\nexec 9>/var/lock/ocd-github-runner-gc.lock\nflock -n 9 || exit 0\n# Every release image is already in the registry; keep no redundant local copies.\ndocker image prune -af >/dev/null 2>&1 || true\n# Retain useful layers, but bound cache so a 40 GB runner cannot fill over time.\ndocker builder prune -af --keep-storage 12GB >/dev/null 2>&1 || true\n`;
 }
 
 /** Build a checksum-pinned, non-interactive installer for GitHub's official runner. */

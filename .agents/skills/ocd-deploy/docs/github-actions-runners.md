@@ -143,9 +143,9 @@ checks, resources, or other manifest settings. `ocd release` is deliberately
 image-only: use it only when the stored configuration is already correct and
 the artifact is the sole desired change.
 
-OCD runs a post-job Docker prune for build cache and images older than 24
-hours. Monitor free disk with `ocd runners ls`; size the VPS for the largest
-concurrent build rather than only for the resulting image.
+OCD removes pushed local images after each job and caps retained BuildKit cache
+at 12 GB. Monitor free disk with `ocd runners ls`; size the VPS for the largest
+single build rather than only for the resulting image.
 
 ## Remove
 
