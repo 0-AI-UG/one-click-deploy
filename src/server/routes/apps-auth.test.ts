@@ -184,12 +184,14 @@ describe("external artifact release endpoint", () => {
     const operation = getOperation(body.op_id)!;
     const input = JSON.parse(operation.input_json) as {
       candidate: { volume_id: string; volume_size: number; volume_path: string };
+      allowUnchangedLegacyVolumeIntent: boolean;
     };
     expect(input.candidate).toMatchObject({
       volume_id: "legacy-volume-42",
       volume_size: -1,
       volume_path: "/data",
     });
+    expect(input.allowUnchangedLegacyVolumeIntent).toBe(true);
   });
 
   test("rejects tags and malformed replay keys before enqueue", async () => {

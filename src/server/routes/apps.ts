@@ -279,7 +279,13 @@ export async function handleReleaseApp(request: Request, appId: number): Promise
     const { opId } = enqueue(withOwningStackKeys({
       kind: "redeploy",
       resourceKeys: [`app:${app.id}`],
-      input: { appId: app.id, userId: payload.userId, gitCommit: commit, candidate },
+      input: {
+        appId: app.id,
+        userId: payload.userId,
+        gitCommit: commit,
+        candidate,
+        allowUnchangedLegacyVolumeIntent: app.desired_volume_size < 0,
+      },
       trigger: "release",
       triggeredBy: payload.userId,
       idempotencyKey: requestedKey ? `release:${app.id}:${requestedKey}` : undefined,

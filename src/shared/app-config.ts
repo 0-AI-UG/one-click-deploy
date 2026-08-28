@@ -398,12 +398,23 @@ async function applyEnvironment(app: AppRow, req: DeployRequest): Promise<void> 
 export async function applyAppConfig(
   appId: number,
   req: DeployRequest,
-  opts: { userId?: string; log?: (line: string) => void } = {},
+  opts: {
+    userId?: string;
+    log?: (line: string) => void;
+    allowUnchangedLegacyVolumeIntent?: boolean;
+  } = {},
 ): Promise<AppConfigChange[]> {
   const app = db.getApp(appId);
   if (!app) throw new Error("App not found");
   const effective = mergeDeployRequestWithExistingApp(app, req);
-  const effectiveValidation = validateDeployRequest(effective);
+  const preservesLegacyVolumeIntent = opts.allowUnchangedLegacyVolumeIntent === true &&
+    app.desired_volume_size < 0 &&
+    effective.volume_size === app.desired_volume_size &&
+    effective.volume_id === app.desired_volume_id &&
+    effective.volume_path === app.desired_volume_path;
+  const effectiveValidation = validateDeployRequest(preservesLegacyVolumeIntent
+    ? { ...effective, volume_id: "", volume_size: 0 }
+    : effective);
   if (!effectiveValidation.valid) throw new Error(effectiveValidation.error);
   if (effective.app_name !== app.name) throw new Error(`Manifest targets "${effective.app_name}", but app #${appId} is "${app.name}"`);
   const desired = normalizedSpec(effective);

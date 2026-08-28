@@ -37,6 +37,8 @@ type RedeployInput = {
   /** Optional source provenance supplied by external CI. Never used to fetch source. */
   gitCommit?: string;
   candidate?: DeployRequest;
+  /** Release-only bridge for an unchanged migration-97 volume sentinel. */
+  allowUnchangedLegacyVolumeIntent?: boolean;
 };
 
 type WakeOut = { woke: boolean };
@@ -385,6 +387,7 @@ const commitCandidateConfig: Step<RedeployInput, { committed: boolean; configRev
     await applyAppConfig(before.id, ctx.input.candidate, {
       userId: ctx.input.userId,
       log: (line) => ctx.log(`[config] ${line}`),
+      allowUnchangedLegacyVolumeIntent: ctx.input.allowUnchangedLegacyVolumeIntent,
     });
     const after = db.getApp(before.id);
     if (!after) throw new Error("App disappeared while committing candidate configuration");

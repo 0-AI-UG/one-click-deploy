@@ -177,6 +177,31 @@ describe("desired app configuration", () => {
     expect(updated.volume_mount).toBe("/mnt/vol-old:/old");
   });
 
+  test("only a release-authorized apply can preserve an unchanged legacy volume sentinel", async () => {
+    const { app } = seedApp();
+    db.updateAppDesiredVolume(app.id, {
+      volumeId: "legacy-volume-42",
+      sizeGb: -1,
+      mountPath: "/data",
+    });
+    const req = {
+      app_name: app.name,
+      image_ref: `ghcr.io/acme/app@sha256:${"c".repeat(64)}`,
+      container_port: 3000,
+      volume_id: "legacy-volume-42",
+      volume_size: -1,
+      volume_path: "/data",
+    };
+
+    await expect(applyAppConfig(app.id, req)).rejects.toThrow("Volume size must be 0 or a positive integer");
+    await applyAppConfig(app.id, req, { allowUnchangedLegacyVolumeIntent: true });
+    const updated = db.getApp(app.id)!;
+    expect(updated.image_ref).toBe(req.image_ref);
+    expect(updated.desired_volume_id).toBe("legacy-volume-42");
+    expect(updated.desired_volume_size).toBe(-1);
+    expect(updated.desired_volume_path).toBe("/data");
+  });
+
   test("editing a linked environment advances the desired-config revision", () => {
     const { app, env } = seedApp();
     const before = db.getApp(app.id)!.config_revision;
