@@ -190,12 +190,12 @@ provider error. Inspect it with `ocd volumes audit`.
 ## Secret safety
 
 - Store environment secrets encrypted; do not commit them.
-- Keep registry and CI tokens out of logs.
-- Store `OCD_TOKEN` as a protected CI secret and scope it to the apps the job
-  releases.
-- Store the private-registry pull password/token only in panel Settings. OCD
-  sends that credential only to the host selected by the configured OCI
-  repository; review the host before saving it.
+- Keep Git checkout and registry tokens out of logs.
+- Store the read-only source token and OCI push/pull token only in panel
+  Settings. OCD sends the OCI credential only to the host selected by the
+  configured repository; review the host before saving it.
+- Treat build workers as trusted production infrastructure because repository
+  Dockerfiles execute there.
 - Prefer container-side access to connection URLs.
 - Prefer `--secret-file`, `--secret-stdin`, `--from-env`, or `--from-dotenv` so
   secret values do not appear in process arguments or shell history.

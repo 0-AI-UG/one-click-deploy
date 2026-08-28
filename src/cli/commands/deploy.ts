@@ -7,6 +7,7 @@ import {
   promptRequired,
   resolveAuthPassword,
   manifestHash,
+  localGitCommit,
 } from "../manifest.ts";
 import { mergeEnv } from "../../shared/env-merge.ts";
 import { withWebConfirmation } from "../confirm.ts";
@@ -104,8 +105,8 @@ export async function deploy(args: string[]): Promise<void> {
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
 
-Deploys the exact immutable OCI image declared by a local .ocd-deploy.json manifest.
-OCD never clones source or builds images.
+Builds the current Git commit on an OCD build worker, pushes it to the
+configured OCI repository, then deploys the registry-resolved digest.
 
 Env vars from the manifest's env[] section are included automatically:
 defaults are sent as-is, --set overrides or adds values, and required
@@ -129,8 +130,8 @@ ${BOLD}Options:${RESET}
   --app=<name>               Apply to an explicit existing app while retaining
                              its stored environment and stack association.
   --set=KEY=VALUE            Set an env var (repeatable)
-  --image=<digest-ref>       Override image.ref in memory so CI can apply the
-                             committed config with its newly built exact digest
+  --image=<digest-ref>       Advanced escape hatch: deploy an already-built
+                             exact digest instead of running the OCD build
   --commit=<sha>             Record the source revision as deployment provenance
   --dry-run                  Show the desired-configuration diff without applying or deploying
   --config-only              Apply config; runtime changes reuse the current image
@@ -144,12 +145,14 @@ ${BOLD}Options:${RESET}
 
   const location = manifestRepoLocation(manifestPath);
   const manifest = readManifest(location.fullPath, { allowUnknown });
-  const imageRef = imageOverride ?? manifest.image.ref;
-  console.log(`${DIM}Image:${RESET}    ${imageRef}${imageOverride ? " (CI override)" : ""}`);
+  const sourceCommit = commit ?? localGitCommit(location.fullPath);
+  const imageRef = imageOverride;
+  console.log(`${DIM}Build:${RESET}    ${manifest.build.repository}#${sourceCommit.slice(0, 12)}`);
+  console.log(`${DIM}Image:${RESET}    ${imageRef ?? manifest.build.image}${imageOverride ? " (exact override)" : ""}`);
   console.log(`${DIM}Manifest:${RESET} ${location.path} ${BOLD}(${manifest.name})${RESET}`);
 
   const name = appName || manifest.suggested_app_name ||
-    imageRef.split("/").pop()!.split("@")[0];
+    manifest.build.image.split("/").pop()!;
   const port = manifest.container_port ?? 3000;
   const authPassword = await resolveAuthPassword(manifest.auth, authPasswordEnv);
   const environment = typeof manifest.environment === "string"
@@ -170,7 +173,8 @@ ${BOLD}Options:${RESET}
     container_port: port,
     domain: manifest.domain,
     image_ref: imageRef,
-    git_commit: commit,
+    build: manifest.build,
+    git_commit: sourceCommit,
     env_projection: manifest.env_projection ?? null,
     environment_id: environment?.id ??
       (manifest.environment === null ? null : undefined),

@@ -11,6 +11,7 @@ const PLAIN_SETTING_KEYS = new Set([
   "default_location",
   "oci_artifact_ref",
   "oci_registry_username",
+  "github_build_username",
 ]);
 
 export async function handleGetSettings(request: Request): Promise<Response> {
@@ -20,6 +21,7 @@ export async function handleGetSettings(request: Request): Promise<Response> {
     const providerToken = await secretStore.getProviderToken();
     const githubOauthClientSecret = await secretStore.get("github_oauth_client_secret");
     const registryPassword = await secretStore.get("oci_registry_password");
+    const githubBuildToken = await secretStore.get("github_build_token");
     return Response.json(
       {
         hetzner_api_token: maskToken(providerToken),
@@ -32,6 +34,8 @@ export async function handleGetSettings(request: Request): Promise<Response> {
         oci_artifact_ref: s.oci_artifact_ref ?? "",
         oci_registry_username: s.oci_registry_username ?? "",
         oci_registry_password: maskToken(registryPassword ?? ""),
+        github_build_username: s.github_build_username ?? "x-access-token",
+        github_build_token: maskToken(githubBuildToken ?? ""),
         require_2fa: (s.require_2fa ?? "1") === "1",
       },
       { headers: corsHeaders },
@@ -73,6 +77,12 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
           { status: 400, headers: corsHeaders },
         );
       }
+      if (key === "github_build_username" && value && !/^[^\s]{1,100}$/.test(value)) {
+        return Response.json(
+          { error: "github_build_username must be a single non-whitespace token" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       if (key === "hetzner_api_token") {
         if (value.includes("...") || value === "****") continue;
         if (value) {
@@ -102,7 +112,7 @@ export async function handleSaveSettings(request: Request): Promise<Response> {
         } else {
           await secretStore.delete(key);
         }
-      } else if (key === "oci_registry_password") {
+      } else if (key === "oci_registry_password" || key === "github_build_token") {
         if (value.includes("...") || value === "****") continue;
         if (value) await secretStore.set(key, value);
         else await secretStore.delete(key);

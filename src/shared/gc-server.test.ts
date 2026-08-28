@@ -130,12 +130,11 @@ describe("gcServerIfEmpty", () => {
     expect(db.getServer(server.id)?.gc_requested_at).toBeNull();
   });
 
-  test("does NOT request GC for a dedicated GitHub build runner", async () => {
+  test("does NOT request GC for a dedicated OCD build worker", async () => {
     const server = freshServer("withrunner");
-    db.insertGitHubRunner({
+    db.insertBuildWorker({
       serverId: server.id,
       name: `runner-${Date.now()}`,
-      scopeUrl: "https://github.com/acme",
       previousPool: "general",
     });
     await db.gcServerIfEmpty(server.id);

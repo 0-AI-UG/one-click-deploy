@@ -5,7 +5,7 @@ import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import { getServersWithApps } from "../../engine/deploy/index.ts";
 import { getContainerLogs } from "../../shared/remote/index.ts";
-import { validateDeployRequest } from "../../shared/validate.ts";
+import { validateDeployRequest, validateBuildDeployRequest } from "../../shared/validate.ts";
 import { syncAppIngress, getPanelIngressIpv4 } from "../../engine/scale/traefik-manager.ts";
 import { enqueue } from "../ipc/enqueue.ts";
 import { enqueueOp } from "./_ops.ts";
@@ -317,8 +317,53 @@ export async function handleDeploy(request: Request): Promise<Response> {
     }
 
     const existing = db.getAppByName(req.app_name);
+    if (req.build && !req.image_ref && req.deploy !== false) {
+      const buildRequest = manifestSpec(req);
+      const validation = validateBuildDeployRequest(buildRequest);
+      if (!validation.valid) {
+        return Response.json({ ok: false, error: validation.error }, { status: 400, headers: corsHeaders });
+      }
+      if (req.dry_run) {
+        const build = buildRequest.build!;
+        const changes = existing
+          ? diffAppConfig(existing, { ...buildRequest, image_ref: existing.image_ref })
+          : [];
+        return Response.json({
+          ok: true,
+          dry_run: true,
+          would_create: !existing,
+          changes,
+          build: {
+            repository: build.repository,
+            commit: buildRequest.git_commit,
+            image: build.image,
+          },
+        }, { headers: corsHeaders });
+      }
+      if (!existing && !buildRequest.server_id) {
+        await approveAutomaticServerProvisioning(
+          request,
+          payload,
+          `building and deploying app ${buildRequest.app_name}`,
+          [buildRequest.placement_pool || "general"],
+        );
+        buildRequest.server_provisioning_approved = true;
+      }
+      const { opId } = enqueue({
+        kind: "build_app_delivery",
+        resourceKeys: [`build:${buildRequest.build!.repository}#${buildRequest.build!.branch || "main"}`, `app-delivery:${req.app_name}`],
+        input: { spec: buildRequest, userId: payload.userId },
+        trigger: "cli",
+        triggeredBy: payload.userId,
+      });
+      return Response.json({ ok: true, op_id: opId, changes: [] }, { status: 202, headers: corsHeaders });
+    }
     if (existing) {
       const spec = manifestSpec(req);
+      if (req.deploy === false && spec.build && !spec.image_ref) {
+        spec.image_ref = existing.image_ref;
+        spec.build = undefined;
+      }
       return applyExistingAppConfig(
         existing,
         spec,

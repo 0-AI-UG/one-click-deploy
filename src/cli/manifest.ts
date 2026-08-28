@@ -41,12 +41,41 @@ export async function promptRequired(
   return out;
 }
 
-/** Resolve a local manifest without requiring a Git checkout. */
-export function manifestRepoLocation(path: string): { path: string; dir: string; fullPath: string } {
+function repositoryRoot(path: string): string {
+  const result = Bun.spawnSync(["git", "-C", dirname(resolve(path)), "rev-parse", "--show-toplevel"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const root = result.stdout.toString().trim();
+  if (result.exitCode !== 0 || !root) {
+    throw new Error("OCD build manifests must be inside a Git checkout");
+  }
+  return root;
+}
+
+/** Resolve a local manifest relative to the repository checkout root. */
+export function manifestRepoLocation(path: string): { path: string; dir: string; fullPath: string; repoRoot: string } {
   const fullPath = resolve(path);
-  const repoPath = relative(process.cwd(), fullPath).replaceAll("\\", "/");
-  const dir = relative(process.cwd(), dirname(fullPath)).replaceAll("\\", "/");
-  return { path: repoPath, dir: dir === "." ? "" : dir, fullPath };
+  const repoRoot = repositoryRoot(fullPath);
+  const repoPath = relative(repoRoot, fullPath).replaceAll("\\", "/");
+  const dir = relative(repoRoot, dirname(fullPath)).replaceAll("\\", "/");
+  if (repoPath.startsWith("../")) throw new Error("Manifest is outside its Git checkout");
+  return { path: repoPath, dir: dir === "." ? "" : dir, fullPath, repoRoot };
+}
+
+/** Resolve the exact local checkout revision used for an OCD build request. */
+export function localGitCommit(path = process.cwd()): string {
+  const root = repositoryRoot(path);
+  const result = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+    cwd: root,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const commit = result.stdout.toString().trim();
+  if (result.exitCode !== 0 || !/^[0-9a-f]{40,64}$/i.test(commit)) {
+    throw new Error("OCD builds require a Git checkout; could not resolve the current commit");
+  }
+  return commit;
 }
 
 /** Read + JSON.parse a `.ocd-deploy.json` manifest, exiting on error. */

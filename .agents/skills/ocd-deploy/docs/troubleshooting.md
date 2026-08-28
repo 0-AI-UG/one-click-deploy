@@ -46,15 +46,14 @@ ocd envs list
 Correct the manifest `environment`, then rerun deploy. Staging is an explicit
 app with its own manifest and environment.
 
-## Release cannot pull an image
+## Build or release cannot publish/pull an image
 
-Confirm the CI passed a complete `repository@sha256:<digest>` reference, the
-digest exists, and fleet hosts can authenticate to and reach the registry.
-For a private image, verify panel **Settings → Defaults → OCI repository** has
-the correct repository host, username, and pull password/token. Credentials
-are deliberately withheld when the image host differs. Tags are rejected.
-Inspect the failed deployment and operation logs before releasing a newly
-published digest.
+For a build, confirm the exact commit is pushed, the Git checkout token can
+read the repository, Dockerfile/context paths are repository-relative, and the
+OCI token can push. For an artifact-only release, confirm the complete
+`repository@sha256:<digest>` exists. Fleet hosts must authenticate to and reach
+the registry. Credentials are deliberately withheld when the image host differs
+from Admin Settings. Inspect operation logs before retrying.
 
 ## Stuck operation
 

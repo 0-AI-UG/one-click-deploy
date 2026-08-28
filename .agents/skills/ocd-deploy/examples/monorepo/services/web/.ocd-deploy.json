@@ -2,14 +2,19 @@
   "$schema": 1,
   "name": "Web Frontend",
   "description": "Web frontend using the stack-injected API_URL",
-  "image": {
-    "ref": "ghcr.io/example/blog-web@sha256:3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012"
+  "build": {
+    "repository": "https://github.com/example/blog.git",
+    "branch": "main",
+    "dockerfile": "services/web/Dockerfile",
+    "context": ".",
+    "image": "ghcr.io/example/blog-web",
+    "webhook": true
   },
   "container_port": 80,
   "env": [
     { "key": "NODE_ENV", "default": "production" }
   ],
   "volume": null,
-  "suggested_app_name": "myapp-web",
+  "suggested_app_name": "blog-web",
   "compress": true
 }

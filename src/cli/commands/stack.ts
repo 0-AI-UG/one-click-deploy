@@ -10,6 +10,7 @@ import {
   promptRequired,
   resolveAuthPassword,
   manifestHash,
+  localGitCommit,
 } from "../manifest.ts";
 import {
   mergeEnv,
@@ -401,12 +402,12 @@ export async function stackUp(args: string[]): Promise<void> {
   const configOnly = parsed.flags["config-only"] === true;
   const allowUnknown = parsed.flags["allow-unknown"] === true;
   const rawImageOverrides = (parsed.flags.image as string[] | undefined) ?? [];
-  const commit = parsed.flags.commit as string | undefined;
+  const stackLocation = manifestRepoLocation(manifestPath);
+  const commit = (parsed.flags.commit as string | undefined) ?? localGitCommit(stackLocation.fullPath);
   if (commit !== undefined && !/^[a-f0-9]{7,64}$/i.test(commit)) {
     throw new Error("--commit must contain 7-64 hexadecimal characters");
   }
 
-  const stackLocation = manifestRepoLocation(manifestPath);
   const manifestFullPath = stackLocation.fullPath;
   const manifest = readStackManifest(manifestFullPath, { allowUnknown });
   const baseDir = dirname(manifestFullPath);
@@ -472,7 +473,7 @@ export async function stackUp(args: string[]): Promise<void> {
     );
     const imageOverride = imageOverrides.get(key);
     if (imageOverride) appElement.image_ref = imageOverride;
-    if (commit && imageOverride) appElement.git_commit = commit;
+    appElement.git_commit = commit;
     const authPassword = await resolveAuthPassword(appManifest.auth);
     if (authPassword !== undefined) appElement.auth_password = authPassword;
     apps.push(appElement);
@@ -582,6 +583,15 @@ export async function stackUp(args: string[]): Promise<void> {
     last_manifest_hash?: string | null;
     [key: string]: unknown;
   }>>("/api/apps");
+  if (configOnly) {
+    for (const app of apps) {
+      const existing = existingApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
+      if (existing?.image_ref) {
+        app.image_ref = existing.image_ref;
+        app.build = undefined;
+      }
+    }
+  }
   const allKeys = new Set(Object.keys(manifest.apps));
   let selectedKeys = new Set(allKeys);
   const modes = new Map<string, "control" | "runtime" | "artifact">();
@@ -677,7 +687,7 @@ export async function stackUp(args: string[]): Promise<void> {
     return out;
   })();
   console.log(`\n${BOLD}Preflight plan${RESET}`);
-  console.log(`${DIM}Artifacts:${RESET} immutable image digests from member manifests`);
+  console.log(`${DIM}Artifacts:${RESET} BuildKit images from exact commit ${commit.slice(0, 12)}`);
   console.log(`${DIM}Selection:${RESET}     ${selectionReason}`);
   console.log(`${DIM}Order:${RESET}         ${levels.map((level) => level.join(" + ")).join(" → ") || "(no app rollout)"}`);
   table(
@@ -692,7 +702,7 @@ export async function stackUp(args: string[]): Promise<void> {
         selectedKeys.has(app.key) ? (existing ? app.reconcile_mode || "reconcile" : "create") : "retain",
         configDiff,
         app.manifest_path || "-",
-        app.image_ref || "-",
+        app.image_ref || app.build?.image || "-",
       ];
     }),
   );

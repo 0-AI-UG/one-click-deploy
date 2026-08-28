@@ -2,8 +2,13 @@
   "$schema": 1,
   "name": "Queue Worker",
   "description": "Background job worker that speaks no HTTP",
-  "image": {
-    "ref": "ghcr.io/example/worker@sha256:123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0"
+  "build": {
+    "repository": "https://github.com/example/worker.git",
+    "branch": "main",
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "image": "ghcr.io/example/worker",
+    "webhook": true
   },
   "env": [
     { "key": "REDIS_URL", "description": "Redis connection string", "required": true, "secret": true },

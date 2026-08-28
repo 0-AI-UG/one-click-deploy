@@ -623,3 +623,43 @@ export function validateDeployRequest(req: {
 
   return { valid: true, value: undefined };
 }
+
+const BUILD_REPOSITORY = /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._/-]+(?:\.git)?$/;
+const BUILD_IMAGE = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+$/i;
+
+/** Validate a request before its source is built. Runtime deploy operations
+ * still receive and validate only the resulting immutable image_ref. */
+export function validateBuildDeployRequest(req: Parameters<typeof validateDeployRequest>[0] & {
+  build?: {
+    repository: string;
+    branch?: string;
+    dockerfile: string;
+    context: string;
+    image: string;
+    webhook?: boolean;
+  };
+}): ValidationResult<void> {
+  const build = req.build;
+  if (!build) return { valid: false, error: "Build configuration is required" };
+  if (!BUILD_REPOSITORY.test(build.repository)) {
+    return { valid: false, error: "Build repository must be an HTTPS Git URL" };
+  }
+  if (!(build.branch || "main").trim() || /[\s~^:?*\\\[]/.test(build.branch || "main")) {
+    return { valid: false, error: "Build branch is invalid" };
+  }
+  for (const [label, value] of [["Dockerfile", build.dockerfile], ["Build context", build.context]] as const) {
+    if (!value || value.startsWith("/") || value.includes("\\") || value.split("/").includes("..")) {
+      return { valid: false, error: `${label} must be a safe repository-relative path` };
+    }
+  }
+  if (!BUILD_IMAGE.test(build.image) || build.image.includes("@") || /:[^/]+$/.test(build.image)) {
+    return { valid: false, error: "Build image must be an OCI repository without a tag or digest" };
+  }
+  if (!req.git_commit || !/^[0-9a-f]{40,64}$/i.test(req.git_commit)) {
+    return { valid: false, error: "OCD builds require an exact 40-64 character Git commit SHA" };
+  }
+  return validateDeployRequest({
+    ...req,
+    image_ref: `${build.image}@sha256:${"0".repeat(64)}`,
+  });
+}

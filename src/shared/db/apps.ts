@@ -16,6 +16,12 @@ export type AppRow = {
   name: string;
   domain: string;
   image_ref: string;
+  build_source_id: number | null;
+  build_repository: string;
+  build_branch: string;
+  build_dockerfile: string;
+  build_context: string;
+  build_image: string;
   container_port: number;
   env_vars: string;
   status: string;
@@ -256,6 +262,28 @@ export function getAppByDomain(domain: string): AppRow | null {
     .get(domain) as AppRow | null;
 }
 
+export function updateAppBuildConfig(id: number, input: {
+  sourceId: number;
+  repository: string;
+  branch: string;
+  dockerfile: string;
+  context: string;
+  image: string;
+}): void {
+  db.query(
+    `UPDATE apps SET build_source_id = ?, build_repository = ?, build_branch = ?,
+       build_dockerfile = ?, build_context = ?, build_image = ? WHERE id = ?`,
+  ).run(
+    input.sourceId,
+    input.repository,
+    input.branch,
+    input.dockerfile,
+    input.context,
+    input.image,
+    id,
+  );
+}
+
 export type AppIngressSettings = {
   sticky?: boolean;
   rate_limit_rps?: number;
@@ -452,8 +480,8 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
     clearServerGcRequest(serverId);
     return;
   }
-  const { getGitHubRunnerByServerId } = await import("./github-runners.ts");
-  if (getGitHubRunnerByServerId(serverId)) {
+  const { getBuildWorkerByServerId } = await import("./build-workers.ts");
+  if (getBuildWorkerByServerId(serverId)) {
     clearServerGcRequest(serverId);
     return;
   }

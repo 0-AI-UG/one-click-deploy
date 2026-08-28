@@ -1,45 +1,27 @@
 # Deploy and Config
 
-## Apply the manifest
+## Build and apply the manifest
 
-Run from the directory containing `.ocd-deploy.json`, or pass a path:
+Run from the repository containing `.ocd-deploy.json`, or pass its path:
 
 ```bash
 ocd deploy
-ocd deploy path/to/app.json
+ocd deploy path/to/app/.ocd-deploy.json
 ```
 
-CI can replace only the manifest's pinned image in memory while applying the
-rest of the committed desired state:
+OCD resolves the repository root and exact local `HEAD`. The manifest declares
+the source/build contract; an OCD worker clones that commit, pushes the built
+image, captures its immutable digest, and applies the complete desired state.
+The commit must already be reachable from the declared remote repository.
+
+For a stack:
 
 ```bash
-ocd deploy .ocd-deploy.json \
-  --image="ghcr.io/example/app@sha256:$DIGEST" \
-  --commit="$GITHUB_SHA"
+ocd deploy stack ocd-stack.json
 ```
 
-For a stack, pass one override per freshly built member:
-
-```bash
-ocd deploy stack ocd-stack.json \
-  --image=api="$API_IMAGE_REF" \
-  --image=worker="$WORKER_IMAGE_REF" \
-  --commit="$GITHUB_SHA"
-```
-
-Overrides never edit the manifest file. They prevent a committed bootstrap
-digest from rolling production backward while configuration and environment
-projections are reconciled from that same checkout.
-
-The manifest must contain an externally published immutable `image.ref`. OCD:
-
-1. reads and validates the complete local manifest;
-2. resolves the named environment and protected secret inputs;
-3. sends the exact image digest and complete desired configuration;
-4. pulls that digest and starts a candidate;
-5. commits the configuration revision only after readiness succeeds.
-
-OCD does not need a source repository and never builds an image.
+All selected app members must use the same repository, branch, and exact commit
+for one stack build. OCD builds them together and rolls out dependency levels.
 
 ## Preview changes
 
@@ -47,8 +29,7 @@ OCD does not need a source repository and never builds an image.
 ocd deploy --dry-run
 ```
 
-Dry-run compares the local manifest with stored desired state. It does not
-apply configuration or start a rollout.
+Dry-run compares desired configuration without building or starting a rollout.
 
 ## Retain the current deployed image
 
@@ -56,10 +37,18 @@ apply configuration or start a rollout.
 ocd deploy --config-only
 ```
 
-Config-only requires an existing app. It applies complete configuration while
-retaining the currently deployed immutable image. Control-plane changes may
-apply in place; container-injected changes recreate containers from that same
-digest.
+Config-only applies complete configuration to an existing app while retaining
+its current immutable image. Use it only when source bytes do not need a build.
+
+## Advanced exact-image override
+
+```bash
+ocd deploy --image=ghcr.io/example/api@sha256:<64-hex-digest> --commit=<sha>
+```
+
+This bypasses the build worker but still applies the manifest. `ocd release`
+is narrower: it updates only the image and does not read any manifest. Prefer a
+normal build deploy or webhook whenever configuration might have changed.
 
 ## Allowed deploy flags
 
@@ -76,7 +65,5 @@ digest.
 ```
 
 `--set` and `--auth-password-env` supply values that must not be committed.
-`--server` is a one-deploy placement override. Persistent settings belong in
-the manifest. Prefer `ocd deploy --image` in CI when the same commit may change
-configuration. Use `ocd release` only for an image-only change after stored
-configuration is already synchronized.
+`--server` is a one-deploy placement override; persistent intent belongs in the
+manifest.

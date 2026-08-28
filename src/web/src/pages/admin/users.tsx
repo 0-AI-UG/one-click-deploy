@@ -52,10 +52,16 @@ type RunnerServer = {
   apps?: Array<{ id: number; name: string }>;
 };
 
-type GitHubRunner = {
-  id: number; name: string; scope_url: string; labels: string; status: string;
-  runner_version: string; architecture: string; last_error: string;
+type BuildWorker = {
+  id: number; name: string; status: string;
+  worker_version: string; architecture: string; last_error: string;
   disk_free_bytes?: number; server: RunnerServer | null;
+};
+
+type BuildSource = {
+  id: number; repository: string; branch: string; webhook_url: string;
+  webhook_enabled: number; webhook_secret_configured: boolean;
+  last_commit: string; last_status: string; last_error: string;
 };
 
 export function UsersPage() {
@@ -74,6 +80,7 @@ export function UsersPage() {
     github_oauth_client_id: "", github_oauth_client_secret: "",
     default_domain_suffix: "", default_server_type: "", default_location: "",
     oci_artifact_ref: "", oci_registry_username: "", oci_registry_password: "",
+    github_build_username: "x-access-token", github_build_token: "",
   });
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -86,14 +93,15 @@ export function UsersPage() {
   const [panelBusy, setPanelBusy] = useState(false);
   const [panelImage, setPanelImage] = useState("");
 
-  // --- GitHub Actions build runners ---
-  const [runners, setRunners] = useState<GitHubRunner[]>([]);
+  // --- OCD BuildKit workers and repository webhooks ---
+  const [runners, setRunners] = useState<BuildWorker[]>([]);
+  const [buildSources, setBuildSources] = useState<BuildSource[]>([]);
   const [runnerServers, setRunnerServers] = useState<RunnerServer[]>([]);
   const [runnerBusy, setRunnerBusy] = useState(false);
   const [runnerForm, setRunnerForm] = useState({
-    server_id: "", scope_url: "", name: "", registration_token: "",
+    server_id: "", name: "", removal_token: "",
   });
-  const [runnerRemovalToken, setRunnerRemovalToken] = useState("");
+  const [shownWebhook, setShownWebhook] = useState<{ url: string; secret: string } | null>(null);
   const availableRunnerServers = runnerServers.filter((server) =>
     server.status === "ready" &&
     !server.apps?.length &&
@@ -103,6 +111,7 @@ export function UsersPage() {
 
   const refreshRunners = () => Promise.all([
     get("/api/runners").then((data) => setRunners(data || [])),
+    get("/api/build-sources").then((data) => setBuildSources(data || [])),
     get("/api/servers").then((data) => {
       const servers = (data || []) as RunnerServer[];
       setRunnerServers(servers);
@@ -152,6 +161,8 @@ export function UsersPage() {
           oci_artifact_ref: s.oci_artifact_ref ?? "",
           oci_registry_username: s.oci_registry_username ?? "",
           oci_registry_password: s.oci_registry_password ?? "",
+          github_build_username: s.github_build_username ?? "x-access-token",
+          github_build_token: s.github_build_token ?? "",
         });
       })
       .catch(() => {})
@@ -258,8 +269,8 @@ export function UsersPage() {
   };
 
   const installRunner = async () => {
-    if (!runnerForm.server_id || !runnerForm.scope_url || !runnerForm.registration_token) {
-      return showToast("Server, GitHub scope and registration token are required", "error");
+    if (!runnerForm.server_id) {
+      return showToast("Select a dedicated server", "error");
     }
     setRunnerBusy(true);
     try {
@@ -268,8 +279,8 @@ export function UsersPage() {
         server_id: Number(runnerForm.server_id),
         name: runnerForm.name || undefined,
       });
-      setRunnerForm((current) => ({ ...current, registration_token: "" }));
-      showToast(`Runner installation queued as operation #${result.op_id}`, "success");
+      setRunnerForm((current) => ({ ...current, removal_token: "" }));
+      showToast(`Build-worker installation queued as operation #${result.op_id}`, "success");
       await refreshRunners();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -278,19 +289,28 @@ export function UsersPage() {
     }
   };
 
-  const removeRunner = async (runner: GitHubRunner) => {
-    if (!runnerRemovalToken) return showToast("Paste a fresh GitHub removal token first", "error");
-    if (!await confirm("Remove Build Runner", `Deregister ${runner.name} and release ${runner.server?.name || "its server"} back to its previous capacity pool?`, true)) return;
+  const removeRunner = async (runner: BuildWorker) => {
+    if (!await confirm("Remove Build Worker", `Remove ${runner.name} and release ${runner.server?.name || "its server"} back to its previous capacity pool?`, true)) return;
     setRunnerBusy(true);
     try {
-      const result = await del(`/api/runners/${runner.id}`, { removal_token: runnerRemovalToken });
-      setRunnerRemovalToken("");
-      showToast(`Runner removal queued as operation #${result.op_id}`, "success");
+      const result = await del(`/api/runners/${runner.id}`);
+      showToast(`Build-worker removal queued as operation #${result.op_id}`, "success");
       await refreshRunners();
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
       setRunnerBusy(false);
+    }
+  };
+
+  const rotateWebhook = async (source: BuildSource) => {
+    if (!await confirm("Rotate Webhook Secret", `Rotate the GitHub webhook secret for ${source.repository}#${source.branch}? The previous secret stops working immediately.`, true)) return;
+    try {
+      const result = await post(`/api/build-sources/${source.id}/webhook-secret`, {});
+      setShownWebhook({ url: result.webhook_url, secret: result.secret });
+      await refreshRunners();
+    } catch (err: any) {
+      showToast(err.message, "error");
     }
   };
 
@@ -347,6 +367,12 @@ export function UsersPage() {
           <Field label="OCI registry password/token">
             <input type="password" value={settingsForm.oci_registry_password} onChange={setS("oci_registry_password")} placeholder="Registry password or token" />
           </Field>
+          <Field label="Git checkout username" align="start" hint="For GitHub tokens use x-access-token. Public repositories need no source token.">
+            <input type="text" value={settingsForm.github_build_username} onChange={setS("github_build_username")} placeholder="x-access-token" />
+          </Field>
+          <Field label="Git checkout token" align="start" hint="Read-only source credential used by OCD build workers. It is separate from the OCI push credential.">
+            <input type="password" value={settingsForm.github_build_token} onChange={setS("github_build_token")} placeholder="Not configured" />
+          </Field>
         </div>
 
         <div className="pt-2">
@@ -354,27 +380,27 @@ export function UsersPage() {
         </div>
       </Card>
 
-      {/* GitHub Actions runners */}
+      {/* OCD BuildKit workers */}
       <Card className="p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-2">
-            <Hammer size={12} /> GitHub Actions build runners
+            <Hammer size={12} /> OCD build workers
           </h3>
           <Btn size="xs" onClick={refreshRunners}><RefreshCw size={11} /> Refresh</Btn>
         </div>
         <p className="font-mono text-[10px] text-muted">
-          OCD installs GitHub's official runner on an empty dedicated server. GitHub checks out and builds; OCD still deploys only immutable registry images.
+          OCD checks out the exact webhook commit on a dedicated worker, builds and pushes with BuildKit, then reconciles the committed manifest using the immutable digest.
         </p>
 
         {runners.length > 0 && (
-          <Table headers={["Runner", "Server", "Scope", "Status", "Version", ""]}>
+          <Table headers={["Worker", "Server", "Status", "Version", "Disk", ""]}>
             {runners.map((runner) => (
               <tr key={runner.id}>
-                <td className="py-2 px-3 font-mono text-[10px]">{runner.name}<div className="text-muted">{runner.labels}</div></td>
+                <td className="py-2 px-3 font-mono text-[10px]">{runner.name}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.server?.name || "Missing"}</td>
-                <td className="py-2 px-3 font-mono text-[10px] break-all">{runner.scope_url.replace("https://github.com/", "")}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.status}{runner.last_error && <div className="text-red-600 max-w-xs break-words">{runner.last_error}</div>}</td>
-                <td className="py-2 px-3 font-mono text-[10px]">{runner.runner_version || "—"}<div className="text-muted">{runner.architecture || "—"}</div></td>
+                <td className="py-2 px-3 font-mono text-[10px]">{runner.worker_version || "—"}<div className="text-muted">{runner.architecture || "—"}</div></td>
+                <td className="py-2 px-3 font-mono text-[10px]">{runner.disk_free_bytes ? `${(runner.disk_free_bytes / 1024 ** 3).toFixed(1)} GB` : "—"}</td>
                 <td className="py-2 px-3"><Btn size="xs" variant="danger" disabled={runnerBusy} onClick={() => removeRunner(runner)}><Trash2 size={11} /></Btn></td>
               </tr>
             ))}
@@ -388,25 +414,34 @@ export function UsersPage() {
               {availableRunnerServers.map((server) => <option key={server.id} value={server.id}>{server.name} ({server.pool || "general"})</option>)}
             </select>
           </Field>
-          <Field label="GitHub scope URL" align="start" hint="Organization or one repository.">
-            <input value={runnerForm.scope_url} onChange={(event) => setRunnerForm((current) => ({ ...current, scope_url: event.target.value }))} placeholder="https://github.com/OWNER" />
-          </Field>
-          <Field label="Runner name" align="start" hint="Optional; defaults to ocd-<server>.">
+          <Field label="Worker name" align="start" hint="Optional; defaults to ocd-<server>.">
             <input value={runnerForm.name} onChange={(event) => setRunnerForm((current) => ({ ...current, name: event.target.value }))} placeholder="ocd-build-1" />
           </Field>
-          <Field label="One-hour registration token" align="start" hint="GitHub Settings → Actions → Runners → New self-hosted runner. It is never retained after installation.">
-            <input type="password" value={runnerForm.registration_token} onChange={(event) => setRunnerForm((current) => ({ ...current, registration_token: event.target.value }))} placeholder="Registration token" />
+          <Field label="Legacy runner removal token" align="start" hint="Only needed once when converting an existing GitHub Actions runner. New workers leave this empty.">
+            <input type="password" value={runnerForm.removal_token} onChange={(event) => setRunnerForm((current) => ({ ...current, removal_token: event.target.value }))} placeholder="Optional conversion token" />
           </Field>
         </div>
-        <Btn variant="primary" loading={runnerBusy} onClick={installRunner}><Hammer size={13} /> Install runner</Btn>
+        <Btn variant="primary" loading={runnerBusy} onClick={installRunner}><Hammer size={13} /> Install build worker</Btn>
 
-        <div className="border-2 border-fg/20 p-3 space-y-2">
-          <div className="font-mono text-[9px] font-bold uppercase">Workflow selector</div>
-          <code className="font-mono text-[10px] select-all">runs-on: [self-hosted, ocd-builder]</code>
-          <Field label="Removal token" align="start" hint="Only needed when removing a runner; obtain it from GitHub runner settings.">
-            <input type="password" value={runnerRemovalToken} onChange={(event) => setRunnerRemovalToken(event.target.value)} placeholder="Fresh removal token" />
-          </Field>
-        </div>
+        {buildSources.length > 0 && <>
+          <Divider />
+          <div className="font-mono text-[9px] font-bold uppercase">Repository webhooks</div>
+          <Table headers={["Source", "Branch", "Status", "Webhook", ""]}>
+            {buildSources.map((source) => <tr key={source.id}>
+              <td className="py-2 px-3 font-mono text-[10px] break-all">{source.repository}</td>
+              <td className="py-2 px-3 font-mono text-[10px]">{source.branch}</td>
+              <td className="py-2 px-3 font-mono text-[10px]">{source.last_status || "idle"}{source.last_error && <div className="text-red-600 max-w-xs break-words">{source.last_error}</div>}</td>
+              <td className="py-2 px-3 font-mono text-[10px]">{source.webhook_secret_configured ? "ready" : "missing"}</td>
+              <td className="py-2 px-3"><Btn size="xs" onClick={() => rotateWebhook(source)}><Key size={11} /> Rotate</Btn></td>
+            </tr>)}
+          </Table>
+        </>}
+        {shownWebhook && <div className="border-2 border-fg p-3 space-y-2">
+          <div className="font-mono text-[9px] font-bold uppercase">Webhook secret — shown once</div>
+          <div className="font-mono text-[10px] break-all"><strong>URL:</strong> {shownWebhook.url}</div>
+          <div className="font-mono text-[10px] break-all"><strong>Secret:</strong> {shownWebhook.secret}</div>
+          <div className="font-mono text-[9px] text-muted">GitHub webhook content type: application/json; event: push only.</div>
+        </div>}
       </Card>
 
       {/* Panel */}

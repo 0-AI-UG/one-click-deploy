@@ -30,9 +30,9 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
     if (!db.getServer(serverId)) {
       return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
     }
-    if (db.getGitHubRunnerByServerId(serverId)) {
+    if (db.getBuildWorkerByServerId(serverId)) {
       return Response.json(
-        { error: "Remove the GitHub Actions runner before deleting its server" },
+        { error: "Remove the OCD build worker before deleting its server" },
         { status: 409, headers: corsHeaders },
       );
     }
@@ -75,10 +75,10 @@ export async function handleSetServerPool(request: Request, serverId: number): P
         { status: 400, headers: corsHeaders },
       );
     }
-    const runner = db.getGitHubRunnerByServerId(serverId);
-    if (runner && pool !== "build-runners") {
+    const runner = db.getBuildWorkerByServerId(serverId);
+    if (runner && pool !== "build-workers") {
       return Response.json(
-        { ok: false, error: `Server hosts GitHub runner ${runner.name}; remove it before changing the dedicated pool` },
+        { ok: false, error: `Server hosts OCD build worker ${runner.name}; remove it before changing the dedicated pool` },
         { status: 409, headers: corsHeaders },
       );
     }

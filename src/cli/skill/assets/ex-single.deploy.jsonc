@@ -2,8 +2,13 @@
   "$schema": 1,
   "name": "My App",
   "description": "A Node.js web application",
-  "image": {
-    "ref": "ghcr.io/example/my-app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  "build": {
+    "repository": "https://github.com/example/my-app.git",
+    "branch": "main",
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "image": "ghcr.io/example/my-app",
+    "webhook": true
   },
   "container_port": 3000,
   "env": [

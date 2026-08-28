@@ -7,7 +7,7 @@ import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 
 const IMMUTABLE_IMAGE = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
 
-/** Pull and run one externally-built immutable OCI artifact. */
+/** Pull one immutable OCI runtime artifact. */
 export async function pullImmutableImageAndRun(
   ip: string,
   opts: {

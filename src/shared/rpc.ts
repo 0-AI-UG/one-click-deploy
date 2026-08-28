@@ -102,6 +102,16 @@ export type DeployRequest = {
   /** Complete manifest reconciliation. Browser/API patches are not supported. */
   apply_mode?: "manifest";
   app_name: string;
+  /** OCD-owned BuildKit delivery. API routes replace this with an exact
+   * image_ref before entering the runtime deploy/redeploy operations. */
+  build?: {
+    repository: string;
+    branch?: string;
+    dockerfile: string;
+    context: string;
+    image: string;
+    webhook?: boolean;
+  };
   domain?: string;
   container_port: number;
   env_vars?: Record<string, string> | Array<{ key: string; value: string; secret?: boolean }>;
@@ -248,7 +258,7 @@ export type StackDeployRequest = {
                     env_overrides?: Record<string, string>; domain?: string;
                     staging?: { volume_size?: number; env_overrides?: Record<string, string>; domain?: string };
                     needs?: string[] }>;
-  /** Stack members with externally-built immutable artifacts. */
+  /** Stack members resolved to immutable artifacts before runtime deployment. */
   apps: Array<Omit<DeployRequest, "environment_id"> & {
     key: string;
     needs?: string[];

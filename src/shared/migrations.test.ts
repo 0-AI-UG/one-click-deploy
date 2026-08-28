@@ -167,14 +167,23 @@ describe("runMigrations", () => {
     expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='webhook_candidates'").get()).toBeNull();
   });
 
-  test("migration 106 tracks one dedicated GitHub runner per server without token columns", () => {
+  test("migration 107 converts dedicated GitHub runners into OCD build workers", () => {
     const db = freshDb();
     runMigrations(db);
-    const columns = (db.query("PRAGMA table_info(github_runners)").all() as any[]).map((column) => column.name);
+    const columns = (db.query("PRAGMA table_info(build_workers)").all() as any[]).map((column) => column.name);
     expect(columns).toContain("server_id");
-    expect(columns).toContain("scope_url");
+    expect(columns).toContain("worker_version");
     expect(columns).toContain("previous_pool");
+    expect(columns).not.toContain("scope_url");
     expect(columns.some((column) => column.includes("token"))).toBe(false);
+    expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='github_runners'").get()).toBeNull();
+
+    const sourceColumns = (db.query("PRAGMA table_info(build_sources)").all() as any[]).map(
+      (column) => column.name,
+    );
+    expect(sourceColumns).toContain("repository");
+    expect(sourceColumns).toContain("webhook_enabled");
+    expect(sourceColumns).toContain("worker_id");
   });
 
   test("skips already applied migrations", () => {

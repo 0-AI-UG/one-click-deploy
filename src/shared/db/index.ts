@@ -19,15 +19,21 @@ export {
   getRecentServerMetrics,
   pruneOldServerMetrics,
 } from "./servers.ts";
-export type { GitHubRunnerRow } from "./github-runners.ts";
+export type { BuildWorkerRow, BuildSourceRow } from "./build-workers.ts";
 export {
-  getGitHubRunners,
-  getGitHubRunner,
-  getGitHubRunnerByServerId,
-  insertGitHubRunner,
-  updateGitHubRunner,
-  deleteGitHubRunner,
-} from "./github-runners.ts";
+  getBuildWorkers,
+  getBuildWorker,
+  getBuildWorkerByServerId,
+  insertBuildWorker,
+  updateBuildWorker,
+  deleteBuildWorker,
+  getBuildSource,
+  getBuildSourceByRepository,
+  getBuildSources,
+  upsertBuildSource,
+  updateBuildSourceDelivery,
+  appsForBuildSource,
+} from "./build-workers.ts";
 export type { AppRow, AppIngressSettings, PublicProtocol, InternalProtocol } from "./apps.ts";
 export {
   getApps,
@@ -59,6 +65,7 @@ export {
   updateAppImageRef,
   recordAppManifestApplied,
   updateAppStackManifestPath,
+  updateAppBuildConfig,
   normalizeAppConfigRevision,
   updateAppDomain,
   updateAppVolume,

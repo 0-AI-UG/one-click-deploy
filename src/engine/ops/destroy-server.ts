@@ -18,8 +18,8 @@ const preflight: Step<DestroyServerInput, { ok: true }> = {
     }
     const server = db.getServer(ctx.input.serverId);
     if (!server) throw new Error("Server not found");
-    if (db.getGitHubRunnerByServerId(ctx.input.serverId)) {
-      throw new Error("Remove the GitHub Actions runner before deleting its server");
+    if (db.getBuildWorkerByServerId(ctx.input.serverId)) {
+      throw new Error("Remove the OCD build worker before deleting its server");
     }
     return { ok: true };
   },

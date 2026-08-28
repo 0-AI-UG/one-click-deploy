@@ -47,7 +47,7 @@ export function buildStackAppSpec(
     apply_mode: "manifest",
     key,
     app_name: key, // server derives <stack>-<key>; sent only to satisfy the type
-    image_ref: manifest.image.ref,
+    build: manifest.build,
     container_port: manifest.container_port ?? 3000,
     declared_env_keys: [...new Set((manifest.env ?? []).map((entry) => entry.key))],
   };

@@ -85,6 +85,23 @@ export async function handleDeployStack(request: Request): Promise<Response> {
       await approveAutomaticServerProvisioning(request, payload, `deploying stack ${req.name}`, pools);
       req.server_provisioning_approved = true;
     }
+    const selectedBuildApps = selectedApps.filter((app) => !!app.build && !app.image_ref);
+    if (!req.config_only && selectedBuildApps.length > 0) {
+      if (selectedBuildApps.length !== selectedApps.length) {
+        return Response.json(
+          { error: "Selected stack members must use one delivery mode; OCD build manifests cannot be mixed with image overrides" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
+      const { opId } = enqueue({
+        kind: "build_stack_delivery",
+        resourceKeys: [`build-stack:${req.name}`],
+        input: { spec: req, userId: payload.userId },
+        trigger: "cli",
+        triggeredBy: payload.userId,
+      });
+      return Response.json({ op_id: opId }, { status: 202, headers: corsHeaders });
+    }
     const { opId } = enqueue({
       kind: "deploy_stack",
       resourceKeys: stack ? stackLockKeys(stack) : [`stack:${req.name}`],

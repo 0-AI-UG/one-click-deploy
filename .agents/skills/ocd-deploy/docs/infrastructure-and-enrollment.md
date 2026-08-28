@@ -69,7 +69,7 @@ the DNS provider of your choice.
 
 ## Dedicated build capacity
 
-An empty managed or connected server can be reserved as a GitHub Actions
-runner. OCD excludes it from app and managed-service placement and prevents
-deletion until the runner is deregistered. See [GitHub Actions build
-runners](github-actions-runners.md) for the trust boundary and commands.
+An empty managed or connected server can be reserved as an OCD BuildKit
+worker. OCD excludes it from app and managed-service placement and prevents
+deletion until the worker is removed. See [Build workers and
+webhooks](build-workers-and-webhooks.md) for the trust boundary and commands.

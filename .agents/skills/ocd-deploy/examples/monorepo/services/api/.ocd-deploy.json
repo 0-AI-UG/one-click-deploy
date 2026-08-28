@@ -2,8 +2,13 @@
   "$schema": 1,
   "name": "API Server",
   "description": "REST API backend using stack-injected service URLs",
-  "image": {
-    "ref": "ghcr.io/example/blog-api@sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01"
+  "build": {
+    "repository": "https://github.com/example/blog.git",
+    "branch": "main",
+    "dockerfile": "services/api/Dockerfile",
+    "context": ".",
+    "image": "ghcr.io/example/blog-api",
+    "webhook": true
   },
   "container_port": 8080,
   "env": [
@@ -12,5 +17,5 @@
   ],
   "volume": null,
   "health_check": { "path": "/health" },
-  "suggested_app_name": "myapp-api"
+  "suggested_app_name": "blog-api"
 }

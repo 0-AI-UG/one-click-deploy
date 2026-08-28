@@ -69,7 +69,7 @@ app names only after validation; see
 
 `ocd deploy stack` submits complete desired membership:
 
-- new members are created from their child digest manifests;
+- selected members are built from the exact repository commit;
 - existing member configuration is reconciled;
 - omitted recorded members are destroyed;
 - dependency ordering and shared ingress are reconciled;
@@ -78,8 +78,9 @@ app names only after validation; see
 - managed volumes are detached and retained, never silently destroyed.
 
 Review the diff before removing or renaming a key; a rename is remove-plus-
-create. Use `ocd release <fully-qualified-app-name> --image <digest>` for later
-CI image delivery to an individual member.
+create. Repository push webhooks normally build and reconcile the complete
+stack. Use `ocd release <fully-qualified-app-name> --image <digest>` only for
+an intentional artifact-only rollout after configuration is synchronized.
 
 ## Example
 

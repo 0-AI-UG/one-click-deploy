@@ -75,8 +75,12 @@ beforeEach(() => {
   // Wipe everything that pickTargetServer reads to keep cases isolated.
   db.deletePanel();
   conn.run("DELETE FROM replicas");
+  conn.run("DELETE FROM service_instances");
+  conn.run("DELETE FROM port_reservations");
   conn.run("DELETE FROM server_metrics_samples");
-  conn.run("DELETE FROM github_runners");
+  conn.run("UPDATE apps SET build_source_id = NULL");
+  conn.run("DELETE FROM build_sources");
+  conn.run("DELETE FROM build_workers");
   conn.run("DELETE FROM servers");
   conn.run("DELETE FROM apps");
   provisionServer.mockClear();
@@ -171,19 +175,18 @@ describe("pickTargetServer", () => {
     expect(picked.id).toBe(worker.id);
   });
 
-  test("build runners are excluded from explicit and automatic app placement", async () => {
+  test("build workers are excluded from explicit and automatic app placement", async () => {
     const runnerServer = makeServer("runner");
-    db.insertGitHubRunner({
+    db.insertBuildWorker({
       serverId: runnerServer.id,
       name: "ocd-runner-1",
-      scopeUrl: "https://github.com/0-AI-UG",
       previousPool: "general",
     });
-    db.updateServerPool(runnerServer.id, "build-runners");
+    db.updateServerPool(runnerServer.id, "build-workers");
     const worker = makeServer("app-worker");
     const app = makeApp("runner-isolation");
 
-    await expect(pickTargetServer(app, {}, noopEmit, runnerServer.id)).rejects.toThrow(/reserved for GitHub Actions builds/);
+    await expect(pickTargetServer(app, {}, noopEmit, runnerServer.id)).rejects.toThrow(/reserved for OCD builds/);
     const picked = await pickTargetServer(app, {}, noopEmit);
     expect(picked.id).toBe(worker.id);
   });

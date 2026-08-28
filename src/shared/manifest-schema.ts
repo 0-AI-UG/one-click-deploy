@@ -100,12 +100,29 @@ function nonEmptyString(phrase: string) {
 
 // --- deploy manifest --------------------------------------------------------
 
-const imageSchema = z.object({
-  ref: z.string({ error: "expected immutable OCI image reference" }).refine(
-    (value) => /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(value),
-    { error: (iss) => `expected image@sha256:<64 hex digest>, got ${got(iss.input)}` },
+const buildSchema = z.object({
+  /** HTTPS Git repository cloned by OCD on a dedicated build worker. */
+  repository: z.string({ error: "expected HTTPS Git repository URL" }).refine(
+    (value) => /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._/-]+(?:\.git)?$/.test(value),
+    { error: (iss) => `expected HTTPS Git repository URL, got ${got(iss.input)}` },
   ),
-}, { error: "expected object { ref }" }).strict();
+  branch: nonEmptyString("expected a non-empty branch name").optional(),
+  dockerfile: nonEmptyString("expected a repository-relative Dockerfile path"),
+  context: nonEmptyString("expected a repository-relative build context"),
+  /** Mutable push repository. OCD resolves the pushed tag to a digest before deploy. */
+  image: z.string({ error: "expected OCI repository" }).refine(
+    (value) => /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+$/i.test(value),
+    { error: (iss) => `expected OCI repository without a tag or digest, got ${got(iss.input)}` },
+  ),
+  /** Signed GitHub pushes trigger an OCD build and full manifest reconcile. */
+  webhook: z.boolean({ error: "expected boolean" }).optional(),
+}, { error: "expected object { repository, dockerfile, context, image, webhook? }" }).strict().superRefine((value, ctx) => {
+  for (const [key, path] of [["dockerfile", value.dockerfile], ["context", value.context]] as const) {
+    if (path.startsWith("/") || path.split("/").includes("..") || path.includes("\\")) {
+      ctx.addIssue({ code: "custom", path: [key], message: "must be a safe repository-relative path" });
+    }
+  }
+});
 
 /** One declared env var. `key` must be a valid env-var name. */
 const envEntrySchema = z.object(
@@ -269,8 +286,8 @@ export const DeployManifestSchema = z
     name: nonEmptyString("expected a non-empty string"),
     description: z.string({ error: "expected string" }).optional(),
     icon: z.string({ error: "expected string" }).optional(),
-    /** The exact externally-built artifact. Tags and source builds are unsupported. */
-    image: imageSchema,
+    /** OCD-owned source checkout and BuildKit delivery contract. */
+    build: buildSchema,
     container_port: guardedNumber(
       "expected integer 1-65535",
       (v) => Number.isInteger(v) && v >= 1 && v <= 65535,

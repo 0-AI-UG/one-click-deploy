@@ -3,17 +3,26 @@ import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, colorStatus, table } from "../format.ts";
 
 type Server = { id: number; name: string; ipv4: string; status?: string };
-type Runner = {
+type Worker = {
   id: number;
   name: string;
-  scope_url: string;
-  labels: string;
-  runner_version: string;
+  worker_version: string;
   architecture: string;
   status: string;
   last_error: string;
   disk_free_bytes?: number;
   server: Server | null;
+};
+type Source = {
+  id: number;
+  repository: string;
+  branch: string;
+  webhook_enabled: number;
+  webhook_url: string;
+  webhook_secret_configured: boolean;
+  last_commit: string;
+  last_status: string;
+  last_error: string;
 };
 
 function valueFlag(args: string[], name: string): string | undefined {
@@ -37,80 +46,81 @@ async function resolveServer(ref: string): Promise<Server> {
   return server;
 }
 
-async function listRunners(): Promise<void> {
-  const runners = await get<Runner[]>("/api/runners");
+async function listWorkers(): Promise<void> {
+  const workers = await get<Worker[]>("/api/runners");
   table(
-    ["ID", "NAME", "SERVER", "SCOPE", "STATUS", "VERSION", "ARCH", "DISK FREE"],
-    runners.map((runner) => [
-      String(runner.id),
-      runner.name,
-      runner.server?.name || "missing",
-      runner.scope_url.replace("https://github.com/", ""),
-      colorStatus(runner.status),
-      runner.runner_version || "-",
-      runner.architecture || "-",
-      formatBytes(runner.disk_free_bytes),
+    ["ID", "NAME", "SERVER", "STATUS", "VERSION", "ARCH", "DISK FREE"],
+    workers.map((worker) => [
+      String(worker.id), worker.name, worker.server?.name || "missing",
+      colorStatus(worker.status), worker.worker_version || "-", worker.architecture || "-",
+      formatBytes(worker.disk_free_bytes),
     ]),
   );
-  if (runners.some((runner) => runner.last_error)) {
-    console.log(`\n${BOLD}Errors${RESET}`);
-    for (const runner of runners.filter((candidate) => candidate.last_error)) {
-      console.log(`${RED}${runner.name}:${RESET} ${runner.last_error}`);
-    }
+  for (const worker of workers.filter((candidate) => candidate.last_error)) {
+    console.log(`${RED}${worker.name}:${RESET} ${worker.last_error}`);
   }
 }
 
-async function installRunner(args: string[]): Promise<void> {
+async function installWorker(args: string[]): Promise<void> {
   const serverRef = valueFlag(args, "server");
-  const scopeUrl = valueFlag(args, "scope");
-  const tokenEnv = valueFlag(args, "token-env") || "GITHUB_RUNNER_TOKEN";
-  if (!serverRef || !scopeUrl) {
-    throw new Error("Usage: ocd runners install --server=<name|id> --scope=https://github.com/OWNER [--name=X] [--token-env=GITHUB_RUNNER_TOKEN]");
-  }
-  const registrationToken = process.env[tokenEnv]?.trim();
-  if (!registrationToken) throw new Error(`Set ${tokenEnv} to the fresh one-hour registration token from GitHub runner settings`);
+  const tokenEnv = valueFlag(args, "removal-token-env") || "GITHUB_RUNNER_REMOVE_TOKEN";
+  if (!serverRef) throw new Error("Usage: ocd runners install --server=<name|id> [--name=X] [--removal-token-env=GITHUB_RUNNER_REMOVE_TOKEN]");
   const server = await resolveServer(serverRef);
-  const result = await post<{ op_id: number; workflow_runs_on: string[] }>("/api/runners", {
+  const result = await post<{ op_id: number }>("/api/runners", {
     server_id: server.id,
-    scope_url: scopeUrl,
-    registration_token: registrationToken,
     name: valueFlag(args, "name"),
+    removal_token: process.env[tokenEnv]?.trim() || undefined,
   });
   const operation = await followOp(result.op_id);
-  if (!operation.ok) throw new Error(operation.error || "Runner installation failed");
-  console.log(`${GREEN}GitHub Actions runner installed on ${server.name}.${RESET}`);
-  console.log(`Use this in build jobs: ${BOLD}runs-on: [${result.workflow_runs_on.join(", ")}]${RESET}`);
+  if (!operation.ok) throw new Error(operation.error || "Build-worker installation failed");
+  console.log(`${GREEN}OCD build worker installed on ${server.name}.${RESET}`);
+  console.log("Deploy a build manifest once, then configure the source shown by `ocd runners sources` as a GitHub push webhook.");
 }
 
-async function resolveRunner(ref: string): Promise<Runner> {
-  const runners = await get<Runner[]>("/api/runners");
-  const runner = /^\d+$/.test(ref)
-    ? runners.find((candidate) => candidate.id === Number(ref))
-    : runners.find((candidate) => candidate.name.toLowerCase() === ref.toLowerCase());
-  if (!runner) throw new Error(`GitHub runner not found: ${ref}`);
-  return runner;
+async function resolveWorker(ref: string): Promise<Worker> {
+  const workers = await get<Worker[]>("/api/runners");
+  const worker = /^\d+$/.test(ref)
+    ? workers.find((candidate) => candidate.id === Number(ref))
+    : workers.find((candidate) => candidate.name.toLowerCase() === ref.toLowerCase());
+  if (!worker) throw new Error(`Build worker not found: ${ref}`);
+  return worker;
 }
 
-async function removeRunner(args: string[]): Promise<void> {
+async function removeWorker(args: string[]): Promise<void> {
   const ref = args.find((arg) => !arg.startsWith("-"));
-  const tokenEnv = valueFlag(args, "token-env") || "GITHUB_RUNNER_REMOVE_TOKEN";
-  if (!ref) throw new Error("Usage: ocd runners remove <name|id> [--token-env=GITHUB_RUNNER_REMOVE_TOKEN]");
-  const removalToken = process.env[tokenEnv]?.trim();
-  if (!removalToken) throw new Error(`Set ${tokenEnv} to a fresh removal token from GitHub runner settings`);
-  const runner = await resolveRunner(ref);
-  const result = await del<{ op_id: number }>(`/api/runners/${runner.id}`, { removal_token: removalToken });
+  if (!ref) throw new Error("Usage: ocd runners remove <name|id>");
+  const worker = await resolveWorker(ref);
+  const result = await del<{ op_id: number }>(`/api/runners/${worker.id}`);
   const operation = await followOp(result.op_id);
-  if (!operation.ok) throw new Error(operation.error || "Runner removal failed");
-  console.log(`${GREEN}Runner ${runner.name} deregistered; its server was retained.${RESET}`);
+  if (!operation.ok) throw new Error(operation.error || "Build-worker removal failed");
+  console.log(`${GREEN}Build worker ${worker.name} removed; its server was retained.${RESET}`);
 }
 
-async function logs(args: string[]): Promise<void> {
+async function listSources(): Promise<void> {
+  const sources = await get<Source[]>("/api/build-sources");
+  table(
+    ["ID", "REPOSITORY", "BRANCH", "WEBHOOK", "LAST COMMIT", "STATUS"],
+    sources.map((source) => [
+      String(source.id), source.repository.replace(/^https:\/\/github\.com\//, ""), source.branch,
+      source.webhook_enabled ? (source.webhook_secret_configured ? "ready" : "secret missing") : "disabled",
+      source.last_commit ? source.last_commit.slice(0, 12) : "-", colorStatus(source.last_status || "idle"),
+    ]),
+  );
+  for (const source of sources) {
+    console.log(`\n${BOLD}${source.id}: ${source.repository}#${source.branch}${RESET}`);
+    console.log(`URL: ${source.webhook_url}`);
+    if (source.last_error) console.log(`${RED}Last error:${RESET} ${source.last_error}`);
+  }
+}
+
+async function webhookSecret(args: string[]): Promise<void> {
   const ref = args.find((arg) => !arg.startsWith("-"));
-  if (!ref) throw new Error("Usage: ocd runners logs <name|id> [--tail=N]");
-  const tail = Number(valueFlag(args, "tail") || 200);
-  const runner = await resolveRunner(ref);
-  const result = await get<{ logs: string }>(`/api/runners/${runner.id}/logs?tail=${Math.min(1000, Math.max(1, tail))}`);
-  process.stdout.write(result.logs.endsWith("\n") ? result.logs : `${result.logs}\n`);
+  if (!ref || !/^\d+$/.test(ref)) throw new Error("Usage: ocd runners webhook-secret <source-id>");
+  const result = await post<{ webhook_url: string; secret: string }>(`/api/build-sources/${Number(ref)}/webhook-secret`, {});
+  console.log(`${BOLD}Payload URL:${RESET} ${result.webhook_url}`);
+  console.log(`${BOLD}Content type:${RESET} application/json`);
+  console.log(`${BOLD}Secret (shown once):${RESET} ${result.secret}`);
+  console.log(`${DIM}Select only the GitHub push event. Rotating this value invalidates the previous secret immediately.${RESET}`);
 }
 
 function usage(): void {
@@ -118,20 +128,24 @@ function usage(): void {
 
 ${BOLD}Commands:${RESET}
   ls
-      List runner health and disk headroom.
+      List OCD BuildKit workers and disk headroom.
 
-  install --server=X --scope=https://github.com/OWNER
-      [--name=X] [--token-env=GITHUB_RUNNER_TOKEN]
-      Install GitHub's official runner on an empty dedicated server. The
-      short-lived token is encrypted only while the operation runs.
+  install --server=X [--name=X]
+      [--removal-token-env=GITHUB_RUNNER_REMOVE_TOKEN]
+      Reserve an empty server and install the OCD build worker. The one-time
+      removal token is needed only when converting an existing Actions runner.
 
-  remove <name|id> [--token-env=GITHUB_RUNNER_REMOVE_TOKEN]
-      Deregister the runner and restore the server's prior capacity pool.
+  remove <name|id>
+      Remove the worker and restore its server's previous capacity pool.
 
-  logs <name|id> [--tail=N]
-      Read the runner service journal (requires host-terminal permission).
+  sources
+      List repository/branch webhook sources created by manifest deploys.
 
-${DIM}Build jobs use: runs-on: [self-hosted, ocd-builder]${RESET}`);
+  webhook-secret <source-id>
+      Rotate and show a GitHub webhook URL and HMAC secret once.
+
+${DIM}The worker checks out the exact push SHA, uses BuildKit to push an immutable
+digest, then OCD reconciles the committed manifest or stack.${RESET}`);
 }
 
 export async function runners(args: string[] = []): Promise<void> {
@@ -139,11 +153,12 @@ export async function runners(args: string[] = []): Promise<void> {
   const rest = args.slice(1);
   switch (subcommand) {
     case "ls":
-    case "list": return listRunners();
-    case "install": return installRunner(rest);
+    case "list": return listWorkers();
+    case "install": return installWorker(rest);
     case "remove":
-    case "delete": return removeRunner(rest);
-    case "logs": return logs(rest);
+    case "delete": return removeWorker(rest);
+    case "sources": return listSources();
+    case "webhook-secret": return webhookSecret(rest);
     case "help":
     case "--help":
     case "-h": return usage();

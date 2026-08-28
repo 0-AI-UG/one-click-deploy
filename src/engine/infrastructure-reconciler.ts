@@ -21,7 +21,7 @@ function serverHasReferences(serverId: number): boolean {
   if (db.getReplicasByServer(serverId).length > 0) return true;
   if (db.getServiceInstancesByServer(serverId).length > 0) return true;
   if (db.getPanel()?.server_id === serverId) return true;
-  if (db.getGitHubRunnerByServerId(serverId)) return true;
+  if (db.getBuildWorkerByServerId(serverId)) return true;
   return db.getApps().some((app) => app.sleeping_server_id === serverId);
 }
 

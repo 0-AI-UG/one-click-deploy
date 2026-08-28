@@ -66,7 +66,7 @@ ${BOLD}Commands:${RESET}
   apps                   List all apps
   app <command>          Inspect and manage an existing app
   logs <app> [--tail=N]  View app logs
-  deploy [manifest]      Apply desired config and its immutable image
+  deploy [manifest]      Build the exact commit and reconcile desired config
   release <app> --image  Publish an externally-built image digest from CI
   deploy stack [manifest]  Deploy a multi-app stack
   manifest validate [path] Validate an app or stack manifest (including children)
@@ -87,7 +87,7 @@ ${BOLD}Commands:${RESET}
   ops <id> | logs <id>   Inspect an operation or stream its logs
   ops cancel|retry|finalize <id>  Recover a stuck operation
   servers                Inspect and manage servers
-  runners                Manage dedicated GitHub Actions build runners
+  runners                Manage OCD BuildKit workers and webhooks
   resources              Inventory and estimated cost
   volumes                Manage attached and retained volumes
   gc [--server X]        Preview safe disk garbage collection (--execute to apply)

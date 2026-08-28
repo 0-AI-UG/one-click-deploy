@@ -17,10 +17,10 @@ ocd manifest validate ocd-stack.json
 ocd deploy stack ocd-stack.json
 ```
 
-The CLI validates each child manifest, including its exact image digest,
-resolves environments and secret inputs, then follows the durable stack
-operation. The engine deploys managed services, injects dependency variables,
-and rolls out app members in dependency levels. It never builds app images.
+The CLI validates each child build manifest and resolves the exact local Git
+commit. An OCD worker builds and pushes all selected app members, then the
+engine deploys managed services, injects dependency variables, and rolls out
+the immutable app digests in dependency levels.
 
 Re-running a stack reconciles complete membership. Missing recorded members
 are destroyed, successful members are retained as checkpoints after failure,
@@ -28,8 +28,9 @@ and managed volumes are grow-only and retained on destroy. A renamed member is
 a remove-plus-create.
 
 Use `ocd deploy stack --config-only` to apply stack/member configuration while
-retaining currently deployed digests. Use `ocd release` per fully qualified
-app name for normal CI image delivery.
+retaining currently deployed digests. Normal delivery happens through the
+repository push webhook; use `ocd release` only for an intentional
+artifact-only change to one fully qualified app.
 
 ## Dependency wiring
 

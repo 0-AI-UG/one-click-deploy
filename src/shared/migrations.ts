@@ -2472,6 +2472,51 @@ export const migrations: Migration[] = [
       )`);
     },
   },
+  {
+    version: 107,
+    description: "Replace GitHub Actions runners with OCD build workers and repository webhook delivery",
+    disableForeignKeys: true,
+    up: (db) => {
+      db.run("ALTER TABLE github_runners RENAME TO build_workers");
+      for (const column of ["scope_url", "labels", "runner_version"]) {
+        db.run(`ALTER TABLE build_workers DROP COLUMN ${column}`);
+      }
+      db.run("ALTER TABLE build_workers ADD COLUMN worker_version TEXT NOT NULL DEFAULT ''");
+      db.run("UPDATE build_workers SET status = 'conversion_required', last_error = ''");
+      db.run("UPDATE servers SET pool = 'build-workers' WHERE id IN (SELECT server_id FROM build_workers)");
+
+      db.run(`CREATE TABLE build_sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repository TEXT NOT NULL,
+        branch TEXT NOT NULL DEFAULT 'main',
+        worker_id INTEGER NOT NULL REFERENCES build_workers(id) ON DELETE RESTRICT,
+        webhook_enabled INTEGER NOT NULL DEFAULT 1,
+        last_delivery_id TEXT NOT NULL DEFAULT '',
+        last_commit TEXT NOT NULL DEFAULT '',
+        last_status TEXT NOT NULL DEFAULT '',
+        last_error TEXT NOT NULL DEFAULT '',
+        last_received_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(repository, branch)
+      )`);
+
+      for (const statement of [
+        "ALTER TABLE apps ADD COLUMN build_source_id INTEGER REFERENCES build_sources(id) ON DELETE SET NULL",
+        "ALTER TABLE apps ADD COLUMN build_repository TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE apps ADD COLUMN build_branch TEXT NOT NULL DEFAULT 'main'",
+        "ALTER TABLE apps ADD COLUMN build_dockerfile TEXT NOT NULL DEFAULT 'Dockerfile'",
+        "ALTER TABLE apps ADD COLUMN build_context TEXT NOT NULL DEFAULT '.'",
+        "ALTER TABLE apps ADD COLUMN build_image TEXT NOT NULL DEFAULT ''",
+      ]) db.run(statement);
+
+      // Existing immutable refs provide a safe default push repository. Source
+      // checkout details are intentionally not guessed; the first v0.8
+      // manifest apply supplies them before a webhook can be enabled.
+      db.run(`UPDATE apps SET build_image = CASE
+        WHEN instr(image_ref, '@sha256:') > 1 THEN substr(image_ref, 1, instr(image_ref, '@sha256:') - 1)
+        ELSE '' END`);
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

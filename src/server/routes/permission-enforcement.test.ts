@@ -151,11 +151,10 @@ import {
 } from "./scaling.ts";
 import { handleDeleteServer, handleSetServerPool, handleGetServers } from "./servers.ts";
 import {
-  handleGetGitHubRunners,
-  handleInstallGitHubRunner,
-  handleRemoveGitHubRunner,
-  handleGetGitHubRunnerLogs,
-} from "./github-runners.ts";
+  handleGetBuildWorkers,
+  handleInstallBuildWorker,
+  handleRemoveBuildWorker,
+} from "./build-workers.ts";
 import {
   handleGetResources,
   handleDeleteResource,
@@ -744,12 +743,12 @@ const CASES: Case[] = [
       ),
   },
   {
-    name: "runners: handleGetGitHubRunners",
+    name: "runners: handleGetBuildWorkers",
     permission: "fleet.view",
-    call: (c) => handleGetGitHubRunners(req("/api/runners", { token: c.token })),
+    call: (c) => handleGetBuildWorkers(req("/api/runners", { token: c.token })),
   },
   {
-    name: "runners: handleInstallGitHubRunner",
+    name: "runners: handleInstallBuildWorker",
     permission: "servers.manage",
     call: (c) => {
       const suffix = uid();
@@ -762,11 +761,9 @@ const CASES: Case[] = [
         location: "fsn1",
         status: "ready",
       });
-      return handleInstallGitHubRunner(req("/api/runners", {
+      return handleInstallBuildWorker(req("/api/runners", {
         body: {
           server_id: server.id,
-          scope_url: "https://github.com/0-AI-UG",
-          registration_token: "Registration_Token_123456789012345",
           name: `ocd-${suffix}`.slice(0, 63).replace(/-+$/, ""),
         },
         token: c.token,
@@ -774,9 +771,9 @@ const CASES: Case[] = [
     },
   },
   {
-    name: "runners: handleRemoveGitHubRunner",
+    name: "runners: handleRemoveBuildWorker",
     permission: "servers.manage",
-    call: (c) => handleRemoveGitHubRunner(
+    call: (c) => handleRemoveBuildWorker(
       req("/api/runners/999999", {
         method: "DELETE",
         body: { removal_token: "Removal_Token_123456789012345678" },
@@ -784,11 +781,6 @@ const CASES: Case[] = [
       }),
       999999,
     ),
-  },
-  {
-    name: "runners: handleGetGitHubRunnerLogs",
-    permission: "terminal.host",
-    call: (c) => handleGetGitHubRunnerLogs(req("/api/runners/999999/logs", { token: c.token }), 999999),
   },
   {
     name: "resources: handleCreateServer",

@@ -47,10 +47,10 @@ describe("embedded OCD skill", () => {
     }
     expect(appManifest).toContain("`environment`");
     expect(appManifest).toContain("`autoscaling`");
-    expect(appManifest).toContain("`image.ref`");
+    expect(appManifest).toContain("`build`");
     expect(appManifest).toContain("`container_port`");
-    expect(appManifest).not.toContain("Dockerfile");
-    expect(appManifest).not.toContain("`build`");
+    expect(appManifest).toContain("Dockerfile");
+    expect(appManifest).not.toContain("`image.ref`");
 
     const documentedStackTokens = [
       ...stackManifest.matchAll(/`([^`]+)`/g),
@@ -71,13 +71,10 @@ describe("embedded OCD skill", () => {
       expect(files[link]).toBeDefined();
     }
     expect(files["docs/infrastructure-and-enrollment.md"]).toContain("ocd servers connect");
-    expect(files["docs/github-actions-runners.md"]).toContain("runs-on: [self-hosted, ocd-builder]");
-    expect(files["docs/github-actions-runners.md"]).toContain("untrusted fork pull requests");
-    expect(files["docs/releases-promotion-and-rollback.md"]).toContain("OCD_PANEL_URL");
-    expect(files["docs/releases-promotion-and-rollback.md"]).toContain("OCD_TOKEN");
-    expect(files["docs/immutable-images-and-health.md"]).toContain("OCI repository");
-    expect(files["docs/immutable-images-and-health.md"]).toContain("OCI registry username");
-    expect(files["docs/immutable-images-and-health.md"]).toContain("OCI registry password/token");
+    expect(files["docs/build-workers-and-webhooks.md"]).toContain("consumes no Actions minutes");
+    expect(files["docs/build-workers-and-webhooks.md"]).toContain("untrusted forks");
+    expect(files["docs/build-workers-and-webhooks.md"]).toContain("X-Hub-Signature-256");
+    expect(files["docs/immutable-images-and-health.md"]).toContain("OCI credential");
     expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(16);
   });
 
@@ -113,24 +110,23 @@ describe("embedded OCD skill", () => {
     expect(cli).toContain("ocd release <app> --image <repository@sha256:digest>");
     expect(cli).toContain("ocd promote --from=<source-app> --to=<destination-app>");
     expect(cli).toContain("ocd rollback <app> [--deployment=<id>]");
-    expect(cli).toContain("Private-image pull credentials have no CLI mutation command");
+    expect(cli).toContain("ocd runners webhook-secret <source-id>");
   });
 
-  test("keeps source builds outside the OCD deployment runtime", () => {
+  test("documents OCD-owned builds and immutable runtime artifacts", () => {
     const files = renderSkillFiles("https://panel.example.com");
     const manual = files
       .filter((file) => file.path.endsWith(".md"))
       .map((file) => file.contents)
       .join("\n");
 
-    for (const removed of ["cache_ref", "git_branch", "wait_for_ci", "webhook"]) {
+    for (const removed of ["cache_ref", "git_branch", "wait_for_ci", "runs-on: [self-hosted"] ) {
       expect(manual.toLowerCase()).not.toContain(removed.toLowerCase());
     }
     expect(manual).toContain("repository@sha256:<digest>");
-    expect(manual).toContain("ocd release");
-    expect(files.find((file) => file.path === "docs/github-actions-runners.md")?.contents.toLowerCase().replace(/\s+/g, " ")).toContain(
-      "ocd itself still never checks out source or builds an image",
-    );
+    expect(manual).toContain("OCD build worker");
+    expect(manual).toContain("GitHub push webhook");
+    expect(files.find((file) => file.path === "docs/build-workers-and-webhooks.md")?.contents).toContain("docker buildx");
   });
 
   test("documents private pull credentials and explicit staging boundaries", () => {
@@ -144,12 +140,10 @@ describe("embedded OCD skill", () => {
     const releases = files["docs/releases-promotion-and-rollback.md"];
     const stack = files["docs/stack-manifest.md"];
 
-    expect(images).toContain("Settings → Defaults");
-    expect(images).toContain("Matching images receive the configured pull");
-    expect(images).toContain("images on any other host are pulled without it");
-    expect(images).toContain("from `OCD_TOKEN`");
-    expect(releases).toContain("A production deploy or release never creates the staging");
-    expect(releases).toContain("ocd deploy path/to/api-staging.ocd-deploy.json");
+    expect(images).toContain("Admin Settings");
+    expect(images).toContain("OCI credential");
+    expect(images).toContain("runtime pulls");
+    expect(releases).toContain("Staging is a separately deployed app");
     expect(releases).toContain("ocd promote --from=api-staging --to=api");
     expect(stack).toContain("does not synthesize staging siblings");
     expect(stack).toContain("not enable or create a staging service");

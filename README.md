@@ -75,8 +75,8 @@ managed provider volumes; `ocd servers delete app-1` only disconnects the host.
 
 ## Features
 
-- Deploy immutable OCI images published by your CI system
-- Run trusted GitHub Actions builds on dedicated OCD-managed self-hosted runners
+- Build exact Git commits on dedicated OCD BuildKit workers
+- Trigger full manifest/stack reconciliation from signed GitHub push webhooks, without Actions minutes
 - Connect operator-owned stateless VPSs without cloud credentials
 - Optionally provision managed Hetzner Cloud servers, volumes, networks, and firewalls
 - Automatic TLS via Traefik and Let's Encrypt HTTP-01; provider-neutral DNS instructions
@@ -89,7 +89,7 @@ managed provider volumes; `ocd servers delete app-1` only disconnects the host.
 
 Managed PostgreSQL recovery: [clean and empty-target restore workflows](docs/postgresql-restore.md).
 Retained volume recovery: [grace-period and reattachment workflow](docs/volume-recovery.md).
-Build runners: [dedicated self-hosted GitHub Actions runners](.agents/skills/ocd-deploy/docs/github-actions-runners.md).
+Build delivery: [OCD build workers and signed repository webhooks](.agents/skills/ocd-deploy/docs/build-workers-and-webhooks.md).
 
 ## CLI-only deployments
 

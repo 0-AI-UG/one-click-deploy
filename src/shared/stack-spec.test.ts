@@ -2,13 +2,20 @@ import { describe, expect, test } from "bun:test";
 import type { DeployManifest, StackManifest } from "./rpc.ts";
 import { buildStackAppSpec } from "./stack-spec.ts";
 
-const IMAGE_REF = `ghcr.io/acme/app@sha256:${"a".repeat(64)}`;
+const BUILD = {
+  repository: "https://github.com/acme/app",
+  branch: "main",
+  dockerfile: "Dockerfile",
+  context: ".",
+  image: "ghcr.io/acme/app",
+  webhook: true,
+} as const;
 
 describe("buildStackAppSpec", () => {
   test("carries the full canonical app manifest deployment spec into a stack", () => {
     const manifest: DeployManifest = {
       name: "API",
-      image: { ref: IMAGE_REF },
+      build: BUILD,
       domain: "manifest.example.com",
       container_port: 8080,
       env_projection: ["DATABASE_URL"],
@@ -61,7 +68,7 @@ describe("buildStackAppSpec", () => {
       apply_mode: "manifest",
       needs: ["database"],
       domain: "stack.example.com",
-      image_ref: IMAGE_REF,
+      build: BUILD,
       container_port: 8080,
       env_projection: ["DATABASE_URL", "JWT_SECRET"],
       environment: "production",
@@ -100,7 +107,7 @@ describe("buildStackAppSpec", () => {
       { manifest: ".ocd-deploy.json" },
       {
         name: "Web",
-        image: { ref: IMAGE_REF },
+        build: BUILD,
         volume: null,
         domain: "web.example.com",
         env_projection: [],
@@ -120,7 +127,7 @@ describe("buildStackAppSpec", () => {
       { manifest: "docs/.ocd-deploy.json", needs: ["api"] },
       {
         name: "Docs",
-        image: { ref: IMAGE_REF },
+        build: BUILD,
         volume: null,
         env: [
           { key: "DOCS_THEME", default: "light" },
@@ -139,7 +146,7 @@ describe("buildStackAppSpec", () => {
     const spec = buildStackAppSpec(
       "legacy",
       { manifest: ".ocd-deploy.json", env_all: true },
-      { name: "Legacy", volume: null, image: { ref: IMAGE_REF } },
+      { name: "Legacy", volume: null, build: BUILD },
       "https://github.com/acme/legacy",
       "",
     );

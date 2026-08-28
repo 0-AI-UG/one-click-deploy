@@ -101,11 +101,13 @@ import { VERSION } from "../shared/version.ts";
 import { handleGcExecute, handleGcInventory } from "./routes/gc.ts";
 import { handleGetAppStorage } from "./routes/app-storage.ts";
 import {
-  handleGetGitHubRunners,
-  handleInstallGitHubRunner,
-  handleRemoveGitHubRunner,
-  handleGetGitHubRunnerLogs,
-} from "./routes/github-runners.ts";
+  handleGetBuildWorkers,
+  handleInstallBuildWorker,
+  handleRemoveBuildWorker,
+  handleGetBuildSources,
+  handleRotateBuildSourceWebhook,
+} from "./routes/build-workers.ts";
+import { handleGitHubBuildWebhook } from "./routes/build-webhooks.ts";
 
 function appIdFrom(req: Request): number {
   const url = new URL(req.url);
@@ -138,6 +140,16 @@ function serverPathIdFrom(req: Request): number {
 
 function runnerIdFrom(req: Request): number {
   const match = new URL(req.url).pathname.match(/\/api\/runners\/(\d+)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function buildSourceIdFrom(req: Request): number {
+  const match = new URL(req.url).pathname.match(/\/api\/build-sources\/(\d+)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function webhookBuildSourceIdFrom(req: Request): number {
+  const match = new URL(req.url).pathname.match(/\/webhooks\/github\/build\/(\d+)/);
   return match ? parseInt(match[1], 10) : 0;
 }
 
@@ -190,6 +202,7 @@ export const apiRoutes = {
   // --- CLI distribution (public) ---
   "/cli/install.sh": { GET: (req: Request) => handleCliInstallSh(req) },
   "/cli/:binary": { GET: (req: Request) => handleCliDownload(req) },
+  "/webhooks/github/build/:id": { POST: (req: Request) => handleGitHubBuildWebhook(req, webhookBuildSourceIdFrom(req)) },
 
   // --- Browser command builder; executes the actual allowlisted OCD CLI ---
   "/api/web-cli/run": { POST: (req: Request) => handleWebCliRun(req) },
@@ -257,11 +270,12 @@ export const apiRoutes = {
   "/api/servers/:id": { DELETE: (req: Request) => handleDeleteServer(req, serverIdFrom(req)) },
   "/api/servers/:id/pool": { PATCH: (req: Request) => handleSetServerPool(req, serverPathIdFrom(req)) },
   "/api/runners": {
-    GET: (req: Request) => handleGetGitHubRunners(req),
-    POST: (req: Request) => handleInstallGitHubRunner(req),
+    GET: (req: Request) => handleGetBuildWorkers(req),
+    POST: (req: Request) => handleInstallBuildWorker(req),
   },
-  "/api/runners/:id": { DELETE: (req: Request) => handleRemoveGitHubRunner(req, runnerIdFrom(req)) },
-  "/api/runners/:id/logs": { GET: (req: Request) => handleGetGitHubRunnerLogs(req, runnerIdFrom(req)) },
+  "/api/runners/:id": { DELETE: (req: Request) => handleRemoveBuildWorker(req, runnerIdFrom(req)) },
+  "/api/build-sources": { GET: (req: Request) => handleGetBuildSources(req) },
+  "/api/build-sources/:id/webhook-secret": { POST: (req: Request) => handleRotateBuildSourceWebhook(req, buildSourceIdFrom(req)) },
   "/api/gc": {
     GET: (req: Request) => handleGcInventory(req),
     POST: (req: Request) => handleGcExecute(req),

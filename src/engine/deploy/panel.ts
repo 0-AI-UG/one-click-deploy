@@ -71,7 +71,7 @@ export type BootstrapPanelOpts = {
   /** Public domain. When omitted, a `<server-ip>.nip.io` domain is derived
    *  after the server is created and served with a self-signed cert. */
   domain?: string;
-  /** Exact externally-built panel artifact. */
+  /** Exact immutable panel artifact. */
   imageRef: string;
   containerPort: number;
   envVars: Record<string, string>;

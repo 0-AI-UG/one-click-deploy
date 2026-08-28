@@ -21,7 +21,7 @@ import DOC_CLI_REFERENCE from "./assets/docs/cli-reference.md" with { type: "tex
 import DOC_DEPLOY_CONFIG from "./assets/docs/deploy-and-config.md" with { type: "text" };
 import DOC_ENVIRONMENTS from "./assets/docs/environments-and-secrets.md" with { type: "text" };
 import DOC_INFRASTRUCTURE from "./assets/docs/infrastructure-and-enrollment.md" with { type: "text" };
-import DOC_GITHUB_RUNNERS from "./assets/docs/github-actions-runners.md" with { type: "text" };
+import DOC_BUILD_WORKERS from "./assets/docs/build-workers-and-webhooks.md" with { type: "text" };
 import DOC_STACKS_SERVICES from "./assets/docs/stacks-and-services.md" with { type: "text" };
 import DOC_NETWORKING from "./assets/docs/networking-and-ingress.md" with { type: "text" };
 import DOC_SCALING_STORAGE from "./assets/docs/scaling-storage-and-placement.md" with { type: "text" };
@@ -51,7 +51,7 @@ const RAW_FILES: ReadonlyArray<readonly [string, string]> = [
   ["docs/deploy-and-config.md", DOC_DEPLOY_CONFIG],
   ["docs/environments-and-secrets.md", DOC_ENVIRONMENTS],
   ["docs/infrastructure-and-enrollment.md", DOC_INFRASTRUCTURE],
-  ["docs/github-actions-runners.md", DOC_GITHUB_RUNNERS],
+  ["docs/build-workers-and-webhooks.md", DOC_BUILD_WORKERS],
   ["docs/stacks-and-services.md", DOC_STACKS_SERVICES],
   ["docs/networking-and-ingress.md", DOC_NETWORKING],
   ["docs/scaling-storage-and-placement.md", DOC_SCALING_STORAGE],
