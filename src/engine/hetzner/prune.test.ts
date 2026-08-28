@@ -15,6 +15,7 @@ describe("buildServerGcScript", () => {
     expect(script).toContain("ghcr.io/acme/ocd:sha-abc123");
     expect(script).toContain('printf \'%b\\n\' "$protected_images"');
     expect(script).toContain('docker ps -aq --filter ancestor="$id"');
+    expect(script).toContain('{{if .Config.Labels}}{{index .Config.Labels "ocd.managed"}}{{end}}');
     expect(script).toContain('\\"($active_pattern):(latest|rollback)\\"');
     expect(script).toContain('docker image rm "$ref"');
     expect(script).not.toContain("docker image rm -f");

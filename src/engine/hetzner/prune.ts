@@ -136,7 +136,7 @@ export function buildServerGcScript(opts: GcRunOptions): string {
     "reclaimable_ids=''",
     "image_ids=$(docker image ls -aq --no-trunc | sort -u)",
     "for id in $image_ids; do",
-    `  record=$(docker image inspect --format '{{.Id}}|{{.Size}}|{{json .RepoTags}}|{{index .Config.Labels "ocd.managed"}}' "$id")`,
+    `  record=$(docker image inspect --format '{{.Id}}|{{.Size}}|{{json .RepoTags}}|{{if .Config.Labels}}{{index .Config.Labels "ocd.managed"}}{{end}}' "$id")`,
     `  actual_id=${"${record%%|*}"}; rest=${"${record#*|}"}; size=${"${rest%%|*}"}; rest=${"${rest#*|}"}; refs=${"${rest%%|*}"}; managed=${"${rest##*|}"}`,
     `  [ "$actual_id" = "$id" ] || { echo "Docker returned mismatched image metadata for $id" >&2; exit 42; }`,
     "  category=reclaimable-foreign",
