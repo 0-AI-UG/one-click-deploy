@@ -10,6 +10,7 @@ import {
 } from "../../shared/db/operations.ts";
 import deployStackOp, {
   dependencyProjectionKeys,
+  injectAppUrl,
   leastPrivilegeProjection,
   suspiciousUnrelatedProjectionKeys,
   stackAppAlreadyConverged,
@@ -145,6 +146,29 @@ describe("least-privilege stack environment projection", () => {
       [],
       ["EMAIL_TOKEN"],
     )).toEqual(["EMAIL_TOKEN"]);
+  });
+});
+
+describe("generated stack URLs", () => {
+  test("does not bump linked app revisions when the generated URL is unchanged", () => {
+    const environment = db.insertEnvironment(`url-env-${randomSuffix()}`, "");
+    const linked = db.insertApp({
+      name: `url-app-${randomSuffix()}`,
+      domain: "",
+      image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      container_port: 3000,
+      env_vars: "{}",
+    });
+    db.updateAppEnvironment(linked.id, environment.id);
+
+    injectAppUrl(environment.id, "api", db.getApp(linked.id)!);
+    const afterFirstWrite = db.getApp(linked.id)!.config_revision;
+    const serialized = db.getEnvironment(environment.id)!.env_vars;
+
+    injectAppUrl(environment.id, "api", db.getApp(linked.id)!);
+
+    expect(db.getEnvironment(environment.id)!.env_vars).toBe(serialized);
+    expect(db.getApp(linked.id)!.config_revision).toBe(afterFirstWrite);
   });
 });
 

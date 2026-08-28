@@ -128,14 +128,16 @@ export function topoLevels(apps: Array<{ key: string; needs?: string[] }>): stri
 
 /** Inject `<KEY>_URL = <app's OCD_INTERNAL_URL>` into the stack environment
  *  (plaintext — an internal URL is not a secret), replacing any prior value. */
-function injectAppUrl(envId: number, key: string, app: AppRow): void {
+export function injectAppUrl(envId: number, key: string, app: AppRow): void {
   const url = platformEnvVars(app).OCD_INTERNAL_URL;
   const varKey = `${envPrefix(key)}_URL`;
   const envRow = db.getEnvironment(envId);
   if (!envRow) return;
+  const parsed = parseEnvVars(envRow.env_vars);
+  const existing = parsed.entries.filter((entry) => entry.key === varKey);
+  if (existing.length === 1 && !existing[0].secret && existing[0].value === url) return;
   const now = new Date().toISOString();
   const entry: EnvVarEntry = { key: varKey, value: url, secret: false, updated_at: now };
-  const parsed = parseEnvVars(envRow.env_vars);
   const filtered = parsed.entries.filter((e) => e.key !== varKey);
   db.updateEnvironment(envId, envRow.name, serializeEnvVars([...filtered, entry]));
 }
