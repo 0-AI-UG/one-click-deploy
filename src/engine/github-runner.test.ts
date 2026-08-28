@@ -37,6 +37,8 @@ describe("GitHub Actions runner installer", () => {
     expect(script).toContain("70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613");
     expect(script).toContain("9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393");
     expect(script).toContain("sha256sum -c -");
+    expect(script).toContain("apt-get install -y -qq unzip");
+    expect(script).toContain("command -v unzip >/dev/null");
     expect(script).toContain("--labels ocd-builder");
     expect(script).toContain("ocd-github-runner.service");
     const hookMatch = script.match(/printf '%s' '([^']+)' \| base64 -d > \/opt\/ocd-actions-runner\/ocd-post-job\.sh/);
