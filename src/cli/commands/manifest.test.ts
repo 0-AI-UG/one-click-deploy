@@ -10,18 +10,23 @@ afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = 
 describe("manifest validate", () => {
   test("recursively validates every stack child", () => {
     dir = mkdtempSync(join(tmpdir(), "ocd-manifest-"));
-    const image = {
-      ref: `ghcr.io/ocd/test@sha256:${"a".repeat(64)}`,
+    const build = {
+      repository: "https://github.com/ocd/test",
+      branch: "main",
+      dockerfile: "Dockerfile",
+      context: ".",
+      image: "ghcr.io/ocd/test",
+      webhook: true,
     };
     writeFileSync(join(dir, "web.json"), JSON.stringify({
       name: "web",
-      image,
+      build,
       container_port: 3000,
       volume: null,
     }));
     writeFileSync(join(dir, "worker.json"), JSON.stringify({
       name: "worker",
-      image,
+      build: { ...build, image: "ghcr.io/ocd/worker" },
       container_port: 3000,
       volume: null,
       typo: true,

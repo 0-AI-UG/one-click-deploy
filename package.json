@@ -9,7 +9,7 @@
     "dev": "OCD_MODE=server SKIP_2FA=1 bun --watch run src/server/index.ts",
     "build": "bun build src/web/index.html --outdir=src/web/dist",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src/",
+    "test": "bun run scripts/test.ts",
     "test:integration": "RUN_INTEGRATION=1 bun test src/integration/",
     "test:integration:engine": "RUN_INTEGRATION=1 bun test src/integration/engine-ops.test.ts",
     "bootstrap": "bun run scripts/bootstrap.ts",

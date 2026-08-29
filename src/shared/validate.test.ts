@@ -16,10 +16,17 @@ import {
   validateIngressFields,
 } from "./validate.ts";
 
-const TEST_IMAGE_REF = `ghcr.io/acme/test@sha256:${"a".repeat(64)}`;
+const TEST_BUILD = {
+  repository: "https://github.com/acme/test",
+  branch: "main",
+  dockerfile: "Dockerfile",
+  context: ".",
+  image: "ghcr.io/acme/test",
+  webhook: true,
+} as const;
 const validateDeployManifest = (raw: unknown) => validateDeployManifestRaw(
   raw !== null && typeof raw === "object" && !Array.isArray(raw)
-    ? { image: { ref: TEST_IMAGE_REF }, ...raw }
+    ? { build: TEST_BUILD, ...raw }
     : raw,
 );
 
@@ -491,9 +498,13 @@ describe("validateDeployManifest", () => {
     expect(r.ok).toBe(true);
   });
 
-  test("requires an immutable external image", () => {
+  test("requires a source build contract", () => {
     expect(validateDeployManifestRaw({ volume: null, name: "demo" }).ok).toBe(false);
-    expect(validateDeployManifestRaw({ volume: null, name: "demo", image: { ref: "ghcr.io/acme/demo:latest" } }).ok).toBe(false);
+    expect(validateDeployManifestRaw({
+      volume: null,
+      name: "demo",
+      build: { ...TEST_BUILD, image: "ghcr.io/acme/demo:latest" },
+    }).ok).toBe(false);
   });
 
   test("accepts a full manifest", () => {
