@@ -38,10 +38,10 @@ function CliCopyButton() {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       }}
-      className="flex items-center gap-1.5 px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-fg/70 hover:text-fg hover:bg-fg/10 transition-all"
+      className="flex items-center gap-1 px-1.5 py-1 font-mono text-[9px] font-bold uppercase tracking-wide text-fg/70 hover:text-fg hover:bg-fg/10 transition-all"
       title={installCmd}
     >
-      {copied ? <Check size={13} className="text-green-600" /> : <TerminalSquare size={13} />}
+      {copied ? <Check size={12} className="text-green-600" /> : <TerminalSquare size={12} />}
       {copied ? "Copied" : "CLI"}
     </button>
   );
@@ -163,14 +163,14 @@ function MobileMenu({ hash }: { hash: string }) {
 function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; hash: string }) {
   return (
     <>
-      <div className="flex items-center gap-5 min-w-0">
-        <a href="#/" className="flex items-center gap-2 text-fg font-mono font-bold text-sm tracking-wider shrink-0">
-          <Terminal size={18} />
+      <div className="flex min-w-0 items-center gap-3">
+        <a href="#/" className="flex shrink-0 items-center gap-1.5 font-mono text-xs font-bold tracking-wide text-fg">
+          <Terminal size={16} />
           <span>OCD</span>
-          <span className="font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5">v0.4</span>
+          <span className="border border-fg px-1 py-0.5 font-mono text-[8px] font-bold uppercase">v0.4</span>
         </a>
-        <div className="h-5 w-0.5 bg-fg/30" />
-        <div className="flex items-center gap-1">
+        <div className="h-4 w-px shrink-0 bg-fg/30" />
+        <div className="flex items-center">
           {navItems.map((item) => {
             const active = item.match.test(hash);
             const Icon = item.icon;
@@ -178,11 +178,11 @@ function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; 
               <a
                 key={item.hash}
                 href={item.hash}
-                className={`flex items-center gap-1.5 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider transition-all ${
+                className={`flex items-center gap-1 px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-wide transition-all ${
                   active ? "bg-fg text-accent" : "text-fg/70 hover:text-fg hover:bg-fg/10"
                 }`}
               >
-                <Icon size={13} />
+                <Icon size={12} />
                 {item.label}
               </a>
             );
@@ -190,41 +190,41 @@ function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; 
           {user?.isAdmin && (
             <a
               href="#/admin"
-              className={`flex items-center gap-1.5 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-wider transition-all ${
+              className={`flex items-center gap-1 px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-wide transition-all ${
                 hash.startsWith("#/admin") ? "bg-fg text-accent" : "text-fg/70 hover:text-fg hover:bg-fg/10"
               }`}
             >
-              <Users size={13} />
+              <Users size={12} />
               Admin
             </a>
           )}
         </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-1.5">
         <div className="flex items-center">
           <CliCopyButton />
           <SkillInstallMenu />
         </div>
-        <div className="h-5 w-0.5 bg-fg/30" />
+        <div className="h-4 w-px bg-fg/30" />
         <a
           href="#/account"
-          className={`font-mono text-[10px] whitespace-nowrap px-2 py-1 transition-all ${
+          className={`flex max-w-40 items-center px-1.5 py-1 font-mono text-[9px] transition-all ${
             hash.startsWith("#/account") ? "bg-fg text-accent" : "text-fg/70 hover:text-fg hover:bg-fg/10"
           }`}
         >
-          {user?.username}
+          <span className="truncate">{user?.username}</span>
           {user?.isAdmin && (
-            <span className="ml-1.5 font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5 bg-fg text-accent">
+            <span className="ml-1 shrink-0 border border-fg bg-fg px-1 py-0.5 font-mono text-[8px] font-bold uppercase text-accent">
               admin
             </span>
           )}
         </a>
         <button
           onClick={() => { logout(); window.location.hash = "#/login"; }}
-          className="p-1.5 text-fg/60 hover:text-accent-red transition-all"
+          className="p-1 text-fg/60 hover:text-accent-red transition-all"
           title="Logout"
         >
-          <LogOut size={14} />
+          <LogOut size={13} />
         </button>
       </div>
     </>
@@ -246,7 +246,7 @@ function CompactNav({ hash }: { hash: string }) {
 
 function Row({ innerRef, children }: { innerRef?: React.Ref<HTMLDivElement>; children: ReactNode }) {
   return (
-    <div ref={innerRef} className="h-12 flex items-center justify-between gap-2">
+    <div ref={innerRef} className="flex h-12 items-center justify-between gap-1">
       {children}
     </div>
   );
@@ -333,17 +333,17 @@ export function Nav() {
 
   return (
     <nav className="sticky top-0 z-50 bg-accent border-b-2 border-fg">
-      <div className="max-w-5xl mx-auto px-4 relative">
+      <div className="relative mx-auto max-w-6xl px-3 xl:px-4">
         <Row innerRef={containerRef}>
           {collapsed ? <CompactNav hash={hash} /> : <DesktopNav user={user} hash={hash} />}
         </Row>
         <div
           ref={ghostRef}
           aria-hidden
-          className="absolute top-0 left-4 invisible pointer-events-none"
+          className="pointer-events-none invisible absolute left-3 top-0 xl:left-4"
           style={{ width: "max-content" }}
         >
-          <div className="h-12 flex items-center gap-2">
+          <div className="flex h-12 items-center gap-1">
             <DesktopNav user={user} hash={hash} />
           </div>
         </div>
