@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Check,
   Cpu,
@@ -64,99 +64,6 @@ function MobileCliCopyButton() {
       {copied ? <Check size={18} className="text-green-600" /> : <TerminalSquare size={18} />}
       {copied ? "Copied install command" : "Copy CLI install command"}
     </button>
-  );
-}
-
-function MobileMenu({ hash }: { hash: string }) {
-  const { user } = useAuth();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (
-        target instanceof Element &&
-        target.closest("[data-skill-install-menu]")
-      ) {
-        return;
-      }
-      if (ref.current && !ref.current.contains(target)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-2 py-1 text-fg/70 hover:text-fg hover:bg-fg/10 transition-all"
-        aria-label="Menu"
-      >
-        <Menu size={18} />
-      </button>
-      {open && (
-        <div className="absolute top-full right-0 mt-1 w-56 bg-white border-2 border-fg shadow-neo z-50">
-          {navItems.map((item) => {
-            const active = item.match.test(hash);
-            const Icon = item.icon;
-            return (
-              <a
-                key={item.hash}
-                href={item.hash}
-                onClick={() => setOpen(false)}
-                className={`flex items-center gap-2 px-3 py-2 font-mono text-xs font-bold uppercase tracking-wider transition-all ${
-                  active ? "bg-fg text-accent" : "text-fg/70 hover:bg-fg/5"
-                }`}
-              >
-                <Icon size={13} />
-                {item.label}
-              </a>
-            );
-          })}
-          {user?.isAdmin && (
-            <a
-              href="#/admin"
-              onClick={() => setOpen(false)}
-              className={`flex items-center gap-2 px-3 py-2 font-mono text-xs font-bold uppercase tracking-wider transition-all ${
-                hash.startsWith("#/admin") ? "bg-fg text-accent" : "text-fg/70 hover:bg-fg/5"
-              }`}
-            >
-              <Users size={13} />
-              Admin
-            </a>
-          )}
-          <div className="border-t border-fg/10 py-1">
-            <div className="flex items-center">
-              <CliCopyButton />
-              <SkillInstallMenu />
-            </div>
-          </div>
-          <div className="border-t border-fg/10 px-3 py-2 font-mono text-[10px] text-fg/70 flex items-center justify-between">
-            <a
-              href="#/account"
-              onClick={() => setOpen(false)}
-              className="truncate hover:text-fg transition-all"
-            >
-              {user?.username}
-              {user?.isAdmin && (
-                <span className="ml-1.5 font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5 bg-fg text-accent">
-                  admin
-                </span>
-              )}
-            </a>
-            <button
-              onClick={() => { logout(); window.location.hash = "#/login"; }}
-              className="p-1 text-fg/60 hover:text-accent-red transition-all"
-              title="Logout"
-            >
-              <LogOut size={14} />
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -231,22 +138,9 @@ function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; 
   );
 }
 
-function CompactNav({ hash }: { hash: string }) {
+function Row({ children }: { children: ReactNode }) {
   return (
-    <>
-      <a href="#/" className="flex items-center gap-2 text-fg font-mono font-bold text-sm tracking-wider shrink-0">
-        <Terminal size={18} />
-        <span>OCD</span>
-        <span className="font-mono text-[9px] font-bold uppercase border border-fg px-1 py-0.5">v0.4</span>
-      </a>
-      <MobileMenu hash={hash} />
-    </>
-  );
-}
-
-function Row({ innerRef, children }: { innerRef?: React.Ref<HTMLDivElement>; children: ReactNode }) {
-  return (
-    <div ref={innerRef} className="flex h-12 items-center justify-between gap-1">
+    <div className="flex h-12 min-w-max items-center justify-between gap-1">
       {children}
     </div>
   );
@@ -312,41 +206,15 @@ export function Nav() {
   const { user } = useAuth();
   const hash = window.location.hash || "#/";
   const isMobile = useMobileLayout();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const ghostRef = useRef<HTMLDivElement>(null);
-  const [collapsed, setCollapsed] = useState(false);
-
-  useEffect(() => {
-    if (isMobile) return;
-    const check = () => {
-      const ghost = ghostRef.current;
-      const container = containerRef.current;
-      if (ghost && container) setCollapsed(ghost.offsetWidth > container.clientWidth + 1);
-    };
-    check();
-    const observer = new ResizeObserver(check);
-    if (containerRef.current) observer.observe(containerRef.current);
-    return () => observer.disconnect();
-  }, [isMobile, user?.id, user?.isAdmin]);
 
   if (isMobile) return <MobileNav hash={hash} />;
 
   return (
-    <nav className="sticky top-0 z-50 bg-accent border-b-2 border-fg">
-      <div className="relative mx-auto max-w-6xl px-3 xl:px-4">
-        <Row innerRef={containerRef}>
-          {collapsed ? <CompactNav hash={hash} /> : <DesktopNav user={user} hash={hash} />}
+    <nav className="sticky top-0 z-50 overflow-x-auto bg-accent border-b-2 border-fg">
+      <div className="mx-auto max-w-6xl px-2 xl:px-3">
+        <Row>
+          <DesktopNav user={user} hash={hash} />
         </Row>
-        <div
-          ref={ghostRef}
-          aria-hidden
-          className="pointer-events-none invisible absolute left-3 top-0 xl:left-4"
-          style={{ width: "max-content" }}
-        >
-          <div className="flex h-12 items-center gap-1">
-            <DesktopNav user={user} hash={hash} />
-          </div>
-        </div>
       </div>
     </nav>
   );
