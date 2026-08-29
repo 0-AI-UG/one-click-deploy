@@ -66,10 +66,13 @@ async function installWorker(args: string[]): Promise<void> {
   const tokenEnv = valueFlag(args, "removal-token-env") || "GITHUB_RUNNER_REMOVE_TOKEN";
   if (!serverRef) throw new Error("Usage: ocd runners install --server=<name|id> [--name=X] [--removal-token-env=GITHUB_RUNNER_REMOVE_TOKEN]");
   const server = await resolveServer(serverRef);
+  const removalToken = args.includes("--removal-token-stdin")
+    ? (await Bun.stdin.text()).trim()
+    : process.env[tokenEnv]?.trim();
   const result = await post<{ op_id: number }>("/api/runners", {
     server_id: server.id,
     name: valueFlag(args, "name"),
-    removal_token: process.env[tokenEnv]?.trim() || undefined,
+    removal_token: removalToken || undefined,
   });
   const operation = await followOp(result.op_id);
   if (!operation.ok) throw new Error(operation.error || "Build-worker installation failed");

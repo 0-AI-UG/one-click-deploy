@@ -42,7 +42,7 @@ export async function requireCliPermission(
   scope?: PermissionScope,
 ): Promise<TokenPayload> {
   const payload = await requirePermission(request, permission, scope);
-  if (payload.client !== "cli") {
+  if (payload.client !== "cli" && payload.client !== "ui-cli") {
     throw new PermissionError("This action is only available through the ocd CLI");
   }
   return payload;

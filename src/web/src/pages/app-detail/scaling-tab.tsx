@@ -1,4 +1,4 @@
-import { post } from "../../api/client.ts";
+import { runCliAction } from "../../api/cli-actions.ts";
 import { Card, Btn, Table } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { Zap, Gauge, History } from "lucide-react";
@@ -41,7 +41,7 @@ export function ScalingTab({
               variant="primary"
               loading={actionLoading === "wake" || ops.isBusyWith("wake")}
               disabled={ops.isBusy}
-              onClick={() => action("wake", () => post(`/api/apps/${appId}/wake`))}
+              onClick={() => action("wake", () => runCliAction("scale.wake", { app: String(appId) }))}
             >
               Wake app
             </Btn>

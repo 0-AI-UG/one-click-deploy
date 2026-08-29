@@ -52,7 +52,7 @@ import {
 import { handleDeviceCode, handleDeviceToken, handleDeviceConfirm } from "./routes/device-auth.ts";
 import { handleCreateConfirmation, handlePollConfirmation, handleLookupConfirmation, handleConfirmConfirmation, handleDenyConfirmation } from "./routes/confirmations.ts";
 import { handleCliInstallSh, handleCliDownload } from "./routes/cli.ts";
-import { handleWebCliRun } from "./routes/web-cli.ts";
+import { handleCliActionRun } from "./routes/web-cli.ts";
 import {
   handleGetEnvironments,
   handleGetDeletedEnvironments,
@@ -108,6 +108,7 @@ import {
   handleRotateBuildSourceWebhook,
 } from "./routes/build-workers.ts";
 import { handleGitHubBuildWebhook } from "./routes/build-webhooks.ts";
+import { handleGetProvisioningDefaults } from "./lib/server-provisioning.ts";
 
 function appIdFrom(req: Request): number {
   const url = new URL(req.url);
@@ -204,8 +205,8 @@ export const apiRoutes = {
   "/cli/:binary": { GET: (req: Request) => handleCliDownload(req) },
   "/webhooks/github/build/:id": { POST: (req: Request) => handleGitHubBuildWebhook(req, webhookBuildSourceIdFrom(req)) },
 
-  // --- Browser command builder; executes the actual allowlisted OCD CLI ---
-  "/api/web-cli/run": { POST: (req: Request) => handleWebCliRun(req) },
+  // --- Purpose-built browser actions; executes the actual allowlisted OCD CLI ---
+  "/api/cli-actions/run": { POST: (req: Request) => handleCliActionRun(req) },
 
   // --- Setup ---
   "/api/setup/status": { GET: (req: Request) => handleSetupStatus(req) },
@@ -266,6 +267,7 @@ export const apiRoutes = {
   "/api/servers": { GET: (req: Request) => handleGetServers(req) },
   "/api/servers/refresh": { POST: (req: Request) => handleRefreshServers(req) },
   "/api/servers/enrollment-key": { GET: (req: Request) => handleGetServerEnrollmentKey(req) },
+  "/api/servers/provisioning-defaults": { GET: (req: Request) => handleGetProvisioningDefaults(req) },
   "/api/servers/connect": { POST: (req: Request) => handleConnectServer(req) },
   "/api/servers/:id": { DELETE: (req: Request) => handleDeleteServer(req, serverIdFrom(req)) },
   "/api/servers/:id/pool": { PATCH: (req: Request) => handleSetServerPool(req, serverPathIdFrom(req)) },

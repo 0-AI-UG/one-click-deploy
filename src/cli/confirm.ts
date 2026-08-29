@@ -26,6 +26,12 @@ export async function webConfirm(
   resourceType: string,
   resourceId: number | string,
 ): Promise<string | null> {
+  // Purpose-built panel actions collect the same server-issued, resource-bound
+  // confirmation before starting the CLI process. Reuse it rather than opening
+  // a second browser approval page from the panel host.
+  const supplied = process.env.OCD_CONFIRMATION_CODE?.trim();
+  if (supplied) return supplied;
+
   const config = loadConfig();
   const panel = config?.panel_url ?? "";
 

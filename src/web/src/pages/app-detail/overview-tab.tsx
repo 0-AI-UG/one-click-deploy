@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
-import { get, post } from "../../api/client.ts";
+import { get } from "../../api/client.ts";
+import { runCliAction } from "../../api/cli-actions.ts";
 import { Card, Btn, StatusBadge, showToast, Table, CopyButton, portalAnchorRect } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { RefreshCw, ExternalLink, Server as ServerIcon, Terminal, ArrowRightLeft } from "lucide-react";
 import { Sparkline, InfoTip, CpuUsage, MemUsage } from "./shared.tsx";
-import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
+import { type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import type { AppData, ReplicaData, MetricSample, ServerData } from "../../types.ts";
 import { DnsInstructionView } from "../../components/dns-instruction.tsx";
 
@@ -24,20 +25,32 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
     ? `tcp://${app.name}.ocd.internal:${app.container_port}`
     : `http://${app.name}.ocd.internal`;
   const [migratingId, setMigratingId] = useState<number | null>(null);
+  const [availability, setAvailability] = useState<{ uptimePct: number | null; mttrSeconds: number | null; sampleCount: number; current: { running: number; desired: number; distinctHosts: number; distinctLocations: number; meetsTarget: boolean } } | null>(null);
+  const [storage, setStorage] = useState<{ current: { image_size_bytes?: number } | null; rollback: { image_size_bytes?: number } | null; reclaimable_image_bytes_upper_bound: number; caveat: string } | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      get(`/api/apps/${appId}/availability?window=86400`).catch(() => null),
+      get(`/api/apps/${appId}/storage`).catch(() => null),
+    ]).then(([nextAvailability, nextStorage]) => {
+      setAvailability(nextAvailability);
+      setStorage(nextStorage);
+    });
+  }, [appId]);
+
+  const bytes = (value?: number | null) => typeof value === "number" && value > 0
+    ? `${(value / 1024 / 1024).toFixed(1)} MiB`
+    : "—";
 
   const handleMigrate = async (replicaId: number, targetId: string) => {
     if (!targetId) { showToast("Select a target server", "error"); return; }
     setMigratingId(replicaId);
     try {
-      const res = await post(`/api/apps/${appId}/replicas/${replicaId}/migrate`, {
-        target_server_id: parseInt(targetId, 10),
-      }) as { op_id: number };
-
-      ops.track(res.op_id);
-      const terminal = await trackOperationInToast(res.op_id, "Migrating replica");
-      if (terminal && terminal !== "done" && terminal !== "cancelled") {
-        throw new Error("Migration failed");
-      }
+      await runCliAction("scale.migrate", {
+        app: String(appId),
+        replica: String(replicaId),
+        target: targetId,
+      });
       setReplicas(await get(`/api/apps/${appId}/metrics`));
     } catch (err: any) {
       showToast(err.message, "error");
@@ -123,6 +136,27 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
             </div>
           </div>
           {app.dns_instruction && <DnsInstructionView value={app.dns_instruction} />}
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card className="p-4 space-y-3">
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Availability · trailing 24h</h3>
+          {availability ? <div className="space-y-2 font-mono text-[10px]">
+            <div className="flex justify-between"><span className="text-muted">Uptime</span><span className="font-bold">{availability.uptimePct == null ? "—" : `${availability.uptimePct.toFixed(3)}%`}</span></div>
+            <div className="flex justify-between"><span className="text-muted">Mean recovery</span><span>{availability.mttrSeconds == null ? "—" : `${Math.round(availability.mttrSeconds)}s`}</span></div>
+            <div className="flex justify-between"><span className="text-muted">Placement now</span><span className={availability.current.meetsTarget ? "text-green-600" : "text-accent-red"}>{availability.current.running}/{availability.current.desired} replicas · {availability.current.distinctHosts} hosts · {availability.current.distinctLocations} locations</span></div>
+            <div className="flex justify-between"><span className="text-muted">Samples</span><span>{availability.sampleCount}</span></div>
+          </div> : <p className="font-mono text-[10px] text-muted">Availability data unavailable</p>}
+        </Card>
+        <Card className="p-4 space-y-3">
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Image storage</h3>
+          {storage ? <div className="space-y-2 font-mono text-[10px]">
+            <div className="flex justify-between"><span className="text-muted">Current artifact</span><span>{bytes(storage.current?.image_size_bytes)}</span></div>
+            <div className="flex justify-between"><span className="text-muted">Rollback artifact</span><span>{bytes(storage.rollback?.image_size_bytes)}</span></div>
+            <div className="flex justify-between"><span className="text-muted">Reclaimable upper bound</span><span>{bytes(storage.reclaimable_image_bytes_upper_bound)}</span></div>
+            <p className="pt-1 text-[9px] text-muted normal-case">{storage.caveat}</p>
+          </div> : <p className="font-mono text-[10px] text-muted">Storage inventory unavailable</p>}
         </Card>
       </div>
 

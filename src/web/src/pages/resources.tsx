@@ -1,15 +1,16 @@
 import { useState, useEffect, useRef } from "react";
-import { get, post } from "../api/client.ts";
+import { get } from "../api/client.ts";
+import { runCliAction, runConfirmedCliAction } from "../api/cli-actions.ts";
 import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
-import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
+import { useActiveOperations } from "../hooks/useOperation.ts";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
 import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, History } from "lucide-react";
 import { InfoTip } from "./app-detail/shared.tsx";
 import type { ResourcesData } from "../types.ts";
-import { serverConfirmedAction, serverConfirmedDelete } from "../api/server-confirmation.ts";
 import { serverProvisioningResourceId } from "../../../shared/server-provisioning.ts";
+import { InfrastructureTools } from "../components/infrastructure-tools.tsx";
 
 export function ResourcesPage() {
   const [data, setData] = useState<ResourcesData | null>(null);
@@ -67,27 +68,18 @@ export function ResourcesPage() {
     )) return;
     setCreating(true);
     try {
-      const body = {
-        server_type: createType,
-        location: createLocation,
-        name: createName || undefined,
-      };
       const planId = serverProvisioningResourceId({
         serverType: createType,
         location: createLocation,
         pools: ["general"],
         reason: createName ? `server ${createName}` : "an explicitly requested server",
       });
-      const res = await serverConfirmedAction<{ op_id: number }>(
-        "/api/resources/servers",
-        "POST",
-        "create_server",
-        "server_plan",
-        planId,
-        body,
+      await runConfirmedCliAction(
+        "servers.create",
+        { type: createType, location: createLocation, name: createName || undefined },
+        { action: "create_server", resourceType: "server_plan", resourceId: planId },
       );
-      trackOperationInToast(res.op_id, "Provisioning server");
-      ops.track(res.op_id);
+      showToast("Server provisioned", "success");
       setShowCreate(false);
       setCreateType("");
       setCreateLocation("");
@@ -132,31 +124,21 @@ export function ResourcesPage() {
     const key = `${type}-${id}`;
     setDeleting(key);
     try {
-      const res = type === "volume"
-        ? await serverConfirmedDelete<{ ok: boolean; audit_id?: number; op_id?: number; error?: string }>(
-            `/api/resources/${type}/${id}`,
-            "delete_volume",
-            "volume",
-            id,
-            typedVolumeId,
-          )
-        : await serverConfirmedDelete<{ ok: boolean; op_id?: number; error?: string }>(
-            `/api/resources/${type}/${id}`,
-            "delete_server",
-            "server",
-            id,
-          );
-      if (res.ok) {
-        if (type === "server" && res.op_id) {
-          trackOperationInToast(res.op_id, connectedServer ? `Disconnecting ${name}` : `Destroying ${name}`);
-          ops.track(res.op_id);
-        } else {
-          showToast(`${name} deleted`, "success");
-        }
-        load();
+      if (type === "volume") {
+        await runConfirmedCliAction(
+          "volumes.delete",
+          { volume: id },
+          { action: "delete_volume", resourceType: "volume", resourceId: id, typedResource: typedVolumeId },
+        );
       } else {
-        showToast(res.error || "Failed to delete", "error");
+        await runConfirmedCliAction(
+          "servers.delete",
+          { server: id },
+          { action: "delete_server", resourceType: "server", resourceId: id },
+        );
       }
+      showToast(`${name} ${connectedServer ? "disconnected" : "deleted"}`, "success");
+      load();
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
@@ -190,7 +172,17 @@ export function ResourcesPage() {
           <HardDrive size={18} className="text-fg" />
           <h1 className="font-mono font-bold text-sm text-fg uppercase">Resources</h1>
         </div>
-        <Btn variant="ghost" onClick={() => { setLoading(true); load(); }}><RefreshCw size={13} /> Refresh</Btn>
+        <Btn variant="ghost" onClick={async () => {
+          setLoading(true);
+          try {
+            await runCliAction("servers.refresh");
+            await load();
+            showToast("Provider inventory refreshed", "success");
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : "Refresh failed", "error");
+            setLoading(false);
+          }
+        }}><RefreshCw size={13} /> Refresh inventory</Btn>
       </div>
 
       {/* Cost estimate */}
@@ -385,6 +377,8 @@ export function ResourcesPage() {
           </div>
         )}
       </Card>
+
+      <InfrastructureTools />
     </div>
   );
 }

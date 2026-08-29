@@ -23,6 +23,7 @@ import { buildStackAppSpec } from "../../shared/stack-spec.ts";
 import { validateStackManifest } from "../../shared/manifest-validate.ts";
 import type { StackManifest, StackDeployRequest } from "../../shared/rpc.ts";
 import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
+import { readSetValuesFromStdin } from "../stdin-values.ts";
 import { operationLogQuery, parseLogArgs } from "../log-filters.ts";
 import { expectArray, expectRecord, expectStringField } from "../response.ts";
 
@@ -387,14 +388,16 @@ export async function stackUp(args: string[]): Promise<void> {
     "allow-unknown": { type: "boolean" },
     image: { type: "string", repeatable: true },
     commit: { type: "string" },
+    "sets-stdin": { type: "boolean" },
   }, { maxPositionals: 1 });
   if (parsed.flags.help === true) {
     upUsage();
     process.exit(0);
   }
   const manifestPath = parsed.positionals[0] || "ocd-stack.json";
-  const rawSets = (parsed.flags.set as string[] | undefined) ?? [];
-  const rawStagingSets = (parsed.flags["staging-set"] as string[] | undefined) ?? [];
+  const stdinSets = parsed.flags["sets-stdin"] === true ? await readSetValuesFromStdin() : { sets: [], stagingSets: [] };
+  const rawSets = [...((parsed.flags.set as string[] | undefined) ?? []), ...stdinSets.sets];
+  const rawStagingSets = [...((parsed.flags["staging-set"] as string[] | undefined) ?? []), ...stdinSets.stagingSets];
   const onlyRaw = (parsed.flags.only as string | undefined) ?? "";
   const withDependents = parsed.flags["with-dependents"] === true;
   const changedOnly = parsed.flags.changed === true;

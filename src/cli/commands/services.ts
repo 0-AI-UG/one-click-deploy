@@ -2,6 +2,7 @@ import { del, get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, table, colorStatus } from "../format.ts";
 import { webConfirm, withWebConfirmation } from "../confirm.ts";
+import { readSetValuesFromStdin } from "../stdin-values.ts";
 
 interface Service {
   id: number;
@@ -79,6 +80,9 @@ export function parseServiceCreateArgs(
       const eq = pair.indexOf("=");
       if (eq < 1) return { ok: false, error: `Invalid --set "${pair}" (expected KEY=VALUE)` };
       envOverrides[pair.slice(0, eq)] = pair.slice(eq + 1);
+    } else if (arg === "--sets-stdin") {
+      // Parsed asynchronously by createService so sensitive overrides stay
+      // out of the process argument list.
     } else if (arg.startsWith("--")) {
       return { ok: false, error: `Unknown option: ${arg}` };
     } else if (!name) name = arg;
@@ -137,6 +141,13 @@ async function createService(args: string[]): Promise<void> {
     return;
   }
   const opts = parsed.value;
+  if (args.includes("--sets-stdin")) {
+    for (const pair of (await readSetValuesFromStdin()).sets) {
+      const eq = pair.indexOf("=");
+      if (eq < 1) throw new Error(`Invalid stdin set value (expected KEY=VALUE): ${pair}`);
+      opts.envOverrides[pair.slice(0, eq)] = pair.slice(eq + 1);
+    }
+  }
   const environment = opts.environment
     ? await resolveEnvironment(opts.environment)
     : undefined;

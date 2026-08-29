@@ -1,7 +1,8 @@
-import { post } from "../../api/client.ts";
-import { Card, Btn, StatusBadge, Table, CopyButton, confirm } from "../../components/ui.tsx";
+import { useState } from "react";
+import { runCliAction } from "../../api/cli-actions.ts";
+import { Card, Btn, StatusBadge, Table, CopyButton, confirm, showToast } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
+import { type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { Clock } from "lucide-react";
 import type { DeploymentRecord } from "../../types.ts";
 
@@ -13,7 +14,56 @@ interface DeploymentsTabProps {
 }
 
 export function DeploymentsTab({ appId, deployments, action, ops }: DeploymentsTabProps) {
+  const [image, setImage] = useState("");
+  const [commit, setCommit] = useState("");
+  const [showRelease, setShowRelease] = useState(false);
+
+  const release = async () => {
+    if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(image.trim())) {
+      showToast("Use an immutable repository@sha256 digest", "error");
+      return;
+    }
+    if (commit && !/^[a-f0-9]{7,64}$/i.test(commit)) {
+      showToast("Commit must be 7-64 hexadecimal characters", "error");
+      return;
+    }
+    await action("release", () => runCliAction("app.release", { app: String(appId), image: image.trim(), commit: commit || undefined }));
+    setShowRelease(false);
+    setImage("");
+    setCommit("");
+  };
+
   return (
+    <div className="space-y-4">
+      <Card className="p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Delivery actions</h3>
+            <p className="mt-1 text-[10px] text-muted">Recreate the stored artifact or release a new immutable digest through the OCD CLI.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <PermissionGate permission="apps.deploy" appId={appId}>
+              <Btn size="xs" disabled={ops.isBusy} onClick={() => action("redeploy", () => runCliAction("app.redeploy", { app: String(appId) }))}>Redeploy current</Btn>
+            </PermissionGate>
+            <PermissionGate permission="apps.restart" appId={appId}>
+              <Btn size="xs" disabled={ops.isBusy} onClick={async () => {
+                if (await confirm("Reload environment", "Recreate this app from its current immutable image using the latest linked environment values?", true)) {
+                  await action("reload environment", () => runCliAction("app.reload-env", { app: String(appId) }, { confirmed: true }));
+                }
+              }}>Reload environment</Btn>
+            </PermissionGate>
+            <PermissionGate permission="apps.deploy" appId={appId}>
+              <Btn size="xs" variant="primary" onClick={() => setShowRelease((open) => !open)}>Release digest</Btn>
+            </PermissionGate>
+          </div>
+        </div>
+        {showRelease && <div className="grid gap-2 border-t-2 border-fg pt-3 md:grid-cols-[1fr_180px_auto]">
+          <input value={image} onChange={(event) => setImage(event.target.value)} placeholder="registry.example.com/team/app@sha256:…" />
+          <input value={commit} onChange={(event) => setCommit(event.target.value.trim())} placeholder="Source commit (optional)" />
+          <Btn variant="primary" disabled={ops.isBusy || !image.trim()} onClick={release}>Release</Btn>
+        </div>}
+      </Card>
+
     <Card className="p-4">
       <div className="flex items-center gap-2 mb-3">
         <Clock size={14} className="text-fg" />
@@ -50,13 +100,10 @@ export function DeploymentsTab({ appId, deployments, action, ops }: DeploymentsT
                       loading={ops.isBusyWith("rollback")}
                       onClick={async () => {
                         if (await confirm("Rollback", `Rollback to deployment #${d.id}?`)) {
-                          action("rollback", async () => {
-                            const res = (await post(`/api/apps/${appId}/rollback`, { deployment_id: d.id })) as { op_id?: number };
-                            if (res?.op_id) {
-                              trackOperationInToast(res.op_id, "Rolling back app");
-                              ops.track(res.op_id);
-                            }
-                          });
+                          action("rollback", () => runCliAction("app.rollback", {
+                            app: String(appId),
+                            deployment: String(d.id),
+                          }));
                         }
                       }}
                     >Rollback</Btn>
@@ -68,5 +115,6 @@ export function DeploymentsTab({ appId, deployments, action, ops }: DeploymentsT
         </Table>
       )}
     </Card>
+    </div>
   );
 }

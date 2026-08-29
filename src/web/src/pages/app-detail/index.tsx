@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { get, post, del } from "../../api/client.ts";
+import { get } from "../../api/client.ts";
+import { runCliAction, runConfirmedCliAction } from "../../api/cli-actions.ts";
 import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { TabBar } from "../../components/tab-bar.tsx";
@@ -173,17 +174,17 @@ export function AppDetailPage({ appId }: { appId: number }) {
         </div>
         <div className="flex gap-1">
           <PermissionGate permission="apps.restart" appId={appId} environmentId={app.environment_id}>
-            <Btn size="xs" loading={actionLoading === "restart" || ops.isBusyWith("restart_app")} disabled={ops.isBusy} onClick={() => action("restart", () => post(`/api/apps/${appId}/restart`))}>
+            <Btn size="xs" loading={actionLoading === "restart" || ops.isBusyWith("restart_app")} disabled={ops.isBusy} onClick={() => action("restart", () => runCliAction("app.restart", { app: String(appId) }))}>
               <RotateCcw size={12} /> Restart
             </Btn>
           </PermissionGate>
           <PermissionGate permission="apps.pause" appId={appId} environmentId={app.environment_id}>
             {app.status === "paused" ? (
-              <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
+              <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => runCliAction("app.unpause", { app: String(appId) }))}>
                 <Play size={12} /> Unpause
               </Btn>
             ) : (
-              <Btn size="xs" loading={actionLoading === "pause" || ops.isBusyWith("pause_app")} disabled={ops.isBusy} onClick={() => action("pause", () => post(`/api/apps/${appId}/pause`))}>
+              <Btn size="xs" loading={actionLoading === "pause" || ops.isBusyWith("pause_app")} disabled={ops.isBusy} onClick={() => action("pause", () => runCliAction("app.pause", { app: String(appId) }))}>
                 <Pause size={12} /> Pause
               </Btn>
             )}
@@ -195,7 +196,11 @@ export function AppDetailPage({ appId }: { appId: number }) {
               disabled={ops.isBusy}
               onClick={async () => {
                 if (await confirm("Destroy App", `Permanently destroy "${app.name}"?`, true)) {
-                  await action("destroy", () => del(`/api/apps/${appId}`));
+                  await action("destroy", () => runConfirmedCliAction(
+                    "app.delete",
+                    { app: String(appId) },
+                    { action: "delete_app", resourceType: "app", resourceId: appId },
+                  ));
                   window.location.hash = "#/";
                 }
               }}
@@ -208,7 +213,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
       {app.status === "paused" && (
         <PausedBanner message="App is paused; containers are frozen and not serving traffic">
           <PermissionGate permission="apps.pause" appId={appId} environmentId={app.environment_id}>
-            <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => post(`/api/apps/${appId}/unpause`))}>
+            <Btn size="xs" loading={actionLoading === "unpause" || ops.isBusyWith("unpause_app")} disabled={ops.isBusy} onClick={() => action("unpause", () => runCliAction("app.unpause", { app: String(appId) }))}>
               <Play size={12} /> Unpause
             </Btn>
           </PermissionGate>
@@ -273,16 +278,20 @@ export function AppDetailPage({ appId }: { appId: number }) {
 
       <MobileActionSheet open={isMobile && mobileActionsOpen} onClose={() => setMobileActionsOpen(false)} title={app.name} subtitle={`App · ${app.status}`}>
         <PermissionGate permission="apps.restart" appId={appId} environmentId={app.environment_id}>
-          <MobileSheetAction icon={<RotateCcw size={19} />} label="Restart" detail="Restart all running replicas" loading={actionLoading === "restart" || ops.isBusyWith("restart_app")} disabled={ops.isBusy} onClick={() => { setMobileActionsOpen(false); action("restart", () => post(`/api/apps/${appId}/restart`)); }} />
+          <MobileSheetAction icon={<RotateCcw size={19} />} label="Restart" detail="Restart all running replicas" loading={actionLoading === "restart" || ops.isBusyWith("restart_app")} disabled={ops.isBusy} onClick={() => { setMobileActionsOpen(false); action("restart", () => runCliAction("app.restart", { app: String(appId) })); }} />
         </PermissionGate>
         <PermissionGate permission="apps.pause" appId={appId} environmentId={app.environment_id}>
-          <MobileSheetAction icon={app.status === "paused" ? <Play size={19} /> : <Pause size={19} />} label={app.status === "paused" ? "Unpause" : "Pause"} detail={app.status === "paused" ? "Resume serving traffic" : "Stop serving traffic without destroying the app"} disabled={ops.isBusy} onClick={() => { const next = app.status === "paused" ? "unpause" : "pause"; setMobileActionsOpen(false); action(next, () => post(`/api/apps/${appId}/${next}`)); }} />
+          <MobileSheetAction icon={app.status === "paused" ? <Play size={19} /> : <Pause size={19} />} label={app.status === "paused" ? "Unpause" : "Pause"} detail={app.status === "paused" ? "Resume serving traffic" : "Stop serving traffic without destroying the app"} disabled={ops.isBusy} onClick={() => { const next = app.status === "paused" ? "unpause" : "pause"; setMobileActionsOpen(false); action(next, () => runCliAction(`app.${next}`, { app: String(appId) })); }} />
         </PermissionGate>
         <PermissionGate permission="apps.destroy" appId={appId} environmentId={app.environment_id}>
           <MobileSheetAction icon={<Trash2 size={19} />} label="Destroy app" detail="Remove containers; DNS stays manual" danger loading={actionLoading === "destroy" || ops.isBusyWith("destroy_app")} disabled={ops.isBusy} onClick={async () => {
             if (await confirm("Destroy App", `Permanently destroy "${app.name}"?`, true)) {
               setMobileActionsOpen(false);
-              await action("destroy", () => del(`/api/apps/${appId}`));
+              await action("destroy", () => runConfirmedCliAction(
+                "app.delete",
+                { app: String(appId) },
+                { action: "delete_app", resourceType: "app", resourceId: appId },
+              ));
               window.location.hash = "#/";
             }
           }} />

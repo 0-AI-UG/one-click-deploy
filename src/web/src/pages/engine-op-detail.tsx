@@ -1,7 +1,9 @@
-import { ArrowLeft, ScrollText } from "lucide-react";
-import { useOperation, cancelOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
-import { Spinner, confirm, Btn } from "../components/ui.tsx";
+import { useState } from "react";
+import { ArrowLeft, RefreshCw, ScrollText, Wrench } from "lucide-react";
+import { useOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
+import { Spinner, confirm, Btn, showToast } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
+import { runCliAction, runConfirmedCliAction } from "../api/cli-actions.ts";
 
 function fmtTs(ts: string | null): string {
   if (!ts) return "—";
@@ -18,6 +20,7 @@ function stepStatusClass(status: string): string {
 
 export function EngineOpDetailPage({ opId }: { opId: number }) {
   const op = useOperation(opId);
+  const [actionBusy, setActionBusy] = useState<"cancel" | "retry" | "finalize" | null>(null);
 
   if (!op) {
     return (
@@ -34,7 +37,46 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
   async function onCancel() {
     const ok = await confirm("Cancel operation?", "The engine will stop at the next step boundary and run compensations.", true);
     if (!ok) return;
-    await cancelOperation(opId);
+    setActionBusy("cancel");
+    try {
+      await runConfirmedCliAction(
+        "ops.cancel",
+        { operation: String(opId) },
+        { action: "cancel_operation", resourceType: "operation", resourceId: opId },
+      );
+      showToast("Cancellation requested", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Cancellation failed", "error");
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function onRetry() {
+    if (!await confirm("Retry operation?", "Resume cleanup when possible, otherwise create a fresh retry.")) return;
+    setActionBusy("retry");
+    try {
+      await runCliAction("ops.retry", { operation: String(opId) }, { confirmed: true });
+      showToast("Operation retried", "success");
+      window.location.hash = "#/engine";
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Retry failed", "error");
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function onFinalize() {
+    if (!await confirm("Finalize operation?", "Reconcile the affected resources and close this stale operation using the engine's automatic assessment.", true)) return;
+    setActionBusy("finalize");
+    try {
+      await runCliAction("ops.finalize", { operation: String(opId), status: "auto" }, { confirmed: true });
+      showToast("Operation finalized", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Finalize failed", "error");
+    } finally {
+      setActionBusy(null);
+    }
   }
 
   return (
@@ -71,16 +113,33 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
             {op.attempt > 1 && ` · attempt ${op.attempt}`}
           </div>
         </div>
+        <div className="flex items-center gap-2">
         {active && (
           <PermissionGate permission="operations.cancel">
           <button
             onClick={onCancel}
+            disabled={actionBusy !== null}
             className="font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg bg-accent-red text-white px-3 py-1.5 shadow-neo-sm hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-neo-none transition-all"
           >
             Cancel
           </button>
           </PermissionGate>
         )}
+        {["failed", "compensation_failed", "compensated", "cancelled"].includes(op.status) && (
+          <PermissionGate permission="operations.cancel">
+            <Btn size="xs" loading={actionBusy === "retry"} disabled={actionBusy !== null} onClick={onRetry}>
+              <RefreshCw size={12} /> Retry
+            </Btn>
+          </PermissionGate>
+        )}
+        {["failed", "compensation_failed"].includes(op.status) && (
+          <PermissionGate permission="operations.cancel">
+            <Btn size="xs" variant="ghost" loading={actionBusy === "finalize"} disabled={actionBusy !== null} onClick={onFinalize}>
+              <Wrench size={12} /> Finalize
+            </Btn>
+          </PermissionGate>
+        )}
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-6 text-[10px] font-mono">

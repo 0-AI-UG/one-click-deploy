@@ -181,7 +181,7 @@ type Ctx = { token: string; userId: string };
 
 async function userWith(
   grants: ReadonlyArray<string | PermissionGrant>,
-  opts: { admin?: boolean; cli?: boolean } = {},
+  opts: { admin?: boolean; cli?: boolean; uiCli?: boolean } = {},
 ): Promise<Ctx> {
   const id = uid();
   db.insertUser({ id, username: id, password_hash: "x", is_admin: opts.admin });
@@ -189,7 +189,7 @@ async function userWith(
   const token = await createToken({
     userId: id,
     username: id,
-    ...(opts.cli ? { client: "cli" as const } : {}),
+    ...(opts.cli ? { client: "cli" as const } : opts.uiCli ? { client: "ui-cli" as const } : {}),
   });
   return { token, userId: id };
 }
@@ -1174,6 +1174,15 @@ describe("deploy entry points are CLI-only", () => {
     );
     expect(res.status).toBe(403);
     expect(((await res.json()) as { error: string }).error).toMatch(/only available through the ocd CLI/i);
+  });
+
+  test("a short-lived UI action CLI token reaches CLI-only routes", async () => {
+    const ctx = await userWith(["services.deploy"], { uiCli: true });
+    const res = await handleDeployService(
+      req("/api/services", { body: {}, token: ctx.token }),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/name is required/i);
   });
 });
 

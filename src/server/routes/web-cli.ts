@@ -1,20 +1,19 @@
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { authenticateRequest, createWebCliToken } from "../lib/auth.ts";
+import { authenticateRequest, createUiCliToken } from "../lib/auth.ts";
 import { PermissionError } from "../lib/errors.ts";
 import { corsHeaders } from "../lib/cors.ts";
 import { handleError } from "../lib/utils.ts";
-import { getUserById, hasPermission } from "../../shared/db.ts";
+import { getUserById } from "../../shared/db.ts";
 import {
-  buildWebCliArgv,
+  buildWebCliInvocation,
   findWebCliCommand,
   formatWebCliCommand,
   type WebCliValues,
 } from "../../shared/web-cli.ts";
 
 const encoder = new TextEncoder();
-const activeByUser = new Set<string>();
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_RUNTIME_MS = 15 * 60 * 1000;
 
@@ -22,18 +21,55 @@ type RunBody = {
   command_id?: string;
   values?: WebCliValues;
   confirmed?: boolean;
+  confirmation_code?: string;
+  workspace?: {
+    entry?: string;
+    files?: Array<{ path?: string; content?: string }>;
+  };
 };
 
-async function requireWebCliUser(request: Request) {
+const WORKSPACE_COMMANDS = new Set(["app.deploy", "stacks.deploy", "manifest.validate"]);
+
+function prepareWorkspace(configRoot: string, commandId: string, raw: RunBody["workspace"]): string {
+  if (!WORKSPACE_COMMANDS.has(commandId)) {
+    if (raw !== undefined) throw new Error("This command does not accept workspace files");
+    return configRoot;
+  }
+  if (!raw || !Array.isArray(raw.files) || raw.files.length === 0 || raw.files.length > 25) {
+    throw new Error("Deployment workspace must contain 1-25 manifest files");
+  }
+  const workspaceDir = path.join(configRoot, "workspace");
+  mkdirSync(workspaceDir, { recursive: true, mode: 0o700 });
+  let totalBytes = 0;
+  const paths = new Set<string>();
+  for (const file of raw.files) {
+    if (typeof file.path !== "string" || typeof file.content !== "string") throw new Error("Invalid workspace file");
+    const filePath = file.path.trim();
+    if (
+      !filePath || filePath.length > 240 || filePath.startsWith("/") || filePath.includes("\\") ||
+      /(^|\/)\.\.?($|\/)/.test(filePath) || /[\u0000-\u001f\u007f]/.test(filePath)
+    ) throw new Error("Workspace paths must be safe relative paths");
+    if (paths.has(filePath)) throw new Error(`Duplicate workspace path: ${filePath}`);
+    paths.add(filePath);
+    totalBytes += Buffer.byteLength(file.content);
+    if (totalBytes > 1024 * 1024) throw new Error("Deployment workspace exceeds 1 MiB");
+    const target = path.join(workspaceDir, filePath);
+    mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    writeFileSync(target, file.content, { mode: 0o600 });
+  }
+  if (typeof raw.entry !== "string" || !paths.has(raw.entry)) throw new Error("Workspace entry must name an uploaded manifest");
+  const init = Bun.spawnSync(["git", "init", "--quiet"], { cwd: workspaceDir, stdout: "pipe", stderr: "pipe" });
+  if (init.exitCode !== 0) throw new Error("Could not initialize deployment workspace");
+  return workspaceDir;
+}
+
+async function requireUiActionUser(request: Request) {
   const payload = await authenticateRequest(request);
-  if (payload.client === "cli") {
-    throw new PermissionError("The web CLI requires a signed-in browser session");
+  if (payload.client) {
+    throw new PermissionError("UI actions require a signed-in browser session");
   }
   const user = getUserById(payload.userId);
   if (!user) throw new PermissionError("Unauthorized");
-  if (!user.is_admin && !hasPermission(payload.userId, "cli.access")) {
-    throw new PermissionError("CLI access is not enabled for this account");
-  }
   return { payload, user };
 }
 
@@ -61,17 +97,9 @@ function event(type: string, data: Record<string, unknown> = {}): Uint8Array {
   return encoder.encode(`${JSON.stringify({ type, ...data })}\n`);
 }
 
-export async function handleWebCliRun(request: Request): Promise<Response> {
-  let userId = "";
+export async function handleCliActionRun(request: Request): Promise<Response> {
   try {
-    const { payload, user } = await requireWebCliUser(request);
-    userId = payload.userId;
-    if (activeByUser.has(userId)) {
-      return Response.json(
-        { error: "One CLI command is already running for this user" },
-        { status: 409, headers: corsHeaders },
-      );
-    }
+    const { payload, user } = await requireUiActionUser(request);
 
     const body = await request.json() as RunBody;
     const command = typeof body.command_id === "string" ? findWebCliCommand(body.command_id) : undefined;
@@ -89,8 +117,14 @@ export async function handleWebCliRun(request: Request): Promise<Response> {
     }
 
     let argv: string[];
+    let stdin: string | undefined;
     try {
-      argv = buildWebCliArgv(command, body.values || {});
+      const built = buildWebCliInvocation(command, body.values || {});
+      argv = built.argv;
+      stdin = built.stdin;
+      if (WORKSPACE_COMMANDS.has(command.id) && body.workspace?.entry !== body.values?.manifest) {
+        throw new Error("Workspace entry must match the manifest path");
+      }
     } catch (err) {
       return Response.json(
         { error: err instanceof Error ? err.message : "Invalid command parameters" },
@@ -98,14 +132,20 @@ export async function handleWebCliRun(request: Request): Promise<Response> {
       );
     }
 
-    const token = await createWebCliToken({
+    const confirmationCode = typeof body.confirmation_code === "string"
+      ? body.confirmation_code.trim()
+      : "";
+    if (confirmationCode && !/^[0-9a-f-]{36}$/i.test(confirmationCode)) {
+      return Response.json({ error: "Invalid confirmation token" }, { status: 400, headers: corsHeaders });
+    }
+
+    const token = await createUiCliToken({
       userId: payload.userId,
       username: payload.username,
       v: user.token_version,
     });
     const invocation = cliInvocation(argv);
-    activeByUser.add(userId);
-    console.info(`[web-cli] user=${payload.userId} command=${command.id}`);
+    console.info(`[cli-action] user=${payload.userId} command=${command.id}`);
 
     let runningProc: ReturnType<typeof Bun.spawn> | undefined;
     let streamCancelled = false;
@@ -114,7 +154,7 @@ export async function handleWebCliRun(request: Request): Promise<Response> {
         const enqueue = (value: Uint8Array) => {
           if (!streamCancelled) controller.enqueue(value);
         };
-        const configRoot = mkdtempSync(path.join(tmpdir(), "ocd-web-cli-"));
+        const configRoot = mkdtempSync(path.join(tmpdir(), "ocd-ui-action-"));
         const configDir = path.join(configRoot, "ocd");
         mkdirSync(configDir, { recursive: true, mode: 0o700 });
         writeFileSync(
@@ -155,15 +195,31 @@ export async function handleWebCliRun(request: Request): Promise<Response> {
         };
 
         try {
+          const cwd = prepareWorkspace(configRoot, command.id, body.workspace);
           enqueue(event("start", { command: formatWebCliCommand(argv) }));
           proc = Bun.spawn(invocation, {
-            cwd: configRoot,
-            env: { ...process.env, XDG_CONFIG_HOME: configRoot },
-            stdin: "ignore",
+            cwd,
+            env: {
+              // Never expose the panel process environment to a user-authored
+              // manifest (for example through auth.password_env). The CLI only
+              // needs its executable search path, locale, temp dir and the
+              // isolated config written above.
+              PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
+              LANG: process.env.LANG || "C.UTF-8",
+              TMPDIR: process.env.TMPDIR || tmpdir(),
+              XDG_CONFIG_HOME: configRoot,
+              ...(confirmationCode ? { OCD_CONFIRMATION_CODE: confirmationCode } : {}),
+            },
+            stdin: stdin === undefined ? "ignore" : "pipe",
             stdout: "pipe",
             stderr: "pipe",
           });
           runningProc = proc;
+          if (stdin !== undefined) {
+            const sink = proc.stdin as unknown as { write(value: string): unknown; end(): unknown };
+            sink.write(stdin);
+            sink.end();
+          }
           const stdout = proc.stdout as ReadableStream<Uint8Array>;
           const stderr = proc.stderr as ReadableStream<Uint8Array>;
           const pump = async (source: ReadableStream<Uint8Array>, channel: "stdout" | "stderr") => {
@@ -198,7 +254,6 @@ export async function handleWebCliRun(request: Request): Promise<Response> {
         } finally {
           clearTimeout(timeout);
           request.signal.removeEventListener("abort", abort);
-          activeByUser.delete(payload.userId);
           rmSync(configRoot, { recursive: true, force: true });
           if (!streamCancelled) controller.close();
         }
@@ -218,7 +273,9 @@ export async function handleWebCliRun(request: Request): Promise<Response> {
       },
     });
   } catch (err) {
-    if (userId) activeByUser.delete(userId);
     return handleError(err);
   }
 }
+
+/** Compatibility export for older callers during rolling upgrades. */
+export const handleWebCliRun = handleCliActionRun;

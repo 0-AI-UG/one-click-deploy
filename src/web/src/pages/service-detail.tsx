@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
-import { get, post, del } from "../api/client.ts";
+import { get } from "../api/client.ts";
+import { runCliAction, runConfirmedCliAction } from "../api/cli-actions.ts";
 import { Card, StatusBadge, Btn, Spinner, showToast, confirm, CopyButton, Table } from "../components/ui.tsx";
-import { trackOperationInToast, useResourceOperations } from "../hooks/useOperation.ts";
+import { useResourceOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { LogViewer } from "../components/log-viewer.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
@@ -13,7 +14,6 @@ import {
 } from "lucide-react";
 import type { ServiceData, ServiceInstance, LinkedEnvironment } from "../types.ts";
 import { CpuUsage, MemUsage } from "./app-detail/shared.tsx";
-import { serverConfirmedDelete } from "../api/server-confirmation.ts";
 import { DnsInstructionView } from "../components/dns-instruction.tsx";
 
 type EnvironmentRef = { id: number; name: string };
@@ -60,18 +60,16 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const action = async (act: string, label: string) => {
     setActionLoading(act);
     try {
-      let res: { op_id?: number };
       if (act === "delete") {
-        res = await serverConfirmedDelete(`/api/services/${serviceId}`, "delete_service", "service", serviceId);
+        await runConfirmedCliAction(
+          "services.delete",
+          { service: String(serviceId) },
+          { action: "delete_service", resourceType: "service", resourceId: serviceId },
+        );
       } else {
-        res = await post(`/api/services/${serviceId}/${act}`);
+        await runCliAction(`services.${act}`, { service: String(serviceId) });
       }
-      if (res?.op_id) {
-        trackOperationInToast(res.op_id, `${label} ${service?.name ?? "service"}`);
-        ops.track(res.op_id);
-      } else {
-        showToast(`${label} started`, "success");
-      }
+      showToast(`${label} complete`, "success");
       if (act === "delete") {
         window.location.hash = "#/";
         return;
@@ -88,7 +86,11 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
     if (!injectEnvId) return;
     setActionLoading("inject");
     try {
-      await post(`/api/services/${serviceId}/inject/${injectEnvId}`, { env_prefix: injectPrefix });
+      await runCliAction("services.inject", {
+        service: String(serviceId),
+        environment: injectEnvId,
+        prefix: injectPrefix,
+      });
       showToast("Credentials injected into environment", "success");
       setInjectEnvId("");
       load();
@@ -102,7 +104,10 @@ export function ServiceDetailPage({ serviceId }: { serviceId: number }) {
   const uninjectEnv = async (envId: number) => {
     setActionLoading(`uninject-${envId}`);
     try {
-      await del(`/api/services/${serviceId}/inject/${envId}`);
+      await runCliAction("services.uninject", {
+        service: String(serviceId),
+        environment: String(envId),
+      });
       showToast("Credentials removed from environment", "success");
       load();
     } catch (err: any) {

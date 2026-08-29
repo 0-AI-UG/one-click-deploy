@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildWebCliArgv, findWebCliCommand, WEB_CLI_COMMANDS } from "./web-cli.ts";
+import { buildWebCliArgv, buildWebCliInvocation, findWebCliCommand, WEB_CLI_COMMANDS } from "./web-cli.ts";
 
 function command(id: string) {
   const found = findWebCliCommand(id);
@@ -17,6 +17,7 @@ describe("web CLI command catalog", () => {
       "login", "apps", "status", "logs", "deploy", "delete", "restart",
       "rollback", "promote", "pause", "unpause", "envs", "service", "stack",
       "ops", "servers", "ssh", "skill", "app", "scale", "resources", "volumes",
+      "release", "manifest", "gc", "runners",
     ]) {
       expect(represented.has(name)).toBe(true);
     }
@@ -28,7 +29,7 @@ describe("web CLI command catalog", () => {
       deployment: "42",
     })).toEqual(["rollback", "api", "--deployment=42"]);
 
-    expect(() => buildWebCliArgv(command("app.delete"), { app: "api" })).toThrow("browser approval");
+    expect(buildWebCliArgv(command("app.delete"), { app: "api" })).toEqual(["delete", "api"]);
   });
 
   test("expands repeatable values without accepting arbitrary parameters", () => {
@@ -46,10 +47,10 @@ describe("web CLI command catalog", () => {
     })).toEqual(["app", "show", "api"]);
   });
 
-  test("rejects malformed numbers, key-value entries and disabled commands", () => {
+  test("rejects malformed numbers and key-value entries", () => {
     expect(() => buildWebCliArgv(command("app.logs"), { app: "api", tail: "1.5" })).toThrow("whole number");
     expect(() => buildWebCliArgv(command("envs.create"), { name: "prod", vars: "NOT_A_PAIR" })).toThrow("KEY=VALUE");
-    expect(() => buildWebCliArgv(command("app.deploy"), {})).toThrow("local manifest");
+    expect(() => buildWebCliArgv(command("app.deploy"), {})).toThrow("Manifest path is required");
   });
 
   test("rejects missing required resource selectors and invalid select values", () => {
@@ -72,5 +73,35 @@ describe("web CLI command catalog", () => {
   test("validates contextual numeric resource identities", () => {
     expect(buildWebCliArgv(command("ops.show"), { operation: "42" })).toEqual(["ops", "42"]);
     expect(() => buildWebCliArgv(command("ops.show"), { operation: "latest" })).toThrow("invalid ID");
+  });
+
+  test("keeps secret values out of argv and transports them through stdin", () => {
+    const built = buildWebCliInvocation(command("envs.set"), {
+      environment: "prod",
+      vars: ["PUBLIC=yes"],
+      secretVars: ["PASSWORD=correct horse battery staple"],
+    });
+    expect(built.argv).toEqual(["envs", "set", "prod", "PUBLIC=yes", "--secrets-stdin"]);
+    expect(built.argv.join(" ")).not.toContain("correct horse");
+    expect(JSON.parse(built.stdin!)).toEqual([{ key: "PASSWORD", value: "correct horse battery staple" }]);
+  });
+
+  test("constructs manifest workspace command arguments without accepting source content", () => {
+    expect(buildWebCliArgv(command("app.deploy"), {
+      manifest: ".ocd-deploy.json",
+      commit: "0123456789abcdef",
+      dryRun: true,
+    })).toEqual(["deploy", ".ocd-deploy.json", "--commit=0123456789abcdef", "--dry-run"]);
+  });
+
+  test("keeps deployment and service overrides out of process arguments", () => {
+    const service = buildWebCliInvocation(command("services.create"), {
+      name: "database",
+      type: "postgresql",
+      vars: ["PASSWORD=not-in-argv"],
+    });
+    expect(service.argv).toEqual(["service", "create", "database", "--type=postgresql", "--sets-stdin"]);
+    expect(service.argv.join(" ")).not.toContain("not-in-argv");
+    expect(JSON.parse(service.stdin!)).toEqual({ sets: ["PASSWORD=not-in-argv"], staging_sets: [] });
   });
 });

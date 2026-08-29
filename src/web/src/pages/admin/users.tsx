@@ -7,6 +7,9 @@ import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-se
 import { Users, Plus, Trash2, Shield, ShieldCheck, Key, ShieldAlert, Save, RefreshCw, Server as ServerIcon, Settings, Copy, Check, Hammer } from "lucide-react";
 import type { PanelApp, DeploymentRecord } from "../../types.ts";
 import { DnsInstructionView } from "../../components/dns-instruction.tsx";
+import { runCliAction } from "../../api/cli-actions.ts";
+
+const stripAnsi = (value: string) => value.replace(/[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, "");
 
 function GitHubOAuthSettings({ form, setS }: {
   form: { github_oauth_client_id: string; github_oauth_client_secret: string };
@@ -274,13 +277,13 @@ export function UsersPage() {
     }
     setRunnerBusy(true);
     try {
-      const result = await post("/api/runners", {
-        ...runnerForm,
-        server_id: Number(runnerForm.server_id),
+      await runCliAction("runners.install", {
+        server: runnerForm.server_id,
         name: runnerForm.name || undefined,
+        removalToken: runnerForm.removal_token || undefined,
       });
       setRunnerForm((current) => ({ ...current, removal_token: "" }));
-      showToast(`Build-worker installation queued as operation #${result.op_id}`, "success");
+      showToast("Build worker installed", "success");
       await refreshRunners();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -293,8 +296,8 @@ export function UsersPage() {
     if (!await confirm("Remove Build Worker", `Remove ${runner.name} and release ${runner.server?.name || "its server"} back to its previous capacity pool?`, true)) return;
     setRunnerBusy(true);
     try {
-      const result = await del(`/api/runners/${runner.id}`);
-      showToast(`Build-worker removal queued as operation #${result.op_id}`, "success");
+      await runCliAction("runners.remove", { runner: String(runner.id) }, { confirmed: true });
+      showToast("Build worker removed", "success");
       await refreshRunners();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -306,8 +309,12 @@ export function UsersPage() {
   const rotateWebhook = async (source: BuildSource) => {
     if (!await confirm("Rotate Webhook Secret", `Rotate the GitHub webhook secret for ${source.repository}#${source.branch}? The previous secret stops working immediately.`, true)) return;
     try {
-      const result = await post(`/api/build-sources/${source.id}/webhook-secret`, {});
-      setShownWebhook({ url: result.webhook_url, secret: result.secret });
+      const result = await runCliAction("runners.webhook-secret", { source: String(source.id) }, { confirmed: true });
+      const output = stripAnsi(result.stdout);
+      const url = output.match(/^Payload URL:\s*(.+)$/m)?.[1]?.trim();
+      const secret = output.match(/^Secret \(shown once\):\s*(.+)$/m)?.[1]?.trim();
+      if (!url || !secret) throw new Error("CLI did not return the rotated webhook secret");
+      setShownWebhook({ url, secret });
       await refreshRunners();
     } catch (err: any) {
       showToast(err.message, "error");

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { decodeJwt } from "jose";
-import { createToken } from "./auth.ts";
+import { createToken, createUiCliToken } from "./auth.ts";
 
 function lifetimeDays(token: string): number {
   const payload = decodeJwt(token);
@@ -23,5 +23,11 @@ describe("token lifetimes", () => {
       client: "cli",
     });
     expect(lifetimeDays(token)).toBe(365);
+  });
+
+  test("keeps panel-spawned CLI credentials short-lived and origin-scoped", async () => {
+    const token = await createUiCliToken({ userId: "user-1", username: "user" });
+    expect(lifetimeDays(token)).toBeCloseTo(5 / 60 / 24, 8);
+    expect(decodeJwt(token).client).toBe("ui-cli");
   });
 });

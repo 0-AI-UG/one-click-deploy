@@ -381,6 +381,28 @@ export async function parseVarArgs(args: string[]): Promise<Array<{ key: string;
       add(key, (await Bun.stdin.text()).replace(/\r?\n$/, ""), true);
       continue;
     }
+    if (arg === "--secrets-stdin") {
+      const raw = await Bun.stdin.text();
+      let entries: unknown;
+      try {
+        entries = JSON.parse(raw);
+      } catch {
+        throw new Error("--secrets-stdin expects a JSON array on stdin");
+      }
+      if (!Array.isArray(entries) || entries.length > 100) {
+        throw new Error("--secrets-stdin expects at most 100 entries");
+      }
+      for (const entry of entries) {
+        if (
+          !entry || typeof entry !== "object" ||
+          typeof (entry as { key?: unknown }).key !== "string" ||
+          typeof (entry as { value?: unknown }).value !== "string"
+        ) throw new Error("--secrets-stdin entries require string key and value fields");
+        const { key, value } = entry as { key: string; value: string };
+        add(key, value, true);
+      }
+      continue;
+    }
     if (arg === "--from-env" || arg.startsWith("--from-env=")) {
       const spec = arg === "--from-env" ? (args[++i] || "") : arg.slice(11);
       const eq = spec.indexOf("=");

@@ -20,13 +20,14 @@ import { UsersPage } from "./pages/admin/users.tsx";
 import { UserDetailPage } from "./pages/admin/user-detail.tsx";
 import { TerminalPage } from "./pages/terminal.tsx";
 import { ServiceDetailPage } from "./pages/service-detail.tsx";
+import { ServicesPage } from "./pages/services.tsx";
 import { EnvironmentsPage } from "./pages/environments.tsx";
 import { DeviceAuthPage } from "./pages/device-auth.tsx";
 import { CliConfirmPage } from "./pages/cli-confirm.tsx";
 import { EnginePage } from "./pages/engine.tsx";
 import { EngineOpDetailPage } from "./pages/engine-op-detail.tsx";
 import { EngineOpLogsPage } from "./pages/engine-op-logs.tsx";
-import { WebCliPage } from "./pages/web-cli.tsx";
+import { DeployPage } from "./pages/deploy.tsx";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -130,19 +131,21 @@ export function App() {
   let content;
   if (hash === "#/" || hash === "") {
     content = <DashboardPage />;
+  } else if (hash === "#/deploy") {
+    content = <DeployPage />;
   } else if (hash.startsWith("#/apps/")) {
     const appId = parseInt(hash.split("/")[2], 10);
     content = appId ? <AppDetailPage appId={appId} /> : <DashboardPage />;
   } else if (hash.startsWith("#/stacks/")) {
     const stackId = parseInt(hash.split("/")[2], 10);
     content = stackId ? <StackDetailPage stackId={stackId} /> : <DashboardPage />;
+  } else if (hash === "#/services") {
+    content = <ServicesPage />;
   } else if (hash.startsWith("#/services/")) {
     const serviceId = parseInt(hash.split("/")[2], 10);
     content = serviceId ? <ServiceDetailPage serviceId={serviceId} /> : <DashboardPage />;
   } else if (hash === "#/cli/auth") {
     content = <DeviceAuthPage />;
-  } else if (hash === "#/cli") {
-    content = <WebCliPage />;
   } else if (hash.startsWith("#/cli/confirm/")) {
     const code = decodeURIComponent(hash.split("/")[3] || "");
     content = code ? <CliConfirmPage userCode={code} /> : <DashboardPage />;

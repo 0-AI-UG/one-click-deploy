@@ -2,11 +2,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   Cpu,
+  Database,
   HardDrive,
   Home,
   Layers,
   LogOut,
   Menu,
+  Rocket,
   Server,
   Terminal,
   TerminalSquare,
@@ -20,10 +22,11 @@ import { SkillInstallMenu } from "./skill-install-menu.tsx";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
-  { hash: "#/cli", label: "Web CLI", icon: TerminalSquare, match: /^#\/cli$/ },
-  { hash: "#/environments", label: "Env", icon: Layers, match: /^#\/environments/ },
-  { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
-  { hash: "#/engine", label: "Engine", icon: Cpu, match: /^#\/engine/ },
+  { hash: "#/deploy", label: "Deploy", icon: Rocket, match: /^#\/deploy/ },
+  { hash: "#/environments", label: "Environments", icon: Layers, match: /^#\/environments/ },
+  { hash: "#/services", label: "Services", icon: Database, match: /^#\/services/ },
+  { hash: "#/resources", label: "Infrastructure", icon: HardDrive, match: /^#\/resources/ },
+  { hash: "#/engine", label: "Operations", icon: Cpu, match: /^#\/engine/ },
 ];
 
 function CliCopyButton() {
@@ -257,8 +260,9 @@ function MobileNav({ hash }: { hash: string }) {
   useEffect(() => setMoreOpen(false), [hash]);
 
   const primaryItems = [
-    { hash: "#/", label: "Home", icon: Home, active: /^#\/?$/.test(hash) || /^#\/(apps|stacks|services)\//.test(hash) },
-    { hash: "#/environments", label: "Envs", icon: Layers, active: hash.startsWith("#/environments") },
+    { hash: "#/", label: "Home", icon: Home, active: /^#\/?$/.test(hash) || /^#\/(apps|stacks)\//.test(hash) },
+    { hash: "#/deploy", label: "Deploy", icon: Rocket, active: hash.startsWith("#/deploy") },
+    { hash: "#/services", label: "Services", icon: Database, active: hash.startsWith("#/services") },
     { hash: "#/resources", label: "Resources", icon: HardDrive, active: hash.startsWith("#/resources") },
   ];
 
@@ -278,7 +282,7 @@ function MobileNav({ hash }: { hash: string }) {
       </header>
 
       <nav className="fixed inset-x-0 bottom-0 z-50 border-t-2 border-fg bg-bg-raised pb-[env(safe-area-inset-bottom)]" aria-label="Primary navigation">
-        <div className="grid h-[62px] grid-cols-4">
+        <div className="grid h-[62px] grid-cols-5">
           {primaryItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -288,15 +292,15 @@ function MobileNav({ hash }: { hash: string }) {
               </a>
             );
           })}
-          <button onClick={() => setMoreOpen(true)} className={`flex flex-col items-center justify-center gap-1 font-mono text-[9px] font-bold uppercase ${moreOpen || hash === "#/cli" || hash.startsWith("#/engine") || hash.startsWith("#/admin") || hash.startsWith("#/account") ? "bg-accent text-fg" : "text-muted"}`}>
+          <button onClick={() => setMoreOpen(true)} className={`flex flex-col items-center justify-center gap-1 font-mono text-[9px] font-bold uppercase ${moreOpen || hash.startsWith("#/environments") || hash.startsWith("#/engine") || hash.startsWith("#/admin") || hash.startsWith("#/account") ? "bg-accent text-fg" : "text-muted"}`}>
             <Menu size={20} /><span>More</span>
           </button>
         </div>
       </nav>
 
       <MobileActionSheet open={moreOpen} onClose={() => setMoreOpen(false)} title="OCD Menu" subtitle={user?.username}>
-        <MobileSheetAction icon={<TerminalSquare size={19} />} label="Web CLI" detail="Compose and run OCD commands" onClick={() => { window.location.hash = "#/cli"; }} />
-        <MobileSheetAction icon={<Cpu size={19} />} label="Engine" detail="Operations and recovery" onClick={() => { window.location.hash = "#/engine"; }} />
+        <MobileSheetAction icon={<Layers size={19} />} label="Environments" detail="Variables, secrets, and rollout behavior" onClick={() => { window.location.hash = "#/environments"; }} />
+        <MobileSheetAction icon={<Cpu size={19} />} label="Operations" detail="Progress, logs, and recovery actions" onClick={() => { window.location.hash = "#/engine"; }} />
         {user?.isAdmin && <MobileSheetAction icon={<Users size={19} />} label="Admin" detail="Users and permissions" onClick={() => { window.location.hash = "#/admin"; }} />}
         <MobileSheetAction icon={<User size={19} />} label="Account" detail="Security and profile" onClick={() => { window.location.hash = "#/account"; }} />
         <MobileCliCopyButton />

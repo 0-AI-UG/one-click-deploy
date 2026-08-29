@@ -12,6 +12,7 @@ import {
 import { mergeEnv } from "../../shared/env-merge.ts";
 import { withWebConfirmation } from "../confirm.ts";
 import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
+import { readSetValuesFromStdin } from "../stdin-values.ts";
 
 interface Environment {
   id: number;
@@ -40,7 +41,7 @@ async function resolveEnvironment(name: string): Promise<Environment> {
   process.exit(1);
 }
 
-function parseFlags(args: string[]): {
+async function parseFlags(args: string[]): Promise<{
   manifestPath: string;
   authPasswordEnv?: string;
   serverId?: number;
@@ -52,7 +53,7 @@ function parseFlags(args: string[]): {
   allowUnknown: boolean;
   imageOverride?: string;
   commit?: string;
-} {
+}> {
   const parsed = parseCliArgs(args, {
     set: { type: "string", repeatable: true },
     "auth-password-env": { type: "string" },
@@ -64,6 +65,7 @@ function parseFlags(args: string[]): {
     "allow-unknown": { type: "boolean" },
     image: { type: "string" },
     commit: { type: "string" },
+    "sets-stdin": { type: "boolean" },
   }, { maxPositionals: 1 });
   const manifestPath = parsed.positionals[0] || ".ocd-deploy.json";
   const authPasswordEnv = parsed.flags["auth-password-env"] as string | undefined;
@@ -76,8 +78,9 @@ function parseFlags(args: string[]): {
   if (commit !== undefined && !/^[a-f0-9]{7,64}$/i.test(commit)) {
     throw new Error("--commit must contain 7-64 hexadecimal characters");
   }
+  const stdinSets = parsed.flags["sets-stdin"] === true ? (await readSetValuesFromStdin()).sets : [];
   const sets: Record<string, string> = {};
-  for (const pair of (parsed.flags.set as string[] | undefined) ?? []) {
+  for (const pair of [...((parsed.flags.set as string[] | undefined) ?? []), ...stdinSets]) {
       const eq = pair.indexOf("=");
       if (eq < 1) {
         throw new Error(`Invalid --set value (expected KEY=VALUE): ${pair}`);
@@ -100,7 +103,7 @@ export async function deploy(args: string[]): Promise<void> {
     return;
   }
 
-  const { manifestPath, authPasswordEnv, serverId, appName, sets, help, dryRun, configOnly, allowUnknown, imageOverride, commit } = parseFlags(args);
+  const { manifestPath, authPasswordEnv, serverId, appName, sets, help, dryRun, configOnly, allowUnknown, imageOverride, commit } = await parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]

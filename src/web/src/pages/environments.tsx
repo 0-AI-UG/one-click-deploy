@@ -1,17 +1,15 @@
 import { useState, useEffect, useRef } from "react";
-import { get, post, put } from "../api/client.ts";
+import { get } from "../api/client.ts";
+import { runCliAction, runConfirmedCliAction } from "../api/cli-actions.ts";
 import { Card, Btn, showToast, confirm, confirmWithText, EmptyState } from "../components/ui.tsx";
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
-import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
+import { useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { Layers, Plus, Trash2, Copy, ChevronDown, ChevronRight, Key } from "lucide-react";
 import type { EnvironmentData } from "../types.ts";
-import { serverConfirmedDelete } from "../api/server-confirmation.ts";
 
 type AttachedApp = { id: number; name: string; status: string; domain: string };
-type EnvironmentMutationResult = { warnings?: string[]; redeploying?: number; restarting?: number; op_id?: number };
-
 export function EnvironmentsPage() {
   const [environments, setEnvironments] = useState<EnvironmentData[]>([]);
   const [deletedEnvironments, setDeletedEnvironments] = useState<EnvironmentData[]>([]);
@@ -85,13 +83,12 @@ export function EnvironmentsPage() {
   const save = async (id: number | "new") => {
     setLoading(true);
     try {
-      const vars = editVars.filter((e) => e.key.trim()).map((e) => ({
-        key: e.key.trim(), value: e.value, secret: e.secret,
-      }));
+      const rows = editVars.filter((e) => e.key.trim());
+      const vars = rows.filter((entry) => !entry.secret).map((entry) => `${entry.key.trim()}=${entry.value}`);
+      const secretVars = rows.filter((entry) => entry.secret).map((entry) => `${entry.key.trim()}=${entry.value}`);
       if (id === "new") {
-        const res = await post("/api/environments", { name: editName, env_vars: vars }) as EnvironmentMutationResult;
+        await runCliAction("envs.create", { name: editName, vars, secretVars });
         showToast("Environment created", "success");
-        for (const warning of res.warnings ?? []) showToast(warning, "info");
       } else {
         const apps = attachedApps[id] || [];
         const activeApps = apps.filter((a) => a.status !== "stopped" && a.status !== "destroying");
@@ -103,15 +100,31 @@ export function EnvironmentsPage() {
           );
           if (!ok) { setLoading(false); return; }
         }
-        const res = await put(`/api/environments/${id}`, { name: editName, env_vars: vars, rollout }) as EnvironmentMutationResult;
-        const rolling = (res?.redeploying ?? 0) + (res?.restarting ?? 0);
-        if (rolling > 0 && res?.op_id) {
-          trackOperationInToast(res.op_id, `Reloading ${rolling} app${rolling !== 1 ? "s" : ""}`);
-          ops.track(res.op_id);
+        const existing = environments.find((environment) => environment.id === id);
+        if (existing && existing.name !== editName.trim()) {
+          await runCliAction("envs.rename", {
+            environment: String(id),
+            newName: editName.trim(),
+          });
+        }
+        if (rows.length > 0) {
+          await runCliAction("envs.set", {
+            environment: String(id),
+            vars,
+            secretVars,
+            replace: true,
+            rollout,
+          });
+        } else if ((existing?.env_vars.length ?? 0) > 0) {
+          await runCliAction("envs.unset", {
+            environment: String(id),
+            keys: existing!.env_vars.map((entry) => entry.key),
+            rollout,
+          });
         } else {
           showToast("Environment updated", "success");
         }
-        for (const warning of res.warnings ?? []) showToast(warning, "info");
+        showToast("Environment updated", "success");
       }
       setExpanded(null);
       load();
@@ -144,7 +157,10 @@ export function EnvironmentsPage() {
     if (!copy?.sourceId || !copy.name.trim()) return;
     setCopyBusy(true);
     try {
-      await post(`/api/environments/${copy.sourceId}/copy`, { name: copy.name.trim() });
+      await runCliAction("envs.copy", {
+        environment: String(copy.sourceId),
+        newName: copy.name.trim(),
+      });
       showToast("Environment duplicated", "success");
       setCopy(null);
       load();
@@ -296,18 +312,12 @@ export function EnvironmentsPage() {
                           }
                           if (await confirm("Delete Environment", `Delete "${env.name}"?`, true)) {
                             try {
-                              const result = await serverConfirmedDelete<{ recoverable_until?: string | null }>(
-                                `/api/environments/${env.id}`,
-                                "delete_environment",
-                                "environment",
-                                env.id,
+                              await runConfirmedCliAction(
+                                "envs.delete",
+                                { environment: String(env.id) },
+                                { action: "delete_environment", resourceType: "environment", resourceId: env.id },
                               );
-                              showToast(
-                                result.recoverable_until
-                                  ? `Environment retained for recovery until ${result.recoverable_until}`
-                                  : "Environment retained for recovery",
-                                "success",
-                              );
+                              showToast("Environment retained for recovery", "success");
                               load();
                             } catch (err: any) {
                               showToast(err.message || "Failed to delete", "error");
@@ -364,7 +374,7 @@ export function EnvironmentsPage() {
                     title="Restore environment"
                     onClick={async () => {
                       try {
-                        await post(`/api/environments/${environment.id}/restore`);
+                        await runCliAction("envs.restore", { environment: String(environment.id) });
                         showToast("Environment restored", "success");
                         load();
                       } catch (err: any) {
@@ -385,12 +395,15 @@ export function EnvironmentsPage() {
                         `Type ${environment.name} to confirm`,
                       )) return;
                       try {
-                        await serverConfirmedDelete(
-                          `/api/environments/${environment.id}/purge`,
-                          "purge_environment",
-                          "environment",
-                          environment.id,
-                          environment.name,
+                        await runConfirmedCliAction(
+                          "envs.purge",
+                          { environment: String(environment.id) },
+                          {
+                            action: "purge_environment",
+                            resourceType: "environment",
+                            resourceId: environment.id,
+                            typedResource: environment.name,
+                          },
                         );
                         showToast("Environment permanently deleted", "success");
                         load();

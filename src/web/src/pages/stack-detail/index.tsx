@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { get, post } from "../../api/client.ts";
+import { get } from "../../api/client.ts";
+import { runConfirmedCliAction } from "../../api/cli-actions.ts";
 import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { TabBar } from "../../components/tab-bar.tsx";
@@ -8,7 +9,6 @@ import { ArrowLeft, ArrowUpFromLine, Trash2 } from "lucide-react";
 import { OverviewTab } from "./overview-tab.tsx";
 import { StackLogsTab } from "./logs-tab.tsx";
 import type { StackDetail, EnvironmentData } from "../../types.ts";
-import { serverConfirmedAction, serverConfirmedDelete } from "../../api/server-confirmation.ts";
 
 const errMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
@@ -125,12 +125,10 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
                 if (await confirm(
                   "Promote Stack",
                   `Promote the staging sibling of ${promotable} member(s) of "${stack.name}" to production? Each production app will receive the exact immutable image running in staging.`,
-                )) await action("promote", () => serverConfirmedAction(
-                  `/api/stacks/${stackId}/promote`,
-                  "POST",
-                  "promote_stack",
-                  "stack",
-                  stackId,
+                )) await action("promote", () => runConfirmedCliAction(
+                  "stacks.promote",
+                  { stack: String(stackId) },
+                  { action: "promote_stack", resourceType: "stack", resourceId: stackId },
                 ));
               }}
             ><ArrowUpFromLine size={12} /> Promote</Btn>
@@ -148,11 +146,10 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
                   `Destroy "${stack.name}" and all ${memberApps.length} app(s) and ${stack.services.length} service(s)? Containers and routing are removed; environments are retained, and managed volumes are detached for recovery.`,
                   true,
                 )) {
-                  await action("destroy", () => serverConfirmedDelete(
-                    `/api/stacks/${stackId}`,
-                    "delete_stack",
-                    "stack",
-                    stackId,
+                  await action("destroy", () => runConfirmedCliAction(
+                    "stacks.delete",
+                    { stack: String(stackId) },
+                    { action: "delete_stack", resourceType: "stack", resourceId: stackId },
                   ));
                   window.location.hash = "#/";
                 }

@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { get, post } from "../api/client.ts";
+import { get } from "../api/client.ts";
+import { runCliAction, runConfirmedCliAction } from "../api/cli-actions.ts";
 import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
-import { trackOperationInToast, useActiveOperations } from "../hooks/useOperation.ts";
+import { useActiveOperations } from "../hooks/useOperation.ts";
 import { Globe, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, Check, Database, Box, Boxes, ChevronDown, ChevronRight, ArrowUpFromLine, MoreVertical, Settings2 } from "lucide-react";
-import { serverConfirmedAction, serverConfirmedDelete } from "../api/server-confirmation.ts";
 import { useMobileLayout } from "../hooks/use-mobile-layout.ts";
 import { MobileActionSheet, MobileSheetAction } from "../components/mobile-action-sheet.tsx";
 import { ContextActionItem, ContextActionMenu } from "../components/context-action-menu.tsx";
@@ -45,18 +45,6 @@ const STACK_OP_KINDS = new Set([
   "deploy_stack", "destroy_stack", "cascade_redeploy", "promote_stack",
 ]);
 
-const APP_OP_LABELS: Record<string, string> = {
-  restart: "Restarting app",
-  pause: "Pausing app",
-  unpause: "Unpausing app",
-  delete: "Destroying app",
-};
-const SVC_OP_LABELS: Record<string, string> = {
-  restart: "Restarting service",
-  pause: "Pausing service",
-  unpause: "Unpausing service",
-  delete: "Destroying service",
-};
 const APP_ACTION_TO_KIND: Record<string, string> = {
   restart: "restart_app",
   pause: "pause_app",
@@ -139,17 +127,20 @@ export function DashboardPage() {
     if (!loading) load();
   }, [activeSig]);
 
-  const appAction = async (action: string, appId: number, body?: Record<string, unknown>) => {
+  const appAction = async (action: string, appId: number) => {
     const key = `${action}-${appId}`;
     setActionLoading(key);
     try {
-      const res = action === "delete"
-        ? await serverConfirmedDelete<{ op_id?: number }>(`/api/apps/${appId}`, "delete_app", "app", appId)
-        : await post(`/api/apps/${appId}/${action}`, body) as { op_id?: number };
-      if (res?.op_id) {
-        trackOperationInToast(res.op_id, APP_OP_LABELS[action] || "Operation");
-        ops.track(res.op_id);
+      if (action === "delete") {
+        await runConfirmedCliAction(
+          "app.delete",
+          { app: String(appId) },
+          { action: "delete_app", resourceType: "app", resourceId: appId },
+        );
+      } else {
+        await runCliAction(`app.${action}`, { app: String(appId) });
       }
+      showToast(`${action} successful`, "success");
       load();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -162,13 +153,16 @@ export function DashboardPage() {
     const key = `svc-${action}-${svcId}`;
     setActionLoading(key);
     try {
-      const res = action === "delete"
-        ? await serverConfirmedDelete<{ op_id?: number }>(`/api/services/${svcId}`, "delete_service", "service", svcId)
-        : await post(`/api/services/${svcId}/${action}`) as { op_id?: number };
-      if (res?.op_id) {
-        trackOperationInToast(res.op_id, SVC_OP_LABELS[action] || "Operation");
-        ops.track(res.op_id);
+      if (action === "delete") {
+        await runConfirmedCliAction(
+          "services.delete",
+          { service: String(svcId) },
+          { action: "delete_service", resourceType: "service", resourceId: svcId },
+        );
+      } else {
+        await runCliAction(`services.${action}`, { service: String(svcId) });
       }
+      showToast(`${action} successful`, "success");
       load();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -189,17 +183,12 @@ export function DashboardPage() {
     const key = `stack-promote-${stack.id}`;
     setActionLoading(key);
     try {
-      const res = await serverConfirmedAction<{ op_id?: number }>(
-        `/api/stacks/${stack.id}/promote`,
-        "POST",
-        "promote_stack",
-        "stack",
-        stack.id,
+      await runConfirmedCliAction(
+        "stacks.promote",
+        { stack: String(stack.id) },
+        { action: "promote_stack", resourceType: "stack", resourceId: stack.id },
       );
-      if (res?.op_id) {
-        trackOperationInToast(res.op_id, `Promoting stack ${stack.name}`);
-        ops.track(res.op_id);
-      }
+      showToast(`Promoted stack ${stack.name}`, "success");
       load();
     } catch (err: any) {
       showToast(err.message, "error");
@@ -217,16 +206,12 @@ export function DashboardPage() {
     const key = `stack-delete-${stack.id}`;
     setActionLoading(key);
     try {
-      const res = await serverConfirmedDelete<{ op_id?: number }>(
-        `/api/stacks/${stack.id}`,
-        "delete_stack",
-        "stack",
-        stack.id,
+      await runConfirmedCliAction(
+        "stacks.delete",
+        { stack: String(stack.id) },
+        { action: "delete_stack", resourceType: "stack", resourceId: stack.id },
       );
-      if (res?.op_id) {
-        trackOperationInToast(res.op_id, `Destroying stack ${stack.name}`);
-        ops.track(res.op_id);
-      }
+      showToast(`Destroyed stack ${stack.name}`, "success");
       load();
     } catch (err: any) {
       showToast(err.message, "error");

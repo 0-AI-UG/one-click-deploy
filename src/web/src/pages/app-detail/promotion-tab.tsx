@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { get } from "../../api/client.ts";
 import { Card, Btn, StatusBadge, confirm, showToast } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
-import { trackOperationInToast, type ResourceOpsResult } from "../../hooks/useOperation.ts";
+import { type ResourceOpsResult } from "../../hooks/useOperation.ts";
 import { ArrowUpCircle, ExternalLink, Rocket } from "lucide-react";
 import type { AppData } from "../../types.ts";
 import type { AppStagingResponse } from "../../../../shared/rpc.ts";
-import { serverConfirmedAction } from "../../api/server-confirmation.ts";
+import { runConfirmedCliAction } from "../../api/cli-actions.ts";
 
 const errMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
@@ -41,18 +41,11 @@ export function PromotionTab({ app, appId, action, ops }: PromotionTabProps) {
     )) return;
 
     await action("promote", async () => {
-      const result = await serverConfirmedAction<{ op_id?: number }>(
-        "/api/apps/promote",
-        "POST",
-        "promote_app",
-        "promotion",
-        `${sibling.id}:${appId}`,
-        { source_app: sibling.name, dest_app: app.name },
+      await runConfirmedCliAction(
+        "app.promote",
+        { from: String(sibling.id), to: String(appId) },
+        { action: "promote_app", resourceType: "promotion", resourceId: `${sibling.id}:${appId}` },
       );
-      if (result.op_id) {
-        trackOperationInToast(result.op_id, "Promoting immutable image to production");
-        ops.track(result.op_id);
-      }
     });
     await load();
   };
