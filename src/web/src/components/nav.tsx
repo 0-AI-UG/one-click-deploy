@@ -8,7 +8,6 @@ import {
   Layers,
   LogOut,
   Menu,
-  Rocket,
   Server,
   Terminal,
   TerminalSquare,
@@ -22,11 +21,10 @@ import { SkillInstallMenu } from "./skill-install-menu.tsx";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
-  { hash: "#/deploy", label: "Deploy", icon: Rocket, match: /^#\/deploy/ },
-  { hash: "#/environments", label: "Environments", icon: Layers, match: /^#\/environments/ },
+  { hash: "#/environments", label: "Env", icon: Layers, match: /^#\/environments/ },
   { hash: "#/services", label: "Services", icon: Database, match: /^#\/services/ },
-  { hash: "#/resources", label: "Infrastructure", icon: HardDrive, match: /^#\/resources/ },
-  { hash: "#/engine", label: "Operations", icon: Cpu, match: /^#\/engine/ },
+  { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
+  { hash: "#/engine", label: "Engine", icon: Cpu, match: /^#\/engine/ },
 ];
 
 function CliCopyButton() {
@@ -261,7 +259,6 @@ function MobileNav({ hash }: { hash: string }) {
 
   const primaryItems = [
     { hash: "#/", label: "Home", icon: Home, active: /^#\/?$/.test(hash) || /^#\/(apps|stacks)\//.test(hash) },
-    { hash: "#/deploy", label: "Deploy", icon: Rocket, active: hash.startsWith("#/deploy") },
     { hash: "#/services", label: "Services", icon: Database, active: hash.startsWith("#/services") },
     { hash: "#/resources", label: "Resources", icon: HardDrive, active: hash.startsWith("#/resources") },
   ];
@@ -282,7 +279,7 @@ function MobileNav({ hash }: { hash: string }) {
       </header>
 
       <nav className="fixed inset-x-0 bottom-0 z-50 border-t-2 border-fg bg-bg-raised pb-[env(safe-area-inset-bottom)]" aria-label="Primary navigation">
-        <div className="grid h-[62px] grid-cols-5">
+        <div className="grid h-[62px] grid-cols-4">
           {primaryItems.map((item) => {
             const Icon = item.icon;
             return (
