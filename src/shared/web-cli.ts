@@ -79,6 +79,7 @@ const resource = (
 export const WEB_CLI_COMMANDS: WebCliCommand[] = [
   { id: "status", category: "Overview", label: "Status", description: "Show the dashboard overview.", args: ["status"], inputs: [] },
   { id: "apps.list", category: "Overview", label: "List apps", description: "List all visible apps.", args: ["apps"], inputs: [] },
+  { id: "doctor", category: "Overview", label: "Deploy readiness", description: "Check capacity and build connections without changing them.", args: ["doctor"], inputs: [] },
 
   { id: "app.show", category: "Apps", label: "App details", description: "Show manifest configuration and runtime state.", args: ["app", "show"], inputs: [app()] },
   { id: "app.storage", category: "Apps", label: "Image storage", description: "Show current, rollback, and reclaimable image storage.", args: ["app", "show"], inputs: [app()], fixedArgs: ["--storage"] },
@@ -171,6 +172,10 @@ export const WEB_CLI_COMMANDS: WebCliCommand[] = [
   { id: "runners.remove", category: "Build", label: "Remove build worker", description: "Remove a worker and restore its server capacity pool.", args: ["runners", "remove"], inputs: [{ key: "runner", label: "Build worker", kind: "text", required: true, positional: true }], danger: true },
   { id: "runners.sources", category: "Build", label: "List build sources", description: "List repository and branch webhook sources.", args: ["runners", "sources"], inputs: [] },
   { id: "runners.webhook-secret", category: "Build", label: "Rotate webhook secret", description: "Rotate and reveal a source webhook secret once.", args: ["runners", "webhook-secret"], inputs: [positiveNumber("source", "Build source", { required: true, positional: true })], danger: true },
+  { id: "registry.login", category: "Build", label: "Connect OCI registry", description: "Store an encrypted repository-namespace-scoped push/pull credential.", args: ["registry", "login"], inputs: [{ key: "scope", label: "Repository namespace", kind: "text", required: true, positional: true }, { key: "username", label: "Username", kind: "text", required: true, flag: "username" }, { key: "token", label: "Password / token", kind: "text", required: true, flag: "token-stdin", transport: "stdin" }] },
+  { id: "registry.logout", category: "Build", label: "Disconnect OCI registry", description: "Remove the stored registry credential.", args: ["registry", "logout"], inputs: [], danger: true },
+  { id: "source.login", category: "Build", label: "Connect private source", description: "Store an encrypted host-scoped Git checkout credential.", args: ["source", "login"], inputs: [{ key: "host", label: "Git host", kind: "text", required: true, positional: true }, { key: "username", label: "Username", kind: "text", required: true, flag: "username" }, { key: "token", label: "Read-only token", kind: "text", required: true, flag: "token-stdin", transport: "stdin" }] },
+  { id: "source.logout", category: "Build", label: "Disconnect private source", description: "Remove the stored private Git credential.", args: ["source", "logout"], inputs: [], danger: true },
 
   { id: "manifest.validate", category: "Deploy", label: "Validate manifest", description: "Validate an app or stack manifest and its children.", args: ["manifest", "validate"], inputs: [{ key: "manifest", label: "Manifest path", kind: "text", required: true, positional: true }, { key: "allowUnknown", label: "Allow unknown manifest keys", kind: "boolean", flag: "allow-unknown" }] },
 

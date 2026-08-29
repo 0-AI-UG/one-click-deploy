@@ -16,10 +16,22 @@ Normal deploys build the exact commit on an OCD worker and apply complete
 manifest configuration. `--image` bypasses the build with a supplied digest.
 `release` is artifact-only and preserves stored configuration.
 
+## Readiness and build connections
+
+```text
+ocd doctor [manifest]
+ocd registry <status|login|logout>
+ocd source <status|login|logout>
+```
+
+Registry credentials are repository-namespace scoped; private source tokens are
+host scoped. Public repositories need no source connection.
+
 ## Build infrastructure
 
 ```text
 ocd runners ls
+ocd runners bootstrap
 ocd runners install --server=<name|id> [--name=X]
     [--removal-token-env=GITHUB_RUNNER_REMOVE_TOKEN]
 ocd runners sources

@@ -747,17 +747,21 @@ export async function handleCreateServer(request: Request): Promise<Response> {
         { status: 409, headers: corsHeaders },
       );
     }
-    const body = await request.json() as { server_type: string; location: string; name?: string };
+    const body = await request.json() as { server_type: string; location: string; name?: string; pool?: string; reason?: string };
 
     if (!body.server_type || !body.location) {
       return Response.json({ error: "server_type and location are required" }, { status: 400, headers: corsHeaders });
     }
 
+    const pool = String(body.pool || "general").trim();
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(pool)) {
+      return Response.json({ error: "pool must be a lowercase capacity-pool slug" }, { status: 400, headers: corsHeaders });
+    }
     const planId = serverProvisioningResourceId({
       serverType: body.server_type,
       location: body.location,
-      pools: ["general"],
-      reason: body.name ? `server ${body.name}` : "an explicitly requested server",
+      pools: [pool],
+      reason: body.reason || (body.name ? `server ${body.name}` : "an explicitly requested server"),
     });
     await enforceConfirmation(request, payload, "create_server", "server_plan", planId);
 
@@ -768,6 +772,7 @@ export async function handleCreateServer(request: Request): Promise<Response> {
         serverType: body.server_type,
         location: body.location,
         name: body.name,
+        pool,
       },
       trigger: payload.client === "cli" ? "cli" : "ui",
       triggeredBy: payload.userId,

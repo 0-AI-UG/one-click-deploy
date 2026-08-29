@@ -14,7 +14,7 @@ Bring existing VPSs or let OCD provision managed capacity on Hetzner.
 
 ---
 
-A lightweight, self-hostable alternative to Heroku, Railway, and Render. Git supplies versioned runtime configuration and CI publishes immutable application images; OCD deploys those images to connected servers. Existing VPSs can be connected directly, while [Hetzner Cloud](https://www.hetzner.com/cloud) remains an optional convenience for provisioning servers and volumes. DNS stays operator-owned and provider-neutral.
+A lightweight, self-hostable alternative to Heroku, Railway, and Render. Git supplies versioned runtime configuration; OCD checks out exact commits, builds with BuildKit, pushes immutable images to your registry, and deploys those digests to connected servers. Existing VPSs can be connected directly, while [Hetzner Cloud](https://www.hetzner.com/cloud) remains an optional convenience for provisioning servers and volumes. DNS stays operator-owned and provider-neutral.
 
 ## Quick Start
 
@@ -26,7 +26,8 @@ not require cloud credentials.
 ```bash
 PANEL_IMAGE='ghcr.io/0-ai-ug/one-click-deploy@sha256:<64-hex-digest>'
 docker run --rm \
-  -e OCD_AUTO_DEPLOY="{\"hetzner_api_token\":\"<hetzner_token>\",\"panel_image_ref\":\"$PANEL_IMAGE\",\"domain\":\"panel.example.com\"}" \
+  -e HETZNER_API_TOKEN='<hetzner_token>' \
+  -e OCD_AUTO_DEPLOY="{\"panel_image_ref\":\"$PANEL_IMAGE\",\"domain\":\"panel.example.com\"}" \
   "$PANEL_IMAGE"
 ```
 
@@ -49,11 +50,24 @@ pending, correct, or conflicting, but it never modifies or deletes DNS.
 > ```bash
 > PANEL_IMAGE='ghcr.io/0-ai-ug/one-click-deploy@sha256:<64-hex-digest>'
 > docker run --rm \
->   -e OCD_AUTO_DEPLOY="{\"hetzner_api_token\":\"<hetzner_token>\",\"panel_image_ref\":\"$PANEL_IMAGE\"}" \
+>   -e HETZNER_API_TOKEN='<hetzner_token>' \
+>   -e OCD_AUTO_DEPLOY="{\"panel_image_ref\":\"$PANEL_IMAGE\"}" \
 >   "$PANEL_IMAGE"
 > ```
 
-Prefer bash? Copy `example.panel.json` to `panel.json` and run `./scripts/bootstrap.sh`.
+Prefer a config file? Copy `example.panel.json` to `panel.json`, keep the token in your shell, and run `HETZNER_API_TOKEN=... bun run bootstrap`. Bootstrap remembers the chosen server type and location as future capacity defaults; it never writes provider or registry secrets into `panel.json`.
+
+After installing the CLI, `ocd doctor` reports deploy readiness. The first
+manifest build reuses an empty server for BuildKit or asks for browser approval
+to provision a dedicated worker, installs it, and resumes the deploy. Registry
+and private-source credentials are explicit scoped connections:
+
+```bash
+ocd registry login ghcr.io/acme --username=acme
+ocd source login github.com                 # private repositories only
+ocd doctor
+ocd deploy
+```
 
 ### Connect an existing VPS
 

@@ -17,7 +17,7 @@ describe("web CLI command catalog", () => {
       "login", "apps", "status", "logs", "deploy", "delete", "restart",
       "rollback", "promote", "pause", "unpause", "envs", "service", "stack",
       "ops", "servers", "ssh", "skill", "app", "scale", "resources", "volumes",
-      "release", "manifest", "gc", "runners",
+      "release", "manifest", "gc", "runners", "doctor", "registry", "source",
     ]) {
       expect(represented.has(name)).toBe(true);
     }
@@ -84,6 +84,17 @@ describe("web CLI command catalog", () => {
     expect(built.argv).toEqual(["envs", "set", "prod", "PUBLIC=yes", "--secrets-stdin"]);
     expect(built.argv.join(" ")).not.toContain("correct horse");
     expect(JSON.parse(built.stdin!)).toEqual([{ key: "PASSWORD", value: "correct horse battery staple" }]);
+  });
+
+  test("keeps build connection tokens out of process arguments", () => {
+    const registry = buildWebCliInvocation(command("registry.login"), {
+      scope: "ghcr.io/acme",
+      username: "acme",
+      token: "registry-secret",
+    });
+    expect(registry.argv).toEqual(["registry", "login", "ghcr.io/acme", "--username=acme", "--token-stdin"]);
+    expect(registry.argv.join(" ")).not.toContain("registry-secret");
+    expect(registry.stdin).toBe("registry-secret");
   });
 
   test("constructs manifest workspace command arguments without accepting source content", () => {

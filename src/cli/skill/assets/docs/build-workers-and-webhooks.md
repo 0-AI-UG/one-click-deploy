@@ -21,7 +21,17 @@ runtime-attestation boundary.
 
 ## Install a worker
 
-The server must be ready and contain no panel, app, or managed service:
+Normal `ocd deploy` checks readiness first. When no worker exists it can reserve
+an empty server or, after browser approval, provision and install a dedicated
+worker before resuming the deploy. This can also be run explicitly:
+
+```bash
+ocd doctor
+ocd runners bootstrap
+```
+
+For manual placement, the server must be ready and contain no panel, app, or
+managed service:
 
 ```bash
 ocd runners install --server=ocd-build-1 --name=ocd-build-1
@@ -42,11 +52,13 @@ worker. The token is held only for that operation.
 
 ## Credentials
 
-Admin Settings holds two distinct credential sets:
+OCD holds two distinct encrypted connections:
 
-- Git checkout username/token: read access to private source repositories.
-- OCI repository username/password-token: push during builds and pull during
-  deployments. The configured repository host scopes where it may be sent.
+- `ocd source login`: host-scoped read access to private source repositories.
+- `ocd registry login`: repository-namespace-scoped push/pull access.
+
+The same actions are available as connection cards in Admin. Credentials are
+never forwarded to an unrelated Git host or sibling OCI namespace.
 
 Use the least privilege available. Never commit either credential. GitHub OAuth
 login credentials are unrelated and are not reused for builds.

@@ -22,6 +22,8 @@ import { resources, volumes } from "./commands/resources.ts";
 import { gc } from "./commands/gc.ts";
 import { manifest } from "./commands/manifest.ts";
 import { runners } from "./commands/runners.ts";
+import { doctor } from "./commands/doctor.ts";
+import { registry, source } from "./commands/connections.ts";
 import { BOLD, DIM, RESET } from "./format.ts";
 import { VERSION } from "./version.ts";
 
@@ -53,6 +55,9 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   gc,
   manifest,
   runners,
+  doctor,
+  registry,
+  source,
 };
 
 function printUsage(): void {
@@ -88,6 +93,9 @@ ${BOLD}Commands:${RESET}
   ops cancel|retry|finalize <id>  Recover a stuck operation
   servers                Inspect and manage servers
   runners                Manage OCD BuildKit workers and webhooks
+  doctor [manifest]      Check deploy readiness and show exact next actions
+  registry               Connect scoped OCI push/pull credentials
+  source                 Connect private Git checkout credentials
   resources              Inventory and estimated cost
   volumes                Manage attached and retained volumes
   gc [--server X]        Preview safe disk garbage collection (--execute to apply)

@@ -16,8 +16,17 @@ async function credentials(): Promise<Pick<RegistryResolution, "username" | "pas
   };
 }
 
-function registryHost(ref: string): string {
-  return ref.replace(/^https?:\/\//, "").split("/")[0].toLowerCase();
+/** Canonical repository prefix used as the credential boundary. Credentials
+ * configured for `ghcr.io/acme/apps` may be sent to that repository and its
+ * descendants, but never to another namespace on the same registry host. */
+export function normalizeRegistryScope(ref: string): string {
+  return ref.trim().replace(/^https?:\/\//i, "").replace(/\/$/, "").toLowerCase();
+}
+
+export function imageMatchesRegistryScope(imageRef: string, configuredRef: string): boolean {
+  const image = normalizeRegistryScope(imageRef).split("@", 1)[0];
+  const scope = normalizeRegistryScope(configuredRef).replace(/:[^/:]+$/, "");
+  return !!scope && (image === scope || image.startsWith(`${scope}/`));
 }
 
 /** Return fleet credentials only when the immutable image is hosted by one of
@@ -27,9 +36,7 @@ export async function resolveRegistryCredentialsForImage(
   imageRef: string,
 ): Promise<Pick<RegistryResolution, "username" | "password">> {
   const settings = db.getSettings();
-  const allowedHosts = [settings.oci_artifact_ref]
-    .filter((ref): ref is string => !!ref)
-    .map(registryHost);
-  if (!allowedHosts.includes(registryHost(imageRef))) return {};
+  const configuredRef = settings.oci_artifact_ref;
+  if (!configuredRef || !imageMatchesRegistryScope(imageRef, configuredRef)) return {};
   return credentials();
 }

@@ -3,12 +3,13 @@ import { posix } from "node:path";
 import * as db from "../../shared/db.ts";
 import type { AppRow } from "../../shared/db/apps.ts";
 import type { DeployManifest, StackDeployRequest, StackManifest } from "../../shared/rpc.ts";
-import { secretStore } from "../../shared/secret-store.ts";
 import { validateDeployManifest, validateStackManifest } from "../../shared/manifest-validate.ts";
 import { buildStackAppSpec } from "../../shared/stack-spec.ts";
 import { deployRequestFromApp } from "../../shared/app-config.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
 import { buildCommitOnWorker, probeBuildWorker } from "../build-worker.ts";
+import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
+import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
@@ -90,7 +91,7 @@ const build: Step<WebhookBuildSourceInput, Built> = {
     const roots = apps.flatMap((app) => [app.stack_id == null ? app.manifest_path : null, app.stack_manifest_path])
       .filter((path): path is string => !!path);
     const builds: Record<string, BuildConfig> = {};
-    const settings = db.getSettings();
+    const sourceCredentials = await resolveSourceCredentialsForRepository(source.repository);
     const result = await buildCommitOnWorker({
       server,
       operationId: ctx.opId,
@@ -128,10 +129,9 @@ const build: Step<WebhookBuildSourceInput, Built> = {
         }
         return targets;
       },
-      gitUsername: settings.github_build_username || "x-access-token",
-      gitToken: await secretStore.get("github_build_token") || undefined,
-      registryUsername: settings.oci_registry_username || undefined,
-      registryPassword: await secretStore.get("oci_registry_password") || undefined,
+      gitUsername: sourceCredentials.username,
+      gitToken: sourceCredentials.token,
+      resolveRegistryCredentials: resolveRegistryCredentialsForImage,
       onLog: (line) => ctx.log(line),
     });
     return { refs: Object.fromEntries(result.refs), files: result.files, builds };

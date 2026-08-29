@@ -45,14 +45,17 @@ This keeps environment projections and configuration synchronized with code.
 escape hatch. It changes the image while preserving stored configuration; it
 does not read a manifest.
 
-Private Git checkout and registry push/pull credentials are configured in panel
-Settings. Public repositories need no Git token. DNS remains operator-owned;
+Private Git checkout and registry push/pull credentials are explicit scoped
+connections, configured with `ocd source login` and `ocd registry login` or the
+panel connection cards. Public repositories need no Git token. DNS remains operator-owned;
 OCD only displays records. Hetzner remains optional infrastructure.
 
 ## Typical workflow
 
 ```bash
 ocd login https://panel.example.com
+ocd registry login ghcr.io/acme --username=acme
+ocd doctor
 ocd manifest validate .ocd-deploy.json
 ocd deploy --dry-run
 ocd deploy
@@ -73,7 +76,11 @@ ocd deploy [manifest] [--set=KEY=VALUE] [--auth-password-env=KEY]
     [--dry-run] [--config-only]
 ocd deploy stack [manifest] [--config-only] [--commit=sha]
 ocd release <app> --image <repository@sha256:digest> [--commit <sha>]
+ocd doctor [manifest]
+ocd registry <status|login|logout>
+ocd source <status|login|logout>
 ocd runners ls
+ocd runners bootstrap
 ocd runners install --server=<name|id> [--name=X]
 ocd runners sources
 ocd runners webhook-secret <source-id>

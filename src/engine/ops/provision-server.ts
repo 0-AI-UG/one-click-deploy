@@ -15,6 +15,7 @@ type ProvisionInput = {
   serverType: string;
   location: string;
   name?: string;
+  pool?: string;
 };
 
 type EnsureInfraOut = {
@@ -100,6 +101,7 @@ const insertServerRow: Step<ProvisionInput, InsertRowOut> = {
       status: "creating",
       provider: "hetzner",
       ownership: "managed",
+      pool: ctx.input.pool || "general",
     });
     return { serverId: row.id, serverName };
   },

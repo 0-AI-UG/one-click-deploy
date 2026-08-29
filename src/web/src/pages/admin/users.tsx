@@ -67,6 +67,16 @@ type BuildSource = {
   last_commit: string; last_status: string; last_error: string;
 };
 
+type Readiness = {
+  ready: boolean;
+  provider: { status: string; configured: boolean };
+  defaults: { status: string; server_type: string; location: string };
+  worker: { status: string; online: number; total: number };
+  registry: { status: string; configured: boolean; scope: string };
+  source: { status: string; configured: boolean; host: string };
+  actions: Array<{ command: string; label: string }>;
+};
+
 export function UsersPage() {
   // --- Users ---
   const [users, setUsers] = useState<User[]>([]);
@@ -83,8 +93,12 @@ export function UsersPage() {
     github_oauth_client_id: "", github_oauth_client_secret: "",
     default_domain_suffix: "", default_server_type: "", default_location: "",
     oci_artifact_ref: "", oci_registry_username: "", oci_registry_password: "",
-    github_build_username: "x-access-token", github_build_token: "",
+    github_build_host: "github.com", github_build_username: "x-access-token", github_build_token: "",
   });
+  const [registryConnected, setRegistryConnected] = useState(false);
+  const [sourceConnected, setSourceConnected] = useState(false);
+  const [connectionBusy, setConnectionBusy] = useState<"registry" | "source" | null>(null);
+  const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const { serverTypes } = useServerTypes();
@@ -120,6 +134,7 @@ export function UsersPage() {
       setRunnerServers(servers);
     }),
   ]).catch(() => {});
+  const refreshReadiness = () => get("/api/readiness").then(setReadiness).catch(() => {});
 
   const loadUsers = async () => {
     try {
@@ -163,15 +178,21 @@ export function UsersPage() {
           default_location: s.default_location ?? "",
           oci_artifact_ref: s.oci_artifact_ref ?? "",
           oci_registry_username: s.oci_registry_username ?? "",
-          oci_registry_password: s.oci_registry_password ?? "",
+          oci_registry_password: "",
           github_build_username: s.github_build_username ?? "x-access-token",
-          github_build_token: s.github_build_token ?? "",
+          github_build_host: s.github_build_host ?? "github.com",
+          github_build_token: "",
         });
       })
       .catch(() => {})
       .finally(() => setSettingsLoading(false));
+    get("/api/admin/connections").then((connections) => {
+      setRegistryConnected(connections.registry?.connected === true);
+      setSourceConnected(connections.source?.connected === true);
+    }).catch(() => {});
     refreshPanel();
     refreshRunners();
+    refreshReadiness();
   }, []);
 
   useEffect(() => {
@@ -235,13 +256,78 @@ export function UsersPage() {
   const saveSettings = async () => {
     setSaving(true);
     try {
-      await put("/api/admin/settings", settingsForm);
+      const {
+        oci_artifact_ref: _registryScope,
+        oci_registry_username: _registryUsername,
+        oci_registry_password: _registryToken,
+        github_build_host: _sourceHost,
+        github_build_username: _sourceUsername,
+        github_build_token: _sourceToken,
+        ...instanceSettings
+      } = settingsForm;
+      await put("/api/admin/settings", instanceSettings);
       showToast("Settings saved", "success");
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
       setSaving(false);
     }
+  };
+
+  const connectRegistry = async () => {
+    setConnectionBusy("registry");
+    try {
+      await runCliAction("registry.login", {
+        scope: settingsForm.oci_artifact_ref,
+        username: settingsForm.oci_registry_username,
+        token: settingsForm.oci_registry_password,
+      });
+      setRegistryConnected(true);
+      refreshReadiness();
+      showToast("Registry connected", "success");
+    } catch (err: any) { showToast(err.message, "error"); }
+    finally { setConnectionBusy(null); }
+  };
+
+  const disconnectRegistry = async () => {
+    if (!await confirm("Disconnect Registry", "Remove the stored OCI registry credential? Existing deployed images keep running, but new builds and pulls may fail.", true)) return;
+    setConnectionBusy("registry");
+    try {
+      await runCliAction("registry.logout", {}, { confirmed: true });
+      setRegistryConnected(false);
+      refreshReadiness();
+      setSettingsForm((current) => ({ ...current, oci_artifact_ref: "", oci_registry_username: "", oci_registry_password: "" }));
+      showToast("Registry disconnected", "success");
+    } catch (err: any) { showToast(err.message, "error"); }
+    finally { setConnectionBusy(null); }
+  };
+
+  const connectSource = async () => {
+    setConnectionBusy("source");
+    try {
+      await runCliAction("source.login", {
+        host: settingsForm.github_build_host,
+        username: settingsForm.github_build_username,
+        token: settingsForm.github_build_token,
+      });
+      setSourceConnected(true);
+      refreshReadiness();
+      showToast("Private source access connected", "success");
+    } catch (err: any) { showToast(err.message, "error"); }
+    finally { setConnectionBusy(null); }
+  };
+
+  const disconnectSource = async () => {
+    if (!await confirm("Disconnect Source", "Remove the stored private Git checkout credential? Public repositories remain available.", true)) return;
+    setConnectionBusy("source");
+    try {
+      await runCliAction("source.logout", {}, { confirmed: true });
+      setSourceConnected(false);
+      refreshReadiness();
+      setSettingsForm((current) => ({ ...current, github_build_host: "github.com", github_build_username: "x-access-token", github_build_token: "" }));
+      showToast("Source access disconnected", "success");
+    } catch (err: any) { showToast(err.message, "error"); }
+    finally { setConnectionBusy(null); }
   };
 
   const redeployPanelNow = async () => {
@@ -285,6 +371,7 @@ export function UsersPage() {
       setRunnerForm((current) => ({ ...current, removal_token: "" }));
       showToast("Build worker installed", "success");
       await refreshRunners();
+      await refreshReadiness();
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
@@ -299,6 +386,7 @@ export function UsersPage() {
       await runCliAction("runners.remove", { runner: String(runner.id) }, { confirmed: true });
       showToast("Build worker removed", "success");
       await refreshRunners();
+      await refreshReadiness();
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
@@ -329,6 +417,33 @@ export function UsersPage() {
         <Settings size={18} className="text-fg" />
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Admin</h1>
       </div>
+
+      {readiness && <Card className="p-5 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Deploy readiness</h3>
+            <p className="font-mono text-[10px] text-muted mt-1">The CLI resolves missing build capacity during the first deploy.</p>
+          </div>
+          <Btn size="xs" onClick={refreshReadiness}><RefreshCw size={11} /> Recheck</Btn>
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
+          {[
+            ["Provider", readiness.provider.configured ? "Connected" : "Optional"],
+            ["Capacity defaults", readiness.defaults.server_type ? `${readiness.defaults.server_type} / ${readiness.defaults.location}` : "Missing"],
+            ["Build worker", `${readiness.worker.online} online`],
+            ["Registry", readiness.registry.configured ? readiness.registry.scope : "Not connected"],
+          ].map(([label, value]) => <div key={label} className="border-2 border-fg/30 p-3">
+            <div className="font-mono text-[8px] text-muted uppercase">{label}</div>
+            <div className="font-mono text-[10px] font-bold mt-1 break-all">{value}</div>
+          </div>)}
+        </div>
+        {readiness.actions.length > 0 && <div className="bg-alt border-2 border-fg p-3 space-y-1">
+          <div className="font-mono text-[9px] font-bold uppercase">Next actions</div>
+          {readiness.actions.map((action) => <div key={action.command} className="font-mono text-[10px]">
+            {action.label}: <code className="font-bold select-all">{action.command}</code>
+          </div>)}
+        </div>}
+      </Card>}
 
       {/* Instance Settings */}
       <Card className="p-5 space-y-4">
@@ -365,25 +480,74 @@ export function UsersPage() {
               options={locationOptions(serverTypes, settingsForm.default_server_type)}
             />
           </Field>
-          <Field label="OCI registry username">
-            <input type="text" value={settingsForm.oci_registry_username} onChange={setS("oci_registry_username")} placeholder="ocd" />
-          </Field>
-          <Field label="OCI repository" align="start" hint="Repository prefix whose registry may receive the credentials below, for example ghcr.io/acme/apps.">
-            <input type="text" value={settingsForm.oci_artifact_ref} onChange={setS("oci_artifact_ref")} placeholder="ghcr.io/acme/apps" />
-          </Field>
-          <Field label="OCI registry password/token">
-            <input type="password" value={settingsForm.oci_registry_password} onChange={setS("oci_registry_password")} placeholder="Registry password or token" />
-          </Field>
-          <Field label="Git checkout username" align="start" hint="For GitHub tokens use x-access-token. Public repositories need no source token.">
-            <input type="text" value={settingsForm.github_build_username} onChange={setS("github_build_username")} placeholder="x-access-token" />
-          </Field>
-          <Field label="Git checkout token" align="start" hint="Read-only source credential used by OCD build workers. It is separate from the OCI push credential.">
-            <input type="password" value={settingsForm.github_build_token} onChange={setS("github_build_token")} placeholder="Not configured" />
-          </Field>
         </div>
 
         <div className="pt-2">
           <Btn variant="primary" loading={saving} onClick={saveSettings}><Save size={13} /> Save Settings</Btn>
+        </div>
+      </Card>
+
+      {/* Build connections are explicit capabilities, not generic settings. */}
+      <Card className="p-5 space-y-4">
+        <div>
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Build connections</h3>
+          <p className="font-mono text-[10px] text-muted mt-1">
+            OCD stores these credentials encrypted and sends them only to the exact source host or OCI namespace configured here.
+          </p>
+        </div>
+
+        <div className="border-2 border-fg p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="font-mono text-[10px] font-bold uppercase">OCI registry</div>
+              <div className="font-mono text-[9px] text-muted">Required for BuildKit pushes and private runtime pulls.</div>
+            </div>
+            <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${registryConnected ? "bg-green-200" : "bg-yellow-200"}`}>
+              {registryConnected ? "Connected" : "Not connected"}
+            </span>
+          </div>
+          <Field label="Repository namespace" align="start" hint="Credential boundary, for example ghcr.io/acme. It is never sent to another namespace on the same registry.">
+            <input type="text" value={settingsForm.oci_artifact_ref} onChange={setS("oci_artifact_ref")} placeholder="ghcr.io/acme" />
+          </Field>
+          <Field label="Username">
+            <input type="text" value={settingsForm.oci_registry_username} onChange={setS("oci_registry_username")} placeholder="acme" />
+          </Field>
+          <Field label={registryConnected ? "New token (only to update)" : "Password / token"}>
+            <input type="password" value={settingsForm.oci_registry_password} onChange={setS("oci_registry_password")} placeholder={registryConnected ? "Leave empty to keep current connection" : "Registry password or token"} />
+          </Field>
+          <div className="flex gap-2">
+            <Btn variant="primary" loading={connectionBusy === "registry"} disabled={!settingsForm.oci_registry_password} onClick={connectRegistry}>
+              <Key size={13} /> {registryConnected ? "Update connection" : "Connect registry"}
+            </Btn>
+            {registryConnected && <Btn variant="danger" disabled={connectionBusy !== null} onClick={disconnectRegistry}><Trash2 size={12} /> Disconnect</Btn>}
+          </div>
+        </div>
+
+        <div className="border-2 border-fg p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="font-mono text-[10px] font-bold uppercase">Private source access</div>
+              <div className="font-mono text-[9px] text-muted">Optional. Public Git repositories need no source credential.</div>
+            </div>
+            <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${sourceConnected ? "bg-green-200" : "bg-alt"}`}>
+              {sourceConnected ? "Connected" : "Public only"}
+            </span>
+          </div>
+          <Field label="Git host">
+            <input type="text" value={settingsForm.github_build_host} onChange={setS("github_build_host")} placeholder="github.com" />
+          </Field>
+          <Field label="Checkout username" align="start" hint="For GitHub tokens use x-access-token.">
+            <input type="text" value={settingsForm.github_build_username} onChange={setS("github_build_username")} placeholder="x-access-token" />
+          </Field>
+          <Field label={sourceConnected ? "New read-only token (only to update)" : "Read-only token"}>
+            <input type="password" value={settingsForm.github_build_token} onChange={setS("github_build_token")} placeholder={sourceConnected ? "Leave empty to keep current connection" : "Token for private checkout"} />
+          </Field>
+          <div className="flex gap-2">
+            <Btn variant="primary" loading={connectionBusy === "source"} disabled={!settingsForm.github_build_token} onClick={connectSource}>
+              <Key size={13} /> {sourceConnected ? "Update connection" : "Connect source"}
+            </Btn>
+            {sourceConnected && <Btn variant="danger" disabled={connectionBusy !== null} onClick={disconnectSource}><Trash2 size={12} /> Disconnect</Btn>}
+          </div>
         </div>
       </Card>
 
@@ -407,7 +571,6 @@ export function UsersPage() {
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.server?.name || "Missing"}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.status}{runner.last_error && <div className="text-red-600 max-w-xs break-words">{runner.last_error}</div>}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.worker_version || "—"}<div className="text-muted">{runner.architecture || "—"}</div></td>
-                <td className="py-2 px-3 font-mono text-[10px]">{runner.disk_free_bytes ? `${(runner.disk_free_bytes / 1024 ** 3).toFixed(1)} GB` : "—"}</td>
                 <td className="py-2 px-3"><Btn size="xs" variant="danger" disabled={runnerBusy} onClick={() => removeRunner(runner)}><Trash2 size={11} /></Btn></td>
               </tr>
             ))}

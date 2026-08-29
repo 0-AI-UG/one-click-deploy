@@ -12,6 +12,7 @@ const PLAIN_SETTING_KEYS = new Set([
   "oci_artifact_ref",
   "oci_registry_username",
   "github_build_username",
+  "github_build_host",
 ]);
 
 export async function handleGetSettings(request: Request): Promise<Response> {
@@ -35,6 +36,7 @@ export async function handleGetSettings(request: Request): Promise<Response> {
         oci_registry_username: s.oci_registry_username ?? "",
         oci_registry_password: maskToken(registryPassword ?? ""),
         github_build_username: s.github_build_username ?? "x-access-token",
+        github_build_host: s.github_build_host ?? "github.com",
         github_build_token: maskToken(githubBuildToken ?? ""),
         require_2fa: (s.require_2fa ?? "1") === "1",
       },

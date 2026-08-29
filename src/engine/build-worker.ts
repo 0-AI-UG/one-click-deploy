@@ -89,6 +89,7 @@ export async function buildCommitOnWorker(input: {
   gitToken?: string;
   registryUsername?: string;
   registryPassword?: string;
+  resolveRegistryCredentials?: (image: string) => Promise<{ username?: string; password?: string }>;
   onLog?: (line: string) => void;
 }): Promise<{ refs: Map<string, string>; files: Record<string, string> }> {
   if (!/^[0-9a-f]{40,64}$/i.test(input.commit)) throw new Error("Build commit must be a full immutable Git SHA");
@@ -148,12 +149,21 @@ export async function buildCommitOnWorker(input: {
       if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+$/i.test(target.image)) throw new Error(`Invalid OCI repository: ${target.image}`);
     }
 
-    if (input.registryUsername && input.registryPassword) {
+    const registryResolutions = input.resolveRegistryCredentials
+      ? await Promise.all(targets.map((target) => input.resolveRegistryCredentials!(target.image)))
+      : [{ username: input.registryUsername, password: input.registryPassword }];
+    const resolvedRegistry = registryResolutions[0];
+    if (registryResolutions.some((candidate) =>
+      candidate.username !== resolvedRegistry.username || candidate.password !== resolvedRegistry.password
+    )) {
+      throw new Error("One build cannot mix image targets inside and outside the connected OCI credential scope");
+    }
+    if (resolvedRegistry.username && resolvedRegistry.password) {
       registryAuth = await dockerLoginRegistry(
         server.ipv4,
         targets[0].image,
-        input.registryUsername,
-        input.registryPassword,
+        resolvedRegistry.username,
+        resolvedRegistry.password,
         hostKey,
       );
     }

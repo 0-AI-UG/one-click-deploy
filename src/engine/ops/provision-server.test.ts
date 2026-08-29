@@ -46,12 +46,13 @@ beforeEach(() => {
 
 describe("provision_server crash identity", () => {
   test("uses an operation-derived name and reuses its placeholder row", async () => {
-    const input = { serverType: "cx22", location: "fsn1" };
+    const input = { serverType: "cx22", location: "fsn1", pool: "build-workers" };
     const first = await step("insert_server_row").run(ctx(input), {} as any) as any;
     const second = await step("insert_server_row").run(ctx(input), {} as any) as any;
     expect(first.serverName).toBe("ocd-server-op73");
     expect(second).toEqual(first);
     expect(db.getServers().filter((server) => server.name === first.serverName)).toHaveLength(1);
+    expect(db.getServer(first.serverId)?.pool).toBe("build-workers");
   });
 
   test("adopts a provider server created before the DB provider id was saved", async () => {

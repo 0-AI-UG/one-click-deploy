@@ -46,8 +46,14 @@ export function loadAutoDeployConfig(raw: string): AutoDeployConfig {
   }
 
   const cfg = parsed as Record<string, unknown>;
-  if (!cfg.hetzner_api_token || typeof cfg.hetzner_api_token !== "string") {
-    throw new Error("auto-deploy config missing required field: hetzner_api_token");
+  const tokenEnv = typeof cfg.hetzner_api_token_env === "string"
+    ? cfg.hetzner_api_token_env
+    : "HETZNER_API_TOKEN";
+  const providerToken = typeof cfg.hetzner_api_token === "string"
+    ? cfg.hetzner_api_token
+    : process.env[tokenEnv];
+  if (!providerToken) {
+    throw new Error(`auto-deploy requires ${tokenEnv}; keep provider credentials out of panel.json`);
   }
   if (typeof cfg.panel_image_ref !== "string" ||
       !/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(cfg.panel_image_ref)) {
@@ -58,7 +64,7 @@ export function loadAutoDeployConfig(raw: string): AutoDeployConfig {
   if (cfg.domain !== undefined && typeof cfg.domain !== "string") {
     throw new Error("auto-deploy config field 'domain' must be a string");
   }
-  return cfg as unknown as AutoDeployConfig;
+  return { ...cfg, hetzner_api_token: providerToken } as unknown as AutoDeployConfig;
 }
 
 export async function runAutoDeploy(
@@ -97,6 +103,11 @@ export async function runAutoDeploy(
   process.env.JWT_SECRET = jwtSecret;
 
   await secretStore.set(hetzner.tokenKey, config.hetzner_api_token);
+  // Reuse bootstrap choices as lazy provisioning defaults. A first manifest
+  // deploy can now add runtime/build capacity without asking for these values
+  // again; credentials remain encrypted in secretStore.
+  db.saveSetting("default_server_type", config.server_type || "cx23");
+  db.saveSetting("default_location", config.server_location || "nbg1");
   if (config.default_domain_suffix) {
     db.saveSetting("default_domain_suffix", config.default_domain_suffix);
   }

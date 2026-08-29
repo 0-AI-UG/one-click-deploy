@@ -109,6 +109,14 @@ import {
 } from "./routes/build-workers.ts";
 import { handleGitHubBuildWebhook } from "./routes/build-webhooks.ts";
 import { handleGetProvisioningDefaults } from "./lib/server-provisioning.ts";
+import {
+  handleDeleteRegistryConnection,
+  handleDeleteSourceConnection,
+  handleGetConnections,
+  handleGetReadiness,
+  handlePutRegistryConnection,
+  handlePutSourceConnection,
+} from "./routes/readiness.ts";
 
 function appIdFrom(req: Request): number {
   const url = new URL(req.url);
@@ -268,6 +276,7 @@ export const apiRoutes = {
   "/api/servers/refresh": { POST: (req: Request) => handleRefreshServers(req) },
   "/api/servers/enrollment-key": { GET: (req: Request) => handleGetServerEnrollmentKey(req) },
   "/api/servers/provisioning-defaults": { GET: (req: Request) => handleGetProvisioningDefaults(req) },
+  "/api/readiness": { GET: (req: Request) => handleGetReadiness(req) },
   "/api/servers/connect": { POST: (req: Request) => handleConnectServer(req) },
   "/api/servers/:id": { DELETE: (req: Request) => handleDeleteServer(req, serverIdFrom(req)) },
   "/api/servers/:id/pool": { PATCH: (req: Request) => handleSetServerPool(req, serverPathIdFrom(req)) },
@@ -326,6 +335,15 @@ export const apiRoutes = {
     PUT: (req: Request) => handleSaveSettings(req),
   },
   "/api/admin/settings/server-types": { GET: (req: Request) => handleGetServerTypes(req) },
+  "/api/admin/connections": { GET: (req: Request) => handleGetConnections(req) },
+  "/api/admin/connections/registry": {
+    PUT: (req: Request) => handlePutRegistryConnection(req),
+    DELETE: (req: Request) => handleDeleteRegistryConnection(req),
+  },
+  "/api/admin/connections/source": {
+    PUT: (req: Request) => handlePutSourceConnection(req),
+    DELETE: (req: Request) => handleDeleteSourceConnection(req),
+  },
 
   // --- Admin: Panel (hosted self) ---
   "/api/admin/panel": { GET: (req: Request) => handleGetPanel(req) },

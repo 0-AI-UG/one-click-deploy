@@ -3,6 +3,8 @@ import { secretStore } from "../../shared/secret-store.ts";
 import type { DeployRequest, StackDeployRequest } from "../../shared/rpc.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
 import { buildCommitOnWorker, probeBuildWorker, type BuildTarget } from "../build-worker.ts";
+import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
+import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
@@ -45,17 +47,16 @@ async function runBuild(
 ): Promise<BuiltOut> {
   const server = db.getServer(worker.serverId);
   if (!server) throw new Error("Build worker server disappeared");
-  const settings = db.getSettings();
+  const sourceCredentials = await resolveSourceCredentialsForRepository(repository);
   const built = await buildCommitOnWorker({
     server,
     operationId: ctx.opId,
     repository,
     commit,
     targets,
-    gitUsername: settings.github_build_username || "x-access-token",
-    gitToken: await secretStore.get("github_build_token") || undefined,
-    registryUsername: settings.oci_registry_username || undefined,
-    registryPassword: await secretStore.get("oci_registry_password") || undefined,
+    gitUsername: sourceCredentials.username,
+    gitToken: sourceCredentials.token,
+    resolveRegistryCredentials: resolveRegistryCredentialsForImage,
     onLog: (line) => ctx.log(line),
   });
   return { refs: Object.fromEntries(built.refs) };

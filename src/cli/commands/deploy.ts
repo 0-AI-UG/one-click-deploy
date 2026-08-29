@@ -13,6 +13,7 @@ import { mergeEnv } from "../../shared/env-merge.ts";
 import { withWebConfirmation } from "../confirm.ts";
 import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
 import { readSetValuesFromStdin } from "../stdin-values.ts";
+import { ensureBuildReadiness } from "../deploy-readiness.ts";
 
 interface Environment {
   id: number;
@@ -287,6 +288,10 @@ ${BOLD}Options:${RESET}
       console.log(`${DIM}No container rollout was required.${RESET}`);
     }
     return;
+  }
+
+  if (!imageOverride) {
+    await ensureBuildReadiness(manifest.build.repository, manifest.build.image);
   }
 
   console.log(`\nDeploying ${BOLD}${body.app_name}${RESET}...`);

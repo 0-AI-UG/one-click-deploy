@@ -1,5 +1,4 @@
 {
-  "hetzner_api_token": "your_hetzner_api_token",
   "panel_image_ref": "ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "domain": "panel.example.com",
   "default_domain_suffix": "apps.example.com",

@@ -19,6 +19,11 @@ if (!existsSync(configPath)) {
   console.error(`copy example.panel.json to panel.json and fill in your values.`);
   process.exit(1);
 }
+if (!process.env.HETZNER_API_TOKEN) {
+  console.error("error: HETZNER_API_TOKEN is required in the environment");
+  console.error("keep provider credentials out of panel.json; for example: HETZNER_API_TOKEN=... bun run bootstrap");
+  process.exit(1);
+}
 
 async function run(cmd: string[]): Promise<void> {
   console.log(`$ ${cmd.join(" ")}`);
@@ -35,5 +40,6 @@ await run([
   "docker", "run", "--rm",
   "-v", `${configPath}:/config.json:ro`,
   "-e", "OCD_AUTO_DEPLOY=/config.json",
+  "-e", "HETZNER_API_TOKEN",
   IMAGE,
 ]);

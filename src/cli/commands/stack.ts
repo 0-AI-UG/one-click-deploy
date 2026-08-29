@@ -26,6 +26,7 @@ import { parseCliArgs, positiveIntegerFlag } from "../args.ts";
 import { readSetValuesFromStdin } from "../stdin-values.ts";
 import { operationLogQuery, parseLogArgs } from "../log-filters.ts";
 import { expectArray, expectRecord, expectStringField } from "../response.ts";
+import { ensureBuildReadiness } from "../deploy-readiness.ts";
 
 type AppElement = StackDeployRequest["apps"][number];
 const IMMUTABLE_IMAGE_REF = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
@@ -714,6 +715,9 @@ export async function stackUp(args: string[]): Promise<void> {
     console.log(`\n${GREEN}Stack already converged with the current manifests and image digests; nothing to deploy.${RESET}`);
     return;
   }
+
+  const selectedBuild = apps.find((app) => selectedKeys.has(app.key) && app.build && !app.image_ref)?.build;
+  if (selectedBuild) await ensureBuildReadiness(selectedBuild.repository, selectedBuild.image);
 
   console.log(
     `\nDeploying stack ${BOLD}${manifest.name}${RESET} (${body.selected_service_keys.length} affected service(s), ${selectedKeys.size} affected app(s))...`,
