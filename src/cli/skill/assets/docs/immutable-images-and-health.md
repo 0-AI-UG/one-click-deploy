@@ -6,7 +6,7 @@ push a temporary commit tag; OCD immediately resolves it to a digest before a
 runtime operation. Rollback, promotion, history, and attestation use the digest.
 
 For private source and images, use `ocd source login` and `ocd registry login`
-(or the Admin connection cards). The Git token is used only for checkout. The
+(or the Admin Settings connection cards). The Git token is used only for checkout. The
 OCI credential is scoped to its configured repository namespace
 and is used for worker pushes and runtime pulls. Never put credentials in a
 manifest, image reference, or logs.
