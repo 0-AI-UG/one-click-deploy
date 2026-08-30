@@ -579,10 +579,15 @@ export function UsersPage() {
 
         <div className="grid md:grid-cols-2 gap-3">
           <Field label="Dedicated server" align="start" hint="The backend rejects the panel host and any server with apps or services.">
-            <select value={runnerForm.server_id} onChange={(event) => setRunnerForm((current) => ({ ...current, server_id: event.target.value }))}>
-              <option value="">Select server</option>
-              {availableRunnerServers.map((server) => <option key={server.id} value={server.id}>{server.name} ({server.pool || "general"})</option>)}
-            </select>
+            <NeoSelect
+              value={runnerForm.server_id}
+              onChange={(serverId) => setRunnerForm((current) => ({ ...current, server_id: serverId }))}
+              options={availableRunnerServers.map((server) => ({
+                value: String(server.id),
+                label: `${server.name} (${server.pool || "general"})`,
+              }))}
+              placeholder="Select server"
+            />
           </Field>
           <Field label="Worker name" align="start" hint="Optional; defaults to ocd-<server>.">
             <input value={runnerForm.name} onChange={(event) => setRunnerForm((current) => ({ ...current, name: event.target.value }))} placeholder="ocd-build-1" />
