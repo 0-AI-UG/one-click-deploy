@@ -103,7 +103,7 @@ managed provider volumes; `ocd servers delete app-1` only disconnects the host.
 
 Managed PostgreSQL recovery: [clean and empty-target restore workflows](docs/postgresql-restore.md).
 Retained volume recovery: [grace-period and reattachment workflow](docs/volume-recovery.md).
-Build delivery: [OCD build workers and signed repository webhooks](.agents/skills/ocd-deploy/docs/build-workers-and-webhooks.md).
+Build delivery: [architecture, cache, failure handling, and operator checks](docs/build-workers.md).
 
 ## CLI-only deployments
 

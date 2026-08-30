@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BUILD_PLATFORM,
+  buildxBuildCommand,
   buildInstallWorkerScript,
   buildWorkerCleanupScript,
   guardedBuildCommand,
   operationImageTag,
+  registryBuildCacheRef,
 } from "./build-worker.ts";
 
 describe("build worker command safety", () => {
@@ -27,5 +30,35 @@ describe("build worker command safety", () => {
 
   test("installs the host-lock utilities", () => {
     expect(buildInstallWorkerScript()).toContain("util-linux");
+  });
+
+  test("uses a per-image registry cache without weakening digest identity", () => {
+    const image = "registry.example.com/acme/api";
+    const tag = operationImageTag(image, 42, "a".repeat(40));
+    const command = buildxBuildCommand({
+      commit: "a".repeat(40),
+      dockerfile: "Dockerfile",
+      context: ".",
+      tag,
+      metadataFile: "/tmp/build.json",
+    });
+
+    expect(registryBuildCacheRef(image)).toBe(`${image}:ocd-buildcache`);
+    expect(command).toContain(`--platform '${BUILD_PLATFORM}'`);
+    expect(command).toContain(`--cache-from 'type=registry,ref=${image}:ocd-buildcache'`);
+    expect(command).toContain(`--cache-to 'type=registry,ref=${image}:ocd-buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true'`);
+    expect(command).toContain(`-t '${tag}'`);
+  });
+
+  test("can disable cache and rejects unsupported runtime platforms", () => {
+    const input = {
+      commit: "a".repeat(40),
+      dockerfile: "Dockerfile",
+      context: ".",
+      tag: operationImageTag("registry.example.com/acme/api", 7, "a".repeat(40)),
+      metadataFile: "/tmp/build.json",
+    };
+    expect(buildxBuildCommand({ ...input, cache: false })).not.toContain("--cache-");
+    expect(() => buildxBuildCommand({ ...input, platform: "linux/arm64" })).toThrow("Unsupported build platform");
   });
 });

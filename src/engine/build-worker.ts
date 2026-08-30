@@ -4,6 +4,7 @@ import { dockerLoginRegistry } from "./hetzner/registry.ts";
 import { asUser } from "./hetzner/container-common.ts";
 
 export const BUILD_WORKER_VERSION = "1";
+export const BUILD_PLATFORM = "linux/amd64";
 const WORKER_DIR = "/opt/ocd-build-worker";
 const BUILD_LOCK = `${WORKER_DIR}/build.lock`;
 const LEGACY_RUNNER_DIR = "/opt/ocd-actions-runner";
@@ -14,6 +15,35 @@ function shellQuote(value: string): string {
 
 export function operationImageTag(image: string, operationId: number, commit: string): string {
   return `${image}:ocd-op-${operationId}-${commit.slice(0, 12)}`;
+}
+
+/** Mutable BuildKit cache transport. It is deliberately never used as runtime
+ * identity; successful builds still publish and persist only verified digests. */
+export function registryBuildCacheRef(image: string): string {
+  return `${image}:ocd-buildcache`;
+}
+
+export function buildxBuildCommand(input: {
+  commit: string;
+  dockerfile: string;
+  context: string;
+  tag: string;
+  metadataFile: string;
+  platform?: string;
+  cache?: boolean;
+  envPrefix?: string;
+}): string {
+  const platform = input.platform || BUILD_PLATFORM;
+  if (platform !== BUILD_PLATFORM) throw new Error(`Unsupported build platform: ${platform}`);
+  const cacheRef = registryBuildCacheRef(input.tag.replace(/:ocd-op-[^/]+$/, ""));
+  const cacheFlags = input.cache === false ? "" :
+    `--cache-from ${shellQuote(`type=registry,ref=${cacheRef}`)} ` +
+    `--cache-to ${shellQuote(`type=registry,ref=${cacheRef},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true`)} `;
+  return `${input.envPrefix ?? ""}docker buildx build --pull --platform ${shellQuote(platform)} ` +
+    `--progress plain --push ${cacheFlags}` +
+    `--label org.opencontainers.image.revision=${shellQuote(input.commit)} ` +
+    `--metadata-file ${shellQuote(input.metadataFile)} -t ${shellQuote(input.tag)} ` +
+    `-f ${shellQuote(input.dockerfile)} ${shellQuote(input.context)}`;
 }
 
 export function guardedBuildCommand(innerBuild: string): string {
@@ -93,6 +123,8 @@ export type BuildTarget = {
   dockerfile: string;
   context: string;
   image: string;
+  platform?: "linux/amd64";
+  cache?: boolean;
 };
 
 export class BuildWorkerUnavailableError extends Error {
@@ -230,6 +262,7 @@ export async function buildCommitOnWorker(input: {
     if (!targets.length) throw new Error("Build request contains no image targets");
     for (const target of targets) {
       if (!target.name || !target.dockerfile || !target.context || !target.image) throw new Error("Build target is incomplete");
+      if (target.platform && target.platform !== BUILD_PLATFORM) throw new Error(`Unsupported build platform: ${target.platform}`);
       for (const path of [target.dockerfile, target.context]) {
         if (path.startsWith("/") || path.includes("\\") || path.split("/").includes("..")) throw new Error(`Unsafe build path: ${path}`);
       }
@@ -262,11 +295,16 @@ export async function buildCommitOnWorker(input: {
       input.onLog?.(`Building ${target.name} → ${target.image}`);
       const innerBuild =
         `echo $$ > ${shellQuote(activePid)}; trap 'rm -f ${activePid}' EXIT; ` +
-        `cd ${shellQuote(checkout)} && ${registryAuth?.envPrefix ?? ""}` +
-        `docker buildx build --pull --platform linux/amd64 --progress plain --push ` +
-        `--label org.opencontainers.image.revision=${shellQuote(input.commit)} ` +
-        `--metadata-file ${shellQuote(metadata)} -t ${shellQuote(tag)} ` +
-        `-f ${shellQuote(target.dockerfile)} ${shellQuote(target.context)}`;
+        `cd ${shellQuote(checkout)} && ` + buildxBuildCommand({
+          commit: input.commit,
+          dockerfile: target.dockerfile,
+          context: target.context,
+          tag,
+          metadataFile: metadata,
+          platform: target.platform,
+          cache: target.cache,
+          envPrefix: registryAuth?.envPrefix,
+        });
       let build;
       try {
         build = await sshExecStreaming(

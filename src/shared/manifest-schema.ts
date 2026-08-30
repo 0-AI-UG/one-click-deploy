@@ -114,9 +114,13 @@ const buildSchema = z.object({
     (value) => /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+$/i.test(value),
     { error: (iss) => `expected OCI repository without a tag or digest, got ${got(iss.input)}` },
   ),
+  /** Builds are reproducible on the fleet's explicitly supported runtime ABI. */
+  platform: z.literal("linux/amd64", { error: "expected linux/amd64" }).optional(),
+  /** Registry-backed BuildKit cache is enabled by default; false disables it. */
+  cache: z.boolean({ error: "expected boolean" }).optional(),
   /** Signed GitHub pushes trigger an OCD build and full manifest reconcile. */
   webhook: z.boolean({ error: "expected boolean" }).optional(),
-}, { error: "expected object { repository, dockerfile, context, image, webhook? }" }).strict().superRefine((value, ctx) => {
+}, { error: "expected object { repository, dockerfile, context, image, platform?, cache?, webhook? }" }).strict().superRefine((value, ctx) => {
   for (const [key, path] of [["dockerfile", value.dockerfile], ["context", value.context]] as const) {
     if (path.startsWith("/") || path.split("/").includes("..") || path.includes("\\")) {
       ctx.addIssue({ code: "custom", path: [key], message: "must be a safe repository-relative path" });

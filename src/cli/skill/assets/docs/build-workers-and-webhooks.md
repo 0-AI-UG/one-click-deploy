@@ -10,14 +10,22 @@ For each build OCD:
 
 1. clones the manifest's HTTPS repository into an operation-scoped directory;
 2. checks out the exact requested commit in detached mode;
-3. runs `docker buildx build` for each declared Dockerfile on `linux/amd64`;
+3. runs `docker buildx build` for each declared Dockerfile on the pinned
+   `linux/amd64` platform, importing and exporting a per-image registry cache;
 4. pushes a temporary commit tag to the declared OCI repository;
 5. resolves and verifies the registry digest;
 6. reconciles the committed manifest or stack using that digest;
-7. removes checkout, temporary credentials, images, and build cache.
+7. removes checkout, temporary credentials, local images, and local build cache.
 
 The immutable digest remains the deployment-history, rollback, promotion, and
 runtime-attestation boundary.
+
+The mutable cache reference is `<image>:ocd-buildcache`. It uses the same scoped
+registry connection and never becomes runtime identity. Add `"cache": false`
+to a build manifest for a cold diagnostic build or an incompatible registry;
+`"platform": "linux/amd64"` may be stated explicitly and is the only supported
+runtime ABI today. Cache export errors are non-fatal and cannot replace digest
+verification.
 
 ## Install a worker
 
@@ -97,6 +105,18 @@ A failed build never changes desired runtime image or configuration. Fix the
 source/build/credential problem and push a new commit, or retry the operation.
 Removing a worker returns the server to its prior capacity pool; it does not
 delete the VPS.
+
+Workers are probed in parallel and require a fresh health observation, an amd64
+architecture, and at least 12 GiB free. OCD holds a durable, heartbeated worker
+lease plus a host `flock`; a lost lease fences publication. A disconnect or
+timeout before any artifact is recorded is retried once on another worker.
+After an artifact is recorded, recovery instead re-verifies every persisted
+digest before it adopts the checkpoint.
+
+Checkout is bounded to five minutes and each image build to 45 minutes.
+Cancellation terminates the remote process group before cleanup. Newer webhook
+deliveries supersede older work, late events are retained as stale without
+running, and the configured branch head is checked again before reconciliation.
 
 Treat build workers as trusted production infrastructure: repository
 Dockerfiles execute code there and OCI push credentials are available only

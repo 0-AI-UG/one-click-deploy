@@ -94,6 +94,19 @@ describe("validateDeployManifest", () => {
     ).toThrow();
   });
 
+  test("pins the supported build platform and allows an explicit cache opt-out", () => {
+    expect(() => validateDeployManifest({
+      name: "worker",
+      volume: null,
+      build: { ...BUILD, platform: "linux/amd64", cache: false },
+    }, ".ocd-deploy.json")).not.toThrow();
+    expect(() => validateDeployManifest({
+      name: "worker",
+      volume: null,
+      build: { ...BUILD, platform: "linux/arm64" },
+    }, ".ocd-deploy.json")).toThrow("linux/amd64");
+  });
+
   test("validates truthful worker and job health contracts", () => {
     expect(() =>
       validateDeployManifest(
