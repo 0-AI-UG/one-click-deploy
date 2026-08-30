@@ -8,7 +8,7 @@ manifest or stack.
 
 ```bash
 ocd release api \
-  --image ghcr.io/example/api@sha256:<64-hex-digest> \
+  --image registry.example.com/team/api@sha256:<64-hex-digest> \
   --commit <source-sha>
 ```
 

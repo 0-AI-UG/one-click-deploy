@@ -25,7 +25,9 @@ ocd source <status|login|logout>
 ```
 
 Registry credentials are repository-namespace scoped; private source tokens are
-host scoped. Public repositories need no source connection.
+host scoped. Public repositories need no source connection. Registry and source
+connections are provider-neutral; GitHub is one supported choice rather than a
+required account.
 
 ## Build infrastructure
 

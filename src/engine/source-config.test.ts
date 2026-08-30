@@ -25,4 +25,22 @@ describe("source credential resolution", () => {
     expect(await resolveSourceCredentialsForRepository("https://evil.example/acme/app.git"))
       .toEqual({});
   });
+
+  test("uses a non-GitHub host and provider-specific username", async () => {
+    db.saveSetting("github_build_host", "gitlab.example");
+    db.saveSetting("github_build_username", "git-user");
+    await secretStore.set("github_build_token", "secret");
+    expect(await resolveSourceCredentialsForRepository("https://gitlab.example/acme/app.git"))
+      .toEqual({ username: "git-user", token: "secret" });
+    expect(await resolveSourceCredentialsForRepository("https://github.com/acme/app.git"))
+      .toEqual({});
+  });
+
+  test("keeps legacy token-only GitHub installations working", async () => {
+    db.saveSetting("github_build_host", "");
+    db.saveSetting("github_build_username", "");
+    await secretStore.set("github_build_token", "legacy-secret");
+    expect(await resolveSourceCredentialsForRepository("https://github.com/acme/app.git"))
+      .toEqual({ username: "x-access-token", token: "legacy-secret" });
+  });
 });

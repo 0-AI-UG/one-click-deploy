@@ -16,6 +16,12 @@ Bring existing VPSs or let OCD provision managed capacity on Hetzner.
 
 A lightweight, self-hostable alternative to Heroku, Railway, and Render. Git supplies versioned runtime configuration; OCD checks out exact commits, builds with BuildKit, pushes immutable images to your registry, and deploys those digests to connected servers. Existing VPSs can be connected directly, while [Hetzner Cloud](https://www.hetzner.com/cloud) remains an optional convenience for provisioning servers and volumes. DNS stays operator-owned and provider-neutral.
 
+Application delivery is provider-neutral: source checkout works with HTTPS Git
+hosts and image publication works with compatible OCI registries such as GHCR,
+GitLab, Docker Hub, Quay, Harbor, or a self-hosted registry. The OCD panel image
+itself is currently published on GHCR, and GitHub push webhooks are the current
+automatic source-trigger integration.
+
 ## Quick Start
 
 The headless bootstrap below creates the panel server on Hetzner and therefore
@@ -63,8 +69,8 @@ to provision a dedicated worker, installs it, and resumes the deploy. Registry
 and private-source credentials are explicit scoped connections:
 
 ```bash
-ocd registry login ghcr.io/acme --username=acme
-ocd source login github.com                 # private repositories only
+ocd registry login registry.example.com/team --username=registry-user
+ocd source login git.example.com --username=git-user  # private repositories only
 ocd doctor
 ocd deploy
 ```
@@ -89,8 +95,9 @@ managed provider volumes; `ocd servers delete app-1` only disconnects the host.
 
 ## Features
 
-- Build exact Git commits on dedicated OCD BuildKit workers
-- Trigger full manifest/stack reconciliation from signed GitHub push webhooks, without Actions minutes
+- Build exact commits from HTTPS Git hosts on dedicated OCD BuildKit workers
+- Publish to compatible OCI registries, including hosted and self-hosted options
+- Optionally trigger full reconciliation from signed GitHub push webhooks, without Actions minutes
 - Connect operator-owned stateless VPSs without cloud credentials
 - Optionally provision managed Hetzner Cloud servers, volumes, networks, and firewalls
 - Automatic TLS via Traefik and Let's Encrypt HTTP-01; provider-neutral DNS instructions

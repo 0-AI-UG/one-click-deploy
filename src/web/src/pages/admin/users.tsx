@@ -93,7 +93,7 @@ export function UsersPage() {
     github_oauth_client_id: "", github_oauth_client_secret: "",
     default_domain_suffix: "", default_server_type: "", default_location: "",
     oci_artifact_ref: "", oci_registry_username: "", oci_registry_password: "",
-    github_build_host: "github.com", github_build_username: "x-access-token", github_build_token: "",
+    github_build_host: "", github_build_username: "", github_build_token: "",
   });
   const [registryConnected, setRegistryConnected] = useState(false);
   const [sourceConnected, setSourceConnected] = useState(false);
@@ -179,8 +179,8 @@ export function UsersPage() {
           oci_artifact_ref: s.oci_artifact_ref ?? "",
           oci_registry_username: s.oci_registry_username ?? "",
           oci_registry_password: "",
-          github_build_username: s.github_build_username ?? "x-access-token",
-          github_build_host: s.github_build_host ?? "github.com",
+          github_build_username: s.github_build_username ?? "",
+          github_build_host: s.github_build_host ?? "",
           github_build_token: "",
         });
       })
@@ -324,7 +324,7 @@ export function UsersPage() {
       await runCliAction("source.logout", {}, { confirmed: true });
       setSourceConnected(false);
       refreshReadiness();
-      setSettingsForm((current) => ({ ...current, github_build_host: "github.com", github_build_username: "x-access-token", github_build_token: "" }));
+      setSettingsForm((current) => ({ ...current, github_build_host: "", github_build_username: "", github_build_token: "" }));
       showToast("Source access disconnected", "success");
     } catch (err: any) { showToast(err.message, "error"); }
     finally { setConnectionBusy(null); }
@@ -500,14 +500,14 @@ export function UsersPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-mono text-[10px] font-bold uppercase">OCI registry</div>
-              <div className="font-mono text-[9px] text-muted">Required for BuildKit pushes and private runtime pulls.</div>
+              <div className="font-mono text-[9px] text-muted">Any compatible OCI registry: GHCR, GitLab, Docker Hub, Quay, Harbor, or self-hosted.</div>
             </div>
             <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${registryConnected ? "bg-green-200" : "bg-yellow-200"}`}>
               {registryConnected ? "Connected" : "Not connected"}
             </span>
           </div>
-          <Field label="Repository namespace" align="start" hint="Credential boundary, for example ghcr.io/acme. It is never sent to another namespace on the same registry.">
-            <input type="text" value={settingsForm.oci_artifact_ref} onChange={setS("oci_artifact_ref")} placeholder="ghcr.io/acme" />
+          <Field label="Repository namespace" align="start" hint="Credential boundary, for example registry.example.com/team. It is never sent to another namespace on the same registry.">
+            <input type="text" value={settingsForm.oci_artifact_ref} onChange={setS("oci_artifact_ref")} placeholder="registry.example.com/team" />
           </Field>
           <Field label="Username">
             <input type="text" value={settingsForm.oci_registry_username} onChange={setS("oci_registry_username")} placeholder="acme" />
@@ -527,23 +527,23 @@ export function UsersPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-mono text-[10px] font-bold uppercase">Private source access</div>
-              <div className="font-mono text-[9px] text-muted">Optional. Public Git repositories need no source credential.</div>
+              <div className="font-mono text-[9px] text-muted">Any HTTPS Git host. Public repositories need no source credential.</div>
             </div>
             <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${sourceConnected ? "bg-green-200" : "bg-alt"}`}>
               {sourceConnected ? "Connected" : "Public only"}
             </span>
           </div>
           <Field label="Git host">
-            <input type="text" value={settingsForm.github_build_host} onChange={setS("github_build_host")} placeholder="github.com" />
+            <input type="text" value={settingsForm.github_build_host} onChange={setS("github_build_host")} placeholder="git.example.com" />
           </Field>
-          <Field label="Checkout username" align="start" hint="For GitHub tokens use x-access-token.">
-            <input type="text" value={settingsForm.github_build_username} onChange={setS("github_build_username")} placeholder="x-access-token" />
+          <Field label="Checkout username" align="start" hint="Provider-specific; GitHub commonly uses x-access-token.">
+            <input type="text" value={settingsForm.github_build_username} onChange={setS("github_build_username")} placeholder="git-user" />
           </Field>
           <Field label={sourceConnected ? "New read-only token (only to update)" : "Read-only token"}>
             <input type="password" value={settingsForm.github_build_token} onChange={setS("github_build_token")} placeholder={sourceConnected ? "Leave empty to keep current connection" : "Token for private checkout"} />
           </Field>
           <div className="flex gap-2">
-            <Btn variant="primary" loading={connectionBusy === "source"} disabled={!settingsForm.github_build_token} onClick={connectSource}>
+            <Btn variant="primary" loading={connectionBusy === "source"} disabled={!settingsForm.github_build_host || !settingsForm.github_build_username || !settingsForm.github_build_token} onClick={connectSource}>
               <Key size={13} /> {sourceConnected ? "Update connection" : "Connect source"}
             </Btn>
             {sourceConnected && <Btn variant="danger" disabled={connectionBusy !== null} onClick={disconnectSource}><Trash2 size={12} /> Disconnect</Btn>}
@@ -560,7 +560,7 @@ export function UsersPage() {
           <Btn size="xs" onClick={refreshRunners}><RefreshCw size={11} /> Refresh</Btn>
         </div>
         <p className="font-mono text-[10px] text-muted">
-          OCD checks out the exact webhook commit on a dedicated worker, builds and pushes with BuildKit, then reconciles the committed manifest using the immutable digest.
+          OCD checks out exact commits from any compatible Git host, builds and pushes to any compatible OCI registry, then deploys the immutable digest. GitHub push webhooks are the current automatic trigger integration.
         </p>
 
         {runners.length > 0 && (
@@ -595,7 +595,7 @@ export function UsersPage() {
 
         {buildSources.length > 0 && <>
           <Divider />
-          <div className="font-mono text-[9px] font-bold uppercase">Repository webhooks</div>
+          <div className="font-mono text-[9px] font-bold uppercase">GitHub push webhooks</div>
           <Table headers={["Source", "Branch", "Status", "Webhook", ""]}>
             {buildSources.map((source) => <tr key={source.id}>
               <td className="py-2 px-3 font-mono text-[10px] break-all">{source.repository}</td>

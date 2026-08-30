@@ -1,8 +1,9 @@
 # OCD Reference
 
-OCD checks out exact Git commits on dedicated BuildKit workers, publishes OCI
-images, resolves immutable digests, and reconciles committed manifests. GitHub
-push webhooks trigger delivery without GitHub Actions.
+OCD checks out exact commits from compatible HTTPS Git hosts on dedicated
+BuildKit workers, publishes to compatible OCI registries, resolves immutable
+digests, and reconciles committed manifests. GitHub push webhooks are an
+optional trigger integration and require no GitHub Actions runner.
 
 - [Concepts](docs/concepts.md)
 - [Deploy and config](docs/deploy-and-config.md)

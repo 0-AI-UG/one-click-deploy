@@ -3,12 +3,12 @@
   "name": "API Server",
   "description": "REST API backend using stack-injected service URLs",
   "build": {
-    "repository": "https://github.com/example/blog.git",
+    "repository": "https://git.example.com/team/blog.git",
     "branch": "main",
     "dockerfile": "services/api/Dockerfile",
     "context": ".",
-    "image": "ghcr.io/example/blog-api",
-    "webhook": true
+    "image": "registry.example.com/team/blog-api",
+    "webhook": false
   },
   "container_port": 8080,
   "env": [

@@ -11,12 +11,12 @@ Unknown fields are rejected by default.
   "name": "API",
   "suggested_app_name": "api",
   "build": {
-    "repository": "https://github.com/example/product.git",
+    "repository": "https://git.example.com/team/product.git",
     "branch": "main",
     "dockerfile": "apps/api/Dockerfile",
     "context": ".",
-    "image": "ghcr.io/example/api",
-    "webhook": true
+    "image": "registry.example.com/team/api",
+    "webhook": false
   },
   "container_port": 3000,
   "environment": "production",
@@ -39,7 +39,9 @@ Unknown fields are rejected by default.
 - `dockerfile`: safe repository-relative Dockerfile path.
 - `context`: safe repository-relative Docker build context.
 - `image`: OCI repository without tag or digest.
-- `webhook`: whether signed push delivery is enabled, default `true`.
+- `webhook`: whether signed push delivery is enabled, default `true`. The
+  current push-webhook protocol integration is GitHub; use `false` with other
+  Git providers and deploy exact commits through the CLI.
 
 Paths must not be absolute, contain `..`, or use backslashes. Credentials never
 belong in this object.

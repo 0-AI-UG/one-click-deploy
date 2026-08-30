@@ -35,8 +35,8 @@ export async function handleGetConnections(request: Request): Promise<Response> 
       },
       source: {
         connected: !!sourceToken,
-        host: settings.github_build_host || "github.com",
-        username: settings.github_build_username || "x-access-token",
+        host: settings.github_build_host || (sourceToken ? "github.com" : ""),
+        username: settings.github_build_username || (sourceToken ? "x-access-token" : ""),
         token: maskToken(sourceToken || ""),
       },
     }, { headers: corsHeaders });
@@ -53,7 +53,7 @@ export async function handlePutRegistryConnection(request: Request): Promise<Res
     const username = String(body.username ?? "").trim();
     const token = String(body.token ?? "");
     if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+$/i.test(scope)) {
-      return Response.json({ error: "scope must be an OCI repository or namespace, for example ghcr.io/acme" }, { status: 400, headers: corsHeaders });
+      return Response.json({ error: "scope must be an OCI repository or namespace, for example registry.example.com/team" }, { status: 400, headers: corsHeaders });
     }
     if (!username || /\s/.test(username)) {
       return Response.json({ error: "username must be a non-whitespace registry username" }, { status: 400, headers: corsHeaders });
@@ -86,11 +86,11 @@ export async function handlePutSourceConnection(request: Request): Promise<Respo
   try {
     await requireAdmin(request);
     const body = await request.json() as { host?: unknown; username?: unknown; token?: unknown };
-    const host = String(body.host ?? "github.com").trim().toLowerCase();
-    const username = String(body.username ?? "x-access-token").trim();
+    const host = String(body.host ?? "").trim().toLowerCase();
+    const username = String(body.username ?? "").trim();
     const token = String(body.token ?? "");
     if (!/^[a-z0-9.-]+(?::[0-9]+)?$/i.test(host)) {
-      return Response.json({ error: "host must be a Git hostname such as github.com" }, { status: 400, headers: corsHeaders });
+      return Response.json({ error: "host must be a Git hostname such as git.example.com" }, { status: 400, headers: corsHeaders });
     }
     if (!username || /\s/.test(username)) {
       return Response.json({ error: "username must be a non-whitespace Git username" }, { status: 400, headers: corsHeaders });
@@ -110,8 +110,8 @@ export async function handlePutSourceConnection(request: Request): Promise<Respo
 export async function handleDeleteSourceConnection(request: Request): Promise<Response> {
   try {
     await requireAdmin(request);
-    db.saveSetting("github_build_host", "github.com");
-    db.saveSetting("github_build_username", "x-access-token");
+    db.saveSetting("github_build_host", "");
+    db.saveSetting("github_build_username", "");
     await secretStore.delete("github_build_token");
     return Response.json({ ok: true }, { headers: corsHeaders });
   } catch (error) {

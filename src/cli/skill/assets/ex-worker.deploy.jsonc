@@ -3,12 +3,12 @@
   "name": "Queue Worker",
   "description": "Background job worker that speaks no HTTP",
   "build": {
-    "repository": "https://github.com/example/worker.git",
+    "repository": "https://git.example.com/team/worker.git",
     "branch": "main",
     "dockerfile": "Dockerfile",
     "context": ".",
-    "image": "ghcr.io/example/worker",
-    "webhook": true
+    "image": "registry.example.com/team/worker",
+    "webhook": false
   },
   "env": [
     { "key": "REDIS_URL", "description": "Redis connection string", "required": true, "secret": true },

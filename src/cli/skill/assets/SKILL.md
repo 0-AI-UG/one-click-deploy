@@ -5,10 +5,10 @@ description: Build, deploy, configure, operate, recover, and troubleshoot applic
 
 # OCD Deploy
 
-Use the `ocd` CLI for One-Click Deploy panels. OCD owns source checkout,
-BuildKit image creation, immutable OCI publication, manifest reconciliation,
-and runtime rollout. GitHub supplies signed push webhooks; GitHub Actions is not
-part of app delivery.
+Use the `ocd` CLI for One-Click Deploy panels. OCD owns provider-neutral HTTPS
+Git checkout, BuildKit image creation, immutable OCI publication, manifest
+reconciliation, and runtime rollout. GitHub signed push webhooks are an optional
+trigger integration; GitHub Actions is not part of app delivery.
 
 ## Safety contract
 
@@ -54,7 +54,7 @@ OCD only displays records. Hetzner remains optional infrastructure.
 
 ```bash
 ocd login https://panel.example.com
-ocd registry login ghcr.io/acme --username=acme
+ocd registry login registry.example.com/team --username=registry-user
 ocd doctor
 ocd manifest validate .ocd-deploy.json
 ocd deploy --dry-run

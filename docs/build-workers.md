@@ -1,8 +1,10 @@
 # Build Worker Operations
 
-OCD builds source repositories on dedicated, operator-controlled servers. It
-does not register those servers with GitHub Actions. GitHub is only a source of
-signed push events; the OCD engine schedules and supervises all build work.
+OCD builds source repositories on dedicated, operator-controlled servers. HTTPS
+checkout works with compatible Git hosts, and publication works with compatible
+OCI registries. Workers are not registered with a hosted CI service; the OCD
+engine schedules and supervises all build work. GitHub signed push webhooks are
+the current optional automatic trigger integration.
 
 ## Delivery contract
 
@@ -40,10 +42,10 @@ state it or omit it for the same default:
 ```json
 {
   "build": {
-    "repository": "https://github.com/acme/api.git",
+    "repository": "https://git.example.com/team/api.git",
     "dockerfile": "Dockerfile",
     "context": ".",
-    "image": "registry.example/acme/api",
+    "image": "registry.example.com/team/api",
     "platform": "linux/amd64",
     "cache": true
   }
@@ -51,7 +53,7 @@ state it or omit it for the same default:
 ```
 
 BuildKit imports and exports a per-image cache at
-`registry.example/acme/api:ocd-buildcache`. The cache uses the same
+`registry.example.com/team/api:ocd-buildcache`. The cache uses the same
 repository-scoped credentials as the image push. Set `"cache": false` for a
 diagnostic cold build or for a registry that cannot store BuildKit cache
 manifests. Cache export errors are non-fatal. A missing, failed, or poisoned

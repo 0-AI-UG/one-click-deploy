@@ -50,7 +50,7 @@ export async function registry(args: string[]): Promise<void> {
   }
   if (sub !== "login" && sub !== "connect") throw new Error("Usage: ocd registry <status|login|logout>");
   const rest = args.slice(1);
-  const scope = positional(rest) || await promptLine("Registry namespace (for example ghcr.io/acme): ");
+  const scope = positional(rest) || await promptLine("Registry namespace (for example registry.example.com/team): ");
   const username = flag(rest, "username") || await promptLine("Registry username: ");
   const token = await secret(rest, "OCD_REGISTRY_TOKEN", "Registry password/token");
   if (!token) throw new Error("Registry password/token is required");
@@ -68,8 +68,9 @@ export async function source(args: string[]): Promise<void> {
   }
   if (sub !== "login" && sub !== "connect") throw new Error("Usage: ocd source <status|login|logout>");
   const rest = args.slice(1);
-  const host = positional(rest) || "github.com";
-  const username = flag(rest, "username") || "x-access-token";
+  const host = positional(rest) || await promptLine("Git host (for example gitlab.com or github.com): ");
+  const defaultUsername = host.toLowerCase() === "github.com" ? "x-access-token" : "";
+  const username = flag(rest, "username") || defaultUsername || await promptLine("Git checkout username: ");
   const token = await secret(rest, "OCD_SOURCE_TOKEN", "Read-only source token");
   if (!token) throw new Error("Source token is required");
   await put("/api/admin/connections/source", { host, username, token });

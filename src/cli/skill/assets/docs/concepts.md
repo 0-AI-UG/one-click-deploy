@@ -30,6 +30,11 @@ Promotion copies an exact tested digest; it does not rebuild.
 
 ## Provider boundaries
 
+Source checkout accepts compatible HTTPS Git hosts. Image publication accepts
+compatible OCI registries such as GHCR, GitLab, Docker Hub, Quay, Harbor, and
+self-hosted registries. GitHub signed push webhooks are the current automatic
+source trigger; manual deployment is not GitHub-dependent.
+
 DNS is manual and provider-neutral. Hetzner provisioning is optional. Connected
 operator-owned hosts support stateless workloads; managed provider volumes and
 services require supported managed infrastructure.

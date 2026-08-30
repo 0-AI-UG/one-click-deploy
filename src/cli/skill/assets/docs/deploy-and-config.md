@@ -43,7 +43,7 @@ its current immutable image. Use it only when source bytes do not need a build.
 ## Advanced exact-image override
 
 ```bash
-ocd deploy --image=ghcr.io/example/api@sha256:<64-hex-digest> --commit=<sha>
+ocd deploy --image=registry.example.com/team/api@sha256:<64-hex-digest> --commit=<sha>
 ```
 
 This bypasses the build worker but still applies the manifest. `ocd release`
