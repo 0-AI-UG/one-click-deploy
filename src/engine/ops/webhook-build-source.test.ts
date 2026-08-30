@@ -7,6 +7,7 @@ import database from "../../shared/db/connection.ts";
 import type { DeployManifest } from "../../shared/rpc.ts";
 import type { BuildCommitInput, BuildTransport } from "../build-transport.ts";
 import type { OpContext, OpKindDefinition } from "../types.ts";
+import { enqueueOperation, markOperationRunning } from "../../shared/db/operations.ts";
 import {
   createWebhookBuildSourceDefinition,
   type WebhookBuildSourceInput,
@@ -89,9 +90,20 @@ function manifest(
   };
 }
 
-function context(input: WebhookBuildSourceInput): OpContext<WebhookBuildSourceInput> {
+function context(
+  definition: OpKindDefinition<WebhookBuildSourceInput>,
+  input: WebhookBuildSourceInput,
+): OpContext<WebhookBuildSourceInput> {
+  const op = enqueueOperation({
+    kind: definition.kind,
+    resourceKeys: definition.resourceKeys(input),
+    input,
+    trigger: "webhook",
+    triggeredBy: "github",
+  });
+  markOperationRunning(op.id);
   return {
-    opId: Math.floor(Math.random() * 1_000_000) + 1,
+    opId: op.id,
     kind: "webhook_build_source",
     input,
     trigger: "webhook",
@@ -113,7 +125,7 @@ function step(definition: OpKindDefinition<WebhookBuildSourceInput>, name: strin
 
 function inMemoryTransport(
   repositoryFiles: Record<string, string>,
-  options: { online?: boolean } = {},
+  options: { online?: boolean; onlineServerId?: number } = {},
 ): BuildTransport & {
   probes: number[];
   builds: BuildCommitInput[];
@@ -131,12 +143,14 @@ function inMemoryTransport(
     reads,
     probeWorker: async (server) => {
       probes.push(server.id);
+      const online = options.online !== false &&
+        (options.onlineServerId === undefined || options.onlineServerId === server.id);
       return {
-        online: options.online !== false,
+        online,
         version: "test",
         architecture: "x86_64",
         diskFreeBytes: 50 * 1024 ** 3,
-        error: options.online === false ? "worker offline" : "",
+        error: online ? "" : "worker offline",
       };
     },
     buildCommit: async (request) => {
@@ -168,26 +182,17 @@ function input(sourceId: number): WebhookBuildSourceInput {
 }
 
 describe("webhook build source transport boundary", () => {
-  test("prepares the source's assigned worker and records building state", async () => {
+  test("prepares source metadata without reserving or probing a worker", async () => {
     const seeded = fixture();
-    const unrelated = seedWorker("webhook-unrelated");
     const transport = inMemoryTransport({});
     const definition = createWebhookBuildSourceDefinition(transport);
-    const ctx = context(input(seeded.source.id));
+    const ctx = context(definition, input(seeded.source.id));
 
-    const prepared = await step(definition, "prepare_source").run(ctx, {}) as {
-      workerId: number;
-      serverId: number;
-      appIds: number[];
-    };
+    const prepared = await step(definition, "prepare_source").run(ctx, {}) as { appIds: number[] };
 
-    expect(prepared).toEqual({
-      workerId: seeded.assigned.worker.id,
-      serverId: seeded.assigned.server.id,
-      appIds: [seeded.app.id],
-    });
-    expect(transport.probes).toEqual([seeded.assigned.server.id]);
-    expect(transport.probes).not.toContain(unrelated.server.id);
+    expect(prepared).toEqual({ appIds: [seeded.app.id] });
+    expect(transport.probes).toEqual([]);
+    expect(db.getBuildWorkerLeaseForOperation(ctx.opId)).toBeNull();
     expect(db.getBuildSource(seeded.source.id)).toMatchObject({
       last_status: "building",
       last_error: "",
@@ -199,13 +204,14 @@ describe("webhook build source transport boundary", () => {
     const rawManifest = JSON.stringify(manifest(seeded));
     const transport = inMemoryTransport({ [MANIFEST_PATH]: rawManifest });
     const definition = createWebhookBuildSourceDefinition(transport);
-    const ctx = context(input(seeded.source.id));
+    const ctx = context(definition, input(seeded.source.id));
 
     const prepared = await step(definition, "prepare_source").run(ctx, {});
     const built = await step(definition, "build_images").run(ctx, { prepare_source: prepared }) as {
       refs: Record<string, string>;
       files: Record<string, string>;
       builds: Record<string, DeployManifest["build"]>;
+      workerId: number;
     };
 
     expect(transport.builds).toHaveLength(1);
@@ -230,6 +236,8 @@ describe("webhook build source transport boundary", () => {
     });
     expect(built.files).toEqual({ [MANIFEST_PATH]: rawManifest });
     expect(built.builds[seeded.app.name]).toEqual(manifest(seeded).build);
+    expect(built.workerId).toBe(seeded.assigned.worker.id);
+    expect(db.getBuildWorkerLeaseForOperation(ctx.opId)).toBeNull();
   });
 
   test("rejects a committed manifest that changes the source repository", async () => {
@@ -240,12 +248,13 @@ describe("webhook build source transport boundary", () => {
       })),
     });
     const definition = createWebhookBuildSourceDefinition(transport);
-    const ctx = context(input(seeded.source.id));
+    const ctx = context(definition, input(seeded.source.id));
     const prepared = await step(definition, "prepare_source").run(ctx, {});
 
     await expect(step(definition, "build_images").run(ctx, { prepare_source: prepared }))
       .rejects.toThrow(/changed repository/);
     expect(transport.targets).toHaveLength(0);
+    expect(db.getBuildWorkerLeaseForOperation(ctx.opId)).toBeNull();
   });
 
   test("rejects a committed manifest that changes the webhook branch", async () => {
@@ -254,11 +263,30 @@ describe("webhook build source transport boundary", () => {
       [MANIFEST_PATH]: JSON.stringify(manifest(seeded, { branch: "release" })),
     });
     const definition = createWebhookBuildSourceDefinition(transport);
-    const ctx = context(input(seeded.source.id));
+    const ctx = context(definition, input(seeded.source.id));
     const prepared = await step(definition, "prepare_source").run(ctx, {});
 
     await expect(step(definition, "build_images").run(ctx, { prepare_source: prepared }))
       .rejects.toThrow(/changed webhook branch/);
     expect(transport.targets).toHaveLength(0);
+    expect(db.getBuildWorkerLeaseForOperation(ctx.opId)).toBeNull();
+  });
+
+  test("fails over from an offline affinity worker and records the actual worker", async () => {
+    const seeded = fixture();
+    const fallback = seedWorker("webhook-fallback");
+    const transport = inMemoryTransport(
+      { [MANIFEST_PATH]: JSON.stringify(manifest(seeded)) },
+      { onlineServerId: fallback.server.id },
+    );
+    const definition = createWebhookBuildSourceDefinition(transport);
+    const ctx = context(definition, input(seeded.source.id));
+    const prepared = await step(definition, "prepare_source").run(ctx, {});
+    const built = await step(definition, "build_images").run(ctx, { prepare_source: prepared });
+
+    expect(transport.builds[0].server.id).toBe(fallback.server.id);
+    expect((built as { workerId: number }).workerId).toBe(fallback.worker.id);
+    await step(definition, "finish_delivery").run(ctx, { build_images: built });
+    expect(db.getBuildSource(seeded.source.id)?.worker_id).toBe(fallback.worker.id);
   });
 });

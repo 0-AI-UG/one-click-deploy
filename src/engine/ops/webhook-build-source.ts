@@ -8,6 +8,7 @@ import { buildStackAppSpec } from "../../shared/stack-spec.ts";
 import { deployRequestFromApp } from "../../shared/app-config.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
 import { sshBuildTransport, type BuildTransport } from "../build-transport.ts";
+import { createBuildCoordinator, type BuildCoordinator } from "../build-coordinator.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
@@ -15,9 +16,14 @@ import { registerOp } from "./registry.ts";
 import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 
 export type WebhookBuildSourceInput = { sourceId: number; commit: string; deliveryId: string };
-type Prepared = { workerId: number; serverId: number; appIds: number[] };
+type Prepared = { appIds: number[] };
 type BuildConfig = NonNullable<import("../../shared/rpc.ts").DeployRequest["build"]>;
-type Built = { refs: Record<string, string>; files: Record<string, string>; builds: Record<string, BuildConfig> };
+type Built = {
+  refs: Record<string, string>;
+  files: Record<string, string>;
+  builds: Record<string, BuildConfig>;
+  workerId: number;
+};
 
 function parseJson<T>(raw: string, label: string): T {
   try { return JSON.parse(raw) as T; } catch { throw new Error(`${label} is not valid JSON`); }
@@ -57,6 +63,7 @@ async function child(ctx: OpContext<WebhookBuildSourceInput>, suffix: string, ki
 
 export function createWebhookBuildSourceDefinition(
   transport: BuildTransport = sshBuildTransport,
+  coordinator: BuildCoordinator = createBuildCoordinator(transport),
 ): OpKindDefinition<WebhookBuildSourceInput> {
 const prepare: Step<WebhookBuildSourceInput, Prepared> = {
   name: "prepare_source",
@@ -65,15 +72,10 @@ const prepare: Step<WebhookBuildSourceInput, Prepared> = {
     const source = db.getBuildSource(ctx.input.sourceId);
     if (!source) throw new Error("Build source not found");
     if (!/^[0-9a-f]{40,64}$/i.test(ctx.input.commit)) throw new Error("Webhook commit is invalid");
-    const worker = db.getBuildWorker(source.worker_id);
-    const server = worker ? db.getServer(worker.server_id) : null;
-    if (!worker || !server) throw new Error("Assigned build worker is missing");
-    const observed = await transport.probeWorker(server);
-    if (!observed.online) throw new Error(observed.error || "Assigned build worker is offline");
     const apps = db.appsForBuildSource(source.id) as AppRow[];
     if (!apps.length) throw new Error("Build source has no attached apps");
     db.updateBuildSourceDelivery(source.id, { last_status: "building", last_error: "" });
-    return { workerId: worker.id, serverId: server.id, appIds: apps.map((app) => app.id) };
+    return { appIds: apps.map((app) => app.id) };
   },
   async compensate(ctx) {
     db.updateBuildSourceDelivery(ctx.input.sourceId, {
@@ -89,55 +91,63 @@ const build: Step<WebhookBuildSourceInput, Built> = {
   async run(ctx, prior) {
     const source = db.getBuildSource(ctx.input.sourceId)!;
     const prepared = prior.prepare_source as Prepared;
-    const server = db.getServer(prepared.serverId)!;
     const apps = prepared.appIds.map((id) => db.getApp(id)).filter((app): app is AppRow => !!app && app.target_of == null);
     const roots = apps.flatMap((app) => [app.stack_id == null ? app.manifest_path : null, app.stack_manifest_path])
       .filter((path): path is string => !!path);
     const builds: Record<string, BuildConfig> = {};
     const sourceCredentials = await resolveSourceCredentialsForRepository(source.repository);
-    const result = await transport.buildCommit({
-      server,
+    const coordinated = await coordinator.withWorker({
       operationId: ctx.opId,
-      repository: source.repository,
-      commit: ctx.input.commit,
-      readFiles: roots,
-      resolveTargets: async (readFile) => {
-        const targets: Array<{ name: string; dockerfile: string; context: string; image: string }> = [];
-        for (const app of apps.filter((candidate) => candidate.stack_id == null)) {
-          if (!app.manifest_path) throw new Error(`${app.name} has no committed manifest path`);
-          const manifest = parseJson<DeployManifest>(await readFile(app.manifest_path), app.manifest_path);
-          validateDeployManifest(manifest, app.manifest_path);
-          assertSourceBuild(manifest.build, source, app.manifest_path);
-          builds[app.name] = manifest.build;
-          targets.push({ name: app.name, ...manifest.build });
-        }
-        const stackIds = [...new Set(apps.map((app) => app.stack_id).filter((id): id is number => id != null))];
-        for (const stackId of stackIds) {
-          const stack = db.getStack(stackId);
-          const member = apps.find((app) => app.stack_id === stackId);
-          const stackPath = member?.stack_manifest_path;
-          if (!stack || !stackPath) throw new Error(`Stack ${stackId} has no committed manifest path`);
-          const stackManifest = parseJson<StackManifest>(await readFile(stackPath), stackPath);
-          validateStackManifest(stackManifest, stackPath);
-          if (stackManifest.name !== stack.name) throw new Error(`${stackPath} changed stack name; apply it manually`);
-          for (const [key, entry] of Object.entries(stackManifest.apps)) {
-            const path = posix.normalize(posix.join(posix.dirname(stackPath), entry.manifest));
-            const manifest = parseJson<DeployManifest>(await readFile(path), path);
-            validateDeployManifest(manifest, path);
-            assertSourceBuild(manifest.build, source, path);
-            const name = `${stack.name}-${key}`;
-            builds[name] = manifest.build;
-            targets.push({ name, ...manifest.build });
+      preferredWorkerId: source.worker_id,
+      run: ({ server }) => transport.buildCommit({
+        server,
+        operationId: ctx.opId,
+        repository: source.repository,
+        commit: ctx.input.commit,
+        readFiles: roots,
+        resolveTargets: async (readFile) => {
+          const targets: Array<{ name: string; dockerfile: string; context: string; image: string }> = [];
+          for (const app of apps.filter((candidate) => candidate.stack_id == null)) {
+            if (!app.manifest_path) throw new Error(`${app.name} has no committed manifest path`);
+            const manifest = parseJson<DeployManifest>(await readFile(app.manifest_path), app.manifest_path);
+            validateDeployManifest(manifest, app.manifest_path);
+            assertSourceBuild(manifest.build, source, app.manifest_path);
+            builds[app.name] = manifest.build;
+            targets.push({ name: app.name, ...manifest.build });
           }
-        }
-        return targets;
-      },
-      gitUsername: sourceCredentials.username,
-      gitToken: sourceCredentials.token,
-      resolveRegistryCredentials: resolveRegistryCredentialsForImage,
-      onLog: (line) => ctx.log(line),
+          const stackIds = [...new Set(apps.map((app) => app.stack_id).filter((id): id is number => id != null))];
+          for (const stackId of stackIds) {
+            const stack = db.getStack(stackId);
+            const member = apps.find((app) => app.stack_id === stackId);
+            const stackPath = member?.stack_manifest_path;
+            if (!stack || !stackPath) throw new Error(`Stack ${stackId} has no committed manifest path`);
+            const stackManifest = parseJson<StackManifest>(await readFile(stackPath), stackPath);
+            validateStackManifest(stackManifest, stackPath);
+            if (stackManifest.name !== stack.name) throw new Error(`${stackPath} changed stack name; apply it manually`);
+            for (const [key, entry] of Object.entries(stackManifest.apps)) {
+              const path = posix.normalize(posix.join(posix.dirname(stackPath), entry.manifest));
+              const manifest = parseJson<DeployManifest>(await readFile(path), path);
+              validateDeployManifest(manifest, path);
+              assertSourceBuild(manifest.build, source, path);
+              const name = `${stack.name}-${key}`;
+              builds[name] = manifest.build;
+              targets.push({ name, ...manifest.build });
+            }
+          }
+          return targets;
+        },
+        gitUsername: sourceCredentials.username,
+        gitToken: sourceCredentials.token,
+        resolveRegistryCredentials: resolveRegistryCredentialsForImage,
+        onLog: (line) => ctx.log(line),
+      }),
     });
-    return { refs: Object.fromEntries(result.refs), files: result.files, builds };
+    return {
+      refs: Object.fromEntries(coordinated.value.refs),
+      files: coordinated.value.files,
+      builds,
+      workerId: coordinated.workerId,
+    };
   },
 };
 
@@ -262,7 +272,9 @@ const reconcile: Step<WebhookBuildSourceInput, { childIds: number[] }> = {
 const finish: Step<WebhookBuildSourceInput, { ok: true }> = {
   name: "finish_delivery",
   label: "Record webhook delivery",
-  async run(ctx) {
+  async run(ctx, prior) {
+    const built = prior.build_images as Built;
+    if (built.workerId != null) db.updateBuildSourceWorker(ctx.input.sourceId, built.workerId);
     db.updateBuildSourceDelivery(ctx.input.sourceId, {
       last_status: "deployed",
       last_error: "",

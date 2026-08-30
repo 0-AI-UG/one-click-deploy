@@ -109,6 +109,10 @@ export function updateBuildSourceDelivery(
   db.query(`UPDATE build_sources SET ${clauses.join(", ")} WHERE id = ?`).run(...values);
 }
 
+export function updateBuildSourceWorker(id: number, workerId: number): void {
+  db.query("UPDATE build_sources SET worker_id = ? WHERE id = ?").run(workerId, id);
+}
+
 export function appsForBuildSource(sourceId: number) {
   return db.query("SELECT * FROM apps WHERE build_source_id = ? ORDER BY id").all(sourceId);
 }

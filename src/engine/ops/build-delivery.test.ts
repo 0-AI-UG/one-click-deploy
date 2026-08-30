@@ -5,7 +5,8 @@ import { describe, expect, test } from "bun:test";
 import * as db from "../../shared/db.ts";
 import type { DeployRequest, StackDeployRequest } from "../../shared/rpc.ts";
 import type { BuildCommitInput, BuildTransport } from "../build-transport.ts";
-import type { OpContext } from "../types.ts";
+import type { OpContext, OpKindDefinition } from "../types.ts";
+import { enqueueOperation, markOperationRunning } from "../../shared/db/operations.ts";
 import {
   createBuildDeliveryDefinitions,
   type BuildAppDeliveryInput,
@@ -30,10 +31,18 @@ function seedWorker(name: string) {
   return { server, worker };
 }
 
-function context<Input>(kind: string, input: Input): OpContext<Input> {
+function context<Input>(definition: OpKindDefinition<Input>, input: Input): OpContext<Input> {
+  const op = enqueueOperation({
+    kind: definition.kind,
+    resourceKeys: definition.resourceKeys(input),
+    input,
+    trigger: "test",
+    triggeredBy: "tester",
+  });
+  markOperationRunning(op.id);
   return {
-    opId: Math.floor(Math.random() * 1_000_000) + 1,
-    kind,
+    opId: op.id,
+    kind: definition.kind,
     input,
     trigger: "test",
     triggeredBy: "tester",
@@ -44,6 +53,12 @@ function context<Input>(kind: string, input: Input): OpContext<Input> {
     park: () => {},
     unpark: () => {},
   };
+}
+
+function step<Input>(definition: OpKindDefinition<Input>, name: string) {
+  const found = definition.steps.find((candidate) => candidate.name === name);
+  if (!found) throw new Error(`Missing build-delivery step ${name}`);
+  return found;
 }
 
 function transport(input: {
@@ -89,10 +104,9 @@ describe("build delivery transport boundary", () => {
     const builds: BuildCommitInput[] = [];
     const definitions = createBuildDeliveryDefinitions(transport({ onlineServerId: server.id, builds }));
     const input: BuildAppDeliveryInput = { spec: appSpec(`app-${randomSuffix()}`) };
-    const ctx = context("build_app_delivery", input);
+    const ctx = context(definitions.appDefinition, input);
 
-    const selected = await definitions.appDefinition.steps[0].run(ctx, {});
-    const built = await definitions.appDefinition.steps[1].run(ctx, { select_build_worker: selected });
+    const built = await step(definitions.appDefinition, "build_and_push").run(ctx, {});
 
     expect(builds).toHaveLength(1);
     expect(builds[0].commit).toBe(COMMIT);
@@ -103,8 +117,10 @@ describe("build delivery transport boundary", () => {
       context: ".",
       image: input.spec.build!.image,
     }]);
-    expect((built as { refs: Record<string, string> }).refs[input.spec.app_name])
+    expect((built as { refs: Record<string, string>; workerId: number }).refs[input.spec.app_name])
       .toBe(`${input.spec.build!.image}@${DIGEST}`);
+    expect((built as { workerId: number }).workerId).toBe(db.getBuildWorkerByServerId(server.id)!.id);
+    expect(db.getBuildWorkerLeaseForOperation(ctx.opId)).toBeNull();
   });
 
   test("skips offline workers and selects an online worker", async () => {
@@ -114,13 +130,10 @@ describe("build delivery transport boundary", () => {
     const definitions = createBuildDeliveryDefinitions(transport({ onlineServerId: online.server.id, builds }));
     const input: BuildAppDeliveryInput = { spec: appSpec(`select-${randomSuffix()}`) };
 
-    const selected = await definitions.appDefinition.steps[0].run(context("build_app_delivery", input), {}) as {
-      workerId: number;
-      serverId: number;
-    };
+    const ctx = context(definitions.appDefinition, input);
+    await step(definitions.appDefinition, "build_and_push").run(ctx, {});
 
-    expect(selected.serverId).toBe(online.server.id);
-    expect(selected.workerId).toBe(online.worker.id);
+    expect(builds[0].server.id).toBe(online.server.id);
   });
 
   test("builds every selected stack target at one exact commit before deployment", async () => {
@@ -139,10 +152,9 @@ describe("build delivery transport boundary", () => {
       selected_app_keys: ["web", "worker"],
     } as unknown as StackDeployRequest;
     const input: BuildStackDeliveryInput = { spec };
-    const ctx = context("build_stack_delivery", input);
+    const ctx = context(definitions.stackDefinition, input);
 
-    const selected = await definitions.stackDefinition.steps[0].run(ctx, {});
-    const built = await definitions.stackDefinition.steps[1].run(ctx, { select_build_worker: selected });
+    const built = await step(definitions.stackDefinition, "build_and_push").run(ctx, {});
 
     expect(builds).toHaveLength(1);
     expect(builds[0].targets?.map((target) => target.name)).toEqual(["web", "worker"]);
@@ -163,10 +175,9 @@ describe("build delivery transport boundary", () => {
       services: [],
     } as unknown as StackDeployRequest;
     const input: BuildStackDeliveryInput = { spec };
-    const ctx = context("build_stack_delivery", input);
-    const selected = await definitions.stackDefinition.steps[0].run(ctx, {});
+    const ctx = context(definitions.stackDefinition, input);
 
-    await expect(definitions.stackDefinition.steps[1].run(ctx, { select_build_worker: selected }))
+    await expect(step(definitions.stackDefinition, "build_and_push").run(ctx, {}))
       .rejects.toThrow(/one exact Git commit/);
     expect(builds).toHaveLength(0);
   });

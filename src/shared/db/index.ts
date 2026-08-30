@@ -32,6 +32,7 @@ export {
   getBuildSources,
   upsertBuildSource,
   updateBuildSourceDelivery,
+  updateBuildSourceWorker,
   appsForBuildSource,
 } from "./build-workers.ts";
 export type { BuildWorkerLeaseRow } from "./build-worker-leases.ts";

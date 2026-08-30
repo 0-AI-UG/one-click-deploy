@@ -4,6 +4,7 @@ import type { DeployRequest, StackDeployRequest } from "../../shared/rpc.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
 import type { BuildTarget } from "../build-worker.ts";
 import { sshBuildTransport, type BuildTransport } from "../build-transport.ts";
+import { createBuildCoordinator, type BuildCoordinator } from "../build-coordinator.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
@@ -12,7 +13,7 @@ import type { OpContext, OpKindDefinition, Step } from "../types.ts";
 
 type BuildConfig = NonNullable<DeployRequest["build"]>;
 type WorkerOut = { workerId: number; serverId: number };
-type BuiltOut = { refs: Record<string, string> };
+type BuiltOut = { refs: Record<string, string>; workerId: number | null };
 
 export type BuildAppDeliveryInput = { spec: DeployRequest; userId?: string };
 export type BuildStackDeliveryInput = { spec: StackDeployRequest; userId?: string };
@@ -21,47 +22,33 @@ function sourceKey(build: BuildConfig): string {
   return `${build.repository}#${build.branch || "main"}`;
 }
 
-async function readyWorker(transport: BuildTransport): Promise<WorkerOut> {
-  for (const worker of db.getBuildWorkers()) {
-    const server = db.getServer(worker.server_id);
-    if (!server || server.status !== "ready") continue;
-    const observed = await transport.probeWorker(server);
-    if (!observed.online) continue;
-    db.updateBuildWorker(worker.id, {
-      status: "online",
-      last_error: "",
-      worker_version: observed.version,
-      architecture: observed.architecture,
-      last_checked_at: new Date().toISOString(),
-    });
-    return { workerId: worker.id, serverId: server.id };
-  }
-  throw new Error("No online OCD build worker is available");
-}
-
 async function runBuild(
   transport: BuildTransport,
+  coordinator: BuildCoordinator,
   ctx: OpContext<any>,
-  worker: WorkerOut,
   repository: string,
+  branch: string,
   commit: string,
   targets: BuildTarget[],
 ): Promise<BuiltOut> {
-  const server = db.getServer(worker.serverId);
-  if (!server) throw new Error("Build worker server disappeared");
   const sourceCredentials = await resolveSourceCredentialsForRepository(repository);
-  const built = await transport.buildCommit({
-    server,
+  const preferredWorkerId = db.getBuildSourceByRepository(repository, branch)?.worker_id;
+  const coordinated = await coordinator.withWorker({
     operationId: ctx.opId,
-    repository,
-    commit,
-    targets,
-    gitUsername: sourceCredentials.username,
-    gitToken: sourceCredentials.token,
-    resolveRegistryCredentials: resolveRegistryCredentialsForImage,
-    onLog: (line) => ctx.log(line),
+    preferredWorkerId,
+    run: ({ server }) => transport.buildCommit({
+      server,
+      operationId: ctx.opId,
+      repository,
+      commit,
+      targets,
+      gitUsername: sourceCredentials.username,
+      gitToken: sourceCredentials.token,
+      resolveRegistryCredentials: resolveRegistryCredentialsForImage,
+      onLog: (line) => ctx.log(line),
+    }),
   });
-  return { refs: Object.fromEntries(built.refs) };
+  return { refs: Object.fromEntries(coordinated.value.refs), workerId: coordinated.workerId };
 }
 
 async function runChild(
@@ -107,16 +94,13 @@ async function persistBuildConfig(appId: number, build: BuildConfig, workerId: n
   }
 }
 
-export function createBuildDeliveryDefinitions(transport: BuildTransport = sshBuildTransport): {
+export function createBuildDeliveryDefinitions(
+  transport: BuildTransport = sshBuildTransport,
+  coordinator: BuildCoordinator = createBuildCoordinator(transport),
+): {
   appDefinition: OpKindDefinition<BuildAppDeliveryInput>;
   stackDefinition: OpKindDefinition<BuildStackDeliveryInput>;
 } {
-const appWorker: Step<BuildAppDeliveryInput, WorkerOut> = {
-  name: "select_build_worker",
-  label: "Select build worker",
-  async run() { return readyWorker(transport); },
-};
-
 const appBuild: Step<BuildAppDeliveryInput, BuiltOut> = {
   name: "build_and_push",
   label: "Build and push image",
@@ -124,7 +108,7 @@ const appBuild: Step<BuildAppDeliveryInput, BuiltOut> = {
     const build = ctx.input.spec.build;
     if (!build) throw new Error("Build configuration missing");
     const commit = ctx.input.spec.git_commit || "";
-    return runBuild(transport, ctx, prior.select_build_worker as WorkerOut, build.repository, commit, [{
+    return runBuild(transport, coordinator, ctx, build.repository, build.branch || "main", commit, [{
       name: ctx.input.spec.app_name,
       dockerfile: build.dockerfile,
       context: build.context,
@@ -152,7 +136,10 @@ const appDeploy: Step<BuildAppDeliveryInput, { childId: number; appId: number }>
       : await runChild(ctx, "app", "deploy", [`app:create:${runtime.app_name}`], runtime as unknown as Record<string, unknown>);
     const app = db.getAppByName(runtime.app_name);
     if (!app) throw new Error("Built app was not persisted after deployment");
-    await persistBuildConfig(app.id, build, (prior.select_build_worker as WorkerOut).workerId);
+    const built = prior.build_and_push as BuiltOut;
+    const workerId = built.workerId ?? (prior.select_build_worker as WorkerOut | undefined)?.workerId;
+    if (workerId == null) throw new Error("Build completed without recording its worker");
+    await persistBuildConfig(app.id, build, workerId);
     return { childId, appId: app.id };
   },
 };
@@ -161,13 +148,7 @@ const appDefinition: OpKindDefinition<BuildAppDeliveryInput> = {
   kind: "build_app_delivery",
   label: "Build and deploy app",
   resourceKeys: (input) => [`build:${sourceKey(input.spec.build!)}`, `app-delivery:${input.spec.app_name}`],
-  steps: [appWorker, appBuild, appDeploy],
-};
-
-const stackWorker: Step<BuildStackDeliveryInput, WorkerOut> = {
-  name: "select_build_worker",
-  label: "Select build worker",
-  async run() { return readyWorker(transport); },
+  steps: [appBuild, appDeploy],
 };
 
 const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
@@ -177,7 +158,7 @@ const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
     const selected = ctx.input.spec.selected_app_keys
       ? ctx.input.spec.apps.filter((app) => ctx.input.spec.selected_app_keys!.includes(app.key))
       : ctx.input.spec.apps;
-    if (!selected.length) return { refs: {} };
+    if (!selected.length) return { refs: {}, workerId: null };
     const builds = selected.map((app) => app.build).filter((build): build is BuildConfig => !!build);
     if (builds.length !== selected.length) throw new Error("Every selected stack member requires build configuration");
     const keys = new Set(builds.map(sourceKey));
@@ -186,9 +167,10 @@ const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
     if (selected.some((app) => app.git_commit !== commit)) throw new Error("Stack members must use one exact Git commit");
     return runBuild(
       transport,
+      coordinator,
       ctx,
-      prior.select_build_worker as WorkerOut,
       builds[0].repository,
+      builds[0].branch || "main",
       commit,
       selected.map((app) => ({
         name: app.key,
@@ -214,9 +196,11 @@ const stackDeploy: Step<BuildStackDeliveryInput, { childId: number }> = {
       })),
     };
     const childId = await runChild(ctx, "stack", "deploy_stack", [`stack:${runtime.name}`], runtime as unknown as Record<string, unknown>);
-    const workerId = (prior.select_build_worker as WorkerOut).workerId;
+    const built = prior.build_and_push as BuiltOut;
+    const workerId = built.workerId ?? (prior.select_build_worker as WorkerOut | undefined)?.workerId;
     for (const appSpec of ctx.input.spec.apps) {
       if (!appSpec.build) continue;
+      if (workerId == null) throw new Error("Build completed without recording its worker");
       const app = db.getAppByName(`${ctx.input.spec.name}-${appSpec.key}`);
       if (app) await persistBuildConfig(app.id, appSpec.build, workerId);
     }
@@ -228,7 +212,7 @@ const stackDefinition: OpKindDefinition<BuildStackDeliveryInput> = {
   kind: "build_stack_delivery",
   label: "Build and deploy stack",
   resourceKeys: (input) => [`build-stack:${input.spec.name}`],
-  steps: [stackWorker, stackBuild, stackDeploy],
+  steps: [stackBuild, stackDeploy],
 };
 
 return { appDefinition, stackDefinition };
