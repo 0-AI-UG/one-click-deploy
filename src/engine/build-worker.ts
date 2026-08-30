@@ -77,6 +77,36 @@ export type BuildTarget = {
   image: string;
 };
 
+export async function verifyBuildArtifact(input: {
+  server: ServerRow;
+  image: string;
+  registryUsername?: string;
+  registryPassword?: string;
+}): Promise<boolean> {
+  if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i.test(input.image)) return false;
+  const hostKey = input.server.ssh_host_key || undefined;
+  let registryAuth: Awaited<ReturnType<typeof dockerLoginRegistry>> | null = null;
+  try {
+    if (input.registryUsername && input.registryPassword) {
+      registryAuth = await dockerLoginRegistry(
+        input.server.ipv4,
+        input.image,
+        input.registryUsername,
+        input.registryPassword,
+        hostKey,
+      );
+    }
+    const result = await sshExec(
+      input.server.ipv4,
+      asUser(`${registryAuth?.envPrefix ?? ""}docker buildx imagetools inspect ${shellQuote(input.image)} >/dev/null`),
+      hostKey,
+    );
+    return result.exitCode === 0;
+  } finally {
+    if (registryAuth) await registryAuth.cleanup();
+  }
+}
+
 export async function buildCommitOnWorker(input: {
   server: ServerRow;
   operationId: number;
@@ -90,6 +120,7 @@ export async function buildCommitOnWorker(input: {
   registryUsername?: string;
   registryPassword?: string;
   resolveRegistryCredentials?: (image: string) => Promise<{ username?: string; password?: string }>;
+  onArtifact?: (name: string, image: string) => Promise<void> | void;
   onLog?: (line: string) => void;
 }): Promise<{ refs: Map<string, string>; files: Record<string, string> }> {
   if (!/^[0-9a-f]{40,64}$/i.test(input.commit)) throw new Error("Build commit must be a full immutable Git SHA");
@@ -170,7 +201,7 @@ export async function buildCommitOnWorker(input: {
 
     const refs = new Map<string, string>();
     for (const target of targets) {
-      const tag = `${target.image}:ocd-${input.commit}`;
+      const tag = `${target.image}:ocd-op-${input.operationId}-${input.commit.slice(0, 12)}`;
       const metadata = `${root}/${target.name}.metadata.json`;
       input.onLog?.(`Building ${target.name} → ${target.image}`);
       const build = await sshExecStreaming(
@@ -201,6 +232,7 @@ export async function buildCommitOnWorker(input: {
       const verify = await sshExec(server.ipv4, asUser(`${registryAuth?.envPrefix ?? ""}docker buildx imagetools inspect ${shellQuote(ref)} >/dev/null`), hostKey);
       if (verify.exitCode !== 0) throw new Error(`Could not verify pushed digest for ${target.name}`);
       refs.set(target.name, ref);
+      await input.onArtifact?.(target.name, ref);
       input.onLog?.(`Published ${ref}`);
     }
     return { refs, files };

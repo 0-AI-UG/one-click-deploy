@@ -9,6 +9,7 @@ import { deployRequestFromApp } from "../../shared/app-config.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
 import { sshBuildTransport, type BuildTransport } from "../build-transport.ts";
 import { createBuildCoordinator, type BuildCoordinator } from "../build-coordinator.ts";
+import { verifyArtifactRefs } from "../build-artifact-recovery.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
@@ -99,13 +100,24 @@ const build: Step<WebhookBuildSourceInput, Built> = {
     const coordinated = await coordinator.withWorker({
       operationId: ctx.opId,
       preferredWorkerId: source.worker_id,
-      run: ({ server }) => transport.buildCommit({
-        server,
-        operationId: ctx.opId,
-        repository: source.repository,
-        commit: ctx.input.commit,
-        readFiles: roots,
-        resolveTargets: async (readFile) => {
+      run: async ({ server, workerId }) => {
+        const recordArtifact = (targetName: string, imageRef: string): void => {
+          db.recordBuildArtifact({
+            operationId: ctx.opId,
+            targetName,
+            imageRef,
+            repository: source.repository,
+            commitSha: ctx.input.commit,
+            workerId,
+          });
+        };
+        const result = await transport.buildCommit({
+          server,
+          operationId: ctx.opId,
+          repository: source.repository,
+          commit: ctx.input.commit,
+          readFiles: roots,
+          resolveTargets: async (readFile) => {
           const targets: Array<{ name: string; dockerfile: string; context: string; image: string }> = [];
           for (const app of apps.filter((candidate) => candidate.stack_id == null)) {
             if (!app.manifest_path) throw new Error(`${app.name} has no committed manifest path`);
@@ -134,13 +146,24 @@ const build: Step<WebhookBuildSourceInput, Built> = {
               targets.push({ name, ...manifest.build });
             }
           }
-          return targets;
-        },
-        gitUsername: sourceCredentials.username,
-        gitToken: sourceCredentials.token,
-        resolveRegistryCredentials: resolveRegistryCredentialsForImage,
-        onLog: (line) => ctx.log(line),
-      }),
+            return targets;
+          },
+          gitUsername: sourceCredentials.username,
+          gitToken: sourceCredentials.token,
+          resolveRegistryCredentials: resolveRegistryCredentialsForImage,
+          onArtifact: recordArtifact,
+          onLog: (line) => ctx.log(line),
+        });
+        for (const [targetName, imageRef] of result.refs) recordArtifact(targetName, imageRef);
+        db.saveBuildResultCheckpoint({
+          operationId: ctx.opId,
+          repository: source.repository,
+          commitSha: ctx.input.commit,
+          workerId,
+          output: { refs: Object.fromEntries(result.refs), files: result.files, builds, workerId },
+        });
+        return result;
+      },
     });
     return {
       refs: Object.fromEntries(coordinated.value.refs),
@@ -148,6 +171,35 @@ const build: Step<WebhookBuildSourceInput, Built> = {
       builds,
       workerId: coordinated.workerId,
     };
+  },
+  async probe(ctx) {
+    const source = db.getBuildSource(ctx.input.sourceId);
+    const checkpoint = db.getBuildResultCheckpoint(ctx.opId);
+    if (!source || !checkpoint || checkpoint.repository !== source.repository ||
+      checkpoint.commit_sha !== ctx.input.commit) return null;
+    let output: Built;
+    try {
+      output = JSON.parse(checkpoint.output_json) as Built;
+    } catch {
+      return null;
+    }
+    if (!output.refs || !output.files || !output.builds) return null;
+    const artifacts = db.listBuildArtifacts(ctx.opId);
+    const entries = Object.entries(output.refs);
+    if (!entries.length || artifacts.length !== entries.length) return null;
+    for (const [targetName, imageRef] of entries) {
+      const artifact = artifacts.find((candidate) => candidate.target_name === targetName);
+      if (!artifact || artifact.image_ref !== imageRef || artifact.repository !== source.repository ||
+        artifact.commit_sha !== ctx.input.commit) return null;
+    }
+    const workerId = await verifyArtifactRefs({
+      operationId: ctx.opId,
+      preferredWorkerId: checkpoint.worker_id,
+      refs: output.refs,
+      transport,
+      coordinator,
+    });
+    return workerId == null ? null : { ...output, workerId };
   },
 };
 

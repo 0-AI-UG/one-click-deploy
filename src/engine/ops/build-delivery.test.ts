@@ -75,11 +75,14 @@ function transport(input: {
     }),
     buildCommit: async (request) => {
       input.builds.push(request);
+      const refs = new Map((request.targets || []).map((target) => [target.name, `${target.image}@${DIGEST}`]));
+      for (const [name, image] of refs) await request.onArtifact?.(name, image);
       return {
-        refs: new Map((request.targets || []).map((target) => [target.name, `${target.image}@${DIGEST}`])),
+        refs,
         files: {},
       };
     },
+    verifyArtifact: async () => true,
   };
 }
 
@@ -121,6 +124,11 @@ describe("build delivery transport boundary", () => {
       .toBe(`${input.spec.build!.image}@${DIGEST}`);
     expect((built as { workerId: number }).workerId).toBe(db.getBuildWorkerByServerId(server.id)!.id);
     expect(db.getBuildWorkerLeaseForOperation(ctx.opId)).toBeNull();
+    expect(db.listBuildArtifacts(ctx.opId)).toHaveLength(1);
+    expect(db.getBuildResultCheckpoint(ctx.opId)?.output_json).not.toContain("lease_token");
+    const adopted = await step(definitions.appDefinition, "build_and_push").probe!(ctx, {});
+    expect(adopted).toEqual(built);
+    expect(builds).toHaveLength(1);
   });
 
   test("skips offline workers and selects an online worker", async () => {

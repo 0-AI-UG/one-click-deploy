@@ -2537,6 +2537,45 @@ export const migrations: Migration[] = [
       db.run("CREATE INDEX build_worker_leases_expiry ON build_worker_leases(expires_at)");
     },
   },
+  {
+    version: 109,
+    description: "Persist verified build artifacts and result checkpoints",
+    up: (db) => {
+      db.run(`CREATE TABLE build_artifacts (
+        operation_id INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+        target_name TEXT NOT NULL CHECK (length(target_name) > 0),
+        image_ref TEXT NOT NULL CHECK (
+          instr(image_ref, '@sha256:') > 1
+          AND length(substr(image_ref, instr(image_ref, '@sha256:') + 8)) = 64
+          AND substr(image_ref, instr(image_ref, '@sha256:') + 8) NOT GLOB '*[^0-9a-f]*'
+        ),
+        repository TEXT NOT NULL CHECK (length(repository) > 0),
+        commit_sha TEXT NOT NULL CHECK (length(commit_sha) > 0),
+        worker_id INTEGER REFERENCES build_workers(id) ON DELETE SET NULL,
+        verified_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (operation_id, target_name)
+      )`);
+      db.run(`CREATE TRIGGER build_artifacts_image_ref_immutable
+        BEFORE UPDATE OF image_ref ON build_artifacts
+        WHEN OLD.image_ref <> NEW.image_ref
+        BEGIN
+          SELECT RAISE(ABORT, 'build artifact image_ref is immutable');
+        END`);
+      db.run("CREATE INDEX build_artifacts_source ON build_artifacts(repository, commit_sha)");
+      db.run("CREATE INDEX build_artifacts_worker ON build_artifacts(worker_id)");
+
+      db.run(`CREATE TABLE build_result_checkpoints (
+        operation_id INTEGER PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+        repository TEXT NOT NULL CHECK (length(repository) > 0),
+        commit_sha TEXT NOT NULL CHECK (length(commit_sha) > 0),
+        worker_id INTEGER REFERENCES build_workers(id) ON DELETE SET NULL,
+        output_json TEXT NOT NULL CHECK (json_valid(output_json)),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      db.run("CREATE INDEX build_result_checkpoints_source ON build_result_checkpoints(repository, commit_sha)");
+      db.run("CREATE INDEX build_result_checkpoints_worker ON build_result_checkpoints(worker_id)");
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

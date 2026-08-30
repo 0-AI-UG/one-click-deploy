@@ -197,6 +197,32 @@ describe("runMigrations", () => {
     expect(db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='build_worker_leases_expiry'").get()).toBeTruthy();
   });
 
+  test("migration 109 persists verified build artifacts and checkpoints", () => {
+    const db = freshDb();
+    runMigrations(db);
+    const artifactColumns = (db.query("PRAGMA table_info(build_artifacts)").all() as any[]).map(
+      (column) => column.name,
+    );
+    expect(artifactColumns).toEqual([
+      "operation_id",
+      "target_name",
+      "image_ref",
+      "repository",
+      "commit_sha",
+      "worker_id",
+      "verified_at",
+    ]);
+    expect(db.query(
+      "SELECT name FROM sqlite_master WHERE type='trigger' AND name='build_artifacts_image_ref_immutable'",
+    ).get()).toBeTruthy();
+    expect(db.query(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='build_result_checkpoints'",
+    ).get()).toBeTruthy();
+    expect(db.query(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='build_result_checkpoints_source'",
+    ).get()).toBeTruthy();
+  });
+
   test("skips already applied migrations", () => {
     const db = freshDb();
     runMigrationsWithImageCutover(db);

@@ -59,6 +59,7 @@ function transport(observations: Map<number, WorkerObservation>): BuildTransport
   return {
     probeWorker: async (server: ServerRow) => observations.get(server.id) ?? observation(),
     buildCommit: async () => ({ refs: new Map(), files: {} }),
+    verifyArtifact: async () => true,
   };
 }
 

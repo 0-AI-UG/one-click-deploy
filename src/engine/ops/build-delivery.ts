@@ -5,6 +5,7 @@ import { enqueueOperation, listChildOperations } from "../../shared/db/operation
 import type { BuildTarget } from "../build-worker.ts";
 import { sshBuildTransport, type BuildTransport } from "../build-transport.ts";
 import { createBuildCoordinator, type BuildCoordinator } from "../build-coordinator.ts";
+import { verifyArtifactRefs } from "../build-artifact-recovery.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
@@ -36,19 +37,68 @@ async function runBuild(
   const coordinated = await coordinator.withWorker({
     operationId: ctx.opId,
     preferredWorkerId,
-    run: ({ server }) => transport.buildCommit({
-      server,
-      operationId: ctx.opId,
-      repository,
-      commit,
-      targets,
-      gitUsername: sourceCredentials.username,
-      gitToken: sourceCredentials.token,
-      resolveRegistryCredentials: resolveRegistryCredentialsForImage,
-      onLog: (line) => ctx.log(line),
-    }),
+    run: async ({ server, workerId }) => {
+      const recordArtifact = (targetName: string, imageRef: string): void => {
+        db.recordBuildArtifact({
+          operationId: ctx.opId,
+          targetName,
+          imageRef,
+          repository,
+          commitSha: commit,
+          workerId,
+        });
+      };
+      const result = await transport.buildCommit({
+        server,
+        operationId: ctx.opId,
+        repository,
+        commit,
+        targets,
+        gitUsername: sourceCredentials.username,
+        gitToken: sourceCredentials.token,
+        resolveRegistryCredentials: resolveRegistryCredentialsForImage,
+        onArtifact: recordArtifact,
+        onLog: (line) => ctx.log(line),
+      });
+      for (const [targetName, imageRef] of result.refs) recordArtifact(targetName, imageRef);
+      db.saveBuildResultCheckpoint({
+        operationId: ctx.opId,
+        repository,
+        commitSha: commit,
+        workerId,
+        output: { refs: Object.fromEntries(result.refs), workerId },
+      });
+      return result;
+    },
   });
   return { refs: Object.fromEntries(coordinated.value.refs), workerId: coordinated.workerId };
+}
+
+async function recoverBuild(
+  transport: BuildTransport,
+  coordinator: BuildCoordinator,
+  ctx: OpContext<any>,
+  repository: string,
+  commit: string,
+  targets: BuildTarget[],
+): Promise<BuiltOut | null> {
+  const artifacts = db.listBuildArtifacts(ctx.opId);
+  if (artifacts.length !== targets.length) return null;
+  const refs: Record<string, string> = {};
+  for (const target of targets) {
+    const artifact = artifacts.find((candidate) => candidate.target_name === target.name);
+    if (!artifact || artifact.repository !== repository || artifact.commit_sha !== commit ||
+      !artifact.image_ref.startsWith(`${target.image}@sha256:`)) return null;
+    refs[target.name] = artifact.image_ref;
+  }
+  const workerId = await verifyArtifactRefs({
+    operationId: ctx.opId,
+    preferredWorkerId: artifacts[0]?.worker_id,
+    refs,
+    transport,
+    coordinator,
+  });
+  return workerId == null ? null : { refs, workerId };
 }
 
 async function runChild(
@@ -115,6 +165,16 @@ const appBuild: Step<BuildAppDeliveryInput, BuiltOut> = {
       image: build.image,
     }]);
   },
+  async probe(ctx) {
+    const build = ctx.input.spec.build;
+    if (!build) return null;
+    return recoverBuild(transport, coordinator, ctx, build.repository, ctx.input.spec.git_commit || "", [{
+      name: ctx.input.spec.app_name,
+      dockerfile: build.dockerfile,
+      context: build.context,
+      image: build.image,
+    }]);
+  },
 };
 
 const appDeploy: Step<BuildAppDeliveryInput, { childId: number; appId: number }> = {
@@ -171,6 +231,29 @@ const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
       ctx,
       builds[0].repository,
       builds[0].branch || "main",
+      commit,
+      selected.map((app) => ({
+        name: app.key,
+        dockerfile: app.build!.dockerfile,
+        context: app.build!.context,
+        image: app.build!.image,
+      })),
+    );
+  },
+  async probe(ctx) {
+    const selected = ctx.input.spec.selected_app_keys
+      ? ctx.input.spec.apps.filter((app) => ctx.input.spec.selected_app_keys!.includes(app.key))
+      : ctx.input.spec.apps;
+    if (!selected.length) return null;
+    const builds = selected.map((app) => app.build).filter((build): build is BuildConfig => !!build);
+    if (builds.length !== selected.length || new Set(builds.map(sourceKey)).size !== 1) return null;
+    const commit = selected[0].git_commit || "";
+    if (selected.some((app) => app.git_commit !== commit)) return null;
+    return recoverBuild(
+      transport,
+      coordinator,
+      ctx,
+      builds[0].repository,
       commit,
       selected.map((app) => ({
         name: app.key,

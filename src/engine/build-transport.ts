@@ -2,6 +2,7 @@ import type { ServerRow } from "../shared/db/servers.ts";
 import {
   buildCommitOnWorker,
   probeBuildWorker,
+  verifyBuildArtifact,
   type BuildTarget,
 } from "./build-worker.ts";
 
@@ -26,7 +27,15 @@ export type BuildCommitInput = {
   registryUsername?: string;
   registryPassword?: string;
   resolveRegistryCredentials?: (image: string) => Promise<{ username?: string; password?: string }>;
+  onArtifact?: (name: string, image: string) => Promise<void> | void;
   onLog?: (line: string) => void;
+};
+
+export type VerifyArtifactInput = {
+  server: ServerRow;
+  image: string;
+  registryUsername?: string;
+  registryPassword?: string;
 };
 
 export type BuildCommitResult = {
@@ -42,9 +51,11 @@ export type BuildCommitResult = {
 export type BuildTransport = {
   probeWorker: (server: ServerRow) => Promise<WorkerObservation>;
   buildCommit: (input: BuildCommitInput) => Promise<BuildCommitResult>;
+  verifyArtifact: (input: VerifyArtifactInput) => Promise<boolean>;
 };
 
 export const sshBuildTransport: BuildTransport = {
   probeWorker: probeBuildWorker,
   buildCommit: buildCommitOnWorker,
+  verifyArtifact: verifyBuildArtifact,
 };

@@ -131,16 +131,19 @@ function inMemoryTransport(
   builds: BuildCommitInput[];
   targets: CapturedTarget[];
   reads: string[];
+  verifications: string[];
 } {
   const probes: number[] = [];
   const builds: BuildCommitInput[] = [];
   const targets: CapturedTarget[] = [];
   const reads: string[] = [];
+  const verifications: string[] = [];
   return {
     probes,
     builds,
     targets,
     reads,
+    verifications,
     probeWorker: async (server) => {
       probes.push(server.id);
       const online = options.online !== false &&
@@ -169,10 +172,16 @@ function inMemoryTransport(
         ? await request.resolveTargets(readFile)
         : request.targets || [];
       targets.push(...resolved);
+      const refs = new Map(resolved.map((target) => [target.name, `${target.image}@${DIGEST}`]));
+      for (const [name, image] of refs) await request.onArtifact?.(name, image);
       return {
-        refs: new Map(resolved.map((target) => [target.name, `${target.image}@${DIGEST}`])),
+        refs,
         files: loaded,
       };
+    },
+    verifyArtifact: async ({ image }) => {
+      verifications.push(image);
+      return true;
     },
   };
 }
@@ -238,6 +247,11 @@ describe("webhook build source transport boundary", () => {
     expect(built.builds[seeded.app.name]).toEqual(manifest(seeded).build);
     expect(built.workerId).toBe(seeded.assigned.worker.id);
     expect(db.getBuildWorkerLeaseForOperation(ctx.opId)).toBeNull();
+    expect(db.listBuildArtifacts(ctx.opId)).toHaveLength(1);
+    const adopted = await step(definition, "build_images").probe!(ctx, { prepare_source: prepared });
+    expect(adopted).toEqual(built);
+    expect(transport.builds).toHaveLength(1);
+    expect(transport.verifications).toEqual([built.refs[seeded.app.name]]);
   });
 
   test("rejects a committed manifest that changes the source repository", async () => {

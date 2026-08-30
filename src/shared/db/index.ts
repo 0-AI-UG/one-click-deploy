@@ -48,6 +48,14 @@ export {
   releaseBuildWorkerLease,
   reapTerminalBuildWorkerLeases,
 } from "./build-worker-leases.ts";
+export type { BuildArtifactRow, BuildResultCheckpointRow } from "./build-artifacts.ts";
+export {
+  recordBuildArtifact,
+  listBuildArtifacts,
+  deleteBuildArtifacts,
+  saveBuildResultCheckpoint,
+  getBuildResultCheckpoint,
+} from "./build-artifacts.ts";
 export type { AppRow, AppIngressSettings, PublicProtocol, InternalProtocol } from "./apps.ts";
 export {
   getApps,
