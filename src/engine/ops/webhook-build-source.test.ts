@@ -208,12 +208,65 @@ describe("webhook build source transport boundary", () => {
     });
   });
 
+  test("refuses a delivery that was superseded before it starts building", async () => {
+    const seeded = fixture();
+    const transport = inMemoryTransport({});
+    const definition = createWebhookBuildSourceDefinition(transport);
+    const requestInput = input(seeded.source.id);
+    const ctx = context(definition, requestInput);
+    db.recordBuildSourceDelivery({
+      sourceId: seeded.source.id,
+      deliveryId: requestInput.deliveryId,
+      commitSha: requestInput.commit,
+      eventAt: "2026-08-30T10:00:00.000Z",
+    });
+    db.attachBuildSourceDeliveryOperation({
+      sourceId: seeded.source.id,
+      deliveryId: requestInput.deliveryId,
+      operationId: ctx.opId,
+    });
+    db.recordBuildSourceDelivery({
+      sourceId: seeded.source.id,
+      deliveryId: "delivery-newer",
+      commitSha: "c".repeat(40),
+      eventAt: "2026-08-30T11:00:00.000Z",
+    });
+    db.updateBuildSourceDeliveryStatus({
+      sourceId: seeded.source.id,
+      deliveryId: requestInput.deliveryId,
+      status: "superseded",
+      supersededByDeliveryId: "delivery-newer",
+    });
+    db.updateBuildSourceDelivery(seeded.source.id, { last_delivery_id: "delivery-newer" });
+
+    await expect(step(definition, "prepare_source").run(ctx, {})).rejects.toThrow(/superseded/);
+    expect(transport.probes).toEqual([]);
+    expect(transport.builds).toEqual([]);
+  });
+
   test("builds targets derived from the committed manifest at the exact webhook commit", async () => {
     const seeded = fixture();
     const rawManifest = JSON.stringify(manifest(seeded));
     const transport = inMemoryTransport({ [MANIFEST_PATH]: rawManifest });
     const definition = createWebhookBuildSourceDefinition(transport);
-    const ctx = context(definition, input(seeded.source.id));
+    const requestInput = input(seeded.source.id);
+    const ctx = context(definition, requestInput);
+    db.recordBuildSourceDelivery({
+      sourceId: seeded.source.id,
+      deliveryId: requestInput.deliveryId,
+      commitSha: requestInput.commit,
+      eventAt: "2026-08-30T12:00:00.000Z",
+    });
+    db.attachBuildSourceDeliveryOperation({
+      sourceId: seeded.source.id,
+      deliveryId: requestInput.deliveryId,
+      operationId: ctx.opId,
+    });
+    db.updateBuildSourceDelivery(seeded.source.id, {
+      last_delivery_id: requestInput.deliveryId,
+      last_commit: requestInput.commit,
+      last_status: "queued",
+    });
 
     const prepared = await step(definition, "prepare_source").run(ctx, {});
     const built = await step(definition, "build_images").run(ctx, { prepare_source: prepared }) as {
@@ -229,6 +282,7 @@ describe("webhook build source transport boundary", () => {
       operationId: ctx.opId,
       repository: seeded.source.repository,
       commit: COMMIT,
+      expectedBranch: seeded.source.branch,
       readFiles: [MANIFEST_PATH],
     });
     expect(transport.reads).toEqual([MANIFEST_PATH]);
@@ -252,6 +306,8 @@ describe("webhook build source transport boundary", () => {
     expect(adopted).toEqual(built);
     expect(transport.builds).toHaveLength(1);
     expect(transport.verifications).toEqual([built.refs[seeded.app.name]]);
+    await step(definition, "finish_delivery").run(ctx, { build_images: built });
+    expect(db.getBuildSourceDelivery(seeded.source.id, requestInput.deliveryId)?.status).toBe("deployed");
   });
 
   test("rejects a committed manifest that changes the source repository", async () => {

@@ -223,6 +223,31 @@ describe("runMigrations", () => {
     ).get()).toBeTruthy();
   });
 
+  test("migration 110 persists build-source webhook deliveries", () => {
+    const db = freshDb();
+    runMigrations(db);
+    const columns = (db.query("PRAGMA table_info(build_source_deliveries)").all() as any[]).map(
+      (column) => column.name,
+    );
+    expect(columns).toEqual([
+      "id",
+      "source_id",
+      "delivery_id",
+      "commit_sha",
+      "event_at",
+      "received_at",
+      "operation_id",
+      "status",
+      "superseded_by",
+    ]);
+    expect(db.query(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='build_source_deliveries_source_event'",
+    ).get()).toBeTruthy();
+    expect(db.query(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='build_source_deliveries_source_status'",
+    ).get()).toBeTruthy();
+  });
+
   test("skips already applied migrations", () => {
     const db = freshDb();
     runMigrationsWithImageCutover(db);

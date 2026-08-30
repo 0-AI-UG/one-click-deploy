@@ -103,6 +103,10 @@ export class BuildWorkerUnavailableError extends Error {
   }
 }
 
+export class BuildCommitSupersededError extends Error {
+  override readonly name = "BuildCommitSupersededError";
+}
+
 export async function verifyBuildArtifact(input: {
   server: ServerRow;
   image: string;
@@ -138,6 +142,7 @@ export async function buildCommitOnWorker(input: {
   operationId: number;
   repository: string;
   commit: string;
+  expectedBranch?: string;
   targets?: BuildTarget[];
   resolveTargets?: (readFile: (path: string) => Promise<string>) => Promise<BuildTarget[]>;
   readFiles?: string[];
@@ -151,6 +156,10 @@ export async function buildCommitOnWorker(input: {
   onLog?: (line: string) => void;
 }): Promise<{ refs: Map<string, string>; files: Record<string, string> }> {
   if (!/^[0-9a-f]{40,64}$/i.test(input.commit)) throw new Error("Build commit must be a full immutable Git SHA");
+  if (input.expectedBranch && (!/^[A-Za-z0-9._/-]+$/.test(input.expectedBranch) ||
+    input.expectedBranch.includes("..") || input.expectedBranch.startsWith("/") || input.expectedBranch.endsWith("/"))) {
+    throw new Error("Expected build branch is invalid");
+  }
   const server = input.server;
   const root = `${WORKER_DIR}/work/op-${input.operationId}`;
   const checkout = `${root}/repo`;
@@ -178,6 +187,9 @@ export async function buildCommitOnWorker(input: {
       `echo $$ > ${shellQuote(activePid)}; trap 'rm -f ${activePid}' EXIT; ` +
       `HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 git init ${shellQuote(checkout)} && ` +
       `cd ${shellQuote(checkout)} && git remote add origin ${repository} && ` +
+      (input.expectedBranch
+        ? `test "$(HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code origin ${shellQuote(`refs/heads/${input.expectedBranch}`)} | awk 'NR==1 {print $1}')" = ${shellQuote(input.commit)} && `
+        : "") +
       `HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin ${shellQuote(input.commit)} && ` +
       `git checkout --detach FETCH_HEAD && test \"$(git rev-parse HEAD)\" = ${shellQuote(input.commit)}`;
     let clone;
@@ -293,6 +305,21 @@ export async function buildCommitOnWorker(input: {
       refs.set(target.name, ref);
       await input.onArtifact?.(target.name, ref);
       input.onLog?.(`Published ${ref}`);
+    }
+    if (input.expectedBranch) {
+      const branchHead = await sshExec(
+        server.ipv4,
+        asUser(
+          `HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code origin ` +
+          `${shellQuote(`refs/heads/${input.expectedBranch}`)} | awk 'NR==1 {print $1}'`,
+        ),
+        hostKey,
+      );
+      if (branchHead.exitCode !== 0 || branchHead.stdout.trim() !== input.commit) {
+        throw new BuildCommitSupersededError(
+          `Commit ${input.commit.slice(0, 12)} is no longer the head of ${input.expectedBranch}`,
+        );
+      }
     }
     return { refs, files };
   } finally {

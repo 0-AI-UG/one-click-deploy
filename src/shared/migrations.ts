@@ -2576,6 +2576,33 @@ export const migrations: Migration[] = [
       db.run("CREATE INDEX build_result_checkpoints_worker ON build_result_checkpoints(worker_id)");
     },
   },
+  {
+    version: 110,
+    description: "Persist and compact build-source webhook deliveries",
+    up: (db) => {
+      db.run(`CREATE TABLE build_source_deliveries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_id INTEGER NOT NULL REFERENCES build_sources(id) ON DELETE CASCADE,
+        delivery_id TEXT NOT NULL CHECK (length(delivery_id) > 0),
+        commit_sha TEXT NOT NULL CHECK (length(commit_sha) > 0),
+        event_at TEXT,
+        received_at TEXT NOT NULL DEFAULT (datetime('now')),
+        operation_id INTEGER REFERENCES operations(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'received' CHECK (status IN (
+          'received', 'queued', 'building', 'deployed', 'failed',
+          'duplicate', 'stale', 'superseded'
+        )),
+        superseded_by INTEGER REFERENCES build_source_deliveries(id) ON DELETE SET NULL,
+        UNIQUE(source_id, delivery_id)
+      )`);
+      db.run(`CREATE INDEX build_source_deliveries_source_event
+        ON build_source_deliveries(source_id, event_at DESC, received_at DESC, id DESC)`);
+      db.run(`CREATE INDEX build_source_deliveries_source_status
+        ON build_source_deliveries(source_id, status, event_at DESC, id DESC)`);
+      db.run(`CREATE INDEX build_source_deliveries_operation
+        ON build_source_deliveries(operation_id) WHERE operation_id IS NOT NULL`);
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

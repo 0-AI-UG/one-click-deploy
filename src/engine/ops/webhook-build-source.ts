@@ -16,7 +16,7 @@ import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
-import type { OpContext, OpKindDefinition, Step } from "../types.ts";
+import { FatalProbeError, type OpContext, type OpKindDefinition, type Step } from "../types.ts";
 
 export type WebhookBuildSourceInput = { sourceId: number; commit: string; deliveryId: string };
 type Prepared = { appIds: number[] };
@@ -48,7 +48,21 @@ function environmentId(name: string, label: string): number {
   return environment.id;
 }
 
+function assertFreshDelivery(ctx: OpContext<WebhookBuildSourceInput>): void {
+  if (ctx.isCancelRequested()) throw new FatalProbeError(`Webhook delivery ${ctx.input.deliveryId} was cancelled`);
+  const source = db.getBuildSource(ctx.input.sourceId);
+  if (!source) throw new FatalProbeError("Build source disappeared");
+  const delivery = db.getBuildSourceDelivery(ctx.input.sourceId, ctx.input.deliveryId);
+  if (delivery && (delivery.status === "stale" || delivery.status === "superseded")) {
+    throw new FatalProbeError(`Webhook delivery ${ctx.input.deliveryId} was ${delivery.status}`);
+  }
+  if (source.last_delivery_id && source.last_delivery_id !== ctx.input.deliveryId) {
+    throw new FatalProbeError(`Webhook delivery ${ctx.input.deliveryId} was superseded by ${source.last_delivery_id}`);
+  }
+}
+
 async function child(ctx: OpContext<WebhookBuildSourceInput>, suffix: string, kind: string, keys: string[], input: unknown): Promise<number> {
+  assertFreshDelivery(ctx);
   const idempotency = `webhook-source:${ctx.opId}:${suffix}`;
   const existing = listChildOperations(ctx.opId).find((op) => op.idempotency_key === idempotency);
   const op = existing ?? enqueueOperation({
@@ -75,16 +89,40 @@ const prepare: Step<WebhookBuildSourceInput, Prepared> = {
     const source = db.getBuildSource(ctx.input.sourceId);
     if (!source) throw new Error("Build source not found");
     if (!/^[0-9a-f]{40,64}$/i.test(ctx.input.commit)) throw new Error("Webhook commit is invalid");
+    assertFreshDelivery(ctx);
     const apps = db.appsForBuildSource(source.id) as AppRow[];
     if (!apps.length) throw new Error("Build source has no attached apps");
+    const delivery = db.getBuildSourceDelivery(source.id, ctx.input.deliveryId);
+    if (delivery) {
+      if (delivery.operation_id != null && delivery.operation_id !== ctx.opId) {
+        throw new Error(`Webhook delivery belongs to operation #${delivery.operation_id}`);
+      }
+      db.updateBuildSourceDeliveryStatus({
+        sourceId: source.id,
+        deliveryId: ctx.input.deliveryId,
+        status: "building",
+      });
+    }
     db.updateBuildSourceDelivery(source.id, { last_status: "building", last_error: "" });
     return { appIds: apps.map((app) => app.id) };
   },
   async compensate(ctx) {
-    db.updateBuildSourceDelivery(ctx.input.sourceId, {
-      last_status: "failed",
-      last_error: `Webhook operation #${ctx.opId} failed; inspect its operation logs`,
-    });
+    const delivery = db.getBuildSourceDelivery(ctx.input.sourceId, ctx.input.deliveryId);
+    if (delivery && delivery.status !== "stale" && delivery.status !== "superseded") {
+      db.updateBuildSourceDeliveryStatus({
+        sourceId: ctx.input.sourceId,
+        deliveryId: ctx.input.deliveryId,
+        status: "failed",
+      });
+    }
+    const source = db.getBuildSource(ctx.input.sourceId);
+    if (!source?.last_delivery_id || source.last_delivery_id === ctx.input.deliveryId) {
+      db.updateBuildSourceDelivery(ctx.input.sourceId, {
+        last_status: "failed",
+        last_error: `Webhook operation #${ctx.opId} failed; inspect its operation logs`,
+      });
+    }
+    db.compactBuildSourceDeliveries(ctx.input.sourceId);
   },
 };
 
@@ -92,6 +130,7 @@ const build: Step<WebhookBuildSourceInput, Built> = {
   name: "build_images",
   label: "Build repository images",
   async run(ctx, prior) {
+    assertFreshDelivery(ctx);
     const source = db.getBuildSource(ctx.input.sourceId)!;
     const prepared = prior.prepare_source as Prepared;
     const apps = prepared.appIds.map((id) => db.getApp(id)).filter((app): app is AppRow => !!app && app.target_of == null);
@@ -121,6 +160,7 @@ const build: Step<WebhookBuildSourceInput, Built> = {
           operationId: ctx.opId,
           repository: source.repository,
           commit: ctx.input.commit,
+          expectedBranch: source.branch,
           readFiles: roots,
           resolveTargets: async (readFile) => {
           const targets: Array<{ name: string; dockerfile: string; context: string; image: string }> = [];
@@ -182,6 +222,7 @@ const build: Step<WebhookBuildSourceInput, Built> = {
     }
   },
   async probe(ctx) {
+    assertFreshDelivery(ctx);
     const source = db.getBuildSource(ctx.input.sourceId);
     const checkpoint = db.getBuildResultCheckpoint(ctx.opId);
     if (!source || !checkpoint || checkpoint.repository !== source.repository ||
@@ -220,6 +261,7 @@ const reconcile: Step<WebhookBuildSourceInput, { childIds: number[] }> = {
   name: "reconcile_manifests",
   label: "Reconcile repository manifests",
   async run(ctx, prior) {
+    assertFreshDelivery(ctx);
     const prepared = prior.prepare_source as Prepared;
     const built = prior.build_images as Built;
     const apps = prepared.appIds.map((id) => db.getApp(id)).filter((app): app is AppRow => !!app && app.target_of == null);
@@ -334,6 +376,7 @@ const finish: Step<WebhookBuildSourceInput, { ok: true }> = {
   name: "finish_delivery",
   label: "Record webhook delivery",
   async run(ctx, prior) {
+    assertFreshDelivery(ctx);
     const built = prior.build_images as Built;
     if (built.workerId != null) db.updateBuildSourceWorker(ctx.input.sourceId, built.workerId);
     db.updateBuildSourceDelivery(ctx.input.sourceId, {
@@ -342,6 +385,15 @@ const finish: Step<WebhookBuildSourceInput, { ok: true }> = {
       last_commit: ctx.input.commit,
       last_delivery_id: ctx.input.deliveryId,
     });
+    const delivery = db.getBuildSourceDelivery(ctx.input.sourceId, ctx.input.deliveryId);
+    if (delivery) {
+      db.updateBuildSourceDeliveryStatus({
+        sourceId: ctx.input.sourceId,
+        deliveryId: ctx.input.deliveryId,
+        status: "deployed",
+      });
+    }
+    db.compactBuildSourceDeliveries(ctx.input.sourceId);
     return { ok: true };
   },
 };

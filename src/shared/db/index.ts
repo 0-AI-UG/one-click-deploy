@@ -56,6 +56,22 @@ export {
   saveBuildResultCheckpoint,
   getBuildResultCheckpoint,
 } from "./build-artifacts.ts";
+export type {
+  BuildSourceDeliveryRow,
+  BuildSourceDeliveryStatus,
+} from "./build-source-deliveries.ts";
+export {
+  BUILD_SOURCE_DELIVERY_STATUSES,
+  getBuildSourceDelivery,
+  getLatestBuildSourceDelivery,
+  recordBuildSourceDelivery,
+  attachBuildSourceDeliveryOperation,
+  updateBuildSourceDeliveryStatus,
+  listActiveBuildSourceDeliveries,
+  listOlderQueuedBuildSourceDeliveries,
+  markOlderBuildSourceDeliveriesSuperseded,
+  compactBuildSourceDeliveries,
+} from "./build-source-deliveries.ts";
 export type { AppRow, AppIngressSettings, PublicProtocol, InternalProtocol } from "./apps.ts";
 export {
   getApps,

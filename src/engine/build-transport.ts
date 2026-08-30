@@ -19,6 +19,7 @@ export type BuildCommitInput = {
   operationId: number;
   repository: string;
   commit: string;
+  expectedBranch?: string;
   targets?: BuildTarget[];
   resolveTargets?: (readFile: (path: string) => Promise<string>) => Promise<BuildTarget[]>;
   readFiles?: string[];

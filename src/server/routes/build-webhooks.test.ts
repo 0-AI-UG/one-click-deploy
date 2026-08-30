@@ -64,6 +64,70 @@ describe("GitHub build webhook", () => {
     const op = getOperation(firstId)!;
     expect(op.kind).toBe("webhook_build_source");
     expect(JSON.parse(op.input_json).commit).toBe(commit);
+    expect(db.getBuildSourceDelivery(source.id, "delivery-2")?.status).toBe("duplicate");
+    expect(db.getBuildSource(source.id)?.last_delivery_id).toBe("delivery-1");
+  });
+
+  test("supersedes and cancels an older queued delivery", async () => {
+    const { source, secret } = await fixture();
+    const olderBody = JSON.stringify({
+      ref: "refs/heads/main",
+      after: "a".repeat(40),
+      head_commit: { timestamp: "2026-08-30T10:00:00Z" },
+      repository: { clone_url: source.repository },
+    });
+    const newerBody = JSON.stringify({
+      ref: "refs/heads/main",
+      after: "b".repeat(40),
+      head_commit: { timestamp: "2026-08-30T11:00:00Z" },
+      repository: { clone_url: source.repository },
+    });
+    const olderResponse = await handleGitHubBuildWebhook(
+      request(source.id, olderBody, await signature(olderBody, secret), "push", "delivery-old"),
+      source.id,
+    );
+    const olderId = Number((await olderResponse.text()).match(/#(\d+)/)?.[1]);
+    await handleGitHubBuildWebhook(
+      request(source.id, newerBody, await signature(newerBody, secret), "push", "delivery-new"),
+      source.id,
+    );
+
+    expect(getOperation(olderId)?.status).toBe("cancelled");
+    expect(db.getBuildSourceDelivery(source.id, "delivery-old")?.status).toBe("superseded");
+    expect(db.getBuildSourceDelivery(source.id, "delivery-new")?.status).toBe("queued");
+    expect(db.getBuildSource(source.id)?.last_delivery_id).toBe("delivery-new");
+  });
+
+  test("records but does not enqueue a delivery older than the latest event", async () => {
+    const { source, secret } = await fixture();
+    const newerBody = JSON.stringify({
+      ref: "refs/heads/main",
+      after: "c".repeat(40),
+      head_commit: { timestamp: "2026-08-30T12:00:00Z" },
+      repository: { clone_url: source.repository },
+    });
+    const staleBody = JSON.stringify({
+      ref: "refs/heads/main",
+      after: "d".repeat(40),
+      head_commit: { timestamp: "2026-08-30T11:00:00Z" },
+      repository: { clone_url: source.repository },
+    });
+    await handleGitHubBuildWebhook(
+      request(source.id, newerBody, await signature(newerBody, secret), "push", "delivery-latest"),
+      source.id,
+    );
+    const stale = await handleGitHubBuildWebhook(
+      request(source.id, staleBody, await signature(staleBody, secret), "push", "delivery-stale"),
+      source.id,
+    );
+
+    expect(stale.status).toBe(202);
+    expect(await stale.text()).toContain("stale");
+    expect(db.getBuildSourceDelivery(source.id, "delivery-stale")).toMatchObject({
+      status: "stale",
+      operation_id: null,
+    });
+    expect(db.getBuildSource(source.id)?.last_delivery_id).toBe("delivery-latest");
   });
 
   test("rejects bad signatures and ignores a different branch", async () => {
