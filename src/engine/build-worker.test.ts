@@ -1,26 +1,31 @@
 import { describe, expect, test } from "bun:test";
-import { BUILD_WORKER_VERSION, buildInstallWorkerScript, normalizeBuildWorkerName } from "./build-worker.ts";
+import {
+  buildInstallWorkerScript,
+  buildWorkerCleanupScript,
+  guardedBuildCommand,
+  operationImageTag,
+} from "./build-worker.ts";
 
-describe("OCD build worker installer", () => {
-  test("validates worker names", () => {
-    expect(normalizeBuildWorkerName("OCD-Build-1")).toBe("ocd-build-1");
-    expect(normalizeBuildWorkerName("bad worker")).toBe("");
+describe("build worker command safety", () => {
+  test("uses an operation-specific transport tag", () => {
+    expect(operationImageTag("registry.example.com/acme/api", 42, "a".repeat(40)))
+      .toBe(`registry.example.com/acme/api:ocd-op-42-${"a".repeat(12)}`);
   });
 
-  test("converts the GitHub runner before installing build tools", () => {
-    const token = "Removal_Token_123456789012345";
-    const script = buildInstallWorkerScript(token);
-    expect(script).toContain("./config.sh remove --token");
-    expect(script.indexOf("./config.sh remove --token")).toBeLessThan(script.indexOf("rm -rf /opt/ocd-actions-runner"));
-    expect(script).toContain("apt-get install -y -qq git jq unzip ca-certificates curl");
-    expect(script).toContain("docker buildx version");
-    expect(script).toContain(BUILD_WORKER_VERSION);
-    expect(script).not.toContain("set -x");
+  test("guards the remote build with a non-blocking host lock and process group", () => {
+    const command = guardedBuildCommand("docker buildx build --push .");
+    expect(command).toContain("flock -n -E 75");
+    expect(command).toContain("setsid sh -c");
   });
 
-  test("new workers need no GitHub registration token", () => {
-    const script = buildInstallWorkerScript();
-    expect(script).not.toContain("actions/runner/releases");
-    expect(script).not.toContain("--labels");
+  test("kills the recorded process group before cleanup and serializes pruning", () => {
+    const script = buildWorkerCleanupScript("/opt/ocd-build-worker/work/op-42");
+    expect(script).toContain('kill -TERM -- "-$pid"');
+    expect(script).toContain('kill -KILL -- "-$pid"');
+    expect(script).toContain("flock -w 30 /opt/ocd-build-worker/build.lock");
+  });
+
+  test("installs the host-lock utilities", () => {
+    expect(buildInstallWorkerScript()).toContain("util-linux");
   });
 });

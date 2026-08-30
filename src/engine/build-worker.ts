@@ -5,10 +5,28 @@ import { asUser } from "./hetzner/container-common.ts";
 
 export const BUILD_WORKER_VERSION = "1";
 const WORKER_DIR = "/opt/ocd-build-worker";
+const BUILD_LOCK = `${WORKER_DIR}/build.lock`;
 const LEGACY_RUNNER_DIR = "/opt/ocd-actions-runner";
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+export function operationImageTag(image: string, operationId: number, commit: string): string {
+  return `${image}:ocd-op-${operationId}-${commit.slice(0, 12)}`;
+}
+
+export function guardedBuildCommand(innerBuild: string): string {
+  return `flock -n -E 75 ${shellQuote(BUILD_LOCK)} setsid sh -c ${shellQuote(innerBuild)}`;
+}
+
+export function buildWorkerCleanupScript(root: string): string {
+  const activePid = `${root}/active.pid`;
+  return `if [ -f ${shellQuote(activePid)} ]; then ` +
+    `pid=$(cat ${shellQuote(activePid)}); ` +
+    `case "$pid" in ''|*[!0-9]*) ;; *) [ "$pid" -le 1 ] || { kill -TERM -- "-$pid" 2>/dev/null || true; sleep 2; kill -KILL -- "-$pid" 2>/dev/null || true; } ;; esac; ` +
+    `fi; rm -rf ${shellQuote(root)}; ` +
+    `su - deploy -c ${shellQuote(`flock -w 30 ${BUILD_LOCK} sh -c 'docker image prune -af >/dev/null 2>&1 || true; docker builder prune -af --keep-storage 12GB >/dev/null 2>&1 || true'`)}`;
 }
 
 export function normalizeBuildWorkerName(value: string): string {
@@ -33,7 +51,7 @@ export function buildInstallWorkerScript(removalToken = ""): string {
     `rm -rf ${LEGACY_RUNNER_DIR}`,
     "systemctl daemon-reload",
     "apt-get update -qq",
-    "apt-get install -y -qq git jq unzip ca-certificates curl",
+    "apt-get install -y -qq git jq unzip ca-certificates curl util-linux",
     "docker buildx version >/dev/null",
     "id deploy >/dev/null 2>&1 || { echo 'deploy user missing' >&2; exit 43; }",
     "usermod -aG docker deploy",
@@ -76,6 +94,14 @@ export type BuildTarget = {
   context: string;
   image: string;
 };
+
+export class BuildWorkerUnavailableError extends Error {
+  override readonly name = "BuildWorkerUnavailableError";
+
+  constructor(message: string, public workerId?: number, options?: ErrorOptions) {
+    super(message, options);
+  }
+}
 
 export async function verifyBuildArtifact(input: {
   server: ServerRow;
@@ -121,6 +147,7 @@ export async function buildCommitOnWorker(input: {
   registryPassword?: string;
   resolveRegistryCredentials?: (image: string) => Promise<{ username?: string; password?: string }>;
   onArtifact?: (name: string, image: string) => Promise<void> | void;
+  signal?: AbortSignal;
   onLog?: (line: string) => void;
 }): Promise<{ refs: Map<string, string>; files: Record<string, string> }> {
   if (!/^[0-9a-f]{40,64}$/i.test(input.commit)) throw new Error("Build commit must be a full immutable Git SHA");
@@ -128,6 +155,7 @@ export async function buildCommitOnWorker(input: {
   const root = `${WORKER_DIR}/work/op-${input.operationId}`;
   const checkout = `${root}/repo`;
   const gitHome = `${root}/git-home`;
+  const activePid = `${root}/active.pid`;
   const hostKey = server.ssh_host_key || undefined;
   const repository = shellQuote(input.repository);
   await sshExec(server.ipv4, `rm -rf ${shellQuote(root)} && install -d -o deploy -g deploy -m 0700 ${shellQuote(root)} ${shellQuote(gitHome)}`, hostKey);
@@ -146,16 +174,32 @@ export async function buildCommitOnWorker(input: {
       if (written.exitCode !== 0) throw new Error("Could not stage private Git credentials on build worker");
     }
     input.onLog?.(`Checking out ${input.repository} at ${input.commit.slice(0, 12)}`);
-    const clone = await sshExecStreaming(
-      server.ipv4,
-      asUser(
-        `HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 git init ${shellQuote(checkout)} && ` +
-        `cd ${shellQuote(checkout)} && git remote add origin ${repository} && ` +
-        `HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin ${shellQuote(input.commit)} && ` +
-        `git checkout --detach FETCH_HEAD && test \"$(git rev-parse HEAD)\" = ${shellQuote(input.commit)}`,
-      ),
-      { hostKey, onLine: (line) => line.trim() && input.onLog?.(line) },
-    );
+    const innerClone =
+      `echo $$ > ${shellQuote(activePid)}; trap 'rm -f ${activePid}' EXIT; ` +
+      `HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 git init ${shellQuote(checkout)} && ` +
+      `cd ${shellQuote(checkout)} && git remote add origin ${repository} && ` +
+      `HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 git fetch --depth 1 origin ${shellQuote(input.commit)} && ` +
+      `git checkout --detach FETCH_HEAD && test \"$(git rev-parse HEAD)\" = ${shellQuote(input.commit)}`;
+    let clone;
+    try {
+      clone = await sshExecStreaming(
+        server.ipv4,
+        asUser(guardedBuildCommand(innerClone)),
+        {
+          hostKey,
+          signal: input.signal,
+          timeoutMs: 5 * 60_000,
+          onLine: (line) => line.trim() && input.onLog?.(line),
+        },
+      );
+    } catch (error) {
+      if (!input.signal?.aborted && error instanceof Error && error.message.includes("timed out")) {
+        throw new BuildWorkerUnavailableError("Build worker timed out during Git checkout", undefined, { cause: error });
+      }
+      throw error;
+    }
+    if (clone.exitCode === 75) throw new BuildWorkerUnavailableError("Build worker host slot is already active");
+    if (clone.exitCode === 255) throw new BuildWorkerUnavailableError("Build worker disconnected during Git checkout");
     if (clone.exitCode !== 0) throw new Error(`Git checkout failed: ${(clone.stderr || clone.stdout).trim().split("\n").slice(-3).join(" | ")}`);
 
     const files: Record<string, string> = {};
@@ -201,25 +245,40 @@ export async function buildCommitOnWorker(input: {
 
     const refs = new Map<string, string>();
     for (const target of targets) {
-      const tag = `${target.image}:ocd-op-${input.operationId}-${input.commit.slice(0, 12)}`;
+      const tag = operationImageTag(target.image, input.operationId, input.commit);
       const metadata = `${root}/${target.name}.metadata.json`;
       input.onLog?.(`Building ${target.name} → ${target.image}`);
-      const build = await sshExecStreaming(
-        server.ipv4,
-        asUser(
-          `cd ${shellQuote(checkout)} && ${registryAuth?.envPrefix ?? ""}` +
-          `docker buildx build --pull --platform linux/amd64 --progress plain --push ` +
-          `--label org.opencontainers.image.revision=${shellQuote(input.commit)} ` +
-          `--metadata-file ${shellQuote(metadata)} -t ${shellQuote(tag)} ` +
-          `-f ${shellQuote(target.dockerfile)} ${shellQuote(target.context)}`,
-        ),
-        {
-          hostKey,
-          heartbeatMs: 30_000,
-          onLine: (line) => line.trim() && input.onLog?.(`[${target.name}] ${line}`),
-          onHeartbeat: (elapsed) => input.onLog?.(`[${target.name}] build still running (${Math.floor(elapsed / 1000)}s)`),
-        },
-      );
+      const innerBuild =
+        `echo $$ > ${shellQuote(activePid)}; trap 'rm -f ${activePid}' EXIT; ` +
+        `cd ${shellQuote(checkout)} && ${registryAuth?.envPrefix ?? ""}` +
+        `docker buildx build --pull --platform linux/amd64 --progress plain --push ` +
+        `--label org.opencontainers.image.revision=${shellQuote(input.commit)} ` +
+        `--metadata-file ${shellQuote(metadata)} -t ${shellQuote(tag)} ` +
+        `-f ${shellQuote(target.dockerfile)} ${shellQuote(target.context)}`;
+      let build;
+      try {
+        build = await sshExecStreaming(
+          server.ipv4,
+          asUser(
+          guardedBuildCommand(innerBuild),
+          ),
+          {
+            hostKey,
+            signal: input.signal,
+            timeoutMs: 45 * 60_000,
+            heartbeatMs: 30_000,
+            onLine: (line) => line.trim() && input.onLog?.(`[${target.name}] ${line}`),
+            onHeartbeat: (elapsed) => input.onLog?.(`[${target.name}] build still running (${Math.floor(elapsed / 1000)}s)`),
+          },
+        );
+      } catch (error) {
+        if (!input.signal?.aborted && error instanceof Error && error.message.includes("timed out")) {
+          throw new BuildWorkerUnavailableError(`Build worker timed out while building ${target.name}`, undefined, { cause: error });
+        }
+        throw error;
+      }
+      if (build.exitCode === 75) throw new BuildWorkerUnavailableError("Build worker host slot is already active");
+      if (build.exitCode === 255) throw new BuildWorkerUnavailableError(`Build worker disconnected while building ${target.name}`);
       if (build.exitCode !== 0) throw new Error(`Build failed for ${target.name}: ${(build.stderr || build.stdout).trim().split("\n").slice(-3).join(" | ")}`);
       const digestResult = await sshExec(
         server.ipv4,
@@ -240,7 +299,7 @@ export async function buildCommitOnWorker(input: {
     if (registryAuth) await registryAuth.cleanup();
     await sshExec(
       server.ipv4,
-      `rm -rf ${shellQuote(root)}; su - deploy -c ${shellQuote("docker image prune -af >/dev/null 2>&1 || true; docker builder prune -af --keep-storage 12GB >/dev/null 2>&1 || true")}`,
+      buildWorkerCleanupScript(root),
       hostKey,
     ).catch(() => {});
   }

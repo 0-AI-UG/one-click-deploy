@@ -1,6 +1,7 @@
 import * as db from "../shared/db.ts";
 import type { ServerRow } from "../shared/db/servers.ts";
 import type { BuildTransport } from "./build-transport.ts";
+import { BuildWorkerUnavailableError } from "./build-worker.ts";
 
 const HEARTBEAT_INTERVAL_MS = 20_000;
 
@@ -13,6 +14,7 @@ export type BuildCoordinator = {
   withWorker<T>(args: {
     operationId: number;
     preferredWorkerId?: number | null;
+    excludedWorkerIds?: number[];
     run: (selection: BuildWorkerSelection) => Promise<T>;
   }): Promise<{ value: T; workerId: number }>;
 };
@@ -26,11 +28,14 @@ export function createBuildCoordinator(transport: BuildTransport): BuildCoordina
     async withWorker<T>(args: {
       operationId: number;
       preferredWorkerId?: number | null;
+      excludedWorkerIds?: number[];
       run: (selection: BuildWorkerSelection) => Promise<T>;
     }): Promise<{ value: T; workerId: number }> {
       const observed = await Promise.all(db.getBuildWorkers().map(async (worker) => {
         const server = db.getServer(worker.server_id);
-        if (!server || server.status !== "ready" || worker.draining) return null;
+        if (!server || server.status !== "ready" || worker.draining || args.excludedWorkerIds?.includes(worker.id)) {
+          return null;
+        }
         try {
           const observation = await transport.probeWorker(server);
           db.updateBuildWorker(worker.id, {
@@ -93,7 +98,15 @@ export function createBuildCoordinator(transport: BuildTransport): BuildCoordina
 
       let completed = false;
       try {
-        const value = await args.run({ workerId: selected.worker.id, server: selected.server });
+        let value: T;
+        try {
+          value = await args.run({ workerId: selected.worker.id, server: selected.server });
+        } catch (error) {
+          if (error instanceof BuildWorkerUnavailableError && error.workerId == null) {
+            error.workerId = selected.worker.id;
+          }
+          throw error;
+        }
         if (leaseLost || !db.heartbeatBuildWorkerLease({
           operationId: args.operationId,
           leaseToken: lease.lease_token,

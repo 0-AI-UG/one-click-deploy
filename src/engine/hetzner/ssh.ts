@@ -214,6 +214,8 @@ export async function sshExecStreaming(
   command: string,
   opts: {
     hostKey?: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
     onLine?: (line: string, source: "stdout" | "stderr") => void;
     onHeartbeat?: (elapsedMs: number, outputLines: number) => void;
     heartbeatMs?: number;
@@ -229,6 +231,18 @@ export async function sshExecStreaming(
     interactive: false,
   });
   const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+  let abortMessage = "";
+  const terminate = (message: string) => {
+    if (abortMessage) return;
+    abortMessage = message;
+    try { proc.kill(); } catch { /* process already exited */ }
+  };
+  const onAbort = () => terminate("SSH command aborted");
+  if (opts.signal?.aborted) onAbort();
+  else opts.signal?.addEventListener("abort", onAbort, { once: true });
+  const timeout = opts.timeoutMs
+    ? setTimeout(() => terminate(`SSH command timed out after ${opts.timeoutMs}ms`), opts.timeoutMs)
+    : null;
   let outputLines = 0;
   const MAX_CAPTURE = 1024 * 1024;
 
@@ -271,9 +285,12 @@ export async function sshExecStreaming(
       consume(proc.stderr, "stderr"),
       proc.exited,
     ]);
+    if (abortMessage) throw new Error(abortMessage);
     return { stdout, stderr, exitCode };
   } finally {
     clearInterval(heartbeat);
+    if (timeout) clearTimeout(timeout);
+    opts.signal?.removeEventListener("abort", onAbort);
     if (tmpKnownHostsPath) {
       try { unlinkSync(tmpKnownHostsPath); } catch { /* cleanup */ }
     }

@@ -10,6 +10,8 @@ import { enqueueOperation, listChildOperations } from "../../shared/db/operation
 import { sshBuildTransport, type BuildTransport } from "../build-transport.ts";
 import { createBuildCoordinator, type BuildCoordinator } from "../build-coordinator.ts";
 import { verifyArtifactRefs } from "../build-artifact-recovery.ts";
+import { operationAbort } from "../operation-abort.ts";
+import { withBuildFailover } from "../build-failover.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
@@ -97,8 +99,11 @@ const build: Step<WebhookBuildSourceInput, Built> = {
       .filter((path): path is string => !!path);
     const builds: Record<string, BuildConfig> = {};
     const sourceCredentials = await resolveSourceCredentialsForRepository(source.repository);
-    const coordinated = await coordinator.withWorker({
-      operationId: ctx.opId,
+    const abort = operationAbort(ctx);
+    try {
+      const coordinated = await withBuildFailover({
+      ctx,
+      coordinator,
       preferredWorkerId: source.worker_id,
       run: async ({ server, workerId }) => {
         const recordArtifact = (targetName: string, imageRef: string): void => {
@@ -152,6 +157,7 @@ const build: Step<WebhookBuildSourceInput, Built> = {
           gitToken: sourceCredentials.token,
           resolveRegistryCredentials: resolveRegistryCredentialsForImage,
           onArtifact: recordArtifact,
+          signal: abort.signal,
           onLog: (line) => ctx.log(line),
         });
         for (const [targetName, imageRef] of result.refs) recordArtifact(targetName, imageRef);
@@ -164,13 +170,16 @@ const build: Step<WebhookBuildSourceInput, Built> = {
         });
         return result;
       },
-    });
-    return {
-      refs: Object.fromEntries(coordinated.value.refs),
-      files: coordinated.value.files,
-      builds,
-      workerId: coordinated.workerId,
-    };
+      });
+      return {
+        refs: Object.fromEntries(coordinated.value.refs),
+        files: coordinated.value.files,
+        builds,
+        workerId: coordinated.workerId,
+      };
+    } finally {
+      abort.dispose();
+    }
   },
   async probe(ctx) {
     const source = db.getBuildSource(ctx.input.sourceId);

@@ -6,6 +6,8 @@ import type { BuildTarget } from "../build-worker.ts";
 import { sshBuildTransport, type BuildTransport } from "../build-transport.ts";
 import { createBuildCoordinator, type BuildCoordinator } from "../build-coordinator.ts";
 import { verifyArtifactRefs } from "../build-artifact-recovery.ts";
+import { operationAbort } from "../operation-abort.ts";
+import { withBuildFailover } from "../build-failover.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
@@ -34,8 +36,11 @@ async function runBuild(
 ): Promise<BuiltOut> {
   const sourceCredentials = await resolveSourceCredentialsForRepository(repository);
   const preferredWorkerId = db.getBuildSourceByRepository(repository, branch)?.worker_id;
-  const coordinated = await coordinator.withWorker({
-    operationId: ctx.opId,
+  const abort = operationAbort(ctx);
+  try {
+    const coordinated = await withBuildFailover({
+    ctx,
+    coordinator,
     preferredWorkerId,
     run: async ({ server, workerId }) => {
       const recordArtifact = (targetName: string, imageRef: string): void => {
@@ -58,6 +63,7 @@ async function runBuild(
         gitToken: sourceCredentials.token,
         resolveRegistryCredentials: resolveRegistryCredentialsForImage,
         onArtifact: recordArtifact,
+        signal: abort.signal,
         onLog: (line) => ctx.log(line),
       });
       for (const [targetName, imageRef] of result.refs) recordArtifact(targetName, imageRef);
@@ -70,8 +76,11 @@ async function runBuild(
       });
       return result;
     },
-  });
-  return { refs: Object.fromEntries(coordinated.value.refs), workerId: coordinated.workerId };
+    });
+    return { refs: Object.fromEntries(coordinated.value.refs), workerId: coordinated.workerId };
+  } finally {
+    abort.dispose();
+  }
 }
 
 async function recoverBuild(

@@ -7,6 +7,8 @@ import connection from "../shared/db/connection.ts";
 import { enqueueOperation } from "../shared/db/operations.ts";
 import type { ServerRow } from "../shared/db/servers.ts";
 import { createBuildCoordinator } from "./build-coordinator.ts";
+import { withBuildFailover } from "./build-failover.ts";
+import { BuildWorkerUnavailableError } from "./build-worker.ts";
 import type { BuildTransport, WorkerObservation } from "./build-transport.ts";
 
 const HEALTHY_DISK_BYTES = 30 * 1024 ** 3;
@@ -186,5 +188,56 @@ describe("build coordinator", () => {
         return "must-not-publish";
       },
     })).rejects.toThrow("Build worker lease was lost before publication could be committed");
+  });
+
+  test("retries one infrastructure failure on a different worker", async () => {
+    const preferred = worker("failover-preferred");
+    const fallback = worker("failover-fallback");
+    const op = operation();
+    const coordinator = createBuildCoordinator(transport(new Map()));
+    const attempted: number[] = [];
+
+    const result = await withBuildFailover({
+      ctx: { opId: op.id, isCancelRequested: () => false, log: () => {} },
+      coordinator,
+      preferredWorkerId: preferred.row.id,
+      run: async ({ workerId }) => {
+        attempted.push(workerId);
+        if (workerId === preferred.row.id) throw new BuildWorkerUnavailableError("disconnected");
+        return "built";
+      },
+    });
+
+    expect(result).toEqual({ value: "built", workerId: fallback.row.id });
+    expect(attempted).toEqual([preferred.row.id, fallback.row.id]);
+    expect(db.getBuildWorkerLeaseForOperation(op.id)).toBeNull();
+  });
+
+  test("does not retry after any digest was durably recorded", async () => {
+    const preferred = worker("partial-preferred");
+    worker("partial-fallback");
+    const op = operation();
+    const coordinator = createBuildCoordinator(transport(new Map()));
+    let attempts = 0;
+
+    await expect(withBuildFailover({
+      ctx: { opId: op.id, isCancelRequested: () => false, log: () => {} },
+      coordinator,
+      preferredWorkerId: preferred.row.id,
+      run: async ({ workerId }) => {
+        attempts++;
+        db.recordBuildArtifact({
+          operationId: op.id,
+          targetName: "api",
+          imageRef: `registry.example.com/acme/api@sha256:${"a".repeat(64)}`,
+          repository: "https://example.com/acme/repository.git",
+          commitSha: "b".repeat(40),
+          workerId,
+        });
+        throw new BuildWorkerUnavailableError("disconnected after publication");
+      },
+    })).rejects.toThrow("disconnected after publication");
+
+    expect(attempts).toBe(1);
   });
 });

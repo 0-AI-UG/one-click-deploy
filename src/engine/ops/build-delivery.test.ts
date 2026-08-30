@@ -114,6 +114,7 @@ describe("build delivery transport boundary", () => {
     expect(builds).toHaveLength(1);
     expect(builds[0].commit).toBe(COMMIT);
     expect(builds[0].repository).toBe(input.spec.build!.repository);
+    expect(builds[0].signal?.aborted).toBe(false);
     expect(builds[0].targets).toEqual([{
       name: input.spec.app_name,
       dockerfile: "docker/app.Dockerfile",

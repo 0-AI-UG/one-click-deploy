@@ -28,6 +28,7 @@ export type BuildCommitInput = {
   registryPassword?: string;
   resolveRegistryCredentials?: (image: string) => Promise<{ username?: string; password?: string }>;
   onArtifact?: (name: string, image: string) => Promise<void> | void;
+  signal?: AbortSignal;
   onLog?: (line: string) => void;
 };
 
