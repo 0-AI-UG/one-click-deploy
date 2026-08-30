@@ -2517,6 +2517,26 @@ export const migrations: Migration[] = [
         ELSE '' END`);
     },
   },
+  {
+    version: 108,
+    description: "Add durable build-worker capacity leases",
+    up: (db) => {
+      db.run("ALTER TABLE build_workers ADD COLUMN draining INTEGER NOT NULL DEFAULT 0 CHECK (draining IN (0, 1))");
+      db.run("ALTER TABLE build_workers ADD COLUMN disk_free_bytes INTEGER NOT NULL DEFAULT 0 CHECK (disk_free_bytes >= 0)");
+      db.run("ALTER TABLE build_workers ADD COLUMN last_used_at TEXT");
+      db.run(`CREATE TABLE build_worker_leases (
+        worker_id INTEGER NOT NULL REFERENCES build_workers(id) ON DELETE RESTRICT,
+        slot INTEGER NOT NULL DEFAULT 0 CHECK (slot >= 0),
+        operation_id INTEGER NOT NULL UNIQUE REFERENCES operations(id) ON DELETE CASCADE,
+        lease_token TEXT NOT NULL UNIQUE,
+        acquired_at TEXT NOT NULL DEFAULT (datetime('now')),
+        heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')),
+        expires_at TEXT NOT NULL,
+        PRIMARY KEY (worker_id, slot)
+      )`);
+      db.run("CREATE INDEX build_worker_leases_expiry ON build_worker_leases(expires_at)");
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

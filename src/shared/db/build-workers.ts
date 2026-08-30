@@ -9,6 +9,9 @@ export type BuildWorkerRow = {
   status: string;
   last_error: string;
   last_checked_at: string | null;
+  draining: number;
+  disk_free_bytes: number;
+  last_used_at: string | null;
   worker_version: string;
   created_at: string;
 };
@@ -48,7 +51,10 @@ export function insertBuildWorker(input: { serverId: number; name: string; previ
 
 export function updateBuildWorker(
   id: number,
-  fields: Partial<Pick<BuildWorkerRow, "status" | "last_error" | "worker_version" | "architecture" | "last_checked_at">>,
+  fields: Partial<Pick<BuildWorkerRow,
+    "status" | "last_error" | "worker_version" | "architecture" | "last_checked_at" |
+    "draining" | "disk_free_bytes" | "last_used_at"
+  >>,
 ): void {
   const clauses: string[] = [];
   const values: Array<string | null | number> = [];

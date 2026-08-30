@@ -186,6 +186,17 @@ describe("runMigrations", () => {
     expect(sourceColumns).toContain("worker_id");
   });
 
+  test("migration 108 adds durable build-worker capacity leases", () => {
+    const db = freshDb();
+    runMigrations(db);
+    const columns = (db.query("PRAGMA table_info(build_workers)").all() as any[]).map((column) => column.name);
+    expect(columns).toContain("draining");
+    expect(columns).toContain("disk_free_bytes");
+    expect(columns).toContain("last_used_at");
+    expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='build_worker_leases'").get()).toBeTruthy();
+    expect(db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='build_worker_leases_expiry'").get()).toBeTruthy();
+  });
+
   test("skips already applied migrations", () => {
     const db = freshDb();
     runMigrationsWithImageCutover(db);

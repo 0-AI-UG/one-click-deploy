@@ -34,6 +34,19 @@ export {
   updateBuildSourceDelivery,
   appsForBuildSource,
 } from "./build-workers.ts";
+export type { BuildWorkerLeaseRow } from "./build-worker-leases.ts";
+export {
+  BUILD_MIN_FREE_BYTES,
+  BUILD_LEASE_TTL_SECONDS,
+  BUILD_OBSERVATION_MAX_AGE_SECONDS,
+  getBuildWorkerLeaseForOperation,
+  getActiveBuildWorkerLease,
+  listActiveBuildWorkerLeases,
+  tryAcquireBuildWorkerLease,
+  heartbeatBuildWorkerLease,
+  releaseBuildWorkerLease,
+  reapTerminalBuildWorkerLeases,
+} from "./build-worker-leases.ts";
 export type { AppRow, AppIngressSettings, PublicProtocol, InternalProtocol } from "./apps.ts";
 export {
   getApps,
