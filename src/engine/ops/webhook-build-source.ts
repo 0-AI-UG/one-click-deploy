@@ -7,7 +7,7 @@ import { validateDeployManifest, validateStackManifest } from "../../shared/mani
 import { buildStackAppSpec } from "../../shared/stack-spec.ts";
 import { deployRequestFromApp } from "../../shared/app-config.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
-import { buildCommitOnWorker, probeBuildWorker } from "../build-worker.ts";
+import { sshBuildTransport, type BuildTransport } from "../build-transport.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
@@ -55,6 +55,9 @@ async function child(ctx: OpContext<WebhookBuildSourceInput>, suffix: string, ki
   return op.id;
 }
 
+export function createWebhookBuildSourceDefinition(
+  transport: BuildTransport = sshBuildTransport,
+): OpKindDefinition<WebhookBuildSourceInput> {
 const prepare: Step<WebhookBuildSourceInput, Prepared> = {
   name: "prepare_source",
   label: "Prepare repository build",
@@ -65,7 +68,7 @@ const prepare: Step<WebhookBuildSourceInput, Prepared> = {
     const worker = db.getBuildWorker(source.worker_id);
     const server = worker ? db.getServer(worker.server_id) : null;
     if (!worker || !server) throw new Error("Assigned build worker is missing");
-    const observed = await probeBuildWorker(server);
+    const observed = await transport.probeWorker(server);
     if (!observed.online) throw new Error(observed.error || "Assigned build worker is offline");
     const apps = db.appsForBuildSource(source.id) as AppRow[];
     if (!apps.length) throw new Error("Build source has no attached apps");
@@ -92,7 +95,7 @@ const build: Step<WebhookBuildSourceInput, Built> = {
       .filter((path): path is string => !!path);
     const builds: Record<string, BuildConfig> = {};
     const sourceCredentials = await resolveSourceCredentialsForRepository(source.repository);
-    const result = await buildCommitOnWorker({
+    const result = await transport.buildCommit({
       server,
       operationId: ctx.opId,
       repository: source.repository,
@@ -276,6 +279,11 @@ const definition: OpKindDefinition<WebhookBuildSourceInput> = {
   resourceKeys: (input) => [`build-source:${input.sourceId}`],
   steps: [prepare, build, reconcile, finish],
 };
+
+return definition;
+}
+
+const definition = createWebhookBuildSourceDefinition();
 
 registerOp(definition as OpKindDefinition<any>);
 export default definition;

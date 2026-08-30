@@ -2,7 +2,8 @@ import * as db from "../../shared/db.ts";
 import { secretStore } from "../../shared/secret-store.ts";
 import type { DeployRequest, StackDeployRequest } from "../../shared/rpc.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
-import { buildCommitOnWorker, probeBuildWorker, type BuildTarget } from "../build-worker.ts";
+import type { BuildTarget } from "../build-worker.ts";
+import { sshBuildTransport, type BuildTransport } from "../build-transport.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
@@ -20,11 +21,11 @@ function sourceKey(build: BuildConfig): string {
   return `${build.repository}#${build.branch || "main"}`;
 }
 
-async function readyWorker(): Promise<WorkerOut> {
+async function readyWorker(transport: BuildTransport): Promise<WorkerOut> {
   for (const worker of db.getBuildWorkers()) {
     const server = db.getServer(worker.server_id);
     if (!server || server.status !== "ready") continue;
-    const observed = await probeBuildWorker(server);
+    const observed = await transport.probeWorker(server);
     if (!observed.online) continue;
     db.updateBuildWorker(worker.id, {
       status: "online",
@@ -39,6 +40,7 @@ async function readyWorker(): Promise<WorkerOut> {
 }
 
 async function runBuild(
+  transport: BuildTransport,
   ctx: OpContext<any>,
   worker: WorkerOut,
   repository: string,
@@ -48,7 +50,7 @@ async function runBuild(
   const server = db.getServer(worker.serverId);
   if (!server) throw new Error("Build worker server disappeared");
   const sourceCredentials = await resolveSourceCredentialsForRepository(repository);
-  const built = await buildCommitOnWorker({
+  const built = await transport.buildCommit({
     server,
     operationId: ctx.opId,
     repository,
@@ -105,10 +107,14 @@ async function persistBuildConfig(appId: number, build: BuildConfig, workerId: n
   }
 }
 
+export function createBuildDeliveryDefinitions(transport: BuildTransport = sshBuildTransport): {
+  appDefinition: OpKindDefinition<BuildAppDeliveryInput>;
+  stackDefinition: OpKindDefinition<BuildStackDeliveryInput>;
+} {
 const appWorker: Step<BuildAppDeliveryInput, WorkerOut> = {
   name: "select_build_worker",
   label: "Select build worker",
-  async run() { return readyWorker(); },
+  async run() { return readyWorker(transport); },
 };
 
 const appBuild: Step<BuildAppDeliveryInput, BuiltOut> = {
@@ -118,7 +124,7 @@ const appBuild: Step<BuildAppDeliveryInput, BuiltOut> = {
     const build = ctx.input.spec.build;
     if (!build) throw new Error("Build configuration missing");
     const commit = ctx.input.spec.git_commit || "";
-    return runBuild(ctx, prior.select_build_worker as WorkerOut, build.repository, commit, [{
+    return runBuild(transport, ctx, prior.select_build_worker as WorkerOut, build.repository, commit, [{
       name: ctx.input.spec.app_name,
       dockerfile: build.dockerfile,
       context: build.context,
@@ -161,7 +167,7 @@ const appDefinition: OpKindDefinition<BuildAppDeliveryInput> = {
 const stackWorker: Step<BuildStackDeliveryInput, WorkerOut> = {
   name: "select_build_worker",
   label: "Select build worker",
-  async run() { return readyWorker(); },
+  async run() { return readyWorker(transport); },
 };
 
 const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
@@ -179,6 +185,7 @@ const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
     const commit = selected[0].git_commit || "";
     if (selected.some((app) => app.git_commit !== commit)) throw new Error("Stack members must use one exact Git commit");
     return runBuild(
+      transport,
       ctx,
       prior.select_build_worker as WorkerOut,
       builds[0].repository,
@@ -223,6 +230,11 @@ const stackDefinition: OpKindDefinition<BuildStackDeliveryInput> = {
   resourceKeys: (input) => [`build-stack:${input.spec.name}`],
   steps: [stackWorker, stackBuild, stackDeploy],
 };
+
+return { appDefinition, stackDefinition };
+}
+
+const { appDefinition, stackDefinition } = createBuildDeliveryDefinitions();
 
 registerOp(appDefinition as OpKindDefinition<any>);
 registerOp(stackDefinition as OpKindDefinition<any>);
