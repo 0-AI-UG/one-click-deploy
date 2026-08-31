@@ -75,6 +75,11 @@ describe("validateDeployManifest", () => {
       cap_add: ["CHOWN", "SETUID", "SETGID"],
       post_start: { command: "pg_isready" },
     }, ".ocd-deploy.json")).not.toThrow();
+    expect(() => validateDeployManifest({
+      name: "database",
+      image: { ref: "postgres:17-alpine" },
+      volume: null,
+    }, ".ocd-deploy.json")).not.toThrow();
     expect(() => validateDeployManifest({ ...validApp, image: "nginx:alpine" }, ".ocd-deploy.json"))
       .toThrow("exactly one of build or image");
     const { build: _build, ...withoutSource } = validApp;

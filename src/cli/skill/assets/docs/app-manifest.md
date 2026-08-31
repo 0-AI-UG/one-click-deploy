@@ -34,8 +34,9 @@ Unknown fields are rejected by default.
 Declare exactly one of `build` or `image`.
 
 `image` accepts any OCI image reference, including Docker Hub shorthand such
-as `postgres:17-alpine`. OCD resolves tags to a registry digest before changing
-desired state and always runs the immutable digest.
+as `postgres:17-alpine`. The established `{ "ref": "..." }` form is accepted
+too. OCD resolves tags to a registry digest before changing desired state and
+always runs the immutable digest.
 
 For source builds, `build` contains:
 

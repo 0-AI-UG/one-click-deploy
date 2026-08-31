@@ -300,6 +300,14 @@ const authSchema = z.object(
   { error: "expected object { enabled, password_env? }" },
 ).strict();
 
+const prebuiltImageSchema = z.union([
+  nonEmptyString("expected an OCI image reference"),
+  z.object({
+    ref: nonEmptyString("expected an OCI image reference"),
+  }, { error: "expected an OCI image reference or object { ref }" }).strict(),
+], { error: "expected an OCI image reference or object { ref }" })
+  .transform((value) => typeof value === "string" ? value : value.ref);
+
 export const DeployManifestSchema = z
   .object({
     $schema: z.literal(1, { error: "expected 1" }).optional(),
@@ -313,7 +321,7 @@ export const DeployManifestSchema = z
     build: buildSchema.optional(),
     /** Prebuilt OCI image reference. Tags are accepted as manifest intent but
      * are resolved to an immutable digest before desired state is changed. */
-    image: nonEmptyString("expected an OCI image reference").optional(),
+    image: prebuiltImageSchema.optional(),
     container_port: guardedNumber(
       "expected integer 1-65535",
       (v) => Number.isInteger(v) && v >= 1 && v <= 65535,

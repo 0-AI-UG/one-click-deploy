@@ -102,6 +102,10 @@ export function readManifest(path: string, options: { allowUnknown?: boolean } =
     console.error(`${RED}${err instanceof Error ? err.message : err}${RESET}`);
     process.exit(1);
   }
+  // Keep the established verbose form (`image: { ref }`) compatible with the
+  // shorthand string, then expose one normalized shape to every deploy path.
+  const rawImage = (manifest as unknown as { image?: string | { ref: string } }).image;
+  if (rawImage && typeof rawImage === "object") manifest.image = rawImage.ref;
   return manifest;
 }
 
