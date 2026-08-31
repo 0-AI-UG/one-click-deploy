@@ -187,7 +187,7 @@ describe("ingestServerRequestMetrics", () => {
     const server = makeServer();
     const app = makeApp();
     const t0 = Date.now();
-    // Same counter name/values but under the svc- prefix (a catalog service,
+    // Same counter name/values but under a non-app prefix,
     // not an app router) — must never count as app activity.
     const svcLine = (n: number) =>
       `traefik_service_requests_total{code="200",method="GET",protocol="http",service="svc-${app.name}@file"} ${n}\n`;

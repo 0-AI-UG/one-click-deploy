@@ -41,9 +41,7 @@ type Ctx = {
   tag: string;
   serverId: number;
   appId: number;
-  serviceId: number;
   appName: string;
-  serviceName: string;
   gitRepo: string;
   gitBranch: string;
   dockerContext: string;
@@ -82,7 +80,6 @@ d(
       const gitBranch = process.env.OCD_TEST_GIT_BRANCH || "main";
       const dockerContext = process.env.OCD_TEST_DOCKER_CONTEXT || DEFAULT_DOCKER_CONTEXT;
       const appName = `ocd-itest-${tag}`;
-      const serviceName = `ocd-itest-svc-${tag}`;
       console.log(
         `[itest:engine-ops] starting suite, tag=${tag}, repo=${gitRepo}, context=${dockerContext}`,
       );
@@ -123,9 +120,7 @@ d(
         tag,
         serverId: (server as { id: number }).id,
         appId: 0,
-        serviceId: 0,
         appName,
-        serviceName,
         gitRepo,
         gitBranch,
         dockerContext,
@@ -148,17 +143,6 @@ d(
           );
         } catch (e) {
           console.warn(`[itest:engine-ops] destroy_app failed: ${e}`);
-        }
-      }
-      if (ctx.serviceId) {
-        try {
-          await enqueueAndWait(
-            "destroy_service",
-            { serviceId: ctx.serviceId },
-            { timeoutMs: 3 * 60_000 },
-          );
-        } catch (e) {
-          console.warn(`[itest:engine-ops] destroy_service failed: ${e}`);
         }
       }
       if (ctx.serverId) {
@@ -253,37 +237,6 @@ d(
       10 * 60_000,
     );
 
-    // ---- 3. deploy-service --------------------------------------------------
-    test(
-      "3. deploy-service: postgres instance running, volume attached",
-      async () => {
-        expect(ctx).not.toBeNull();
-        const db = await import("../shared/db.ts");
-
-        const result = await enqueueAndWait(
-          "deploy_service",
-          {
-            name: ctx!.serviceName,
-            service_type: "postgresql",
-          },
-          { timeoutMs: 5 * 60_000 },
-        );
-        expect(result.status).toBe("done");
-
-        const service = db.getServiceByName(ctx!.serviceName);
-        expect(service).not.toBeNull();
-        ctx!.serviceId = service!.id;
-
-        const instances = db.getServiceInstances(ctx!.serviceId);
-        expect(instances.length).toBeGreaterThan(0);
-        expect(instances[0].status).toBe("running");
-        expect(instances[0].volume_id).not.toBe("");
-
-        assertStepsOk(await getStepsForOp(result.opId));
-      },
-      5 * 60_000,
-    );
-
     // ---- 4. scale-up -------------------------------------------------------
     appTest(
       "4. scale-up: 3 replicas running",
@@ -371,51 +324,6 @@ d(
         expect(["running", "healthy"].includes(app!.status)).toBe(true);
       },
       4 * 60_000,
-    );
-
-    // ---- 8. pause-service / unpause-service --------------------------------
-    test(
-      "8. pause-service then unpause-service",
-      async () => {
-        expect(ctx).not.toBeNull();
-        const db = await import("../shared/db.ts");
-
-        const pauseResult = await enqueueAndWait(
-          "pause_service",
-          { serviceId: ctx!.serviceId },
-          { timeoutMs: 2 * 60_000 },
-        );
-        expect(pauseResult.status).toBe("done");
-        expect(db.getService(ctx!.serviceId)!.status).toBe("paused");
-
-        const unpauseResult = await enqueueAndWait(
-          "unpause_service",
-          { serviceId: ctx!.serviceId },
-          { timeoutMs: 2 * 60_000 },
-        );
-        expect(unpauseResult.status).toBe("done");
-        const svc = db.getService(ctx!.serviceId);
-        expect(["running", "healthy"].includes(svc!.status)).toBe(true);
-      },
-      4 * 60_000,
-    );
-
-    // ---- 9. restart-service ------------------------------------------------
-    test(
-      "9. restart-service: op succeeds",
-      async () => {
-        expect(ctx).not.toBeNull();
-
-        const result = await enqueueAndWait(
-          "restart_service",
-          { serviceId: ctx!.serviceId },
-          { timeoutMs: 2 * 60_000 },
-        );
-        expect(result.status).toBe("done");
-
-        assertStepsOk(await getStepsForOp(result.opId));
-      },
-      2 * 60_000,
     );
 
     // ---- 10. redeploy -------------------------------------------------------

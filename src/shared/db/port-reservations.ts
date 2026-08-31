@@ -34,14 +34,6 @@ export function reserveHostPort(args: {
         `Port preflight failed: ${args.bindAddress}:${args.hostPort}/${protocol} is reserved by replica ${replica.container_name} (#${replica.id})`,
       );
     }
-    const service = db.query(
-      "SELECT id, container_name FROM service_instances WHERE server_id = ? AND host_port = ? LIMIT 1",
-    ).get(args.serverId, args.hostPort) as { id: number; container_name: string } | null;
-    if (service) {
-      throw new Error(
-        `Port preflight failed: ${args.bindAddress}:${args.hostPort}/${protocol} is reserved by service ${service.container_name} (#${service.id})`,
-      );
-    }
     const panel = db.query(
       "SELECT id, name FROM panel WHERE server_id = ? AND host_port = ? LIMIT 1",
     ).get(args.serverId, args.hostPort) as { id: number; name: string } | null;

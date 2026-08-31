@@ -479,11 +479,6 @@ export async function gcServerIfEmpty(serverId: number): Promise<void> {
     clearServerGcRequest(serverId);
     return;
   }
-  const { getServiceInstancesByServer } = await import("./services.ts");
-  if (getServiceInstancesByServer(serverId).length > 0) {
-    clearServerGcRequest(serverId);
-    return;
-  }
   const { getPanel } = await import("./panel.ts");
   if (getPanel()?.server_id === serverId) {
     clearServerGcRequest(serverId);

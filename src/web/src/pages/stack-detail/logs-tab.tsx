@@ -6,7 +6,7 @@ import { LogViewer } from "../../components/log-viewer.tsx";
 import { ScrollText, RefreshCw } from "lucide-react";
 
 type MemberLog = {
-  kind: "app" | "service";
+  kind: "app";
   id: number;
   name: string;
   logs: string;

@@ -578,7 +578,7 @@ export function UsersPage() {
         )}
 
         <div className="grid md:grid-cols-2 gap-3">
-          <Field label="Dedicated server" align="start" hint="The backend rejects the panel host and any server with apps or services.">
+          <Field label="Dedicated server" align="start" hint="The backend rejects the panel host and any server with apps.">
             <NeoSelect
               value={runnerForm.server_id}
               onChange={(serverId) => setRunnerForm((current) => ({ ...current, server_id: serverId }))}

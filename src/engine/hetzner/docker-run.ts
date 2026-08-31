@@ -126,8 +126,7 @@ export type StartAppReplicaOpts = {
   /** Docker network. Defaults to "ocd-net"; pass null for the default bridge
    *  (replicas historically don't join ocd-net). */
   network?: string | null;
-  /** Override service aliases. Omit to inject every current
-   * `<service>.svc.ocd.internal` mapping from desired state. */
+  /** Override internal app aliases. */
   extraHosts?: Array<{ hostname: string; address: string }>;
   volumeMount?: string;
   extraVolumes?: string[];
@@ -152,28 +151,6 @@ export type StartAppReplicaOpts = {
   command?: string[];
   capAdd?: string[];
 };
-
-/** Resolve the current single-instance service names to their private fleet
- * addresses. Exported so reload/deploy parity can be regression-tested without
- * reaching a real Docker host. */
-export function currentServiceAliases(): Array<{ hostname: string; address: string }> {
-  const aliases: Array<{ hostname: string; address: string }> = [];
-  try {
-    for (const service of db.getServices()) {
-      const instance = db.getServiceInstances(service.id)[0];
-      const server = instance ? db.getServer(instance.server_id) : null;
-      if (server?.private_ipv4) {
-        aliases.push({
-          hostname: `${service.name}.svc.ocd.internal`,
-          address: server.private_ipv4,
-        });
-      }
-    }
-  } catch {
-    // Early bootstrap and isolated unit tests may not have an initialized DB.
-  }
-  return aliases;
-}
 
 export function currentAppAliases(): Array<{ hostname: string; address: string }> {
   try {
@@ -264,12 +241,12 @@ export async function startAppReplicaWithSsh(
   }
 
   // `/etc/hosts` on the fleet host is not inherited by Docker containers.
-  // Resolve the managed-service aliases on every create/recreate path here,
+  // Resolve app aliases on every create/recreate path here,
   // rather than relying on each deploy/rollback/reload caller to remember.
   // This keeps environment-only reloads equivalent to initial deploys.
   let extraHosts = opts.extraHosts;
   if (extraHosts === undefined) {
-    extraHosts = [...currentAppAliases(), ...currentServiceAliases()];
+    extraHosts = currentAppAliases();
   }
 
   const cmd = buildDockerRunArgs({

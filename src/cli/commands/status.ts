@@ -1,5 +1,5 @@
 import { get, appAddress } from "../api.ts";
-import { table, colorStatus, BOLD, RESET, DIM } from "../format.ts";
+import { table, colorStatus, BOLD, RESET } from "../format.ts";
 import { expectArray, expectRecord } from "../response.ts";
 
 interface DashboardApp {
@@ -14,32 +14,23 @@ interface DashboardApp {
   environment_stale?: boolean | number;
 }
 
-interface DashboardService {
-  id: number;
-  name: string;
-  service_type: string;
-  status: string;
-}
-
 interface Dashboard {
   apps: DashboardApp[];
-  services: DashboardService[];
 }
 
 export async function status(): Promise<void> {
-  // The browser dashboard needs enriched app/service rows, including history
+  // The browser dashboard needs enriched app rows, including history
   // fields that can grow to several megabytes. Status needs only this compact
   // projection, so do not make a slow link download the web payload first.
   const payload = await get<unknown>("/api/dashboard?compact=1");
   const row = expectRecord(payload, "Status request");
   const apps = expectArray(row.apps, "Status apps") as DashboardApp[];
-  const services = expectArray(row.services, "Status services") as DashboardService[];
   for (const app of apps) {
     if (!app || typeof app.name !== "string" || typeof app.status !== "string") {
       throw new Error("Status request returned a malformed app entry");
     }
   }
-  const data: Dashboard = { apps, services };
+  const data: Dashboard = { apps };
 
   const running = data.apps.filter((a) => a.status === "running").length;
   const unhealthy = data.apps.filter((a) => a.status === "unhealthy").length;
@@ -58,16 +49,5 @@ export async function status(): Promise<void> {
         appAddress(a),
       ]),
     );
-  }
-
-  if (data.services.length > 0) {
-    console.log();
-    console.log(`${BOLD}Services:${RESET} ${data.services.length}`);
-    table(
-      ["Name", "Type", "Status"],
-      data.services.map((s) => [s.name, s.service_type, colorStatus(s.status)]),
-    );
-  } else {
-    console.log(`${DIM}No services${RESET}`);
   }
 }

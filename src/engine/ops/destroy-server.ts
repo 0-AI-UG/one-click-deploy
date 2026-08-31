@@ -58,39 +58,6 @@ const destroyAppsOnServer: Step<DestroyServerInput, { appIds: number[]; failed: 
   },
 };
 
-const destroyServicesOnServer: Step<DestroyServerInput, { serviceIds: number[]; failed: boolean }> = {
-  name: "destroy_services_on_server",
-  label: "Destroy services on server",
-  async run(ctx) {
-    const services = db.getServicesOnServer(ctx.input.serverId);
-    const existing = new Map(
-      listChildOperations(ctx.opId).map((child) => [child.idempotency_key ?? "", child]),
-    );
-    const childIds: number[] = [];
-    for (const svc of services) {
-      const idempotencyKey = `destroy_server:${ctx.opId}:service:${svc.id}`;
-      const prior = existing.get(idempotencyKey);
-      const volumeKeys = db.getServiceInstances(svc.id)
-        .filter((instance) => !!instance.volume_id)
-        .map((instance) => `volume:${instance.volume_id}`);
-      const child = prior ?? enqueueOperation({
-        kind: "destroy_service",
-        resourceKeys: [`service:${svc.id}`, ...volumeKeys],
-        input: { serviceId: svc.id },
-        trigger: "cascade",
-        triggeredBy: ctx.triggeredBy,
-        parentId: ctx.opId,
-        idempotencyKey,
-      });
-      childIds.push(child.id);
-    }
-    const result = await softStep(ctx, "destroy service children", async () => {
-      await awaitChildren(ctx, { childIds });
-    });
-    return { serviceIds: services.map((service) => service.id), failed: !result.ok };
-  },
-};
-
 // Preflight rejects the panel server, so panel-resource cleanup here was dead
 // code. More importantly, this boundary must run before provider deletion: a
 // failed child destroy means the server still owns live resources.
@@ -98,7 +65,7 @@ const assertChildCleanup: Step<DestroyServerInput, { ok: true }> = {
   name: "assert_child_cleanup",
   label: "Verify child cleanup completed",
   async run(ctx, prior) {
-    const childSteps = ["destroy_apps_on_server", "destroy_services_on_server"];
+    const childSteps = ["destroy_apps_on_server"];
     const failedSteps = runDbCleanupGate(prior).filter((name) => childSteps.includes(name));
     if (failedSteps.length > 0) {
       try { db.updateServerStatus(ctx.input.serverId, "cleanup_failed"); } catch { /* ignore */ }
@@ -165,7 +132,6 @@ const destroyServerOp: OpKindDefinition<DestroyServerInput> = {
     const keys: string[] = [`server:${input.serverId}`];
     try {
       for (const app of db.getApps(input.serverId)) keys.push(`app:${app.id}`);
-      for (const svc of db.getServicesOnServer(input.serverId)) keys.push(`service:${svc.id}`);
     } catch {
       /* best-effort at enqueue time */
     }
@@ -174,7 +140,6 @@ const destroyServerOp: OpKindDefinition<DestroyServerInput> = {
   steps: [
     preflight,
     destroyAppsOnServer,
-    destroyServicesOnServer,
     assertChildCleanup,
     deleteCloudServer,
     deleteDbRows,

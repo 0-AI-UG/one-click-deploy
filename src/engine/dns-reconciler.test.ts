@@ -11,7 +11,7 @@ mock.module("node:dns/promises", () => ({
 }));
 
 import * as db from "../shared/db.ts";
-const { reconcileAppDns, reconcilePanelDns, reconcileServiceDns } = await import("./dns-reconciler.ts");
+const { reconcileAppDns, reconcilePanelDns } = await import("./dns-reconciler.ts");
 const observerSource = readFileSync(new URL("./dns-reconciler.ts", import.meta.url), "utf8");
 
 function makeApp(domain: string, isPublic = true) {
@@ -132,25 +132,4 @@ describe("provider-neutral DNS instructions", () => {
     db.deletePanel();
   });
 
-  test("HTTP services receive instructions while raw services do not", async () => {
-    const http = db.insertService({
-      name: `flowise-${randomSuffix()}`,
-      service_type: "flowise",
-      version: "latest",
-      port: 3000,
-      env_vars: "{}",
-      credentials: JSON.stringify({ domain: "flow.example.com" }),
-    });
-    const raw = db.insertService({
-      name: `postgres-${randomSuffix()}`,
-      service_type: "postgresql",
-      version: "16",
-      port: 5432,
-      env_vars: "{}",
-      credentials: JSON.stringify({ domain: "db.example.com" }),
-    });
-    expect((await reconcileServiceDns(http.id)).record?.name).toBe("flow.example.com");
-    expect((await reconcileServiceDns(raw.id)).status).toBe("not_applicable");
-    expectNoProviderMutation();
-  });
 });

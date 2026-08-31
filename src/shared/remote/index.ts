@@ -37,9 +37,6 @@ export {
   containerRunning,
   ensureOcdNetwork,
   buildDockerRunArgs,
-  pullAndRunService,
-  serviceHealthCheck,
-  deployConfigFile,
   pruneServer,
   ensureHostLogPolicy,
 } from "../../engine/hetzner/containers.ts";

@@ -78,7 +78,6 @@ function stateFor(...appNames: string[]): DesiredState {
   return {
     ...state,
     apps: state.apps.filter((a) => appNames.includes(a.name)),
-    services: [],
   };
 }
 

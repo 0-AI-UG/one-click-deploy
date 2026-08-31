@@ -186,9 +186,9 @@ describe("step-runner: compensation on failure", () => {
       trigger: "test",
     });
     const child = enqueueOperation({
-      kind: "destroy_service",
-      resourceKeys: ["service:9"],
-      input: { serviceId: 9 },
+      kind: "destroy_app",
+      resourceKeys: ["app:9"],
+      input: { appId: 9 },
       trigger: "stack",
       parentId: parent.id,
     });
@@ -202,7 +202,7 @@ describe("step-runner: compensation on failure", () => {
     const destructiveRun = mock(async () => ({ ok: true }));
     const def = {
       ...makeDef([{ name: "delete", run: destructiveRun }]),
-      kind: "destroy_service",
+      kind: "destroy_app",
     } as AnyOpKind;
 
     await runOperation(getOperation(child.id)!, def);

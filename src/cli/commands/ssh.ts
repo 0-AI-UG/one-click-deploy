@@ -1,7 +1,6 @@
 import { get, getApps, post, resolveApp, type App } from "../api.ts";
 import { requireConfig } from "../config.ts";
 import { BOLD, DIM, RED, RESET } from "../format.ts";
-import { resolveServiceTerminalTarget } from "./services.ts";
 
 interface Server {
   id: number;
@@ -65,19 +64,7 @@ async function findApp(nameOrId: string): Promise<App | null> {
 
 async function resolveTarget(args: string[]): Promise<{ wsTarget: string; label: string; isServer: boolean }> {
   const isServer = args.includes("--server");
-  const isService = args.includes("--service");
   const target = args.find((a) => !a.startsWith("-"))!;
-
-  if (isService) {
-    const instanceArg = args.find((arg) => arg.startsWith("--instance="));
-    const instanceId = instanceArg ? Number(instanceArg.slice("--instance=".length)) : undefined;
-    if (instanceArg && (!Number.isInteger(instanceId) || instanceId! <= 0)) {
-      console.error("--instance must be a positive service instance ID");
-      process.exit(1);
-    }
-    const resolved = await resolveServiceTerminalTarget(target, instanceId);
-    return { wsTarget: resolved.target, label: resolved.label, isServer: false };
-  }
 
   if (isServer) {
     const srv = await resolveServer(target);
@@ -210,21 +197,18 @@ function interactive(url: string, label: string): void {
 
 export async function ssh(args: string[]): Promise<void> {
   if (!args[0] || args[0] === "--help" || args[0] === "-h") {
-    console.error(`${BOLD}Usage:${RESET} ocd ssh <app|service|server> [command] [options]
+    console.error(`${BOLD}Usage:${RESET} ocd ssh <app|server> [command] [options]
 
   ocd ssh <app> <command>       Run a command and print output
   ocd ssh <app> -i              Interactive terminal session
   ocd ssh <app> -i --replica=ID Select a specific running replica
-  ocd ssh <service> -i --service Open a managed-service container
   ocd ssh <server> -i           Interactive session on a server
   ocd ssh <server> --server     Force server target (disambiguates name collisions)
 
 ${BOLD}Options:${RESET}
   -i, --interactive             Open an interactive shell
   --server                      Target a server instead of an app
-  --service                     Target a managed service instead of an app
-  --replica=<id>                Target a specific running app replica
-  --instance=<id>               Target a specific service instance`);
+  --replica=<id>                Target a specific running app replica`);
     process.exit(1);
   }
 
@@ -239,9 +223,7 @@ ${BOLD}Options:${RESET}
       a !== "-i" &&
       a !== "--interactive" &&
       a !== "--server" &&
-      a !== "--service" &&
-      !a.startsWith("--replica=") &&
-      !a.startsWith("--instance=")
+      !a.startsWith("--replica=")
     )
     .join(" ");
 

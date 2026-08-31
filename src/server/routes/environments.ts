@@ -239,13 +239,6 @@ export async function handleDeleteEnvironment(request: Request, id: number): Pro
         error: `Cannot delete: environment is used by ${attachedApps.length} app(s): ${names}. Reassign them first.`,
       }, { status: 409, headers: corsHeaders });
     }
-    const serviceLinks = db.getServiceLinksByEnvironmentId(id);
-    if (serviceLinks.length > 0) {
-      return Response.json({
-        ok: false,
-        error: `Cannot delete: environment is linked to ${serviceLinks.length} managed service(s). Uninject them first.`,
-      }, { status: 409, headers: corsHeaders });
-    }
     db.softDeleteEnvironment(id);
     const deleted = db.getDeletedEnvironment(id);
     return Response.json({

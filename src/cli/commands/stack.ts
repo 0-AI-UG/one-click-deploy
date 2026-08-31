@@ -49,28 +49,12 @@ export function parseStackImageOverrides(values: string[], appKeys: ReadonlySet<
 }
 
 /** Pure manifest→wire mapping kept exported for parity regression tests. */
-export function buildStackServiceSpecs(
-  manifest: StackManifest,
-): StackDeployRequest["services"] {
-  return Object.entries(manifest.services || {}).map(([key, svc]) => ({
-    key,
-    type: svc.type,
-    version: svc.version,
-    volume_size: svc.volume_size,
-    env_overrides: svc.env_overrides,
-    domain: svc.domain,
-    staging: svc.staging,
-    needs: undefined,
-  }));
-}
-
 interface StackListItem {
   id: number;
   name: string;
   status: string;
   created_at: string;
   app_count: number;
-  service_count: number;
   environment_id?: number | null;
   /** The stack's shared staging environment, remembered across re-ups. */
   staging_environment_id?: number | null;
@@ -105,7 +89,6 @@ interface StackDetail {
   last_operation_children?: Array<{ id: number; kind: string; status: string }>;
   resource_status_reason?: string;
   apps: Array<{ id: number; name: string; status: string; domain: string; public?: number | boolean; environment_stale?: number | boolean }>;
-  services: Array<{ id: number; name: string; service_type: string; version: string; status: string }>;
   public_endpoints?: Array<{
     app_name: string; domain: string; managed: boolean; expectedTarget: string;
     resolved: string[]; ready: boolean; tlsReady: boolean; httpStatus?: number; tlsError?: string;
@@ -456,9 +439,6 @@ export async function stackUp(args: string[]): Promise<void> {
 
   console.log(`${DIM}Stack:${RESET} ${stackLocation.path} ${BOLD}(${manifest.name})${RESET}`);
 
-  // Managed services
-  const services = buildStackServiceSpecs(manifest);
-
   // Apps. Members share one environment, so env vars are merged across all
   // apps (not collected per-app) into a single stack env.
   const apps: AppElement[] = [];
@@ -574,7 +554,6 @@ export async function stackUp(args: string[]): Promise<void> {
         ...Object.keys(stagingOverrides),
       ]),
     ],
-    services,
     apps,
   };
 
@@ -673,9 +652,6 @@ export async function stackUp(args: string[]): Promise<void> {
   body.selected_app_keys = [...selectedKeys].sort();
   body.partial = partial;
   body.config_only = configOnly;
-  // Catalog services are cheap to reconcile and their desired state lives in
-  // this manifest, so include them without relying on local Git history.
-  body.selected_service_keys = services.map((service) => service.key);
 
   const levels = (() => {
     const remaining = new Set(selectedKeys);
@@ -710,7 +686,7 @@ export async function stackUp(args: string[]): Promise<void> {
       ];
     }),
   );
-  if (selectedKeys.size === 0 && body.selected_service_keys.length === 0) {
+  if (selectedKeys.size === 0) {
     console.log(`\n${GREEN}Stack already converged with the current manifests and image digests; nothing to deploy.${RESET}`);
     return;
   }
@@ -719,7 +695,7 @@ export async function stackUp(args: string[]): Promise<void> {
   if (selectedBuild) await ensureBuildReadiness(selectedBuild.repository, selectedBuild.image);
 
   console.log(
-    `\nDeploying stack ${BOLD}${manifest.name}${RESET} (${body.selected_service_keys.length} affected service(s), ${selectedKeys.size} affected app(s))...`,
+    `\nDeploying stack ${BOLD}${manifest.name}${RESET} (${selectedKeys.size} affected app(s))...`,
   );
   if (reused) {
     console.log(
@@ -776,7 +752,7 @@ export async function stackUp(args: string[]): Promise<void> {
 async function stackLs(): Promise<void> {
   const list = await fetchStackList();
   table(
-    ["NAME", "STATUS", "LAST OP", "APPS", "SERVICES", "CREATED"],
+    ["NAME", "STATUS", "LAST OP", "APPS", "CREATED"],
     list.map((s) => [
       s.name,
       colorStatus(s.status),
@@ -784,7 +760,6 @@ async function stackLs(): Promise<void> {
         ? `#${s.last_operation_id} ${s.last_operation_status}${s.last_operation_failed ? " (failed)" : ""}`
         : "-",
       String(s.app_count),
-      String(s.service_count),
       (s.created_at || "").replace("T", " ").slice(0, 16),
     ]),
   );
@@ -804,7 +779,6 @@ async function stackStatus(args: string[]): Promise<void> {
     throw new Error("Stack status request returned a malformed response (missing name or status)");
   }
   expectArray(detailRow.apps, "Stack status apps");
-  expectArray(detailRow.services, "Stack status services");
   const detail = detailRow as unknown as StackDetail;
 
   console.log(`${BOLD}${detail.name}${RESET}  ${colorStatus(detail.status)}`);
@@ -827,11 +801,6 @@ async function stackStatus(args: string[]): Promise<void> {
   }
   console.log(`${DIM}Created:${RESET} ${(detail.created_at || "").replace("T", " ").slice(0, 16)}\n`);
 
-  console.log(`${BOLD}Services${RESET}`);
-  table(
-    ["NAME", "TYPE", "VERSION", "STATUS"],
-    (detail.services || []).map((s) => [s.name, s.service_type, s.version || "-", colorStatus(s.status)]),
-  );
 
   if ((detail.public_endpoints || []).length > 0) {
     console.log(`\n${BOLD}Public endpoints${RESET}`);
@@ -937,7 +906,7 @@ async function stackMemberLogs(args: string[]): Promise<void> {
   const stackRef = await resolveStack(name);
   const payload = await get<unknown>(`/api/stacks/${stackRef.id}/member-logs?tail=${tail}`);
   const members = expectArray(expectRecord(payload, "Stack member logs request").members, "Stack member logs request") as
-    Array<{ kind: "app" | "service"; id: number; name: string; logs: string; error?: string }>;
+    Array<{ kind: "app"; id: number; name: string; logs: string; error?: string }>;
   for (const member of members) {
     console.log(`${BOLD}==> ${member.kind} ${member.name} (#${member.id}) <==${RESET}`);
     if (member.error) console.log(`${RED}${member.error}${RESET}`);
@@ -989,7 +958,7 @@ function usage(): void {
 
 ${BOLD}Subcommands:${RESET}
   ls                   List all stacks
-  status <name>        Show a stack's apps and services
+  status <name>        Show a stack's apps
   logs <name>          Print a stack's deploy log
   member-logs <name>   Print current container logs for every readable member
 

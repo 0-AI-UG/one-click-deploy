@@ -127,14 +127,6 @@ import {
   handleGetStackLog,
 } from "./stacks.ts";
 import {
-  handleGetServices,
-  handleGetCatalog,
-  handleDeployService,
-  handleDestroyService,
-  handleRestartService,
-  handleInjectService,
-} from "./services.ts";
-import {
   handleGetEnvironments,
   handleGetDeletedEnvironments,
   handleCreateEnvironment,
@@ -251,7 +243,6 @@ let serverS = 0;
 let replicaR = 0;
 let stackA = 0; // every member in envA
 let stackX = 0; // members split across envA/envB -> no scoped grant can satisfy
-let serviceX = 0;
 
 function seedFleet(): void {
   envA = db.insertEnvironment(`perm-envA-${uid()}`, "{}").id;
@@ -295,14 +286,6 @@ function seedFleet(): void {
   db.setAppStack(mkApp(envA), stackX);
   db.setAppStack(mkApp(envB), stackX);
 
-  serviceX = db.insertService({
-    name: `perm-svc-${uid()}`,
-    service_type: "postgres",
-    version: "16",
-    port: 5432,
-    env_vars: "{}",
-    credentials: "{}",
-  }).id;
 }
 
 /** Every id the case table dereferences must still resolve; if any was wiped we
@@ -316,8 +299,7 @@ function fixturesIntact(): boolean {
     serverS && db.getServer(serverS) &&
     replicaR && db.getReplica(replicaR) &&
     stackA && db.getStack(stackA) &&
-    stackX && db.getStack(stackX) &&
-    serviceX && db.getService(serviceX),
+    stackX && db.getStack(stackX),
   );
 }
 
@@ -510,69 +492,6 @@ const CASES: Case[] = [
           headers: confirmedHeader(c, "promote_stack", "stack", String(stackA)),
         }),
         stackA,
-      ),
-  },
-
-  // --- services -------------------------------------------------------------
-  {
-    name: "services: handleGetServices",
-    permission: "services.view",
-    call: (c) => handleGetServices(req("/api/services", { token: c.token })),
-  },
-  {
-    name: "services: handleGetCatalog",
-    permission: "services.view",
-    call: (c) => handleGetCatalog(req("/api/services/catalog", { token: c.token })),
-  },
-  {
-    name: "services: handleDeployService",
-    permission: "services.deploy",
-    extra: ["cli.access"],
-    cli: true,
-    call: (c) => handleDeployService(req("/api/services", { body: {}, token: c.token })),
-  },
-  {
-    name: "services: handleDestroyService",
-    permission: "services.destroy",
-    call: (c) =>
-      handleDestroyService(
-        req(`/api/services/${serviceX}`, {
-          method: "DELETE",
-          token: c.token,
-          headers: confirmedHeader(c, "delete_service", "service", serviceX),
-        }),
-        serviceX,
-      ),
-  },
-  {
-    name: "services: handleRestartService",
-    permission: "services.manage",
-    call: (c) =>
-      handleRestartService(
-        req(`/api/services/${serviceX}/restart`, { body: {}, token: c.token }),
-        serviceX,
-      ),
-  },
-  {
-    name: "services: handleInjectService (link gate)",
-    permission: "services.link",
-    extra: ["environments.secrets"],
-    call: (c) =>
-      handleInjectService(
-        req(`/api/services/${serviceX}/inject/${envA}`, { body: {}, token: c.token }),
-        serviceX,
-        envA,
-      ),
-  },
-  {
-    name: "services: handleInjectService (secrets gate)",
-    permission: "environments.secrets",
-    extra: ["services.link"],
-    call: (c) =>
-      handleInjectService(
-        req(`/api/services/${serviceX}/inject/${envA}`, { body: {}, token: c.token }),
-        serviceX,
-        envA,
       ),
   },
 
@@ -1167,82 +1086,7 @@ describe("deploy entry points are CLI-only", () => {
     expect(((await res.json()) as { error: string }).error).toMatch(/only available through the ocd CLI/i);
   });
 
-  test("a browser token cannot deploy a managed service", async () => {
-    const ctx = await userWith(["services.deploy"]);
-    const res = await handleDeployService(
-      req("/api/services", { body: {}, token: ctx.token }),
-    );
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as { error: string }).error).toMatch(/only available through the ocd CLI/i);
-  });
 
-  test("a short-lived UI action CLI token reaches CLI-only routes", async () => {
-    const ctx = await userWith(["services.deploy"], { uiCli: true });
-    const res = await handleDeployService(
-      req("/api/services", { body: {}, token: ctx.token }),
-    );
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toMatch(/name is required/i);
-  });
-});
-
-describe("automatic server provisioning approval", () => {
-  test("a service deploy cannot authorize billable capacity without servers.create", async () => {
-    db.saveSetting("default_server_type", "cx22");
-    db.saveSetting("default_location", "fsn1");
-    const ctx = await userWith(["services.deploy", "cli.access"], { cli: true });
-    const res = await handleDeployService(
-      req("/api/services", { body: { name: `capacity-${uid()}` }, token: ctx.token }),
-    );
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as { error: string }).error).toMatch(/servers\.create/);
-  });
-
-  test("a service deploy requires and consumes browser approval for its exact capacity plan", async () => {
-    db.saveSetting("default_server_type", "cx22");
-    db.saveSetting("default_location", "fsn1");
-    const ctx = await userWith(["services.deploy", "servers.create", "cli.access"], { cli: true });
-    const name = `capacity-${uid()}`;
-    const body = { name };
-
-    const denied = await handleDeployService(
-      req("/api/services", { body, token: ctx.token }),
-    );
-    expect(denied.status).toBe(403);
-    const deniedBody = await denied.json() as {
-      confirmation?: { action: string; resource_type: string; resource_id: string };
-    };
-    const requirement = deniedBody.confirmation;
-    expect(requirement).toEqual({
-      action: "create_server",
-      resource_type: "server_plan",
-      resource_id: serverProvisioningResourceId({
-        serverType: "cx22",
-        location: "fsn1",
-        pools: ["general"],
-        reason: `deploying service ${name}`,
-      }),
-    });
-
-    const approved = await handleDeployService(
-      req("/api/services", {
-        body,
-        token: ctx.token,
-        headers: confirmedHeader(
-          ctx,
-          requirement!.action,
-          requirement!.resource_type,
-          requirement!.resource_id,
-        ),
-      }),
-    );
-    expect(approved.status).toBe(200);
-    const { op_id: opId } = await approved.json() as { op_id: number };
-    const queuedInput = JSON.parse(getOperation(opId)!.input_json) as {
-      server_provisioning_approved?: boolean;
-    };
-    expect(queuedInput.server_provisioning_approved).toBe(true);
-  });
 });
 
 describe("cli.access gates CLI-minted tokens on every route", () => {

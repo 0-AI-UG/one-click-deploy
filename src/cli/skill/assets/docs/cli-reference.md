@@ -76,7 +76,6 @@ ocd servers create --type=X --location=X
 ocd servers enrollment-key
 ocd servers connect --name=X --address=X --private-address=X --host-key='...'
 ocd servers delete <name|id>
-ocd services
 ocd stack <ls|status|logs>
 ocd resources
 ocd volumes

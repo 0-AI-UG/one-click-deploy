@@ -44,8 +44,6 @@ function makeCtx(input: StackDeployRequest): OpContext<StackDeployRequest> {
 
 const planStep = deployStackOp.steps.find((s) => s.name === "plan")!;
 const deployAppsStep = deployStackOp.steps.find((s) => s.name === "deploy_apps")!;
-const reconcileServicesStep = deployStackOp.steps.find((s) => s.name === "reconcile_services")!;
-const reconcileRemovalsStep = deployStackOp.steps.find((s) => s.name === "reconcile_removals")!;
 const preflightAppsStep = deployStackOp.steps.find((s) => s.name === "preflight_apps")!;
 const validatePlanStep = deployStackOp.steps.find((s) => s.name === "validate_plan")!;
 
@@ -53,8 +51,8 @@ function app(key: string, needs?: string[], exports?: Record<string, { value: st
   return { key, needs, exports, app_name: key, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000 };
 }
 
-function req(name: string, apps: ReturnType<typeof app>[], services: Array<{ key: string; type: string }> = []): StackDeployRequest {
-  return { name, apps, services } as unknown as StackDeployRequest;
+function req(name: string, apps: ReturnType<typeof app>[]): StackDeployRequest {
+  return { name, apps } as StackDeployRequest;
 }
 
 describe("topoLevels", () => {
@@ -63,14 +61,17 @@ describe("topoLevels", () => {
   });
 
   test("splits a dependency chain into ordered levels", () => {
-    // web -> api -> (nothing). db is a service key, ignored for ordering.
-    const levels = topoLevels([app("web", ["api"]), app("api", ["db"])]);
-    expect(levels).toEqual([["api"], ["web"]]);
+    const levels = topoLevels([
+      app("web", ["api"]),
+      app("api", ["database"]),
+      app("database"),
+    ]);
+    expect(levels).toEqual([["database"], ["api"], ["web"]]);
   });
 
-  test("ignores `needs` entries that name a non-app (service) key", () => {
-    // Only `cache`/`db` (not in the app set) — treated as satisfied, so both
-    // apps land in the first level.
+  test("ignores `needs` entries that name an unknown app key", () => {
+    // Unknown keys are handled by manifest validation; the pure sorter treats
+    // them as already satisfied.
     const levels = topoLevels([app("api", ["db"]), app("worker", ["cache"])]);
     expect(levels).toEqual([["api", "worker"]]);
   });
@@ -89,14 +90,19 @@ describe("topoLevels", () => {
     expect(() => topoLevels([app("a", ["b"]), app("b", ["a"])])).toThrow(/cycle/i);
   });
 });
-
 describe("least-privilege stack environment projection", () => {
   test("includes declared variables and generated dependency variables", () => {
-    const input = req(
-      "safe",
-      [app("web", ["api", "database"]), app("api")],
-      [{ key: "database", type: "postgresql" }],
-    );
+    const input = req("safe", [
+      app("web", ["api", "database"]),
+      app("api"),
+      app("database", undefined, {
+        HOST: { value: "{app.host}" },
+        PORT: { value: "{app.port}" },
+        USER: { value: "postgres" },
+        PASSWORD: { value: "{env.POSTGRES_PASSWORD}", secret: true },
+        NAME: { value: "app" },
+      }),
+    ]);
     const web = {
       ...input.apps[0],
       declared_env_keys: ["NODE_ENV", "STRIPE_API_KEY"],
@@ -393,109 +399,6 @@ describe("deploy_stack plan step", () => {
   });
 });
 
-describe("deploy_stack service adoption", () => {
-  test("adopts a recovered existing service instead of enqueueing service:create again", async () => {
-    const name = `adopt-${randomSuffix()}`;
-    const input = req(name, [], [{ key: "db", type: "postgresql" }]);
-    const service = db.insertService({
-      name: `${name}-db`,
-      service_type: "postgresql",
-      version: "17-alpine",
-      port: 5432,
-      env_vars: "{}",
-      credentials: JSON.stringify({
-        host: `${name}-db.svc.ocd.internal`,
-        port: 15432,
-        username: "postgres",
-        password: "secret",
-        database: "ocd_db",
-        connection_url: `postgresql://postgres:secret@${name}-db.svc.ocd.internal:15432/ocd_db`,
-      }),
-    });
-    const ctx = makeCtx(input);
-    const planOut = await planStep.run(ctx, {}) as any;
-
-    const result = await reconcileServicesStep.run(ctx, { plan: planOut }) as { childIds: number[] };
-
-    expect(result.childIds).toEqual([]);
-    expect(db.getService(service.id)?.stack_id).toBe(planOut.stackId);
-    expect(db.getServiceLinks(service.id)).toHaveLength(1);
-    expect(db.getServiceLinks(service.id)[0].environment_id).toBe(planOut.environmentId);
-    expect(
-      listChildOperations(ctx.opId).filter((op) => op.kind === "deploy_service"),
-    ).toHaveLength(0);
-  });
-
-  test("rejects immutable managed-service version drift instead of reporting success", async () => {
-    const name = `drift-${randomSuffix()}`;
-    const input = req(name, [], [{ key: "db", type: "postgresql", version: "17-pgmq" } as any]);
-    db.insertService({
-      name: `${name}-db`,
-      service_type: "postgresql",
-      version: "17-alpine",
-      port: 5432,
-      env_vars: "{}",
-      credentials: "{}",
-    });
-    const ctx = makeCtx(input);
-    const planOut = await planStep.run(ctx, {}) as any;
-
-    await expect(reconcileServicesStep.run(ctx, { plan: planOut }))
-      .rejects.toThrow(/immutable managed-service drift.*17-alpine.*17-pgmq.*confirmation is required/i);
-  });
-
-  test("grows a declared existing service volume and waits for provider confirmation", async () => {
-    const name = `resize-${randomSuffix()}`;
-    const input = req(name, [], [{ key: "db", type: "postgresql", volume_size: 30 } as any]);
-    const server = db.insertServer({
-      name: `${name}-server`, provider_id: `provider-${name}`, ipv4: "10.0.0.8", ipv6: "",
-      type: "cx22", location: "fsn1", status: "ready",
-    });
-    const service = db.insertService({
-      name: `${name}-db`, service_type: "postgresql", version: "17-alpine", port: 5432,
-      env_vars: "{}", credentials: "{}",
-    });
-    db.insertServiceInstance({
-      service_id: service.id,
-      server_id: server.id,
-      role: "primary",
-      container_name: `${name}-db`,
-      host_port: 15000,
-      volume_id: "vol-resize",
-      volume_mount: "/mnt/db:/var/lib/postgresql/data",
-      status: "running",
-    });
-    const ctx = makeCtx(input);
-    const parent = enqueueOperation({
-      kind: "deploy_stack", resourceKeys: [`stack:${name}`], input, trigger: "test",
-    });
-    ctx.opId = parent.id;
-    const planOut = await planStep.run(ctx, {}) as any;
-    const originalGet = hetzner.volumes.get;
-    let observedSize = 10;
-    hetzner.volumes.get = (async (id: string) => ({
-      providerId: id, name: "db", sizeGb: observedSize, location: "fsn1", serverId: server.provider_id,
-    })) as typeof hetzner.volumes.get;
-    const poll = setInterval(() => {
-      const resize = listChildOperations(parent.id).find((child) => child.kind === "resize_volume");
-      if (resize && resize.status !== "done") {
-        observedSize = 30;
-        markOperationFinished(resize.id, "done");
-      }
-    }, 5);
-    try {
-      await reconcileServicesStep.run(ctx, { plan: planOut });
-    } finally {
-      clearInterval(poll);
-      hetzner.volumes.get = originalGet;
-    }
-    const resize = listChildOperations(parent.id).find((child) => child.kind === "resize_volume");
-    expect(resize).not.toBeUndefined();
-    expect(JSON.parse(resize!.input_json)).toEqual({ volumeId: "vol-resize", sizeGb: 30 });
-    expect(observedSize).toBe(30);
-  });
-});
-
 // Simulate the reported bug: member A (postgres) deploys & is left RUNNING, then
 // member B (web) fails mid-`deploy_apps`. Because a *failed* forward step isn't
 // replayed as compensable, `deploy_apps`' own compensator never runs — so the
@@ -517,19 +420,14 @@ describe("deploy_stack compensation retains already-deployed members", () => {
   }
 
   async function driveWithSimulatedDestroys(opId: number, fn: () => Promise<void>) {
-    // The compensator enqueues destroy_app/destroy_service children then awaits
-    // them; there is no engine in this unit test, so stand in for it: mark each
-    // destroy 'done' and actually remove the row (what the destroy op would do),
-    // so a following env delete isn't blocked by an FK.
+    // The compensator awaits destroy children; there is no engine in this
+    // unit test, so stand in for it and apply the app-row deletion.
     const poll = setInterval(() => {
       for (const c of listChildOperations(opId)) {
         if (c.status === "done") continue;
         if (c.kind === "destroy_app") {
           markOperationFinished(c.id, "done");
           try { db.deleteApp(JSON.parse(c.input_json).appId); } catch { /* already gone */ }
-        } else if (c.kind === "destroy_service") {
-          markOperationFinished(c.id, "done");
-          try { db.deleteService(JSON.parse(c.input_json).serviceId); } catch { /* already gone */ }
         }
       }
     }, 20);
@@ -597,185 +495,6 @@ describe("deploy_stack compensation retains already-deployed members", () => {
     expect(db.getStackByName(name)?.status).toBe("failed");
   });
 });
-
-// Rollback must reap ONLY what this deploy newly created; anything reused
-// (a caller-supplied environment, a pre-existing managed service) survives.
-describe("deploy_stack compensation preserves reconciliation checkpoints", () => {
-  async function driveWithSimulatedDestroys(opId: number, fn: () => Promise<void>) {
-    const poll = setInterval(() => {
-      for (const c of listChildOperations(opId)) {
-        if (c.status === "done") continue;
-        if (c.kind === "destroy_app") {
-          markOperationFinished(c.id, "done");
-          try { db.deleteApp(JSON.parse(c.input_json).appId); } catch { /* gone */ }
-        } else if (c.kind === "destroy_service") {
-          markOperationFinished(c.id, "done");
-          try { db.deleteService(JSON.parse(c.input_json).serviceId); } catch { /* gone */ }
-        }
-      }
-    }, 20);
-    try { await fn(); } finally { clearInterval(poll); }
-  }
-
-  test("reused and newly-successful resources survive for retry", async () => {
-    const existingEnv = db.insertEnvironment(`shared-${randomSuffix()}`, "");
-    const name = `s-${randomSuffix()}`;
-    // A managed service that ALREADY exists before this stack deploy (reused).
-    const reusedSvc = db.insertService({
-      name: `${name}-cache`, service_type: "redis", version: "7", port: 6379,
-      env_vars: "{}", credentials: "{}",
-    });
-
-    const input = {
-      ...req(name, [app("postgres"), app("web", ["postgres"])], [
-        { key: "cache", type: "redis" }, // reused (pre-existing)
-        { key: "queue", type: "redis" }, // newly created by this run
-      ]),
-      environment_id: existingEnv.id,
-    } as StackDeployRequest;
-    const parent = enqueueOperation({
-      kind: "deploy_stack", resourceKeys: [`stack:${name}`], input, trigger: "test",
-    });
-    const ctx = makeCtx(input);
-    ctx.opId = parent.id;
-    const opId = parent.id;
-
-    const planOut = (await planStep.run(ctx, {})) as {
-      stackId: number; environmentId: number; createdStack: boolean;
-      createdEnv: boolean; reusedServiceKeys: string[];
-    };
-    expect(planOut.createdEnv).toBe(false);          // reused env
-    expect(planOut.reusedServiceKeys).toEqual(["cache"]); // cache pre-existed, queue didn't
-
-    // Member A (postgres) deployed new & tagged; its `deploy` child is 'done'.
-    const aName = `${name}-postgres`;
-    const appA = db.insertApp({
-      name: aName, domain: `${aName}.example.com`, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      environment_id: planOut.environmentId,
-      container_port: 3000, env_vars: "{}",
-    });
-    db.setAppStack(appA.id, planOut.stackId);
-    enqueueOperation({
-      kind: "deploy", resourceKeys: [`app:create:${aName}`],
-      input: { app_name: aName, environment_id: planOut.environmentId },
-      trigger: "stack", parentId: opId, idempotencyKey: `stack:${opId}:app:postgres`,
-    });
-    // Member B (web) FAILED its build and self-compensated.
-    const bDeploy = enqueueOperation({
-      kind: "deploy", resourceKeys: [`app:create:${name}-web`],
-      input: { app_name: `${name}-web`, environment_id: planOut.environmentId },
-      trigger: "stack", parentId: opId, idempotencyKey: `stack:${opId}:app:web`,
-    });
-    markOperationFinished(bDeploy.id, "compensated");
-
-    // Both services were reconciled + tagged; `queue` was newly created this run.
-    db.setServiceStack(reusedSvc.id, planOut.stackId);
-    enqueueOperation({
-      kind: "deploy_service", resourceKeys: [`service:create:${name}-cache`],
-      input: { name: `${name}-cache` }, trigger: "stack", parentId: opId,
-      idempotencyKey: `stack:${opId}:svc:cache`,
-    });
-    const newSvc = db.insertService({
-      name: `${name}-queue`, service_type: "redis", version: "7", port: 6379,
-      env_vars: "{}", credentials: "{}",
-    });
-    db.setServiceStack(newSvc.id, planOut.stackId);
-    enqueueOperation({
-      kind: "deploy_service", resourceKeys: [`service:create:${name}-queue`],
-      input: { name: `${name}-queue` }, trigger: "stack", parentId: opId,
-      idempotencyKey: `stack:${opId}:svc:queue`,
-    });
-
-    await driveWithSimulatedDestroys(opId, () => planStep.compensate!(ctx, planOut, {}));
-
-    // New and reused members are all retained as resume checkpoints.
-    const appDestroys = listChildOperations(opId).filter((c) => c.kind === "destroy_app");
-    expect(appDestroys.length).toBe(0);
-    const svcDestroys = listChildOperations(opId).filter((c) => c.kind === "destroy_service");
-    expect(svcDestroys.length).toBe(0);
-    expect(db.getApp(appA.id)).not.toBeNull();
-    expect(db.getService(newSvc.id)).not.toBeNull();
-
-    // ... while the REUSED env + REUSED service survive the rollback.
-    expect(db.getEnvironment(existingEnv.id)).not.toBeNull();
-    const survivingCache = db.getServiceByName(`${name}-cache`);
-    expect(survivingCache).not.toBeNull();
-    expect(survivingCache!.stack_id).toBe(planOut.stackId);
-    expect(db.getStackByName(name)?.status).toBe("failed");
-  });
-
-  test("first-up failure retains reused and newly-created successful services", async () => {
-    const name = `s-${randomSuffix()}`;
-    // A managed service that ALREADY exists (reused on this first up).
-    const reusedSvc = db.insertService({
-      name: `${name}-cache`, service_type: "redis", version: "7", port: 6379,
-      env_vars: "{}", credentials: "{}",
-    });
-    const input = req(name, [app("web")], [
-      { key: "cache", type: "redis" }, // reused
-      { key: "queue", type: "redis" }, // newly created this run
-    ]);
-    const parent = enqueueOperation({
-      kind: "deploy_stack", resourceKeys: [`stack:${name}`], input, trigger: "test",
-    });
-    const ctx = makeCtx(input);
-    ctx.opId = parent.id;
-    const opId = parent.id;
-
-    const planOut = (await planStep.run(ctx, {})) as {
-      stackId: number; createdStack: boolean; reusedServiceKeys: string[];
-    };
-    expect(planOut.createdStack).toBe(true);            // first up
-    expect(planOut.reusedServiceKeys).toEqual(["cache"]);
-
-    // reconcile_services tagged BOTH the reused and the newly-created service.
-    db.setServiceStack(reusedSvc.id, planOut.stackId);
-    const newSvc = db.insertService({
-      name: `${name}-queue`, service_type: "redis", version: "7", port: 6379,
-      env_vars: "{}", credentials: "{}",
-    });
-    db.setServiceStack(newSvc.id, planOut.stackId);
-    enqueueOperation({
-      kind: "deploy_service", resourceKeys: [`service:create:${name}-queue`],
-      input: { name: `${name}-queue` }, trigger: "stack", parentId: opId,
-      idempotencyKey: `stack:${opId}:svc:queue`,
-    });
-
-    await driveWithSimulatedDestroys(opId, () => planStep.compensate!(ctx, planOut, {}));
-
-    // Both successful services survive and remain stack-owned for retry.
-    expect(db.getServiceByName(`${name}-queue`)).not.toBeNull();
-    const cache = db.getServiceByName(`${name}-cache`);
-    expect(cache).not.toBeNull();
-    expect(cache!.stack_id).toBe(planOut.stackId);
-    expect(db.getStackByName(name)?.status).toBe("failed");
-  });
-
-  test("reconcile_services has no destructive compensation", async () => {
-    const name = `s-${randomSuffix()}`;
-    const reusedSvc = db.insertService({
-      name: `${name}-cache`, service_type: "redis", version: "7", port: 6379,
-      env_vars: "{}", credentials: "{}",
-    });
-    const input = req(name, [app("web")], [{ key: "cache", type: "redis" }]);
-    const parent = enqueueOperation({
-      kind: "deploy_stack", resourceKeys: [`stack:${name}`], input, trigger: "test",
-    });
-    const ctx = makeCtx(input);
-    ctx.opId = parent.id;
-
-    const planOut = (await planStep.run(ctx, {})) as { reusedServiceKeys: string[] };
-    expect(planOut.reusedServiceKeys).toEqual(["cache"]);
-
-    const reconcileServicesStep = deployStackOp.steps.find((s) => s.name === "reconcile_services")!;
-    expect(reconcileServicesStep.compensate).toBeUndefined();
-
-    // No destroy enqueued for the reused service; it still exists.
-    expect(listChildOperations(parent.id).filter((c) => c.kind === "destroy_service")).toHaveLength(0);
-    expect(db.getService(reusedSvc.id)).not.toBeNull();
-  });
-});
-
 
 describe("deploy_stack shared staging environment", () => {
   function planOf(
@@ -869,40 +588,5 @@ describe("deploy_stack shared staging environment", () => {
     } as StackDeployRequest;
     await planStep.run(makeCtx(input), {});
     expect(JSON.parse(db.getStackByName(name)!.staging_env_keys)).toEqual([]);
-  });
-});
-
-describe("deploy_stack staging service removal", () => {
-  test("disabling staging queues only the staging counterpart for removal", async () => {
-    const name = `remove-stage-${randomSuffix()}`;
-    const input = req(name, [app("web")], [{ key: "cache", type: "redis" }]);
-    const parent = enqueueOperation({
-      kind: "deploy_stack", resourceKeys: [`stack:${name}`], input, trigger: "test",
-    });
-    const ctx = makeCtx(input);
-    ctx.opId = parent.id;
-    const planOut = await planStep.run(ctx, {}) as any;
-    const production = db.insertService({
-      name: `${name}-cache`, service_type: "redis", version: "7", port: 6379,
-      env_vars: "{}", credentials: "{}", stack_id: planOut.stackId,
-    });
-    const staging = db.insertService({
-      name: `${name}-cache-staging`, service_type: "redis", version: "7", port: 6379,
-      env_vars: "{}", credentials: "{}", stack_id: planOut.stackId,
-      target: "staging", target_of: production.id, placement_pool: "staging",
-    });
-    const poll = setInterval(() => {
-      for (const child of listChildOperations(parent.id)) {
-        if (child.status !== "done") markOperationFinished(child.id, "done");
-      }
-    }, 5);
-    try {
-      await reconcileRemovalsStep.run(ctx, { plan: planOut });
-    } finally {
-      clearInterval(poll);
-    }
-    const destroys = listChildOperations(parent.id).filter((child) => child.kind === "destroy_service");
-    expect(destroys).toHaveLength(1);
-    expect(JSON.parse(destroys[0].input_json).serviceId).toBe(staging.id);
   });
 });

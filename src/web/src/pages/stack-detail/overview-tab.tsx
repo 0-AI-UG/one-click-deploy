@@ -1,5 +1,5 @@
 import { Card, StatusBadge, Table, EmptyState } from "../../components/ui.tsx";
-import { Boxes, Database, ExternalLink } from "lucide-react";
+import { Boxes, ExternalLink } from "lucide-react";
 import type { StackDetail, StackMemberApp, EnvironmentData } from "../../types.ts";
 
 /**
@@ -59,7 +59,6 @@ export function OverviewTab({
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Rollout</h3>
           <div className="space-y-2 text-[10px] font-mono">
             <div className="flex justify-between"><span className="text-muted">Apps</span><span className="text-fg font-bold">{memberApps.length}</span></div>
-            <div className="flex justify-between"><span className="text-muted">Services</span><span className="text-fg font-bold">{stack.services.length}</span></div>
             <div className="flex justify-between">
               <span className="text-muted">Members on staging</span>
               <span className={staging > 0 ? "text-accent-amber font-bold" : "text-fg-dim"}>
@@ -113,31 +112,6 @@ export function OverviewTab({
         )}
       </Card>
 
-      <Card className="p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Database size={14} className="text-fg" />
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Services ({stack.services.length})</h3>
-        </div>
-        {stack.services.length === 0 ? (
-          <EmptyState message="This stack has no services." icon={Database} />
-        ) : (
-          <Table headers={["Name", "Type", "Version", "Status", ""]}>
-            {stack.services.map((s) => (
-              <tr key={s.id} className="hover:bg-alt/50">
-                <td className="py-2 px-3">
-                  <a href={`#/services/${s.id}`} className="font-mono text-[10px] font-bold text-fg hover:underline">{s.name}</a>
-                </td>
-                <td className="py-2 px-3 font-mono text-[10px] text-fg">{s.service_type}</td>
-                <td className="py-2 px-3 font-mono text-[10px] text-muted">{s.version}</td>
-                <td className="py-2 px-3"><StatusBadge status={s.status} /></td>
-                <td className="py-2 px-3 text-right">
-                  <a href={`#/services/${s.id}`} className="font-mono text-[9px] text-muted hover:text-fg uppercase tracking-wider">Open</a>
-                </td>
-              </tr>
-            ))}
-          </Table>
-        )}
-      </Card>
     </div>
   );
 }

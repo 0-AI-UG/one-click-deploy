@@ -151,7 +151,7 @@ export async function containerRunning(
   return result.stdout.trim() === "true";
 }
 
-// --- Docker Network for Services ---
+// --- Docker Network ---
 
 export async function ensureOcdNetwork(ip: string, hostKey?: string): Promise<void> {
   await sshExec(

@@ -32,17 +32,6 @@ function addAppTarget(targets: Set<string>, name: string): void {
   }
 }
 
-function addServiceTarget(targets: Set<string>, name: string): void {
-  const service = db.getServiceByName(name);
-  if (!service) return;
-  targets.add(`service "${service.name}" (id ${service.id})`);
-  for (const instance of db.getServiceInstances(service.id)) {
-    if (instance.volume_id && !instance.volume_attached) {
-      targets.add(`managed service volume ${instance.volume_id}`);
-    }
-  }
-}
-
 /** Build a server-side preview from durable forward outputs and current DB
  * identities. No client-provided description is trusted. */
 export function previewCompensation(op: OperationRow): CompensationPreview {
@@ -60,22 +49,15 @@ export function previewCompensation(op: OperationRow): CompensationPreview {
       const childInput = json<Record<string, any>>(child.input_json, {});
       if (child.kind === "deploy" && typeof childInput.app_name === "string") {
         addAppTarget(targets, childInput.app_name);
-      } else if (child.kind === "deploy_service" && typeof childInput.name === "string") {
-        addServiceTarget(targets, childInput.name);
       }
     }
     const stack = typeof input.name === "string" ? db.getStackByName(input.name) : null;
     if (stack) targets.add(`stack "${stack.name}" (id ${stack.id})`);
   } else if (op.kind === "deploy" && typeof input.app_name === "string") {
     addAppTarget(targets, input.app_name);
-  } else if (op.kind === "deploy_service" && typeof input.name === "string") {
-    addServiceTarget(targets, input.name);
   } else if (typeof input.appId === "number") {
     const app = db.getApp(input.appId);
     if (app) addAppTarget(targets, app.name);
-  } else if (typeof input.serviceId === "number") {
-    const service = db.getService(input.serviceId);
-    if (service) addServiceTarget(targets, service.name);
   }
 
   const targetList = [...targets];

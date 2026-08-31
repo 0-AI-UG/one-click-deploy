@@ -13,7 +13,6 @@ type DestroyStackInput = { stackId: number };
 type DestroyPlanOut = {
   stackName: string;
   appIds: number[];
-  serviceIds: number[];
 };
 
 const planDestroy: Step<DestroyStackInput, DestroyPlanOut> = {
@@ -25,7 +24,6 @@ const planDestroy: Step<DestroyStackInput, DestroyPlanOut> = {
     return {
       stackName: stack.name,
       appIds: db.getAppsByStackId(stack.id).map((app) => app.id).sort((a, b) => a - b),
-      serviceIds: db.getServicesByStackId(stack.id).map((service) => service.id).sort((a, b) => a - b),
     };
   },
 };
@@ -42,7 +40,7 @@ const destroyMembers: Step<DestroyStackInput, { childIds: number[] }> = {
     const childIds: number[] = [];
 
     const enqueueDestroy = (
-      kind: "destroy_app" | "destroy_service",
+      kind: "destroy_app",
       resourceKey: string,
       input: Record<string, number>,
       idk: string,
@@ -50,11 +48,7 @@ const destroyMembers: Step<DestroyStackInput, { childIds: number[] }> = {
       const prev = byKey.get(idk);
       if (prev) { childIds.push(prev.id); return; }
       const resourceId = Number(Object.values(input)[0]);
-      const volumeKeys = kind === "destroy_app"
-        ? (db.getApp(resourceId)?.volume_id ? [`volume:${db.getApp(resourceId)!.volume_id}`] : [])
-        : db.getServiceInstances(resourceId)
-          .filter((instance) => !!instance.volume_id)
-          .map((instance) => `volume:${instance.volume_id}`);
+      const volumeKeys = db.getApp(resourceId)?.volume_id ? [`volume:${db.getApp(resourceId)!.volume_id}`] : [];
       const op: OperationRow = enqueueOperation({
         kind,
         resourceKeys: [resourceKey, ...volumeKeys],
@@ -68,12 +62,8 @@ const destroyMembers: Step<DestroyStackInput, { childIds: number[] }> = {
     };
 
     const appIds = planned?.appIds ?? db.getAppsByStackId(stackId).map((app) => app.id);
-    const serviceIds = planned?.serviceIds ?? db.getServicesByStackId(stackId).map((service) => service.id);
     for (const appId of appIds) {
       enqueueDestroy("destroy_app", `app:${appId}`, { appId }, `destroy_stack:${ctx.opId}:app:${appId}`);
-    }
-    for (const serviceId of serviceIds) {
-      enqueueDestroy("destroy_service", `service:${serviceId}`, { serviceId }, `destroy_stack:${ctx.opId}:svc:${serviceId}`);
     }
     if (childIds.length > 0) {
       ctx.log(`destroying ${childIds.length} stack member(s)`);

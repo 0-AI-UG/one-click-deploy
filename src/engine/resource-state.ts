@@ -3,7 +3,6 @@ import dbConn from "../shared/db/connection.ts";
 import type { OperationRow, OperationStatus } from "../shared/db/operations.ts";
 
 const APP_READY = new Set(["running", "sleeping", "paused"]);
-const SERVICE_READY = new Set(["running", "paused"]);
 const OP_TERMINAL = new Set<OperationStatus>([
   "done",
   "failed",
@@ -40,7 +39,6 @@ function healthTimestampIsStale(value: string | null | undefined, nowMs = Date.n
  * Status/readiness views must not report that gap as healthy. */
 function memberInstanceIssues(
   apps: Array<NonNullable<ReturnType<typeof db.getApp>>>,
-  services: Array<NonNullable<ReturnType<typeof db.getService>>>,
 ): string[] {
   const issues: string[] = [];
   for (const app of apps) {
@@ -51,16 +49,6 @@ function memberInstanceIssues(
         issues.push(`${app.name}/replica-${replica.id}:${replica.status}`);
       } else if (healthTimestampIsStale(replica.last_health_at)) {
         issues.push(`${app.name}/replica-${replica.id}:health-stale`);
-      }
-    }
-  }
-  for (const service of services) {
-    if (service.status === "paused") continue;
-    for (const instance of db.getServiceInstances(service.id)) {
-      if (instance.status !== "running") {
-        issues.push(`${service.name}/instance-${instance.id}:${instance.status}`);
-      } else if (healthTimestampIsStale(instance.last_health_at)) {
-        issues.push(`${service.name}/instance-${instance.id}:health-stale`);
       }
     }
   }
@@ -78,20 +66,6 @@ function assessApp(appId: number | undefined): ResourceAssessment {
       : app
         ? `app ${app.name} is ${app.status}`
         : "app no longer exists",
-  };
-}
-
-function assessService(serviceId: number | undefined): ResourceAssessment {
-  const service = serviceId ? db.getService(serviceId) : null;
-  const ready = !!service && SERVICE_READY.has(service.status);
-  return {
-    safeToFinalizeDone: ready,
-    status: ready ? "done" : "failed",
-    reason: ready
-      ? `service ${service!.name} is ${service!.status}`
-      : service
-        ? `service ${service.name} is ${service.status}`
-        : "service no longer exists",
   };
 }
 
@@ -114,29 +88,18 @@ function assessStack(op: OperationRow): ResourceAssessment {
   const expectedApps = Array.isArray(input.apps)
     ? input.apps.map((a: any) => `${name}-${String(a?.key ?? "")}`)
     : db.getAppsByStackId(stack.id).map((app) => app.name);
-  const expectedServices = Array.isArray(input.services)
-    ? input.services.map((s: any) => `${name}-${String(s?.key ?? "")}`)
-    : db.getServicesByStackId(stack.id).map((service) => service.name);
   const apps = expectedApps.map((memberName) => db.getAppByName(memberName));
-  const services = expectedServices.map((memberName) => db.getServiceByName(memberName));
-  const missing = [
-    ...expectedApps.filter((_n, i) => !apps[i]),
-    ...expectedServices.filter((_n, i) => !services[i]),
-  ];
+  const missing = expectedApps.filter((_n, i) => !apps[i]);
   const unhealthy = [
     ...apps.filter((a) => a && !APP_READY.has(a.status)).map((a) => `${a!.name}:${a!.status}`),
-    ...services.filter((s) => s && !SERVICE_READY.has(s.status)).map((s) => `${s!.name}:${s!.status}`),
-    ...memberInstanceIssues(
-      apps.filter((a): a is NonNullable<typeof a> => !!a),
-      services.filter((s): s is NonNullable<typeof s> => !!s),
-    ),
+    ...memberInstanceIssues(apps.filter((a): a is NonNullable<typeof a> => !!a)),
   ];
   const ready = missing.length === 0 && unhealthy.length === 0;
   return {
     safeToFinalizeDone: ready,
     status: ready ? "done" : "failed",
     reason: ready
-      ? `all ${apps.length} app(s) and ${services.length} service(s) are healthy`
+      ? `all ${apps.length} app(s) are healthy`
       : [
           missing.length ? `missing: ${missing.join(", ")}` : "",
           unhealthy.length ? `not ready: ${unhealthy.join(", ")}` : "",
@@ -174,18 +137,6 @@ export function assessOperationResources(op: OperationRow): ResourceAssessment {
         reason: gone ? "app is absent" : "app still exists",
       };
     }
-    case "deploy_service": {
-      const service = typeof input.name === "string" ? db.getServiceByName(input.name) : null;
-      return assessService(service?.id);
-    }
-    case "destroy_service": {
-      const gone = !db.getService(Number(input.serviceId));
-      return {
-        safeToFinalizeDone: gone,
-        status: gone ? "done" : "failed",
-        reason: gone ? "service is absent" : "service still exists",
-      };
-    }
     case "redeploy":
     case "restart_app":
     case "reload_app":
@@ -194,11 +145,6 @@ export function assessOperationResources(op: OperationRow): ResourceAssessment {
     case "pause_app":
     case "unpause_app":
       return assessApp(Number(input.appId ?? input.destAppId));
-    case "restart_service":
-    case "repair_service":
-    case "pause_service":
-    case "unpause_service":
-      return assessService(Number(input.serviceId));
     default:
       return {
         safeToFinalizeDone: false,
@@ -318,25 +264,23 @@ export function reconcileStaleAppStates(): HealedAppState[] {
  * separate diagnostic signal and never overwrites a healthy reality. */
 export function deriveStackResourceState(stack: db.StackRow): StackResourceState {
   const apps = db.getAppsByStackId(stack.id).filter((app) => app.target_of == null);
-  const services = db.getServicesByStackId(stack.id);
   const unhealthy = [
     ...apps.filter((app) => !APP_READY.has(app.status)).map((app) => `${app.name}:${app.status}`),
     ...apps.filter((app) => app.public && app.public_endpoint_status === "degraded")
       .map((app) => `${app.name}:public-endpoint(${app.public_endpoint_error || "not ready"})`),
-    ...services.filter((service) => !SERVICE_READY.has(service.status)).map((service) => `${service.name}:${service.status}`),
-    ...memberInstanceIssues(apps, services),
+    ...memberInstanceIssues(apps),
   ];
   const rows = dbConn
     .query("SELECT * FROM operations ORDER BY id DESC")
     .all() as OperationRow[];
   const latest = rows.find((op) => operationHasStackKey(op, stack.id, stack.name)) ?? null;
-  const empty = apps.length === 0 && services.length === 0;
+  const empty = apps.length === 0;
   return {
     status: empty ? "empty" : unhealthy.length === 0 ? "running" : "degraded",
     reason: empty
       ? "stack has no materialized members"
       : unhealthy.length === 0
-        ? `all ${apps.length} app(s) and ${services.length} service(s) are ready`
+        ? `all ${apps.length} app(s) are ready`
         : `not ready: ${unhealthy.join(", ")}`,
     lastOperationId: latest?.id ?? null,
     lastOperationStatus: latest?.status ?? null,

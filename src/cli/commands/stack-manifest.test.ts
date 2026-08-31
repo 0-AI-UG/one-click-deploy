@@ -1,49 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildStackServiceSpecs,
   certifiedStagingExistingKeys,
   classifyLocalStackReconcile,
   expandAppDependents,
   mergeStagingEnv,
 } from "./stack.ts";
-
-describe("buildStackServiceSpecs", () => {
-  test("maps every managed-service manifest field to the stack request", () => {
-    expect(
-      buildStackServiceSpecs({
-        name: "production",
-        services: {
-          database: {
-            type: "postgresql",
-            version: "17-pgmq",
-            volume_size: 40,
-            env_overrides: {
-              PGDATA: "/var/lib/postgresql/data/pgdata",
-            },
-            domain: "database.example.com",
-            staging: { volume_size: 10, env_overrides: { POSTGRES_DB: "staging" } },
-          },
-        },
-        apps: {
-          api: { manifest: "api/.ocd-deploy.json" },
-        },
-      }),
-    ).toEqual([
-      {
-        key: "database",
-        type: "postgresql",
-        version: "17-pgmq",
-        volume_size: 40,
-        env_overrides: {
-          PGDATA: "/var/lib/postgresql/data/pgdata",
-        },
-        domain: "database.example.com",
-        staging: { volume_size: 10, env_overrides: { POSTGRES_DB: "staging" } },
-        needs: undefined,
-      },
-    ]);
-  });
-});
 
 describe("stack reconciliation mode", () => {
   const desired = {

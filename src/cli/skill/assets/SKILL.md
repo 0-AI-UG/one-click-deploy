@@ -97,7 +97,6 @@ ocd pause <app>
 ocd unpause <app>
 ocd scale wake <app>
 ocd envs <list|show|create|copy|rename|set|unset|deleted|restore|remove|purge>
-ocd services
 ocd stack <ls|status|logs>
 ocd manifest validate [path] [--allow-unknown]
 ocd gc [--server=<name|id|ip>] [--execute]

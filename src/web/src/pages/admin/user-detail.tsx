@@ -22,7 +22,6 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
     permissions: [
       { key: "fleet.view", label: "View servers and dashboard" },
       { key: "apps.view", label: "View apps" },
-      { key: "services.view", label: "View services" },
       { key: "environments.view", label: "View environments (not their values)" },
       { key: "metrics.view", label: "View replicas, metrics, scaling events" },
       { key: "operations.view", label: "View engine operations" },
@@ -39,16 +38,6 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
       { key: "apps.destroy", label: "Destroy apps" },
       { key: "apps.logs", label: "View app logs" },
       { key: "apps.promote", label: "Promote staging to production" },
-    ],
-  },
-  {
-    label: "Services",
-    permissions: [
-      { key: "services.deploy", label: "Deploy infrastructure services with the CLI" },
-      { key: "services.manage", label: "Restart/pause/unpause services" },
-      { key: "services.destroy", label: "Destroy services" },
-      { key: "services.logs", label: "View service logs" },
-      { key: "services.link", label: "Link/unlink services to environments" },
     ],
   },
   {

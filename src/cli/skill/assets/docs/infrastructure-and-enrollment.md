@@ -6,11 +6,11 @@ infrastructure provisioner, not an account or runtime requirement.
 ## Server ownership
 
 - A **managed Hetzner** server is created and owned by OCD. It supports OCD
-  provider volumes, managed services, network/firewall reconciliation, and
+  provider volumes, network/firewall reconciliation, and
   provider-side deletion.
 - A **connected** server is owned by the operator. OCD runs stateless app
   containers on it, but never deletes the VPS and does not attach provider
-  volumes or place managed services there. Removing it from OCD only
+  volumes there. Removing it from OCD only
   disconnects its database record.
 
 Direct SSH remains available. OCD's enrollment key is the platform key used
@@ -70,6 +70,6 @@ the DNS provider of your choice.
 ## Dedicated build capacity
 
 An empty managed or connected server can be reserved as an OCD BuildKit
-worker. OCD excludes it from app and managed-service placement and prevents
+worker. OCD excludes it from app placement and prevents
 deletion until the worker is removed. See [Build workers and
 webhooks](build-workers-and-webhooks.md) for the trust boundary and commands.

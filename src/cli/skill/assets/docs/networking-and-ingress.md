@@ -4,7 +4,6 @@
 
 - [Network layers](#network-layers)
 - [Private app addressing](#private-app-addressing)
-- [Managed-service addressing](#managed-service-addressing)
 - [Public HTTP routing](#public-http-routing)
 - [Internal protocol](#internal-protocol)
 - [Health checks](#health-checks)
@@ -16,7 +15,7 @@
 
 OCD provides three distinct exposure mechanisms:
 
-1. stable private app/service names on the fleet network;
+1. stable private app names on the fleet network;
 2. public HTTP/HTTPS domain routing through panel ingress;
 3. optional raw TCP/UDP ports on the panel IP.
 
@@ -58,18 +57,6 @@ A user-defined environment key with the same name wins.
 
 Stack app key `api` publishes its `OCD_INTERNAL_URL` into the stack environment
 as `API_URL`.
-
-## Managed-service addressing
-
-Managed services use:
-
-```text
-<service-name>.svc.ocd.internal
-```
-
-This resolves to the service host's private IP. The catalog generates the
-correct scheme/port and connection URL. Consume injected `<KEY>_URL` values
-instead of reconstructing service URLs.
 
 ## Public HTTP routing
 

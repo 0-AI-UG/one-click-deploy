@@ -22,7 +22,7 @@ describe("server infrastructure capabilities", () => {
       name: "external-1",
       provider: "external",
       ownership: "connected",
-    })).toThrow(/does not support OCD-managed volumes or managed services/);
+    })).toThrow(/does not support OCD-managed volumes/);
     expect(() => assertConnectedStatelessWorkload(
       { name: "external-1", provider: "external", ownership: "connected" },
       { managedVolume: false, hostMounts: true },

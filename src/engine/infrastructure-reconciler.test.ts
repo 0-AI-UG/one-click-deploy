@@ -44,31 +44,6 @@ describe("infrastructure reconciliation", () => {
     expect(db.getServer(server.id)).toBeNull();
   });
 
-  test("cancels stale GC intent when a service now references the server", async () => {
-    const server = makeServer();
-    db.requestServerGc(server.id);
-    const service = db.insertService({
-      name: `service-${randomSuffix()}`,
-      service_type: "postgres",
-      version: "16",
-      port: 5432,
-      env_vars: "{}",
-      credentials: "{}",
-    });
-    db.insertServiceInstance({
-      service_id: service.id,
-      server_id: server.id,
-      role: "primary",
-      container_name: service.name,
-      host_port: 15000,
-    });
-
-    await reconcileServerGc(fakeProvider);
-
-    expect(deleteServer).not.toHaveBeenCalled();
-    expect(db.getServer(server.id)?.gc_requested_at).toBeNull();
-  });
-
   test("disconnects an unreferenced external server without provider deletion", async () => {
     const server = db.insertServer({
       name: `connected-${randomSuffix()}`,

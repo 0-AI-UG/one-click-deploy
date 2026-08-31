@@ -49,7 +49,6 @@ interface ServerDetail extends Server {
   disk_total_gb: number | null;
   disk_free_gb: number | null;
   replicas: Array<{ id: number; app_name: string; container_name: string; status: string; cpu_percent: number; memory_percent: number }>;
-  services: Array<{ id: number; name: string; service_type: string; status: string; instances: unknown[] }>;
   host: HostProbe;
 }
 
@@ -152,17 +151,6 @@ async function showServer(ref: string, diagnosticsOnly = false): Promise<void> {
       colorStatus(replica.status),
       fmtPct(replica.cpu_percent),
       fmtPct(replica.memory_percent),
-    ]),
-  );
-  console.log(`\n${BOLD}Services${RESET}`);
-  table(
-    ["ID", "NAME", "TYPE", "STATUS", "INSTANCES"],
-    detail.services.map((service) => [
-      String(service.id),
-      service.name,
-      service.service_type,
-      colorStatus(service.status),
-      String(service.instances.length),
     ]),
   );
 }

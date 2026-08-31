@@ -61,10 +61,9 @@ function makeApp(stackId: number, overrides: Record<string, unknown> = {}) {
 }
 
 // The whole suite shares one temp database, and other files wipe `servers`
-// wholesale — leaving replicas/instances behind here would trip their FK.
+// wholesale — leaving replicas behind here would trip their FK.
 afterAll(() => {
   const { default: conn } = require("../../shared/db/connection.ts");
-  conn.run("DELETE FROM service_instances");
   conn.run("DELETE FROM replicas");
   conn.run("DELETE FROM servers");
 });
@@ -87,23 +86,12 @@ describe("GET /api/stacks/:id/member-logs", () => {
     const sibling = makeApp(stack.id, { target_of: app.id });
     db.insertReplica({ app_id: sibling.id, server_id: server.id, host_port: 20002, container_name: "app-staging" });
 
-    const service = db.insertService({
-      name: `svc-${randomSuffix()}`,
-      service_type: "postgres",
-      version: "16",
-      port: 5432,
-      env_vars: "{}",
-      credentials: "{}",
-    } as Parameters<typeof db.insertService>[0]);
-    db.setServiceStack(service.id, stack.id);
-    db.insertServiceInstance({ service_id: service.id, server_id: server.id, role: "primary", container_name: "svc-main", host_port: 5432 });
-
     logCalls.length = 0;
     const body = await (await req(stack.id, 50)).json() as { members: Array<{ name: string; kind: string; logs: string; error?: string }> };
 
-    expect(body.members).toHaveLength(2);
-    expect(body.members.map((m) => m.kind).sort()).toEqual(["app", "service"]);
-    expect(logCalls.map((c) => c.container).sort()).toEqual(["app-main", "svc-main"]);
+    expect(body.members).toHaveLength(1);
+    expect(body.members.map((m) => m.kind)).toEqual(["app"]);
+    expect(logCalls.map((c) => c.container)).toEqual(["app-main"]);
     expect(logCalls.every((c) => c.timestamps === true && c.tail === 50)).toBe(true);
     expect(body.members[0].logs).toContain("2026-07-21T10:00:00");
   });

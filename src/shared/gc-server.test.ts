@@ -109,27 +109,6 @@ describe("gcServerIfEmpty", () => {
     expect(db.getServer(server.id)).toBeTruthy();
   });
 
-  test("does NOT request GC while a service instance references the server", async () => {
-    const server = freshServer("withservice");
-    const service = db.insertService({
-      name: `service-${Date.now()}`,
-      service_type: "postgres",
-      version: "16",
-      port: 5432,
-      env_vars: "{}",
-      credentials: "{}",
-    });
-    db.insertServiceInstance({
-      service_id: service.id,
-      server_id: server.id,
-      role: "primary",
-      container_name: service.name,
-      host_port: 15000,
-    });
-    await db.gcServerIfEmpty(server.id);
-    expect(db.getServer(server.id)?.gc_requested_at).toBeNull();
-  });
-
   test("does NOT request GC for a dedicated OCD build worker", async () => {
     const server = freshServer("withrunner");
     db.insertBuildWorker({

@@ -35,17 +35,17 @@ export function assertProviderVolumesSupported(
 ): void {
   if (!serverCapabilities(server).providerVolumes) {
     throw new Error(
-      `Server ${server.name} is externally connected and does not support OCD-managed volumes or managed services`,
+      `Server ${server.name} is externally connected and does not support OCD-managed volumes`,
     );
   }
 }
 
 export function assertConnectedStatelessWorkload(
   server: Pick<ServerRow, "name" | "provider" | "ownership">,
-  requested: { managedVolume: boolean; hostMounts: boolean; managedService?: boolean },
+  requested: { managedVolume: boolean; hostMounts: boolean },
 ): void {
   if (server.ownership !== "connected") return;
-  if (requested.managedVolume || requested.hostMounts || requested.managedService) {
+  if (requested.managedVolume || requested.hostMounts) {
     throw new Error(
       `Server ${server.name} is externally connected; only stateless app containers are supported`,
     );

@@ -19,7 +19,7 @@ process.env.OCD_DATA_DIR = mkdtempSync(path.join(tmpdir(), "ocd-test-"));
 // footguns. That leaks. Rows a file forgets to delete stay visible to every
 // later test, and because bun's file execution order differs between machines
 // it fails nondeterministically — passing locally, failing on CI. The failures
-// were exactly this: renderDynamicConfig reads every row so a leaked service
+// were exactly this: renderDynamicConfig reads every row so leaked state
 // dropped a fixture from collectDesiredState, and a stale child row tripped a
 // FOREIGN KEY sweep in pick_or_provision_server.
 //

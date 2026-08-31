@@ -57,19 +57,4 @@ describe("durable reconciler intents", () => {
     expect(db.getApp(app.id)?.rollout_requested_revision).toBe(0);
   });
 
-  test("service deletion intent is durable and idempotent", () => {
-    const service = db.insertService({
-      name: `service-${randomSuffix()}`,
-      service_type: "postgres",
-      version: "16",
-      port: 5432,
-      env_vars: "{}",
-      credentials: "{}",
-    });
-    db.markServiceDeletionRequested(service.id);
-    const first = db.getService(service.id)?.deletion_requested_at;
-    db.markServiceDeletionRequested(service.id);
-    expect(first).toBeTruthy();
-    expect(db.getService(service.id)?.deletion_requested_at).toBe(first);
-  });
 });

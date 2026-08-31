@@ -39,8 +39,7 @@ function unusedReadyServer() {
     server.status === "ready" &&
     server.id !== panelServerId &&
     !workerServerIds.has(server.id) &&
-    db.getApps(server.id).length === 0 &&
-    db.getServicesOnServer(server.id).length === 0
+    db.getApps(server.id).length === 0
   );
 }
 

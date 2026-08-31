@@ -76,19 +76,6 @@ import {
 import { handleTerminalExec } from "./routes/terminal-exec.ts";
 import { handleInternalWake } from "./routes/internal.ts";
 import {
-  handleGetCatalog,
-  handleGetServices,
-  handleGetService,
-  handleDeployService,
-  handleDestroyService,
-  handleRestartService,
-  handlePauseService,
-  handleUnpauseService,
-  handleGetServiceLogs,
-  handleInjectService,
-  handleUninjectService,
-} from "./routes/services.ts";
-import {
   handleDeployStack,
   handleGetStacks,
   handleGetStack,
@@ -165,18 +152,6 @@ function webhookBuildSourceIdFrom(req: Request): number {
 function resourcePartsFrom(req: Request): { type: string; id: string } {
   const parts = new URL(req.url).pathname.split("/");
   return { type: parts[3], id: parts[4] };
-}
-
-function serviceIdFrom(req: Request): number {
-  const url = new URL(req.url);
-  const match = url.pathname.match(/\/api\/services\/(\d+)/);
-  return match ? parseInt(match[1], 10) : 0;
-}
-
-function serviceInjectPartsFrom(req: Request): { serviceId: number; environmentId: number } {
-  const url = new URL(req.url);
-  const match = url.pathname.match(/\/api\/services\/(\d+)\/inject\/(\d+)/);
-  return match ? { serviceId: parseInt(match[1], 10), environmentId: parseInt(match[2], 10) } : { serviceId: 0, environmentId: 0 };
 }
 
 function environmentIdFrom(req: Request): number {
@@ -386,29 +361,6 @@ export const apiRoutes = {
     DELETE: (req: Request) => {
       const { type, id } = resourcePartsFrom(req);
       return handleDeleteResource(req, type, id);
-    },
-  },
-
-  // --- Infrastructure Services ---
-  "/api/services": { GET: (req: Request) => handleGetServices(req) },
-  "/api/services/catalog": { GET: (req: Request) => handleGetCatalog(req) },
-  "/api/services/deploy": { POST: (req: Request) => handleDeployService(req) },
-  "/api/services/:id": {
-    GET: (req: Request) => handleGetService(req, serviceIdFrom(req)),
-    DELETE: (req: Request) => handleDestroyService(req, serviceIdFrom(req)),
-  },
-  "/api/services/:id/restart": { POST: (req: Request) => handleRestartService(req, serviceIdFrom(req)) },
-  "/api/services/:id/pause": { POST: (req: Request) => handlePauseService(req, serviceIdFrom(req)) },
-  "/api/services/:id/unpause": { POST: (req: Request) => handleUnpauseService(req, serviceIdFrom(req)) },
-  "/api/services/:id/logs": { GET: (req: Request) => handleGetServiceLogs(req, serviceIdFrom(req)) },
-  "/api/services/:id/inject/:envId": {
-    POST: (req: Request) => {
-      const { serviceId, environmentId } = serviceInjectPartsFrom(req);
-      return handleInjectService(req, serviceId, environmentId);
-    },
-    DELETE: (req: Request) => {
-      const { serviceId, environmentId } = serviceInjectPartsFrom(req);
-      return handleUninjectService(req, serviceId, environmentId);
     },
   },
 

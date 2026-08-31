@@ -1,10 +1,10 @@
 # Recovering retained volumes
 
-OCD does not immediately delete managed app or service volumes. It detaches
+OCD does not immediately delete app volumes. It detaches
 the volume and records it as `retired` with a seven-day `purge_after` date.
 Retention depends on why the volume was detached:
 
-- volumes retained after an explicit app, service, or stack deletion remain
+- volumes retained after an explicit app or stack deletion remain
   user-owned and are never deleted automatically;
 - volumes created only by a failed deployment are provisional. The reconciler
   deletes them after `purge_after`, but only if OCD has no live owner reference
@@ -16,9 +16,6 @@ Hetzner volume charges.
 
 To recover an app volume during the grace period, use the existing
 **attach-existing volume** action and select the recorded provider volume ID.
-For a managed service, create or recover the service first, then attach and
-mount the volume under operator supervision before starting the container.
-
 For user-owned retention, the purge-after date is an operator review date, not
 an automatic deletion. Delete the detached provider volume from Resources only
 after backups and recovery are no longer needed. For failed-deploy provisional

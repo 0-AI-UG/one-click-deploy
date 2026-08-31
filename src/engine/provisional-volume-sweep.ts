@@ -13,12 +13,6 @@ function liveOwners(providerVolumeId: string): string[] {
   const owners = db.getApps()
     .filter((app) => app.volume_id === providerVolumeId)
     .map((app) => `app:${app.name}`);
-  const services = new Map(db.getServices().map((service) => [service.id, service.name]));
-  for (const instance of db.getAllServiceInstances()) {
-    if (instance.volume_id === providerVolumeId) {
-      owners.push(`service:${services.get(instance.service_id) ?? instance.service_id}`);
-    }
-  }
   const panel = db.getPanel();
   if (panel?.volume_id === providerVolumeId) owners.push(`panel:${panel.name}`);
   return owners;

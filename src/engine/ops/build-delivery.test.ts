@@ -157,7 +157,6 @@ describe("build delivery transport boundary", () => {
         { key: "web", build: web.build, git_commit: COMMIT },
         { key: "worker", build: worker.build, git_commit: COMMIT },
       ],
-      services: [],
       selected_app_keys: ["web", "worker"],
     } as unknown as StackDeployRequest;
     const input: BuildStackDeliveryInput = { spec };
@@ -181,7 +180,6 @@ describe("build delivery transport boundary", () => {
         { key: "a", build: base.build, git_commit: COMMIT },
         { key: "b", build: base.build, git_commit: "c".repeat(40) },
       ],
-      services: [],
     } as unknown as StackDeployRequest;
     const input: BuildStackDeliveryInput = { spec };
     const ctx = context(definitions.stackDefinition, input);

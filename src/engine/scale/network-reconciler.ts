@@ -26,7 +26,6 @@ export async function reconcileNetwork(): Promise<void> {
  * server:
  *
  *   - `<app>.ocd.internal`      → the app's fleet-wide virtual IP (ocd-proxy)
- *   - `<svc>.svc.ocd.internal`  → service host's private_ipv4 (direct)
  *
  * App entries point at per-app VIPs, terminated on loopback by each server's
  * local ocd-proxy. The gate is per-server and sticky (wasProxyEverReady): a
@@ -37,9 +36,6 @@ export async function reconcileNetwork(): Promise<void> {
  * it pointed at was torn down, so such a line would route to a closed port
  * (see appHostsLine).
  *
- * Service entries stay as private-IP pointers to the service host because
- * services are single-instance and don't need the local proxy indirection.
- *
  * Idempotent — the block is delimited by BEGIN/END markers so repeated
  * runs just overwrite the same region.
  */
@@ -49,16 +45,6 @@ export async function syncInternalHosts(): Promise<void> {
   if (!panel) return;
 
   const apps = db.getApps();
-  const serviceLines: string[] = [];
-  for (const service of db.getServices()) {
-    if (service.status !== "running" || service.deletion_requested_at) continue;
-    const instance = db.getServiceInstances(service.id)[0];
-    if (!instance || instance.status !== "running") continue;
-    const host = db.getServer(instance.server_id);
-    if (!host || host.status !== "ready" || !host.private_ipv4) continue;
-    serviceLines.push(`${host.private_ipv4} ${service.name}.svc.ocd.internal`);
-  }
-
   const servers = db.getServers().filter((s) => s.ipv4 && s.status === "ready");
   for (const snapshot of servers) {
     const keys = [`server:${snapshot.id}`];
@@ -75,7 +61,6 @@ export async function syncInternalHosts(): Promise<void> {
           if (line) lines.push(line);
         }
       }
-      lines.push(...serviceLines);
       try {
         await writeHostsBlock(server.ipv4, lines.join("\n"), server.ssh_host_key || undefined);
       } catch (err) {

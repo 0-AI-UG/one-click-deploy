@@ -10,7 +10,6 @@ import { rollback } from "./commands/rollback.ts";
 import { promote } from "./commands/promote.ts";
 import { pause, unpause } from "./commands/pause.ts";
 import { envs } from "./commands/envs.ts";
-import { services } from "./commands/services.ts";
 import { stack } from "./commands/stack.ts";
 import { ops } from "./commands/ops.ts";
 import { servers } from "./commands/servers.ts";
@@ -41,8 +40,6 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   pause,
   unpause,
   envs,
-  services,
-  service: services,
   stack,
   ops,
   servers,
@@ -84,9 +81,6 @@ ${BOLD}Commands:${RESET}
   pause <app>            Pause an app
   unpause <app>          Unpause an app
   scale <command>        Wake apps, inspect policy, or migrate replicas
-  services               List managed services
-  service catalog        List available managed-service types and defaults
-  service create <name>  Create a standalone managed service
   stack <ls|status|logs>   Inspect multi-app stacks
   ops [--app X]          List deploy engine operations
   ops <id> | logs <id>   Inspect an operation or stream its logs

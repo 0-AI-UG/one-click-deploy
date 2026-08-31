@@ -350,10 +350,8 @@ const reconcile: Step<WebhookBuildSourceInput, { childIds: number[] }> = {
           : manifest.staging_environment
             ? environmentId(manifest.staging_environment, stackPath)
             : stack.staging_environment_id ?? undefined,
-        services: Object.entries(manifest.services || {}).map(([key, service]) => ({ key, ...service })),
         apps: specs,
         selected_app_keys: specs.map((spec) => spec.key),
-        selected_service_keys: Object.keys(manifest.services || {}),
         partial: false,
       };
       childIds.push(await child(ctx, `stack:${stack.id}`, "deploy_stack", [`stack:${stack.id}`, `stack:${stack.name}`], stackRequest));

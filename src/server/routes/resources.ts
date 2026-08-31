@@ -124,25 +124,6 @@ export async function handleGetResources(request: Request): Promise<Response> {
         monthly_eur: null,
       });
     }
-    const serviceById = new Map(db.getServices().map((service) => [service.id, service]));
-    for (const instance of db.getAllServiceInstances()) {
-      if (!instance.volume_id || trackedVolumes.has(instance.volume_id)) continue;
-      const server = db.getServer(instance.server_id);
-      trackedVolumes.set(instance.volume_id, {
-        id: instance.volume_id,
-        name: instance.volume_id,
-        size: 0,
-        server_name: server?.name || "",
-        app_name: serviceById.get(instance.service_id)?.name || "",
-        location: server?.location || "",
-        app_id: 0,
-        retired_state: "",
-        retired_from: "",
-        purge_after: "",
-        retention_class: "",
-        monthly_eur: null,
-      });
-    }
     for (const retired of db.getRetiredVolumes()) {
       if (trackedVolumes.has(retired.provider_volume_id)) continue;
       trackedVolumes.set(retired.provider_volume_id, {
@@ -244,11 +225,9 @@ export async function handleDeleteResource(request: Request, type: string, id: s
         }
         await enforceConfirmation(request, payload, "delete_server", "server", String(server.id));
         const apps = db.getApps(server.id);
-        const services = db.getServicesOnServer(server.id);
         const keys = [
           `server:${server.id}`,
           ...apps.map((a) => `app:${a.id}`),
-          ...services.map((s) => `service:${s.id}`),
         ];
         const { opId } = enqueue({
           kind: "destroy_server",
@@ -266,13 +245,9 @@ export async function handleDeleteResource(request: Request, type: string, id: s
     } else if (type === "volume") {
       const allApps = db.getApps();
       const using = allApps.filter((a) => a.volume_id === id);
-      const servicesById = new Map(db.getServices().map((service) => [service.id, service.name]));
-      const usingServices = db.getAllServiceInstances().filter((instance) => instance.volume_id === id);
       const panel = db.getPanel();
       const users = [
         ...using.map((app) => `app ${app.name}`),
-        ...usingServices.map((instance) =>
-          `service ${servicesById.get(instance.service_id) ?? `#${instance.service_id}`}`),
         ...(panel?.volume_id === id ? [`panel ${panel.name}`] : []),
       ];
       if (users.length > 0) {
@@ -678,29 +653,6 @@ export async function handleGetServerDetail(request: Request, serverId: number):
       };
     });
 
-    const services = db.getServicesOnServer(serverId).map((s) => {
-      const instances = db.getServiceInstancesByServer(serverId).filter((i) => i.service_id === s.id);
-      return {
-        id: s.id,
-        name: s.name,
-        service_type: s.service_type,
-        version: s.version,
-        status: s.status,
-        instances: instances.map((i) => ({
-          id: i.id,
-          role: i.role,
-          container_name: i.container_name,
-          host_port: i.host_port,
-          status: i.status,
-          cpu_percent: i.cpu_percent,
-          memory_percent: i.memory_percent,
-          cpu_limit_cores: i.cpu_limit_cores,
-          memory_used_mb: i.memory_used_mb,
-          memory_limit_mb: i.memory_limit_mb,
-        })),
-      };
-    });
-
     return Response.json({
       id: server.id,
       name: server.name,
@@ -729,7 +681,6 @@ export async function handleGetServerDetail(request: Request, serverId: number):
         : null,
       replicas,
       replica_metrics: replicaMetrics,
-      services,
       host: await probePromise,
     }, { headers: corsHeaders });
   } catch (error) {

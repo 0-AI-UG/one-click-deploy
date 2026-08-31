@@ -38,11 +38,9 @@ export async function handleDeleteServer(request: Request, serverId: number): Pr
     }
     await enforceConfirmation(request, payload, "delete_server", "server", String(serverId));
     const apps = db.getApps(serverId);
-    const services = db.getServicesOnServer(serverId);
     const keys = [
       `server:${serverId}`,
       ...apps.map((a) => `app:${a.id}`),
-      ...services.map((s) => `service:${s.id}`),
     ];
     const { opId } = enqueue({
       kind: "destroy_server",

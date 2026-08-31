@@ -102,13 +102,13 @@ managed provider volumes; `ocd servers delete app-1` only disconnects the host.
 - Optionally provision managed Hetzner Cloud servers, volumes, networks, and firewalls
 - Automatic TLS via Traefik and Let's Encrypt HTTP-01; provider-neutral DNS instructions
 - Horizontal scaling, auto-scaling, pause/resume
-- Managed services: Postgres, Redis, MySQL, and more
+- Image-backed apps for databases, caches, and other infrastructure; reusable manifests can live in a repository catalog
 - Web terminal, log streaming, exact-image releases, promotions, and rollbacks
 - Passkeys, TOTP, GitHub OAuth, multi-user RBAC
 - `ocd` CLI for Linux, macOS, Windows
 - Self-managing: the panel deploys itself
 
-Managed PostgreSQL recovery: [clean and empty-target restore workflows](docs/postgresql-restore.md).
+PostgreSQL app recovery: [clean and empty-target restore workflows](docs/postgresql-restore.md).
 Retained volume recovery: [grace-period and reattachment workflow](docs/volume-recovery.md).
 Build delivery: [architecture, cache, failure handling, and operator checks](docs/build-workers.md).
 

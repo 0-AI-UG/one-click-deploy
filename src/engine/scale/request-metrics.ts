@@ -7,7 +7,7 @@
 // the idle monitor's "is this data fresh enough to sleep on?" question.
 //
 // traefik_service_requests_total exists per (service, code, method, protocol)
-// label set and only for HTTP services. Internal app-to-app traffic no longer
+// label set and only for HTTP apps. Internal app-to-app traffic no longer
 // crosses Traefik at all — it flows through the per-host VIP proxy, whose
 // activity is merged separately via ingestProxyActivity (see below), so callees
 // busy serving internal calls still count as active and stay awake.

@@ -1,7 +1,7 @@
 {
   "$schema": 1,
   "name": "API Server",
-  "description": "REST API backend using stack-injected service URLs",
+  "description": "REST API backend using stack dependency URLs",
   "build": {
     "repository": "https://git.example.com/team/blog.git",
     "branch": "main",

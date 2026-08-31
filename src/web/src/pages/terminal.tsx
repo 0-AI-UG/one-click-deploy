@@ -5,7 +5,7 @@ import { TerminalViewport, type TerminalViewportHandle } from "../components/ter
 import { ArrowLeft } from "lucide-react";
 
 type Props = {
-  kind: "server" | "replica" | "service-instance";
+  kind: "server" | "replica";
   id: number;
 };
 

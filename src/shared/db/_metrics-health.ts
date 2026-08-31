@@ -3,7 +3,7 @@ import type { ResourceUsage } from "./replicas.ts";
 
 /** Tables that share the health/metrics column shape. Passed as a literal from
  *  each caller so the table name is never an arbitrary string (no injection). */
-type HealthTable = "replicas" | "service_instances";
+type HealthTable = "replicas";
 
 export function updateStatus(table: HealthTable, id: number, status: string): void {
   db.query(`UPDATE ${table} SET status = ? WHERE id = ?`).run(status, id);

@@ -44,8 +44,7 @@ const _enabled: boolean | undefined = _deploy.health_check?.enabled;
 const _port: number | undefined = _deploy.container_port;
 const _stack: StackManifest = {
   name: "s",
-  services: { db: { type: "postgres" } },
-  apps: { web: { manifest: "web/.ocd-deploy.json", needs: ["db"] } },
+  apps: { web: { manifest: "web/.ocd-deploy.json" } },
 };
 void _enabled;
 void _port;
@@ -318,9 +317,8 @@ describe("validateDeployManifest", () => {
 describe("validateStackManifest", () => {
   const validStack = {
     name: "myapp",
-    services: { db: { type: "postgres" } },
     apps: {
-      web: { manifest: "web/.ocd-deploy.json", needs: ["db"] },
+      web: { manifest: "web/.ocd-deploy.json" },
       worker: { manifest: "worker/.ocd-deploy.json", needs: ["web"] },
     },
   };
@@ -329,30 +327,13 @@ describe("validateStackManifest", () => {
     expect(() => validateStackManifest(validStack, "ocd-stack.json")).not.toThrow();
   });
 
-  test("managed service custom domains validate", () => {
-    expect(() => validateStackManifest({
-      name: "search",
-      services: {
-        search: { type: "meilisearch", domain: "search.example.com" },
-      },
-      apps: { web: { manifest: "web/.ocd-deploy.json" } },
-    }, "ocd-stack.json")).not.toThrow();
-  });
-
-  test("managed service staging overrides and stack staging env declarations validate", () => {
+  test("stack staging environment declarations validate", () => {
     expect(() => validateStackManifest({
       ...validStack,
       staging_env: [
         { key: "PUBLIC_BASE_URL", default: "https://staging.example.com" },
         { key: "STRIPE_SECRET_KEY", required: true, secret: true },
       ],
-      services: {
-        db: {
-          type: "postgresql",
-          volume_size: 20,
-          staging: { volume_size: 10, env_overrides: { POSTGRES_DB: "staging" } },
-        },
-      },
     }, "ocd-stack.json")).not.toThrow();
   });
 
@@ -396,7 +377,7 @@ describe("validateStackManifest", () => {
     } catch (e) {
       msg = (e as Error).message;
     }
-    expect(msg).toContain('apps.web.needs[0]: references "ghost", which is not a declared app or service key');
+    expect(msg).toContain('apps.web.needs[0]: references "ghost", which is not a declared app key');
   });
 
   test("empty apps fails", () => {

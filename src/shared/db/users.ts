@@ -35,7 +35,6 @@ export const ALL_PERMISSIONS = [
   // --- Read ------------------------------------------------------------
   "fleet.view",
   "apps.view",
-  "services.view",
   "environments.view",
   "metrics.view",
   "operations.view",
@@ -49,13 +48,6 @@ export const ALL_PERMISSIONS = [
   "apps.destroy",
   "apps.logs",
   "apps.promote",
-
-  // --- Services --------------------------------------------------------
-  "services.deploy",
-  "services.manage",
-  "services.destroy",
-  "services.logs",
-  "services.link",
 
   // --- Stacks ----------------------------------------------------------
   "stacks.view",

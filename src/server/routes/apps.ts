@@ -77,24 +77,7 @@ export async function handleGetDashboard(request: Request): Promise<Response> {
           const reps = db.getReplicas(app.id);
           return withDnsInstruction(enrichAppForResponse({ ...app, desired_replicas: app.desired_replicas ?? reps.length }));
         }));
-    const services = db.getServices().map((svc) => {
-      if (compact) {
-        return {
-          id: svc.id,
-          name: svc.name,
-          service_type: svc.service_type,
-          status: svc.status,
-        };
-      }
-      const instances = db.getServiceInstances(svc.id);
-      const links = db.getServiceLinks(svc.id);
-      return {
-        ...svc,
-        instance_count: instances.length,
-        linked_environments: links.map((l) => ({ id: l.environment_id, name: l.environment_name })),
-      };
-    });
-    return Response.json({ apps, services }, { headers: corsHeaders });
+    return Response.json({ apps }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

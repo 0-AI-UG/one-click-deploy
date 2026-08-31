@@ -15,7 +15,7 @@ describe("web CLI command catalog", () => {
     const represented = new Set(WEB_CLI_COMMANDS.map((item) => item.args[0]));
     for (const name of [
       "login", "apps", "status", "logs", "deploy", "delete", "restart",
-      "rollback", "promote", "pause", "unpause", "envs", "service", "stack",
+      "rollback", "promote", "pause", "unpause", "envs", "stack",
       "ops", "servers", "ssh", "skill", "app", "scale", "resources", "volumes",
       "release", "manifest", "gc", "runners", "doctor", "registry", "source",
     ]) {
@@ -105,14 +105,4 @@ describe("web CLI command catalog", () => {
     })).toEqual(["deploy", ".ocd-deploy.json", "--commit=0123456789abcdef", "--dry-run"]);
   });
 
-  test("keeps deployment and service overrides out of process arguments", () => {
-    const service = buildWebCliInvocation(command("services.create"), {
-      name: "database",
-      type: "postgresql",
-      vars: ["PASSWORD=not-in-argv"],
-    });
-    expect(service.argv).toEqual(["service", "create", "database", "--type=postgresql", "--sets-stdin"]);
-    expect(service.argv.join(" ")).not.toContain("not-in-argv");
-    expect(JSON.parse(service.stdin!)).toEqual({ sets: ["PASSWORD=not-in-argv"], staging_sets: [] });
-  });
 });

@@ -463,36 +463,13 @@ export type DeployManifest = z.infer<typeof DeployManifestSchema>;
 
 // --- stack manifest ---------------------------------------------------------
 
-/** One managed service member (catalog type + options). */
-const stackServiceSchema = z
-  .object({
-    type: nonEmptyString("expected a non-empty string"),
-    version: z.string({ error: "expected string" }).optional(),
-    volume_size: guardedNumber("expected positive number", (v) => v >= 1).optional(),
-    env_overrides: z
-      .record(z.string(), z.string(), { error: "expected object map of string -> string" })
-      .optional(),
-    /** Custom domain for HTTP-facing catalog services. */
-    domain: z.string({ error: "expected string" }).optional(),
-    /** Optional settings for the automatically-created isolated staging
-     * counterpart. Omitted fields inherit the production declaration. */
-    staging: z.object({
-      volume_size: guardedNumber("expected positive number", (v) => v >= 1).optional(),
-      env_overrides: z
-        .record(z.string(), z.string(), { error: "expected object map of string -> string" })
-        .optional(),
-      domain: z.string({ error: "expected string" }).optional(),
-    }, { error: "expected object { volume_size?, env_overrides?, domain? }" }).strict().optional(),
-  }, { error: "expected object { type, version?, volume_size?, env_overrides?, domain?, staging? }" })
-  .strict();
-
 /** One app member: a path to a child `.ocd-deploy.json` + stack-level overrides. */
 const stackAppSchema = z
   .object({
     manifest: nonEmptyString("expected a manifest path string"),
     needs: z
       .array(z.string({ error: "expected a key string" }), {
-        error: "expected array of app/service keys",
+        error: "expected array of app keys",
       })
       .optional(),
     domain: z.string({ error: "expected string" }).optional(),
@@ -533,9 +510,6 @@ export const StackManifestSchema = z
     /** Desired overrides applied after the staging environment is
      * created/copied. Secret values are supplied by the CLI, not stored here. */
     staging_env: z.array(envEntrySchema, { error: "expected array of environment variable definitions" }).optional(),
-    services: z
-      .record(z.string(), stackServiceSchema, { error: "expected object map of key -> service" })
-      .optional(),
     apps: z.record(z.string(), stackAppSchema, { error: "expected object map of key -> app" }),
   })
   .strict()
@@ -545,8 +519,8 @@ export const StackManifestSchema = z
     if (appKeys.length === 0) {
       ctx.addIssue({ code: "custom", message: "expected at least one app", path: ["apps"] });
     }
-    // Cross-field: every `needs` entry must name a declared app or service key.
-    const known = new Set([...appKeys, ...Object.keys(val.services ?? {})]);
+    // Cross-field: every `needs` entry must name a declared app key.
+    const known = new Set(appKeys);
     for (const [key, app] of Object.entries(val.apps ?? {})) {
       const needs = app.needs ?? [];
       for (let i = 0; i < needs.length; i++) {
@@ -554,7 +528,7 @@ export const StackManifestSchema = z
         if (!known.has(n)) {
           ctx.addIssue({
             code: "custom",
-            message: `references "${n}", which is not a declared app or service key`,
+            message: `references "${n}", which is not a declared app key`,
             path: ["apps", key, "needs", i],
           });
         }

@@ -46,14 +46,14 @@ export type DockerRunVolume = { host: string; container: string };
 export type DockerRunOpts = {
   /** Container name (--name). */
   name: string;
-  /** Image reference. App workloads use immutable digests; managed services may use catalog tags. */
+  /** Immutable image reference. */
   image: string;
   /** App name used to scope the volume host-path allowlist. */
   appName: string;
   /** Override the docker network. Default "ocd-net". Pass null to skip --network. */
   network?: string | null;
   /** Static hostname mappings injected into the container. OCD uses these for
-   * managed-service aliases because containers do not inherit host /etc/hosts. */
+   * app aliases because containers do not inherit host /etc/hosts. */
   extraHosts?: Array<{ hostname: string; address: string }>;
   /** Port publish spec. Omit for containers that don't expose ports. */
   publish?: { bindAddr: string; hostPort: number; containerPort: number };

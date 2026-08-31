@@ -15,7 +15,7 @@ export type RetiredVolumeRow = {
 
 export function retireVolume(data: {
   providerVolumeId: string;
-  formerResourceType: "app" | "service";
+  formerResourceType: "app";
   formerResourceId: number;
   formerResourceName: string;
   reason: string;
@@ -48,7 +48,7 @@ export function getRetiredVolumes(): RetiredVolumeRow[] {
 
 /**
  * Only operation-owned provisional volumes are eligible for unattended
- * cleanup. Volumes retained after an explicit app/service destroy remain
+ * cleanup. Volumes retained after an explicit app destroy remain
  * user-owned and require the normal browser-confirmed deletion flow.
  */
 export function getExpiredProvisionalVolumes(): RetiredVolumeRow[] {

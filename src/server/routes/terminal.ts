@@ -17,7 +17,7 @@ const sessionsByUser = new Map<string, number>();
 
 export type TerminalWsData = {
   userId: string;
-  target: { kind: "server" | "replica" | "service-instance"; id: number };
+  target: { kind: "server" | "replica"; id: number };
   pty: PtySession | null;
   pingTimer: ReturnType<typeof setInterval> | null;
 };
@@ -38,8 +38,7 @@ async function authFromQuery(req: Request): Promise<{ userId: string } | null> {
 
 /** A shell on a fleet host is root-equivalent and is gated separately from a
  *  shell inside a container. The container case is scoped to the app that owns
- *  the replica, so a per-app grant reaches only its own containers; a service
- *  instance belongs to no app and needs the fleet-wide grant. */
+ *  the replica, so a per-app grant reaches only its own containers. */
 function checkPermission(userId: string, target: TerminalWsData["target"]): boolean {
   const user = db.getUserById(userId);
   if (!user) return false;
@@ -50,18 +49,18 @@ function checkPermission(userId: string, target: TerminalWsData["target"]): bool
     const replica = db.getReplica(target.id);
     return db.hasPermission(userId, "terminal.container", replica ? { appId: replica.app_id } : undefined);
   }
-  return db.hasPermission(userId, "terminal.container");
+  return false;
 }
 
 /**
  * Parse `/api/terminal/ws?target=server:123` or `replica:45`.
  */
-function parseTarget(req: Request): { kind: "server" | "replica" | "service-instance"; id: number } | null {
+function parseTarget(req: Request): { kind: "server" | "replica"; id: number } | null {
   const url = new URL(req.url);
   const t = url.searchParams.get("target") || "";
-  const m = t.match(/^(server|replica|service-instance):(\d+)$/);
+  const m = t.match(/^(server|replica):(\d+)$/);
   if (!m) return null;
-  return { kind: m[1] as "server" | "replica" | "service-instance", id: parseInt(m[2], 10) };
+  return { kind: m[1] as "server" | "replica", id: parseInt(m[2], 10) };
 }
 
 /**
@@ -150,28 +149,10 @@ export const terminalWsHandlers = {
       // docker exec as deploy user into the specific container
       remoteCommand = `su - deploy -c 'docker exec -it ${replica.container_name} sh -lc "exec \\$(command -v bash >/dev/null && echo bash || echo sh)"'`;
       log("open", `user=${data.userId} replica=${replica.id} container=${replica.container_name} ip=${ip}`);
-    } else {
-      // service-instance
-      const instance = db.getServiceInstance(data.target.id);
-      if (!instance) {
-        ws.send("service instance not found\r\n");
-        ws.close();
-        return;
-      }
-      const srv = db.getServer(instance.server_id);
-      if (!srv) {
-        ws.send("service instance's server not found\r\n");
-        ws.close();
-        return;
-      }
-      ip = srv.ipv4;
-      hostKey = srv.ssh_host_key || undefined;
-      remoteCommand = `su - deploy -c 'docker exec -it ${instance.container_name} sh -lc "exec \\$(command -v bash >/dev/null && echo bash || echo sh)"'`;
-      log("open", `user=${data.userId} service-instance=${instance.id} container=${instance.container_name} ip=${ip}`);
     }
 
     // Warn about secret visibility when exec-ing into a container
-    if (data.target.kind === "replica" || data.target.kind === "service-instance") {
+    if (data.target.kind === "replica") {
       try {
         ws.send(new TextEncoder().encode(
           "\x1b[33m\u26A0 Environment secrets are accessible inside this container.\x1b[0m\r\n\r\n"

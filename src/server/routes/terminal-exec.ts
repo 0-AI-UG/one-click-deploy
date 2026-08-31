@@ -10,11 +10,11 @@ function log(context: string, ...args: unknown[]) {
 
 const MAX_COMMAND_BYTES = 256 * 1024;
 
-type TargetKind = "server" | "replica" | "service-instance";
+type TargetKind = "server" | "replica";
 
 function parseTarget(raw: unknown): { kind: TargetKind; id: number } | null {
   if (typeof raw !== "string") return null;
-  const m = raw.match(/^(server|replica|service-instance):(\d+)$/);
+  const m = raw.match(/^(server|replica):(\d+)$/);
   if (!m) return null;
   return { kind: m[1] as TargetKind, id: parseInt(m[2], 10) };
 }
@@ -32,11 +32,7 @@ function resolveTarget(kind: TargetKind, id: number): { ip: string; hostKey?: st
     if (!srv) return { error: "replica's server not found" };
     return { ip: srv.ipv4, hostKey: srv.ssh_host_key || undefined, container: replica.container_name, appId: replica.app_id };
   }
-  const instance = db.getServiceInstance(id);
-  if (!instance) return { error: "service instance not found" };
-  const srv = db.getServer(instance.server_id);
-  if (!srv) return { error: "service instance's server not found" };
-  return { ip: srv.ipv4, hostKey: srv.ssh_host_key || undefined, container: instance.container_name };
+  return { error: "bad target" };
 }
 
 function buildRemoteCommand(userCommand: string, container: string | undefined): string {
@@ -83,8 +79,7 @@ export async function handleTerminalExec(request: Request): Promise<Response> {
   // A shell inside a container and a shell on the host are very different
   // grants: the latter is root-equivalent over every workload on that machine.
   // Pick the permission from what the target actually resolved to, and scope
-  // the container case to the app when the target carries one (replicas do;
-  // service instances belong to a service, not an app).
+  // the container case to the app that owns the replica.
   if (!user.is_admin) {
     const permission = resolved.container ? "terminal.container" : "terminal.host";
     const scope = resolved.appId != null ? appScope(resolved.appId) : undefined;

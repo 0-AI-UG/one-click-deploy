@@ -1,4 +1,4 @@
-// Barrel module: the container/build/health/service helpers were split
+// Barrel module: the container/build/health helpers were split
 // into per-concern modules (see the sibling files below). This file re-exports
 // the same public surface so existing importers (shared/remote, tests) keep the
 // concrete `hetzner/containers.ts` path.
@@ -30,7 +30,6 @@ export {
   probeAppHealth,
   markerFreshnessHealthCheck,
   assessMarkerFreshness,
-  serviceHealthCheck,
 } from "./health.ts";
 
 export {
@@ -45,5 +44,3 @@ export {
   containerRunning,
   ensureOcdNetwork,
 } from "./lifecycle.ts";
-
-export { pullAndRunService, deployConfigFile } from "./infra.ts";

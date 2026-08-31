@@ -246,7 +246,6 @@ export type Stack = {
   created_at: string;
   environment_id: number | null;
   app_count: number;
-  service_count: number;
   last_operation_id?: number | null;
   last_operation_status?: string | null;
   last_operation_failed?: boolean;
@@ -271,14 +270,6 @@ export type StackMemberApp = {
   environment_stale?: boolean | number;
 };
 
-export type StackMemberService = {
-  id: number;
-  name: string;
-  service_type: string;
-  version: string;
-  status: string;
-};
-
 export type StackDetail = {
   id: number;
   name: string;
@@ -294,7 +285,6 @@ export type StackDetail = {
   last_operation_children?: Array<{ id: number; kind: string; status: string }>;
   resource_status_reason?: string;
   apps: StackMemberApp[];
-  services: StackMemberService[];
 };
 
 export type ScopeType = "global" | "environment" | "app";

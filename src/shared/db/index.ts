@@ -250,43 +250,6 @@ export {
   insertPanelDeployment,
   getPanelDeployments,
 } from "./panel.ts";
-export type {
-  ServiceRow,
-  ServiceInstanceRow,
-  ServiceLinkRow,
-  ServiceLinkWithEnvironmentRow,
-} from "./services.ts";
-export {
-  insertService,
-  getService,
-  getServiceByName,
-  getStagingService,
-  getServices,
-  updateServiceStatus,
-  markServiceDeletionRequested,
-  updateServiceCredentials,
-  deleteService,
-  insertServiceInstance,
-  insertServiceWithPrimaryInstance,
-  getServiceInstances,
-  getServiceInstance,
-  getPrimaryInstance,
-  getAllServiceInstances,
-  getServiceInstancesByServer,
-  updateServiceInstanceStatus,
-  updateServiceInstancePlacement,
-  updateServiceInstanceMetrics,
-  touchServiceInstanceHealth,
-  incrementServiceInstanceUnhealthyTicks,
-  resetServiceInstanceUnhealthyTicks,
-  deleteServiceInstance,
-  nextServiceHostPort,
-  insertServiceLink,
-  deleteServiceLink,
-  getServiceLinks,
-  getServiceLinksByEnvironmentId,
-  getServicesOnServer,
-} from "./services.ts";
 export type { EnvironmentRow } from "./environments.ts";
 export {
   getEnvironments,
@@ -314,9 +277,7 @@ export {
   getStackLog,
   deleteStack,
   getAppsByStackId,
-  getServicesByStackId,
   setAppStack,
-  setServiceStack,
 } from "./stacks.ts";
 export type { AvailabilitySampleRow } from "./availability.ts";
 export {

@@ -1,6 +1,5 @@
 import { resolve4 } from "node:dns/promises";
 import * as db from "../shared/db.ts";
-import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { getPanelIngressIpv4 } from "./scale/traefik-manager.ts";
 import { tryAcquire, release, NON_OP_HOLDER } from "./scheduler.ts";
 
@@ -159,21 +158,6 @@ export async function reconcilePanelDns(): Promise<DnsReadiness> {
     );
   }
   return observeARecord(panel.domain, server.ipv4);
-}
-
-export async function reconcileServiceDns(serviceId: number): Promise<DnsReadiness> {
-  const service = db.getService(serviceId);
-  if (!service) throw new Error(`Service ${serviceId} not found`);
-  const catalog = getCatalogEntry(service.service_type);
-  let domain = "";
-  try { domain = String(JSON.parse(service.credentials || "{}")?.domain || ""); }
-  catch { /* malformed credentials are not a public endpoint */ }
-  if (!catalog?.http || !domain) {
-    return notApplicable("Private and raw-only services do not require a DNS instruction", domain);
-  }
-  const target = getPanelIngressIpv4() || "";
-  if (!target) return { ...notApplicable("Panel ingress IPv4 is unavailable", domain), ready: false };
-  return observeARecord(domain, target);
 }
 
 export type PublicEndpointReadiness = DnsReadiness & {

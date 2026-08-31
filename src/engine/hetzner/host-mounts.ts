@@ -1,7 +1,7 @@
 // Bind-mount management for Hetzner-attached volumes.
 //
 // Background: Hetzner attaches volumes with `automount: true`, which lands the
-// real device at `/mnt/HC_Volume_${volumeId}`. Apps and services historically
+// real device at `/mnt/HC_Volume_${volumeId}`. Apps historically
 // referenced `/mnt/ocd-${name}-data` on the root filesystem, so Docker bind
 // mounts silently wrote to the root disk instead of the persistent volume.
 //
@@ -11,7 +11,6 @@
 //
 // Block-name convention used by callers:
 //   - user apps:  `app-${app.id}`
-//   - services:   `svc-${service.id}`
 
 import { sshExec as realSshExec } from "./ssh.ts";
 type SshExecFn = typeof realSshExec;

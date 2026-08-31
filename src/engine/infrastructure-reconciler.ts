@@ -19,7 +19,6 @@ async function withLock(keys: string[], kind: string, work: () => Promise<void>)
 
 function serverHasReferences(serverId: number): boolean {
   if (db.getReplicasByServer(serverId).length > 0) return true;
-  if (db.getServiceInstancesByServer(serverId).length > 0) return true;
   if (db.getPanel()?.server_id === serverId) return true;
   if (db.getBuildWorkerByServerId(serverId)) return true;
   return db.getApps().some((app) => app.sleeping_server_id === serverId);
@@ -60,7 +59,6 @@ export async function reconcileServersAndNetwork(): Promise<void> {
         if (!available && (fresh?.unavailable_ticks ?? 0) >= 2) {
           db.updateServerStatus(server.id, "unavailable");
           for (const replica of db.getReplicasByServer(server.id)) db.updateReplicaStatus(replica.id, "unhealthy");
-          for (const instance of db.getServiceInstancesByServer(server.id)) db.updateServiceInstanceStatus(instance.id, "unhealthy");
         }
         if (!networkId || !hetzner.networks) return;
         try {
@@ -86,7 +84,6 @@ export async function reconcileServersAndNetwork(): Promise<void> {
         if ((fresh?.unavailable_ticks ?? 0) >= 2) {
           db.updateServerStatus(server.id, "unavailable");
           for (const replica of db.getReplicasByServer(server.id)) db.updateReplicaStatus(replica.id, "unhealthy");
-          for (const instance of db.getServiceInstancesByServer(server.id)) db.updateServiceInstanceStatus(instance.id, "unhealthy");
         }
       }
     });
@@ -173,24 +170,6 @@ function activeVolumeOwners(): VolumeOwner[] {
         if (!wasUnhealthy) db.appendDeployLog(app.id, `[volume] ${reason}`);
       },
     });
-  }
-  for (const service of db.getServices()) {
-    if (service.deletion_requested_at) continue;
-    for (const instance of db.getServiceInstances(service.id)) {
-      if (!instance.volume_id || !instance.volume_mount) continue;
-      owners.push({
-        key: `service:${service.id}`,
-        volumeId: instance.volume_id,
-        serverId: instance.server_id,
-        hostMountPath: instance.volume_mount.split(":")[0],
-        blockName: `svc-${service.id}`,
-        markDegraded: (reason) => {
-          db.updateServiceInstanceStatus(instance.id, "unhealthy");
-          db.updateServiceStatus(service.id, "unhealthy");
-          log("volume", `${service.name}: ${reason}`);
-        },
-      });
-    }
   }
   const panel = db.getPanel();
   if (panel?.volume_id && panel.volume_mount) {

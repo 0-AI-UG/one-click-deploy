@@ -1,17 +1,14 @@
 // Per-container health checks run in parallel by the reconciler each tick.
-// Replicas and service instances have separate check paths (the replica path
-// has a recreate fallback + auto-restart bookkeeping). No orchestration lives
+// Replica checks have a recreate fallback + auto-restart bookkeeping. No orchestration lives
 // here — the reconciler decides which containers to check and applies status
 // propagation.
 
 import * as db from "../shared/db.ts";
-import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } from "../shared/db.ts";
+import type { AppRow, ReplicaRow, ServerRow } from "../shared/db.ts";
 import {
-  sshExec, probeAppHealth, restartContainer,
-  serviceHealthCheck, startAppReplica,
+  sshExec, probeAppHealth, restartContainer, startAppReplica,
 } from "../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../shared/env-crypto.ts";
-import { getCatalogEntry } from "../shared/services/catalog.ts";
 import { replicaBindHost, appReplicaRunOpts } from "./scale/types.ts";
 import { currentHolder } from "./scheduler.ts";
 import { latestDesiredImage } from "./revision.ts";
@@ -147,60 +144,5 @@ export async function checkReplicaHealth(
     }
   } catch (err) {
     log("health", `check failed for ${replica.container_name}: ${err}`);
-  }
-}
-
-export async function checkServiceInstanceHealth(
-  instance: ServiceInstanceRow,
-  service: ServiceRow,
-  server: ServerRow,
-): Promise<void> {
-  const hostKey = server.ssh_host_key || undefined;
-  const catalog = getCatalogEntry(service.service_type);
-  if (!catalog) return;
-
-  try {
-    const check = await serviceHealthCheck(
-      server.ipv4, instance.container_name, catalog.healthCmd, 1, hostKey,
-    );
-
-    // SSH to the host was dropped, not a real check failure — skip this tick
-    // (see checkReplicaHealth for the reasoning).
-    if (check.inconclusive) {
-      log("health", `inconclusive probe for ${instance.container_name} (ssh unreachable); leaving status unchanged`);
-      return;
-    }
-
-    const current = db.getServiceInstance(instance.id);
-    if (!current || HEALTH_EXEMPT_STATUSES.has(current.status)) return;
-    // Defer to any in-flight engine op holding this service's lock (see the
-    // replica path above for the reasoning).
-    if (currentHolder(`service:${service.id}`)) return;
-
-    if (check.healthy) {
-      db.updateServiceInstanceStatus(instance.id, "running");
-      db.touchServiceInstanceHealth(instance.id);
-      db.resetServiceInstanceUnhealthyTicks(instance.id);
-    } else {
-      db.updateServiceInstanceStatus(instance.id, "unhealthy");
-      const ticks = db.incrementServiceInstanceUnhealthyTicks(instance.id);
-      log("health", `service instance ${instance.container_name} unhealthy (${ticks} ticks): ${check.error ?? ""}`);
-      if (ticks >= UNHEALTHY_RESTART_THRESHOLD) {
-        const currentService = db.getService(service.id);
-        if (!currentService || currentService.status === "paused") {
-          log("health", `skipping auto-restart of ${instance.container_name}: service status is ${currentService?.status ?? "gone"}`);
-          return;
-        }
-        log("health", `auto-restarting service ${instance.container_name}`);
-        try {
-          await restartContainer(server.ipv4, instance.container_name, hostKey);
-          db.resetServiceInstanceUnhealthyTicks(instance.id);
-        } catch (err) {
-          log("health", `restart failed: ${err}`);
-        }
-      }
-    }
-  } catch (err) {
-    log("health", `check failed for service instance ${instance.container_name}: ${err}`);
   }
 }

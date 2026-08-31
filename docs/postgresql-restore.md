@@ -52,5 +52,5 @@ pg_restore \
 ```
 
 Keep the application isolated until `pg_restore` exits successfully and basic
-schema/data checks pass. Then reload or redeploy linked apps so their containers
-receive the current managed-service connection variables.
+schema/data checks pass. Then reload or redeploy dependent apps so their
+containers receive the current connection variables.

@@ -73,6 +73,36 @@ describe("runMigrations", () => {
     expect(row.version).toBeGreaterThan(0);
   });
 
+  test("migration 112 removes empty managed-service tables and retired grants", () => {
+    const db = freshDb();
+    runMigrationsWithImageCutover(db);
+
+    for (const table of ["services", "service_instances", "service_links"]) {
+      expect(db.query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      ).get(table)).toBeNull();
+    }
+    expect(db.query(
+      "SELECT 1 FROM user_permissions WHERE permission LIKE 'services.%'",
+    ).get()).toBeNull();
+  });
+
+  test("migration 112 refuses to remove a nonempty managed-service schema", () => {
+    const db = new Database(":memory:");
+    db.run("CREATE TABLE services (id INTEGER PRIMARY KEY, name TEXT NOT NULL)");
+    db.run("CREATE TABLE service_instances (id INTEGER PRIMARY KEY, service_id INTEGER)");
+    db.run("CREATE TABLE service_links (id INTEGER PRIMARY KEY, service_id INTEGER)");
+    db.run("CREATE TABLE user_permissions (permission TEXT NOT NULL)");
+    db.run("INSERT INTO services (name) VALUES ('database')");
+    db.run("INSERT INTO user_permissions (permission) VALUES ('services.view')");
+
+    expect(() => migrations.find((migration) => migration.version === 112)!.up(db))
+      .toThrow("Migrate them to apps first");
+    expect(db.query("SELECT name FROM services").get()).toEqual({ name: "database" });
+    expect(db.query("SELECT permission FROM user_permissions").get())
+      .toEqual({ permission: "services.view" });
+  });
+
   test("adds ssh_host_key column to servers", () => {
     const db = freshDb();
     runMigrationsWithImageCutover(db);

@@ -835,10 +835,8 @@ describe("deploy step: insert_app_row deploy targets", () => {
     create_volume: null,
   });
 
-  /** Parent production app with a linked environment (one env var) and a
-   *  service linked to that environment — the things staging must/must not
-   *  inherit. */
-  async function makeParentWithEnvAndServiceLink() {
+  /** Parent production app with a linked environment. */
+  async function makeParentWithEnvironment() {
     const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
     const parentName = `prod-${randomSuffix()}`;
     const parentEnv = db.insertEnvironment(
@@ -854,22 +852,13 @@ describe("deploy step: insert_app_row deploy targets", () => {
       environment_id: parentEnv.id,
       target: "production",
     });
-    const svc = db.insertService({
-      name: `svc-${randomSuffix()}`,
-      service_type: "postgres",
-      version: "16",
-      port: 5432,
-      env_vars: "{}",
-      credentials: "{}",
-    });
-    db.insertServiceLink(svc.id, parentEnv.id, "DATABASE");
-    return { parent, parentEnv, svc, parentName };
+    return { parent, parentEnv, parentName };
   }
 
   test("non-production target deploys with its explicitly selected environment; no live inheritance", async () => {
     const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
     const server = makeReadyServer();
-    const { parent, parentEnv, svc, parentName } = await makeParentWithEnvAndServiceLink();
+    const { parent, parentName } = await makeParentWithEnvironment();
     const stagingName = `${parentName}-staging`;
     // The user duplicated production's environment and tweaked it — staging is
     // deployed with THIS explicit env, nothing inherited from the parent.
@@ -905,16 +894,12 @@ describe("deploy step: insert_app_row deploy targets", () => {
     expect(out.environmentId).toBe(stagingEnv.id);
     expect(out.flatEnvVars).toEqual({ DATABASE_URL: "postgres://staging-db" });
 
-    // NO service links copied: the prod DB link stays on the parent env only.
-    const links = db.getServiceLinks(svc.id);
-    expect(links.some((l) => l.environment_id === parentEnv.id)).toBe(true);
-    expect(links.some((l) => l.environment_id === stagingEnv.id)).toBe(false);
   });
 
   test("an explicit environment_id is used as-is (no isolated-environment creation)", async () => {
     const { serializeEnvVars } = await import("../../shared/env-crypto.ts");
     const server = makeReadyServer();
-    const { parent, parentName } = await makeParentWithEnvAndServiceLink();
+    const { parent, parentName } = await makeParentWithEnvironment();
     const linked = db.insertEnvironment(`explicit-${randomSuffix()}`, serializeEnvVars([]));
     const devName = `${parentName}-dev`;
 

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { get } from "../api/client.ts";
 import { runCliAction } from "../api/cli-actions.ts";
 import { Card, Btn, Spinner, EmptyState, Table, StatusBadge, showToast } from "../components/ui.tsx";
-import { Server, ArrowLeft, RefreshCw, Terminal, Database, FileWarning, Network, Layers, Check, X } from "lucide-react";
+import { Server, ArrowLeft, RefreshCw, Terminal, FileWarning, Network, Layers, Check, X } from "lucide-react";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { Sparkline, CpuUsage, MemUsage } from "./app-detail/shared.tsx";
@@ -21,28 +21,6 @@ type ServerReplica = {
   memory_used_mb: number;
   memory_limit_mb: number;
   created_at: string;
-};
-
-type ServerServiceInstance = {
-  id: number;
-  role: string;
-  container_name: string;
-  host_port: number;
-  status: string;
-  cpu_percent: number;
-  memory_percent: number;
-  cpu_limit_cores: number;
-  memory_used_mb: number;
-  memory_limit_mb: number;
-};
-
-type ServerService = {
-  id: number;
-  name: string;
-  service_type: string;
-  version: string;
-  status: string;
-  instances: ServerServiceInstance[];
 };
 
 type ReplicaMetricSample = {
@@ -95,7 +73,6 @@ type ServerDetail = {
   disk_free_gb: number | null;
   replicas: ServerReplica[];
   replica_metrics: ReplicaMetricSample[];
-  services: ServerService[];
   host: HostProbe;
 };
 
@@ -498,34 +475,6 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
         )}
       </Card>
 
-      {detail.services.length > 0 && (
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Database size={14} className="text-fg" />
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">
-              Services ({detail.services.length})
-            </h3>
-          </div>
-          <Table headers={["Name", "Type", "Role", "Container", "Port", "Status", "CPU", "Memory"]}>
-            {detail.services.flatMap((s) =>
-              s.instances.length
-                ? s.instances.map((i) => (
-                    <tr key={`${s.id}-${i.id}`}>
-                      <td className="py-2 px-3 text-fg font-bold">{s.name}</td>
-                      <td className="py-2 px-3"><span className="font-mono text-[8px] font-bold uppercase border border-fg px-1 py-0.5">{s.service_type}</span></td>
-                      <td className="py-2 px-3 text-fg-dim">{i.role}</td>
-                      <td className="py-2 px-3 text-fg-dim">{i.container_name}</td>
-                      <td className="py-2 px-3 text-fg-dim">{i.host_port}</td>
-                      <td className="py-2 px-3"><StatusBadge status={i.status} /></td>
-                      <td className="py-2 px-3 text-fg-dim"><CpuUsage cpuPercent={i.cpu_percent} limitCores={i.cpu_limit_cores} status={i.status} /></td>
-                      <td className="py-2 px-3 text-fg-dim"><MemUsage memoryPercent={i.memory_percent} usedMb={i.memory_used_mb} limitMb={i.memory_limit_mb} status={i.status} /></td>
-                    </tr>
-                  ))
-                : []
-            )}
-          </Table>
-        </Card>
-      )}
     </div>
   );
 }

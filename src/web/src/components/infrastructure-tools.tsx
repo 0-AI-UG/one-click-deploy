@@ -6,7 +6,7 @@ import { Btn, Card, CopyButton, Field, Table, confirm, showToast } from "./ui.ts
 import { NeoSelect } from "./neo-select.tsx";
 import { PermissionGate } from "./permission-gate.tsx";
 
-type Server = { id: number; name: string; ipv4: string; status: string; pool?: string; apps?: Array<{ id: number }>; services?: Array<{ id: number }> };
+type Server = { id: number; name: string; ipv4: string; status: string; pool?: string; apps?: Array<{ id: number }> };
 type Worker = { id: number; name: string; status: string; worker_version: string; architecture: string; last_error: string; disk_free_bytes?: number; server: Server | null };
 type Source = { id: number; repository: string; branch: string; webhook_secret_configured: boolean; last_status: string; last_error: string };
 type GcRow = { server: { id: number; name: string }; images: unknown[]; reclaimable_ocd_image_bytes: number; reclaimable_foreign_image_bytes: number };
@@ -37,7 +37,7 @@ export function InfrastructureTools() {
   useEffect(() => { load().catch(() => {}); }, []);
 
   const eligible = useMemo(() => servers.filter((server) =>
-    server.status === "ready" && !server.apps?.length && !server.services?.length && !workers.some((item) => item.server?.id === server.id)
+    server.status === "ready" && !server.apps?.length && !workers.some((item) => item.server?.id === server.id)
   ), [servers, workers]);
 
   const installWorker = async () => {

@@ -75,7 +75,7 @@ describe("embedded OCD skill", () => {
     expect(files["docs/build-workers-and-webhooks.md"]).toContain("untrusted forks");
     expect(files["docs/build-workers-and-webhooks.md"]).toContain("X-Hub-Signature-256");
     expect(files["docs/immutable-images-and-health.md"]).toContain("OCI credential");
-    expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(16);
+    expect(Object.keys(files).filter((path) => path.startsWith("docs/"))).toHaveLength(15);
   });
 
   test("documents the unified desired-configuration surface", () => {
@@ -88,7 +88,7 @@ describe("embedded OCD skill", () => {
     const cli = files["docs/cli-reference.md"];
     for (const command of [
       "deploy", "release", "apps", "logs", "restart", "rollback", "promote", "pause",
-      "unpause", "envs", "services", "service", "stack", "ops", "servers",
+      "unpause", "envs", "stack", "ops", "servers",
       "ssh", "app", "scale", "resources", "volumes", "runners",
     ]) {
       expect(cli).toContain(`ocd ${command}`);
@@ -146,7 +146,7 @@ describe("embedded OCD skill", () => {
     expect(releases).toContain("Staging is a separately deployed app");
     expect(releases).toContain("ocd promote --from=api-staging --to=api");
     expect(stack).toContain("does not synthesize staging siblings");
-    expect(stack).toContain("not enable or create a staging service");
+    expect(stack).toContain("Create staging apps separately");
   });
 
   test("has no broken local markdown links", () => {

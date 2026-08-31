@@ -68,21 +68,9 @@ export async function handleDeployStack(request: Request): Promise<Response> {
     const selectedApps = req.selected_app_keys
       ? req.apps.filter((app) => req.selected_app_keys!.includes(app.key))
       : req.apps;
-    const selectedServices = req.selected_service_keys
-      ? req.services.filter((service) => req.selected_service_keys!.includes(service.key))
-      : req.services;
-    const hasNewServices = selectedServices.some((service) => !db.getServiceByName(`${req.name}-${service.key}`));
-    const wantsStagingServices = false;
-    const hasNewStagingServices = wantsStagingServices && selectedServices.some(
-      (service) => !db.getServiceByName(`${req.name}-${service.key}-staging`),
-    );
     const newApps = selectedApps.filter((app) => !db.getAppByName(`${req.name}-${app.key}`));
-    if (hasNewServices || hasNewStagingServices || newApps.length > 0) {
-      const pools = [
-        ...(hasNewServices ? ["general"] : []),
-        ...(hasNewStagingServices ? ["staging"] : []),
-        ...newApps.map((app) => app.placement_pool || "general"),
-      ];
+    if (newApps.length > 0) {
+      const pools = newApps.map((app) => app.placement_pool || "general");
       await approveAutomaticServerProvisioning(request, payload, `deploying stack ${req.name}`, pools);
       req.server_provisioning_approved = true;
     }
@@ -132,7 +120,6 @@ export async function handleGetStacks(request: Request): Promise<Response> {
         resource_status_reason: resourceState.reason,
         ...operationFields(s, resourceState),
         app_count: apps.length,
-        service_count: db.getServicesByStackId(s.id).length,
         // How many members `promote_stack` would actually promote. This applies
         // the same artifact-target rule as planPromotions so the dashboard button and the
         // CLI pre-check can't offer a promote the op then rejects.
@@ -207,7 +194,6 @@ export async function handleGetStack(request: Request, stackId: number): Promise
         : resourceState.reason,
       ...operationFields(stack, resourceState),
       apps: apps.map((app) => enrichAppForResponse(app as db.AppRow & Record<string, unknown>)),
-      services: db.getServicesByStackId(stackId),
       public_endpoints: publicEndpoints,
       acme_errors,
     }, { headers: corsHeaders });
@@ -233,7 +219,7 @@ export async function handleGetStackLog(request: Request, stackId: number): Prom
  *
  * A stack is only interesting as a whole: a request crosses three of its apps
  * and a database, so reading one member's log at a time is the wrong unit. We
- * fan out over the members' primary replica / instance, ask docker for
+ * fan out over the members' primary replica, ask docker for
  * timestamped lines, and hand the client one block per member. Interleaving and
  * per-member filtering happen client-side so toggling a member off is instant
  * and doesn't re-run N ssh calls.
@@ -256,17 +242,14 @@ export async function handleGetStackMemberLogs(request: Request, stackId: number
     // Staging siblings follow their production app and are not members in their
     // own right — the same rule the detail page's member list uses.
     //
-    // Container output is gated per member: `apps.logs` scoped to each member app,
-    // `services.logs` for the service members. A member the caller may not read is
+    // Container output is gated per member: `apps.logs` scoped to each member app.
+    // A member the caller may not read is
     // dropped from the response instead of 403-ing the request, so a user with a
     // narrow grant still sees the members they were given.
     const apps = db
       .getAppsByStackId(stackId)
       .filter((a) => a.target_of == null)
       .filter((a) => db.hasPermission(payload.userId, "apps.logs", appScope(a.id)));
-    const services = db.hasPermission(payload.userId, "services.logs")
-      ? db.getServicesByStackId(stackId)
-      : [];
 
     const fetchApp = async (app: { id: number; name: string }) => {
       const replicas = db.getReplicas(app.id);
@@ -277,14 +260,6 @@ export async function handleGetStackMemberLogs(request: Request, stackId: number
       return getContainerLogs(server.ipv4, replica.container_name, tail, server.ssh_host_key || undefined, true);
     };
 
-    const fetchService = async (service: { id: number; name: string }) => {
-      const instance = db.getPrimaryInstance(service.id);
-      if (!instance) throw new Error("No primary instance");
-      const server = db.getServer(instance.server_id);
-      if (!server) throw new Error("Server not found");
-      return getContainerLogs(server.ipv4, instance.container_name, tail, server.ssh_host_key || undefined, true);
-    };
-
     // One slow or unreachable member must not blank the whole view, so each
     // failure is reported in its own block and the rest still render.
     const members = await Promise.all([
@@ -293,13 +268,6 @@ export async function handleGetStackMemberLogs(request: Request, stackId: number
           return { kind: "app" as const, id: a.id, name: a.name, logs: await fetchApp(a) };
         } catch (err) {
           return { kind: "app" as const, id: a.id, name: a.name, logs: "", error: err instanceof Error ? err.message : String(err) };
-        }
-      }),
-      ...services.map(async (s) => {
-        try {
-          return { kind: "service" as const, id: s.id, name: s.name, logs: await fetchService(s) };
-        } catch (err) {
-          return { kind: "service" as const, id: s.id, name: s.name, logs: "", error: err instanceof Error ? err.message : String(err) };
         }
       }),
     ]);

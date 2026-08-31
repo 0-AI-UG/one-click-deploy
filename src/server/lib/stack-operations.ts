@@ -19,19 +19,15 @@ export function stackLockKeys(stack: Pick<db.StackRow, "id" | "name">): string[]
 export function withOwningStackKeys(args: EnqueueInput): EnqueueInput {
   const keys = new Set(args.resourceKeys);
   for (const key of args.resourceKeys) {
-    const match = /^(app|service):(\d+)$/.exec(key);
+    const match = /^app:(\d+)$/.exec(key);
     if (!match) continue;
-    const id = Number(match[2]);
+    const id = Number(match[1]);
     let stackId: number | null = null;
-    if (match[1] === "app") {
-      const app = db.getApp(id);
-      if (!app) continue;
-      stackId = app.stack_id;
-      if (stackId == null && app.target_of != null) {
-        stackId = db.getApp(app.target_of)?.stack_id ?? null;
-      }
-    } else {
-      stackId = db.getService(id)?.stack_id ?? null;
+    const app = db.getApp(id);
+    if (!app) continue;
+    stackId = app.stack_id;
+    if (stackId == null && app.target_of != null) {
+      stackId = db.getApp(app.target_of)?.stack_id ?? null;
     }
     if (stackId == null) continue;
     const stack = db.getStack(stackId);
@@ -63,11 +59,6 @@ export function relatedStackResourceKeys(stack: db.StackRow): Set<string> {
     keys.add(`app:${app.id}`);
     keys.add(`app:${app.name}`);
     keys.add(`app:create:${app.name}`);
-  }
-  for (const service of db.getServicesByStackId(stack.id)) {
-    keys.add(`service:${service.id}`);
-    keys.add(`service:${service.name}`);
-    keys.add(`service:create:${service.name}`);
   }
   return keys;
 }

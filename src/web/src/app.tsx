@@ -19,8 +19,6 @@ import { AccountPage } from "./pages/account.tsx";
 import { UsersPage } from "./pages/admin/users.tsx";
 import { UserDetailPage } from "./pages/admin/user-detail.tsx";
 import { TerminalPage } from "./pages/terminal.tsx";
-import { ServiceDetailPage } from "./pages/service-detail.tsx";
-import { ServicesPage } from "./pages/services.tsx";
 import { EnvironmentsPage } from "./pages/environments.tsx";
 import { DeviceAuthPage } from "./pages/device-auth.tsx";
 import { CliConfirmPage } from "./pages/cli-confirm.tsx";
@@ -136,11 +134,6 @@ export function App() {
   } else if (hash.startsWith("#/stacks/")) {
     const stackId = parseInt(hash.split("/")[2], 10);
     content = stackId ? <StackDetailPage stackId={stackId} /> : <DashboardPage />;
-  } else if (hash === "#/services") {
-    content = <ServicesPage />;
-  } else if (hash.startsWith("#/services/")) {
-    const serviceId = parseInt(hash.split("/")[2], 10);
-    content = serviceId ? <ServiceDetailPage serviceId={serviceId} /> : <DashboardPage />;
   } else if (hash === "#/cli/auth") {
     content = <DeviceAuthPage />;
   } else if (hash.startsWith("#/cli/confirm/")) {
@@ -175,9 +168,9 @@ export function App() {
     content = userId ? <UserDetailPage userId={userId} /> : <UsersPage />;
   } else if (hash.startsWith("#/terminal/")) {
     const parts = hash.split("/");
-    const kind = parts[2] as "server" | "replica" | "service-instance";
+    const kind = parts[2] as "server" | "replica";
     const id = parseInt(parts[3], 10);
-    content = (kind === "server" || kind === "replica" || kind === "service-instance") && id
+    content = (kind === "server" || kind === "replica") && id
       ? <TerminalPage kind={kind} id={id} />
       : <DashboardPage />;
   } else {

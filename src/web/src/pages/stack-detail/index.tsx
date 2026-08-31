@@ -95,7 +95,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
             <StatusBadge status={stack.status} />
           </div>
           <div className="font-mono text-[9px] text-muted mt-0.5">
-            {memberApps.length} app{memberApps.length !== 1 ? "s" : ""} · {stack.services.length} service{stack.services.length !== 1 ? "s" : ""}
+            {memberApps.length} app{memberApps.length !== 1 ? "s" : ""}
           </div>
           {stack.last_operation_id != null && (
             <>
@@ -143,7 +143,7 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
               onClick={async () => {
                 if (await confirm(
                   "Destroy Stack",
-                  `Destroy "${stack.name}" and all ${memberApps.length} app(s) and ${stack.services.length} service(s)? Containers and routing are removed; environments are retained, and managed volumes are detached for recovery.`,
+                  `Destroy "${stack.name}" and all ${memberApps.length} app(s)? Containers and routing are removed; environments are retained, and managed volumes are detached for recovery.`,
                   true,
                 )) {
                   await action("destroy", () => runConfirmedCliAction(

@@ -14,8 +14,8 @@ const preflight: Step<InstallBuildWorkerInput, { serverId: number }> = {
     if (!worker) throw new Error("Build worker record not found");
     const server = db.getServer(worker.server_id);
     if (!server) throw new Error("Build worker server not found");
-    if (db.getPanel()?.server_id === server.id || db.getApps(server.id).length || db.getServicesOnServer(server.id).length) {
-      throw new Error("Build workers require a dedicated server with no panel, apps, or managed services");
+    if (db.getPanel()?.server_id === server.id || db.getApps(server.id).length) {
+      throw new Error("Build workers require a dedicated server with no panel or apps");
     }
     if (server.pool !== "build-workers") throw new Error("Build worker server must be isolated in the build-workers pool");
     db.updateBuildWorker(worker.id, { status: "installing", last_error: "" });

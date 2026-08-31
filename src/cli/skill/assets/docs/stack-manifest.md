@@ -1,10 +1,10 @@
 # `ocd-stack.json` Stack Manifest
 
-Use a stack for apps and managed services that share dependency ordering and
-environment wiring. Each app entry references its own `.ocd-deploy.json`; each
-child manifest must contain its own immutable image digest.
+Use a stack for apps that share dependency ordering and environment wiring.
+Each app entry references its own `.ocd-deploy.json`; each child manifest can
+build from Git or select an OCI image.
 
-Stack `blog`, app key `api` becomes `blog-api`; service key `database` becomes
+Stack `blog`, app key `api` becomes `blog-api`; app key `database` becomes
 `blog-database`.
 
 ## Complete field reference
@@ -18,24 +18,12 @@ Stack `blog`, app key `api` becomes `blog-api`; service key `database` becomes
 | `environment` | Existing shared production environment name. |
 | `staging_environment` | Optional existing shared staging environment name; `null` clears the link. It does not create an environment or app. |
 | `staging_env` | Values applied to the selected staging environment. It requires that environment and does not trigger a release. |
-| `services` | Optional managed-service map. |
 | `apps` | Required non-empty app map. |
-
-Service entries support:
-
-- `services.<key>.type`: required catalog key;
-- `services.<key>.version`: supported catalog version;
-- `services.<key>.volume_size`: desired data size in GB;
-- `services.<key>.env_overrides`: string-to-string container overrides;
-- `services.<key>.domain`: custom HTTP domain;
-- `services.<key>.staging`: reserved staging-counterpart configuration
-  containing `volume_size`, `env_overrides`, and `domain`; declaring it does
-  not enable or create a staging service.
 
 App entries support:
 
 - `apps.<key>.manifest`: required child manifest path relative to the stack;
-- `apps.<key>.needs`: app/service keys that must become healthy first;
+- `apps.<key>.needs`: app keys that must become healthy first;
 - `apps.<key>.env`: explicit shared-environment key projection;
 - `apps.<key>.env_all`: explicitly expose every shared key; mutually exclusive
   with `env`;
@@ -49,8 +37,7 @@ Unknown nested fields and unknown `needs` targets are rejected.
 `needs` must form an acyclic graph. Dependencies become healthy before their
 consumers; independent members can proceed concurrently. Dependency variables
 use the stack member key: `api` publishes `API_URL`; `database` publishes
-`DATABASE_URL`, `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USER`,
-`DATABASE_PASSWORD`, and `DATABASE_NAME`.
+`DATABASE_URL` when the database app declares an `exports.URL` template.
 
 All child `env[]` declarations merge into the shared environment. Explicit
 sets win, existing values beat defaults, and conflicting defaults fail unless
@@ -89,14 +76,11 @@ an intentional artifact-only rollout after configuration is synchronized.
   "$schema": 1,
   "name": "blog",
   "environment": "production",
-  "services": {
-    "database": {
-      "type": "postgresql",
-      "version": "17",
-      "volume_size": 20
-    }
-  },
   "apps": {
+    "database": {
+      "manifest": "apps/database/.ocd-deploy.json",
+      "env": ["DATABASE_PASSWORD"]
+    },
     "api": {
       "manifest": "services/api/.ocd-deploy.json",
       "needs": ["database"],

@@ -241,7 +241,6 @@ export type StackDeployRequest = {
   stack_manifest_path?: string;
   /** Optional partial reconcile selection. Omission means every member. */
   selected_app_keys?: string[];
-  selected_service_keys?: string[];
   /** Partial runs never interpret omitted members as desired removals. */
   partial?: boolean;
   /** Apply desired configuration without changing the released artifact. */
@@ -257,10 +256,6 @@ export type StackDeployRequest = {
   /** Declared staging contract keys. The server retains certification only for
    * previously-applied keys still present in this list. */
   staging_env_keys?: string[];
-  services: Array<{ key: string; type: string; version?: string; volume_size?: number;
-                    env_overrides?: Record<string, string>; domain?: string;
-                    staging?: { volume_size?: number; env_overrides?: Record<string, string>; domain?: string };
-                    needs?: string[] }>;
   /** Stack members resolved to immutable artifacts before runtime deployment. */
   apps: Array<Omit<DeployRequest, "environment_id"> & {
     key: string;

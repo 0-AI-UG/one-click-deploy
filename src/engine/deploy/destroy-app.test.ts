@@ -41,7 +41,6 @@ mock.module("../../shared/github.ts", () => ({
 
 import * as db from "../../shared/db.ts";
 import { destroyApp } from "./lifecycle.ts";
-import { destroyServiceCore } from "./service-lifecycle.ts";
 import { enqueueOperation, listChildOperations, markOperationFinished } from "../../shared/db/operations.ts";
 import destroyServerOp from "../ops/destroy-server.ts";
 
@@ -74,13 +73,11 @@ async function destroyServer(serverId: number): Promise<{ ok: boolean; error?: s
   try {
     for (const step of destroyServerOp.steps) {
       const running = step.run(ctx, prior);
-      if (step.name === "destroy_apps_on_server" || step.name === "destroy_services_on_server") {
+      if (step.name === "destroy_apps_on_server") {
         await new Promise((resolve) => setTimeout(resolve, 0));
         for (const child of listChildOperations(ctx.opId).filter((op) => op.status === "pending")) {
-          const input = JSON.parse(child.input_json) as { appId?: number; serviceId?: number };
-          const result = child.kind === "destroy_app"
-            ? await destroyApp(input.appId!)
-            : await destroyServiceCore(input.serviceId!);
+          const input = JSON.parse(child.input_json) as { appId?: number };
+          const result = await destroyApp(input.appId!);
           markOperationFinished(
             child.id,
             result.ok ? "done" : "failed",

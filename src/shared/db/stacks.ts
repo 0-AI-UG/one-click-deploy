@@ -1,6 +1,5 @@
 import db from "./connection.ts";
 import type { AppRow } from "./apps.ts";
-import type { ServiceRow } from "./services.ts";
 
 export type StackRow = {
   id: number;
@@ -75,14 +74,6 @@ export function getAppsByStackId(stackId: number): AppRow[] {
   return db.query("SELECT * FROM apps WHERE stack_id = ?").all(stackId) as AppRow[];
 }
 
-export function getServicesByStackId(stackId: number): ServiceRow[] {
-  return db.query("SELECT * FROM services WHERE stack_id = ?").all(stackId) as ServiceRow[];
-}
-
 export function setAppStack(appId: number, stackId: number | null): void {
   db.query("UPDATE apps SET stack_id = ? WHERE id = ?").run(stackId, appId);
-}
-
-export function setServiceStack(serviceId: number, stackId: number | null): void {
-  db.query("UPDATE services SET stack_id = ? WHERE id = ?").run(stackId, serviceId);
 }

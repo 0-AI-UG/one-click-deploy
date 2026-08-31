@@ -17,7 +17,6 @@ export type CliActionWorkspace = {
 
 export type ConfirmableCliAction =
   | "delete_app"
-  | "delete_service"
   | "delete_server"
   | "delete_stack"
   | "delete_environment"

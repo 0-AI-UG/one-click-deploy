@@ -2612,6 +2612,23 @@ export const migrations: Migration[] = [
       db.run("ALTER TABLE apps ADD COLUMN post_start_command TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 112,
+    description: "Remove managed services",
+    disableForeignKeys: true,
+    up: (db) => {
+      const row = db.query("SELECT COUNT(*) AS count FROM services").get() as { count: number };
+      if (row.count !== 0) {
+        throw new Error(
+          `Cannot remove managed-service tables while ${row.count} service(s) still exist. Migrate them to apps first.`,
+        );
+      }
+      db.run("DELETE FROM user_permissions WHERE permission LIKE 'services.%'");
+      db.run("DROP TABLE service_links");
+      db.run("DROP TABLE service_instances");
+      db.run("DROP TABLE services");
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

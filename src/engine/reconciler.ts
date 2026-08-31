@@ -1,5 +1,5 @@
 import * as db from "../shared/db.ts";
-import type { AppRow, ReplicaRow, ServerRow, ServiceRow, ServiceInstanceRow } from "../shared/db.ts";
+import type { AppRow, ReplicaRow, ServerRow } from "../shared/db.ts";
 import { ensureHostLogPolicy, pruneServer } from "../shared/remote/index.ts";
 import { evaluateAutoScale, convergeAppReplicas } from "./scale/index.ts";
 import { reconcileNetwork } from "./scale/network-reconciler.ts";
@@ -7,7 +7,7 @@ import { reconcileProxy } from "./scale/proxy-manager.ts";
 import { reconcileTraefik } from "./scale/traefik-manager.ts";
 import { ingestServerRequestMetrics } from "./scale/request-metrics.ts";
 import { collectServerMetrics } from "./metrics-parse.ts";
-import { checkReplicaHealth, checkServiceInstanceHealth, HEALTH_EXEMPT_STATUSES } from "./health.ts";
+import { checkReplicaHealth, HEALTH_EXEMPT_STATUSES } from "./health.ts";
 import { sweepStuckStates } from "./stuck-sweep.ts";
 import { sweepExpiredProvisionalVolumes } from "./provisional-volume-sweep.ts";
 import { reconcileAllAppDns } from "./dns-reconciler.ts";
@@ -19,7 +19,6 @@ import {
   reconcileServerGc,
   reconcileServersAndNetwork,
 } from "./infrastructure-reconciler.ts";
-import { reconcileServiceInstances } from "./service-reconciler.ts";
 import { reconcileAppRuntime } from "./app-runtime-reconciler.ts";
 
 function log(context: string, ...args: unknown[]) {
@@ -39,7 +38,6 @@ let running = false;
 interface ServerWorkItem {
   server: ServerRow;
   replicas: { replica: ReplicaRow; app: AppRow }[];
-  serviceInstances: { instance: ServiceInstanceRow; service: ServiceRow }[];
 }
 
 async function processServer(work: ServerWorkItem): Promise<void> {
@@ -76,18 +74,6 @@ async function processServer(work: ServerWorkItem): Promise<void> {
     }
   }
 
-  // Apply container metrics to service instances
-  for (const { instance } of work.serviceInstances) {
-    const stats = containerStats.get(instance.container_name);
-    if (stats) {
-      db.updateServiceInstanceMetrics(instance.id, stats.cpu, stats.mem, {
-        cpuLimitCores: stats.cpuLimitCores,
-        memoryUsedMb: stats.memUsedMb,
-        memoryLimitMb: stats.memLimitMb,
-      });
-    }
-  }
-
   // Apply server-level metrics
   if (serverMetrics) {
     db.insertServerMetricSample(
@@ -111,11 +97,6 @@ async function processServer(work: ServerWorkItem): Promise<void> {
   for (const { replica, app } of work.replicas) {
     if (replica.status === "stopped" || replica.status === "paused" || replica.status === "sleeping" || replica.status === "waking") continue;
     checks.push(() => checkReplicaHealth(replica, app, server));
-  }
-
-  for (const { instance, service } of work.serviceInstances) {
-    if (instance.status === "paused" || instance.status === "stopped") continue;
-    checks.push(() => checkServiceInstanceHealth(instance, service, server));
   }
 
   await runWithConcurrency(checks, HEALTH_CHECK_CONCURRENCY);
@@ -157,7 +138,7 @@ async function tick(): Promise<void> {
       if (item) return item;
       const server = db.getServer(serverId);
       if (!server) return null;
-      item = { server, replicas: [], serviceInstances: [] };
+      item = { server, replicas: [] };
       serverWork.set(serverId, item);
       return item;
     };
@@ -175,19 +156,6 @@ async function tick(): Promise<void> {
       if (!app) continue;
       const work = ensureServer(replica.server_id);
       if (work) work.replicas.push({ replica, app });
-    }
-
-    const services = db.getServices();
-    let serviceCount = 0;
-    for (const service of services) {
-      if (service.status === "paused" || service.status === "deploying") continue;
-      const instances = db.getServiceInstances(service.id);
-      for (const instance of instances) {
-        if (instance.status === "paused" || instance.status === "stopped") continue;
-        const work = ensureServer(instance.server_id);
-        if (work) work.serviceInstances.push({ instance, service });
-      }
-      serviceCount++;
     }
 
     // Also ensure servers with no containers still get server-level metrics
@@ -211,7 +179,7 @@ async function tick(): Promise<void> {
       }
     }
 
-    // --- Status propagation (app + service level) ---
+    // --- Status propagation ---
     for (const [appId, list] of byApp) {
       const app = db.getApp(appId);
       if (!app) continue;
@@ -295,28 +263,12 @@ async function tick(): Promise<void> {
       log("availability", `sampling failed: ${err}`);
     }
 
-    for (const service of services) {
-      if (service.status === "paused" || service.status === "deploying") continue;
-      if (service.status === "running" || service.status === "unhealthy") {
-        const instances = db.getServiceInstances(service.id);
-        const freshInstances = instances
-          .map((i) => db.getServiceInstance(i.id))
-          .filter((i): i is NonNullable<typeof i> => i !== null && !HEALTH_EXEMPT_STATUSES.has(i.status));
-        const allHealthy = freshInstances.length > 0 && freshInstances.every((i) => i.status === "running");
-        const newStatus = allHealthy ? "running" : "unhealthy";
-        if (newStatus !== service.status) {
-          log("status", `service ${service.id}: ${service.status} -> ${newStatus}`);
-          db.updateServiceStatus(service.id, newStatus);
-        }
-      }
-    }
-
     // --- Cleanup ---
     db.pruneOldMetrics(METRICS_RETENTION_SEC);
     db.pruneOldServerMetrics(METRICS_RETENTION_SEC);
     db.pruneOldAvailabilitySamples(AVAILABILITY_RETENTION_SEC);
 
-    log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps, ${serviceCount} services, ${serverWork.size} servers)`);
+    log("tick", `done in ${Date.now() - start}ms (${byApp.size} apps, ${serverWork.size} servers)`);
   } catch (err) {
     log("tick", `error: ${err}`);
   } finally {
@@ -345,7 +297,6 @@ export function startReconciler(): void {
     run: async () => { await reconcileServersAndNetwork(); await reconcileNetwork(); },
   });
   startController({ name: "ingress", intervalMs: 30_000, timeoutMs: 25_000, run: reconcileTraefik });
-  startController({ name: "service-runtime", intervalMs: 30_000, timeoutMs: 25_000, run: reconcileServiceInstances });
   startController({ name: "app-runtime", intervalMs: 60_000, timeoutMs: 50_000, run: reconcileAppRuntime });
   startController({ name: "server-gc", intervalMs: 30_000, timeoutMs: 25_000, run: reconcileServerGc });
   startController({ name: "volumes", intervalMs: 120_000, timeoutMs: 90_000, run: reconcileActiveVolumes });
@@ -370,7 +321,6 @@ async function maintenanceTick(): Promise<void> {
     const activeAppNames = db.getApps(server.id).map((app) => app.name);
     const protectedContainerNames = [
       ...db.getReplicasByServer(server.id).map((replica) => replica.container_name),
-      ...db.getServiceInstancesByServer(server.id).map((instance) => instance.container_name),
     ];
     const panel = db.getPanel();
     const panelContainerName = panel?.server_id === server.id ? panel.name : undefined;

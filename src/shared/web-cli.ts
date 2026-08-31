@@ -2,16 +2,12 @@ export type WebCliResource =
   | "app"
   | "environment"
   | "deleted-environment"
-  | "service"
   | "stack"
   | "server"
   | "volume"
   | "operation"
   | "deployment"
   | "replica"
-  | "service-instance"
-  | "service-type"
-  | "service-version"
   | "server-type"
   | "location";
 
@@ -48,9 +44,6 @@ export type WebCliCommand = {
 
 const app = (description = "App name or numeric ID"): WebCliInput => ({
   key: "app", label: "App", description, kind: "resource", resource: "app", required: true, positional: true,
-});
-const service = (): WebCliInput => ({
-  key: "service", label: "Service", kind: "resource", resource: "service", required: true, positional: true,
 });
 const environment = (key = "environment", label = "Environment"): WebCliInput => ({
   key, label, kind: "resource", resource: "environment", required: true, positional: true,
@@ -106,7 +99,7 @@ export const WEB_CLI_COMMANDS: WebCliCommand[] = [
   { id: "scale.migrate", category: "Scaling", label: "Migrate replica", description: "Move a replica to another server.", args: ["scale", "migrate"], inputs: [app(), resource("replica", "Replica", "replica", { required: true, positional: true }), { ...server(), key: "target", label: "Target server", positional: false, flag: "to" }] },
 
   { id: "stacks.list", category: "Stacks", label: "List stacks", description: "List all stacks.", args: ["stack", "ls"], inputs: [] },
-  { id: "stacks.status", category: "Stacks", label: "Stack status", description: "Show a stack's apps and services.", args: ["stack", "status"], inputs: [stack()] },
+  { id: "stacks.status", category: "Stacks", label: "Stack status", description: "Show a stack's apps.", args: ["stack", "status"], inputs: [stack()] },
   { id: "stacks.logs", category: "Stacks", label: "Stack deploy log", description: "Print the stack's deploy log.", args: ["stack", "logs"], inputs: [stack()] },
   { id: "stacks.member-logs", category: "Stacks", label: "Member logs", description: "Print current logs for every readable member.", args: ["stack", "member-logs"], inputs: [stack(), positiveNumber("tail", "Lines per member", { flag: "tail", defaultValue: "100", max: 10000 })] },
   { id: "stacks.promote", category: "Stacks", label: "Promote stack", description: "Promote ready staging siblings in dependency order.", args: ["promote", "stack"], inputs: [stack()], danger: true },
@@ -124,18 +117,6 @@ export const WEB_CLI_COMMANDS: WebCliCommand[] = [
   { id: "envs.restore", category: "Environments", label: "Restore environment", description: "Restore a retired environment.", args: ["envs", "restore"], inputs: [{ ...environment(), resource: "deleted-environment" }] },
   { id: "envs.delete", category: "Environments", label: "Retire environment", description: "Retire an environment for recovery.", args: ["envs", "remove"], inputs: [environment(), { key: "copyName", label: "Recovery copy name", kind: "text", flag: "copy-before-delete" }], danger: true },
   { id: "envs.purge", category: "Environments", label: "Purge environment", description: "Permanently erase a retired environment.", args: ["envs", "purge"], inputs: [{ ...environment(), resource: "deleted-environment" }], danger: true },
-
-  { id: "services.list", category: "Services", label: "List services", description: "List managed services.", args: ["service", "list"], inputs: [] },
-  { id: "services.catalog", category: "Services", label: "Service catalog", description: "Show supported service types and defaults.", args: ["service", "catalog"], inputs: [] },
-  { id: "services.show", category: "Services", label: "Service details", description: "Show instances, connection details, and links (secrets remain masked).", args: ["service", "show"], inputs: [service()] },
-  { id: "services.logs", category: "Services", label: "Service logs", description: "Read recent service logs.", args: ["service", "logs"], inputs: [service(), positiveNumber("tail", "Lines", { flag: "tail", defaultValue: "100", max: 10000 }), resource("instance", "Instance", "service-instance", { flag: "instance" })] },
-  { id: "services.restart", category: "Services", label: "Restart service", description: "Restart a service and follow the operation.", args: ["service", "restart"], inputs: [service()] },
-  { id: "services.pause", category: "Services", label: "Pause service", description: "Pause a managed service.", args: ["service", "pause"], inputs: [service()] },
-  { id: "services.unpause", category: "Services", label: "Unpause service", description: "Resume a managed service.", args: ["service", "unpause"], inputs: [service()] },
-  { id: "services.inject", category: "Services", label: "Inject credentials", description: "Inject service credentials into an environment.", args: ["service", "inject"], inputs: [service(), environment(), { key: "prefix", label: "Prefix", kind: "text", flag: "prefix", defaultValue: "DATABASE" }] },
-  { id: "services.uninject", category: "Services", label: "Remove credentials", description: "Remove injected service credentials from an environment.", args: ["service", "uninject"], inputs: [service(), environment()] },
-  { id: "services.delete", category: "Services", label: "Delete service", description: "Destroy service containers and retain its environment.", args: ["service", "delete"], inputs: [service()], danger: true },
-  { id: "services.create", category: "Services", label: "Create service", description: "Provision a standalone managed service.", args: ["service", "create"], inputs: [{ key: "name", label: "Name", kind: "text", required: true, positional: true }, resource("type", "Catalog type", "service-type", { required: true, flag: "type" }), resource("version", "Version", "service-version", { flag: "version" }), positiveNumber("volumeSize", "Volume size (GB)", { flag: "volume-size" }), { ...environment(), required: false, positional: false, flag: "env" }, { key: "envPrefix", label: "Environment prefix", kind: "text", flag: "env-prefix" }, { key: "domain", label: "Domain", kind: "text", flag: "domain" }, { key: "vars", label: "Overrides", kind: "key-value", repeatable: true, transport: "set-vars" }] },
 
   { id: "ops.list", category: "Operations", label: "List operations", description: "List engine operations.", args: ["ops", "list"], inputs: [{ ...app(), required: false, positional: false, flag: "app" }, positiveNumber("limit", "Limit", { flag: "limit", defaultValue: "20", max: 200 })] },
   { id: "ops.engine", category: "Operations", label: "Engine status", description: "Show heartbeat, concurrency, and operation kinds.", args: ["ops", "engine"], inputs: [] },
@@ -256,7 +237,7 @@ export function buildWebCliInvocation(
       if (
         input.kind === "resource" &&
         input.resource &&
-        ["operation", "deployment", "replica", "service-instance"].includes(input.resource) &&
+        ["operation", "deployment", "replica"].includes(input.resource) &&
         !/^[1-9]\d*$/.test(value)
       ) {
         throw new Error(`${input.label} has an invalid ID`);

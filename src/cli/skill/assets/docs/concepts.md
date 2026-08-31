@@ -36,5 +36,5 @@ self-hosted registries. GitHub signed push webhooks are the current automatic
 source trigger; manual deployment is not GitHub-dependent.
 
 DNS is manual and provider-neutral. Hetzner provisioning is optional. Connected
-operator-owned hosts support stateless workloads; managed provider volumes and
-services require supported managed infrastructure.
+operator-owned hosts support stateless workloads; managed provider volumes
+require supported managed infrastructure.

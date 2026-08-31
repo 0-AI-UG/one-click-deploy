@@ -14,7 +14,6 @@ import {
 
 const CONFIRMABLE_ACTIONS = [
   "delete_app",
-  "delete_service",
   "delete_server",
   "delete_stack",
   "delete_environment",
@@ -65,31 +64,24 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       const app = db.getApp(Number(resourceId));
       if (!app) return Response.json({ error: "App not found" }, { status: 404, headers: corsHeaders });
       summary = `Destroy app "${app.name}" (id ${app.id}) — removes its container(s); managed volumes are detached and retained for recovery. DNS is never changed, so remove ${app.domain || "its record"} manually if needed.`;
-    } else if (action === "delete_service") {
-      const service = db.getService(Number(resourceId));
-      if (!service) return Response.json({ error: "Service not found" }, { status: 404, headers: corsHeaders });
-      summary = `Destroy service "${service.name}" (id ${service.id}) — removes its containers and injected environment variables; managed volumes are detached and retained for recovery.`;
     } else if (action === "delete_server") {
       const server = db.getServers().find((row) => String(row.id) === resourceId || row.provider_id === resourceId);
       if (!server) return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
       const apps = db.getApps(server.id);
-      const services = db.getServicesOnServer(server.id);
       summary = server.ownership === "connected"
-        ? `Disconnect externally owned server "${server.name}" (id ${server.id}) after destroying ${apps.length} app(s) plus ${services.length} service(s) assigned to it. The VPS itself will not be changed or deleted.`
-        : `Permanently delete managed server "${server.name}" (${server.provider_id || `id ${server.id}`}) and destroy ${apps.length} app(s) plus ${services.length} service(s) assigned to it.`;
+        ? `Disconnect externally owned server "${server.name}" (id ${server.id}) after destroying ${apps.length} app(s) assigned to it. The VPS itself will not be changed or deleted.`
+        : `Permanently delete managed server "${server.name}" (${server.provider_id || `id ${server.id}`}) and destroy ${apps.length} app(s) assigned to it.`;
     } else if (action === "delete_stack") {
       const s = db.getStack(Number(resourceId));
       if (!s) return Response.json({ error: "Stack not found" }, { status: 404, headers: corsHeaders });
       const apps = db.getAppsByStackId(s.id);
-      const svcs = db.getServicesByStackId(s.id);
-      summary = `Destroy stack "${s.name}" and all ${apps.length} app(s) + ${svcs.length} service(s); its production and staging environments are retained, and managed volumes are detached for recovery.`;
+      summary = `Destroy stack "${s.name}" and all ${apps.length} app(s); its production and staging environments are retained, and managed volumes are detached for recovery.`;
     } else if (action === "delete_environment") {
       const env = db.getEnvironment(Number(resourceId));
       if (!env) return Response.json({ error: "Environment not found" }, { status: 404, headers: corsHeaders });
       const inUse = db.getAppsByEnvironmentId(env.id);
-      const serviceLinks = db.getServiceLinksByEnvironmentId(env.id);
-      summary = inUse.length || serviceLinks.length
-        ? `Retire environment "${env.name}" (id ${env.id}) — currently used by ${inUse.length} app(s) and linked to ${serviceLinks.length} service(s).`
+      summary = inUse.length
+        ? `Retire environment "${env.name}" (id ${env.id}) — currently used by ${inUse.length} app(s).`
         : `Retire environment "${env.name}" (id ${env.id}) for seven-day recovery.`;
     } else if (action === "purge_environment") {
       const env = db.getDeletedEnvironment(Number(resourceId));

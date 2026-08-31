@@ -2,7 +2,6 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   Check,
   Cpu,
-  Database,
   HardDrive,
   Home,
   Layers,
@@ -22,7 +21,6 @@ import { SkillInstallMenu } from "./skill-install-menu.tsx";
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
   { hash: "#/environments", label: "Env", icon: Layers, match: /^#\/environments/ },
-  { hash: "#/services", label: "Services", icon: Database, match: /^#\/services/ },
   { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
   { hash: "#/engine", label: "Engine", icon: Cpu, match: /^#\/engine/ },
 ];
@@ -153,7 +151,6 @@ function MobileNav({ hash }: { hash: string }) {
 
   const primaryItems = [
     { hash: "#/", label: "Home", icon: Home, active: /^#\/?$/.test(hash) || /^#\/(apps|stacks)\//.test(hash) },
-    { hash: "#/services", label: "Services", icon: Database, active: hash.startsWith("#/services") },
     { hash: "#/resources", label: "Resources", icon: HardDrive, active: hash.startsWith("#/resources") },
   ];
 

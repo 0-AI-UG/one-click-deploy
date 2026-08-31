@@ -94,7 +94,6 @@ function stateFor(...appNames: string[]) {
   return {
     ...state,
     apps: state.apps.filter((a) => appNames.includes(a.name)),
-    services: [],
   };
 }
 
@@ -345,51 +344,6 @@ describe("renderDynamicConfig", () => {
     expect(cfg).not.toContain(appDraining.name);
   });
 
-  test("managed HTTP service gets a panel-only single-upstream vhost", () => {
-    const server = makeServer("10.0.1.10");
-    const name = `svc-${randomSuffix()}`;
-    const svc = db.insertService({
-      name,
-      service_type: "n8n",
-      version: "latest",
-      port: 5678,
-      env_vars: "{}",
-      credentials: JSON.stringify({ domain: `${name}.example.com` }),
-    });
-    const instance = db.insertServiceInstance({
-      service_id: svc.id,
-      server_id: server.id,
-      role: "primary",
-      container_name: name,
-      host_port: 11001,
-    });
-
-    const state = collectDesiredState();
-    const desired = state.services.find((s) => s.name === name);
-    expect(desired).toEqual({
-      name,
-      domain: `${name}.example.com`,
-      upstream: "10.0.1.10:11001",
-    });
-
-    const panel = parse(renderDynamicConfig({ ...state, apps: [] }, { isPanel: true }));
-    const router = panel.http.routers[`svc-${name}`];
-    expect(router.rule).toBe(`Host(\`${name}.example.com\`)`);
-    expect(router.middlewares).toEqual(["svc-headers", "retry"]);
-    expect(router.tls).toEqual({ certResolver: "letsencrypt" });
-    expect(panel.http.services[`svc-${name}`].loadBalancer.servers).toEqual([
-      { url: "http://10.0.1.10:11001" },
-    ]);
-
-    const worker = parse(renderDynamicConfig({ ...state, apps: [] }, { isPanel: false }));
-    expect(worker.http?.routers?.[`svc-${name}`]).toBeUndefined();
-
-    // service_instances.server_id has no ON DELETE CASCADE — clean up so
-    // other test files' deleteServer sweeps don't hit the FK constraint.
-    db.deleteServiceInstance(instance.id);
-    db.deleteService(svc.id);
-  });
-
   test("sticky sessions: cookie affinity on the app's HTTP service; off by default", () => {
     const server = makeServer("10.0.2.2");
     const plain = makeApp({ server, hostPort: 10100 });
@@ -573,7 +527,7 @@ describe("publicTls (HTTP-01 only)", () => {
     const custom = makeApp({ server, domain: "shop.custom-domain.io", hostPort: 10091 });
     const state = collectDesiredState();
     const cfg = parse(renderDynamicConfig(
-      { ...state, apps: state.apps.filter((a) => [auto.name, custom.name].includes(a.name)), services: [] },
+      { ...state, apps: state.apps.filter((a) => [auto.name, custom.name].includes(a.name)) },
       { isPanel: true },
     ));
     expect(cfg.http.routers[`pub-${auto.name}`].tls).toEqual({ certResolver: "letsencrypt" });

@@ -53,20 +53,20 @@ describe("buildDockerRunArgs", () => {
     expect(cmd).not.toContain("--network");
   });
 
-  test("injects managed-service aliases even when app replicas use the default bridge", () => {
+  test("injects app aliases even when replicas use the default bridge", () => {
     const cmd = buildDockerRunArgs({
       name: "api",
       image: "api:latest",
       appName: "api",
       network: null,
       extraHosts: [
-        { hostname: "postgres.svc.ocd.internal", address: "10.0.0.8" },
-        { hostname: "redis.svc.ocd.internal", address: "10.0.0.9" },
+        { hostname: "database.ocd.internal", address: "10.0.0.8" },
+        { hostname: "cache.ocd.internal", address: "10.0.0.9" },
       ],
     });
     expect(cmd).not.toContain("--network");
-    expect(cmd).toContain("--add-host=postgres.svc.ocd.internal:10.0.0.8");
-    expect(cmd).toContain("--add-host=redis.svc.ocd.internal:10.0.0.9");
+    expect(cmd).toContain("--add-host=database.ocd.internal:10.0.0.8");
+    expect(cmd).toContain("--add-host=cache.ocd.internal:10.0.0.9");
   });
 
   test("rejects unsafe service alias values", () => {

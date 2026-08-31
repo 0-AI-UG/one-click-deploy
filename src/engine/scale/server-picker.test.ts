@@ -75,7 +75,6 @@ beforeEach(() => {
   // Wipe everything that pickTargetServer reads to keep cases isolated.
   db.deletePanel();
   conn.run("DELETE FROM replicas");
-  conn.run("DELETE FROM service_instances");
   conn.run("DELETE FROM port_reservations");
   conn.run("DELETE FROM server_metrics_samples");
   conn.run("UPDATE apps SET build_source_id = NULL");

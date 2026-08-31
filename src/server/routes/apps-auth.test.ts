@@ -91,24 +91,13 @@ describe("app response scrubbing", () => {
       internal_protocol: "http",
     });
     db.appendDeployLog(app.id, "x".repeat(256_000));
-    const service = db.insertService({
-      name: `service-${Math.random().toString(36).slice(2, 8)}`,
-      service_type: "postgres",
-      version: "16",
-      port: 5432,
-      env_vars: '{"VISIBLE":"no"}',
-      credentials: '{"PASSWORD":"secret"}',
-    });
-
     const response = await handleGetDashboard(new Request("http://x/api/dashboard?compact=1"));
     expect(response.status).toBe(200);
     const raw = await response.text();
     const body = JSON.parse(raw) as {
       apps: Array<Record<string, unknown>>;
-      services: Array<Record<string, unknown>>;
     };
     const appRow = body.apps.find((row) => row.id === app.id)!;
-    const serviceRow = body.services.find((row) => row.id === service.id)!;
 
     expect(Object.keys(appRow).sort()).toEqual([
       "container_port",
@@ -122,7 +111,6 @@ describe("app response scrubbing", () => {
       "public",
       "status",
     ]);
-    expect(Object.keys(serviceRow).sort()).toEqual(["id", "name", "service_type", "status"]);
     expect(raw).not.toContain("x".repeat(1_000));
     expect(raw).not.toContain("secret");
     expect(raw.length).toBeLessThan(10_000);
@@ -130,10 +118,8 @@ describe("app response scrubbing", () => {
     const fullResponse = await handleGetDashboard(new Request("http://x/api/dashboard"));
     const fullBody = await fullResponse.json() as {
       apps: Array<Record<string, unknown>>;
-      services: Array<Record<string, unknown>>;
     };
     expect(fullBody.apps.find((row) => row.id === app.id)?.deploy_log).toContain("x".repeat(1_000));
-    expect(fullBody.services.find((row) => row.id === service.id)?.credentials).toContain("secret");
   });
 });
 

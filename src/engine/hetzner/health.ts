@@ -419,7 +419,7 @@ export async function probeAppHealth(
   }
   if (mode === "exec") {
     if (!app.health_check_command) return { healthy: false, error: "Exec health check command is missing" };
-    return serviceHealthCheck(ip, containerName, app.health_check_command, maxAttempts, hostKey);
+    return execHealthCheck(ip, containerName, app.health_check_command, maxAttempts, hostKey);
   }
   if (mode === "heartbeat" || mode === "periodic_job") {
     if (!app.health_check_file || !app.health_check_max_age_seconds) {
@@ -439,6 +439,40 @@ export async function probeAppHealth(
   // docker-inspect (which still rejects restarting/exited/restart-loop state)
   // is authoritative and avoids turning final bookkeeping into a 30s+ wait.
   return containerRunningCheck(ip, containerName, 1, hostKey);
+}
+
+async function execHealthCheck(
+  ip: string,
+  containerName: string,
+  command: string,
+  maxAttempts: number,
+  hostKey?: string,
+): Promise<{ healthy: boolean; error?: string; inconclusive?: boolean }> {
+  return runHealthProbe(`Exec health check for ${containerName}: ${command}`, maxAttempts, async (i) => {
+    const inspect = await inspectContainer(ip, containerName, hostKey);
+    if (inspect.sshFailed) return inconclusiveStep(i, maxAttempts);
+    const assessment = inspect.state
+      ? assessContainerInspection(inspect.state)
+      : { runnable: false, error: "Container does not exist" };
+    if (!assessment.runnable) {
+      return {
+        done: false,
+        retryLog: `${assessment.error} (attempt ${i + 1}/${maxAttempts})`,
+        finalResult: { healthy: false, running: false, ready: false, error: assessment.error },
+      };
+    }
+    const result = await sshExec(ip, dockerExecScriptCommand(containerName, command), hostKey);
+    if (result.exitCode === SSH_TRANSPORT_FAILURE) return inconclusiveStep(i, maxAttempts);
+    if (result.exitCode === 0) {
+      return { done: true, log: `Exec health check passed for ${containerName}`, result: { healthy: true } };
+    }
+    const error = result.stdout.trim() || result.stderr.trim() || `exit ${result.exitCode}`;
+    return {
+      done: false,
+      retryLog: `Exec health check failed (attempt ${i + 1}/${maxAttempts}): ${error}`,
+      finalResult: { healthy: false, error: `Health check failed: ${error}` },
+    };
+  });
 }
 
 /** Pure marker assessment used by probes and unit tests. */
@@ -502,75 +536,6 @@ export async function markerFreshnessHealthCheck(
         done: false,
         retryLog: `${error} (attempt ${i + 1}/${maxAttempts})`,
         finalResult: { healthy: false, running: true, ready: false, error },
-      };
-    },
-  );
-}
-
-export async function serviceHealthCheck(
-  ip: string,
-  containerName: string,
-  healthCmd: string,
-  maxAttempts = 5,
-  hostKey?: string
-): Promise<{ healthy: boolean; error?: string; inconclusive?: boolean }> {
-  return runHealthProbe(
-    `Service health check for ${containerName}: ${healthCmd}`,
-    maxAttempts,
-    async (i) => {
-      const inspect = await inspectContainer(ip, containerName, hostKey);
-      if (inspect.sshFailed) return inconclusiveStep(i, maxAttempts);
-      const assessment = inspect.state ? assessContainerInspection(inspect.state) : {
-        runnable: false,
-        error: "Container does not exist",
-      };
-      if (!assessment.runnable) {
-        return {
-          done: false,
-          retryLog: `${assessment.error} (attempt ${i + 1}/${maxAttempts})`,
-          finalResult: {
-            healthy: false,
-            running: false,
-            ready: false,
-            error: assessment.error,
-            containerStatus: inspect.state?.status,
-            restartCount: inspect.state?.restartCount,
-          },
-        };
-      }
-
-      // Run health check command inside container
-      const result = await sshExec(
-        ip,
-        dockerExecScriptCommand(containerName, healthCmd),
-        hostKey
-      );
-
-      if (result.exitCode === SSH_TRANSPORT_FAILURE) return inconclusiveStep(i, maxAttempts);
-      if (result.exitCode === 0) {
-        return {
-          done: true,
-          log: `Service health check passed for ${containerName}`,
-          result: {
-            healthy: true,
-            running: true,
-            ready: true,
-            containerStatus: inspect.state?.status,
-            restartCount: inspect.state?.restartCount,
-          },
-        };
-      }
-      return {
-        done: false,
-        retryLog: `Service health check failed (attempt ${i + 1}/${maxAttempts}): ${result.stdout.trim()}`,
-        finalResult: {
-          healthy: false,
-          running: true,
-          ready: false,
-          error: `Health check failed: ${result.stdout.trim() || result.stderr.trim()}`,
-          containerStatus: inspect.state?.status,
-          restartCount: inspect.state?.restartCount,
-        },
       };
     },
   );

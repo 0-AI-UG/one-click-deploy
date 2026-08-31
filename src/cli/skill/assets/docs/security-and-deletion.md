@@ -26,7 +26,7 @@ permission, globally or at a supported resource scope.
 
 Read permissions:
 
-- `fleet.view`, `apps.view`, `services.view`, `environments.view`,
+- `fleet.view`, `apps.view`, `environments.view`,
   `metrics.view`, `operations.view`, `deployments.view`.
 
 App permissions:
@@ -34,10 +34,8 @@ App permissions:
 - `apps.deploy`, `apps.rollback`, `apps.restart`, `apps.pause`, `apps.destroy`,
   `apps.logs`, `apps.promote`.
 
-Service/stack/environment:
+Stack/environment:
 
-- `services.deploy`, `services.manage`, `services.destroy`, `services.logs`,
-  `services.link`;
 - `stacks.view`, `stacks.deploy`, `stacks.promote`, `stacks.destroy`;
 - `environments.manage`, `environments.secrets`.
 
@@ -111,10 +109,9 @@ provider volume ID before the server marks the confirmation approved.
 | Action | Confirmation | Environment | Managed volume | Other effects |
 |---|---|---|---|---|
 | Delete app | Web UI always | retained | detached/retained | containers and ingress removed; DNS cleanup shown as manual |
-| Delete service | Web UI always | retained | detached/retained | containers and injected variables removed |
 | Delete managed server | Web UI always | retained | workload volumes retained | cascades through assigned workloads, then deletes the provider VPS |
 | Disconnect external server | Web UI always | retained | unsupported | cascades through assigned stateless workloads; never deletes the VPS |
-| Delete stack | Web UI always | production and staging retained | member volumes detached/retained | all recorded apps/services destroyed |
+| Delete stack | Web UI always | production and staging retained | member volumes detached/retained | all recorded apps destroyed |
 | Delete environment | Web UI always | explicitly deleted only if unused | n/a | fails while apps link it |
 | Cancel operation | Web UI always once compensation is possible | compensation depends on provisional ownership | compensation may detach created volume | runs operation rollback |
 | Delete provider volume | Web UI + typed provider ID | n/a | provider data destroyed | irreversible; verify backup/ownership |

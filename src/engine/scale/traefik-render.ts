@@ -13,7 +13,6 @@
 // All emitted "YAML" is JSON (JSON is valid YAML) — no serializer dependency.
 
 import * as db from "../../shared/db.ts";
-import { getCatalogEntry } from "../../shared/services/catalog.ts";
 import {
   BASIC_AUTH_USER,
   WAKER_HTTP_PORT,
@@ -78,16 +77,8 @@ export type DesiredApp = {
   upstreams: string[];
 };
 
-export type DesiredService = {
-  name: string;
-  domain: string;
-  /** `<private-ip>:<host-port>` — services are single-instance. */
-  upstream: string;
-};
-
 export type DesiredState = {
   apps: DesiredApp[];
-  services: DesiredService[];
   /** The panel container's host port on the panel server's loopback. Null when
    *  no panel. No longer consumed by the renderer (sleeping apps route to the
    *  waker, not the panel) — retained in the snapshot for callers/tests. */
@@ -163,34 +154,10 @@ export function collectDesiredState(): DesiredState {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const services: DesiredService[] = [];
-  for (const svc of db.getServices()) {
-    const catalog = getCatalogEntry(svc.service_type);
-    if (!catalog?.http) continue;
-    let domain = "";
-    try {
-      domain = String(JSON.parse(svc.credentials)?.domain || "");
-    } catch {
-      // malformed credentials — no ingress
-    }
-    if (!domain) continue;
-    const instance = db.getServiceInstances(svc.id)[0];
-    if (!instance) continue;
-    const server = db.getServer(instance.server_id);
-    if (!server?.private_ipv4) continue;
-    services.push({
-      name: svc.name,
-      domain,
-      upstream: `${server.private_ipv4}:${instance.host_port}`,
-    });
-  }
-  services.sort((a, b) => a.name.localeCompare(b.name));
-
   const panel = db.getPanel();
   const panelServer = panel ? db.getServer(panel.server_id) : null;
   return {
     apps,
-    services,
     panelHostPort: panel?.host_port ?? null,
     panelPrivateIpv4: panelServer?.private_ipv4 || null,
     panelPublicIpv4: panelServer?.ipv4 || null,
@@ -245,7 +212,7 @@ function httpLoadBalancer(app: DesiredApp): Record<string, unknown> {
  * Traefik now carries public HTTP ingress only — internal app-to-app traffic
  * AND the public raw TCP/UDP pool (30000-30099) are both owned by the per-host
  * VIP proxy (src/proxy/). Only the panel (`isPanel`) renders routers: public
- * app domains, managed-service domains, and the global web→websecure redirect.
+ * app domains and the global web→websecure redirect.
  * Workers get an empty config.
  *
  * A SLEEPING public app does not disappear — its domain router is pointed at
@@ -267,7 +234,6 @@ export function renderDynamicConfig(
 
   let needRetry = false;
   let needSecHeaders = false;
-  let needSvcHeaders = false;
   // Whether any router pointed at the shared waker HTTP service this render, so
   // the one load balancer to `<panel-private-ip>:WAKER_HTTP_PORT` is emitted.
   let needWakerHttp = false;
@@ -340,24 +306,7 @@ export function renderDynamicConfig(
     needSecHeaders = true;
   }
 
-  // Managed services: single-upstream public vhosts on the panel.
   if (opts.isPanel) {
-    for (const svc of state.services) {
-      const svcName = `svc-${svc.name}`;
-      httpServices[svcName] = {
-        loadBalancer: { servers: [{ url: `http://${svc.upstream}` }] },
-      };
-      httpRouters[svcName] = {
-        entryPoints: ["websecure"],
-        rule: `Host(\`${svc.domain}\`)`,
-        middlewares: ["svc-headers", "retry"],
-        service: svcName,
-        tls: publicTls(svc.domain),
-      };
-      needRetry = true;
-      needSvcHeaders = true;
-    }
-
     // Global web→websecure redirect. ACME HTTP-01 bypasses it automatically;
     // priority 1 lets any explicit :80 router (panel.yml) win over it.
     httpRouters["web-to-https"] = {
@@ -395,16 +344,6 @@ export function renderDynamicConfig(
           "X-Frame-Options": "DENY",
           "Referrer-Policy": "strict-origin-when-cross-origin",
           "X-XSS-Protection": "1; mode=block",
-        },
-      },
-    };
-  }
-  if (needSvcHeaders) {
-    httpMiddlewares["svc-headers"] = {
-      headers: {
-        customResponseHeaders: {
-          "X-Content-Type-Options": "nosniff",
-          "Referrer-Policy": "strict-origin-when-cross-origin",
         },
       },
     };

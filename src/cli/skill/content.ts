@@ -22,7 +22,6 @@ import DOC_DEPLOY_CONFIG from "./assets/docs/deploy-and-config.md" with { type: 
 import DOC_ENVIRONMENTS from "./assets/docs/environments-and-secrets.md" with { type: "text" };
 import DOC_INFRASTRUCTURE from "./assets/docs/infrastructure-and-enrollment.md" with { type: "text" };
 import DOC_BUILD_WORKERS from "./assets/docs/build-workers-and-webhooks.md" with { type: "text" };
-import DOC_STACKS_SERVICES from "./assets/docs/stacks-and-services.md" with { type: "text" };
 import DOC_NETWORKING from "./assets/docs/networking-and-ingress.md" with { type: "text" };
 import DOC_SCALING_STORAGE from "./assets/docs/scaling-storage-and-placement.md" with { type: "text" };
 import DOC_RELEASES from "./assets/docs/releases-promotion-and-rollback.md" with { type: "text" };
@@ -34,6 +33,8 @@ import EX_API from "./assets/ex-api.deploy.jsonc" with { type: "text" };
 import EX_WEB from "./assets/ex-web.deploy.jsonc" with { type: "text" };
 import EX_STACK from "./assets/ex-stack.stack.jsonc" with { type: "text" };
 import EX_WORKER from "./assets/ex-worker.deploy.jsonc" with { type: "text" };
+import EX_POSTGRES from "./assets/ex-postgres.deploy.jsonc" with { type: "text" };
+import EX_REDIS from "./assets/ex-redis.deploy.jsonc" with { type: "text" };
 
 /** The directory name every agent installs the skill under. */
 export const SKILL_DIR_NAME = "ocd-deploy";
@@ -52,15 +53,16 @@ const RAW_FILES: ReadonlyArray<readonly [string, string]> = [
   ["docs/environments-and-secrets.md", DOC_ENVIRONMENTS],
   ["docs/infrastructure-and-enrollment.md", DOC_INFRASTRUCTURE],
   ["docs/build-workers-and-webhooks.md", DOC_BUILD_WORKERS],
-  ["docs/stacks-and-services.md", DOC_STACKS_SERVICES],
   ["docs/networking-and-ingress.md", DOC_NETWORKING],
   ["docs/scaling-storage-and-placement.md", DOC_SCALING_STORAGE],
   ["docs/releases-promotion-and-rollback.md", DOC_RELEASES],
   ["docs/operations-and-recovery.md", DOC_OPERATIONS],
   ["docs/security-and-deletion.md", DOC_SECURITY],
   ["docs/troubleshooting.md", DOC_TROUBLESHOOTING],
-  ["examples/single-service/.ocd-deploy.json", EX_SINGLE],
+  ["examples/single-app/.ocd-deploy.json", EX_SINGLE],
   ["examples/monorepo/ocd-stack.json", EX_STACK],
+  ["examples/monorepo/infrastructure/database/.ocd-deploy.json", EX_POSTGRES],
+  ["examples/monorepo/infrastructure/redis/.ocd-deploy.json", EX_REDIS],
   ["examples/monorepo/services/api/.ocd-deploy.json", EX_API],
   ["examples/monorepo/services/web/.ocd-deploy.json", EX_WEB],
   ["examples/worker/.ocd-deploy.json", EX_WORKER],

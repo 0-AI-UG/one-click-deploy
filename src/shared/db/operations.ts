@@ -170,7 +170,7 @@ export function findSupersedingOperation(op: OperationRow): OperationRow | null 
     // one stack must not fence each other's compensation merely because both
     // serialize through the same stack key. A genuinely stack-wide operation
     // still supersedes through that shared key, and two operations for the
-    // same member still intersect on app/service identity.
+    // same member still intersect on app identity.
     const superseded = ownedMemberKeys.size > 0 && candidateMemberKeys.size > 0
       ? [...candidateMemberKeys].some((key) => ownedMemberKeys.has(key))
       : [...candidate].some((key) => owned.has(key));
@@ -180,7 +180,7 @@ export function findSupersedingOperation(op: OperationRow): OperationRow | null 
 }
 
 function memberResourceKeys(keys: Set<string>): Set<string> {
-  return new Set([...keys].filter((key) => key.startsWith("app:") || key.startsWith("service:")));
+  return new Set([...keys].filter((key) => key.startsWith("app:")));
 }
 
 /** Destructive children spawned by a parent's compensation inherit the
@@ -469,16 +469,15 @@ function safeStringArray(raw: string): string[] {
 }
 
 /** Expand create-time/name keys into their durable numeric identities. Resource
- * keys intentionally change from `app:create:<name>` to `app:<id>` (and the
- * service equivalent) after insertion; compensation ownership must span that
+ * keys intentionally change from `app:create:<name>` to `app:<id>` after
+ * insertion; compensation ownership must span that
  * transition or a stale create op could delete an app a later redeploy owns. */
 function expandedResourceKeys(op: OperationRow): Set<string> {
   const keys = new Set(safeStringArray(op.resource_keys));
   const input = safeJson<Record<string, unknown>>(op.input_json, {});
 
-  const tableFor = (type: "app" | "service" | "stack"): string =>
-    type === "app" ? "apps" : type === "service" ? "services" : "stacks";
-  const addNamed = (type: "app" | "service" | "stack", name: unknown): void => {
+  const tableFor = (type: "app" | "stack"): string => type === "app" ? "apps" : "stacks";
+  const addNamed = (type: "app" | "stack", name: unknown): void => {
     if (typeof name !== "string" || !name) return;
     keys.add(`${type}:create:${name}`);
     keys.add(`${type}:${name}`);
@@ -487,7 +486,7 @@ function expandedResourceKeys(op: OperationRow): Set<string> {
       | null;
     if (row) keys.add(`${type}:${row.id}`);
   };
-  const addId = (type: "app" | "service" | "stack", id: unknown): void => {
+  const addId = (type: "app" | "stack", id: unknown): void => {
     const numeric = Number(id);
     if (!Number.isInteger(numeric) || numeric <= 0) return;
     keys.add(`${type}:${numeric}`);
@@ -501,11 +500,9 @@ function expandedResourceKeys(op: OperationRow): Set<string> {
   };
 
   if (op.kind === "deploy") addNamed("app", input.app_name);
-  if (op.kind === "deploy_service") addNamed("service", input.name);
   if (op.kind === "deploy_stack") addNamed("stack", input.name);
   if ("appId" in input) addId("app", input.appId);
   if ("destAppId" in input) addId("app", input.destAppId);
-  if ("serviceId" in input) addId("service", input.serviceId);
   if ("stackId" in input) addId("stack", input.stackId);
   return keys;
 }

@@ -39,7 +39,7 @@ ocd runners bootstrap
 ```
 
 For manual placement, the server must be ready and contain no panel, app, or
-managed service:
+image-backed app:
 
 ```bash
 ocd runners install --server=ocd-build-1 --name=ocd-build-1

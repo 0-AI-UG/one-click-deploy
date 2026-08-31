@@ -57,8 +57,8 @@ export async function handleInstallBuildWorker(request: Request): Promise<Respon
     const server = Number.isInteger(serverId) ? db.getServer(serverId) : null;
     if (!server) return Response.json({ error: "Server not found" }, { status: 404, headers: corsHeaders });
     if (server.status !== "ready") return Response.json({ error: `Server ${server.name} is not ready` }, { status: 409, headers: corsHeaders });
-    if (db.getPanel()?.server_id === server.id || db.getApps(server.id).length || db.getServicesOnServer(server.id).length) {
-      return Response.json({ error: "Build workers require a dedicated server with no panel, apps, or managed services" }, { status: 409, headers: corsHeaders });
+    if (db.getPanel()?.server_id === server.id || db.getApps(server.id).length) {
+      return Response.json({ error: "Build workers require a dedicated server with no panel or apps" }, { status: 409, headers: corsHeaders });
     }
     const defaultName = `ocd-${server.name}`.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 63).replace(/-+$/, "");
     const name = normalizeBuildWorkerName(String(body.name ?? defaultName));

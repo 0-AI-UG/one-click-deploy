@@ -13,7 +13,7 @@ function retire(retentionClass: "user" | "provisional") {
   const providerVolumeId = `vol-${retentionClass}-${randomSuffix()}`;
   db.retireVolume({
     providerVolumeId,
-    formerResourceType: "service",
+    formerResourceType: "app",
     formerResourceId: 0,
     formerResourceName: `resource-${randomSuffix()}`,
     reason: "test",

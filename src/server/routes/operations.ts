@@ -18,7 +18,6 @@ import {
 import { getSettings } from "../../shared/db/settings.ts";
 import { getApp } from "../../shared/db/apps.ts";
 import { getServer } from "../../shared/db/servers.ts";
-import { getService } from "../../shared/db/services.ts";
 import { stepCount, listOps, getOp } from "../../engine/ops/registry.ts";
 import { getFilteredOpLogs } from "../../engine/op-logger.ts";
 import { currentHolder } from "../../engine/scheduler.ts";
@@ -55,16 +54,12 @@ function redact(value: unknown): unknown {
 }
 
 function labelForResourceKey(key: string): string {
-  const m = /^(app|server|service):(\d+)$/.exec(key);
+  const m = /^(app|server):(\d+)$/.exec(key);
   if (!m) return key;
   const id = parseInt(m[2], 10);
   if (m[1] === "app") {
     const app = getApp(id);
     return app ? app.name : key;
-  }
-  if (m[1] === "service") {
-    const service = getService(id);
-    return service ? service.name : key;
   }
   const server = getServer(id);
   return server ? server.name : key;

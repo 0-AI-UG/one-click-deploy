@@ -14,7 +14,6 @@ mock.module("../scale/traefik-manager.ts", () => ({ syncAllTraefik: mock(async (
 import * as db from "../../shared/db.ts";
 import { enqueueOperation, listChildOperations, markOperationFinished } from "../../shared/db/operations.ts";
 import destroyAppOp from "./destroy-app.ts";
-import destroyServiceOp from "./destroy-service.ts";
 import type { OpContext } from "../types.ts";
 
 type Input = { appId: number };
@@ -174,38 +173,4 @@ describe("destructive DB cleanup gates", () => {
     }
   });
 
-  test("destroy_service env-removal failures reach DB cleanup and preserve the service", async () => {
-    const service = db.insertService({
-      name: `svc-${randomSuffix()}`,
-      service_type: "postgres",
-      version: "16",
-      port: 5432,
-      env_vars: "{}",
-      credentials: "{}",
-    });
-    const environment = db.insertEnvironment(`env-${randomSuffix()}`, JSON.stringify({ DATABASE_URL: "postgres://db" }));
-    db.insertServiceLink(service.id, environment.id, "DATABASE");
-    const removeEnv = destroyServiceOp.steps.find((s) => s.name === "remove_env_vars_from_linked_environments")!;
-    const deleteRows = destroyServiceOp.steps.find((s) => s.name === "delete_db_rows")!;
-    const gate = destroyServiceOp.steps.find((s) => s.name === "assert_db_cleanup")!;
-    const ctx = makeCtx({ appId: service.id }, parentOp(999_999).id) as unknown as OpContext<any>;
-    ctx.kind = "destroy_service";
-    ctx.input = { serviceId: service.id };
-
-    const updateSpy = spyOn(db, "updateEnvironment").mockImplementationOnce(() => {
-      throw new Error("sqlite busy");
-    });
-    const envOutput = await removeEnv.run(ctx, {});
-    updateSpy.mockRestore();
-    expect(envOutput).toEqual({
-      ok: false,
-      failed: true,
-      failedEnvironmentIds: [environment.id],
-    });
-
-    const output = await deleteRows.run(ctx, { remove_env_vars_from_linked_environments: envOutput });
-    expect(output).toMatchObject({ ok: false, failed: true });
-    expect(db.getService(service.id)?.status).toBe("cleanup_failed");
-    await expect(gate.run(ctx, { delete_db_rows: output })).rejects.toThrow(/cleanup incomplete/i);
-  });
 });

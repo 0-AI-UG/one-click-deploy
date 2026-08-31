@@ -29,14 +29,6 @@ export function sweepStuckStates(): void {
     log("sweep", `apps query failed: ${err}`);
   }
   try {
-    const services = db.getServices().filter((s) => s.status === "cleanup_failed");
-    for (const s of services) {
-      log("sweep", `service#${s.id} (${s.name}) is cleanup_failed — manual recovery may be needed`);
-    }
-  } catch (err) {
-    log("sweep", `services query failed: ${err}`);
-  }
-  try {
     const servers = db.getServers().filter((s) => s.status === "cleanup_failed");
     for (const s of servers) {
       log("sweep", `server#${s.id} (${s.name}) is cleanup_failed — manual recovery may be needed`);
