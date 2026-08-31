@@ -11,6 +11,7 @@ import {
   markOperationFinished,
   requeueOperation,
   retryOperationAsNew,
+  retryWebhookOperationAsNew,
 } from "./operations.ts";
 
 describe("operation recovery persistence", () => {
@@ -52,6 +53,43 @@ describe("operation recovery persistence", () => {
     expect(retry.trigger).toBe("retry");
     expect(retry.triggered_by).toBe("operator");
     expect(JSON.parse(retry.input_json)).toEqual({ appId: 9 });
+  });
+
+  test("a webhook retry atomically transfers its failed delivery", () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const server = db.insertServer({
+      name: `worker-${suffix}`,
+      provider_id: `provider-${suffix}`,
+      ipv4: "192.0.2.20",
+      ipv6: "",
+      type: "cx23",
+      location: "nbg1",
+      status: "ready",
+    });
+    const worker = db.insertBuildWorker({ serverId: server.id, name: `worker-${suffix}`, previousPool: "general" });
+    const source = db.upsertBuildSource({
+      repository: `https://example.com/${suffix}.git`,
+      branch: "main",
+      workerId: worker.id,
+    });
+    const input = { sourceId: source.id, deliveryId: `delivery-${suffix}`, commit: "a".repeat(40) };
+    db.recordBuildSourceDelivery({ sourceId: source.id, deliveryId: input.deliveryId, commitSha: input.commit });
+    const original = enqueueOperation({
+      kind: "webhook_build_source",
+      resourceKeys: [`build-source:${source.id}`],
+      input,
+      trigger: "webhook",
+    });
+    db.attachBuildSourceDeliveryOperation({ sourceId: source.id, deliveryId: input.deliveryId, operationId: original.id });
+    db.updateBuildSourceDeliveryStatus({ sourceId: source.id, deliveryId: input.deliveryId, status: "failed" });
+    markOperationFinished(original.id, "compensated", { message: "build failed" });
+
+    const retry = retryWebhookOperationAsNew(original.id, "operator", input)!;
+    expect(retry.id).not.toBe(original.id);
+    expect(db.getBuildSourceDelivery(source.id, input.deliveryId)).toMatchObject({
+      operation_id: retry.id,
+      status: "queued",
+    });
   });
 
   test("operator finalization records an explicit terminal audit state", () => {

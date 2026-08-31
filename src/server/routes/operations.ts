@@ -13,6 +13,7 @@ import {
   requestCancel,
   requeueOperation,
   retryOperationAsNew,
+  retryWebhookOperationAsNew,
   finalizeOperation,
 } from "../../shared/db/operations.ts";
 import { getSettings } from "../../shared/db/settings.ts";
@@ -364,9 +365,14 @@ export async function handleRetryOperation(request: Request, id: number): Promis
     const sameAttempt = ["pending", "running", "compensating", "compensation_failed"].includes(op.status);
     const stackResume = op.kind === "deploy_stack" && !sameAttempt;
     const originalInput = safeParse<Record<string, unknown>>(op.input_json, {});
+    const webhookInput = op.kind === "webhook_build_source"
+      ? originalInput as { sourceId: number; deliveryId: string; commit: string }
+      : null;
     const retried = sameAttempt
       ? requeueOperation(op.id)
-      : retryOperationAsNew(
+      : webhookInput
+        ? retryWebhookOperationAsNew(op.id, payload.userId, webhookInput)
+        : retryOperationAsNew(
           op.id,
           payload.userId,
           stackResume ? { ...originalInput, resume_operation_id: op.id } : undefined,

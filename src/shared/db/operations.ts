@@ -291,6 +291,33 @@ export function retryOperationAsNew(
   });
 }
 
+/** Retry a failed webhook delivery as a fresh operation while atomically
+ * transferring the delivery's durable ownership to that new audit row. */
+export function retryWebhookOperationAsNew(
+  id: number,
+  triggeredBy: string,
+  input: { sourceId: number; deliveryId: string; commit: string },
+): OperationRow | null {
+  return db.transaction(() => {
+    const original = getOperation(id);
+    if (!original) return null;
+    if (original.kind !== "webhook_build_source") {
+      throw new Error("Only webhook build operations can transfer delivery ownership");
+    }
+    const retried = retryOperationAsNew(id, triggeredBy, input);
+    if (!retried) return null;
+    const changed = db.query(
+      `UPDATE build_source_deliveries
+       SET operation_id = ?, status = 'queued', superseded_by = NULL
+       WHERE source_id = ? AND delivery_id = ? AND operation_id = ? AND status = 'failed'`,
+    ).run(retried.id, input.sourceId, input.deliveryId, id).changes;
+    if (changed !== 1) {
+      throw new Error("Webhook delivery is not a failed delivery owned by this operation");
+    }
+    return retried;
+  })();
+}
+
 /**
  * Operator acknowledgement for an irrecoverable stale operation. This is
  * intentionally a force transition: route-level recovery checks decide whether
