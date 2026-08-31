@@ -1,16 +1,5 @@
-import { Info } from "lucide-react";
-import { Checkbox, Field } from "../../components/ui";
-
-export function InfoTip({ text }: { text: string }) {
-  return (
-    <span className="relative inline-flex items-center text-muted hover:text-fg cursor-help group">
-      <Info size={11} />
-      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-[9px] font-mono text-fg bg-bg border-2 border-fg shadow-neo-sm whitespace-normal max-w-[220px] w-max opacity-0 group-hover:opacity-100 transition-opacity z-50">
-        {text}
-      </span>
-    </span>
-  );
-}
+import { Checkbox, Field, InfoTip } from "../../components/ui";
+export { InfoTip };
 
 /**
  * The app's HTTP health check, as one control shared by the deploy form and the
@@ -34,8 +23,8 @@ export function HealthCheckField({
   return (
     <Field
       align="start"
-      label={<span className="flex items-center gap-2">Health Check <InfoTip text="Checks the app answers HTTP after each deploy and periodically while running; failing replicas restart or leave rotation. Off = only verify the container runs (non-HTTP apps). HTTP routing only." /></span>}
-      hint="applied on the next deploy or scale"
+      label="Health check"
+      hint="Checks that the app answers HTTP after deploys and while running. Failing replicas restart or leave rotation. Turn it off for non-HTTP apps. Changes apply on the next deploy or scale."
     >
       <div className="space-y-2">
         <div className="flex justify-start">

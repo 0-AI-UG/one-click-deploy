@@ -189,7 +189,7 @@ function MobileNav({ hash }: { hash: string }) {
       <MobileActionSheet open={moreOpen} onClose={() => setMoreOpen(false)} title="OCD Menu" subtitle={user?.username}>
         <MobileSheetAction icon={<Layers size={19} />} label="Environments" detail="Variables, secrets, and rollout behavior" onClick={() => { window.location.hash = "#/environments"; }} />
         <MobileSheetAction icon={<Cpu size={19} />} label="Operations" detail="Progress, logs, and recovery actions" onClick={() => { window.location.hash = "#/engine"; }} />
-        {user?.isAdmin && <MobileSheetAction icon={<Users size={19} />} label="Admin" detail="Users and permissions" onClick={() => { window.location.hash = "#/admin"; }} />}
+        {user?.isAdmin && <MobileSheetAction icon={<Users size={19} />} label="Admin" detail="Setup, integrations, and users" onClick={() => { window.location.hash = "#/admin"; }} />}
         <MobileSheetAction icon={<User size={19} />} label="Account" detail="Security and profile" onClick={() => { window.location.hash = "#/account"; }} />
         <MobileCliCopyButton />
         <div className="border-2 border-fg bg-bg-raised px-3 py-2"><SkillInstallMenu /></div>

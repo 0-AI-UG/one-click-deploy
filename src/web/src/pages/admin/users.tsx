@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { get, post, del, put } from "../../api/client.ts";
-import { Card, Btn, Table, Spinner, Field, Divider, showToast, confirm } from "../../components/ui.tsx";
+import { Card, Btn, Table, Spinner, Field, Divider, InfoTip, showToast, confirm } from "../../components/ui.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-server-types.ts";
@@ -77,7 +77,18 @@ type Readiness = {
   actions: Array<{ command: string; label: string }>;
 };
 
+type AdminSection = "overview" | "infrastructure" | "build" | "panel" | "users";
+
+const ADMIN_SECTIONS: Array<{ key: AdminSection; label: string }> = [
+  { key: "overview", label: "Overview" },
+  { key: "infrastructure", label: "Infrastructure" },
+  { key: "build", label: "Build & Registry" },
+  { key: "panel", label: "Panel" },
+  { key: "users", label: "Users & Security" },
+];
+
 export function UsersPage() {
+  const [section, setSection] = useState<AdminSection>("overview");
   // --- Users ---
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -101,6 +112,10 @@ export function UsersPage() {
   const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [infrastructureEditing, setInfrastructureEditing] = useState(false);
+  const [registryEditing, setRegistryEditing] = useState(false);
+  const [sourceEditing, setSourceEditing] = useState(false);
+  const [oauthEditing, setOauthEditing] = useState(false);
   const { serverTypes } = useServerTypes();
 
   // --- Panel ---
@@ -109,12 +124,15 @@ export function UsersPage() {
   const [panelDeployments, setPanelDeployments] = useState<DeploymentRecord[]>([]);
   const [panelBusy, setPanelBusy] = useState(false);
   const [panelImage, setPanelImage] = useState("");
+  const [panelReleaseOpen, setPanelReleaseOpen] = useState(false);
 
   // --- OCD BuildKit workers and repository webhooks ---
   const [runners, setRunners] = useState<BuildWorker[]>([]);
   const [buildSources, setBuildSources] = useState<BuildSource[]>([]);
   const [runnerServers, setRunnerServers] = useState<RunnerServer[]>([]);
   const [runnerBusy, setRunnerBusy] = useState(false);
+  const [addingWorker, setAddingWorker] = useState(false);
+  const [workerAdvanced, setWorkerAdvanced] = useState(false);
   const [runnerForm, setRunnerForm] = useState({
     server_id: "", name: "", removal_token: "",
   });
@@ -267,6 +285,8 @@ export function UsersPage() {
       } = settingsForm;
       await put("/api/admin/settings", instanceSettings);
       showToast("Settings saved", "success");
+      setInfrastructureEditing(false);
+      setOauthEditing(false);
     } catch (err: any) {
       showToast(err.message, "error");
     } finally {
@@ -283,6 +303,7 @@ export function UsersPage() {
         token: settingsForm.oci_registry_password,
       });
       setRegistryConnected(true);
+      setRegistryEditing(false);
       refreshReadiness();
       showToast("Registry connected", "success");
     } catch (err: any) { showToast(err.message, "error"); }
@@ -311,6 +332,7 @@ export function UsersPage() {
         token: settingsForm.github_build_token,
       });
       setSourceConnected(true);
+      setSourceEditing(false);
       refreshReadiness();
       showToast("Private source access connected", "success");
     } catch (err: any) { showToast(err.message, "error"); }
@@ -346,6 +368,7 @@ export function UsersPage() {
       const result = await post("/api/admin/panel/redeploy", { image });
       if (result?.ok) {
         showToast("Panel release dispatched", "success");
+        setPanelReleaseOpen(false);
         setTimeout(refreshPanel, 2000);
       } else {
         showToast(result?.error || "Failed to dispatch redeploy", "error");
@@ -369,6 +392,8 @@ export function UsersPage() {
         removalToken: runnerForm.removal_token || undefined,
       });
       setRunnerForm((current) => ({ ...current, removal_token: "" }));
+      setAddingWorker(false);
+      setWorkerAdvanced(false);
       showToast("Build worker installed", "success");
       await refreshRunners();
       await refreshReadiness();
@@ -418,12 +443,28 @@ export function UsersPage() {
         <h1 className="font-mono font-bold text-sm text-fg uppercase">Admin</h1>
       </div>
 
-      {readiness && <Card className="p-5 space-y-3">
+      <nav className="flex gap-1 overflow-x-auto border-b-2 border-fg" aria-label="Admin sections">
+        {ADMIN_SECTIONS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            aria-current={section === item.key ? "page" : undefined}
+            onClick={() => setSection(item.key)}
+            className={`shrink-0 px-3 py-2 font-mono text-[9px] font-bold uppercase tracking-wider transition-colors ${
+              section === item.key ? "bg-fg text-accent" : "text-muted hover:bg-alt hover:text-fg"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      {section === "overview" && readiness && <Card className="p-5 space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Deploy readiness</h3>
-            <p className="font-mono text-[10px] text-muted mt-1">The CLI resolves missing build capacity during the first deploy.</p>
-          </div>
+          <h2 className="flex items-center gap-1 font-mono text-[10px] font-bold uppercase tracking-wider">
+            Deploy readiness
+            <InfoTip>The first deploy can create missing build capacity automatically. Review required actions below before deploying.</InfoTip>
+          </h2>
           <Btn size="xs" onClick={refreshReadiness}><RefreshCw size={11} /> Recheck</Btn>
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
@@ -445,22 +486,42 @@ export function UsersPage() {
         </div>}
       </Card>}
 
-      {/* Instance Settings */}
-      <Card className="p-5 space-y-4">
-        <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Optional Infrastructure Provider</h3>
-        <Field label="Hetzner Cloud API Token" align="start" hint="Optional. Configure this only when OCD should create and own Hetzner servers and volumes. Leave empty to use connected servers.">
-          <input type="password" value={settingsForm.hetzner_api_token} onChange={setS("hetzner_api_token")} placeholder="Not configured" />
-        </Field>
-        <Divider />
-        <GitHubOAuthSettings form={settingsForm} setS={setS} />
-        <Divider />
+      {section === "overview" && (
+        <Card className="overflow-hidden">
+          {[
+            { key: "infrastructure" as const, label: "Infrastructure", value: readiness?.provider.configured ? "Cloud provider connected" : "Using connected servers" },
+            { key: "build" as const, label: "Build & Registry", value: `${readiness?.worker.online ?? 0} workers · ${registryConnected ? "registry connected" : "registry not connected"}` },
+            { key: "panel" as const, label: "Panel", value: panel ? panel.status : "Not self-hosted" },
+            { key: "users" as const, label: "Users & Security", value: `${users.length} users · ${require2fa ? "2FA required" : "2FA optional"}` },
+          ].map((item) => (
+            <button key={item.key} type="button" onClick={() => setSection(item.key)} className="flex w-full items-center justify-between gap-4 border-b border-fg/10 px-4 py-3 text-left last:border-b-0 hover:bg-alt/50">
+              <span className="font-mono text-[10px] font-bold uppercase">{item.label}</span>
+              <span className="font-mono text-[9px] text-muted">{item.value}</span>
+            </button>
+          ))}
+        </Card>
+      )}
 
-        <div className="pt-2">
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Defaults</h3>
-          <Field label="Default Domain Suffix" align="start" hint="OCD displays required DNS records but never modifies DNS.">
+      {/* Instance Settings */}
+      {section === "infrastructure" && <Card className="p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-mono text-[10px] font-bold uppercase tracking-wider">Infrastructure defaults</h2>
+            <div className="mt-1 font-mono text-[9px] text-muted">
+              {readiness?.provider.configured ? "Hetzner connected" : "Connected servers only"} · {settingsForm.default_server_type || "No server default"} {settingsForm.default_location && `· ${settingsForm.default_location}`}
+            </div>
+          </div>
+          <Btn size="xs" onClick={() => setInfrastructureEditing((open) => !open)}>{infrastructureEditing ? "Close" : "Edit"}</Btn>
+        </div>
+
+        {infrastructureEditing && <div className="animate-slide-up border-t-2 border-fg/10 pt-2">
+          <Field label="Cloud provider token" align="start" hint="Optional. Add a Hetzner token only when OCD should create and own servers and volumes. Leave it empty to use connected servers.">
+            <input type="password" value={settingsForm.hetzner_api_token} onChange={setS("hetzner_api_token")} placeholder={readiness?.provider.configured ? "Leave empty to keep current token" : "Hetzner API token"} />
+          </Field>
+          <Field label="App domain" align="start" hint="Used as the default domain suffix. OCD shows the DNS records to create but never changes DNS.">
             <input type="text" value={settingsForm.default_domain_suffix} onChange={setS("default_domain_suffix")} placeholder="apps.example.com" />
           </Field>
-          <Field label="Default Server Type">
+          <Field label="Server type">
             <NeoSelect
               value={settingsForm.default_server_type}
               onChange={(v) => {
@@ -473,40 +534,38 @@ export function UsersPage() {
               options={typeOptions(serverTypes)}
             />
           </Field>
-          <Field label="Default Location">
-            <NeoSelect
-              value={settingsForm.default_location}
-              onChange={(v) => setSettingsForm((f) => ({ ...f, default_location: v }))}
-              options={locationOptions(serverTypes, settingsForm.default_server_type)}
-            />
+          <Field label="Location">
+            <NeoSelect value={settingsForm.default_location} onChange={(v) => setSettingsForm((f) => ({ ...f, default_location: v }))} options={locationOptions(serverTypes, settingsForm.default_server_type)} />
           </Field>
-        </div>
-
-        <div className="pt-2">
-          <Btn variant="primary" loading={saving} onClick={saveSettings}><Save size={13} /> Save Settings</Btn>
-        </div>
-      </Card>
+          <div className="flex justify-end pt-2">
+            <Btn variant="primary" loading={saving} onClick={saveSettings}><Save size={13} /> Save</Btn>
+          </div>
+        </div>}
+      </Card>}
 
       {/* Build connections are explicit capabilities, not generic settings. */}
-      <Card className="p-5 space-y-4">
-        <div>
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Build connections</h3>
-          <p className="font-mono text-[10px] text-muted mt-1">
-            OCD stores these credentials encrypted and sends them only to the exact source host or OCI namespace configured here.
-          </p>
-        </div>
+      {section === "build" && <Card className="p-5 space-y-4">
+        <h2 className="flex items-center gap-1 font-mono text-[10px] font-bold uppercase tracking-wider">
+          Build connections
+          <InfoTip>Credentials are encrypted and sent only to the configured Git host or registry scope.</InfoTip>
+        </h2>
 
         <div className="border-2 border-fg p-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
-            <div>
+            <div className="flex items-center gap-1">
               <div className="font-mono text-[10px] font-bold uppercase">OCI registry</div>
-              <div className="font-mono text-[9px] text-muted">Any compatible OCI registry: GHCR, GitLab, Docker Hub, Quay, Harbor, or self-hosted.</div>
+              <InfoTip>Works with GHCR, GitLab, Docker Hub, Quay, Harbor, and self-hosted OCI registries.</InfoTip>
             </div>
-            <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${registryConnected ? "bg-green-200" : "bg-yellow-200"}`}>
-              {registryConnected ? "Connected" : "Not connected"}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${registryConnected ? "bg-green-200" : "bg-yellow-200"}`}>
+                {registryConnected ? "Connected" : "Not connected"}
+              </span>
+              <Btn size="xs" onClick={() => setRegistryEditing((open) => !open)}>{registryEditing ? "Close" : registryConnected ? "Edit" : "Configure"}</Btn>
+            </div>
           </div>
-          <Field label="Repository namespace" align="start" hint="Credential boundary, for example registry.example.com/team. It is never sent to another namespace on the same registry.">
+          {registryConnected && !registryEditing && <div className="font-mono text-[9px] text-muted break-all">{settingsForm.oci_artifact_ref || readiness?.registry.scope}</div>}
+          {registryEditing && <div className="animate-slide-up border-t-2 border-fg/10 pt-1">
+          <Field label="Registry scope" align="start" hint="The credential boundary, such as registry.example.com/team. Credentials are never sent to another scope on the same registry.">
             <input type="text" value={settingsForm.oci_artifact_ref} onChange={setS("oci_artifact_ref")} placeholder="registry.example.com/team" />
           </Field>
           <Field label="Username">
@@ -521,22 +580,28 @@ export function UsersPage() {
             </Btn>
             {registryConnected && <Btn variant="danger" disabled={connectionBusy !== null} onClick={disconnectRegistry}><Trash2 size={12} /> Disconnect</Btn>}
           </div>
+          </div>}
         </div>
 
         <div className="border-2 border-fg p-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="font-mono text-[10px] font-bold uppercase">Private source access</div>
-              <div className="font-mono text-[9px] text-muted">Any HTTPS Git host. Public repositories need no source credential.</div>
+            <div className="flex items-center gap-1">
+              <div className="font-mono text-[10px] font-bold uppercase">Private Git repositories</div>
+              <InfoTip>Public repositories work without credentials. Configure this only for private repositories on an HTTPS Git host.</InfoTip>
             </div>
-            <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${sourceConnected ? "bg-green-200" : "bg-alt"}`}>
-              {sourceConnected ? "Connected" : "Public only"}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${sourceConnected ? "bg-green-200" : "bg-alt"}`}>
+                {sourceConnected ? "Connected" : "Public only"}
+              </span>
+              <Btn size="xs" onClick={() => setSourceEditing((open) => !open)}>{sourceEditing ? "Close" : sourceConnected ? "Edit" : "Configure"}</Btn>
+            </div>
           </div>
+          {sourceConnected && !sourceEditing && <div className="font-mono text-[9px] text-muted break-all">{settingsForm.github_build_host || readiness?.source.host}</div>}
+          {sourceEditing && <div className="animate-slide-up border-t-2 border-fg/10 pt-1">
           <Field label="Git host">
             <input type="text" value={settingsForm.github_build_host} onChange={setS("github_build_host")} placeholder="git.example.com" />
           </Field>
-          <Field label="Checkout username" align="start" hint="Provider-specific; GitHub commonly uses x-access-token.">
+          <Field label="Git username" align="start" hint="Provider-specific. GitHub commonly uses x-access-token.">
             <input type="text" value={settingsForm.github_build_username} onChange={setS("github_build_username")} placeholder="git-user" />
           </Field>
           <Field label={sourceConnected ? "New read-only token (only to update)" : "Read-only token"}>
@@ -548,20 +613,22 @@ export function UsersPage() {
             </Btn>
             {sourceConnected && <Btn variant="danger" disabled={connectionBusy !== null} onClick={disconnectSource}><Trash2 size={12} /> Disconnect</Btn>}
           </div>
+          </div>}
         </div>
-      </Card>
+      </Card>}
 
       {/* OCD BuildKit workers */}
-      <Card className="p-5 space-y-4">
+      {section === "build" && <Card className="p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-2">
-            <Hammer size={12} /> OCD build workers
-          </h3>
-          <Btn size="xs" onClick={refreshRunners}><RefreshCw size={11} /> Refresh</Btn>
+          <h2 className="font-mono text-[10px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">
+            <Hammer size={12} /> Build workers
+            <InfoTip>Workers check out an exact commit, build and push its image, then deploy the immutable digest. GitHub push webhooks can trigger builds automatically.</InfoTip>
+          </h2>
+          <div className="flex gap-2">
+            <Btn size="xs" onClick={refreshRunners}><RefreshCw size={11} /> Refresh</Btn>
+            <Btn size="xs" variant="primary" onClick={() => setAddingWorker((open) => !open)}><Plus size={11} /> {addingWorker ? "Close" : "Add worker"}</Btn>
+          </div>
         </div>
-        <p className="font-mono text-[10px] text-muted">
-          OCD checks out exact commits from any compatible Git host, builds and pushes to any compatible OCI registry, then deploys the immutable digest. GitHub push webhooks are the current automatic trigger integration.
-        </p>
 
         {runners.length > 0 && (
           <Table headers={["Worker", "Server", "Status", "Version", "Disk", ""]}>
@@ -571,14 +638,16 @@ export function UsersPage() {
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.server?.name || "Missing"}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.status}{runner.last_error && <div className="text-red-600 max-w-xs break-words">{runner.last_error}</div>}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.worker_version || "—"}<div className="text-muted">{runner.architecture || "—"}</div></td>
+                <td className="py-2 px-3 font-mono text-[10px]">{runner.disk_free_bytes ? `${(runner.disk_free_bytes / 1024 ** 3).toFixed(1)} GB` : "—"}</td>
                 <td className="py-2 px-3"><Btn size="xs" variant="danger" disabled={runnerBusy} onClick={() => removeRunner(runner)}><Trash2 size={11} /></Btn></td>
               </tr>
             ))}
           </Table>
         )}
+        {runners.length === 0 && !addingWorker && <div className="border-2 border-dashed border-fg/20 p-4 text-center font-mono text-[9px] text-muted">No build workers</div>}
 
-        <div className="grid md:grid-cols-2 gap-3">
-          <Field label="Dedicated server" align="start" hint="The backend rejects the panel host and any server with apps.">
+        {addingWorker && <div className="animate-slide-up border-2 border-fg bg-alt/30 p-4">
+          <Field label="Build server" align="start" hint="Choose an empty server. The panel host and servers already running apps cannot become build workers.">
             <NeoSelect
               value={runnerForm.server_id}
               onChange={(serverId) => setRunnerForm((current) => ({ ...current, server_id: serverId }))}
@@ -589,14 +658,19 @@ export function UsersPage() {
               placeholder="Select server"
             />
           </Field>
-          <Field label="Worker name" align="start" hint="Optional; defaults to ocd-<server>.">
+          <button type="button" onClick={() => setWorkerAdvanced((open) => !open)} className="font-mono text-[9px] font-bold uppercase text-muted underline hover:text-fg">
+            {workerAdvanced ? "Hide advanced options" : "Advanced options"}
+          </button>
+          {workerAdvanced && <div className="mt-2 border-t-2 border-fg/10 pt-1">
+          <Field label="Worker name" align="start" hint="Optional. Defaults to ocd-<server>.">
             <input value={runnerForm.name} onChange={(event) => setRunnerForm((current) => ({ ...current, name: event.target.value }))} placeholder="ocd-build-1" />
           </Field>
-          <Field label="Legacy runner removal token" align="start" hint="Only needed once when converting an existing GitHub Actions runner. New workers leave this empty.">
+          <Field label="Conversion token" align="start" hint="Only needed when converting an existing GitHub Actions runner. New workers leave this empty.">
             <input type="password" value={runnerForm.removal_token} onChange={(event) => setRunnerForm((current) => ({ ...current, removal_token: event.target.value }))} placeholder="Optional conversion token" />
           </Field>
-        </div>
-        <Btn variant="primary" loading={runnerBusy} onClick={installRunner}><Hammer size={13} /> Install build worker</Btn>
+          </div>}
+          <div className="mt-3 flex justify-end"><Btn variant="primary" loading={runnerBusy} disabled={!runnerForm.server_id} onClick={installRunner}><Hammer size={13} /> Install worker</Btn></div>
+        </div>}
 
         {buildSources.length > 0 && <>
           <Divider />
@@ -615,12 +689,13 @@ export function UsersPage() {
           <div className="font-mono text-[9px] font-bold uppercase">Webhook secret — shown once</div>
           <div className="font-mono text-[10px] break-all"><strong>URL:</strong> {shownWebhook.url}</div>
           <div className="font-mono text-[10px] break-all"><strong>Secret:</strong> {shownWebhook.secret}</div>
-          <div className="font-mono text-[9px] text-muted">GitHub webhook content type: application/json; event: push only.</div>
+          <div className="flex items-center gap-1 font-mono text-[9px] font-bold uppercase">Webhook setup <InfoTip>Use content type application/json and subscribe to push events only.</InfoTip></div>
         </div>}
-      </Card>
+      </Card>}
 
       {/* Panel */}
-      {panel && (
+      {section === "panel" && !panel && <Card className="p-5 font-mono text-[10px] text-muted">This instance is not managed as a self-hosted panel app.</Card>}
+      {section === "panel" && panel && (
         <Card className="p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-2">
@@ -654,12 +729,17 @@ export function UsersPage() {
 
           <PermissionGate permission="panel.manage">
             <div className="pt-1 space-y-2">
-              <Field label="Next immutable image" align="start" hint="Build and publish this image in CI, then paste its digest-qualified reference here.">
+              <Btn size="xs" variant={panelReleaseOpen ? "ghost" : "primary"} onClick={() => setPanelReleaseOpen((open) => !open)}>
+                <RefreshCw size={12} /> {panelReleaseOpen ? "Cancel release" : "Release new version"}
+              </Btn>
+              {panelReleaseOpen && <div className="animate-slide-up border-2 border-fg bg-alt/30 p-3">
+              <Field label="New panel image" align="start" hint="Build and publish the image in CI, then paste its digest-qualified reference here.">
                 <input type="text" value={panelImage} onChange={(event) => setPanelImage(event.target.value)} placeholder="ghcr.io/owner/ocd@sha256:..." />
               </Field>
               <Btn variant="primary" loading={panelBusy} onClick={redeployPanelNow}>
                 <RefreshCw size={13} /> Release panel image
               </Btn>
+              </div>}
             </div>
           </PermissionGate>
 
@@ -680,8 +760,22 @@ export function UsersPage() {
         </Card>
       )}
 
+      {section === "users" && <Card className="p-5 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-mono text-[10px] font-bold uppercase tracking-wider">GitHub sign-in</h2>
+            <div className="mt-1 font-mono text-[9px] text-muted">{settingsForm.github_oauth_client_id ? "Configured" : "Not configured"}</div>
+          </div>
+          <Btn size="xs" onClick={() => setOauthEditing((open) => !open)}>{oauthEditing ? "Close" : settingsForm.github_oauth_client_id ? "Edit" : "Configure"}</Btn>
+        </div>
+        {oauthEditing && <div className="animate-slide-up border-t-2 border-fg/10 pt-1">
+          <GitHubOAuthSettings form={settingsForm} setS={setS} />
+          <div className="flex justify-end pt-2"><Btn variant="primary" loading={saving} onClick={saveSettings}><Save size={13} /> Save</Btn></div>
+        </div>}
+      </Card>}
+
       {/* Users */}
-      <Card className="p-5">
+      {section === "users" && <Card className="p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Users size={14} className="text-fg" />
@@ -761,7 +855,7 @@ export function UsersPage() {
             </tr>
           ))}
         </Table>
-      </Card>
+      </Card>}
     </div>
   );
 }

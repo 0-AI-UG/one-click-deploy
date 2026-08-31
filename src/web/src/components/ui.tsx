@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback, type ReactNode } from "react";
-import { X, AlertTriangle, Loader2, Copy, Check } from "lucide-react";
+import React, { useState, useEffect, useCallback, useId, type ReactNode } from "react";
+import { X, AlertTriangle, Loader2, Copy, Check, Info } from "lucide-react";
 import { useMobileLayout } from "../hooks/use-mobile-layout.ts";
+export { portalAnchorRect } from "./portal-position.ts";
 
 // --- Toast system ---
 type Toast = {
@@ -200,24 +201,6 @@ export function ConfirmDialog() {
   );
 }
 
-// --- Portal anchor rect ---
-// A position:fixed portal appended to <body> inherits the `html { zoom }` factor
-// (index.html), so setting `top: T` renders it at `T * zoom`. getBoundingClientRect
-// already returns coordinates in that same pre-zoom space, so we pass them straight
-// through — dividing the zoom back out double-counts it and lands the portal ~1.2×
-// too high (above its trigger).
-export function portalAnchorRect(el: Element) {
-  const r = el.getBoundingClientRect();
-  return {
-    top: r.top,
-    bottom: r.bottom,
-    left: r.left,
-    right: r.right,
-    width: r.width,
-    height: r.height,
-  };
-}
-
 // --- Spinner ---
 export function Spinner({ className = "" }: { className?: string }) {
   return <Loader2 size={16} className={`animate-spin text-fg ${className}`} />;
@@ -238,6 +221,36 @@ export function CopyButton({ text, size = 12 }: { text: string; size?: number })
     >
       {copied ? <Check size={size} className="text-green-500" /> : <Copy size={size} />}
     </button>
+  );
+}
+
+// --- Info tip ---
+// Help is deliberately hidden until requested, but remains available through
+// hover, keyboard focus, and tap. Keeping this here gives every form the same
+// interaction and avoids permanently rendering explanatory paragraphs.
+export function InfoTip({ children, text }: { children?: ReactNode; text?: ReactNode }) {
+  const content = children ?? text;
+  const tooltipId = useId();
+  if (!content) return null;
+
+  return (
+    <span className="group relative inline-flex shrink-0 items-center">
+      <button
+        type="button"
+        aria-label="More information"
+        aria-describedby={tooltipId}
+        className="inline-grid h-5 w-5 place-items-center text-muted transition-colors hover:text-fg focus:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <Info size={12} aria-hidden="true" />
+      </button>
+      <span
+        id={tooltipId}
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-1/2 z-[80] mb-1.5 w-max max-w-[260px] -translate-x-1/2 border-2 border-fg bg-bg px-2.5 py-2 font-mono text-[9px] font-normal normal-case leading-relaxed tracking-normal text-fg opacity-0 shadow-neo-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {content}
+      </span>
+    </span>
   );
 }
 
@@ -452,15 +465,16 @@ export function Field({
 }) {
   const isMobile = useMobileLayout();
   const col = wide ? "w-[min(75%,34rem)]" : "w-[min(62%,20rem)]";
+  const fieldLabel = label || hint ? (
+    <div className="flex min-w-0 items-center gap-1">
+      {label && <label htmlFor={htmlFor} className="block font-mono text-[9px] font-bold uppercase leading-tight tracking-wider text-fg">{label}</label>}
+      {hint && <InfoTip>{hint}</InfoTip>}
+    </div>
+  ) : null;
   if (isMobile) {
     return (
       <div className={`py-3 ${divider ? "border-b-2 border-fg/10 last:border-b-0" : ""} ${className}`}>
-        {(label || hint) && (
-          <div className="mb-2">
-            {label && <label htmlFor={htmlFor} className="block font-mono text-[9px] font-bold uppercase tracking-wider text-fg">{label}</label>}
-            {hint && <div className="mt-1 font-mono text-[9px] leading-snug text-muted">{hint}</div>}
-          </div>
-        )}
+        {fieldLabel && <div className="mb-2">{fieldLabel}</div>}
         <div className="w-full">{children}</div>
       </div>
     );
@@ -471,16 +485,7 @@ export function Field({
         divider ? "border-b-2 border-fg/10 last:border-b-0" : ""
       } ${className}`}
     >
-      {(label || hint) && (
-        <div className={`min-w-0 ${align === "start" ? "pt-1.5" : ""}`}>
-          {label && (
-            <label htmlFor={htmlFor} className="font-mono text-[9px] font-bold uppercase tracking-wider text-fg leading-tight block">
-              {label}
-            </label>
-          )}
-          {hint && <div className="font-mono text-[9px] text-muted normal-case tracking-normal mt-1 leading-snug">{hint}</div>}
-        </div>
-      )}
+      {fieldLabel && <div className={`min-w-0 ${align === "start" ? "pt-1.5" : ""}`}>{fieldLabel}</div>}
       <div className={`shrink-0 ${col}`}>{children}</div>
     </div>
   );

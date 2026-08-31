@@ -11,6 +11,19 @@ type Item = {
   resource_name?: string;
 };
 
+const ACTION_PRESENTATION: Record<string, { confirmLabel: string; destructive: boolean }> = {
+  delete_app: { confirmLabel: "Confirm & Destroy", destructive: true },
+  delete_server: { confirmLabel: "Confirm & Remove", destructive: true },
+  delete_stack: { confirmLabel: "Confirm & Destroy", destructive: true },
+  delete_environment: { confirmLabel: "Confirm & Retire", destructive: true },
+  purge_environment: { confirmLabel: "Confirm & Delete", destructive: true },
+  delete_volume: { confirmLabel: "Confirm & Delete", destructive: true },
+  cancel_operation: { confirmLabel: "Confirm & Cancel", destructive: true },
+  create_server: { confirmLabel: "Confirm & Create", destructive: false },
+  promote_app: { confirmLabel: "Confirm & Promote", destructive: false },
+  promote_stack: { confirmLabel: "Confirm & Promote", destructive: false },
+};
+
 export function CliConfirmPage({ userCode }: { userCode: string }) {
   const [item, setItem] = useState<Item | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -116,17 +129,22 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
       ? item.resource_name
       : undefined;
   const typedResourceMatches = requiredTypedResource === undefined || typedResource.trim() === requiredTypedResource;
+  const presentation = ACTION_PRESENTATION[item.action] ?? {
+    confirmLabel: "Confirm Action",
+    destructive: false,
+  };
+  const ConfirmationIcon = presentation.destructive ? Trash2 : Check;
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="flex items-center gap-2 mb-8 justify-center">
-          <Trash2 size={24} className="text-fg" />
+          <ConfirmationIcon size={24} className="text-fg" />
           <h1 className="font-mono font-bold text-lg text-fg tracking-wider uppercase">Confirm Action</h1>
         </div>
         <div className="bg-bg-raised border-2 border-fg shadow-neo p-6">
           <p className="font-mono text-[11px] text-muted mb-4">
-            A CLI command is requesting confirmation for a destructive action. Review the details below before continuing.
+            A CLI command is requesting confirmation{presentation.destructive ? " for a destructive action" : ""}. Review the details below before continuing.
           </p>
           <div className="border-2 border-fg bg-bg p-3 mb-5">
             <p className="font-mono text-xs text-fg break-words">{item.summary}</p>
@@ -154,7 +172,7 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
               disabled={submitting !== null || !typedResourceMatches}
               className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35"
             >
-              {submitting === "confirm" ? <Spinner /> : "Confirm & Delete"}
+              {submitting === "confirm" ? <Spinner /> : presentation.confirmLabel}
             </button>
             <button
               type="button"

@@ -198,13 +198,13 @@ export function EnvironmentsPage() {
         </PermissionGate>
         {typeof id === "number" && (
           <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <span className="font-mono text-[9px] font-bold uppercase text-muted">On variable change</span>
+            <span className="font-mono text-[9px] font-bold uppercase text-muted">Apply changes</span>
             <NeoSelect
               compact
               value={rollout}
               options={[
-                { value: "restart", label: "Reload existing image" },
-                { value: "none", label: "No rollout" },
+                { value: "restart", label: "Reload running apps now" },
+                { value: "none", label: "Apply on next deploy" },
               ]}
               onChange={(value) => setRollout((value || "restart") as typeof rollout)}
             />
