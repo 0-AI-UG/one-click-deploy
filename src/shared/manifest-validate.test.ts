@@ -62,6 +62,26 @@ const validApp = {
 };
 
 describe("validateDeployManifest", () => {
+  test("accepts arbitrary image apps and rejects ambiguous delivery sources", () => {
+    expect(() => validateDeployManifest({
+      name: "database",
+      image: "postgres:17-alpine",
+      container_port: 5432,
+      volume: { size: 10, path: "/var/lib/postgresql/data" },
+      env: [{ key: "POSTGRES_PASSWORD", generate: "password", secret: true }],
+      exports: {
+        URL: { value: "postgresql://postgres:{env.POSTGRES_PASSWORD}@{app.host}:{app.port}/postgres", secret: true },
+      },
+      cap_add: ["CHOWN", "SETUID", "SETGID"],
+      post_start: { command: "pg_isready" },
+    }, ".ocd-deploy.json")).not.toThrow();
+    expect(() => validateDeployManifest({ ...validApp, image: "nginx:alpine" }, ".ocd-deploy.json"))
+      .toThrow("exactly one of build or image");
+    const { build: _build, ...withoutSource } = validApp;
+    expect(() => validateDeployManifest(withoutSource, ".ocd-deploy.json"))
+      .toThrow("exactly one of build or image");
+  });
+
   test("accepts recognized $llm metadata without warnings", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     expect(() => validateDeployManifest({ ...validApp, $llm: { purpose: "worker" } }, ".ocd-deploy.json")).not.toThrow();

@@ -1,5 +1,5 @@
 import { sshExec, describeFailure } from "./ssh.ts";
-import { asUser, log, buildDockerRunArgs, withImageGcLease } from "./container-common.ts";
+import { asUser, log, buildDockerRunArgs, shellSingleQuote, withImageGcLease } from "./container-common.ts";
 import * as db from "../../shared/db.ts";
 import { REVISION_LABELS } from "../revision.ts";
 
@@ -149,6 +149,8 @@ export type StartAppReplicaOpts = {
   removeExisting?: boolean;
   configRevision?: number;
   envHash?: string;
+  command?: string[];
+  capAdd?: string[];
 };
 
 /** Resolve the current single-instance service names to their private fleet
@@ -283,6 +285,8 @@ export async function startAppReplicaWithSsh(
     extraVolumes: opts.extraVolumes,
     memoryMb: opts.memoryMb,
     cpus: opts.cpus,
+    command: opts.command,
+    extraCaps: opts.capAdd,
     labels,
   });
   // Keep GC out while Docker resolves the image tag and creates the container.
@@ -294,4 +298,25 @@ export async function startAppReplicaWithSsh(
     throw new Error(describeFailure("Failed to start container", result));
   }
   return { containerId: result.stdout.trim() };
+}
+
+/** Run an idempotent setup command inside a healthy app container. */
+export async function runAppPostStartCommand(
+  ip: string,
+  containerName: string,
+  command: string,
+  hostKey?: string,
+): Promise<void> {
+  if (!command.trim()) return;
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(containerName)) {
+    throw new Error(`Invalid container name: ${containerName}`);
+  }
+  const result = await sshExec(
+    ip,
+    asUser(`docker exec ${containerName} sh -c ${shellSingleQuote(command)}`),
+    hostKey,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(describeFailure("Post-start command failed", result));
+  }
 }

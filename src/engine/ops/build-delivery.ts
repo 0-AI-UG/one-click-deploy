@@ -228,12 +228,13 @@ const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
       ? ctx.input.spec.apps.filter((app) => ctx.input.spec.selected_app_keys!.includes(app.key))
       : ctx.input.spec.apps;
     if (!selected.length) return { refs: {}, workerId: null };
-    const builds = selected.map((app) => app.build).filter((build): build is BuildConfig => !!build);
-    if (builds.length !== selected.length) throw new Error("Every selected stack member requires build configuration");
+    const buildApps = selected.filter((app) => !!app.build);
+    if (!buildApps.length) return { refs: {}, workerId: null };
+    const builds = buildApps.map((app) => app.build!);
     const keys = new Set(builds.map(sourceKey));
     if (keys.size !== 1) throw new Error("One stack build must use one repository and branch");
-    const commit = selected[0].git_commit || "";
-    if (selected.some((app) => app.git_commit !== commit)) throw new Error("Stack members must use one exact Git commit");
+    const commit = buildApps[0].git_commit || "";
+    if (buildApps.some((app) => app.git_commit !== commit)) throw new Error("Built stack members must use one exact Git commit");
     return runBuild(
       transport,
       coordinator,
@@ -241,7 +242,7 @@ const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
       builds[0].repository,
       builds[0].branch || "main",
       commit,
-      selected.map((app) => ({
+      buildApps.map((app) => ({
         name: app.key,
         dockerfile: app.build!.dockerfile,
         context: app.build!.context,
@@ -254,17 +255,19 @@ const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
       ? ctx.input.spec.apps.filter((app) => ctx.input.spec.selected_app_keys!.includes(app.key))
       : ctx.input.spec.apps;
     if (!selected.length) return null;
-    const builds = selected.map((app) => app.build).filter((build): build is BuildConfig => !!build);
-    if (builds.length !== selected.length || new Set(builds.map(sourceKey)).size !== 1) return null;
-    const commit = selected[0].git_commit || "";
-    if (selected.some((app) => app.git_commit !== commit)) return null;
+    const buildApps = selected.filter((app) => !!app.build);
+    if (!buildApps.length) return { refs: {}, workerId: null };
+    const builds = buildApps.map((app) => app.build!);
+    if (new Set(builds.map(sourceKey)).size !== 1) return null;
+    const commit = buildApps[0].git_commit || "";
+    if (buildApps.some((app) => app.git_commit !== commit)) return null;
     return recoverBuild(
       transport,
       coordinator,
       ctx,
       builds[0].repository,
       commit,
-      selected.map((app) => ({
+      buildApps.map((app) => ({
         name: app.key,
         dockerfile: app.build!.dockerfile,
         context: app.build!.context,
@@ -284,7 +287,7 @@ const stackDeploy: Step<BuildStackDeliveryInput, { childId: number }> = {
       apps: ctx.input.spec.apps.map((app) => ({
         ...app,
         build: undefined,
-        image_ref: refs[app.key] || db.getAppByName(`${ctx.input.spec.name}-${app.key}`)?.image_ref,
+        image_ref: refs[app.key] || app.image_ref || db.getAppByName(`${ctx.input.spec.name}-${app.key}`)?.image_ref,
       })),
     };
     const childId = await runChild(ctx, "stack", "deploy_stack", [`stack:${runtime.name}`], runtime as unknown as Record<string, unknown>);

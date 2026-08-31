@@ -11,6 +11,7 @@ import {
 import deployStackOp, {
   dependencyProjectionKeys,
   injectAppUrl,
+  injectAppExports,
   leastPrivilegeProjection,
   suspiciousUnrelatedProjectionKeys,
   stackAppAlreadyConverged,
@@ -48,8 +49,8 @@ const reconcileRemovalsStep = deployStackOp.steps.find((s) => s.name === "reconc
 const preflightAppsStep = deployStackOp.steps.find((s) => s.name === "preflight_apps")!;
 const validatePlanStep = deployStackOp.steps.find((s) => s.name === "validate_plan")!;
 
-function app(key: string, needs?: string[]) {
-  return { key, needs, app_name: key, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000 };
+function app(key: string, needs?: string[], exports?: Record<string, { value: string; secret?: boolean }>) {
+  return { key, needs, exports, app_name: key, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000 };
 }
 
 function req(name: string, apps: ReturnType<typeof app>[], services: Array<{ key: string; type: string }> = []): StackDeployRequest {
@@ -147,6 +148,18 @@ describe("least-privilege stack environment projection", () => {
       ["EMAIL_TOKEN"],
     )).toEqual(["EMAIL_TOKEN"]);
   });
+
+  test("includes every declared app dependency export", () => {
+    const input = req("safe", [app("web", ["database"]), app("database", undefined, {
+      HOST: { value: "{app.host}" },
+      PASSWORD: { value: "{env.POSTGRES_PASSWORD}", secret: true },
+    })]);
+    expect(dependencyProjectionKeys(input.apps[0], input)).toEqual([
+      "DATABASE_URL",
+      "DATABASE_HOST",
+      "DATABASE_PASSWORD",
+    ]);
+  });
 });
 
 describe("generated stack URLs", () => {
@@ -169,6 +182,33 @@ describe("generated stack URLs", () => {
 
     expect(db.getEnvironment(environment.id)!.env_vars).toBe(serialized);
     expect(db.getApp(linked.id)!.config_revision).toBe(afterFirstWrite);
+  });
+
+  test("renders app and environment templates without rotating unchanged secrets", async () => {
+    const environment = db.insertEnvironment(`exports-env-${randomSuffix()}`, JSON.stringify({
+      version: 2,
+      entries: [{ key: "POSTGRES_PASSWORD", value: "secret", secret: false }],
+    }));
+    const database = db.insertApp({
+      name: `database-${randomSuffix()}`,
+      domain: "",
+      image_ref: `docker.io/library/postgres@sha256:${"a".repeat(64)}`,
+      container_port: 5432,
+      env_vars: "{}",
+    });
+    const definitions = {
+      HOST: { value: "{app.host}" },
+      PORT: { value: "{app.port}" },
+      PASSWORD: { value: "{env.POSTGRES_PASSWORD}", secret: true },
+    };
+    await injectAppExports(environment.id, "database", database, definitions);
+    const first = db.getEnvironment(environment.id)!.env_vars;
+    const resolved = await resolveEnvVarsForDeploy(first);
+    expect(resolved.DATABASE_HOST).toBe(`${database.name}.ocd.internal`);
+    expect(resolved.DATABASE_PORT).toBe("5432");
+    expect(resolved.DATABASE_PASSWORD).toBe("secret");
+    await injectAppExports(environment.id, "database", database, definitions);
+    expect(db.getEnvironment(environment.id)!.env_vars).toBe(first);
   });
 });
 

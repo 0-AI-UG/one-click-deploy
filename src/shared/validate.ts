@@ -468,6 +468,9 @@ export function validateDeployRequest(req: {
   compress?: boolean;
   public_port?: number | "auto" | null;
   public_protocol?: string;
+  command?: string[];
+  cap_add?: string[];
+  post_start_command?: string;
 }): ValidationResult<void> {
   const nameResult = validateAppName(req.app_name);
   if (!nameResult.valid) return { valid: false, error: `App name: ${nameResult.error}` };
@@ -477,6 +480,21 @@ export function validateDeployRequest(req: {
   }
   if (req.git_commit && !/^[0-9a-f]{7,64}$/i.test(req.git_commit)) {
     return { valid: false, error: "Git commit SHA must contain 7-64 hexadecimal characters" };
+  }
+  if (req.command !== undefined && (
+    !Array.isArray(req.command) ||
+    req.command.some((part) => typeof part !== "string" || part.length === 0 || /[\0\r\n]/.test(part))
+  )) {
+    return { valid: false, error: "Command must be an array of non-empty strings without control characters" };
+  }
+  if (req.cap_add !== undefined && (
+    !Array.isArray(req.cap_add) ||
+    req.cap_add.some((cap) => typeof cap !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(cap))
+  )) {
+    return { valid: false, error: "Linux capabilities must use names such as CHOWN or SETUID" };
+  }
+  if (req.post_start_command !== undefined && /[\0]/.test(req.post_start_command)) {
+    return { valid: false, error: "Post-start command must not contain NUL bytes" };
   }
 
   if (req.domain) {

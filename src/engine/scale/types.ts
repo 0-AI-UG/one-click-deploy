@@ -54,6 +54,8 @@ export function appReplicaRunOpts(
     extraVolumes: db.parseExtraVolumes(app.extra_volumes),
     memoryMb: app.memory_mb || undefined,
     cpus: app.cpu_limit || undefined,
+    command: db.parseAppCommand(app),
+    capAdd: db.parseAppCapabilities(app),
   };
 }
 

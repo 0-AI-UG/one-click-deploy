@@ -78,6 +78,9 @@ describe("desired app configuration", () => {
       autoscale_mem_threshold: 75,
       autoscale_req_threshold: 100,
       autoscale_cooldown: 180,
+      command: ["postgres"],
+      cap_add: ["CHOWN", "SETUID"],
+      post_start_command: "pg_isready",
     };
 
     expect(diffAppConfig(app, req).map((c) => c.field)).toContain("image_ref");
@@ -100,6 +103,9 @@ describe("desired app configuration", () => {
     expect(updated.autoscale_mem_threshold).toBe(75);
     expect(updated.autoscale_req_threshold).toBe(100);
     expect(updated.autoscale_cooldown).toBe(180);
+    expect(db.parseAppCommand(updated)).toEqual(["postgres"]);
+    expect(db.parseAppCapabilities(updated)).toEqual(["CHOWN", "SETUID"]);
+    expect(updated.post_start_command).toBe("pg_isready");
     expect(updated.last_manifest_path).toBe(".ocd-deploy.json");
     expect(updated.last_manifest_hash).toBe("abc123");
     expect(updated.last_manifest_config_revision).toBe(updated.config_revision);

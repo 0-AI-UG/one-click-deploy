@@ -5,6 +5,7 @@ import {
   startAppReplica,
   writeEnvDeployFile,
   pullImmutableImage,
+  runAppPostStartCommand,
 } from "../../shared/remote/index.ts";
 import { resolveAppEnvVars } from "../../shared/env-crypto.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -45,6 +46,8 @@ type PriorContainerSnapshot = {
   extraVolumes: string[];
   memoryMb: number | null;
   cpus: number | null;
+  command: string[];
+  capAdd: string[];
   configRevision: number;
   envHash: string;
 };
@@ -121,6 +124,8 @@ const snapshotCurrentRevision: Step<{ appId: number }, PriorContainerSnapshot | 
       extraVolumes: db.parseExtraVolumes(current.app.extra_volumes),
       memoryMb: current.app.memory_mb ?? null,
       cpus: current.app.cpu_limit ?? null,
+      command: db.parseAppCommand(current.app),
+      capAdd: db.parseAppCapabilities(current.app),
       configRevision: current.app.config_revision,
       envHash: hashEnvironment(await resolveAppEnvVars(current.app)),
     };
@@ -142,6 +147,8 @@ const snapshotCurrentRevision: Step<{ appId: number }, PriorContainerSnapshot | 
       extraVolumes: db.parseExtraVolumes(current.app.extra_volumes),
       memoryMb: current.app.memory_mb ?? null,
       cpus: current.app.cpu_limit ?? null,
+      command: db.parseAppCommand(current.app),
+      capAdd: db.parseAppCapabilities(current.app),
       configRevision: current.app.config_revision,
       envHash: hashEnvironment(await resolveAppEnvVars(current.app)),
     };
@@ -175,6 +182,8 @@ const snapshotCurrentRevision: Step<{ appId: number }, PriorContainerSnapshot | 
       extraVolumes: snap.extraVolumes,
       memoryMb: snap.memoryMb ?? undefined,
       cpus: snap.cpus ?? undefined,
+      command: snap.command,
+      capAdd: snap.capAdd,
       configRevision: snap.configRevision,
       envHash: snap.envHash,
     }, hostKey);
@@ -269,6 +278,8 @@ const swapContainer: Step<{ appId: number }, SwapOut> = {
       extraVolumes: db.parseExtraVolumes(app.extra_volumes),
       memoryMb: app.memory_mb || undefined,
       cpus: app.cpu_limit || undefined,
+      command: db.parseAppCommand(app),
+      capAdd: db.parseAppCapabilities(app),
       configRevision: app.config_revision,
       envHash: hashEnvironment(envVars),
     }, hostKey);
@@ -334,6 +345,15 @@ const healthCheckStep: Step<{ appId: number }, { healthy: boolean }> = {
       throw new Error(`Rollback revision attestation failed: ${attestation.error}`);
     }
     db.updateReplicaStatus(first.id, "running");
+    if (app.post_start_command) {
+      await runAppPostStartCommand(
+        server.ipv4,
+        first.container_name,
+        app.post_start_command,
+        hostKey,
+      );
+      db.appendDeployLog(target.appId, "[post-start] Setup completed");
+    }
     return { healthy: health.healthy };
   },
 };

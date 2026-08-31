@@ -2603,6 +2603,15 @@ export const migrations: Migration[] = [
         ON build_source_deliveries(operation_id) WHERE operation_id IS NOT NULL`);
     },
   },
+  {
+    version: 111,
+    description: "Add image runtime options to apps",
+    up: (db) => {
+      db.run("ALTER TABLE apps ADD COLUMN command_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(command_json))");
+      db.run("ALTER TABLE apps ADD COLUMN cap_add_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(cap_add_json))");
+      db.run("ALTER TABLE apps ADD COLUMN post_start_command TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

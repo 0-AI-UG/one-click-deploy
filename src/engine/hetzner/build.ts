@@ -26,6 +26,8 @@ export async function pullImmutableImageAndRun(
     configRevision?: number;
     envHash?: string;
     extraPublish?: string[];
+    command?: string[];
+    capAdd?: string[];
   },
   onLog?: (line: string) => void,
 ): Promise<{ containerId: string; imageTag: string; imageDigest: string; imageBytes: number }> {
@@ -51,6 +53,8 @@ export async function pullImmutableImageAndRun(
     configRevision: opts.configRevision,
     envHash: opts.envHash,
     extraPublish: opts.extraPublish,
+    command: opts.command,
+    capAdd: opts.capAdd,
   }, opts.hostKey);
   const inspected = await sshExec(
     ip,

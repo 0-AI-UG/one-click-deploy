@@ -710,7 +710,6 @@ export async function stackUp(args: string[]): Promise<void> {
       ];
     }),
   );
-
   if (selectedKeys.size === 0 && body.selected_service_keys.length === 0) {
     console.log(`\n${GREEN}Stack already converged with the current manifests and image digests; nothing to deploy.${RESET}`);
     return;
@@ -833,6 +832,7 @@ async function stackStatus(args: string[]): Promise<void> {
     ["NAME", "TYPE", "VERSION", "STATUS"],
     (detail.services || []).map((s) => [s.name, s.service_type, s.version || "-", colorStatus(s.status)]),
   );
+
   if ((detail.public_endpoints || []).length > 0) {
     console.log(`\n${BOLD}Public endpoints${RESET}`);
     table(

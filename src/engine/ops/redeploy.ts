@@ -3,6 +3,7 @@ import {
   pullImmutableImageAndRun,
   probeAppHealth,
   startAppReplica,
+  runAppPostStartCommand,
 } from "../../shared/remote/index.ts";
 import {
   platformEnvVars,
@@ -55,6 +56,8 @@ type RollbackSnapshot = {
   extraVolumes: string[];
   memoryMb: number | null;
   cpus: number | null;
+  command: string[];
+  capAdd: string[];
   configRevision: number;
   envHash: string;
 };
@@ -91,6 +94,9 @@ function candidateApp(app: AppRow, candidate: DeployRequest | null): AppRow {
     health_check_path: candidate.health_check_path ?? "",
     internal_protocol: candidate.internal_protocol ?? "http",
     extra_volumes: JSON.stringify((candidate.extra_volumes ?? []).map((v) => `${v.host_path}:${v.container_path}`)),
+    command_json: JSON.stringify(candidate.command ?? []),
+    cap_add_json: JSON.stringify(candidate.cap_add ?? []),
+    post_start_command: candidate.post_start_command ?? "",
     config_revision: app.config_revision + 1,
   };
 }
@@ -187,6 +193,8 @@ const snapshotCurrentRevision: Step<RedeployInput, RollbackSnapshot | null> = {
       extraVolumes: db.parseExtraVolumes(target.app.extra_volumes),
       memoryMb: target.app.memory_mb ?? null,
       cpus: target.app.cpu_limit ?? null,
+      command: db.parseAppCommand(target.app),
+      capAdd: db.parseAppCapabilities(target.app),
       configRevision: target.app.config_revision,
       envHash: hashEnvironment(await resolveAppEnvVars(target.app)),
     };
@@ -208,6 +216,8 @@ const snapshotCurrentRevision: Step<RedeployInput, RollbackSnapshot | null> = {
       extraVolumes: db.parseExtraVolumes(target.app.extra_volumes),
       memoryMb: target.app.memory_mb ?? null,
       cpus: target.app.cpu_limit ?? null,
+      command: db.parseAppCommand(target.app),
+      capAdd: db.parseAppCapabilities(target.app),
       configRevision: target.app.config_revision,
       envHash: hashEnvironment(await resolveAppEnvVars(target.app)),
     };
@@ -233,6 +243,8 @@ const snapshotCurrentRevision: Step<RedeployInput, RollbackSnapshot | null> = {
       extraVolumes: snap.extraVolumes,
       memoryMb: snap.memoryMb ?? undefined,
       cpus: snap.cpus ?? undefined,
+      command: snap.command,
+      capAdd: snap.capAdd,
       configRevision: snap.configRevision,
       envHash: snap.envHash,
     }, hostKey);
@@ -279,6 +291,8 @@ const pullAndRunCandidate: Step<RedeployInput, ArtifactOut> = {
       containerName: first.container_name,
       memoryMb: app.memory_mb || undefined,
       cpus: app.cpu_limit || undefined,
+      command: db.parseAppCommand(app),
+      capAdd: db.parseAppCapabilities(app),
       hostKey: server.ssh_host_key || undefined,
       configRevision: app.config_revision,
       envHash: hashEnvironment(envVars),
@@ -438,6 +452,18 @@ const healthCheckStep: Step<RedeployInput, HealthOut> = {
       const attestation = await attestReplica(app, replica, server, expected);
       if (!attestation.ok) throw new Error(`Replica ${replica.id} revision attestation failed: ${attestation.error}`);
       db.updateReplicaStatus(replica.id, "running");
+    }
+    if (app.post_start_command) {
+      const first = replicas[0];
+      const server = first ? db.getServer(first.server_id) : null;
+      if (!first || !server) throw new Error("Primary replica missing for post-start setup");
+      await runAppPostStartCommand(
+        server.ipv4,
+        first.container_name,
+        app.post_start_command,
+        server.ssh_host_key || undefined,
+      );
+      db.appendDeployLog(ctx.input.appId, "[post-start] Setup completed");
     }
     db.appendDeployLog(
       ctx.input.appId,

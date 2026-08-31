@@ -140,9 +140,27 @@ const envEntrySchema = z.object(
     default: z.string({ error: "expected string" }).optional(),
     required: z.boolean({ error: "expected boolean" }).optional(),
     secret: z.boolean({ error: "expected boolean" }).optional(),
+    /** Generate a value when the target environment does not already contain
+     * this key. Generated values are persisted like any other environment
+     * value, so a later reconcile preserves rather than rotates them. */
+    generate: z.enum(["password", "username"], {
+      error: 'expected "password" or "username"',
+    }).optional(),
   },
   { error: 'expected object with a "key"' },
 );
+
+const exportEntrySchema = z.object({
+  value: nonEmptyString("expected a non-empty template string"),
+  secret: z.boolean({ error: "expected boolean" }).optional(),
+}, { error: "expected object { value, secret? }" }).strict();
+
+const commandSchema = z.array(
+  nonEmptyString("expected a non-empty command argument"),
+  { error: "expected an array of command arguments" },
+).min(1, { error: "expected at least one command argument" });
+
+const CAPABILITY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
 /** App data volume desired state. `id` adopts one exact retained/provider
  * volume; omitting it means OCD owns creation. Size is always explicit so the
@@ -290,8 +308,12 @@ export const DeployManifestSchema = z
     name: nonEmptyString("expected a non-empty string"),
     description: z.string({ error: "expected string" }).optional(),
     icon: z.string({ error: "expected string" }).optional(),
-    /** OCD-owned source checkout and BuildKit delivery contract. */
-    build: buildSchema,
+    /** OCD-owned source checkout and BuildKit delivery contract. Mutually
+     * exclusive with image. */
+    build: buildSchema.optional(),
+    /** Prebuilt OCI image reference. Tags are accepted as manifest intent but
+     * are resolved to an immutable digest before desired state is changed. */
+    image: nonEmptyString("expected an OCI image reference").optional(),
     container_port: guardedNumber(
       "expected integer 1-65535",
       (v) => Number.isInteger(v) && v >= 1 && v <= 65535,
@@ -301,6 +323,16 @@ export const DeployManifestSchema = z
         error: "expected array of { key, description?, default?, required?, secret? }",
       })
       .optional(),
+    /** Values exported to dependents in a stack. The map key becomes
+     * `<MEMBER>_<KEY>` and the template may reference `{app.host}`,
+     * `{app.port}`, and `{env.NAME}`. */
+    exports: z.record(
+      z.string().refine((key) => ENV_KEY_PATTERN.test(key), {
+        error: "expected env-var-name export key",
+      }),
+      exportEntrySchema,
+      { error: "expected object map of export key -> { value, secret? }" },
+    ).optional(),
     /** Existing environment selected by name; null explicitly detaches it. */
     environment: z.union([
       nonEmptyString("expected a non-empty environment name"),
@@ -339,6 +371,19 @@ export const DeployManifestSchema = z
       `expected 0 (default) or a number ${MIN_CPU_LIMIT}-${MAX_CPU_LIMIT}`,
       isValidCpuLimit,
     ).optional(),
+    /** Optional image command override, passed as argv after the image. */
+    command: commandSchema.optional(),
+    /** Explicit capabilities restored after the platform-wide cap drop. */
+    cap_add: z.array(
+      z.string().refine((capability) => CAPABILITY_PATTERN.test(capability), {
+        error: "expected uppercase Linux capability name",
+      }),
+      { error: "expected an array of Linux capability names" },
+    ).optional(),
+    /** Idempotent command executed inside the healthy container after rollout. */
+    post_start: z.object({
+      command: nonEmptyString("expected a non-empty command"),
+    }, { error: "expected object { command }" }).strict().optional(),
     health_check: healthCheckSchema.optional(),
     /** Internal routing protocol (independent of health_check.enabled); omit → "http".
      *  Raw-TCP apps (e.g. databases) must set "tcp". */
@@ -377,6 +422,22 @@ export const DeployManifestSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    if (Boolean(value.build) === Boolean(value.image)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "exactly one of build or image is required",
+        path: value.build ? ["image"] : ["build"],
+      });
+    }
+    for (const [index, entry] of (value.env ?? []).entries()) {
+      if (entry.generate && entry.default !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "cannot be combined with default",
+          path: ["env", index, "generate"],
+        });
+      }
+    }
     if (
       value.autoscaling?.max_replicas !== undefined &&
       value.replicas !== undefined &&

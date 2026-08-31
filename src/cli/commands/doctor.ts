@@ -21,12 +21,12 @@ export async function doctor(args: string[]): Promise<void> {
       const first = Object.values(parsed.apps)[0]?.manifest;
       if (!first) throw new Error("Stack manifest contains no app manifests");
       const manifest = readManifest(resolve(dirname(location.fullPath), first));
-      repository = manifest.build.repository;
-      image = manifest.build.image;
+      repository = manifest.build?.repository;
+      image = manifest.build?.image ?? manifest.image;
     } else {
       const manifest = readManifest(location.fullPath);
-      repository = manifest.build.repository;
-      image = manifest.build.image;
+      repository = manifest.build?.repository;
+      image = manifest.build?.image ?? manifest.image;
     }
     console.log(`${DIM}Manifest:${RESET} ${location.path}`);
   }

@@ -77,6 +77,9 @@ export type AppRow = {
   extra_volumes: string; // JSON array of "host:container" strings
   memory_mb: number; // per-container memory ceiling in MB; 0 = platform default
   cpu_limit: number; // per-container CPU ceiling in cores (fractional allowed); 0 = platform default
+  command_json: string;
+  cap_add_json: string;
+  post_start_command: string;
   health_check: number; // 1 = HTTP probe (default); 0 = only verify the container is running
   health_check_mode: string;
   health_check_command: string;
@@ -330,6 +333,9 @@ type InsertAppFields = {
   desired_volume_id?: string;
   desired_volume_size?: number;
   desired_volume_path?: string;
+  command?: string[];
+  cap_add?: string[];
+  post_start_command?: string;
 } & AppIngressSettings;
 
 /** Resolve a deploy request's public exposure to a concrete port. Runs
@@ -363,7 +369,7 @@ function insertAppRow(app: InsertAppFields): AppRow {
   const internalProtocol: InternalProtocol = app.internal_protocol ?? "http";
   return db
     .query(
-      "INSERT INTO apps (name, domain, image_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, health_check_expected_statuses, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+      "INSERT INTO apps (name, domain, image_ref, container_port, env_vars, auth_password_hash, environment_id, env_projection, public, health_check, health_check_mode, health_check_command, health_check_file, health_check_max_age_seconds, health_check_expected_statuses, internal_protocol, internal_port, virtual_ip, sticky, rate_limit_rps, ip_allowlist, health_check_path, compress, public_port, public_protocol, durability_class, max_per_host, min_locations, placement_pool, target, target_of, desired_volume_id, desired_volume_size, desired_volume_path, command_json, cap_add_json, post_start_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .get(
       app.name,
@@ -402,6 +408,9 @@ function insertAppRow(app: InsertAppFields): AppRow {
       app.desired_volume_id ?? "",
       app.desired_volume_size ?? 0,
       app.desired_volume_path ?? "/data",
+      JSON.stringify(app.command ?? []),
+      JSON.stringify(app.cap_add ?? []),
+      app.post_start_command ?? "",
     ) as AppRow;
 }
 
@@ -710,6 +719,32 @@ export function updateAppDesiredVolume(
 
 export function updateAppExtraVolumes(id: number, extraVolumes: string[]): void {
   db.query("UPDATE apps SET extra_volumes = ? WHERE id = ?").run(JSON.stringify(extraVolumes), id);
+}
+
+function parseStringArray(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function parseAppCommand(app: Pick<AppRow, "command_json">): string[] {
+  return parseStringArray(app.command_json);
+}
+
+export function parseAppCapabilities(app: Pick<AppRow, "cap_add_json">): string[] {
+  return parseStringArray(app.cap_add_json);
+}
+
+export function updateAppRuntimeOptions(
+  id: number,
+  options: { command: string[]; capAdd: string[]; postStartCommand: string },
+): void {
+  db.query("UPDATE apps SET command_json = ?, cap_add_json = ?, post_start_command = ? WHERE id = ?")
+    .run(JSON.stringify(options.command), JSON.stringify(options.capAdd), options.postStartCommand, id);
 }
 
 /**

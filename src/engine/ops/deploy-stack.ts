@@ -142,6 +142,50 @@ export function injectAppUrl(envId: number, key: string, app: AppRow): void {
   db.updateEnvironment(envId, envRow.name, serializeEnvVars([...filtered, entry]));
 }
 
+/** Publish manifest-defined dependency outputs into the shared environment.
+ * Templates deliberately have a tiny vocabulary: the internal app host/port
+ * plus values already present in the target environment. */
+export async function injectAppExports(
+  envId: number,
+  key: string,
+  app: AppRow,
+  exports: Record<string, { value: string; secret?: boolean }> | undefined,
+): Promise<void> {
+  if (!exports || Object.keys(exports).length === 0) return;
+  const env = db.getEnvironment(envId);
+  if (!env) throw new Error(`Environment ${envId} not found`);
+  const values = await resolveEnvVarsForDeploy(env.env_vars);
+  const now = new Date().toISOString();
+  const outputs: Array<{ key: string; value: string; secret: boolean }> = [];
+  for (const [exportKey, definition] of Object.entries(exports)) {
+    const rendered = definition.value.replace(/\{(app\.host|app\.port|env\.[A-Z_][A-Z0-9_]*)\}/g, (_match, token: string) => {
+      if (token === "app.host") return `${app.name}.ocd.internal`;
+      if (token === "app.port") return String(app.container_port);
+      const envKey = token.slice(4);
+      if (!(envKey in values)) throw new Error(`Export ${key}.${exportKey} references missing environment key ${envKey}`);
+      return values[envKey];
+    });
+    const variable = `${envPrefix(key)}_${exportKey}`;
+    outputs.push({ key: variable, value: rendered, secret: definition.secret === true });
+  }
+  const existingEntries = new Map(parseEnvVars(env.env_vars).entries.map((entry) => [entry.key, entry]));
+  if (outputs.every((output) => values[output.key] === output.value && existingEntries.get(output.key)?.secret === output.secret)) {
+    return;
+  }
+  const entries: EnvVarEntry[] = [];
+  for (const output of outputs) {
+    if (output.secret) {
+      const { encrypted_value, iv } = await encryptValue(output.value);
+      entries.push({ key: output.key, value: "", encrypted_value, iv, secret: true, updated_at: now });
+    } else {
+      entries.push({ key: output.key, value: output.value, secret: false, updated_at: now });
+    }
+  }
+  const replaced = new Set(entries.map((entry) => entry.key));
+  const retained = parseEnvVars(env.env_vars).entries.filter((entry) => !replaced.has(entry.key));
+  db.updateEnvironment(envId, env.name, serializeEnvVars([...retained, ...entries]));
+}
+
 /**
  * Publish `<KEY>_URL` into the STAGING environment. Without this a staging
  * sibling resolves its peers through whatever the staging env was seeded with —
@@ -201,6 +245,10 @@ export function dependencyProjectionKeys(
       );
     } else {
       keys.push(`${prefix}_URL`);
+      const dependencyApp = req.apps.find((app) => app.key === dependency);
+      for (const exportKey of Object.keys(dependencyApp?.exports ?? {})) {
+        keys.push(`${prefix}_${exportKey}`);
+      }
     }
   }
   return keys;
@@ -1019,10 +1067,15 @@ const deployApps: Step<DeployStackInput, { ok: true }> = {
         db.setAppStackNeeds(app.id, appByKey.get(key)?.needs ?? null);
         const desiredStagingEnv = stagingEnvFor(key);
         injectAppUrl(environmentId, key, app);
+        await injectAppExports(environmentId, key, app, appByKey.get(key)?.exports);
         // Mirror the wiring into the staging env so a staged stack resolves to
         // its own siblings rather than to production.
         if (stagingEnvironmentId != null) {
+          const stagedApp = desiredStagingEnv != null
+            ? ({ ...app, name: `${app.name}-staging` } as AppRow)
+            : app;
           injectStagingUrl(stagingEnvironmentId, key, app, desiredStagingEnv != null);
+          await injectAppExports(stagingEnvironmentId, key, stagedApp, appByKey.get(key)?.exports);
         }
       }
     }

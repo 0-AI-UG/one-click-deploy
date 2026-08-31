@@ -12,6 +12,7 @@ import { findLatestRelatedStackOperation, stackLockKeys } from "../lib/stack-ope
 import { validatePublicEndpoint } from "../../engine/dns-reconciler.ts";
 import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
 import { enrichAppForResponse } from "./apps.ts";
+import { resolveOciImage } from "../../engine/oci-image.ts";
 
 const TERMINAL_OPERATION_STATUSES = new Set([
   "done",
@@ -85,14 +86,15 @@ export async function handleDeployStack(request: Request): Promise<Response> {
       await approveAutomaticServerProvisioning(request, payload, `deploying stack ${req.name}`, pools);
       req.server_provisioning_approved = true;
     }
+    for (const app of selectedApps) {
+      if (app.build || !app.image_ref) continue;
+      const existingApp = db.getAppByName(`${req.name}-${app.key}`);
+      app.image_ref = req.config_only && existingApp
+        ? existingApp.image_ref
+        : await resolveOciImage(app.image_ref);
+    }
     const selectedBuildApps = selectedApps.filter((app) => !!app.build && !app.image_ref);
     if (!req.config_only && selectedBuildApps.length > 0) {
-      if (selectedBuildApps.length !== selectedApps.length) {
-        return Response.json(
-          { error: "Selected stack members must use one delivery mode; OCD build manifests cannot be mixed with image overrides" },
-          { status: 400, headers: corsHeaders },
-        );
-      }
       const { opId } = enqueue({
         kind: "build_stack_delivery",
         resourceKeys: [`build-stack:${req.name}`],

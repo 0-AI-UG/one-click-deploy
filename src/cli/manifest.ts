@@ -151,6 +151,11 @@ export async function collectEnvVars(
   const remaining = { ...sets };
 
   const toPrompt: NonNullable<DeployManifest["env"]> = [];
+  const randomPassword = (length = 32): string => {
+    const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const bytes = crypto.getRandomValues(new Uint8Array(length));
+    return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+  };
   for (const entry of manifest.env || []) {
     if (entry.key in remaining) {
       out.push({ key: entry.key, value: remaining[entry.key], secret: entry.secret });
@@ -159,6 +164,12 @@ export async function collectEnvVars(
       out.push({ key: entry.key, value: fallback[entry.key], secret: entry.secret });
     } else if (entry.default !== undefined) {
       out.push({ key: entry.key, value: entry.default, secret: entry.secret });
+    } else if (entry.generate) {
+      out.push({
+        key: entry.key,
+        value: entry.generate === "username" ? "ocd_user" : randomPassword(),
+        secret: entry.secret,
+      });
     } else if (entry.required) {
       toPrompt.push(entry);
     }

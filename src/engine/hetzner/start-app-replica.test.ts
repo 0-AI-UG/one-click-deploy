@@ -44,6 +44,25 @@ describe("startAppReplica", () => {
     expect(run).toContain("--network ocd-net"); // default network
   });
 
+  test("adds explicit capabilities and shell-escapes command arguments", async () => {
+    await startAppReplica("1.2.3.4", {
+      containerName: "db",
+      image: "postgres:17",
+      appName: "db",
+      bindAddr: "10.0.0.1",
+      hostPort: 5432,
+      containerPort: 5432,
+      capAdd: ["CHOWN", "SETUID"],
+      command: ["postgres", "-c", "shared_preload_libraries=pgmq; touch /tmp/nope"],
+    });
+    const run = calls.find((call) => call.includes("docker run -d"))!;
+    expect(run).toContain("--cap-drop=ALL");
+    expect(run).toContain("--cap-add=CHOWN");
+    expect(run).toContain("--cap-add=SETUID");
+    expect(run).toContain("'shared_preload_libraries=pgmq; touch /tmp/nope'");
+  });
+
+
   test("removeExisting:false skips the rm; network:null omits --network", async () => {
     await startAppReplica("1.2.3.4", {
       containerName: "app2",

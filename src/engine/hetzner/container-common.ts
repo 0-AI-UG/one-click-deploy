@@ -9,7 +9,7 @@ export function log(context: string, ...args: unknown[]) {
 // JSON.stringify uses double quotes, which lets the outer shell expand `$var`
 // and `$(...)` before `su` sees them. That silently broke GC loops and any
 // other command whose variables were meant for the deploy user's shell.
-function shellSingleQuote(value: string): string {
+export function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
@@ -78,6 +78,8 @@ export type DockerRunOpts = {
   restart?: string;
   /** Optional trailing command/args (already shell-escaped by caller). */
   cmd?: string;
+  /** Optional trailing command/args escaped independently by this builder. */
+  command?: string[];
   /** Deterministic workload identity labels used for replica attestation. */
   labels?: Record<string, string>;
 };
@@ -159,6 +161,7 @@ export function buildDockerRunArgs(opts: DockerRunOpts): string {
   }
 
   parts.push(opts.image);
-  if (opts.cmd) parts.push(opts.cmd);
+  if (opts.command?.length) parts.push(...opts.command.map(shellSingleQuote));
+  else if (opts.cmd) parts.push(opts.cmd);
   return parts.join(" ");
 }

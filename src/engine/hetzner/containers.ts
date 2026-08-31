@@ -15,7 +15,7 @@ export type { DockerRunVolume, DockerRunOpts } from "./container-common.ts";
 
 export type { RegistryAuth } from "./registry.ts";
 
-export { writeEnvDeployFile, startAppReplica } from "./docker-run.ts";
+export { writeEnvDeployFile, startAppReplica, runAppPostStartCommand } from "./docker-run.ts";
 export type { StartAppReplicaOpts } from "./docker-run.ts";
 
 export { pruneServer } from "./prune.ts";

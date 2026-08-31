@@ -16,6 +16,7 @@ import { findActiveOperationByResourceKey } from "../../shared/db/operations.ts"
 import { approveAutomaticServerProvisioning } from "../lib/server-provisioning.ts";
 import { stackLockKeys, withOwningStackKeys } from "../lib/stack-operations.ts";
 import { reconcileAppDns } from "../../engine/dns-reconciler.ts";
+import { resolveOciImage } from "../../engine/oci-image.ts";
 
 /** Enrich app row for API responses — adds environment name, the resolved
  *  public raw TCP/UDP address, a boolean `auth_enabled` flag, and strips every
@@ -317,6 +318,15 @@ export async function handleDeploy(request: Request): Promise<Response> {
     }
 
     const existing = db.getAppByName(req.app_name);
+    if (!req.build && req.image_ref) {
+      if (req.deploy === false && existing) {
+        // Config-only reconciles manifest settings while deliberately retaining
+        // the deployed immutable artifact.
+        req.image_ref = existing.image_ref;
+      } else {
+        req.image_ref = await resolveOciImage(req.image_ref);
+      }
+    }
     if (req.build && !req.image_ref && req.deploy !== false) {
       const buildRequest = manifestSpec(req);
       const validation = validateBuildDeployRequest(buildRequest);

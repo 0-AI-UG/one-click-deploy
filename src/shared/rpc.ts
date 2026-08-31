@@ -141,6 +141,9 @@ export type DeployRequest = {
   server_provisioning_approved?: boolean;
   memory_mb?: number; // Per-container memory ceiling in MB. Omit / 0 → platform default
   cpu_limit?: number; // Per-container CPU ceiling in cores (fractional allowed). Omit / 0 → platform default
+  command?: string[]; // Optional argv appended after the OCI image
+  cap_add?: string[]; // Explicit Linux capabilities restored after cap-drop=ALL
+  post_start_command?: string; // Idempotent command executed after a healthy rollout
   health_check?: boolean; // Default true; false = skip the HTTP probe, only verify the container is running
   health_check_mode?: "http" | "container" | "exec" | "heartbeat" | "periodic_job";
   health_check_command?: string;
@@ -272,6 +275,9 @@ export type StackDeployRequest = {
     /** Child-manifest declarations, used for least-privilege derivation and
      * public-app exposure warnings. Values never appear here. */
     declared_env_keys?: string[];
+    /** Generic dependency outputs published as `<MEMBER>_<KEY>` into the
+     * shared environment after this member becomes healthy. */
+    exports?: Record<string, { value: string; secret?: boolean }>;
   }>;
   /** Internal authorization set only by the stack route after browser approval. */
   server_provisioning_approved?: boolean;

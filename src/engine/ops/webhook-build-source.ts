@@ -37,7 +37,8 @@ function sameRepository(left: string, right: string): boolean {
     right.trim().replace(/\.git$/i, "").replace(/\/$/, "").toLowerCase();
 }
 
-function assertSourceBuild(build: BuildConfig, source: db.BuildSourceRow, label: string): void {
+function assertSourceBuild(build: BuildConfig | undefined, source: db.BuildSourceRow, label: string): asserts build is BuildConfig {
+  if (!build) throw new Error(`${label} no longer declares a source build; apply it manually`);
   if (!sameRepository(build.repository, source.repository)) throw new Error(`${label} changed repository; apply it manually before enabling that source`);
   if ((build.branch || "main") !== source.branch) throw new Error(`${label} changed webhook branch; apply it manually before enabling that source`);
 }
@@ -185,6 +186,7 @@ const build: Step<WebhookBuildSourceInput, Built> = {
               const path = posix.normalize(posix.join(posix.dirname(stackPath), entry.manifest));
               const manifest = parseJson<DeployManifest>(await readFile(path), path);
               validateDeployManifest(manifest, path);
+              if (!manifest.build) continue;
               assertSourceBuild(manifest.build, source, path);
               const name = `${stack.name}-${key}`;
               builds[name] = manifest.build;

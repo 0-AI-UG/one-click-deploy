@@ -16,6 +16,7 @@ import {
   containerRunning,
   probeAppHealth,
   getContainerLogs,
+  runAppPostStartCommand,
 } from "../../shared/remote/index.ts";
 import { syncAppIngress, syncAllTraefik } from "../scale/traefik-manager.ts";
 import { replicaBindHost } from "../scale/types.ts";
@@ -541,6 +542,9 @@ const insertAppRow: Step<DeployInput, InsertAppOut> = {
           desired_volume_id: req.volume_id ?? "",
           desired_volume_size: req.volume_size ?? 0,
           desired_volume_path: req.volume_path ?? "/data",
+          command: req.command,
+          cap_add: req.cap_add,
+          post_start_command: req.post_start_command,
         },
         server.serverId,
       );
@@ -737,6 +741,8 @@ const pullAndRunContainer: Step<DeployInput, ArtifactOut> = {
         bindAddr: containerBindAddr,
         memoryMb: req.memory_mb || undefined,
         cpus: req.cpu_limit || undefined,
+        command: req.command,
+        capAdd: req.cap_add,
         hostKey: server.serverHostKey || undefined,
         configRevision: appRow?.config_revision ?? 1,
         envHash: hashEnvironment(envVars),
@@ -879,6 +885,15 @@ const healthCheckStep: Step<DeployInput, { healthy: boolean; statusCode?: number
       if (!attestation.ok) {
         db.updateAppStatus(appOut.appId, "unhealthy");
         throw new Error(`Replica ${replica.id} revision attestation failed: ${attestation.error}`);
+      }
+      if (app.post_start_command) {
+        await runAppPostStartCommand(
+          server.serverIp,
+          appOut.containerName,
+          app.post_start_command,
+          server.serverHostKey || undefined,
+        );
+        db.appendDeployLog(appOut.appId, "[post-start] Setup completed");
       }
       db.appendDeployLog(
         appOut.appId,

@@ -151,12 +151,14 @@ ${BOLD}Options:${RESET}
   const manifest = readManifest(location.fullPath, { allowUnknown });
   const sourceCommit = commit ?? localGitCommit(location.fullPath);
   const imageRef = imageOverride;
-  console.log(`${DIM}Build:${RESET}    ${manifest.build.repository}#${sourceCommit.slice(0, 12)}`);
-  console.log(`${DIM}Image:${RESET}    ${imageRef ?? manifest.build.image}${imageOverride ? " (exact override)" : ""}`);
+  if (manifest.build) {
+    console.log(`${DIM}Build:${RESET}    ${manifest.build.repository}#${sourceCommit.slice(0, 12)}`);
+  }
+  console.log(`${DIM}Image:${RESET}    ${imageRef ?? manifest.image ?? manifest.build?.image}${imageOverride ? " (exact override)" : ""}`);
   console.log(`${DIM}Manifest:${RESET} ${location.path} ${BOLD}(${manifest.name})${RESET}`);
 
   const name = appName || manifest.suggested_app_name ||
-    manifest.build.image.split("/").pop()!;
+    (manifest.image ?? manifest.build!.image).split("/").pop()!.split(":")[0];
   const port = manifest.container_port ?? 3000;
   const authPassword = await resolveAuthPassword(manifest.auth, authPasswordEnv);
   const environment = typeof manifest.environment === "string"
@@ -176,7 +178,7 @@ ${BOLD}Options:${RESET}
     app_name: name,
     container_port: port,
     domain: manifest.domain,
-    image_ref: imageRef,
+    image_ref: imageRef ?? manifest.image,
     build: manifest.build,
     git_commit: sourceCommit,
     env_projection: manifest.env_projection ?? null,
@@ -186,6 +188,9 @@ ${BOLD}Options:${RESET}
     public: manifest.public ?? true,
     memory_mb: manifest.memory_mb ?? 0,
     cpu_limit: manifest.cpu_limit ?? 0,
+    command: manifest.command ?? [],
+    cap_add: manifest.cap_add ?? [],
+    post_start_command: manifest.post_start?.command ?? "",
     health_check: healthMode === "http",
     health_check_mode: healthMode,
     health_check_path: healthMode === "http" ? (manifest.health_check?.path ?? "") : "",
@@ -290,7 +295,7 @@ ${BOLD}Options:${RESET}
     return;
   }
 
-  if (!imageOverride) {
+  if (!imageOverride && manifest.build) {
     await ensureBuildReadiness(manifest.build.repository, manifest.build.image);
   }
 

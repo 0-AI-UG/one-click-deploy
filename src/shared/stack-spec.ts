@@ -47,10 +47,12 @@ export function buildStackAppSpec(
     apply_mode: "manifest",
     key,
     app_name: key, // server derives <stack>-<key>; sent only to satisfy the type
-    build: manifest.build,
     container_port: manifest.container_port ?? 3000,
     declared_env_keys: [...new Set((manifest.env ?? []).map((entry) => entry.key))],
   };
+  if (manifest.build) spec.build = manifest.build;
+  if (manifest.image) spec.image_ref = manifest.image;
+  if (manifest.exports) spec.exports = manifest.exports;
   if (manifest.environment !== undefined) spec.environment = manifest.environment;
 
   if (entry.needs) spec.needs = entry.needs;
@@ -90,6 +92,9 @@ export function buildStackAppSpec(
   if (memoryMb !== undefined) spec.memory_mb = memoryMb;
   const cpuLimit = manifest.cpu_limit;
   if (cpuLimit !== undefined) spec.cpu_limit = cpuLimit;
+  if (manifest.command) spec.command = manifest.command;
+  if (manifest.cap_add) spec.cap_add = manifest.cap_add;
+  if (manifest.post_start?.command) spec.post_start_command = manifest.post_start.command;
   if (healthCheck?.enabled === false) spec.health_check = false;
   if (healthCheck?.mode) spec.health_check_mode = healthCheck.mode;
   if (healthCheck?.mode) spec.health_check = healthCheck.mode === "http";

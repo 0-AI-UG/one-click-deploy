@@ -4,6 +4,18 @@ import { mergeEnv, type AppEnvDefs } from "./env-merge.ts";
 const app = (name: string, defs: AppEnvDefs["defs"]): AppEnvDefs => ({ app: name, defs });
 
 describe("mergeEnv — single app (a stack of one)", () => {
+  test("generates secrets once and preserves an existing value", () => {
+    const first = mergeEnv([app("db", [{ key: "PASSWORD", generate: "password", secret: true }])]);
+    expect(first.entries).toHaveLength(1);
+    expect(first.entries[0].value).toHaveLength(32);
+    expect(first.entries[0].secret).toBe(true);
+    expect(mergeEnv(
+      [app("db", [{ key: "PASSWORD", generate: "password", secret: true }])],
+      {},
+      new Set(["PASSWORD"]),
+    ).entries).toEqual([]);
+  });
+
   test("emits a manifest default", () => {
     const r = mergeEnv([app("web", [{ key: "PORT", default: "3000" }])]);
     expect(r.entries).toEqual([{ key: "PORT", value: "3000", secret: false }]);

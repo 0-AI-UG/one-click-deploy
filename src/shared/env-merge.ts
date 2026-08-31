@@ -6,6 +6,7 @@
 //   1. --set override      — wins over everything, including an existing env var
 //   2. existing env var    — a value already present in the target environment
 //   3. manifest default(s) — merged across apps
+//   4. generated values    — created once when no persisted value exists
 //
 // Multiple apps declaring the same key:
 //   - only one supplies a (non-empty) default  → use it
@@ -24,6 +25,7 @@ export type EnvDef = {
   required?: boolean;
   secret?: boolean;
   description?: string;
+  generate?: "password" | "username";
 };
 
 export type AppEnvDefs = { app: string; defs: EnvDef[] };
@@ -36,6 +38,16 @@ export type MergeResult = {
   conflicts: EnvConflict[];
   requiredMissing: RequiredMissing[];
 };
+
+function randomPassword(length = 32): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+}
+
+function generatedValue(kind: NonNullable<EnvDef["generate"]>): string {
+  return kind === "username" ? "ocd_user" : randomPassword();
+}
 
 export function mergeEnv(
   apps: AppEnvDefs[],
@@ -72,8 +84,15 @@ export function mergeEnv(
       entries.push({ key, value: distinct[0], secret });
     } else if (distinct.length > 1) {
       conflicts.push({ key, apps: withDefault.map((x) => x.app), values: distinct });
-    } else if (declaring.some((x) => x.def.required === true)) {
-      requiredMissing.push({ key, apps: declaring.map((x) => x.app), secret, description });
+    } else {
+      const generators = [...new Set(declaring.map((x) => x.def.generate).filter(Boolean))] as Array<NonNullable<EnvDef["generate"]>>;
+      if (generators.length === 1) {
+        entries.push({ key, value: generatedValue(generators[0]), secret });
+      } else if (generators.length > 1) {
+        conflicts.push({ key, apps: declaring.map((x) => x.app), values: generators });
+      } else if (declaring.some((x) => x.def.required === true)) {
+        requiredMissing.push({ key, apps: declaring.map((x) => x.app), secret, description });
+      }
     }
   }
 
