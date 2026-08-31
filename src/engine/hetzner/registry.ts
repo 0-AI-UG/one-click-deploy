@@ -43,7 +43,9 @@ export async function dockerLoginRegistry(
   }
   return {
     dockerConfig,
-    envPrefix: `DOCKER_CONFIG=${dockerConfig} `,
+    // Keep credentials ephemeral while reusing the persistent named Buildx
+    // instance provisioned for the deploy user.
+    envPrefix: `DOCKER_CONFIG=${dockerConfig} BUILDX_CONFIG=/home/deploy/.docker/buildx `,
     cleanup: async () => {
       await sshExec(ip, asUser(`rm -rf ${dockerConfig}`), hostKey).catch(() => {});
     },

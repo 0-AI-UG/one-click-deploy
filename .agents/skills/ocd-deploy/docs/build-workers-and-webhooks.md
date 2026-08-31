@@ -20,6 +20,10 @@ For each build OCD:
 The immutable digest remains the deployment-history, rollback, promotion, and
 runtime-attestation boundary.
 
+Worker installation provisions a dedicated `ocd-worker` BuildKit container
+builder. Registry-backed cache import/export never depends on Docker's default
+builder driver.
+
 The mutable cache reference is `<image_repository>:ocd-buildcache`. It uses the same scoped
 registry connection and never becomes runtime identity. Add `"cache": false`
 to a build manifest for a cold diagnostic build or an incompatible registry;

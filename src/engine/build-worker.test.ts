@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BUILDX_BUILDER,
   BUILD_PLATFORM,
   buildxBuildCommand,
   buildInstallWorkerScript,
@@ -29,7 +30,10 @@ describe("build worker command safety", () => {
   });
 
   test("installs the host-lock utilities", () => {
-    expect(buildInstallWorkerScript()).toContain("util-linux");
+    const script = buildInstallWorkerScript();
+    expect(script).toContain("util-linux");
+    expect(script).toContain(`docker buildx create --name ${BUILDX_BUILDER} --driver docker-container`);
+    expect(script).toContain(`docker buildx inspect ${BUILDX_BUILDER} --bootstrap`);
   });
 
   test("uses a per-image registry cache without weakening digest identity", () => {
@@ -44,6 +48,7 @@ describe("build worker command safety", () => {
     });
 
     expect(registryBuildCacheRef(image)).toBe(`${image}:ocd-buildcache`);
+    expect(command).toContain(`--builder '${BUILDX_BUILDER}'`);
     expect(command).toContain(`--platform '${BUILD_PLATFORM}'`);
     expect(command).toContain(`--cache-from 'type=registry,ref=${image}:ocd-buildcache'`);
     expect(command).toContain(`--cache-to 'type=registry,ref=${image}:ocd-buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true'`);

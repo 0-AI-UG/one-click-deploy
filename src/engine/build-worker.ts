@@ -3,8 +3,9 @@ import { sshExec, sshExecStreaming, sshExecWithStdin } from "./hetzner/ssh.ts";
 import { dockerLoginRegistry } from "./hetzner/registry.ts";
 import { asUser } from "./hetzner/container-common.ts";
 
-export const BUILD_WORKER_VERSION = "1";
+export const BUILD_WORKER_VERSION = "2";
 export const BUILD_PLATFORM = "linux/amd64";
+export const BUILDX_BUILDER = "ocd-worker";
 const WORKER_DIR = "/opt/ocd-build-worker";
 const BUILD_LOCK = `${WORKER_DIR}/build.lock`;
 const LEGACY_RUNNER_DIR = "/opt/ocd-actions-runner";
@@ -39,7 +40,7 @@ export function buildxBuildCommand(input: {
   const cacheFlags = input.cache === false ? "" :
     `--cache-from ${shellQuote(`type=registry,ref=${cacheRef}`)} ` +
     `--cache-to ${shellQuote(`type=registry,ref=${cacheRef},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true`)} `;
-  return `${input.envPrefix ?? ""}docker buildx build --pull --platform ${shellQuote(platform)} ` +
+  return `${input.envPrefix ?? ""}docker buildx build --builder ${shellQuote(BUILDX_BUILDER)} --pull --platform ${shellQuote(platform)} ` +
     `--progress plain --push ${cacheFlags}` +
     `--label org.opencontainers.image.revision=${shellQuote(input.commit)} ` +
     `--metadata-file ${shellQuote(input.metadataFile)} -t ${shellQuote(input.tag)} ` +
@@ -85,6 +86,8 @@ export function buildInstallWorkerScript(removalToken = ""): string {
     "docker buildx version >/dev/null",
     "id deploy >/dev/null 2>&1 || { echo 'deploy user missing' >&2; exit 43; }",
     "usermod -aG docker deploy",
+    `runuser -u deploy -- docker buildx inspect ${BUILDX_BUILDER} >/dev/null 2>&1 || runuser -u deploy -- docker buildx create --name ${BUILDX_BUILDER} --driver docker-container >/dev/null`,
+    `runuser -u deploy -- docker buildx inspect ${BUILDX_BUILDER} --bootstrap >/dev/null`,
     `install -d -o deploy -g deploy -m 0750 ${WORKER_DIR} ${WORKER_DIR}/work`,
     `printf '%s\\n' ${shellQuote(BUILD_WORKER_VERSION)} > ${WORKER_DIR}/version`,
     `chown deploy:deploy ${WORKER_DIR}/version`,
@@ -107,7 +110,7 @@ export async function probeBuildWorker(server: ServerRow): Promise<{
     server.ipv4,
     `set -eu; test -f ${WORKER_DIR}/version; ! systemctl is-active --quiet ocd-github-runner.service; ` +
       `version=$(cat ${WORKER_DIR}/version); docker version --format '{{.Server.Version}}' >/dev/null; ` +
-      `docker buildx version >/dev/null; git --version >/dev/null; ` +
+      `docker buildx version >/dev/null; su - deploy -c ${shellQuote(`docker buildx inspect ${BUILDX_BUILDER} >/dev/null`)}; git --version >/dev/null; ` +
       `printf '%s\\t%s\\t%s\\n' \"$version\" \"$(uname -m)\" \"$(df -B1 / | awk 'NR==2 {print $4}')\"`,
     server.ssh_host_key || undefined,
   );

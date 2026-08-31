@@ -22,6 +22,7 @@ describe("generic OCI registry authentication", () => {
     expect(calls[0].command).not.toContain(password);
     expect(calls[0].command).not.toContain("touch /tmp/nope");
     expect(calls[0].command).toContain("--password-stdin");
+    expect(auth.envPrefix).toContain("BUILDX_CONFIG=/home/deploy/.docker/buildx");
     await auth.cleanup();
   });
 
