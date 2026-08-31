@@ -142,6 +142,16 @@ export class BuildCommitSupersededError extends Error {
   override readonly name = "BuildCommitSupersededError";
 }
 
+export function branchHeadCommand(checkout: string, gitHome: string, branch: string): string {
+  return `cd ${shellQuote(checkout)} && HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 ` +
+    `git ls-remote --exit-code origin ${shellQuote(`refs/heads/${branch}`)}`;
+}
+
+export function remoteBranchHead(stdout: string): string {
+  const head = stdout.trim().split(/\s+/, 1)[0] || "";
+  return /^[0-9a-f]{40,64}$/i.test(head) ? head.toLowerCase() : "";
+}
+
 export async function verifyBuildArtifact(input: {
   server: ServerRow;
   image: string;
@@ -348,17 +358,28 @@ export async function buildCommitOnWorker(input: {
       input.onLog?.(`Published ${ref}`);
     }
     if (input.expectedBranch) {
-      const branchHead = await sshExec(
-        server.ipv4,
-        asUser(
-          `HOME=${shellQuote(gitHome)} GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code origin ` +
-          `${shellQuote(`refs/heads/${input.expectedBranch}`)} | awk 'NR==1 {print $1}'`,
-        ),
-        hostKey,
-      );
-      if (branchHead.exitCode !== 0 || branchHead.stdout.trim() !== input.commit) {
-        throw new BuildCommitSupersededError(
-          `Commit ${input.commit.slice(0, 12)} is no longer the head of ${input.expectedBranch}`,
+      let verified = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const branchHead = await sshExec(
+          server.ipv4,
+          asUser(branchHeadCommand(checkout, gitHome, input.expectedBranch)),
+          hostKey,
+        );
+        const head = branchHead.exitCode === 0 ? remoteBranchHead(branchHead.stdout) : "";
+        if (head) {
+          if (head !== input.commit.toLowerCase()) {
+            throw new BuildCommitSupersededError(
+              `Commit ${input.commit.slice(0, 12)} is no longer the head of ${input.expectedBranch}`,
+            );
+          }
+          verified = true;
+          break;
+        }
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (!verified) {
+        throw new BuildWorkerUnavailableError(
+          `Could not verify the current head of ${input.expectedBranch} after publishing build artifacts`,
         );
       }
     }

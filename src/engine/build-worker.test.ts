@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   BUILDX_BUILDER,
   BUILD_PLATFORM,
+  branchHeadCommand,
   buildxBuildCommand,
   buildInstallWorkerScript,
   buildWorkerCleanupScript,
   guardedBuildCommand,
   operationImageTag,
+  remoteBranchHead,
   registryBuildCacheRef,
 } from "./build-worker.ts";
 
@@ -67,5 +69,25 @@ describe("build worker command safety", () => {
     };
     expect(buildxBuildCommand({ ...input, cache: false })).not.toContain("--cache-");
     expect(() => buildxBuildCommand({ ...input, platform: "linux/arm64" })).toThrow("Unsupported build platform");
+  });
+
+  test("checks the remote branch from the authenticated checkout", () => {
+    const command = branchHeadCommand(
+      "/opt/ocd-build-worker/work/op-42/repo",
+      "/opt/ocd-build-worker/work/op-42/git-home",
+      "main",
+    );
+
+    expect(command).toStartWith("cd '/opt/ocd-build-worker/work/op-42/repo' && ");
+    expect(command).toContain("HOME='/opt/ocd-build-worker/work/op-42/git-home'");
+    expect(command).toContain("git ls-remote --exit-code origin 'refs/heads/main'");
+    expect(command).not.toContain("awk");
+  });
+
+  test("accepts only a full Git object id from ls-remote", () => {
+    const commit = "A".repeat(40);
+    expect(remoteBranchHead(`${commit}\trefs/heads/main\n`)).toBe(commit.toLowerCase());
+    expect(remoteBranchHead("fatal: authentication failed\n")).toBe("");
+    expect(remoteBranchHead("abc\trefs/heads/main\n")).toBe("");
   });
 });
