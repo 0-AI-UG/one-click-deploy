@@ -27,10 +27,10 @@ trigger integration; GitHub Actions is not part of app delivery.
 
 ## Core model
 
-`.ocd-deploy.json` is complete desired state for one app. Its required `build`
-object declares the HTTPS repository, branch, Dockerfile, context, OCI push
-repository, and whether push webhooks are enabled. It never contains a token,
-tag, or pinned runtime digest.
+`.ocd-deploy.json` is complete desired state for one app. It declares exactly
+one delivery source: a `build` object for OCD-owned Git/BuildKit delivery, or
+an `image` reference for any prebuilt OCI image. Tags in `image` are resolved
+to immutable digests before deployment. Credentials never belong in either.
 
 `ocd deploy` resolves the exact local Git commit, asks a dedicated OCD build
 worker to clone that commit, builds and pushes the image, records the registry

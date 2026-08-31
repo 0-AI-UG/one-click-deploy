@@ -29,9 +29,15 @@ Unknown fields are rejected by default.
 }
 ```
 
-## Build object
+## Image source
 
-`build` is required:
+Declare exactly one of `build` or `image`.
+
+`image` accepts any OCI image reference, including Docker Hub shorthand such
+as `postgres:17-alpine`. OCD resolves tags to a registry digest before changing
+desired state and always runs the immutable digest.
+
+For source builds, `build` contains:
 
 - `repository`: HTTPS Git URL. Public or accessible with the configured
   read-only Git checkout token.
@@ -48,7 +54,8 @@ belong in this object.
 
 ## Other top-level fields
 
-`$schema`, `$llm`, `name`, `description`, `icon`, `container_port`, `env`,
+`$schema`, `$llm`, `name`, `description`, `icon`, `build`, `image`,
+`container_port`, `env`, `exports`, `command`, `cap_add`, `post_start`,
 `environment`, required `volume` (`null` for none),
 `suggested_app_name`, `domain`, `env_projection`, `auth`, `replicas`,
 `autoscaling`, `public`, `extra_volumes`, `memory_mb`, `cpu_limit`,
@@ -56,6 +63,12 @@ belong in this object.
 `ip_allowlist`, `compress`, `public_port`, `public_protocol`,
 `durability_class`, `placement_pool`, and `scale_to_zero_after` retain their
 normal complete-desired-state semantics.
+
+An env declaration may use `generate: "password"` or `generate: "username"`;
+the value is created only when the selected environment does not already have
+the key. Stack `exports` publish dependency outputs using `{app.host}`,
+`{app.port}`, and `{env.NAME}` templates. Mark credential-bearing outputs with
+`secret: true`.
 
 Primary volumes are grow-only. `environment` and `domain` are retention
 exceptions: omission retains an existing value, while explicit `null` or `""`
