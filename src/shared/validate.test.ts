@@ -21,7 +21,7 @@ const TEST_BUILD = {
   branch: "main",
   dockerfile: "Dockerfile",
   context: ".",
-  image: "ghcr.io/acme/test",
+  image_repository: "ghcr.io/acme/test",
   webhook: true,
 } as const;
 const validateDeployManifest = (raw: unknown) => validateDeployManifestRaw(
@@ -503,7 +503,7 @@ describe("validateDeployManifest", () => {
     expect(validateDeployManifestRaw({
       volume: null,
       name: "demo",
-      build: { ...TEST_BUILD, image: "ghcr.io/acme/demo:latest" },
+      build: { ...TEST_BUILD, image_repository: "ghcr.io/acme/demo:latest" },
     }).ok).toBe(false);
   });
 

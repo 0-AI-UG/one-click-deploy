@@ -1,0 +1,26 @@
+{
+  "$schema": 1,
+  "name": "PostgreSQL 17",
+  "image": "postgres:17-alpine",
+  "container_port": 5432,
+  "env": [
+    { "key": "DATABASE_USER", "generate": "username" },
+    { "key": "DATABASE_PASSWORD", "generate": "password", "secret": true },
+    { "key": "DATABASE_NAME", "default": "app" },
+    { "key": "PGDATA", "default": "/var/lib/postgresql/data/pgdata" }
+  ],
+  "exports": {
+    "URL": { "value": "postgresql://{env.DATABASE_USER}:{env.DATABASE_PASSWORD}@{app.host}:{app.port}/{env.DATABASE_NAME}", "secret": true },
+    "HOST": { "value": "{app.host}" },
+    "PORT": { "value": "{app.port}" },
+    "USER": { "value": "{env.DATABASE_USER}" },
+    "PASSWORD": { "value": "{env.DATABASE_PASSWORD}", "secret": true },
+    "NAME": { "value": "{env.DATABASE_NAME}" }
+  },
+  "command": ["sh", "-ec", "export POSTGRES_USER=\"$DATABASE_USER\" POSTGRES_PASSWORD=\"$DATABASE_PASSWORD\" POSTGRES_DB=\"$DATABASE_NAME\" PGUSER=\"$DATABASE_USER\" PGDATABASE=\"$DATABASE_NAME\"; exec docker-entrypoint.sh postgres"],
+  "cap_add": ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER"],
+  "internal_protocol": "tcp",
+  "public": false,
+  "health_check": { "mode": "exec", "command": "pg_isready" },
+  "volume": { "size": 10, "path": "/var/lib/postgresql/data" }
+}

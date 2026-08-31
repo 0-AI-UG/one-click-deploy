@@ -137,7 +137,7 @@ Stack deletion:
 
 1. requires web UI confirmation;
 2. enqueues a durable stack-wide destroy operation;
-3. enqueues child destroy operations for every app/service;
+3. enqueues child destroy operations for every app;
 4. waits for children;
 5. logs retention of production/staging environments;
 6. deletes only the stack row.

@@ -132,7 +132,7 @@ effects. Reused/adopted resources survive stale compensation.
 
 Stack failure commonly:
 
-- destroys newly created child apps/services;
+- compensates newly created child apps that did not reach a durable checkpoint;
 - removes newly created stack rows/environments when they were solely
   provisional deploy side effects;
 - preserves resources that existed before the attempt;
@@ -141,9 +141,9 @@ Stack failure commonly:
 This provisional-deploy rollback is distinct from explicit app/stack deletion.
 Explicit deletion never deletes linked environments.
 
-Before stateful services are provisioned, stack deployment validates every app
-request and child manifest, including each immutable image reference. Source
-checkout and artifact creation occur outside OCD.
+Before stateful apps are deployed, stack deployment validates every app request
+and child manifest. Build members are checked out and published by OCD;
+prebuilt-image members are resolved to immutable digests before rollout.
 
 ## App/stack cleanup failure
 
@@ -191,13 +191,13 @@ After validation, recreate/redeploy linked apps so they use current credentials.
 
 ## Volume recovery
 
-Destroyed app/service volumes are detached and retained as user-owned data.
+Destroyed app volumes are detached and retained as user-owned data.
 They remain billable, and their seven-day review date is not automatic
 deletion.
 
 Volumes created only by a failed deployment are retained as provisional for
 the same seven-day recovery window. After that date, the reconciler permanently
-deletes them only when no app, service, or panel references the volume and the
+deletes them only when no app or panel references the volume and the
 provider reports it detached. Automated deletion is written to the permanent
 volume audit. Adopting the volume before expiry removes it from provisional
 retention.

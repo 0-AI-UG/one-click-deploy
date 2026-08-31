@@ -102,6 +102,8 @@ export type DeployRequest = {
   /** Complete manifest reconciliation. Browser/API patches are not supported. */
   apply_mode?: "manifest";
   app_name: string;
+  /** Internal manifest provenance for build-source attachment cleanup. */
+  delivery_source?: "build" | "image";
   /** OCD-owned BuildKit delivery. API routes replace this with an exact
    * image_ref before entering the runtime deploy/redeploy operations. */
   build?: {
@@ -109,7 +111,9 @@ export type DeployRequest = {
     branch?: string;
     dockerfile: string;
     context: string;
-    image: string;
+    image_repository: string;
+    platform?: "linux/amd64";
+    cache?: boolean;
     webhook?: boolean;
   };
   domain?: string;

@@ -271,7 +271,7 @@ export function updateAppBuildConfig(id: number, input: {
   branch: string;
   dockerfile: string;
   context: string;
-  image: string;
+  imageRepository: string;
 }): void {
   db.query(
     `UPDATE apps SET build_source_id = ?, build_repository = ?, build_branch = ?,
@@ -282,9 +282,28 @@ export function updateAppBuildConfig(id: number, input: {
     input.branch,
     input.dockerfile,
     input.context,
-    input.image,
+    input.imageRepository,
     id,
   );
+}
+
+/** Detach an app from source-build delivery and remove the now-orphaned source.
+ * Returns the deleted source id so callers can remove its external secret. */
+export function clearAppBuildConfig(id: number): number | null {
+  return db.transaction(() => {
+    const app = getApp(id);
+    const sourceId = app?.build_source_id ?? null;
+    db.query(
+      `UPDATE apps SET build_source_id = NULL, build_repository = '', build_branch = 'main',
+       build_dockerfile = 'Dockerfile', build_context = '.', build_image = '' WHERE id = ?`,
+    ).run(id);
+    if (sourceId == null) return null;
+    const remaining = db.query("SELECT COUNT(*) AS count FROM apps WHERE build_source_id = ?")
+      .get(sourceId) as { count: number };
+    if (remaining.count > 0) return null;
+    db.query("DELETE FROM build_sources WHERE id = ?").run(sourceId);
+    return sourceId;
+  })();
 }
 
 export type AppIngressSettings = {

@@ -21,16 +21,6 @@ interface Environment {
   env_vars?: Array<{ key: string }>;
 }
 
-const IMMUTABLE_IMAGE_REF = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
-
-export function validateImageOverride(value: string): string {
-  const image = value.trim();
-  if (!IMMUTABLE_IMAGE_REF.test(image)) {
-    throw new Error("--image must be an immutable repository@sha256:<64 hex digest> reference");
-  }
-  return image;
-}
-
 async function resolveEnvironment(name: string): Promise<Environment> {
   const list = await get<Environment[]>("/api/environments");
   const lower = name.toLowerCase();
@@ -52,7 +42,6 @@ async function parseFlags(args: string[]): Promise<{
   dryRun: boolean;
   configOnly: boolean;
   allowUnknown: boolean;
-  imageOverride?: string;
   commit?: string;
 }> {
   const parsed = parseCliArgs(args, {
@@ -64,7 +53,6 @@ async function parseFlags(args: string[]): Promise<{
     "dry-run": { type: "boolean" },
     "config-only": { type: "boolean" },
     "allow-unknown": { type: "boolean" },
-    image: { type: "string" },
     commit: { type: "string" },
     "sets-stdin": { type: "boolean" },
   }, { maxPositionals: 1 });
@@ -72,9 +60,6 @@ async function parseFlags(args: string[]): Promise<{
   const authPasswordEnv = parsed.flags["auth-password-env"] as string | undefined;
   const serverId = positiveIntegerFlag(parsed.flags.server, "server");
   const appName = parsed.flags.app as string | undefined;
-  const imageOverride = typeof parsed.flags.image === "string"
-    ? validateImageOverride(parsed.flags.image)
-    : undefined;
   const commit = parsed.flags.commit as string | undefined;
   if (commit !== undefined && !/^[a-f0-9]{7,64}$/i.test(commit)) {
     throw new Error("--commit must contain 7-64 hexadecimal characters");
@@ -89,7 +74,7 @@ async function parseFlags(args: string[]): Promise<{
       sets[pair.slice(0, eq)] = pair.slice(eq + 1);
   }
   return {
-    manifestPath, authPasswordEnv, serverId, appName, sets, imageOverride, commit,
+    manifestPath, authPasswordEnv, serverId, appName, sets, commit,
     help: parsed.flags.help === true,
     dryRun: parsed.flags["dry-run"] === true,
     configOnly: parsed.flags["config-only"] === true,
@@ -104,13 +89,14 @@ export async function deploy(args: string[]): Promise<void> {
     return;
   }
 
-  const { manifestPath, authPasswordEnv, serverId, appName, sets, help, dryRun, configOnly, allowUnknown, imageOverride, commit } = await parseFlags(args);
+  const { manifestPath, authPasswordEnv, serverId, appName, sets, help, dryRun, configOnly, allowUnknown, commit } = await parseFlags(args);
 
   if (help) {
     console.error(`${BOLD}Usage:${RESET} ocd deploy [manifest] [options]
 
-Builds the current Git commit on an OCD build worker, pushes it to the
-configured OCI repository, then deploys the registry-resolved digest.
+Deploys the manifest's declared source. OCD either builds the current Git
+commit and pushes it to build.image_repository, or resolves a prebuilt image
+reference. The runtime always receives an immutable registry digest.
 
 Env vars from the manifest's env[] section are included automatically:
 defaults are sent as-is, --set overrides or adds values, and required
@@ -134,8 +120,6 @@ ${BOLD}Options:${RESET}
   --app=<name>               Apply to an explicit existing app while retaining
                              its stored environment and stack association.
   --set=KEY=VALUE            Set an env var (repeatable)
-  --image=<digest-ref>       Advanced escape hatch: deploy an already-built
-                             exact digest instead of running the OCD build
   --commit=<sha>             Record the source revision as deployment provenance
   --dry-run                  Show the desired-configuration diff without applying or deploying
   --config-only              Apply config; runtime changes reuse the current image
@@ -143,22 +127,17 @@ ${BOLD}Options:${RESET}
     process.exit(0);
   }
 
-  if (configOnly && imageOverride) {
-    throw new Error("--image cannot be combined with --config-only; an image override is an artifact rollout");
-  }
-
   const location = manifestRepoLocation(manifestPath);
   const manifest = readManifest(location.fullPath, { allowUnknown });
   const sourceCommit = commit ?? localGitCommit(location.fullPath);
-  const imageRef = imageOverride;
   if (manifest.build) {
     console.log(`${DIM}Build:${RESET}    ${manifest.build.repository}#${sourceCommit.slice(0, 12)}`);
   }
-  console.log(`${DIM}Image:${RESET}    ${imageRef ?? manifest.image ?? manifest.build?.image}${imageOverride ? " (exact override)" : ""}`);
+  console.log(`${DIM}Image:${RESET}    ${manifest.image ?? manifest.build?.image_repository}`);
   console.log(`${DIM}Manifest:${RESET} ${location.path} ${BOLD}(${manifest.name})${RESET}`);
 
   const name = appName || manifest.suggested_app_name ||
-    (manifest.image ?? manifest.build!.image).split("/").pop()!.split(":")[0];
+    (manifest.image ?? manifest.build!.image_repository).split("/").pop()!.split("@")[0].split(":")[0];
   const port = manifest.container_port ?? 3000;
   const authPassword = await resolveAuthPassword(manifest.auth, authPasswordEnv);
   const environment = typeof manifest.environment === "string"
@@ -176,9 +155,10 @@ ${BOLD}Options:${RESET}
   const body = {
     apply_mode: "manifest" as const,
     app_name: name,
+    delivery_source: manifest.build ? "build" as const : "image" as const,
     container_port: port,
     domain: manifest.domain,
-    image_ref: imageRef ?? manifest.image,
+    image_ref: manifest.image,
     build: manifest.build,
     git_commit: sourceCommit,
     env_projection: manifest.env_projection ?? null,
@@ -295,8 +275,8 @@ ${BOLD}Options:${RESET}
     return;
   }
 
-  if (!imageOverride && manifest.build) {
-    await ensureBuildReadiness(manifest.build.repository, manifest.build.image);
+  if (manifest.build && !configOnly) {
+    await ensureBuildReadiness(manifest.build.repository, manifest.build.image_repository);
   }
 
   console.log(`\nDeploying ${BOLD}${body.app_name}${RESET}...`);

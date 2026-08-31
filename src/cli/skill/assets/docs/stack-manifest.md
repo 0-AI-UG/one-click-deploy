@@ -56,7 +56,8 @@ app names only after validation; see
 
 `ocd deploy stack` submits complete desired membership:
 
-- selected members are built from the exact repository commit;
+- selected members are built from the exact repository commit or resolved from
+  their prebuilt image reference;
 - existing member configuration is reconciled;
 - omitted recorded members are destroyed;
 - dependency ordering and shared ingress are reconciled;

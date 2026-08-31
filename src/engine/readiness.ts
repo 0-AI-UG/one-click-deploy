@@ -47,9 +47,10 @@ export async function inspectDeployReadiness(input: {
   repository?: string;
   image?: string;
 } = {}): Promise<DeployReadiness> {
+  const buildDelivery = !!input.repository;
   const settings = db.getSettings();
   const providerConfigured = !!await secretStore.get(hetzner.tokenKey).catch(() => null);
-  const workers = db.getBuildWorkers();
+  const workers = buildDelivery ? db.getBuildWorkers() : [];
   let online = 0;
   for (const worker of workers) {
     const server = db.getServer(worker.server_id);
@@ -70,15 +71,17 @@ export async function inspectDeployReadiness(input: {
     : null;
   const defaultsConfigured = !!(settings.default_server_type && settings.default_location);
   const actions: DeployReadiness["actions"] = [];
-  if (!online) actions.push({
+  if (buildDelivery && !online) actions.push({
     command: candidate ? `ocd runners install --server=${candidate.id}` : "ocd runners bootstrap",
     label: candidate ? `Install a worker on ${candidate.name}` : "Provision a build worker",
   });
-  if (!registryConfigured || coversTarget === false) actions.push({ command: "ocd registry login", label: "Connect the target OCI registry" });
+  if (buildDelivery && (!registryConfigured || coversTarget === false)) {
+    actions.push({ command: "ocd registry login", label: "Connect the build output registry" });
+  }
   if (coversRepository === false && sourceConfigured) actions.push({ command: "ocd source login", label: "Reconnect private source access for this repository host" });
 
   return {
-    ready: online > 0 && coversTarget !== false,
+    ready: !buildDelivery || (online > 0 && registryConfigured && coversTarget !== false),
     provider: { status: providerConfigured ? "ready" : "warning", configured: providerConfigured },
     defaults: {
       status: defaultsConfigured ? "ready" : "warning",
@@ -86,20 +89,22 @@ export async function inspectDeployReadiness(input: {
       location: settings.default_location || "",
     },
     worker: {
-      status: online ? "ready" : candidate || (providerConfigured && defaultsConfigured) ? "warning" : "blocked",
+      status: !buildDelivery ? "ready" : online ? "ready" : candidate || (providerConfigured && defaultsConfigured) ? "warning" : "blocked",
       online,
       total: workers.length,
       candidate_server: candidate ? { id: candidate.id, name: candidate.name } : null,
     },
     registry: {
-      status: coversTarget === false ? "blocked" : registryConfigured ? "ready" : "warning",
+      status: buildDelivery && coversTarget === false
+        ? "blocked"
+        : registryConfigured ? "ready" : buildDelivery ? "blocked" : "warning",
       configured: registryConfigured,
       scope,
       username: settings.oci_registry_username || "",
       covers_target: coversTarget,
     },
     source: {
-      status: coversRepository === false ? "blocked" : sourceConfigured ? "ready" : "warning",
+      status: !buildDelivery ? "ready" : coversRepository === false ? "warning" : sourceConfigured ? "ready" : "warning",
       configured: sourceConfigured,
       host: sourceHost,
       covers_repository: coversRepository,

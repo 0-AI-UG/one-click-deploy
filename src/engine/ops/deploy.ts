@@ -30,6 +30,7 @@ import { FatalProbeError, type OpContext, type OpKindDefinition, type Step } fro
 import { attestReplica, hashEnvironment, latestDesiredImage } from "../revision.ts";
 import { scaleUp } from "../scale/scale-up.ts";
 import { assertConnectedStatelessWorkload, assertProviderVolumesSupported } from "../../shared/infrastructure.ts";
+import { commitManifestDeliverySource } from "../manifest-delivery-source.ts";
 
 type DeployInput = DeployRequest;
 
@@ -1003,6 +1004,7 @@ const finalizeDeploy: Step<DeployInput, { ok: true }> = {
         `Replica convergence incomplete: desired=${desired}, actual=${finalReplicas.length}, unattested=${divergent.map((r) => r.id).join(",") || "none"}`,
       );
     }
+    await commitManifestDeliverySource(appOut.appId, req.delivery_source);
     if (req.manifest_path && req.manifest_hash) {
       db.recordAppManifestApplied(appOut.appId, req.manifest_path, req.manifest_hash);
     }

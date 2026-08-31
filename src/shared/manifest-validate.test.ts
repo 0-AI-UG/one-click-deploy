@@ -11,7 +11,7 @@ const BUILD = {
   branch: "main",
   dockerfile: "Dockerfile",
   context: ".",
-  image: "ghcr.io/acme/web",
+  image_repository: "ghcr.io/acme/web",
   webhook: true,
 } as const;
 const _deploy: DeployManifest = {
@@ -78,7 +78,7 @@ describe("validateDeployManifest", () => {
       name: "database",
       image: { ref: "postgres:17-alpine" },
       volume: null,
-    }, ".ocd-deploy.json")).not.toThrow();
+    }, ".ocd-deploy.json")).toThrow("expected an OCI image reference");
     expect(() => validateDeployManifest({ ...validApp, image: "nginx:alpine" }, ".ocd-deploy.json"))
       .toThrow("exactly one of build or image");
     const { build: _build, ...withoutSource } = validApp;
@@ -106,13 +106,13 @@ describe("validateDeployManifest", () => {
   test("accepts safe OCD build contracts and rejects tagged push repositories", () => {
     expect(() =>
       validateDeployManifest(
-        { name: "worker", volume: null, build: { ...BUILD, image: "ghcr.io/acme/worker" } },
+        { name: "worker", volume: null, build: { ...BUILD, image_repository: "ghcr.io/acme/worker" } },
         ".ocd-deploy.json",
       ),
     ).not.toThrow();
     expect(() =>
       validateDeployManifest(
-        { name: "worker", volume: null, build: { ...BUILD, image: "ghcr.io/acme/worker:latest" } },
+        { name: "worker", volume: null, build: { ...BUILD, image_repository: "ghcr.io/acme/worker:latest" } },
         ".ocd-deploy.json",
       ),
     ).toThrow();

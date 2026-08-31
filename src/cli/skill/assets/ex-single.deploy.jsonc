@@ -7,7 +7,7 @@
     "branch": "main",
     "dockerfile": "Dockerfile",
     "context": ".",
-    "image": "registry.example.com/team/my-app",
+    "image_repository": "registry.example.com/team/my-app",
     "webhook": false
   },
   "container_port": 3000,

@@ -15,7 +15,7 @@ describe("manifest validate", () => {
       branch: "main",
       dockerfile: "Dockerfile",
       context: ".",
-      image: "ghcr.io/ocd/test",
+      image_repository: "ghcr.io/ocd/test",
       webhook: true,
     };
     writeFileSync(join(dir, "web.json"), JSON.stringify({
@@ -26,7 +26,7 @@ describe("manifest validate", () => {
     }));
     writeFileSync(join(dir, "worker.json"), JSON.stringify({
       name: "worker",
-      build: { ...build, image: "ghcr.io/ocd/worker" },
+      build: { ...build, image_repository: "ghcr.io/ocd/worker" },
       container_port: 3000,
       volume: null,
       typo: true,

@@ -4,6 +4,7 @@ import type { DeployRequest } from "../../shared/rpc.ts";
 import { syncAppIngress } from "../scale/traefik-manager.ts";
 import { registerOp } from "./registry.ts";
 import type { OpKindDefinition, Step } from "../types.ts";
+import { commitManifestDeliverySource } from "../manifest-delivery-source.ts";
 
 type ApplyAppConfigInput = { appId: number; userId?: string; spec: DeployRequest };
 
@@ -18,6 +19,7 @@ const apply: Step<ApplyAppConfigInput, { changed: string[] }> = {
         ctx.log(line);
       },
     });
+    await commitManifestDeliverySource(ctx.input.appId, ctx.input.spec.delivery_source);
     await syncAppIngress(ctx.input.appId);
     return { changed: changes.map((change) => change.field) };
   },

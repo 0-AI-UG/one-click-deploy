@@ -31,6 +31,7 @@ import {
   probeRemoteRevisionSnapshot,
   type RemoteRevisionSnapshot,
 } from "./_revision-snapshot.ts";
+import { commitManifestDeliverySource } from "../manifest-delivery-source.ts";
 
 type RedeployInput = {
   appId: number;
@@ -403,6 +404,7 @@ const commitCandidateConfig: Step<RedeployInput, { committed: boolean; configRev
       log: (line) => ctx.log(`[config] ${line}`),
       allowUnchangedLegacyVolumeIntent: ctx.input.allowUnchangedLegacyVolumeIntent,
     });
+    await commitManifestDeliverySource(before.id, ctx.input.candidate.delivery_source);
     const after = db.getApp(before.id);
     if (!after) throw new Error("App disappeared while committing candidate configuration");
     if (after.config_revision !== before.config_revision + 1) {

@@ -1,8 +1,9 @@
 # Releases, Promotion, and Rollback
 
-Normal delivery is `ocd deploy` followed by signed repository push webhooks.
-Those paths build the exact commit and reconcile the complete committed
-manifest or stack.
+Normal delivery is `ocd deploy`, which reconciles either a Git build or a
+prebuilt image declared in the manifest. Build manifests may additionally use
+signed repository push webhooks to build the exact pushed commit and reconcile
+the complete committed manifest or stack.
 
 ## Artifact-only release
 

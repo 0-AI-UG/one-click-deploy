@@ -7,7 +7,7 @@
     "branch": "main",
     "dockerfile": "services/api/Dockerfile",
     "context": ".",
-    "image": "registry.example.com/team/blog-api",
+    "image_repository": "registry.example.com/team/blog-api",
     "webhook": false
   },
   "container_port": 8080,

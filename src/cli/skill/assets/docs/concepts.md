@@ -2,22 +2,28 @@
 
 ## Source desired state, immutable runtime
 
-The app manifest owns both complete runtime configuration and a source/build
-contract. `ocd deploy` builds the exact Git commit, obtains a registry digest,
-and applies the whole manifest. Signed push webhooks do the same from the
-committed manifest, so code and environment projections do not drift.
+The app manifest owns complete runtime configuration and exactly one delivery
+source. A `build` source builds the exact Git commit and publishes it to
+`build.image_repository`; an `image` source resolves a prebuilt tag or digest
+without a build worker. Both paths apply the whole manifest and store only an
+immutable runtime digest. Signed push webhooks apply only to build sources.
 
 | Intent | Command |
 | --- | --- |
 | Validate desired state | `ocd manifest validate` |
-| Build and reconcile an app | `ocd deploy` |
-| Build and reconcile a stack | `ocd deploy stack` |
+| Reconcile an app from its declared source | `ocd deploy` |
+| Reconcile a stack from member sources | `ocd deploy stack` |
 | Apply config with current digest | `ocd deploy --config-only` |
 | Advanced artifact-only rollout | `ocd release <app> --image <repository@sha256:digest>` |
 | Roll back exact history | `ocd rollback <app>` |
 
-Build repositories use temporary tags only for publication. Runtime desired
-state and deployment history always store digest-qualified image references.
+Build repositories use temporary tags only for publication. Prebuilt image
+tags are resolved before deployment. Runtime desired state and deployment
+history always store digest-qualified image references.
+
+A manifest catalog is just version-controlled app manifests. It has no
+separate server-side lifecycle: catalog entries deploy as standalone apps or
+stack members.
 
 ## Environments and staging
 

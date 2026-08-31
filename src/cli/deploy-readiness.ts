@@ -35,6 +35,9 @@ async function installWorker(server: Server): Promise<void> {
  * through the same durable operations and browser confirmation paths. */
 export async function ensureBuildReadiness(repository = "", image = ""): Promise<void> {
   let readiness = await getDeployReadiness(repository, image);
+  if (!readiness.registry.configured) {
+    throw new Error(`A registry connection is required to publish ${image}. Run: ocd registry login`);
+  }
   if (image && readiness.registry.covers_target === false) {
     throw new Error(
       `Image ${image} is outside the connected registry scope ${readiness.registry.scope || "(none)"}. ` +

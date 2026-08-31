@@ -20,7 +20,7 @@ For each build OCD:
 The immutable digest remains the deployment-history, rollback, promotion, and
 runtime-attestation boundary.
 
-The mutable cache reference is `<image>:ocd-buildcache`. It uses the same scoped
+The mutable cache reference is `<image_repository>:ocd-buildcache`. It uses the same scoped
 registry connection and never becomes runtime identity. Add `"cache": false`
 to a build manifest for a cold diagnostic build or an incompatible registry;
 `"platform": "linux/amd64"` may be stated explicitly and is the only supported
@@ -29,7 +29,7 @@ verification.
 
 ## Install a worker
 
-Normal `ocd deploy` checks readiness first. When no worker exists it can reserve
+Deploying a `build` manifest checks readiness first. When no worker exists it can reserve
 an empty server or, after browser approval, provision and install a dedicated
 worker before resuming the deploy. This can also be run explicitly:
 
@@ -38,8 +38,7 @@ ocd doctor
 ocd runners bootstrap
 ```
 
-For manual placement, the server must be ready and contain no panel, app, or
-image-backed app:
+For manual placement, the server must be ready and contain no panel or app:
 
 ```bash
 ocd runners install --server=ocd-build-1 --name=ocd-build-1

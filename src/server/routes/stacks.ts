@@ -55,6 +55,17 @@ export async function handleDeployStack(request: Request): Promise<Response> {
     if (!req?.name || typeof req.name !== "string") {
       return Response.json({ ok: false, error: "name is required" }, { status: 400, headers: corsHeaders });
     }
+    if (!Array.isArray(req.apps) || req.apps.length === 0) {
+      return Response.json({ ok: false, error: "apps must be a non-empty array" }, { status: 400, headers: corsHeaders });
+    }
+    const invalidSource = req.apps.find((app) => Boolean(app.build) === Boolean(app.image_ref));
+    if (invalidSource) {
+      return Response.json(
+        { ok: false, error: `Stack app ${invalidSource.key} requires exactly one delivery source: build or image_ref` },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    for (const app of req.apps ?? []) app.delivery_source = app.build ? "build" : "image";
     req.server_provisioning_approved = false;
     // Single-flight: only one deploy_stack per stack may run at a time. If one is
     // already in flight (pending/running/compensating), attach to it — follow the
@@ -75,11 +86,14 @@ export async function handleDeployStack(request: Request): Promise<Response> {
       req.server_provisioning_approved = true;
     }
     for (const app of selectedApps) {
-      if (app.build || !app.image_ref) continue;
       const existingApp = db.getAppByName(`${req.name}-${app.key}`);
-      app.image_ref = req.config_only && existingApp
-        ? existingApp.image_ref
-        : await resolveOciImage(app.image_ref);
+      if (req.config_only && existingApp) {
+        app.image_ref = existingApp.image_ref;
+        app.build = undefined;
+        continue;
+      }
+      if (app.build || !app.image_ref) continue;
+      app.image_ref = await resolveOciImage(app.image_ref);
     }
     const selectedBuildApps = selectedApps.filter((app) => !!app.build && !app.image_ref);
     if (!req.config_only && selectedBuildApps.length > 0) {

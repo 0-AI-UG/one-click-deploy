@@ -1,6 +1,6 @@
-# Restoring a managed PostgreSQL service
+# Restoring a PostgreSQL app
 
-Managed PostgreSQL images may initialize extensions such as PGMQ when their
+Prebuilt PostgreSQL images may initialize extensions such as PGMQ when their
 data directory is first created. A custom-format dump that also contains those
 schemas can therefore fail against the pre-initialized database with errors
 such as `schema "pgmq" already exists`.

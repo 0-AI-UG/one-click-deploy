@@ -127,6 +127,12 @@ applied by the `ocd` CLI. The web panel is read-only for manifest-owned app
 configuration and exposes operational controls such as restart, rollback,
 pause, wake, promotion, migration, and recovery.
 
+Each app declares exactly one delivery source: top-level `image` for a prebuilt
+OCI reference, or `build` for an OCD-owned Git build. Within `build`,
+`image_repository` is only the destination repository for the build output; it
+is not a second source. `ocd release --image` remains the separate,
+artifact-only operational command.
+
 The single-app `.ocd-deploy.json` schema is also used by every app entry in
 `ocd-stack.json`, so moving an app into or out of a stack does not change its
 deployment capabilities.

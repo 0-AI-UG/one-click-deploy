@@ -653,7 +653,9 @@ export function validateBuildDeployRequest(req: Parameters<typeof validateDeploy
     branch?: string;
     dockerfile: string;
     context: string;
-    image: string;
+    image_repository: string;
+    platform?: "linux/amd64";
+    cache?: boolean;
     webhook?: boolean;
   };
 }): ValidationResult<void> {
@@ -670,14 +672,20 @@ export function validateBuildDeployRequest(req: Parameters<typeof validateDeploy
       return { valid: false, error: `${label} must be a safe repository-relative path` };
     }
   }
-  if (!BUILD_IMAGE.test(build.image) || build.image.includes("@") || /:[^/]+$/.test(build.image)) {
-    return { valid: false, error: "Build image must be an OCI repository without a tag or digest" };
+  if (!BUILD_IMAGE.test(build.image_repository) || build.image_repository.includes("@") || /:[^/]+$/.test(build.image_repository)) {
+    return { valid: false, error: "Build image repository must be an OCI repository without a tag or digest" };
+  }
+  if (build.platform !== undefined && build.platform !== "linux/amd64") {
+    return { valid: false, error: "Build platform must be linux/amd64" };
+  }
+  if (build.cache !== undefined && typeof build.cache !== "boolean") {
+    return { valid: false, error: "Build cache must be a boolean" };
   }
   if (!req.git_commit || !/^[0-9a-f]{40,64}$/i.test(req.git_commit)) {
     return { valid: false, error: "OCD builds require an exact 40-64 character Git commit SHA" };
   }
   return validateDeployRequest({
     ...req,
-    image_ref: `${build.image}@sha256:${"0".repeat(64)}`,
+    image_ref: `${build.image_repository}@sha256:${"0".repeat(64)}`,
   });
 }

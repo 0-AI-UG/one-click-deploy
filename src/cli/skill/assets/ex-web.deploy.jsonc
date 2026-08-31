@@ -7,7 +7,7 @@
     "branch": "main",
     "dockerfile": "services/web/Dockerfile",
     "context": ".",
-    "image": "registry.example.com/team/blog-web",
+    "image_repository": "registry.example.com/team/blog-web",
     "webhook": false
   },
   "container_port": 80,

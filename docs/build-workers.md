@@ -45,7 +45,7 @@ state it or omit it for the same default:
     "repository": "https://git.example.com/team/api.git",
     "dockerfile": "Dockerfile",
     "context": ".",
-    "image": "registry.example.com/team/api",
+    "image_repository": "registry.example.com/team/api",
     "platform": "linux/amd64",
     "cache": true
   }

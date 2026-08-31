@@ -4,10 +4,16 @@ useTempDataDir();
 import { describe, expect, test } from "bun:test";
 import * as db from "../../shared/db.ts";
 import database from "../../shared/db/connection.ts";
-import type { DeployManifest } from "../../shared/rpc.ts";
+import type { DeployManifest, StackDeployRequest } from "../../shared/rpc.ts";
 import type { BuildCommitInput, BuildTransport } from "../build-transport.ts";
+import { createBuildCoordinator } from "../build-coordinator.ts";
 import type { OpContext, OpKindDefinition } from "../types.ts";
-import { enqueueOperation, markOperationRunning } from "../../shared/db/operations.ts";
+import {
+  enqueueOperation,
+  listChildOperations,
+  markOperationFinished,
+  markOperationRunning,
+} from "../../shared/db/operations.ts";
 import {
   createWebhookBuildSourceDefinition,
   type WebhookBuildSourceInput,
@@ -64,7 +70,7 @@ function fixture() {
     branch: source.branch,
     dockerfile: "Dockerfile",
     context: ".",
-    image: `registry.example.com/acme/${app.name}`,
+    imageRepository: `registry.example.com/acme/${app.name}`,
   });
   database.query("UPDATE apps SET manifest_path = ? WHERE id = ?").run(MANIFEST_PATH, app.id);
   return { assigned, source, app };
@@ -82,7 +88,7 @@ function manifest(
       branch: seeded.source.branch,
       dockerfile: "docker/web.Dockerfile",
       context: "apps/web",
-      image: `registry.example.com/acme/${seeded.app.name}`,
+      image_repository: `registry.example.com/acme/${seeded.app.name}`,
       ...build,
     },
     container_port: 3000,
@@ -172,7 +178,7 @@ function inMemoryTransport(
         ? await request.resolveTargets(readFile)
         : request.targets || [];
       targets.push(...resolved);
-      const refs = new Map(resolved.map((target) => [target.name, `${target.image}@${DIGEST}`]));
+      const refs = new Map(resolved.map((target) => [target.name, `${target.imageRepository}@${DIGEST}`]));
       for (const [name, image] of refs) await request.onArtifact?.(name, image);
       return {
         refs,
@@ -288,11 +294,11 @@ describe("webhook build source transport boundary", () => {
     expect(transport.reads).toEqual([MANIFEST_PATH]);
     expect(transport.targets).toEqual([{
       name: seeded.app.name,
-      repository: seeded.source.repository,
-      branch: seeded.source.branch,
       dockerfile: "docker/web.Dockerfile",
       context: "apps/web",
-      image: `registry.example.com/acme/${seeded.app.name}`,
+      imageRepository: `registry.example.com/acme/${seeded.app.name}`,
+      platform: undefined,
+      cache: undefined,
     }]);
     expect(built.refs).toEqual({
       [seeded.app.name]: `registry.example.com/acme/${seeded.app.name}@${DIGEST}`,
@@ -308,6 +314,101 @@ describe("webhook build source transport boundary", () => {
     expect(transport.verifications).toEqual([built.refs[seeded.app.name]]);
     await step(definition, "finish_delivery").run(ctx, { build_images: built });
     expect(db.getBuildSourceDelivery(seeded.source.id, requestInput.deliveryId)?.status).toBe("deployed");
+  });
+
+  test("builds and reconciles a mixed stack without treating prebuilt members as build targets", async () => {
+    const seeded = fixture();
+    const stack = db.insertStack({ name: `mixed-${randomSuffix()}`, environment_id: null });
+    const buildMember = db.insertApp({
+      name: `${stack.name}-web`,
+      domain: "",
+      image_ref: OLD_DIGEST,
+      container_port: 3000,
+      env_vars: "{}",
+    });
+    db.updateAppBuildConfig(buildMember.id, {
+      sourceId: seeded.source.id,
+      repository: seeded.source.repository,
+      branch: seeded.source.branch,
+      dockerfile: "Dockerfile",
+      context: ".",
+      imageRepository: `registry.example.com/acme/${seeded.app.name}`,
+    });
+    db.clearAppBuildConfig(seeded.app.id);
+    db.setAppStack(buildMember.id, stack.id);
+    db.updateAppStackManifestPath(buildMember.id, "ocd-stack.json");
+    const prebuilt = db.insertApp({
+      name: `${stack.name}-database`,
+      domain: "",
+      image_ref: `docker.io/library/postgres@sha256:${"c".repeat(64)}`,
+      container_port: 5432,
+      env_vars: "{}",
+    });
+    db.setAppStack(prebuilt.id, stack.id);
+    db.updateAppStackManifestPath(prebuilt.id, "ocd-stack.json");
+
+    const buildPath = "apps/web.json";
+    const imagePath = "apps/database.json";
+    const stackManifest = JSON.stringify({
+      $schema: 1,
+      name: stack.name,
+      apps: {
+        web: { manifest: buildPath },
+        database: { manifest: imagePath },
+      },
+    });
+    const buildManifest = JSON.stringify({ ...manifest(seeded), name: `${stack.name}-web` });
+    const imageManifest = JSON.stringify({
+      $schema: 1,
+      name: `${stack.name}-database`,
+      image: "postgres:17-alpine",
+      container_port: 5432,
+      volume: null,
+    });
+    const resolvedPrebuilt = `docker.io/library/postgres@sha256:${"d".repeat(64)}`;
+    const transport = inMemoryTransport({
+      "ocd-stack.json": stackManifest,
+      [buildPath]: buildManifest,
+      [imagePath]: imageManifest,
+    });
+    const definition = createWebhookBuildSourceDefinition(
+      transport,
+      createBuildCoordinator(transport),
+      async (image) => {
+        expect(image).toBe("postgres:17-alpine");
+        return resolvedPrebuilt;
+      },
+    );
+    const ctx = context(definition, input(seeded.source.id));
+    const prepared = await step(definition, "prepare_source").run(ctx, {});
+    const built = await step(definition, "build_images").run(ctx, { prepare_source: prepared });
+
+    expect(transport.targets).toHaveLength(1);
+    expect(transport.targets[0].name).toBe(`${stack.name}-web`);
+
+    const poll = setInterval(() => {
+      for (const child of listChildOperations(ctx.opId)) {
+        if (child.status === "pending" || child.status === "running") {
+          markOperationFinished(child.id, "done");
+        }
+      }
+    }, 10);
+    try {
+      await step(definition, "reconcile_manifests").run(ctx, {
+        prepare_source: prepared,
+        build_images: built,
+      });
+    } finally {
+      clearInterval(poll);
+    }
+
+    const child = listChildOperations(ctx.opId).find((candidate) => candidate.kind === "deploy_stack");
+    expect(child).toBeDefined();
+    const request = JSON.parse(child!.input_json) as StackDeployRequest;
+    expect(request.apps.map((app) => ({ key: app.key, image_ref: app.image_ref }))).toEqual([
+      { key: "web", image_ref: `registry.example.com/acme/${seeded.app.name}@${DIGEST}` },
+      { key: "database", image_ref: resolvedPrebuilt },
+    ]);
   });
 
   test("rejects a committed manifest that changes the source repository", async () => {

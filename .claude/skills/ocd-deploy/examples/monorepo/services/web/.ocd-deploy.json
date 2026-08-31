@@ -1,12 +1,20 @@
 {
   "$schema": 1,
   "name": "Web Frontend",
-  "description": "React SPA served by nginx. Its container entrypoint renders API_URL from the runtime environment into a browser-readable config file; API_URL is injected by the stack and is not declared here.",
-  "build": { "dockerfile": "Dockerfile", "context": ".", "container_port": 80 },
+  "description": "Web frontend using the stack-injected API_URL",
+  "build": {
+    "repository": "https://git.example.com/team/blog.git",
+    "branch": "main",
+    "dockerfile": "services/web/Dockerfile",
+    "context": ".",
+    "image_repository": "registry.example.com/team/blog-web",
+    "webhook": false
+  },
+  "container_port": 80,
   "env": [
     { "key": "NODE_ENV", "default": "production" }
   ],
-  "webhook": { "enabled": true, "branch": "main", "path": "services/web" },
-  "suggested_app_name": "myapp-web",
+  "volume": null,
+  "suggested_app_name": "blog-web",
   "compress": true
 }

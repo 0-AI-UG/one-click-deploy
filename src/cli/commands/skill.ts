@@ -22,7 +22,7 @@ ${BOLD}Usage:${RESET}
 ${BOLD}Options:${RESET}
   --agent <agent>   Target agent (required). One of the names below.
   --dir <path>      Install root (default: current directory).
-  --force           Overwrite existing skill files.
+  --force           Replace the existing skill directory.
 
 ${BOLD}Agents:${RESET}
 ${agentList()}
@@ -89,6 +89,13 @@ function install(args: string[]): void {
       `Skill already installed at ${DIM}${path.relative(root, skillRoot) || skillRoot}${RESET}. Re-run with --force to overwrite.`,
     );
     process.exit(1);
+  }
+
+  // The rendered tree is authoritative. Replacing it on --force also removes
+  // files deleted from newer skill versions instead of leaving obsolete
+  // commands and concepts behind indefinitely.
+  if (force && fs.existsSync(skillRoot)) {
+    fs.rmSync(skillRoot, { recursive: true, force: true });
   }
 
   for (const file of files) {

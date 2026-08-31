@@ -46,6 +46,7 @@ const planStep = deployStackOp.steps.find((s) => s.name === "plan")!;
 const deployAppsStep = deployStackOp.steps.find((s) => s.name === "deploy_apps")!;
 const preflightAppsStep = deployStackOp.steps.find((s) => s.name === "preflight_apps")!;
 const validatePlanStep = deployStackOp.steps.find((s) => s.name === "validate_plan")!;
+const reconcileRemovalsStep = deployStackOp.steps.find((s) => s.name === "reconcile_removals")!;
 
 function app(key: string, needs?: string[], exports?: Record<string, { value: string; secret?: boolean }>) {
   return { key, needs, exports, app_name: key, image_ref: "ghcr.io/ocd/test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", container_port: 3000 };
@@ -493,6 +494,67 @@ describe("deploy_stack compensation retains already-deployed members", () => {
     expect(destroys.length).toBe(0);
     expect(db.getApp(appA.id)).not.toBeNull();
     expect(db.getStackByName(name)?.status).toBe("failed");
+  });
+});
+
+describe("deploy_stack membership reconciliation", () => {
+  test("a full reconcile removes members no longer present in the manifest", async () => {
+    const name = `membership-${randomSuffix()}`;
+    const input = req(name, [app("web")]);
+    const parent = enqueueOperation({
+      kind: "deploy_stack",
+      resourceKeys: [`stack:${name}`],
+      input,
+      trigger: "test",
+    });
+    const ctx = makeCtx(input);
+    ctx.opId = parent.id;
+    const planOut = await planStep.run(ctx, {}) as { stackId: number; environmentId: number };
+    const stale = db.insertApp({
+      name: `${name}-database`,
+      domain: "",
+      image_ref: app("database").image_ref,
+      container_port: 5432,
+      environment_id: planOut.environmentId,
+      env_vars: "{}",
+    });
+    db.setAppStack(stale.id, planOut.stackId);
+
+    const poll = setInterval(() => {
+      for (const child of listChildOperations(parent.id)) {
+        if (child.kind !== "destroy_app" || child.status === "done") continue;
+        const { appId } = JSON.parse(child.input_json) as { appId: number };
+        db.deleteApp(appId);
+        markOperationFinished(child.id, "done");
+      }
+    }, 10);
+    try {
+      const result = await reconcileRemovalsStep.run(ctx, { plan: planOut });
+      expect(result).toEqual({ removed: 1 });
+    } finally {
+      clearInterval(poll);
+    }
+
+    expect(db.getApp(stale.id)).toBeNull();
+    expect(listChildOperations(parent.id).filter((child) => child.kind === "destroy_app")).toHaveLength(1);
+  });
+
+  test("a partial reconcile retains members omitted from the request", async () => {
+    const name = `membership-${randomSuffix()}`;
+    const input = { ...req(name, [app("web")]), partial: true } as StackDeployRequest;
+    const planOut = await planStep.run(makeCtx(input), {}) as { stackId: number; environmentId: number };
+    const retained = db.insertApp({
+      name: `${name}-database`,
+      domain: "",
+      image_ref: app("database").image_ref,
+      container_port: 5432,
+      environment_id: planOut.environmentId,
+      env_vars: "{}",
+    });
+    db.setAppStack(retained.id, planOut.stackId);
+
+    expect(await reconcileRemovalsStep.run(makeCtx(input), { plan: planOut })).toEqual({ removed: 0 });
+    expect(db.getApp(retained.id)).not.toBeNull();
   });
 });
 

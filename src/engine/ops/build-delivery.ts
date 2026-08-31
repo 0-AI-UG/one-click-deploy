@@ -97,7 +97,7 @@ async function recoverBuild(
   for (const target of targets) {
     const artifact = artifacts.find((candidate) => candidate.target_name === target.name);
     if (!artifact || artifact.repository !== repository || artifact.commit_sha !== commit ||
-      !artifact.image_ref.startsWith(`${target.image}@sha256:`)) return null;
+      !artifact.image_ref.startsWith(`${target.imageRepository}@sha256:`)) return null;
     refs[target.name] = artifact.image_ref;
   }
   const workerId = await verifyArtifactRefs({
@@ -145,7 +145,7 @@ async function persistBuildConfig(appId: number, build: BuildConfig, workerId: n
     branch: build.branch || "main",
     dockerfile: build.dockerfile,
     context: build.context,
-    image: build.image,
+    imageRepository: build.image_repository,
   });
   if (build.webhook !== false && !(await secretStore.get(`build_source_webhook:${source.id}`))) {
     const secret = Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -171,7 +171,9 @@ const appBuild: Step<BuildAppDeliveryInput, BuiltOut> = {
       name: ctx.input.spec.app_name,
       dockerfile: build.dockerfile,
       context: build.context,
-      image: build.image,
+      imageRepository: build.image_repository,
+      platform: build.platform,
+      cache: build.cache,
     }]);
   },
   async probe(ctx) {
@@ -181,7 +183,9 @@ const appBuild: Step<BuildAppDeliveryInput, BuiltOut> = {
       name: ctx.input.spec.app_name,
       dockerfile: build.dockerfile,
       context: build.context,
-      image: build.image,
+      imageRepository: build.image_repository,
+      platform: build.platform,
+      cache: build.cache,
     }]);
   },
 };
@@ -246,7 +250,9 @@ const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
         name: app.key,
         dockerfile: app.build!.dockerfile,
         context: app.build!.context,
-        image: app.build!.image,
+        imageRepository: app.build!.image_repository,
+        platform: app.build!.platform,
+        cache: app.build!.cache,
       })),
     );
   },
@@ -271,7 +277,9 @@ const stackBuild: Step<BuildStackDeliveryInput, BuiltOut> = {
         name: app.key,
         dockerfile: app.build!.dockerfile,
         context: app.build!.context,
-        image: app.build!.image,
+        imageRepository: app.build!.image_repository,
+        platform: app.build!.platform,
+        cache: app.build!.cache,
       })),
     );
   },

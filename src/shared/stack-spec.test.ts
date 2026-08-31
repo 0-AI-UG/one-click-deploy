@@ -7,7 +7,7 @@ const BUILD = {
   branch: "main",
   dockerfile: "Dockerfile",
   context: ".",
-  image: "ghcr.io/acme/app",
+  image_repository: "ghcr.io/acme/app",
   webhook: true,
 } as const;
 

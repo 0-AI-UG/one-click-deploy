@@ -22,21 +22,22 @@ export async function doctor(args: string[]): Promise<void> {
       if (!first) throw new Error("Stack manifest contains no app manifests");
       const manifest = readManifest(resolve(dirname(location.fullPath), first));
       repository = manifest.build?.repository;
-      image = manifest.build?.image ?? manifest.image;
+      image = manifest.build?.image_repository ?? manifest.image;
     } else {
       const manifest = readManifest(location.fullPath);
       repository = manifest.build?.repository;
-      image = manifest.build?.image ?? manifest.image;
+      image = manifest.build?.image_repository ?? manifest.image;
     }
     console.log(`${DIM}Manifest:${RESET} ${location.path}`);
   }
   const result = await getDeployReadiness(repository, image);
+  const buildDelivery = !!repository;
   console.log(`\n${BOLD}Deploy readiness${RESET}`);
   console.log(`${icon(result.provider.status)} Provider       ${result.provider.configured ? "connected" : "not connected"}`);
   console.log(`${icon(result.defaults.status)} Defaults       ${result.defaults.server_type && result.defaults.location ? `${result.defaults.server_type} / ${result.defaults.location}` : "not configured"}`);
-  console.log(`${icon(result.worker.status)} Build worker   ${result.worker.online} online, ${result.worker.total} registered`);
-  console.log(`${icon(result.registry.status)} Registry       ${result.registry.configured ? `${result.registry.scope} as ${result.registry.username}` : "not connected"}`);
-  console.log(`${icon(result.source.status)} Source access  ${result.source.configured ? result.source.host : `${result.source.host} (public repositories only)`}`);
+  console.log(`${icon(result.worker.status)} Build worker   ${buildDelivery ? `${result.worker.online} online, ${result.worker.total} registered` : "not required for prebuilt images"}`);
+  console.log(`${icon(result.registry.status)} Registry       ${result.registry.configured ? `${result.registry.scope} as ${result.registry.username}` : buildDelivery ? "not connected" : "anonymous pull unless the image is private"}`);
+  console.log(`${icon(result.source.status)} Source access  ${buildDelivery ? (result.source.configured ? result.source.host : `${result.source.host} (public repositories only)`) : "not required for prebuilt images"}`);
   if (result.actions.length) {
     console.log(`\n${BOLD}Next actions${RESET}`);
     result.actions.forEach((action) => console.log(`  ${action.label}: ${BOLD}${action.command}${RESET}`));

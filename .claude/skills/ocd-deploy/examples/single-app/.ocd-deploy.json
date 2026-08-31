@@ -3,12 +3,12 @@
   "name": "My App",
   "description": "A Node.js web application",
   "build": {
-    "repository": "https://github.com/example/my-app.git",
+    "repository": "https://git.example.com/team/my-app.git",
     "branch": "main",
     "dockerfile": "Dockerfile",
     "context": ".",
-    "image": "ghcr.io/example/my-app",
-    "webhook": true
+    "image_repository": "registry.example.com/team/my-app",
+    "webhook": false
   },
   "container_port": 3000,
   "env": [

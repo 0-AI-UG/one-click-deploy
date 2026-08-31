@@ -32,10 +32,16 @@ one delivery source: a `build` object for OCD-owned Git/BuildKit delivery, or
 an `image` reference for any prebuilt OCI image. Tags in `image` are resolved
 to immutable digests before deployment. Credentials never belong in either.
 
-`ocd deploy` resolves the exact local Git commit, asks a dedicated OCD build
-worker to clone that commit, builds and pushes the image, records the registry
-digest, then reconciles the complete manifest. The first successful deploy
-creates a build source and HMAC webhook secret.
+For a `build` manifest, `ocd deploy` resolves the exact local Git commit, asks
+a dedicated OCD build worker to clone that commit, pushes the result to
+`build.image_repository`, records the registry digest, then reconciles the
+complete manifest. A webhook-enabled build deploy creates a build source and
+HMAC webhook secret.
+
+For an `image` manifest, `ocd deploy` resolves the declared tag or digest and
+reconciles the complete manifest without a source checkout, build worker, or
+build source. Public images can be pulled anonymously; private images need a
+matching registry connection.
 
 A signed GitHub push webhook repeats that flow from the pushed SHA. For stacks,
 OCD reads the committed stack and child manifests and deploys dependency levels.
@@ -47,19 +53,27 @@ does not read a manifest.
 
 Private Git checkout and registry push/pull credentials are explicit scoped
 connections, configured with `ocd source login` and `ocd registry login` or the
-panel connection cards. Public repositories need no Git token. DNS remains operator-owned;
-OCD only displays records. Hetzner remains optional infrastructure.
+panel connection cards. Public repositories need no Git token. DNS remains
+operator-owned; OCD only displays records. Hetzner remains optional
+infrastructure.
 
 ## Typical workflow
 
 ```bash
 ocd login https://panel.example.com
-ocd registry login registry.example.com/team --username=registry-user
 ocd doctor
 ocd manifest validate .ocd-deploy.json
 ocd deploy --dry-run
 ocd deploy
 ocd app show my-app
+```
+
+For a `build` manifest, also connect its output registry, check build capacity,
+and optionally configure the GitHub push webhook:
+
+```bash
+ocd registry login registry.example.com/team --username=registry-user
+ocd doctor
 ocd runners sources
 ocd runners webhook-secret <source-id>
 ```
@@ -116,12 +130,16 @@ ocd ssh
 - [Concepts](docs/concepts.md)
 - [Deploy and config](docs/deploy-and-config.md)
 - [App manifest](docs/app-manifest.md)
+- [Stack manifest](docs/stack-manifest.md)
 - [Build workers and webhooks](docs/build-workers-and-webhooks.md)
 - [Immutable images and health](docs/immutable-images-and-health.md)
 - [Releases, promotion, and rollback](docs/releases-promotion-and-rollback.md)
 - [CLI reference](docs/cli-reference.md)
 - [Environments and secrets](docs/environments-and-secrets.md)
+- [Networking and ingress](docs/networking-and-ingress.md)
 - [Infrastructure and server enrollment](docs/infrastructure-and-enrollment.md)
 - [Scaling, storage, and placement](docs/scaling-storage-and-placement.md)
+- [Operations and recovery](docs/operations-and-recovery.md)
+- [Security and deletion](docs/security-and-deletion.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Reference index](reference.md)

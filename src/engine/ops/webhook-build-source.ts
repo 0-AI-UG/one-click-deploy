@@ -8,11 +8,13 @@ import { buildStackAppSpec } from "../../shared/stack-spec.ts";
 import { deployRequestFromApp } from "../../shared/app-config.ts";
 import { enqueueOperation, listChildOperations } from "../../shared/db/operations.ts";
 import { sshBuildTransport, type BuildTransport } from "../build-transport.ts";
+import type { BuildTarget } from "../build-worker.ts";
 import { createBuildCoordinator, type BuildCoordinator } from "../build-coordinator.ts";
 import { verifyArtifactRefs } from "../build-artifact-recovery.ts";
 import { operationAbort } from "../operation-abort.ts";
 import { withBuildFailover } from "../build-failover.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
+import { resolveOciImage } from "../oci-image.ts";
 import { resolveSourceCredentialsForRepository } from "../source-config.ts";
 import { awaitChildren } from "./_children.ts";
 import { registerOp } from "./registry.ts";
@@ -82,6 +84,7 @@ async function child(ctx: OpContext<WebhookBuildSourceInput>, suffix: string, ki
 export function createWebhookBuildSourceDefinition(
   transport: BuildTransport = sshBuildTransport,
   coordinator: BuildCoordinator = createBuildCoordinator(transport),
+  resolveImage: (image: string) => Promise<string> = resolveOciImage,
 ): OpKindDefinition<WebhookBuildSourceInput> {
 const prepare: Step<WebhookBuildSourceInput, Prepared> = {
   name: "prepare_source",
@@ -164,14 +167,21 @@ const build: Step<WebhookBuildSourceInput, Built> = {
           expectedBranch: source.branch,
           readFiles: roots,
           resolveTargets: async (readFile) => {
-          const targets: Array<{ name: string; dockerfile: string; context: string; image: string }> = [];
+          const targets: BuildTarget[] = [];
           for (const app of apps.filter((candidate) => candidate.stack_id == null)) {
             if (!app.manifest_path) throw new Error(`${app.name} has no committed manifest path`);
             const manifest = parseJson<DeployManifest>(await readFile(app.manifest_path), app.manifest_path);
             validateDeployManifest(manifest, app.manifest_path);
             assertSourceBuild(manifest.build, source, app.manifest_path);
             builds[app.name] = manifest.build;
-            targets.push({ name: app.name, ...manifest.build });
+            targets.push({
+              name: app.name,
+              dockerfile: manifest.build.dockerfile,
+              context: manifest.build.context,
+              imageRepository: manifest.build.image_repository,
+              platform: manifest.build.platform,
+              cache: manifest.build.cache,
+            });
           }
           const stackIds = [...new Set(apps.map((app) => app.stack_id).filter((id): id is number => id != null))];
           for (const stackId of stackIds) {
@@ -190,7 +200,14 @@ const build: Step<WebhookBuildSourceInput, Built> = {
               assertSourceBuild(manifest.build, source, path);
               const name = `${stack.name}-${key}`;
               builds[name] = manifest.build;
-              targets.push({ name, ...manifest.build });
+              targets.push({
+                name,
+                dockerfile: manifest.build.dockerfile,
+                context: manifest.build.context,
+                imageRepository: manifest.build.image_repository,
+                platform: manifest.build.platform,
+                cache: manifest.build.cache,
+              });
             }
           }
             return targets;
@@ -309,7 +326,7 @@ const reconcile: Step<WebhookBuildSourceInput, { childIds: number[] }> = {
         branch: build.branch || "main",
         dockerfile: build.dockerfile,
         context: build.context,
-        image: build.image,
+        imageRepository: build.image_repository,
       });
     }
 
@@ -321,7 +338,7 @@ const reconcile: Step<WebhookBuildSourceInput, { childIds: number[] }> = {
       const rawStack = built.files[stackPath];
       const manifest = parseJson<StackManifest>(rawStack, stackPath);
       validateStackManifest(manifest, stackPath);
-      const specs = Object.entries(manifest.apps).map(([key, entry]) => {
+      const specs = await Promise.all(Object.entries(manifest.apps).map(async ([key, entry]) => {
         const app = members.find((candidate) => candidate.name === `${stack.name}-${key}`);
         const path = posix.normalize(posix.join(posix.dirname(stackPath), entry.manifest));
         const raw = built.files[path];
@@ -329,16 +346,20 @@ const reconcile: Step<WebhookBuildSourceInput, { childIds: number[] }> = {
         const childManifest = parseJson<DeployManifest>(raw, path);
         validateDeployManifest(childManifest, path);
         const spec = buildStackAppSpec(key, entry, childManifest, "", "");
+        const imageRef = childManifest.build
+          ? built.refs[`${stack.name}-${key}`]
+          : childManifest.image ? await resolveImage(childManifest.image) : undefined;
+        if (!imageRef) throw new Error(`No immutable image resolved for ${stack.name}-${key}`);
         return {
           ...spec,
           build: undefined,
-          image_ref: built.refs[`${stack.name}-${key}`],
+          image_ref: imageRef,
           git_commit: ctx.input.commit,
           manifest_path: path,
           manifest_hash: manifestHash(raw),
           reconcile_mode: "artifact" as const,
         };
-      });
+      }));
       const stackRequest: StackDeployRequest = {
         name: stack.name,
         stack_manifest_path: stackPath,
@@ -364,7 +385,7 @@ const reconcile: Step<WebhookBuildSourceInput, { childIds: number[] }> = {
           branch: build.branch || "main",
           dockerfile: build.dockerfile,
           context: build.context,
-          image: build.image,
+          imageRepository: build.image_repository,
         });
       }
     }

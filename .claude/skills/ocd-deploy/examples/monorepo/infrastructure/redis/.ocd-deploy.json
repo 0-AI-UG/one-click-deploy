@@ -1,0 +1,21 @@
+{
+  "$schema": 1,
+  "name": "Redis 8",
+  "image": "redis:8-alpine",
+  "container_port": 6379,
+  "env": [
+    { "key": "REDIS_PASSWORD", "generate": "password", "secret": true }
+  ],
+  "exports": {
+    "URL": { "value": "redis://:{env.REDIS_PASSWORD}@{app.host}:{app.port}", "secret": true },
+    "HOST": { "value": "{app.host}" },
+    "PORT": { "value": "{app.port}" },
+    "PASSWORD": { "value": "{env.REDIS_PASSWORD}", "secret": true }
+  },
+  "command": ["sh", "-ec", "exec docker-entrypoint.sh redis-server --appendonly yes --requirepass \"$REDIS_PASSWORD\""],
+  "cap_add": ["CHOWN", "SETUID", "SETGID"],
+  "internal_protocol": "tcp",
+  "public": false,
+  "health_check": { "mode": "exec", "command": "redis-cli -a \"$REDIS_PASSWORD\" ping" },
+  "volume": { "size": 10, "path": "/data" }
+}

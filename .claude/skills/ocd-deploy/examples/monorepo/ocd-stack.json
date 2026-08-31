@@ -1,12 +1,13 @@
 {
   "$schema": 1,
   "name": "blog",
-  "description": "API + web frontend on Postgres, with a Redis cache",
-  "services": {
-    "database": { "type": "postgresql", "volume_size": 10 },
-    "redis": { "type": "redis" }
-  },
   "apps": {
+    "database": {
+      "manifest": "infrastructure/database/.ocd-deploy.json"
+    },
+    "redis": {
+      "manifest": "infrastructure/redis/.ocd-deploy.json"
+    },
     "api": {
       "manifest": "services/api/.ocd-deploy.json",
       "needs": ["database", "redis"],

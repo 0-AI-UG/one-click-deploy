@@ -29,24 +29,6 @@ import { expectArray, expectRecord, expectStringField } from "../response.ts";
 import { ensureBuildReadiness } from "../deploy-readiness.ts";
 
 type AppElement = StackDeployRequest["apps"][number];
-const IMMUTABLE_IMAGE_REF = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
-
-export function parseStackImageOverrides(values: string[], appKeys: ReadonlySet<string>): Map<string, string> {
-  const overrides = new Map<string, string>();
-  for (const value of values) {
-    const separator = value.indexOf("=");
-    if (separator < 1) throw new Error(`Invalid --image value (expected MEMBER=repository@sha256:digest): ${value}`);
-    const key = value.slice(0, separator).trim();
-    const image = value.slice(separator + 1).trim();
-    if (!appKeys.has(key)) throw new Error(`Unknown stack member in --image: ${key}`);
-    if (!IMMUTABLE_IMAGE_REF.test(image)) {
-      throw new Error(`--image for ${key} must be an immutable repository@sha256:<64 hex digest> reference`);
-    }
-    if (overrides.has(key)) throw new Error(`Duplicate --image override for stack member ${key}`);
-    overrides.set(key, image);
-  }
-  return overrides;
-}
 
 /** Pure manifest→wire mapping kept exported for parity regression tests. */
 interface StackListItem {
@@ -169,8 +151,9 @@ function upUsage(): void {
   console.error(`${BOLD}Usage:${RESET} ocd deploy stack [manifest] [options]
 
 Deploys a multi-app stack from an ocd-stack.json manifest. Each app entry
-references a .ocd-deploy.json (resolved relative to the stack manifest). All
-apps deploy from the exact immutable OCI digests in their manifests.
+references a .ocd-deploy.json (resolved relative to the stack manifest). Each
+member declares either a Git build or a prebuilt image. OCD resolves every
+runtime artifact to an exact immutable OCI digest.
 
 Env vars are collected per app from each app's manifest env[] section:
 defaults are sent as-is, --set overrides or adds values, and required vars
@@ -187,8 +170,6 @@ ${BOLD}Options:${RESET}
   --with-dependents          Include downstream app dependents of --only
   --changed                  Reconcile members whose manifest or image changed
   --all                      Reconcile every member (disables changed-only default)
-  --image=MEMBER=<digest>    Override one member's image in memory (repeatable);
-                             CI uses this to apply config with newly built digests
   --commit=<sha>             Record one source revision for the selected artifacts
   --config-only              Apply config without changing the image; runtime changes
                              reuse the current immutable images
@@ -370,7 +351,6 @@ export async function stackUp(args: string[]): Promise<void> {
     all: { type: "boolean" },
     "config-only": { type: "boolean" },
     "allow-unknown": { type: "boolean" },
-    image: { type: "string", repeatable: true },
     commit: { type: "string" },
     "sets-stdin": { type: "boolean" },
   }, { maxPositionals: 1 });
@@ -388,7 +368,6 @@ export async function stackUp(args: string[]): Promise<void> {
   const forceAll = parsed.flags.all === true;
   const configOnly = parsed.flags["config-only"] === true;
   const allowUnknown = parsed.flags["allow-unknown"] === true;
-  const rawImageOverrides = (parsed.flags.image as string[] | undefined) ?? [];
   const stackLocation = manifestRepoLocation(manifestPath);
   const commit = (parsed.flags.commit as string | undefined) ?? localGitCommit(stackLocation.fullPath);
   if (commit !== undefined && !/^[a-f0-9]{7,64}$/i.test(commit)) {
@@ -409,11 +388,6 @@ export async function stackUp(args: string[]): Promise<void> {
   }
 
   const appKeys = new Set(Object.keys(manifest.apps));
-  const imageOverrides = parseStackImageOverrides(rawImageOverrides, appKeys);
-  if (configOnly && imageOverrides.size > 0) {
-    throw new Error("--image cannot be combined with --config-only; image overrides are artifact rollouts");
-  }
-
   // Parse --set into per-app (<app>.KEY) and global (KEY) buckets. A plain
   // KEY is a fallback applied to any app that declares it; an <app>.KEY targets
   // that one app.
@@ -455,8 +429,6 @@ export async function stackUp(args: string[]): Promise<void> {
       entry.manifest,
       childManifestPath,
     );
-    const imageOverride = imageOverrides.get(key);
-    if (imageOverride) appElement.image_ref = imageOverride;
     appElement.git_commit = commit;
     const authPassword = await resolveAuthPassword(appManifest.auth);
     if (authPassword !== undefined) appElement.auth_password = authPassword;
@@ -562,20 +534,20 @@ export async function stackUp(args: string[]): Promise<void> {
     name: string;
     status: string;
     image_ref?: string | null;
+    stack_id?: number | null;
     config_revision?: number;
     last_manifest_hash?: string | null;
     [key: string]: unknown;
   }>>("/api/apps");
-  if (configOnly) {
-    for (const app of apps) {
-      const existing = existingApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
-      if (existing?.image_ref) {
-        app.image_ref = existing.image_ref;
-        app.build = undefined;
-      }
-    }
-  }
   const allKeys = new Set(Object.keys(manifest.apps));
+  const memberPrefix = `${manifest.name}-`;
+  const removedMemberKeys = existingStack
+    ? existingApps
+      .filter((candidate) => candidate.stack_id === existingStack.id && candidate.name.startsWith(memberPrefix))
+      .map((candidate) => candidate.name.slice(memberPrefix.length))
+      .filter((key) => !allKeys.has(key))
+      .sort()
+    : [];
   let selectedKeys = new Set(allKeys);
   const modes = new Map<string, "control" | "runtime" | "artifact">();
   let selectionReason = "all members";
@@ -589,6 +561,9 @@ export async function stackUp(args: string[]): Promise<void> {
     if (withDependents) selectedKeys = expandAppDependents(selectedKeys, manifest.apps);
     for (const key of selectedKeys) modes.set(key, "artifact");
     selectionReason = `explicit --only${withDependents ? " plus dependents" : ""}`;
+  } else if (!forceAll && removedMemberKeys.length > 0) {
+    for (const key of selectedKeys) modes.set(key, "runtime");
+    selectionReason = `complete membership reconcile; remove ${removedMemberKeys.join(", ")}`;
   } else if (!forceAll && (changedOnly || existingStack)) {
     selectedKeys = new Set<string>();
     for (const app of apps) {
@@ -598,14 +573,17 @@ export async function stackUp(args: string[]): Promise<void> {
         modes.set(app.key, "artifact");
         continue;
       }
+      const desiredForDiff = configOnly
+        ? { ...app, image_ref: deployed.image_ref ?? undefined }
+        : app;
       const mode = classifyLocalStackReconcile(
         deployed,
-        app,
+        desiredForDiff,
       );
       if (
         deployed.last_manifest_hash !== app.manifest_hash ||
         mode === "artifact" ||
-        clientVisibleConfigDiff(deployed, app).length > 0
+        clientVisibleConfigDiff(deployed, desiredForDiff).length > 0
       ) {
         selectedKeys.add(app.key);
         modes.set(app.key, mode);
@@ -629,11 +607,6 @@ export async function stackUp(args: string[]): Promise<void> {
     selectionReason = "changed manifests or immutable images plus dependents";
   }
 
-  for (const key of imageOverrides.keys()) {
-    selectedKeys.add(key);
-    modes.set(key, "artifact");
-  }
-
   for (const app of apps) {
     if (!selectedKeys.has(app.key)) continue;
     const existing = existingApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
@@ -648,7 +621,7 @@ export async function stackUp(args: string[]): Promise<void> {
     }
   }
 
-  const partial = selectedKeys.size < allKeys.size;
+  const partial = Boolean(onlyRaw) || selectedKeys.size < allKeys.size;
   body.selected_app_keys = [...selectedKeys].sort();
   body.partial = partial;
   body.config_only = configOnly;
@@ -666,33 +639,56 @@ export async function stackUp(args: string[]): Promise<void> {
     }
     return out;
   })();
+  const selectedApps = apps.filter((app) => selectedKeys.has(app.key));
+  const buildCount = selectedApps.filter((app) => app.build && !app.image_ref).length;
+  const prebuiltCount = selectedApps.filter((app) => app.image_ref).length;
+  const artifactSummary = configOnly
+    ? `${selectedApps.length} current immutable image${selectedApps.length === 1 ? "" : "s"} retained`
+    : [
+      buildCount > 0 ? `${buildCount} Git build${buildCount === 1 ? "" : "s"} at ${commit.slice(0, 12)}` : "",
+      prebuiltCount > 0 ? `${prebuiltCount} prebuilt image${prebuiltCount === 1 ? "" : "s"} resolved to digests` : "",
+    ].filter(Boolean).join(" + ") || "no artifact changes";
   console.log(`\n${BOLD}Preflight plan${RESET}`);
-  console.log(`${DIM}Artifacts:${RESET} BuildKit images from exact commit ${commit.slice(0, 12)}`);
+  console.log(`${DIM}Artifacts:${RESET} ${artifactSummary}`);
   console.log(`${DIM}Selection:${RESET}     ${selectionReason}`);
   console.log(`${DIM}Order:${RESET}         ${levels.map((level) => level.join(" + ")).join(" → ") || "(no app rollout)"}`);
   table(
     ["MEMBER", "ACTION", "CONFIG DIFF", "MANIFEST", "IMAGE"],
-    apps.map((app) => {
+    [
+      ...apps.map((app) => {
       const existing = existingApps.find((candidate) => candidate.name === `${manifest.name}-${app.key}`);
+      const desiredForDiff = configOnly && existing
+        ? { ...app, image_ref: existing.image_ref ?? undefined }
+        : app;
       const configDiff = !existing
         ? "new app"
-        : clientVisibleConfigDiff(existing, app).join(", ") || "none";
+        : clientVisibleConfigDiff(existing, desiredForDiff).join(", ") || "none";
       return [
         app.key,
         selectedKeys.has(app.key) ? (existing ? app.reconcile_mode || "reconcile" : "create") : "retain",
         configDiff,
         app.manifest_path || "-",
-        app.image_ref || app.build?.image || "-",
+        configOnly && existing ? existing.image_ref || "-" : app.image_ref || app.build?.image_repository || "-",
       ];
-    }),
+      }),
+      ...removedMemberKeys.map((key) => [key, "remove", "removed from manifest", "-", "-"]),
+    ],
   );
   if (selectedKeys.size === 0) {
     console.log(`\n${GREEN}Stack already converged with the current manifests and image digests; nothing to deploy.${RESET}`);
     return;
   }
 
-  const selectedBuild = apps.find((app) => selectedKeys.has(app.key) && app.build && !app.image_ref)?.build;
-  if (selectedBuild) await ensureBuildReadiness(selectedBuild.repository, selectedBuild.image);
+  const selectedBuilds = configOnly ? [] : apps
+    .filter((app) => selectedKeys.has(app.key) && app.build && !app.image_ref)
+    .map((app) => app.build!);
+  const readinessKeys = new Set<string>();
+  for (const build of selectedBuilds) {
+    const key = `${build.repository}\n${build.image_repository}`;
+    if (readinessKeys.has(key)) continue;
+    readinessKeys.add(key);
+    await ensureBuildReadiness(build.repository, build.image_repository);
+  }
 
   console.log(
     `\nDeploying stack ${BOLD}${manifest.name}${RESET} (${selectedKeys.size} affected app(s))...`,

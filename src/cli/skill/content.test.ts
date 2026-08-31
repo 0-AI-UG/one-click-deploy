@@ -103,7 +103,8 @@ describe("embedded OCD skill", () => {
       "ocd config", "ocd redeploy", "ocd envs attach", "ocd envs detach",
       "ocd scale policy set", "ocd app webhook enable",
       "ocd app webhook set", "ocd app webhook disable",
-      "ocd app redeploy", "ocd webhook plan",
+      "ocd webhook plan", "ocd deploy --image", "--image=MEMBER",
+      "ocd service", "managed service",
     ]) {
       expect(cli).not.toContain(removed);
     }
@@ -111,6 +112,9 @@ describe("embedded OCD skill", () => {
     expect(cli).toContain("ocd promote --from=<source-app> --to=<destination-app>");
     expect(cli).toContain("ocd rollback <app> [--deployment=<id>]");
     expect(cli).toContain("ocd runners webhook-secret <source-id>");
+    expect(cli).toContain("ocd app redeploy <app>");
+    expect(files["docs/app-manifest.md"]).toContain("`image_repository`");
+    expect(files["docs/app-manifest.md"]).not.toContain("`image`: OCI repository");
   });
 
   test("documents OCD-owned builds and immutable runtime artifacts", () => {

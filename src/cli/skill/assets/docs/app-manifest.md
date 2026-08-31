@@ -15,7 +15,7 @@ Unknown fields are rejected by default.
     "branch": "main",
     "dockerfile": "apps/api/Dockerfile",
     "context": ".",
-    "image": "registry.example.com/team/api",
+    "image_repository": "registry.example.com/team/api",
     "webhook": false
   },
   "container_port": 3000,
@@ -33,10 +33,9 @@ Unknown fields are rejected by default.
 
 Declare exactly one of `build` or `image`.
 
-`image` accepts any OCI image reference, including Docker Hub shorthand such
-as `postgres:17-alpine`. The established `{ "ref": "..." }` form is accepted
-too. OCD resolves tags to a registry digest before changing desired state and
-always runs the immutable digest.
+`image` is one OCI image-reference string, including Docker Hub shorthand such
+as `postgres:17-alpine`. OCD resolves tags to a registry digest before changing
+desired state and always runs the immutable digest.
 
 For source builds, `build` contains:
 
@@ -45,13 +44,24 @@ For source builds, `build` contains:
 - `branch`: webhook branch, default `main`.
 - `dockerfile`: safe repository-relative Dockerfile path.
 - `context`: safe repository-relative Docker build context.
-- `image`: OCI repository without tag or digest.
+- `image_repository`: OCI repository where OCD pushes the build, without a tag
+  or digest.
+- `platform`: optional `linux/amd64`; this is the only supported runtime ABI.
+- `cache`: optional boolean; `false` disables registry-backed BuildKit cache.
 - `webhook`: whether signed push delivery is enabled, default `true`. The
   current push-webhook protocol integration is GitHub; use `false` with other
   Git providers and deploy exact commits through the CLI.
 
 Paths must not be absolute, contain `..`, or use backslashes. Credentials never
 belong in this object.
+
+## Manifest catalogs
+
+A catalog is an ordinary version-controlled directory of app manifests, not an
+OCD resource or API. Deploy a catalog entry directly with `ocd deploy
+path/to/.ocd-deploy.json`, or reference it from `apps.<key>.manifest` in an
+`ocd-stack.json`. PostgreSQL, Redis, and similar infrastructure use the same app
+lifecycle as every other manifest.
 
 ## Other top-level fields
 

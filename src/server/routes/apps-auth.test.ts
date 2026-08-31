@@ -32,6 +32,7 @@ mock.module("../../engine/scale/traefik-manager.ts", () => ({
 import * as db from "../../shared/db.ts";
 import { getOperation } from "../../shared/db/operations.ts";
 import { handleDeploy, handleGetApps, handleGetDashboard, handleReleaseApp } from "./apps.ts";
+import { handleDeployStack } from "./stacks.ts";
 
 const DIGEST_A = `ghcr.io/acme/app@sha256:${"a".repeat(64)}`;
 const DIGEST_B = `ghcr.io/acme/app@sha256:${"b".repeat(64)}`;
@@ -217,6 +218,53 @@ describe("CLI-only manifest endpoint", () => {
     const app = makeApp();
     const response = await handleDeploy(deployRequest(app, { apply_mode: "patch" }));
     expect(response.status).toBe(400);
+  });
+
+  test("requires exactly one manifest delivery source", async () => {
+    const app = makeApp();
+    const build = {
+      repository: "https://github.com/acme/app.git",
+      dockerfile: "Dockerfile",
+      context: ".",
+      image_repository: "ghcr.io/acme/app",
+    };
+    const both = await handleDeploy(deployRequest(app, { build }));
+    expect(both.status).toBe(400);
+    expect(((await both.json()) as { error: string }).error).toMatch(/exactly one delivery source/i);
+
+    const neither = await handleDeploy(deployRequest(app, { image_ref: undefined }));
+    expect(neither.status).toBe(400);
+    expect(((await neither.json()) as { error: string }).error).toMatch(/exactly one delivery source/i);
+  });
+
+  test("requires exactly one delivery source for every stack member", async () => {
+    const image_ref = DIGEST_A;
+    const build = {
+      repository: "https://github.com/acme/app.git",
+      dockerfile: "Dockerfile",
+      context: ".",
+      image_repository: "ghcr.io/acme/app",
+    };
+    const response = await handleDeployStack(new Request("http://x/api/stacks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: `stack-${Math.random().toString(36).slice(2, 8)}`,
+        apps: [{ key: "app", app_name: "app", container_port: 3000, image_ref, build }],
+      }),
+    }));
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/exactly one delivery source/i);
+  });
+
+  test("rejects a stack request without app members", async () => {
+    const response = await handleDeployStack(new Request("http://x/api/stacks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: `stack-${Math.random().toString(36).slice(2, 8)}`, apps: [] }),
+    }));
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/non-empty array/i);
   });
 
   test("config-only applies a complete manifest and documented defaults", async () => {

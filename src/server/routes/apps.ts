@@ -299,6 +299,13 @@ export async function handleDeploy(request: Request): Promise<Response> {
         { status: 400, headers: corsHeaders },
       );
     }
+    if (Boolean(req.build) === Boolean(req.image_ref)) {
+      return Response.json(
+        { ok: false, error: "Exactly one delivery source is required: build or image_ref" },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    req.delivery_source = req.build ? "build" : "image";
 
     const existing = db.getAppByName(req.app_name);
     if (!req.build && req.image_ref) {
@@ -329,7 +336,7 @@ export async function handleDeploy(request: Request): Promise<Response> {
           build: {
             repository: build.repository,
             commit: buildRequest.git_commit,
-            image: build.image,
+            image_repository: build.image_repository,
           },
         }, { headers: corsHeaders });
       }

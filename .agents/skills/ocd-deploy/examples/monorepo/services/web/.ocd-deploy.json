@@ -3,12 +3,12 @@
   "name": "Web Frontend",
   "description": "Web frontend using the stack-injected API_URL",
   "build": {
-    "repository": "https://github.com/example/blog.git",
+    "repository": "https://git.example.com/team/blog.git",
     "branch": "main",
     "dockerfile": "services/web/Dockerfile",
     "context": ".",
-    "image": "ghcr.io/example/blog-web",
-    "webhook": true
+    "image_repository": "registry.example.com/team/blog-web",
+    "webhook": false
   },
   "container_port": 80,
   "env": [

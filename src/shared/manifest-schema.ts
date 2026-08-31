@@ -109,8 +109,8 @@ const buildSchema = z.object({
   branch: nonEmptyString("expected a non-empty branch name").optional(),
   dockerfile: nonEmptyString("expected a repository-relative Dockerfile path"),
   context: nonEmptyString("expected a repository-relative build context"),
-  /** Mutable push repository. OCD resolves the pushed tag to a digest before deploy. */
-  image: z.string({ error: "expected OCI repository" }).refine(
+  /** Mutable OCI repository where OCD pushes the built image. */
+  image_repository: z.string({ error: "expected OCI repository" }).refine(
     (value) => /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+$/i.test(value),
     { error: (iss) => `expected OCI repository without a tag or digest, got ${got(iss.input)}` },
   ),
@@ -120,7 +120,7 @@ const buildSchema = z.object({
   cache: z.boolean({ error: "expected boolean" }).optional(),
   /** Signed GitHub pushes trigger an OCD build and full manifest reconcile. */
   webhook: z.boolean({ error: "expected boolean" }).optional(),
-}, { error: "expected object { repository, dockerfile, context, image, platform?, cache?, webhook? }" }).strict().superRefine((value, ctx) => {
+}, { error: "expected object { repository, dockerfile, context, image_repository, platform?, cache?, webhook? }" }).strict().superRefine((value, ctx) => {
   for (const [key, path] of [["dockerfile", value.dockerfile], ["context", value.context]] as const) {
     if (path.startsWith("/") || path.split("/").includes("..") || path.includes("\\")) {
       ctx.addIssue({ code: "custom", path: [key], message: "must be a safe repository-relative path" });
@@ -300,14 +300,6 @@ const authSchema = z.object(
   { error: "expected object { enabled, password_env? }" },
 ).strict();
 
-const prebuiltImageSchema = z.union([
-  nonEmptyString("expected an OCI image reference"),
-  z.object({
-    ref: nonEmptyString("expected an OCI image reference"),
-  }, { error: "expected an OCI image reference or object { ref }" }).strict(),
-], { error: "expected an OCI image reference or object { ref }" })
-  .transform((value) => typeof value === "string" ? value : value.ref);
-
 export const DeployManifestSchema = z
   .object({
     $schema: z.literal(1, { error: "expected 1" }).optional(),
@@ -321,7 +313,7 @@ export const DeployManifestSchema = z
     build: buildSchema.optional(),
     /** Prebuilt OCI image reference. Tags are accepted as manifest intent but
      * are resolved to an immutable digest before desired state is changed. */
-    image: prebuiltImageSchema.optional(),
+    image: nonEmptyString("expected an OCI image reference").optional(),
     container_port: guardedNumber(
       "expected integer 1-65535",
       (v) => Number.isInteger(v) && v >= 1 && v <= 65535,

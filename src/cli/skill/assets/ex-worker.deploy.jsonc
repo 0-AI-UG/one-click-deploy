@@ -7,7 +7,7 @@
     "branch": "main",
     "dockerfile": "Dockerfile",
     "context": ".",
-    "image": "registry.example.com/team/worker",
+    "image_repository": "registry.example.com/team/worker",
     "webhook": false
   },
   "env": [

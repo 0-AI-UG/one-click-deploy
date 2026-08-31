@@ -75,7 +75,7 @@ function transport(input: {
     }),
     buildCommit: async (request) => {
       input.builds.push(request);
-      const refs = new Map((request.targets || []).map((target) => [target.name, `${target.image}@${DIGEST}`]));
+      const refs = new Map((request.targets || []).map((target) => [target.name, `${target.imageRepository}@${DIGEST}`]));
       for (const [name, image] of refs) await request.onArtifact?.(name, image);
       return {
         refs,
@@ -96,7 +96,7 @@ function appSpec(name: string): DeployRequest {
       branch: "main",
       dockerfile: "docker/app.Dockerfile",
       context: ".",
-      image: `registry.example.com/acme/${name}`,
+      image_repository: `registry.example.com/acme/${name}`,
     },
   };
 }
@@ -119,10 +119,10 @@ describe("build delivery transport boundary", () => {
       name: input.spec.app_name,
       dockerfile: "docker/app.Dockerfile",
       context: ".",
-      image: input.spec.build!.image,
+      imageRepository: input.spec.build!.image_repository,
     }]);
     expect((built as { refs: Record<string, string>; workerId: number }).refs[input.spec.app_name])
-      .toBe(`${input.spec.build!.image}@${DIGEST}`);
+      .toBe(`${input.spec.build!.image_repository}@${DIGEST}`);
     expect((built as { workerId: number }).workerId).toBe(db.getBuildWorkerByServerId(server.id)!.id);
     expect(db.getBuildWorkerLeaseForOperation(ctx.opId)).toBeNull();
     expect(db.listBuildArtifacts(ctx.opId)).toHaveLength(1);

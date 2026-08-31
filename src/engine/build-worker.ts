@@ -122,7 +122,7 @@ export type BuildTarget = {
   name: string;
   dockerfile: string;
   context: string;
-  image: string;
+  imageRepository: string;
   platform?: "linux/amd64";
   cache?: boolean;
 };
@@ -261,16 +261,16 @@ export async function buildCommitOnWorker(input: {
     const targets = input.resolveTargets ? await input.resolveTargets(readFile) : input.targets || [];
     if (!targets.length) throw new Error("Build request contains no image targets");
     for (const target of targets) {
-      if (!target.name || !target.dockerfile || !target.context || !target.image) throw new Error("Build target is incomplete");
+      if (!target.name || !target.dockerfile || !target.context || !target.imageRepository) throw new Error("Build target is incomplete");
       if (target.platform && target.platform !== BUILD_PLATFORM) throw new Error(`Unsupported build platform: ${target.platform}`);
       for (const path of [target.dockerfile, target.context]) {
         if (path.startsWith("/") || path.includes("\\") || path.split("/").includes("..")) throw new Error(`Unsafe build path: ${path}`);
       }
-      if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+$/i.test(target.image)) throw new Error(`Invalid OCI repository: ${target.image}`);
+      if (!/^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+$/i.test(target.imageRepository)) throw new Error(`Invalid OCI repository: ${target.imageRepository}`);
     }
 
     const registryResolutions = input.resolveRegistryCredentials
-      ? await Promise.all(targets.map((target) => input.resolveRegistryCredentials!(target.image)))
+      ? await Promise.all(targets.map((target) => input.resolveRegistryCredentials!(target.imageRepository)))
       : [{ username: input.registryUsername, password: input.registryPassword }];
     const resolvedRegistry = registryResolutions[0];
     if (registryResolutions.some((candidate) =>
@@ -281,7 +281,7 @@ export async function buildCommitOnWorker(input: {
     if (resolvedRegistry.username && resolvedRegistry.password) {
       registryAuth = await dockerLoginRegistry(
         server.ipv4,
-        targets[0].image,
+        targets[0].imageRepository,
         resolvedRegistry.username,
         resolvedRegistry.password,
         hostKey,
@@ -290,9 +290,9 @@ export async function buildCommitOnWorker(input: {
 
     const refs = new Map<string, string>();
     for (const target of targets) {
-      const tag = operationImageTag(target.image, input.operationId, input.commit);
+      const tag = operationImageTag(target.imageRepository, input.operationId, input.commit);
       const metadata = `${root}/${target.name}.metadata.json`;
-      input.onLog?.(`Building ${target.name} → ${target.image}`);
+      input.onLog?.(`Building ${target.name} → ${target.imageRepository}`);
       const innerBuild =
         `echo $$ > ${shellQuote(activePid)}; trap 'rm -f ${activePid}' EXIT; ` +
         `cd ${shellQuote(checkout)} && ` + buildxBuildCommand({
@@ -337,7 +337,7 @@ export async function buildCommitOnWorker(input: {
       );
       const digest = digestResult.stdout.trim();
       if (!/^sha256:[a-f0-9]{64}$/.test(digest)) throw new Error(`Registry did not return an immutable digest for ${target.name}`);
-      const ref = `${target.image}@${digest}`;
+      const ref = `${target.imageRepository}@${digest}`;
       const verify = await sshExec(server.ipv4, asUser(`${registryAuth?.envPrefix ?? ""}docker buildx imagetools inspect ${shellQuote(ref)} >/dev/null`), hostKey);
       if (verify.exitCode !== 0) throw new Error(`Could not verify pushed digest for ${target.name}`);
       refs.set(target.name, ref);

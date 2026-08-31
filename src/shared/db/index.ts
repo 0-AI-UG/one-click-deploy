@@ -104,6 +104,7 @@ export {
   recordAppManifestApplied,
   updateAppStackManifestPath,
   updateAppBuildConfig,
+  clearAppBuildConfig,
   normalizeAppConfigRevision,
   updateAppDomain,
   updateAppVolume,
