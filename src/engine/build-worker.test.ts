@@ -27,6 +27,8 @@ describe("build worker command safety", () => {
     expect(script).toContain('kill -TERM -- "-$pid"');
     expect(script).toContain('kill -KILL -- "-$pid"');
     expect(script).toContain("flock -w 30 /opt/ocd-build-worker/build.lock");
+    expect(script).toContain(`docker buildx prune --builder ${BUILDX_BUILDER}`);
+    expect(script).toContain("--keep-storage 4GB");
   });
 
   test("installs the host-lock utilities", () => {

@@ -57,7 +57,7 @@ export function buildWorkerCleanupScript(root: string): string {
     `pid=$(cat ${shellQuote(activePid)}); ` +
     `case "$pid" in ''|*[!0-9]*) ;; *) [ "$pid" -le 1 ] || { kill -TERM -- "-$pid" 2>/dev/null || true; sleep 2; kill -KILL -- "-$pid" 2>/dev/null || true; } ;; esac; ` +
     `fi; rm -rf ${shellQuote(root)}; ` +
-    `su - deploy -c ${shellQuote(`flock -w 30 ${BUILD_LOCK} sh -c 'docker image prune -af >/dev/null 2>&1 || true; docker builder prune -af --keep-storage 12GB >/dev/null 2>&1 || true'`)}`;
+    `su - deploy -c ${shellQuote(`flock -w 30 ${BUILD_LOCK} sh -c 'docker image prune -af >/dev/null 2>&1 || true; docker buildx prune --builder ${BUILDX_BUILDER} -af --keep-storage 4GB >/dev/null 2>&1 || true'`)}`;
 }
 
 export function normalizeBuildWorkerName(value: string): string {
