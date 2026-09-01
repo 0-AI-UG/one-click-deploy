@@ -220,6 +220,13 @@ export type ResourceVolume = {
   monthly_eur?: number;
 };
 
+export type ResourceBucket = {
+  name: string;
+  region: string;
+  endpoint: string;
+  createdAt: string;
+};
+
 export type ServerMetricSample = {
   server_id: number;
   cpu_percent: number;
@@ -230,6 +237,10 @@ export type ServerMetricSample = {
 export type ResourcesData = {
   servers: ResourceServer[];
   volumes: ResourceVolume[];
+  buckets: ResourceBucket[];
+  s3_configured: boolean;
+  s3_region: string;
+  s3_error?: string;
   totals?: {
     servers: number;
     volumes: number;

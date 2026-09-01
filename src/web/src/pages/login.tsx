@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { post } from "../api/client.ts";
 import { login, setTempToken } from "../stores/auth.ts";
-import { showToast, Spinner, Field } from "../components/ui.tsx";
+import { showToast, Field, Card, Btn, AuthShell } from "../components/ui.tsx";
 import { Terminal, ArrowRight } from "lucide-react";
 
 export function LoginPage() {
@@ -32,13 +32,8 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <div className="flex items-center gap-2 mb-8 justify-center">
-          <Terminal size={24} className="text-fg" />
-          <h1 className="font-mono font-bold text-lg text-fg tracking-wider uppercase">One-Click Deploy</h1>
-        </div>
-        <div className="bg-bg-raised border-2 border-fg shadow-neo p-6">
+    <AuthShell icon={<Terminal size={24} />} title="One-Click Deploy">
+        <Card className="p-6">
           <h2 className="font-mono text-sm font-bold text-fg uppercase mb-4">Sign In</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
             <Field label="Username">
@@ -47,13 +42,15 @@ export function LoginPage() {
             <Field label="Password">
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required />
             </Field>
-            <button
+            <Btn
               type="submit"
-              disabled={loading}
-              className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35"
+              variant="primary"
+              size="md"
+              loading={loading}
+              className="w-full justify-center"
             >
-              {loading ? <Spinner /> : <><span>Sign In</span><ArrowRight size={14} /></>}
-            </button>
+              <span>Sign In</span><ArrowRight size={14} />
+            </Btn>
           </form>
           <div className="mt-4 text-center">
             <a
@@ -63,8 +60,7 @@ export function LoginPage() {
               Forgot password?
             </a>
           </div>
-        </div>
-      </div>
-    </div>
+        </Card>
+    </AuthShell>
   );
 }

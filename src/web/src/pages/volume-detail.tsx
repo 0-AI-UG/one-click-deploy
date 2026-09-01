@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { get } from "../api/client.ts";
-import { Card, Btn, Spinner, EmptyState, showToast } from "../components/ui.tsx";
+import { Card, Btn, Spinner, EmptyState, showToast, PageShell, PageHeader, PageState } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { Database, Folder, FileText, ArrowLeft, ChevronRight, RefreshCw, FileWarning } from "lucide-react";
 
@@ -111,29 +111,16 @@ export function VolumeDetailPage({ volumeId }: { volumeId: string }) {
 
   if (detailErr) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = "#/resources"; }}>
-          <ArrowLeft size={11} /> Back to Resources
-        </Btn>
-        <Card className="p-6 mt-4">
-          <EmptyState message={detailErr} icon={FileWarning} />
-        </Card>
-      </div>
+      <PageState kind="error" title="Volume unavailable" description={detailErr} action={<Btn variant="ghost" onClick={() => { window.location.hash = "#/resources"; }}>Back to resources</Btn>} />
     );
   }
-  if (!detail) return <div className="flex justify-center py-20"><Spinner /></div>;
+  if (!detail) return <PageState title="Loading volume" />;
 
   const crumbs = path.split("/").filter(Boolean);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
-      <div className="flex items-center gap-2">
-        <Btn variant="ghost" size="xs" onClick={() => { window.location.hash = "#/resources"; }}>
-          <ArrowLeft size={11} /> Resources
-        </Btn>
-        <Database size={16} className="text-fg" />
-        <h1 className="font-mono font-bold text-sm text-fg uppercase">{detail.name}</h1>
-      </div>
+    <PageShell>
+      <PageHeader backHref="#/resources" backLabel="Back to resources" eyebrow="Volume" title={detail.name} />
 
       <Card className="p-4">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -259,7 +246,7 @@ export function VolumeDetailPage({ volumeId }: { volumeId: string }) {
         </div>
         </PermissionGate>
       )}
-    </div>
+    </PageShell>
   );
 }
 
@@ -273,4 +260,3 @@ function Info({ label, value, accent }: { label: string; value: string; accent?:
     </div>
   );
 }
-

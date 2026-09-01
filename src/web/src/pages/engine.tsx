@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { get } from "../api/client.ts";
-import { Spinner } from "../components/ui.tsx";
+import { Badge, PageShell, PageHeader, PageState } from "../components/ui.tsx";
 import { humanizeStep, type OperationView } from "../hooks/useOperation.ts";
 
 type Snapshot = {
@@ -55,36 +55,19 @@ export function EnginePage() {
     };
   }, []);
 
-  if (!snap) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Spinner />
-      </div>
-    );
-  }
+  if (!snap) return <PageState title="Loading operations" />;
 
   const hb = heartbeatLabel(snap.engine.heartbeat);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="font-mono text-xl font-bold uppercase tracking-wider">Engine</h1>
-        </div>
-        <div className="flex items-center gap-3 text-[10px] font-mono font-bold uppercase tracking-wider">
-          <span
-            className={`inline-flex items-center gap-1.5 px-2 py-1 border-2 border-fg shadow-neo-sm ${
-              hb.healthy ? "bg-accent text-fg" : "bg-accent-red text-white"
-            }`}
-          >
+    <PageShell>
+      <PageHeader title="Operations" description="Queued, running, and recently completed engine work." actions={<>
+          <Badge tone={hb.healthy ? "success" : "danger"}>
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${hb.healthy ? "bg-fg" : "bg-white"}`} />
             Heartbeat {hb.text}
-          </span>
-          <span className="px-2 py-1 border-2 border-fg bg-bg-raised shadow-neo-sm">
-            Concurrency {snap.engine.concurrency}
-          </span>
-        </div>
-      </div>
+          </Badge>
+          <Badge>Concurrency {snap.engine.concurrency}</Badge>
+      </>} />
 
       <Section title="Running" count={snap.running.length}>
         {snap.running.length === 0 ? (
@@ -109,7 +92,7 @@ export function EnginePage() {
           <OpList ops={snap.recent} />
         )}
       </Section>
-    </div>
+    </PageShell>
   );
 }
 

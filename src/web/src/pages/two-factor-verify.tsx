@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { post } from "../api/client.ts";
 import { useAuth, login, logout } from "../stores/auth.ts";
-import { Spinner } from "../components/ui.tsx";
+import { Spinner, Btn, Card, AuthShell, InlineNotice } from "../components/ui.tsx";
 import { PasskeyUnsupported } from "../components/passkey-unsupported.tsx";
 import { Shield, Fingerprint } from "lucide-react";
 
@@ -40,18 +40,11 @@ export function TwoFactorVerifyPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm animate-slide-up text-center">
-        <Shield size={32} className="text-fg mx-auto mb-4" />
-        <h2 className="font-mono font-bold text-sm text-fg uppercase mb-1">Verify with Passkey</h2>
-        <p className="text-[10px] text-muted mb-6 font-mono uppercase tracking-wider">
-          Use Touch ID, Face ID, or a security key
-        </p>
-
+    <AuthShell icon={<Shield size={32} />} title="Verify with Passkey" description="Use Touch ID, Face ID, or a security key">
         {!supported ? (
           <PasskeyUnsupported onBack={() => { logout(); window.location.hash = "#/login"; }} />
         ) : (
-          <div className="bg-bg-raised border-2 border-fg shadow-neo p-6">
+          <Card className="p-6 text-center">
             <Fingerprint size={48} className="text-fg mx-auto mb-4" />
             {loading ? (
               <div className="flex justify-center py-2">
@@ -59,13 +52,15 @@ export function TwoFactorVerifyPage() {
               </div>
             ) : (
               <>
-                {error && <p className="text-[10px] text-red-500 font-mono mb-4">{error}</p>}
-                <button
+                {error && <InlineNotice tone="danger" className="mb-4">{error}</InlineNotice>}
+                <Btn
                   onClick={verify}
-                  className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all"
+                  variant="primary"
+                  size="md"
+                  className="w-full justify-center"
                 >
                   <Fingerprint size={14} /> {error ? "Try Again" : "Verify"}
-                </button>
+                </Btn>
                 <button
                   type="button"
                   onClick={() => { logout(); window.location.hash = "#/login"; }}
@@ -75,9 +70,8 @@ export function TwoFactorVerifyPage() {
                 </button>
               </>
             )}
-          </div>
+          </Card>
         )}
-      </div>
-    </div>
+    </AuthShell>
   );
 }

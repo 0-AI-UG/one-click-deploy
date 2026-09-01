@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { startRegistration, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { post } from "../api/client.ts";
 import { useAuth, login, logout } from "../stores/auth.ts";
-import { Spinner, Card } from "../components/ui.tsx";
+import { Spinner, Card, Btn, AuthShell, InlineNotice } from "../components/ui.tsx";
 import { PasskeyUnsupported } from "../components/passkey-unsupported.tsx";
 import { Fingerprint, Shield } from "lucide-react";
 
@@ -40,16 +40,7 @@ export function TwoFactorSetupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-md animate-slide-up">
-        <div className="text-center mb-6">
-          <Shield size={32} className="text-fg mx-auto mb-3" />
-          <h2 className="font-mono font-bold text-sm text-fg uppercase">Add a Passkey</h2>
-          <p className="text-[10px] text-muted font-mono mt-1 uppercase tracking-wider">
-            Required to secure your account
-          </p>
-        </div>
-
+    <AuthShell icon={<Shield size={32} />} title="Add a Passkey" description="Required to secure your account" width="md">
         {!supported ? (
           <PasskeyUnsupported onBack={() => { logout(); window.location.hash = "#/login"; }} />
         ) : (
@@ -64,18 +55,19 @@ export function TwoFactorSetupPage() {
               </>
             ) : (
               <>
-                {error && <p className="text-[10px] text-red-500 font-mono mb-4">{error}</p>}
-                <button
+                {error && <InlineNotice tone="danger" className="mb-4">{error}</InlineNotice>}
+                <Btn
                   onClick={register}
-                  className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all"
+                  variant="primary"
+                  size="md"
+                  className="w-full justify-center"
                 >
                   <Fingerprint size={14} /> {error ? "Try Again" : "Register Passkey"}
-                </button>
+                </Btn>
               </>
             )}
           </Card>
         )}
-      </div>
-    </div>
+    </AuthShell>
   );
 }

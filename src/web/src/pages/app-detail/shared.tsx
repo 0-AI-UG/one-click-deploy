@@ -91,14 +91,15 @@ export function MemUsage({ memoryPercent, usedMb, limitMb, status }: { memoryPer
   return <span className="text-[10px]">{text}</span>;
 }
 
-export function Sparkline({ values, color = "#3b82f6" }: { values: number[]; color?: string }) {
+export function Sparkline({ values, color = "#5B8DEF" }: { values: number[]; color?: string }) {
   if (values.length < 2) return <span className="text-[9px] text-muted font-mono">no data</span>;
   const w = 120, h = 24;
   const max = Math.max(100, ...values);
   const step = w / (values.length - 1);
   const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - (v / max) * h).toFixed(1)}`).join(" ");
   return (
-    <svg width={w} height={h} className="inline-block">
+    <svg width={w} height={h} className="inline-block" role="img" aria-label="Recent metric trend">
+      <title>Recent metric trend</title>
       <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" />
     </svg>
   );

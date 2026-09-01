@@ -20,9 +20,9 @@ import { SkillInstallMenu } from "./skill-install-menu.tsx";
 
 const navItems = [
   { hash: "#/", label: "Dashboard", icon: Server, match: /^#\/?$/ },
-  { hash: "#/environments", label: "Env", icon: Layers, match: /^#\/environments/ },
+  { hash: "#/environments", label: "Environments", icon: Layers, match: /^#\/environments/ },
   { hash: "#/resources", label: "Resources", icon: HardDrive, match: /^#\/resources/ },
-  { hash: "#/engine", label: "Engine", icon: Cpu, match: /^#\/engine/ },
+  { hash: "#/engine", label: "Operations", icon: Cpu, match: /^#\/engine/ },
 ];
 
 function CliCopyButton() {
@@ -39,7 +39,7 @@ function CliCopyButton() {
       className="flex items-center gap-1 px-1.5 py-1 font-mono text-[9px] font-bold uppercase tracking-wide text-fg/70 hover:text-fg hover:bg-fg/10 transition-all"
       title={installCmd}
     >
-      {copied ? <Check size={12} className="text-green-600" /> : <TerminalSquare size={12} />}
+      {copied ? <Check size={12} className="text-fg" /> : <TerminalSquare size={12} />}
       {copied ? "Copied" : "CLI"}
     </button>
   );
@@ -59,7 +59,7 @@ function MobileCliCopyButton() {
       className="flex min-h-12 w-full items-center gap-3 border-2 border-fg bg-bg-raised px-4 py-3 font-mono text-[11px] font-bold uppercase shadow-neo-sm"
       title={installCmd}
     >
-      {copied ? <Check size={18} className="text-green-600" /> : <TerminalSquare size={18} />}
+      {copied ? <Check size={18} className="text-fg" /> : <TerminalSquare size={18} />}
       {copied ? "Copied install command" : "Copy CLI install command"}
     </button>
   );
@@ -72,7 +72,6 @@ function DesktopNav({ user, hash }: { user: ReturnType<typeof useAuth>["user"]; 
         <a href="#/" className="flex shrink-0 items-center gap-1.5 font-mono text-xs font-bold tracking-wide text-fg">
           <Terminal size={16} />
           <span>OCD</span>
-          <span className="border border-fg px-1 py-0.5 font-mono text-[8px] font-bold uppercase">v0.4</span>
         </a>
         <div className="h-4 w-px shrink-0 bg-fg/30" />
         <div className="flex items-center">
@@ -170,7 +169,7 @@ function MobileNav({ hash }: { hash: string }) {
       </header>
 
       <nav className="fixed inset-x-0 bottom-0 z-50 border-t-2 border-fg bg-bg-raised pb-[env(safe-area-inset-bottom)]" aria-label="Primary navigation">
-        <div className="grid h-[62px] grid-cols-4">
+        <div className="grid h-[62px] grid-cols-3">
           {primaryItems.map((item) => {
             const Icon = item.icon;
             return (

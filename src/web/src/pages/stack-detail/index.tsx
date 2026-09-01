@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { get } from "../../api/client.ts";
 import { runConfirmedCliAction } from "../../api/cli-actions.ts";
-import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
+import { Btn, StatusBadge, showToast, confirm, PageShell, PageHeader, PageState } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { TabBar } from "../../components/tab-bar.tsx";
 import { trackOperationInToast, useActiveOperations } from "../../hooks/useOperation.ts";
@@ -68,8 +68,8 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
     }
   };
 
-  if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
-  if (!stack) return <div className="text-center py-20 text-muted font-mono text-[10px] uppercase tracking-wider">Stack not found</div>;
+  if (loading) return <PageState title="Loading stack" />;
+  if (!stack) return <PageState kind="empty" title="Stack not found" action={<Btn variant="ghost" onClick={() => { window.location.hash = "#/"; }}>Back to dashboard</Btn>} />;
 
   // Staging siblings are hidden implementation detail of their production app —
   // they belong to the member, not to the stack's member list.
@@ -86,20 +86,20 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
   ] as const;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
-      <div className="flex items-center gap-3 mb-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = "#/"; }}><ArrowLeft size={14} /></Btn>
-        <div className="flex-1">
-          <div className="flex items-center gap-3">
-            <h1 className="font-mono font-bold text-sm text-fg uppercase">{stack.name}</h1>
-            <StatusBadge status={stack.status} />
-          </div>
-          <div className="font-mono text-[9px] text-muted mt-0.5">
+    <PageShell>
+      <PageHeader
+        backHref="#/"
+        backLabel="Back to dashboard"
+        eyebrow="Stack"
+        title={stack.name}
+        meta={<>
+          <div><StatusBadge status={stack.status} /></div>
+          <div className="mt-1">
             {memberApps.length} app{memberApps.length !== 1 ? "s" : ""}
           </div>
           {stack.last_operation_id != null && (
             <>
-              <div className={`font-mono text-[9px] mt-0.5 ${stack.last_operation_failed ? "text-danger" : "text-muted"}`}>
+              <div className={`font-mono text-[9px] mt-0.5 ${stack.last_operation_failed ? "text-accent-red" : "text-muted"}`}>
                 Last stack operation #{stack.last_operation_id}: {stack.last_operation_status}
                 {stack.operation_in_progress ? " (in progress)" : ""}
               </div>
@@ -110,8 +110,8 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
               )}
             </>
           )}
-        </div>
-        <div className="flex gap-1">
+        </>}
+        actions={<div className="flex gap-1">
           {/* Promote only exists when there is something to promote — a stack
               with no staging siblings has no use for the button at all. */}
           {promotable > 0 && (
@@ -156,8 +156,8 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
               }}
             ><Trash2 size={12} /> Destroy</Btn>
           </PermissionGate>
-        </div>
-      </div>
+        </div>}
+      />
 
       <TabBar tabs={tabs} active={tab} onChange={setTab} />
 
@@ -170,6 +170,6 @@ export function StackDetailPage({ stackId }: { stackId: number }) {
       )}
 
       {tab === "logs" && <StackLogsTab stackId={stackId} />}
-    </div>
+    </PageShell>
   );
 }

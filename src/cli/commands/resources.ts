@@ -1,4 +1,4 @@
-import { del, get } from "../api.ts";
+import { del, get, post } from "../api.ts";
 import { followOp } from "../ops.ts";
 import { BOLD, DIM, GREEN, RED, RESET, table } from "../format.ts";
 import { webConfirm } from "../confirm.ts";
@@ -15,9 +15,16 @@ type ResourceVolume = {
   retention_class: "user" | "provisional" | "";
   monthly_eur: number | null;
 };
+type ResourceBucket = {
+  name: string; region: string; endpoint: string; createdAt: string;
+};
 type ResourceInventory = {
   servers: ResourceServer[];
   volumes: ResourceVolume[];
+  buckets: ResourceBucket[];
+  s3_configured?: boolean;
+  s3_region?: string;
+  s3_error?: string;
   totals?: { servers: number; volumes: number; total: number; currency: string };
 };
 
@@ -71,6 +78,83 @@ async function listResources(): Promise<void> {
       money(volume.monthly_eur, currency),
     ]),
   );
+  console.log(`\n${BOLD}S3 buckets${RESET}`);
+  if (!data.s3_configured) {
+    console.log(`${DIM}Hetzner S3 is not configured. Add credentials in Admin → Infrastructure.${RESET}`);
+  } else if (data.s3_error) {
+    console.log(`${RED}${data.s3_error}${RESET}`);
+  } else {
+    table(
+      ["NAME", "REGION", "CREATED", "ENDPOINT"],
+      data.buckets.map((bucket) => [
+        bucket.name,
+        bucket.region,
+        bucket.createdAt || "-",
+        bucket.endpoint,
+      ]),
+    );
+  }
+}
+
+async function createS3Bucket(name: string): Promise<void> {
+  const confirmation = await webConfirm("create_bucket", "bucket", name);
+  if (!confirmation) {
+    console.log("Aborted.");
+    return;
+  }
+  await post<{ ok: boolean }>(
+    "/api/resources/buckets",
+    { name },
+    { "X-OCD-Confirmation": confirmation },
+  );
+  console.log(`${GREEN}bucket created.${RESET}`);
+}
+
+async function deleteS3Bucket(name: string): Promise<void> {
+  const confirmation = await webConfirm("delete_bucket", "bucket", name);
+  if (!confirmation) {
+    console.log("Aborted.");
+    return;
+  }
+  await del<{ ok: boolean }>(
+    `/api/resources/buckets/${encodeURIComponent(name)}`,
+    undefined,
+    { "X-OCD-Confirmation": confirmation },
+  );
+  console.log(`${GREEN}bucket deleted.${RESET}`);
+}
+
+function bucketUsage(): void {
+  console.error(`${BOLD}Usage:${RESET} ocd buckets <command>
+
+${BOLD}Commands:${RESET}
+  list                      List buckets visible to the configured Hetzner S3 key
+  create <name>             Create a private bucket (browser approval)
+  delete <name>             Delete an empty bucket (browser approval)`);
+}
+
+export async function buckets(args: string[] = []): Promise<void> {
+  const sub = args[0] || "list";
+  if (sub === "list" || sub === "ls") {
+    const data = await inventory();
+    if (!data.s3_configured) throw new Error("Hetzner S3 is not configured");
+    if (data.s3_error) throw new Error(data.s3_error);
+    table(
+      ["NAME", "REGION", "CREATED", "ENDPOINT"],
+      data.buckets.map((bucket) => [bucket.name, bucket.region, bucket.createdAt || "-", bucket.endpoint]),
+    );
+    return;
+  }
+  if (sub === "create") {
+    if (!args[1]) throw new Error("Usage: ocd buckets create <name>");
+    return createS3Bucket(args[1]);
+  }
+  if (sub === "delete" || sub === "remove") {
+    if (!args[1]) throw new Error("Usage: ocd buckets delete <name>");
+    return deleteS3Bucket(args[1]);
+  }
+  if (sub === "help" || sub === "--help" || sub === "-h") return bucketUsage();
+  throw new Error(`Unknown bucket command: ${sub}`);
 }
 
 async function showVolume(ref: string): Promise<void> {
@@ -243,6 +327,7 @@ ${BOLD}Commands:${RESET}
   ls                              Inventory and estimated monthly cost
   volume <provider-id>            Volume detail
   volumes <command>               Volume inspection, files, and deletion
+  buckets <command>               Hetzner S3 bucket management
   delete <server|volume> <id>     Delete a provider resource or disconnect an external server`);
 }
 
@@ -257,6 +342,8 @@ export async function resources(args: string[] = []): Promise<void> {
       return showVolume(args[1]);
     case "volumes":
       return volumes(args.slice(1));
+    case "buckets":
+      return buckets(args.slice(1));
     case "delete":
     case "remove":
       return deleteResource(args.slice(1));

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { get, post, del, put } from "../../api/client.ts";
-import { Card, Btn, Table, Spinner, Field, Divider, InfoTip, showToast, confirm } from "../../components/ui.tsx";
+import { Card, Btn, Table, Spinner, Field, Divider, InfoTip, showToast, confirm, PageShell, PageHeader, PageState } from "../../components/ui.tsx";
+import { TabBar } from "../../components/tab-bar.tsx";
 import { NeoSelect } from "../../components/neo-select.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../../hooks/use-server-types.ts";
@@ -31,7 +32,7 @@ function GitHubOAuthSettings({ form, setS }: {
         <div className="flex items-center gap-2 bg-alt border-2 border-fg px-3 py-2">
           <code className="font-mono text-[10px] text-fg flex-1 select-all truncate">{callbackUrl}</code>
           <button onClick={copyUrl} className="text-muted hover:text-fg transition-colors shrink-0">
-            {copied ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
+            {copied ? <Check size={12} className="text-fg" /> : <Copy size={12} />}
           </button>
         </div>
       </Field>
@@ -101,6 +102,7 @@ export function UsersPage() {
   // --- Instance Settings ---
   const [settingsForm, setSettingsForm] = useState({
     hetzner_api_token: "",
+    hetzner_s3_access_key: "", hetzner_s3_secret_key: "", hetzner_s3_region: "fsn1",
     github_oauth_client_id: "", github_oauth_client_secret: "",
     default_domain_suffix: "", default_server_type: "", default_location: "",
     oci_artifact_ref: "", oci_registry_username: "", oci_registry_password: "",
@@ -189,6 +191,9 @@ export function UsersPage() {
         setRequire2fa(s.require_2fa !== false);
         setSettingsForm({
           hetzner_api_token: s.hetzner_api_token ?? "",
+          hetzner_s3_access_key: s.hetzner_s3_access_key ?? "",
+          hetzner_s3_secret_key: s.hetzner_s3_secret_key ?? "",
+          hetzner_s3_region: s.hetzner_s3_region ?? "fsn1",
           github_oauth_client_id: s.github_oauth_client_id ?? "",
           github_oauth_client_secret: s.github_oauth_client_secret ?? "",
           default_domain_suffix: s.default_domain_suffix ?? "",
@@ -434,30 +439,13 @@ export function UsersPage() {
     }
   };
 
-  if (loading || settingsLoading) return <div className="flex justify-center py-20"><Spinner /></div>;
+  if (loading || settingsLoading) return <PageState title="Loading administration" />;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in space-y-6">
-      <div className="flex items-center gap-2">
-        <Settings size={18} className="text-fg" />
-        <h1 className="font-mono font-bold text-sm text-fg uppercase">Admin</h1>
-      </div>
+    <PageShell>
+      <PageHeader title="Admin" description="Infrastructure, build delivery, panel settings, and user access." />
 
-      <nav className="flex gap-1 overflow-x-auto border-b-2 border-fg" aria-label="Admin sections">
-        {ADMIN_SECTIONS.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            aria-current={section === item.key ? "page" : undefined}
-            onClick={() => setSection(item.key)}
-            className={`shrink-0 px-3 py-2 font-mono text-[9px] font-bold uppercase tracking-wider transition-colors ${
-              section === item.key ? "bg-fg text-accent" : "text-muted hover:bg-alt hover:text-fg"
-            }`}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
+      <TabBar tabs={ADMIN_SECTIONS} active={section} onChange={setSection} />
 
       {section === "overview" && readiness && <Card className="p-5 space-y-3">
         <div className="flex items-center justify-between gap-3">
@@ -518,6 +506,29 @@ export function UsersPage() {
           <Field label="Cloud provider token" align="start" hint="Optional. Add a Hetzner token only when OCD should create and own servers and volumes. Leave it empty to use connected servers.">
             <input type="password" value={settingsForm.hetzner_api_token} onChange={setS("hetzner_api_token")} placeholder={readiness?.provider.configured ? "Leave empty to keep current token" : "Hetzner API token"} />
           </Field>
+          <Divider />
+          <div>
+            <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Hetzner Object Storage</h3>
+            <p className="mt-1 font-mono text-[9px] text-muted">Generate S3 credentials in Hetzner Console. These are separate from the Cloud API token and are stored encrypted by OCD.</p>
+          </div>
+          <Field label="S3 access key">
+            <input type="password" value={settingsForm.hetzner_s3_access_key} onChange={setS("hetzner_s3_access_key")} placeholder="Hetzner S3 access key" autoComplete="off" />
+          </Field>
+          <Field label="S3 secret key" align="start" hint="Clear both S3 key fields and save to disconnect Object Storage.">
+            <input type="password" value={settingsForm.hetzner_s3_secret_key} onChange={setS("hetzner_s3_secret_key")} placeholder="Hetzner S3 secret key" autoComplete="new-password" />
+          </Field>
+          <Field label="S3 region">
+            <NeoSelect
+              value={settingsForm.hetzner_s3_region}
+              onChange={(v) => setSettingsForm((f) => ({ ...f, hetzner_s3_region: v }))}
+              options={[
+                { value: "fsn1", label: "Falkenstein (fsn1)" },
+                { value: "nbg1", label: "Nuremberg (nbg1)" },
+                { value: "hel1", label: "Helsinki (hel1)" },
+              ]}
+            />
+          </Field>
+          <Divider />
           <Field label="App domain" align="start" hint="Used as the default domain suffix. OCD shows the DNS records to create but never changes DNS.">
             <input type="text" value={settingsForm.default_domain_suffix} onChange={setS("default_domain_suffix")} placeholder="apps.example.com" />
           </Field>
@@ -557,7 +568,7 @@ export function UsersPage() {
               <InfoTip>Works with GHCR, GitLab, Docker Hub, Quay, Harbor, and self-hosted OCI registries.</InfoTip>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${registryConnected ? "bg-green-200" : "bg-yellow-200"}`}>
+              <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${registryConnected ? "bg-accent/30" : "bg-accent-amber/30"}`}>
                 {registryConnected ? "Connected" : "Not connected"}
               </span>
               <Btn size="xs" onClick={() => setRegistryEditing((open) => !open)}>{registryEditing ? "Close" : registryConnected ? "Edit" : "Configure"}</Btn>
@@ -590,7 +601,7 @@ export function UsersPage() {
               <InfoTip>Public repositories work without credentials. Configure this only for private repositories on an HTTPS Git host.</InfoTip>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${sourceConnected ? "bg-green-200" : "bg-alt"}`}>
+              <span className={`font-mono text-[9px] font-bold uppercase px-2 py-1 border-2 border-fg ${sourceConnected ? "bg-accent/30" : "bg-alt"}`}>
                 {sourceConnected ? "Connected" : "Public only"}
               </span>
               <Btn size="xs" onClick={() => setSourceEditing((open) => !open)}>{sourceEditing ? "Close" : sourceConnected ? "Edit" : "Configure"}</Btn>
@@ -636,7 +647,7 @@ export function UsersPage() {
               <tr key={runner.id}>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.name}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.server?.name || "Missing"}</td>
-                <td className="py-2 px-3 font-mono text-[10px]">{runner.status}{runner.last_error && <div className="text-red-600 max-w-xs break-words">{runner.last_error}</div>}</td>
+                <td className="py-2 px-3 font-mono text-[10px]">{runner.status}{runner.last_error && <div className="text-accent-red max-w-xs break-words">{runner.last_error}</div>}</td>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.worker_version || "—"}<div className="text-muted">{runner.architecture || "—"}</div></td>
                 <td className="py-2 px-3 font-mono text-[10px]">{runner.disk_free_bytes ? `${(runner.disk_free_bytes / 1024 ** 3).toFixed(1)} GB` : "—"}</td>
                 <td className="py-2 px-3"><Btn size="xs" variant="danger" disabled={runnerBusy} onClick={() => removeRunner(runner)}><Trash2 size={11} /></Btn></td>
@@ -679,7 +690,7 @@ export function UsersPage() {
             {buildSources.map((source) => <tr key={source.id}>
               <td className="py-2 px-3 font-mono text-[10px] break-all">{source.repository}</td>
               <td className="py-2 px-3 font-mono text-[10px]">{source.branch}</td>
-              <td className="py-2 px-3 font-mono text-[10px]">{source.last_status || "idle"}{source.last_error && <div className="text-red-600 max-w-xs break-words">{source.last_error}</div>}</td>
+              <td className="py-2 px-3 font-mono text-[10px]">{source.last_status || "idle"}{source.last_error && <div className="text-accent-red max-w-xs break-words">{source.last_error}</div>}</td>
               <td className="py-2 px-3 font-mono text-[10px]">{source.webhook_secret_configured ? "ready" : "missing"}</td>
               <td className="py-2 px-3"><Btn size="xs" onClick={() => rotateWebhook(source)}><Key size={11} /> Rotate</Btn></td>
             </tr>)}
@@ -703,7 +714,7 @@ export function UsersPage() {
             </h3>
             <span
               className={`font-mono text-[9px] font-bold uppercase px-2 py-0.5 border-2 border-fg ${
-                panel.status === "running" ? "bg-green-200" : panel.status === "error" ? "bg-red-200" : "bg-yellow-200"
+                panel.status === "running" ? "bg-accent/30" : panel.status === "error" ? "bg-accent-red/20" : "bg-accent-amber/30"
               }`}
             >
               {panel.status}
@@ -856,6 +867,6 @@ export function UsersPage() {
           ))}
         </Table>
       </Card>}
-    </div>
+    </PageShell>
   );
 }

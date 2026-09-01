@@ -24,6 +24,8 @@ export type ConfirmableCliAction =
   | "delete_volume"
   | "cancel_operation"
   | "create_server"
+  | "create_bucket"
+  | "delete_bucket"
   | "promote_app"
   | "promote_stack";
 
@@ -45,7 +47,7 @@ export async function approveCliAction(
   }) as Confirmation;
   const typedBody = action === "delete_volume"
     ? { typed_resource_id: typedResource }
-    : action === "purge_environment"
+    : action === "purge_environment" || action === "delete_bucket"
       ? { typed_resource_name: typedResource }
       : undefined;
   await post(

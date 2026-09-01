@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { get } from "../api/client.ts";
 import { runCliAction } from "../api/cli-actions.ts";
-import { Card, Btn, Spinner, EmptyState, Table, StatusBadge, showToast } from "../components/ui.tsx";
+import { Card, Btn, EmptyState, Table, StatusBadge, showToast, PageShell, PageHeader, PageState } from "../components/ui.tsx";
 import { Server, ArrowLeft, RefreshCw, Terminal, FileWarning, Network, Layers, Check, X } from "lucide-react";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
@@ -223,17 +223,10 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
 
   if (detailErr) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = "#/resources"; }}>
-          <ArrowLeft size={11} /> Back to Resources
-        </Btn>
-        <Card className="p-6 mt-4">
-          <EmptyState message={detailErr} icon={FileWarning} />
-        </Card>
-      </div>
+      <PageState kind="error" title="Server unavailable" description={detailErr} action={<Btn variant="ghost" onClick={() => { window.location.hash = "#/resources"; }}>Back to resources</Btn>} />
     );
   }
-  if (loading || !detail) return <div className="flex justify-center py-20"><Spinner /></div>;
+  if (loading || !detail) return <PageState title="Loading server" />;
 
   const cpuSeries = history.filter((m) => m.server_id === serverId).map((m) => m.cpu_percent);
   const memSeries = history.filter((m) => m.server_id === serverId).map((m) => m.memory_percent);
@@ -244,15 +237,8 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
     .filter((g) => g.count > 0);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
-      <div className="flex items-center gap-2">
-        <Btn variant="ghost" size="xs" onClick={() => { window.location.hash = "#/resources"; }}>
-          <ArrowLeft size={11} /> Resources
-        </Btn>
-        <Server size={16} className="text-fg" />
-        <h1 className="font-mono font-bold text-sm text-fg uppercase">{detail.name}</h1>
-        <span className={`font-mono text-[10px] uppercase ${statusClass(detail.status)}`}>· {detail.status}</span>
-        <div className="ml-auto flex items-center gap-1">
+    <PageShell>
+      <PageHeader backHref="#/resources" backLabel="Back to resources" eyebrow="Server" title={detail.name} meta={<StatusBadge status={detail.status} />} actions={<div className="flex items-center gap-1">
           <PermissionGate
             permission="servers.delete"
             fallback={
@@ -325,8 +311,7 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
           <Btn size="xs" variant="ghost" onClick={() => { setLoading(true); load(); }}>
             <RefreshCw size={11} /> Refresh
           </Btn>
-        </div>
-      </div>
+        </div>} />
 
       <Card className="p-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -475,7 +460,7 @@ export function ServerDetailPage({ serverId }: { serverId: number }) {
         )}
       </Card>
 
-    </div>
+    </PageShell>
   );
 }
 

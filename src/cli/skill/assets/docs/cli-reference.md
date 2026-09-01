@@ -100,8 +100,13 @@ ocd delete <app>
 ocd delete stack <name>
 ocd resources <ls|volume|volumes|delete>
 ocd volumes <list|show|audit|ls|cat|delete>
+ocd buckets <list|create|delete>
 ocd ssh
 ```
 
 DNS has no mutation command. The panel displays records for the operator to
 create at any DNS provider.
+
+Hetzner buckets use a separately configured S3 access key, secret key, and
+location-bound endpoint. Bucket creation and deletion require browser approval;
+deletion refuses non-empty buckets and never recursively removes objects.

@@ -154,6 +154,7 @@ import {
   handleCreateServer,
   handleGetVolumeDeletionAudit,
 } from "./resources.ts";
+import { handleCreateBucket, handleDeleteBucket, handleListBuckets } from "./buckets.ts";
 import {
   handleConfirmConfirmation,
   handleCreateConfirmation,
@@ -727,6 +728,30 @@ const CASES: Case[] = [
     permission: "resources.view",
     denyOnly: "the allow path calls the Hetzner API for pricing and inventory",
     call: (c) => handleGetResources(req("/api/resources", { token: c.token })),
+  },
+  {
+    name: "buckets: handleListBuckets",
+    permission: "resources.view",
+    call: (c) => handleListBuckets(req("/api/resources/buckets", { token: c.token })),
+  },
+  {
+    name: "buckets: handleCreateBucket",
+    permission: "buckets.create",
+    denyOnly: "the allow path requires configured S3 credentials and browser confirmation",
+    call: (c) => handleCreateBucket(req("/api/resources/buckets", {
+      method: "POST",
+      body: { name: "permission-test-bucket" },
+      token: c.token,
+    })),
+  },
+  {
+    name: "buckets: handleDeleteBucket",
+    permission: "buckets.delete",
+    denyOnly: "the allow path requires configured S3 credentials and browser confirmation",
+    call: (c) => handleDeleteBucket(
+      req("/api/resources/buckets/permission-test-bucket", { method: "DELETE", token: c.token }),
+      "permission-test-bucket",
+    ),
   },
   {
     name: "resources: handleDeleteResource (generic)",

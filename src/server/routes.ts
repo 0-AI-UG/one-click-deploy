@@ -35,6 +35,7 @@ import {
 import { handleConnectServer, handleDeleteServer, handleGetServerEnrollmentKey, handleRefreshServers, handleSetServerPool } from "./routes/servers.ts";
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail, handleGetVolumeDeletionAudit } from "./routes/resources.ts";
+import { handleCreateBucket, handleDeleteBucket, handleListBuckets } from "./routes/buckets.ts";
 import { handleWakeApp, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
 import { handleGetAvailability } from "./routes/availability.ts";
 import {
@@ -328,6 +329,16 @@ export const apiRoutes = {
 
   // --- Resources ---
   "/api/resources": { GET: (req: Request) => handleGetResources(req) },
+  "/api/resources/buckets": {
+    GET: (req: Request) => handleListBuckets(req),
+    POST: (req: Request) => handleCreateBucket(req),
+  },
+  "/api/resources/buckets/:name": {
+    DELETE: (req: Request) => {
+      const name = decodeURIComponent(new URL(req.url).pathname.split("/")[4] || "");
+      return handleDeleteBucket(req, name);
+    },
+  },
   "/api/resources/servers": { POST: (req: Request) => handleCreateServer(req) },
   "/api/resources/metrics/history": { GET: (req: Request) => handleGetServerMetricsHistory(req) },
   "/api/resources/volumes/deletion-audit": {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useId, type ReactNode } from "react";
-import { X, AlertTriangle, Loader2, Copy, Check, Info } from "lucide-react";
+import { X, AlertTriangle, Loader2, Copy, Check, Info, ArrowLeft } from "lucide-react";
 import { useMobileLayout } from "../hooks/use-mobile-layout.ts";
 export { portalAnchorRect } from "./portal-position.ts";
 
@@ -67,7 +67,7 @@ export function Toasts() {
   }, []);
 
   return (
-    <div className={isMobile ? "pointer-events-none fixed inset-x-3 top-[calc(62px+env(safe-area-inset-top))] z-[100] flex flex-col gap-2" : "fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none"}>
+    <div aria-live="polite" aria-relevant="additions text" className={isMobile ? "pointer-events-none fixed inset-x-3 top-[calc(62px+env(safe-area-inset-top))] z-[100] flex flex-col gap-2" : "fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none"}>
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -141,6 +141,20 @@ export function ConfirmDialog() {
     setTypedText("");
   }, [state.open, state.requiredText]);
 
+  useEffect(() => {
+    if (!state.open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [state.open]);
+
   if (!state.open) return null;
 
   const close = (v: boolean) => {
@@ -151,13 +165,13 @@ export function ConfirmDialog() {
 
   return (
     <div className={`fixed inset-0 z-[90] flex bg-fg/40 animate-fade-in ${isMobile ? "items-end" : "items-center justify-center"}`}>
-      <div className={isMobile ? "w-full rounded-t-[22px] border-2 border-b-0 border-fg bg-bg-raised px-5 pb-[calc(20px+env(safe-area-inset-bottom))] pt-4 shadow-[0_-5px_0_#1A1A1A] animate-slide-up" : "bg-bg-raised border-2 border-fg shadow-neo p-6 max-w-md w-full mx-4 animate-slide-up"}>
+      <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message" className={isMobile ? "w-full rounded-t-[22px] border-2 border-b-0 border-fg bg-bg-raised px-5 pb-[calc(20px+env(safe-area-inset-bottom))] pt-4 shadow-[0_-5px_0_#1A1A1A] animate-slide-up" : "bg-bg-raised border-2 border-fg shadow-neo p-6 max-w-md w-full mx-4 animate-slide-up"}>
         {isMobile && <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-fg/25" />}
         <div className="flex items-start gap-3 mb-4">
           {state.danger && <AlertTriangle size={20} className="text-accent-red mt-0.5 flex-shrink-0" />}
           <div>
-            <h3 className="font-mono font-bold text-sm text-fg uppercase">{state.title}</h3>
-            <p className="text-xs text-fg-dim mt-1">{state.message}</p>
+            <h3 id="confirm-dialog-title" className="font-mono font-bold text-sm text-fg uppercase">{state.title}</h3>
+            <p id="confirm-dialog-message" className="text-xs text-fg-dim mt-1">{state.message}</p>
           </div>
         </div>
         {state.requiredText !== undefined && (
@@ -211,6 +225,8 @@ export function CopyButton({ text, size = 12 }: { text: string; size?: number })
   const [copied, setCopied] = useState(false);
   return (
     <button
+      type="button"
+      aria-label={copied ? "Copied" : "Copy to clipboard"}
       className="p-1 text-muted hover:text-fg transition-colors"
       onClick={(e) => {
         e.stopPropagation();
@@ -219,7 +235,7 @@ export function CopyButton({ text, size = 12 }: { text: string; size?: number })
         setTimeout(() => setCopied(false), 1500);
       }}
     >
-      {copied ? <Check size={size} className="text-green-500" /> : <Copy size={size} />}
+      {copied ? <Check size={size} className="text-fg" /> : <Copy size={size} />}
     </button>
   );
 }
@@ -258,12 +274,10 @@ export function InfoTip({ children, text }: { children?: ReactNode; text?: React
 export function StatusBadge({ status, subLabel }: { status: string; subLabel?: string }) {
   const s = status?.toLowerCase() || "unknown";
   const dotColor =
-    s === "running" ? "bg-accent" :
-    s === "deploying" || s === "waking" ? "bg-accent-amber" :
-    s === "sleeping" ? "bg-accent-amber" :
+    ["running", "done", "ready", "online", "healthy", "active", "deployed", "completed", "open"].includes(s) ? "bg-accent" :
+    ["deploying", "waking", "sleeping", "pending", "queued", "compensating", "connecting", "disconnected", "ended"].includes(s) ? "bg-accent-amber" :
     s === "paused" ? "bg-alt" :
-    s === "unhealthy" ? "bg-accent-amber" :
-    s === "error" || s === "failed" ? "bg-accent-red" :
+    ["unhealthy", "error", "failed", "offline", "cancelled", "compensation_failed"].includes(s) ? "bg-accent-red" :
     "bg-alt";
 
   return (
@@ -277,8 +291,190 @@ export function StatusBadge({ status, subLabel }: { status: string; subLabel?: s
   );
 }
 
+// --- Page composition ---
+// The panel used to rebuild its page container and title row in every route.
+// These primitives keep spacing, hierarchy, back navigation, and responsive
+// action placement consistent without prescribing page-specific content.
+export function PageShell({
+  children,
+  width = "lg",
+  className = "",
+}: {
+  children: ReactNode;
+  width?: "md" | "lg" | "xl";
+  className?: string;
+}) {
+  const widths = { md: "max-w-3xl", lg: "max-w-4xl", xl: "max-w-6xl" };
+  return (
+    <main className={`${widths[width]} mx-auto space-y-5 px-4 py-5 md:py-6 animate-fade-in ${className}`}>
+      {children}
+    </main>
+  );
+}
+
+export function PageHeader({
+  title,
+  eyebrow,
+  description,
+  meta,
+  backHref,
+  backLabel = "Back",
+  actions,
+  className = "",
+}: {
+  title: ReactNode;
+  eyebrow?: ReactNode;
+  description?: ReactNode;
+  meta?: ReactNode;
+  backHref?: string;
+  backLabel?: string;
+  actions?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <header className={`flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between ${className}`}>
+      <div className="flex min-w-0 items-start gap-3">
+        {backHref && (
+          <a
+            href={backHref}
+            aria-label={backLabel}
+            title={backLabel}
+            className="grid h-9 w-9 shrink-0 place-items-center border-2 border-fg bg-bg-raised text-fg shadow-neo-sm transition-all hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
+          >
+            <ArrowLeft size={16} />
+          </a>
+        )}
+        <div className="min-w-0">
+          {eyebrow && <div className="mb-1 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-muted">{eyebrow}</div>}
+          <h1 className="truncate font-mono text-lg font-bold uppercase leading-tight tracking-wide text-fg">{title}</h1>
+          {description && <p className="mt-1 max-w-2xl text-xs leading-relaxed text-fg-dim">{description}</p>}
+          {meta && <div className="mt-1.5 font-mono text-[9px] text-muted">{meta}</div>}
+        </div>
+      </div>
+      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">{actions}</div>}
+    </header>
+  );
+}
+
+export function SectionHeader({
+  title,
+  description,
+  actions,
+  className = "",
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`flex items-start justify-between gap-4 ${className}`}>
+      <div className="min-w-0">
+        <h2 className="font-mono text-[10px] font-bold uppercase tracking-wider text-fg">{title}</h2>
+        {description && <p className="mt-1 text-[10px] leading-relaxed text-muted">{description}</p>}
+      </div>
+      {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+export function PageState({
+  kind = "loading",
+  title,
+  description,
+  action,
+}: {
+  kind?: "loading" | "empty" | "error";
+  title?: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <PageShell>
+      <div role={kind === "error" ? "alert" : "status"} className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
+        {kind === "loading" && <Spinner />}
+        {title && <div className={`font-mono text-xs font-bold uppercase tracking-wider ${kind === "error" ? "text-accent-red" : "text-fg"}`}>{title}</div>}
+        {description && <p className="max-w-md text-xs leading-relaxed text-muted">{description}</p>}
+        {action}
+      </div>
+    </PageShell>
+  );
+}
+
+export function Badge({
+  children,
+  tone = "neutral",
+  className = "",
+}: {
+  children: ReactNode;
+  tone?: "neutral" | "success" | "warning" | "danger" | "info";
+  className?: string;
+}) {
+  const tones = {
+    neutral: "bg-alt text-fg-dim",
+    success: "bg-accent text-fg",
+    warning: "bg-accent-amber text-fg",
+    danger: "bg-accent-red text-white",
+    info: "bg-accent-blue text-white",
+  };
+  return <span className={`inline-flex items-center gap-1 border-2 border-fg px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider shadow-neo-sm ${tones[tone]} ${className}`}>{children}</span>;
+}
+
+export function InlineNotice({
+  children,
+  tone = "info",
+  title,
+  className = "",
+}: {
+  children: ReactNode;
+  tone?: "info" | "success" | "warning" | "danger";
+  title?: ReactNode;
+  className?: string;
+}) {
+  const tones = {
+    info: "border-accent-blue bg-accent-blue/10",
+    success: "border-fg bg-accent/20",
+    warning: "border-accent-amber bg-accent-amber/15",
+    danger: "border-accent-red bg-accent-red/10",
+  };
+  return (
+    <div role={tone === "danger" ? "alert" : "status"} className={`border-2 p-3 ${tones[tone]} ${className}`}>
+      {title && <div className="mb-1 font-mono text-[10px] font-bold uppercase tracking-wider text-fg">{title}</div>}
+      <div className="text-[10px] leading-relaxed text-fg-dim">{children}</div>
+    </div>
+  );
+}
+
+export function AuthShell({
+  icon,
+  title,
+  description,
+  children,
+  width = "sm",
+}: {
+  icon?: ReactNode;
+  title: ReactNode;
+  description?: ReactNode;
+  children: ReactNode;
+  width?: "sm" | "md" | "lg";
+}) {
+  const widths = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-lg" };
+  return (
+    <main className="flex min-h-screen items-center justify-center px-4 py-8">
+      <div className={`w-full ${widths[width]} animate-slide-up`}>
+        <header className="mb-6 text-center">
+          {icon && <div className="mb-3 flex justify-center text-fg">{icon}</div>}
+          <h1 className="font-mono text-lg font-bold uppercase tracking-wider text-fg">{title}</h1>
+          {description && <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted">{description}</p>}
+        </header>
+        {children}
+      </div>
+    </main>
+  );
+}
+
 // --- Card ---
-export function Card({ children, className = "" }: { children: ReactNode; className?: string; accent?: boolean }) {
+export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div className={`bg-bg-raised border-2 border-fg shadow-neo ${className}`}>
       {children}
@@ -297,22 +493,24 @@ export function Btn({
   loading = false,
   className = "",
   title,
+  ariaLabel,
 }: {
   children: ReactNode;
   onClick?: () => void;
   type?: "button" | "submit" | "reset";
   variant?: "default" | "primary" | "danger" | "ghost";
-  size?: "xs" | "sm";
+  size?: "xs" | "sm" | "md";
   disabled?: boolean;
   loading?: boolean;
   className?: string;
   title?: string;
+  ariaLabel?: string;
 }) {
   const isMobile = useMobileLayout();
   const base = "inline-flex items-center gap-1.5 font-mono font-bold uppercase tracking-wider border-2 border-fg cursor-pointer transition-all disabled:opacity-35 disabled:cursor-not-allowed disabled:shadow-neo-sm disabled:translate-x-0 disabled:translate-y-0";
   const sizes = isMobile
-    ? (size === "xs" ? "min-h-11 px-3 py-2 text-[9px]" : "min-h-11 px-4 py-2 text-[10px]")
-    : (size === "xs" ? "px-2 py-1 text-[9px]" : "px-3 py-1.5 text-[10px]");
+    ? (size === "xs" ? "min-h-11 px-3 py-2 text-[9px]" : size === "md" ? "min-h-12 px-5 py-3 text-[11px]" : "min-h-11 px-4 py-2 text-[10px]")
+    : (size === "xs" ? "px-2 py-1 text-[9px]" : size === "md" ? "px-4 py-2.5 text-[10px]" : "px-3 py-1.5 text-[10px]");
 
   const variants = {
     default: "bg-bg-raised text-fg shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none",
@@ -330,7 +528,7 @@ export function Btn({
   }
 
   return (
-    <button type={type} onClick={onClick} disabled={disabled || loading} title={title} className={`${base} ${sizes} ${variants[variant]} ${className}`}>
+    <button type={type} onClick={onClick} disabled={disabled || loading} title={title} aria-label={ariaLabel || title} className={`${base} ${sizes} ${variants[variant]} ${className}`}>
       {loading && !iconReplaced && <Loader2 size={size === "xs" ? 12 : 13} className="animate-spin flex-shrink-0" />}
       {renderedChildren}
     </button>
@@ -426,12 +624,14 @@ export function Table({ headers, children }: { headers: string[]; children: Reac
 export function Checkbox({ checked, onChange, label, disabled = false }: { checked: boolean; onChange: (v: boolean) => void; label?: string; disabled?: boolean }) {
   return (
     <label className={`inline-flex items-center gap-2 group ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}>
-      <span
-        onClick={(e) => { e.preventDefault(); if (!disabled) onChange(!checked); }}
-        className={`w-4 h-4 border-2 border-fg flex-shrink-0 flex items-center justify-center transition-colors ${checked ? "bg-accent" : "bg-bg-raised group-hover:bg-alt"}`}
-      >
-        {checked && <span className="block w-2 h-2 bg-fg" />}
-      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        aria-label={label || "Toggle option"}
+        onChange={(event) => onChange(event.target.checked)}
+        className="shrink-0"
+      />
       {label && <span className="font-mono text-[10px] text-fg">{label}</span>}
     </label>
   );
@@ -464,10 +664,20 @@ export function Field({
   htmlFor?: string;
 }) {
   const isMobile = useMobileLayout();
+  const generatedId = useId();
+  const isNativeControl = React.isValidElement(children)
+    && typeof children.type === "string"
+    && ["input", "select", "textarea"].includes(children.type);
+  const controlId = htmlFor || (isNativeControl ? generatedId : undefined);
+  const renderedControl = isNativeControl
+    ? React.cloneElement(children as React.ReactElement<{ id?: string }>, {
+        id: (children.props as { id?: string }).id || controlId,
+      })
+    : children;
   const col = wide ? "w-[min(75%,34rem)]" : "w-[min(62%,20rem)]";
   const fieldLabel = label || hint ? (
     <div className="flex min-w-0 items-center gap-1">
-      {label && <label htmlFor={htmlFor} className="block font-mono text-[9px] font-bold uppercase leading-tight tracking-wider text-fg">{label}</label>}
+      {label && <label htmlFor={controlId} className="block font-mono text-[9px] font-bold uppercase leading-tight tracking-wider text-fg">{label}</label>}
       {hint && <InfoTip>{hint}</InfoTip>}
     </div>
   ) : null;
@@ -475,7 +685,7 @@ export function Field({
     return (
       <div className={`py-3 ${divider ? "border-b-2 border-fg/10 last:border-b-0" : ""} ${className}`}>
         {fieldLabel && <div className="mb-2">{fieldLabel}</div>}
-        <div className="w-full">{children}</div>
+        <div className="w-full">{renderedControl}</div>
       </div>
     );
   }
@@ -486,7 +696,7 @@ export function Field({
       } ${className}`}
     >
       {fieldLabel && <div className={`min-w-0 ${align === "start" ? "pt-1.5" : ""}`}>{fieldLabel}</div>}
-      <div className={`shrink-0 ${col}`}>{children}</div>
+      <div className={`shrink-0 ${col}`}>{renderedControl}</div>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { get } from "../api/client.ts";
 import { runCliAction, runConfirmedCliAction } from "../api/cli-actions.ts";
-import { Card, Btn, showToast, confirm, confirmWithText, EmptyState } from "../components/ui.tsx";
+import { Card, Btn, showToast, confirm, confirmWithText, EmptyState, PageShell, PageHeader, SectionHeader } from "../components/ui.tsx";
 import { EnvVarEditor, type EnvVarRow } from "../components/env-var-editor.tsx";
 import { useActiveOperations } from "../hooks/useOperation.ts";
 import { NeoSelect } from "../components/neo-select.tsx";
@@ -221,10 +221,11 @@ export function EnvironmentsPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
-      <div className="flex items-center justify-between">
-        <h1 className="font-mono font-bold text-sm text-fg uppercase">Environments</h1>
-        <div className="flex items-center gap-2">
+    <PageShell>
+      <PageHeader
+        title="Environments"
+        description="Reusable variables and secrets projected into app deployments."
+        actions={<>
           {environments.length > 0 && (
             <div className="relative" ref={copyPopoverRef}>
               <Btn size="sm" variant="ghost" onClick={() => (copy ? setCopy(null) : startCopy())}>
@@ -261,8 +262,8 @@ export function EnvironmentsPage() {
           <Btn size="sm" variant="primary" onClick={startNew}>
             <Plus size={12} /> New
           </Btn>
-        </div>
-      </div>
+        </>}
+      />
 
       {environments.length > 0 || expanded === "new" ? (
         <Card className="overflow-hidden">
@@ -354,10 +355,7 @@ export function EnvironmentsPage() {
 
       {deletedEnvironments.length > 0 && (
         <Card className="overflow-hidden">
-          <div className="px-4 py-3 bg-alt/30">
-            <h2 className="font-mono text-[10px] font-bold text-fg uppercase">Deleted environments</h2>
-            <p className="font-mono text-[9px] text-muted mt-1">Recoverable configuration retained separately from apps and stacks.</p>
-          </div>
+          <SectionHeader className="bg-alt/30 px-4 py-3" title="Deleted environments" description="Recoverable configuration retained separately from apps and stacks." />
           <div className="divide-y divide-fg/10">
             {deletedEnvironments.map((environment) => (
               <div key={environment.id} className="px-4 py-3 flex items-center justify-between gap-3">
@@ -420,6 +418,6 @@ export function EnvironmentsPage() {
           </div>
         </Card>
       )}
-    </div>
+    </PageShell>
   );
 }

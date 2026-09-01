@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
-import { showToast, Spinner } from "../components/ui.tsx";
+import { showToast, Card, Btn, AuthShell, PageState } from "../components/ui.tsx";
 import { Trash2, Check, AlertTriangle, Ban } from "lucide-react";
 
 type Item = {
@@ -18,6 +18,8 @@ const ACTION_PRESENTATION: Record<string, { confirmLabel: string; destructive: b
   delete_environment: { confirmLabel: "Confirm & Retire", destructive: true },
   purge_environment: { confirmLabel: "Confirm & Delete", destructive: true },
   delete_volume: { confirmLabel: "Confirm & Delete", destructive: true },
+  create_bucket: { confirmLabel: "Confirm & Create", destructive: false },
+  delete_bucket: { confirmLabel: "Confirm & Delete", destructive: true },
   cancel_operation: { confirmLabel: "Confirm & Cancel", destructive: true },
   create_server: { confirmLabel: "Confirm & Create", destructive: false },
   promote_app: { confirmLabel: "Confirm & Promote", destructive: false },
@@ -44,7 +46,7 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
         `/api/confirmations/item/${encodeURIComponent(userCode)}/confirm`,
         item?.action === "delete_volume"
           ? { typed_resource_id: typedResource.trim() }
-          : item?.action === "purge_environment"
+          : item?.action === "purge_environment" || item?.action === "delete_bucket"
             ? { typed_resource_name: typedResource.trim() }
           : undefined,
       );
@@ -71,61 +73,45 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
   // --- done: confirmed ---
   if (done === "confirmed") {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <div className="w-full max-w-sm animate-slide-up text-center">
-          <div className="bg-bg-raised border-2 border-fg shadow-neo p-8">
-            <Check size={32} className="text-green-600 mx-auto mb-4" />
-            <h2 className="font-mono text-sm font-bold text-fg uppercase mb-2">Action Confirmed</h2>
+      <AuthShell icon={<Check size={32} />} title="Action Confirmed">
+          <Card className="p-8 text-center">
             <p className="font-mono text-[11px] text-muted">You can close this page and return to your terminal.</p>
-          </div>
-        </div>
-      </div>
+          </Card>
+      </AuthShell>
     );
   }
 
   // --- done: denied ---
   if (done === "denied") {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <div className="w-full max-w-sm animate-slide-up text-center">
-          <div className="bg-bg-raised border-2 border-fg shadow-neo p-8">
-            <Ban size={32} className="text-fg mx-auto mb-4" />
-            <h2 className="font-mono text-sm font-bold text-fg uppercase mb-2">Action Cancelled</h2>
+      <AuthShell icon={<Ban size={32} />} title="Action Cancelled">
+          <Card className="p-8 text-center">
             <p className="font-mono text-[11px] text-muted">The action was cancelled. You can close this page.</p>
-          </div>
-        </div>
-      </div>
+          </Card>
+      </AuthShell>
     );
   }
 
   // --- error ---
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <div className="w-full max-w-sm animate-slide-up text-center">
-          <div className="bg-bg-raised border-2 border-accent-red shadow-neo p-8">
-            <AlertTriangle size={32} className="text-accent-red mx-auto mb-4" />
-            <h2 className="font-mono text-sm font-bold text-fg uppercase mb-2">Confirmation Unavailable</h2>
+      <AuthShell icon={<AlertTriangle size={32} className="text-accent-red" />} title="Confirmation Unavailable">
+          <Card className="border-accent-red p-8 text-center">
             <p className="font-mono text-[11px] text-muted">{error}</p>
-          </div>
-        </div>
-      </div>
+          </Card>
+      </AuthShell>
     );
   }
 
   // --- loading ---
   if (!item) {
-    return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <Spinner />
-      </div>
-    );
+    return <PageState title="Loading confirmation" />;
   }
 
   // --- loaded (pending) ---
   const requiredTypedResource = item.action === "delete_volume"
     ? item.resource_id
-    : item.action === "purge_environment"
+    : item.action === "purge_environment" || item.action === "delete_bucket"
       ? item.resource_name
       : undefined;
   const typedResourceMatches = requiredTypedResource === undefined || typedResource.trim() === requiredTypedResource;
@@ -136,13 +122,8 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
   const ConfirmationIcon = presentation.destructive ? Trash2 : Check;
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <div className="flex items-center gap-2 mb-8 justify-center">
-          <ConfirmationIcon size={24} className="text-fg" />
-          <h1 className="font-mono font-bold text-lg text-fg tracking-wider uppercase">Confirm Action</h1>
-        </div>
-        <div className="bg-bg-raised border-2 border-fg shadow-neo p-6">
+    <AuthShell icon={<ConfirmationIcon size={24} />} title="Confirm Action">
+        <Card className="p-6">
           <p className="font-mono text-[11px] text-muted mb-4">
             A CLI command is requesting confirmation{presentation.destructive ? " for a destructive action" : ""}. Review the details below before continuing.
           </p>
@@ -152,7 +133,7 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
           {requiredTypedResource !== undefined && (
             <div className="mb-5">
               <label className="block font-mono text-[10px] font-bold text-fg mb-2" htmlFor="resource-confirmation">
-                Type {item.action === "delete_volume" ? "volume ID" : "environment name"}{" "}
+                Type {item.action === "delete_volume" ? "volume ID" : item.action === "delete_bucket" ? "bucket name" : "environment name"}{" "}
                 <span className="select-all">{requiredTypedResource}</span> to permanently delete it
               </label>
               <input
@@ -166,25 +147,30 @@ export function CliConfirmPage({ userCode }: { userCode: string }) {
             </div>
           )}
           <div className="space-y-2">
-            <button
+            <Btn
               type="button"
               onClick={handleConfirm}
+              variant={presentation.destructive ? "danger" : "primary"}
+              size="md"
+              loading={submitting === "confirm"}
               disabled={submitting !== null || !typedResourceMatches}
-              className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35"
+              className="w-full justify-center"
             >
-              {submitting === "confirm" ? <Spinner /> : presentation.confirmLabel}
-            </button>
-            <button
+              {presentation.confirmLabel}
+            </Btn>
+            <Btn
               type="button"
               onClick={handleDeny}
+              variant="ghost"
+              size="md"
+              loading={submitting === "deny"}
               disabled={submitting !== null}
-              className="w-full flex items-center justify-center gap-2 bg-bg-raised text-fg-dim border-2 border-fg shadow-neo-sm hover:bg-alt active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35"
+              className="w-full justify-center"
             >
-              {submitting === "deny" ? <Spinner /> : "Cancel"}
-            </button>
+              Cancel
+            </Btn>
           </div>
-        </div>
-      </div>
-    </div>
+        </Card>
+    </AuthShell>
   );
 }

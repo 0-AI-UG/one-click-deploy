@@ -89,7 +89,7 @@ describe("embedded OCD skill", () => {
     for (const command of [
       "deploy", "release", "apps", "logs", "restart", "rollback", "promote", "pause",
       "unpause", "envs", "stack", "ops", "servers",
-      "ssh", "app", "scale", "resources", "volumes", "runners",
+      "ssh", "app", "scale", "resources", "volumes", "buckets", "runners",
     ]) {
       expect(cli).toContain(`ocd ${command}`);
     }

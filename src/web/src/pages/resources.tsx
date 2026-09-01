@@ -1,13 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { get } from "../api/client.ts";
 import { runCliAction, runConfirmedCliAction } from "../api/cli-actions.ts";
-import { Card, Btn, Table, EmptyState, Spinner, showToast, confirm } from "../components/ui.tsx";
+import { Card, Btn, Table, EmptyState, InfoTip, showToast, confirm, PageShell, PageHeader, PageState } from "../components/ui.tsx";
 import { useActiveOperations } from "../hooks/useOperation.ts";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { NeoSelect } from "../components/neo-select.tsx";
 import { useServerTypes, typeOptions, locationOptions } from "../hooks/use-server-types.ts";
-import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, History } from "lucide-react";
-import { InfoTip } from "./app-detail/shared.tsx";
+import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, History, Cloud } from "lucide-react";
 import type { ResourcesData } from "../types.ts";
 import { serverProvisioningResourceId } from "../../../shared/server-provisioning.ts";
 import { InfrastructureTools } from "../components/infrastructure-tools.tsx";
@@ -31,6 +30,8 @@ export function ResourcesPage() {
   const aliveRef = useRef(true);
   const popoverRef = useRef<HTMLDivElement>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [bucketName, setBucketName] = useState("");
+  const [bucketBusy, setBucketBusy] = useState<string | null>(null);
 
   const ops = useActiveOperations(
     (op) => op.kind === "provision_server" || op.kind === "destroy_server",
@@ -158,21 +159,57 @@ export function ResourcesPage() {
     }
   };
 
+  const handleCreateBucket = async () => {
+    const name = bucketName.trim().toLowerCase();
+    if (!name) return showToast("Enter a bucket name", "error");
+    if (!await confirm("Create S3 Bucket", `Create private bucket "${name}" in ${data?.s3_region || "the configured region"}? Hetzner billing starts when the first bucket becomes active.`, true)) return;
+    setBucketBusy(`create:${name}`);
+    try {
+      await runConfirmedCliAction(
+        "buckets.create",
+        { bucket: name },
+        { action: "create_bucket", resourceType: "bucket", resourceId: name },
+      );
+      setBucketName("");
+      await load();
+      showToast("Bucket created", "success");
+    } catch (err: any) {
+      showToast(err.message || "Bucket creation failed", "error");
+    } finally {
+      setBucketBusy(null);
+    }
+  };
+
+  const handleDeleteBucket = async (name: string) => {
+    if (!await confirm("Delete S3 Bucket", `Delete empty bucket "${name}"? OCD will never recursively delete its objects or versions.`, true)) return;
+    const typed = window.prompt(`Type the bucket name "${name}" to confirm deletion:`)?.trim();
+    if (typed !== name) return showToast("Bucket name did not match; deletion cancelled", "error");
+    setBucketBusy(`delete:${name}`);
+    try {
+      await runConfirmedCliAction(
+        "buckets.delete",
+        { bucket: name },
+        { action: "delete_bucket", resourceType: "bucket", resourceId: name, typedResource: typed },
+      );
+      await load();
+      showToast("Bucket deleted", "success");
+    } catch (err: any) {
+      showToast(err.message || "Bucket deletion failed", "error");
+    } finally {
+      setBucketBusy(null);
+    }
+  };
+
   const fmtPrice = (eur: number | null | undefined) => {
     if (eur == null) return "—";
     return `€${eur.toFixed(2)}`;
   };
 
-  if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
+  if (loading) return <PageState title="Loading resources" />;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <HardDrive size={18} className="text-fg" />
-          <h1 className="font-mono font-bold text-sm text-fg uppercase">Resources</h1>
-        </div>
-        <Btn variant="ghost" onClick={async () => {
+    <PageShell>
+      <PageHeader title="Resources" description="Servers, volumes, S3 buckets, capacity, and infrastructure cost." actions={<Btn variant="ghost" onClick={async () => {
           setLoading(true);
           try {
             await runCliAction("servers.refresh");
@@ -182,8 +219,7 @@ export function ResourcesPage() {
             showToast(error instanceof Error ? error.message : "Refresh failed", "error");
             setLoading(false);
           }
-        }}><RefreshCw size={13} /> Refresh inventory</Btn>
-      </div>
+        }}><RefreshCw size={13} /> Refresh inventory</Btn>} />
 
       {/* Cost estimate */}
       {data?.totals && (
@@ -305,6 +341,56 @@ export function ResourcesPage() {
         )}
       </Card>
 
+      {/* Object storage */}
+      <Card className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Cloud size={14} className="text-fg" />
+          <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">S3 Buckets ({data?.buckets?.length || 0})</h3>
+          {data?.s3_configured && <span className="font-mono text-[8px] text-muted uppercase">Hetzner · {data.s3_region}</span>}
+        </div>
+        {!data?.s3_configured ? (
+          <EmptyState message="Hetzner S3 is not configured. Add S3 credentials under Admin → Infrastructure." />
+        ) : data.s3_error ? (
+          <div className="border-2 border-accent-red bg-accent-red/10 p-3 font-mono text-[10px] text-accent-red">{data.s3_error}</div>
+        ) : (
+          <>
+            <PermissionGate permission="buckets.create">
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="text"
+                  value={bucketName}
+                  onChange={(event) => setBucketName(event.target.value)}
+                  placeholder="globally-unique-bucket-name"
+                  className="min-w-0 flex-1 font-mono text-[10px]"
+                />
+                <Btn size="xs" onClick={handleCreateBucket} loading={bucketBusy?.startsWith("create:") === true} disabled={!bucketName.trim()}>
+                  <Plus size={11} /> Create private bucket
+                </Btn>
+              </div>
+            </PermissionGate>
+            {!data.buckets.length ? <EmptyState message="No buckets in this region" /> : (
+              <Table headers={["Name", "Region", "Created", "Endpoint", ""]}>
+                {data.buckets.map((bucket) => (
+                  <tr key={bucket.name} className="hover:bg-alt/50">
+                    <td className="py-2 px-3 font-bold">{bucket.name}</td>
+                    <td className="py-2 px-3 text-fg-dim">{bucket.region}</td>
+                    <td className="py-2 px-3 text-fg-dim">{bucket.createdAt ? new Date(bucket.createdAt).toLocaleString() : "—"}</td>
+                    <td className="py-2 px-3 font-mono text-[9px] text-fg-dim">{bucket.endpoint}</td>
+                    <td className="py-2 px-3">
+                      <PermissionGate permission="buckets.delete">
+                        <Btn size="xs" variant="danger" loading={bucketBusy === `delete:${bucket.name}`} onClick={() => handleDeleteBucket(bucket.name)}>
+                          <Trash2 size={11} />
+                        </Btn>
+                      </PermissionGate>
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            )}
+          </>
+        )}
+      </Card>
+
       {/* Volumes */}
       <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">
@@ -379,6 +465,6 @@ export function ResourcesPage() {
       </Card>
 
       <InfrastructureTools />
-    </div>
+    </PageShell>
   );
 }

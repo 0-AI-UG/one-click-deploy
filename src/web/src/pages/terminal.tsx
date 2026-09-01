@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "../stores/auth.ts";
-import { Btn, Spinner } from "../components/ui.tsx";
+import { Btn, Spinner, PageShell, PageHeader, StatusBadge, InlineNotice } from "../components/ui.tsx";
 import { TerminalViewport, type TerminalViewportHandle } from "../components/terminal-viewport.tsx";
 import { ArrowLeft } from "lucide-react";
 
@@ -165,15 +165,9 @@ export function TerminalPage({ kind, id }: Props) {
     : "text-accent-red";
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6">
-      <div className="flex items-center gap-3 mb-4">
-        <Btn variant="ghost" onClick={() => window.history.back()}><ArrowLeft size={14} /></Btn>
-        <h1 className="font-mono font-bold text-sm text-fg uppercase">
-          Terminal: {kind} #{id}
-        </h1>
-        <span className={`font-mono text-[9px] uppercase tracking-wider ${statusColor}`}>{status}</span>
-      </div>
-      {error && <div className="font-mono text-[10px] text-red-500 mb-2">{error}</div>}
+    <PageShell>
+      <PageHeader title={`Terminal: ${kind} #${id}`} actions={<StatusBadge status={status} />} />
+      {error && <InlineNotice tone="danger">{error}</InlineNotice>}
       <div className="relative">
         <TerminalViewport
           key={`${kind}:${id}`}
@@ -181,8 +175,7 @@ export function TerminalPage({ kind, id }: Props) {
           onReady={connect}
           onData={handleData}
           onResize={handleResize}
-          className="border-2 border-fg bg-black"
-          style={{ height: "70vh" }}
+          className="h-[calc(100dvh-220px)] min-h-[320px] border-2 border-fg bg-black md:h-[70vh]"
         />
         {(status === "disconnected" || status === "connecting" || status === "ended") && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60">
@@ -195,6 +188,6 @@ export function TerminalPage({ kind, id }: Props) {
           </div>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

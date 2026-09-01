@@ -17,7 +17,7 @@ import { ssh } from "./commands/ssh.ts";
 import { skill } from "./commands/skill.ts";
 import { app } from "./commands/app.ts";
 import { scale } from "./commands/scale.ts";
-import { resources, volumes } from "./commands/resources.ts";
+import { buckets, resources, volumes } from "./commands/resources.ts";
 import { gc } from "./commands/gc.ts";
 import { manifest } from "./commands/manifest.ts";
 import { runners } from "./commands/runners.ts";
@@ -49,6 +49,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   scale,
   resources,
   volumes,
+  buckets,
   gc,
   manifest,
   runners,
@@ -92,6 +93,7 @@ ${BOLD}Commands:${RESET}
   source                 Connect private Git checkout credentials
   resources              Inventory and estimated cost
   volumes                Manage attached and retained volumes
+  buckets                Manage Hetzner S3 buckets
   gc [--server X]        Preview safe disk garbage collection (--execute to apply)
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session

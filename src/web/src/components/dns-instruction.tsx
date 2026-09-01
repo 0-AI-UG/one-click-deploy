@@ -2,9 +2,9 @@ import { CopyButton } from "./ui.tsx";
 import type { DnsInstruction } from "../types.ts";
 
 const statusClass: Record<DnsInstruction["status"], string> = {
-  correct: "bg-green-200",
-  pending: "bg-yellow-200",
-  conflicting: "bg-red-200",
+  correct: "bg-accent/30",
+  pending: "bg-accent-amber/30",
+  conflicting: "bg-accent-red/20",
   not_applicable: "bg-alt",
 };
 

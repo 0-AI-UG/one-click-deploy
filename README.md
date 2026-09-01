@@ -100,6 +100,7 @@ managed provider volumes; `ocd servers delete app-1` only disconnects the host.
 - Optionally trigger full reconciliation from signed GitHub push webhooks, without Actions minutes
 - Connect operator-owned stateless VPSs without cloud credentials
 - Optionally provision managed Hetzner Cloud servers, volumes, networks, and firewalls
+- Manage private Hetzner Object Storage buckets with encrypted S3 credentials
 - Automatic TLS via Traefik and Let's Encrypt HTTP-01; provider-neutral DNS instructions
 - Horizontal scaling, auto-scaling, pause/resume
 - Image-backed apps for databases, caches, and other infrastructure; reusable manifests can live in a repository catalog
@@ -110,6 +111,7 @@ managed provider volumes; `ocd servers delete app-1` only disconnects the host.
 
 PostgreSQL app recovery: [clean and empty-target restore workflows](docs/postgresql-restore.md).
 Retained volume recovery: [grace-period and reattachment workflow](docs/volume-recovery.md).
+Hetzner S3: [connection, bucket management, and safety model](docs/object-storage.md).
 Build delivery: [architecture, cache, failure handling, and operator checks](docs/build-workers.md).
 
 ## CLI-only deployments

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { get, post } from "../api/client.ts";
-import { Card, Btn, Spinner, showToast } from "../components/ui.tsx";
+import { Card, Btn, Spinner, showToast, PageShell, PageHeader } from "../components/ui.tsx";
 import { User, Shield, Fingerprint, Trash2, LogOut, GitBranch, LinkIcon, Unlink } from "lucide-react";
 import { startRegistration, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { logout, useAuth, updateUser } from "../stores/auth.ts";
@@ -92,7 +92,7 @@ function SecuritySection() {
                 <button
                   onClick={() => deletePasskey(pk.id, pk.name)}
                   disabled={busy}
-                  className="text-muted hover:text-red-500 transition-colors disabled:opacity-35"
+                  className="text-muted hover:text-accent-red transition-colors disabled:opacity-35"
                 >
                   <Trash2 size={12} />
                 </button>
@@ -201,7 +201,7 @@ function GitHubSection() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="font-mono text-[11px] text-fg font-bold">@{username}</span>
-            <span className="font-mono text-[9px] font-bold uppercase px-2 py-0.5 border-2 border-fg bg-green-200">Linked</span>
+            <span className="font-mono text-[9px] font-bold uppercase px-2 py-0.5 border-2 border-fg bg-accent/30">Linked</span>
           </div>
           <Btn size="xs" loading={busy} onClick={unlinkGitHub}>
             <Unlink size={11} /> Unlink
@@ -224,14 +224,11 @@ function GitHubSection() {
 
 export function AccountPage() {
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
-      <div className="flex items-center gap-2 mb-6">
-        <User size={18} className="text-fg" />
-        <h1 className="font-mono font-bold text-sm text-fg uppercase">Account</h1>
-      </div>
+    <PageShell>
+      <PageHeader title="Account" description="Profile, connected identities, and sign-in security." />
 
       <GitHubSection />
       <SecuritySection />
-    </div>
+    </PageShell>
   );
 }

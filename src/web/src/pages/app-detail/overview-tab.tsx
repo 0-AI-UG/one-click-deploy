@@ -145,7 +145,7 @@ export function OverviewTab({ app, appId, replicas, metricsHistory, allServers, 
           {availability ? <div className="space-y-2 font-mono text-[10px]">
             <div className="flex justify-between"><span className="text-muted">Uptime</span><span className="font-bold">{availability.uptimePct == null ? "—" : `${availability.uptimePct.toFixed(3)}%`}</span></div>
             <div className="flex justify-between"><span className="text-muted">Mean recovery</span><span>{availability.mttrSeconds == null ? "—" : `${Math.round(availability.mttrSeconds)}s`}</span></div>
-            <div className="flex justify-between"><span className="text-muted">Placement now</span><span className={availability.current.meetsTarget ? "text-green-600" : "text-accent-red"}>{availability.current.running}/{availability.current.desired} replicas · {availability.current.distinctHosts} hosts · {availability.current.distinctLocations} locations</span></div>
+            <div className="flex justify-between"><span className="text-muted">Placement now</span><span className={availability.current.meetsTarget ? "text-fg" : "text-accent-red"}>{availability.current.running}/{availability.current.desired} replicas · {availability.current.distinctHosts} hosts · {availability.current.distinctLocations} locations</span></div>
             <div className="flex justify-between"><span className="text-muted">Samples</span><span>{availability.sampleCount}</span></div>
           </div> : <p className="font-mono text-[10px] text-muted">Availability data unavailable</p>}
         </Card>

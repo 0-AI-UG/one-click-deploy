@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { ArrowLeft, RefreshCw, ScrollText, Wrench } from "lucide-react";
+import { RefreshCw, ScrollText, Wrench } from "lucide-react";
 import { useOperation, humanizeStep, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
-import { Spinner, confirm, Btn, showToast } from "../components/ui.tsx";
+import { confirm, Btn, showToast, Badge, PageShell, PageHeader, PageState, SectionHeader } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { runCliAction, runConfirmedCliAction } from "../api/cli-actions.ts";
 
@@ -23,11 +23,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
   const [actionBusy, setActionBusy] = useState<"cancel" | "retry" | "finalize" | null>(null);
 
   if (!op) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Spinner />
-      </div>
-    );
+    return <PageState title="Loading operation" />;
   }
 
   const active = !TERMINAL_STATUSES.has(op.status);
@@ -80,49 +76,30 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
-      <div className="mb-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = "#/engine"; }}><ArrowLeft size={14} /></Btn>
-      </div>
-
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="font-mono text-xl font-bold uppercase tracking-wider">{op.kind}</h1>
-            <span className="font-mono text-sm text-fg-dim">#{op.id}</span>
-            <span
-              className={`font-mono text-[10px] font-bold uppercase tracking-wider px-2 py-1 border-2 border-fg ${
-                op.status === "done"
-                  ? "bg-accent text-fg"
-                  : op.status === "running"
-                    ? "bg-accent-blue text-white"
-                    : op.status === "compensation_failed"
-                      ? "bg-accent-red text-white border-dashed"
-                      : op.status === "failed" || op.status === "compensated"
-                        ? "bg-accent-red text-white"
-                        : op.status === "compensating"
-                        ? "bg-accent-amber text-fg"
-                        : "bg-alt text-fg"
-              }`}
-            >
-              {op.status}
-            </span>
-          </div>
-          <div className="mt-2 text-xs text-fg-dim font-mono">
+    <PageShell>
+      <PageHeader
+        backHref="#/engine"
+        backLabel="Back to operations"
+        eyebrow={`Operation #${op.id}`}
+        title={op.kind}
+        meta={<>
+          <Badge tone={op.status === "done" ? "success" : op.status === "running" ? "info" : op.status.includes("fail") || op.status === "compensated" ? "danger" : op.status === "compensating" ? "warning" : "neutral"}>{op.status}</Badge>
+          <div className="mt-2">
             {(op.resource_labels ?? op.resource_keys).join(", ")} · triggered by {op.trigger}
             {op.attempt > 1 && ` · attempt ${op.attempt}`}
           </div>
-        </div>
-        <div className="flex items-center gap-2">
+        </>}
+        actions={<>
         {active && (
           <PermissionGate permission="operations.cancel">
-          <button
+          <Btn
+            variant="danger"
             onClick={onCancel}
+            loading={actionBusy === "cancel"}
             disabled={actionBusy !== null}
-            className="font-mono text-[10px] font-bold uppercase tracking-wider border-2 border-fg bg-accent-red text-white px-3 py-1.5 shadow-neo-sm hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-neo-none transition-all"
           >
             Cancel
-          </button>
+          </Btn>
           </PermissionGate>
         )}
         {["failed", "compensation_failed", "compensated", "cancelled"].includes(op.status) && (
@@ -139,8 +116,8 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
             </Btn>
           </PermissionGate>
         )}
-        </div>
-      </div>
+        </>}
+      />
 
       <div className="grid grid-cols-3 gap-3 mb-6 text-[10px] font-mono">
         <Meta label="Enqueued" value={fmtTs(op.enqueued_at)} />
@@ -158,7 +135,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
       </div>
 
       <section className="mb-6">
-        <h2 className="font-mono text-sm font-bold uppercase tracking-wider mb-3">Steps</h2>
+        <SectionHeader className="mb-3" title="Steps" />
         <div className="flex flex-col gap-1">
           {forward.map((s) => (
             <StepRow key={s.seq} step={s} />
@@ -171,9 +148,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
 
       {op.children && op.children.length > 0 && (
         <section className="mb-6">
-          <h2 className="font-mono text-sm font-bold uppercase tracking-wider mb-3">
-            Child Operations ({op.children.length})
-          </h2>
+          <SectionHeader className="mb-3" title={`Child operations (${op.children.length})`} />
           <div className="flex flex-col gap-1">
             {op.children.map((c) => (
               <a
@@ -199,9 +174,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
 
       {compensations.length > 0 && (
         <section>
-          <h2 className="font-mono text-sm font-bold uppercase tracking-wider mb-3 text-accent-red">
-            Compensations
-          </h2>
+          <SectionHeader className="mb-3" title="Compensations" />
           <div className="flex flex-col gap-1">
             {compensations.map((s) => (
               <StepRow key={s.seq} step={s} />
@@ -209,7 +182,7 @@ export function EngineOpDetailPage({ opId }: { opId: number }) {
           </div>
         </section>
       )}
-    </div>
+    </PageShell>
   );
 }
 

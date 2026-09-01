@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { get } from "../../api/client.ts";
 import { runCliAction, runConfirmedCliAction } from "../../api/cli-actions.ts";
-import { Btn, StatusBadge, Spinner, showToast, confirm } from "../../components/ui.tsx";
+import { Btn, StatusBadge, showToast, confirm, PageShell, PageState } from "../../components/ui.tsx";
 import { PermissionGate } from "../../components/permission-gate.tsx";
 import { TabBar } from "../../components/tab-bar.tsx";
 import { PausedBanner } from "../../components/paused-banner.tsx";
@@ -120,8 +120,8 @@ export function AppDetailPage({ appId }: { appId: number }) {
     }
   };
 
-  if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
-  if (!app) return <div className="text-center py-20 text-muted font-mono text-[10px] uppercase tracking-wider">App not found</div>;
+  if (loading) return <PageState title="Loading app" />;
+  if (!app) return <PageState kind="empty" title="App not found" action={<Btn variant="ghost" onClick={() => { window.location.hash = "#/"; }}>Back to dashboard</Btn>} />;
 
   // Cold-start ETA sub-label for the state badge. Scale-to-zero is a
   // `docker stop` on the tenant host, so wake is always ~1s.
@@ -141,7 +141,7 @@ export function AppDetailPage({ appId }: { appId: number }) {
   ] as const;
 
   return (
-    <div className={isMobile ? "px-4 pb-5 pt-4 animate-fade-in" : "max-w-4xl mx-auto px-4 py-6 animate-fade-in"}>
+    <PageShell className={isMobile ? "!pb-5 !pt-4" : ""}>
       {isMobile ? (
         <div className="mb-5">
           <div className="flex items-start gap-3">
@@ -297,6 +297,6 @@ export function AppDetailPage({ appId }: { appId: number }) {
           }} />
         </PermissionGate>
       </MobileActionSheet>
-    </div>
+    </PageShell>
   );
 }

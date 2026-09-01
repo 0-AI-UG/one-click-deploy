@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { get, put } from "../../api/client.ts";
-import { Card, Btn, Spinner, showToast } from "../../components/ui.tsx";
+import { Card, Btn, showToast, Badge, PageShell, PageHeader, PageState } from "../../components/ui.tsx";
 import { ArrowLeft, Save, Key, ShieldCheck, Target, X } from "lucide-react";
 import { useAuth } from "../../stores/auth.ts";
 import type { AdminUser, AppData, EnvironmentData, PermissionGrant, UserPermissionsResponse } from "../../types.ts";
@@ -75,6 +75,13 @@ const PERMISSION_GROUPS: Array<{ label: string; permissions: Array<{ key: string
     permissions: [
       { key: "volumes.delete", label: "Delete volumes" },
       { key: "volumes.files.read", label: "Browse and read files on a volume" },
+    ],
+  },
+  {
+    label: "Object Storage",
+    permissions: [
+      { key: "buckets.create", label: "Create S3 buckets" },
+      { key: "buckets.delete", label: "Delete empty S3 buckets" },
     ],
   },
   {
@@ -239,25 +246,19 @@ export function UserDetailPage({ userId }: { userId: string }) {
     }
   };
 
-  if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
-  if (!user) return <div className="text-center py-20 text-muted font-mono text-[10px] uppercase tracking-wider">User not found</div>;
+  if (loading) return <PageState title="Loading user" />;
+  if (!user) return <PageState kind="empty" title="User not found" action={<Btn variant="ghost" onClick={() => { window.location.hash = "#/admin"; }}>Back to admin</Btn>} />;
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 animate-fade-in">
-      <div className="flex items-center gap-3 mb-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = "#/admin"; }}><ArrowLeft size={14} /></Btn>
-        <div>
-          <h1 className="font-mono font-bold text-sm text-fg uppercase">{user.username}</h1>
-          <p className="text-[9px] text-muted font-mono mt-0.5 uppercase tracking-wider">
-            {user.isAdmin ? "Admin; has all permissions" : "User; permissions managed below"}
-          </p>
-        </div>
-        {user.isAdmin && (
-          <span className="ml-auto inline-flex items-center gap-1 font-mono text-[9px] font-bold uppercase bg-accent-amber border-2 border-fg px-2 py-1 text-fg shadow-neo-sm">
-            <ShieldCheck size={12} /> Admin
-          </span>
-        )}
-      </div>
+    <PageShell width="md">
+      <PageHeader
+        backHref="#/admin"
+        backLabel="Back to admin"
+        eyebrow="User"
+        title={user.username}
+        description={user.isAdmin ? "Administrator with unrestricted access." : "Permissions and resource scopes for this user."}
+        actions={user.isAdmin ? <Badge tone="warning"><ShieldCheck size={12} /> Admin</Badge> : undefined}
+      />
 
       {/* Permissions */}
       {!user.isAdmin && (
@@ -391,7 +392,7 @@ export function UserDetailPage({ userId }: { userId: string }) {
           </div>
         </Card>
       )}
-    </div>
+    </PageShell>
   );
 }
 

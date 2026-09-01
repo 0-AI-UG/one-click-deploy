@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { post } from "../api/client.ts";
-import { showToast, Spinner, Btn, Field } from "../components/ui.tsx";
+import { showToast, Btn, Field, Card, AuthShell } from "../components/ui.tsx";
 import { KeyRound, Fingerprint, ArrowLeft } from "lucide-react";
 import { startAuthentication, browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { PasskeyUnsupported } from "../components/passkey-unsupported.tsx";
@@ -36,17 +36,12 @@ export function PasswordResetPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <div className="flex items-center gap-2 mb-8 justify-center">
-          <KeyRound size={24} className="text-fg" />
-          <h1 className="font-mono font-bold text-lg text-fg tracking-wider uppercase">Reset Password</h1>
-        </div>
+    <AuthShell icon={<KeyRound size={24} />} title="Reset Password">
 
         {!supported ? (
           <PasskeyUnsupported onBack={() => { window.location.hash = "#/login"; }} />
         ) : (
-          <div className="bg-bg-raised border-2 border-fg shadow-neo p-6">
+          <Card className="p-6">
             <p className="text-[10px] text-muted font-mono mb-4 uppercase tracking-wider">
               Enter your username and new password, then verify with your passkey.
             </p>
@@ -60,20 +55,21 @@ export function PasswordResetPage() {
               <Field label="Confirm new password">
                 <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="••••••••" required minLength={8} />
               </Field>
-              <button
+              <Btn
                 type="submit"
-                disabled={loading}
-                className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35"
+                variant="primary"
+                size="md"
+                loading={loading}
+                className="w-full justify-center"
               >
-                {loading ? <Spinner /> : <><Fingerprint size={14} /><span>Verify & Reset</span></>}
-              </button>
+                <Fingerprint size={14} /><span>Verify & Reset</span>
+              </Btn>
             </form>
             <div className="mt-4 text-center">
               <Btn variant="ghost" onClick={() => { window.location.hash = "#/login"; }}><ArrowLeft size={14} /></Btn>
             </div>
-          </div>
+          </Card>
         )}
-      </div>
-    </div>
+    </AuthShell>
   );
 }

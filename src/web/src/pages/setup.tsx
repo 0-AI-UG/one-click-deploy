@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { post } from "../api/client.ts";
 import { setTempToken } from "../stores/auth.ts";
-import { showToast, Spinner, Card, Field } from "../components/ui.tsx";
+import { showToast, Card, Field, Btn, AuthShell } from "../components/ui.tsx";
 import { Terminal, ArrowRight, Key } from "lucide-react";
 
 export function SetupPage() {
@@ -33,13 +33,7 @@ export function SetupPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-lg animate-slide-up">
-        <div className="text-center mb-6">
-          <Terminal size={32} className="text-fg mx-auto mb-3" />
-          <h1 className="font-mono font-bold text-lg text-fg tracking-wider uppercase">Initial Setup</h1>
-          <p className="text-[10px] text-muted font-mono mt-1 uppercase tracking-wider">Create the administrator account</p>
-        </div>
+    <AuthShell icon={<Terminal size={32} />} title="Initial Setup" description="Create the administrator account" width="lg">
         <Card className="p-6">
           <div className="space-y-4">
             <div className="flex items-center gap-2 mb-2">
@@ -59,12 +53,11 @@ export function SetupPage() {
             <p className="text-[9px] font-mono text-muted uppercase tracking-wider">
               Cloud credentials are optional and can be configured later. You can also connect an existing server.
             </p>
-            <button onClick={handleSubmit} disabled={loading} className="w-full flex items-center justify-center gap-2 bg-accent text-fg border-2 border-fg shadow-neo-sm hover:shadow-neo hover:-translate-x-px hover:-translate-y-px active:translate-x-0.5 active:translate-y-0.5 active:shadow-neo-none px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-35">
-              {loading ? <Spinner /> : <><span>Complete Setup</span><ArrowRight size={14} /></>}
-            </button>
+            <Btn onClick={handleSubmit} variant="primary" size="md" loading={loading} className="w-full justify-center">
+              <span>Complete Setup</span><ArrowRight size={14} />
+            </Btn>
           </div>
         </Card>
-      </div>
-    </div>
+    </AuthShell>
   );
 }

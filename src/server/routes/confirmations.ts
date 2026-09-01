@@ -21,6 +21,8 @@ const CONFIRMABLE_ACTIONS = [
   "delete_volume",
   "cancel_operation",
   "create_server",
+  "create_bucket",
+  "delete_bucket",
   "promote_app",
   "promote_stack",
 ] as const;
@@ -115,6 +117,11 @@ export async function handleCreateConfirmation(request: Request): Promise<Respon
       summary =
         `Allow creation of one or more billable provider servers as required for ${plan.reason}: ` +
         `${plan.serverType} in ${plan.location}, pool${plan.pools.length === 1 ? "" : "s"} ${plan.pools.join(", ")}.`;
+    } else if (action === "create_bucket") {
+      const region = db.getSettings().hetzner_s3_region || "fsn1";
+      summary = `Create private Hetzner S3 bucket "${resourceId}" in ${region}. Creating the first active bucket starts Hetzner Object Storage billing.`;
+    } else if (action === "delete_bucket") {
+      summary = `Delete empty Hetzner S3 bucket "${resourceId}". OCD will refuse to recursively delete objects or versions.`;
     } else if (action === "promote_app") {
       const match = /^(\d+):(\d+)$/.exec(resourceId);
       const source = match ? db.getApp(Number(match[1])) : null;
@@ -170,6 +177,8 @@ export async function handleLookupConfirmation(request: Request, userCode: strin
 
     const resourceName = pending.action === "purge_environment"
       ? db.getDeletedEnvironment(Number(pending.resourceId))?.name
+      : pending.action === "delete_bucket"
+        ? pending.resourceId
       : undefined;
 
     return Response.json({
@@ -197,6 +206,14 @@ export async function handleConfirmConfirmation(request: Request, userCode: stri
       if (body.typed_resource_id !== pending.resourceId) {
         return Response.json(
           { error: `Type volume ID ${pending.resourceId} to confirm permanent deletion` },
+          { status: 400, headers: corsHeaders },
+        );
+      }
+    } else if (pending.action === "delete_bucket") {
+      const body = await request.json().catch(() => ({})) as { typed_resource_name?: string };
+      if (body.typed_resource_name !== pending.resourceId) {
+        return Response.json(
+          { error: `Type bucket name ${pending.resourceId} to confirm deletion` },
           { status: 400, headers: corsHeaders },
         );
       }

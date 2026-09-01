@@ -122,6 +122,7 @@ ocd servers enrollment-key
 ocd servers connect --name=X --address=X --private-address=X --host-key='...'
 ocd resources
 ocd volumes
+ocd buckets <list|create|delete>
 ocd ssh
 ```
 

@@ -1,7 +1,7 @@
 import { ArrowLeft, Download, ScrollText, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { get } from "../api/client.ts";
-import { Card, Btn, Spinner } from "../components/ui.tsx";
+import { Card, Btn, Spinner, PageShell, PageHeader } from "../components/ui.tsx";
 import { LogViewer } from "../components/log-viewer.tsx";
 import { useOperation, TERMINAL_STATUSES } from "../hooks/useOperation.ts";
 
@@ -71,29 +71,19 @@ export function EngineOpLogsPage({ opId }: { opId: number }) {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 animate-fade-in">
-      <div className="mb-6">
-        <Btn variant="ghost" onClick={() => { window.location.hash = `#/engine/op/${opId}`; }}>
-          <ArrowLeft size={14} />
-        </Btn>
-      </div>
-
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="font-mono text-xl font-bold uppercase tracking-wider">
-            Logs
-            <span className="ml-2 font-mono text-sm text-fg-dim">
-              {op ? op.kind : ""} #{opId}
-            </span>
-          </h1>
-          {op && (
-            <div className="mt-2 text-xs text-fg-dim font-mono">
+    <PageShell>
+      <PageHeader
+        backHref={`#/engine/op/${opId}`}
+        backLabel="Back to operation"
+        eyebrow="Operation logs"
+        title={op ? `${op.kind} #${opId}` : `Operation #${opId}`}
+        meta={op && (
+            <>
               {(op.resource_labels ?? op.resource_keys).join(", ")} · status {op.status}
               {active ? " · live" : ""}
-            </div>
-          )}
-        </div>
-      </div>
+            </>
+        )}
+      />
 
       {!loaded && !op ? (
         <div className="min-h-[200px] flex items-center justify-center">
@@ -123,6 +113,6 @@ export function EngineOpLogsPage({ opId }: { opId: number }) {
           />
         </Card>
       )}
-    </div>
+    </PageShell>
   );
 }

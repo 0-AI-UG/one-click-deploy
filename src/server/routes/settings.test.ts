@@ -42,6 +42,11 @@ const fakeProvider = {
 mock.module("../../shared/providers/index.ts", () => ({
   hetzner: fakeProvider,
 }));
+const realS3 = await import("../../engine/hetzner/s3.ts");
+mock.module("../../engine/hetzner/s3.ts", () => ({
+  ...realS3,
+  listBuckets: async () => [],
+}));
 
 import * as db from "../../shared/db.ts";
 import { secretStore } from "../../shared/secret-store.ts";
@@ -63,6 +68,8 @@ beforeEach(async () => {
   await secretStore.delete("hetzner_api_token");
   await secretStore.delete("github_oauth_client_secret");
   await secretStore.delete("oci_registry_password");
+  await secretStore.delete("hetzner_s3_access_key");
+  await secretStore.delete("hetzner_s3_secret_key");
 });
 
 describe("handleGetSettings", () => {
@@ -145,6 +152,57 @@ describe("handleSaveSettings: github_oauth_client_secret", () => {
     await secretStore.set("github_oauth_client_secret", "keeper");
     await handleSaveSettings(req({ github_oauth_client_secret: "abc...xyz" }));
     expect(await secretStore.get("github_oauth_client_secret")).toBe("keeper");
+  });
+});
+
+describe("handleSaveSettings: Hetzner S3", () => {
+  test("stores both S3 keys encrypted and returns only masked values", async () => {
+    const r = await handleSaveSettings(req({
+      hetzner_s3_access_key: "S3ACCESSKEY123456",
+      hetzner_s3_secret_key: "s3-secret-value-123456789",
+      hetzner_s3_region: "nbg1",
+    }));
+    expect(r.status).toBe(200);
+    expect(await secretStore.get("hetzner_s3_access_key")).toBe("S3ACCESSKEY123456");
+    expect(await secretStore.get("hetzner_s3_secret_key")).toBe("s3-secret-value-123456789");
+    expect(db.getSettings().hetzner_s3_region).toBe("nbg1");
+    const shown = await (await handleGetSettings(req())).json() as Record<string, unknown>;
+    expect(shown.hetzner_s3_configured).toBe(true);
+    expect(shown.hetzner_s3_access_key).not.toBe("S3ACCESSKEY123456");
+    expect(shown.hetzner_s3_secret_key).not.toBe("s3-secret-value-123456789");
+  });
+
+  test("rejects incomplete credentials and unsupported regions", async () => {
+    const incomplete = await handleSaveSettings(req({
+      hetzner_s3_access_key: "only-access-key",
+      hetzner_s3_secret_key: "",
+      hetzner_s3_region: "fsn1",
+    }));
+    expect(incomplete.status).toBe(400);
+    const region = await handleSaveSettings(req({
+      hetzner_s3_access_key: "access-key",
+      hetzner_s3_secret_key: "secret-key",
+      hetzner_s3_region: "ash1",
+    }));
+    expect(region.status).toBe(400);
+  });
+
+  test("preserves masked credentials and clears both explicit empty values", async () => {
+    await secretStore.set("hetzner_s3_access_key", "keep-access-key");
+    await secretStore.set("hetzner_s3_secret_key", "keep-secret-key");
+    await handleSaveSettings(req({
+      hetzner_s3_access_key: "keep...-key",
+      hetzner_s3_secret_key: "keep...-key",
+      hetzner_s3_region: "fsn1",
+    }));
+    expect(await secretStore.get("hetzner_s3_access_key")).toBe("keep-access-key");
+    await handleSaveSettings(req({
+      hetzner_s3_access_key: "",
+      hetzner_s3_secret_key: "",
+      hetzner_s3_region: "fsn1",
+    }));
+    expect(await secretStore.get("hetzner_s3_access_key")).toBeNull();
+    expect(await secretStore.get("hetzner_s3_secret_key")).toBeNull();
   });
 });
 

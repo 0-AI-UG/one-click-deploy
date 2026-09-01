@@ -74,6 +74,10 @@ export const ALL_PERMISSIONS = [
   /** Browsing and reading file contents off a volume — i.e. application data. */
   "volumes.files.read",
 
+  // --- Object storage -------------------------------------------------
+  "buckets.create",
+  "buckets.delete",
+
   // --- Other cloud resources ------------------------------------------
   "resources.view",
   "resources.delete",

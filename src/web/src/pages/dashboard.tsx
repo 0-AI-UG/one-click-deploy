@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { get } from "../api/client.ts";
 import { runCliAction, runConfirmedCliAction } from "../api/cli-actions.ts";
-import { Card, StatusBadge, Btn, EmptyState, Spinner, showToast, confirm, CopyButton } from "../components/ui.tsx";
+import { Card, StatusBadge, Btn, EmptyState, showToast, confirm, CopyButton, PageShell, PageHeader, PageState } from "../components/ui.tsx";
 import { PermissionGate } from "../components/permission-gate.tsx";
 import { useActiveOperations } from "../hooks/useOperation.ts";
 import { Globe, RefreshCw, Play, Pause, RotateCcw, Trash2, ExternalLink, Check, Box, Boxes, ChevronDown, ChevronRight, ArrowUpFromLine, MoreVertical, Settings2 } from "lucide-react";
@@ -367,7 +367,7 @@ export function DashboardPage() {
     );
   };
 
-  if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
+  if (loading) return <PageState title="Loading dashboard" />;
 
   const { apps } = data;
 
@@ -466,7 +466,7 @@ export function DashboardPage() {
         </div>
 
         {!nothingDeployed && (
-          <div className="mb-5 grid grid-cols-3 border-2 border-fg bg-bg-raised p-1 shadow-neo-sm">
+          <div className="mb-5 grid grid-cols-2 border-2 border-fg bg-bg-raised p-1 shadow-neo-sm">
             {(["all", "apps"] as const).map((filter) => (
               <button key={filter} onClick={() => setMobileFilter(filter)} className={`min-h-10 px-2 font-mono text-[9px] font-bold uppercase ${mobileFilter === filter ? "bg-fg text-accent" : "text-muted"}`}>{filter}</button>
             ))}
@@ -508,17 +508,16 @@ export function DashboardPage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-mono font-bold text-sm text-fg uppercase">Dashboard</h1>
-          <p className="text-[10px] text-muted font-mono mt-0.5">
+    <PageShell>
+      <PageHeader
+        eyebrow="Your infrastructure"
+        title="Dashboard"
+        meta={<>
             {apps.length} app{apps.length !== 1 ? "s" : ""}
             {stacks.length > 0 && `, ${stacks.length} stack${stacks.length !== 1 ? "s" : ""}`}
-          </p>
-        </div>
-        <Btn onClick={load} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>
-      </div>
+        </>}
+        actions={<Btn onClick={load} variant="ghost"><RefreshCw size={13} /> Refresh</Btn>}
+      />
 
       {nothingDeployed ? (
         <EmptyState message="Nothing deployed yet" icon={Box} />
@@ -542,6 +541,6 @@ export function DashboardPage() {
 
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

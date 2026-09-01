@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import { useState, useEffect, useRef, useLayoutEffect, useId } from "react";
 import { createPortal } from "react-dom";
 import { portalAnchorRect } from "./ui.tsx";
 
@@ -13,10 +13,17 @@ export function NeoSelect({ value, options, onChange, placeholder, compact, disa
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [highlighted, setHighlighted] = useState(0);
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const selected = options.find(o => o.value === value);
+  const listboxId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    setHighlighted(Math.max(0, options.findIndex((option) => option.value === value)));
+  }, [open, options, value]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -42,9 +49,42 @@ export function NeoSelect({ value, options, onChange, placeholder, compact, disa
       if (menuRef.current?.contains(target)) return;
       setOpen(false);
     };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
     document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
   }, [open]);
+
+  const choose = (index: number) => {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open) {
+        setOpen(true);
+        return;
+      }
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      setHighlighted((index) => (index + direction + options.length) % Math.max(1, options.length));
+    }
+    if (event.key === "Enter" && open) {
+      event.preventDefault();
+      choose(highlighted);
+    }
+  };
 
   return (
     <>
@@ -53,6 +93,12 @@ export function NeoSelect({ value, options, onChange, placeholder, compact, disa
         type="button"
         disabled={disabled}
         onClick={() => setOpen(!open)}
+        onKeyDown={onKeyDown}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-haspopup="listbox"
+        aria-activedescendant={open && options[highlighted] ? `${listboxId}-${highlighted}` : undefined}
         className={`w-full text-left bg-bg-raised border-2 border-fg font-mono flex items-center transition-all ${
           disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer"
         } ${compact ? "px-1.5 py-[3px] text-[9px]" : "px-2.5 py-[7px] text-[10px]"
@@ -71,6 +117,8 @@ export function NeoSelect({ value, options, onChange, placeholder, compact, disa
       {open && pos && createPortal(
         <div
           ref={menuRef}
+          id={listboxId}
+          role="listbox"
           data-neoselect-menu
           style={{ position: "fixed", top: pos.top, left: pos.left, minWidth: pos.width }}
           className="z-50 bg-bg-raised border-2 border-fg shadow-neo max-h-40 overflow-auto"
@@ -83,11 +131,15 @@ export function NeoSelect({ value, options, onChange, placeholder, compact, disa
           {options.map(opt => (
             <button
               key={opt.value}
+              id={`${listboxId}-${options.indexOf(opt)}`}
               type="button"
-              onClick={() => { onChange(opt.value); setOpen(false); }}
+              role="option"
+              aria-selected={opt.value === value}
+              onMouseEnter={() => setHighlighted(options.indexOf(opt))}
+              onClick={() => choose(options.indexOf(opt))}
               className={`w-full text-left block font-mono border-b border-fg cursor-pointer text-fg ${
                 compact ? "px-1.5 py-1 text-[9px]" : "px-2.5 py-1.5 text-[10px]"
-              } ${opt.value === value ? "bg-accent font-bold" : "bg-transparent hover:bg-alt"}`}
+              } ${options.indexOf(opt) === highlighted ? "bg-alt" : "bg-transparent"} ${opt.value === value ? "font-bold" : ""}`}
             >
               {opt.label}
             </button>

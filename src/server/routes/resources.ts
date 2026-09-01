@@ -9,6 +9,7 @@ import { enforceConfirmation } from "../lib/action-confirm.ts";
 import { serverProvisioningResourceId } from "../../shared/server-provisioning.ts";
 import { isManagedHetznerServer } from "../../shared/infrastructure.ts";
 import { secretStore } from "../../shared/secret-store.ts";
+import { getHetznerS3Credentials, listBuckets, type HetznerS3Bucket } from "../../engine/hetzner/s3.ts";
 export async function handleGetResources(request: Request): Promise<Response> {
   try {
     await requirePermission(request, "resources.view");
@@ -178,6 +179,18 @@ export async function handleGetResources(request: Request): Promise<Response> {
     interface ResourceWithCost { monthly_eur: number | null }
     const sum = (arr: ResourceWithCost[]) =>
       arr.reduce((acc, x) => acc + (typeof x.monthly_eur === "number" ? x.monthly_eur : 0), 0);
+    const s3Credentials = await getHetznerS3Credentials();
+    let buckets: HetznerS3Bucket[] = [];
+    let s3Error = "";
+    if (s3Credentials) {
+      try {
+        buckets = await listBuckets(s3Credentials);
+      } catch (error) {
+        s3Error = error instanceof Error ? error.message : "Could not load Hetzner S3 buckets";
+        console.error("resources: failed to fetch S3 buckets:", error);
+      }
+    }
+
     const totals = {
       currency,
       servers: sum(servers),
@@ -185,7 +198,15 @@ export async function handleGetResources(request: Request): Promise<Response> {
       total: sum(servers) + sum(volumes),
     };
 
-    return Response.json({ servers, volumes, totals }, { headers: corsHeaders });
+    return Response.json({
+      servers,
+      volumes,
+      buckets,
+      s3_configured: !!s3Credentials,
+      s3_region: s3Credentials?.region ?? "",
+      s3_error: s3Error,
+      totals,
+    }, { headers: corsHeaders });
   } catch (error) {
     return handleError(error);
   }

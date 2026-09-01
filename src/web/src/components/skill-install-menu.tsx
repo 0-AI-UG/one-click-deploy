@@ -114,7 +114,7 @@ export function SkillInstallMenu() {
         aria-expanded={open}
       >
         {copiedAgent ? (
-          <Check size={13} className="text-green-700" />
+          <Check size={13} className="text-fg" />
         ) : (
           <Sparkles size={13} />
         )}
