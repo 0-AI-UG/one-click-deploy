@@ -10,8 +10,20 @@ import { HardDrive, Server, Database, Trash2, RefreshCw, Plus, History, Cloud } 
 import type { ResourcesData } from "../types.ts";
 import { serverProvisioningResourceId } from "../../../shared/server-provisioning.ts";
 import { InfrastructureTools } from "../components/infrastructure-tools.tsx";
+import { TabBar } from "../components/tab-bar.tsx";
+
+type ResourceSection = "overview" | "servers" | "volumes" | "object-storage" | "tools";
+
+const RESOURCE_SECTIONS: Array<{ key: ResourceSection; label: string }> = [
+  { key: "overview", label: "Overview" },
+  { key: "servers", label: "Servers" },
+  { key: "volumes", label: "Volumes" },
+  { key: "object-storage", label: "Object Storage" },
+  { key: "tools", label: "Tools" },
+];
 
 export function ResourcesPage() {
+  const [section, setSection] = useState<ResourceSection>("overview");
   const [data, setData] = useState<ResourcesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -221,8 +233,10 @@ export function ResourcesPage() {
           }
         }}><RefreshCw size={13} /> Refresh inventory</Btn>} />
 
+      <TabBar tabs={RESOURCE_SECTIONS} active={section} onChange={setSection} />
+
       {/* Cost estimate */}
-      {data?.totals && (
+      {section === "overview" && data?.totals && (
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider flex items-center gap-1">Estimated Monthly Cost <InfoTip text="Estimates based on Hetzner's list prices. Excludes traffic overage and snapshots." /></h3>
@@ -247,8 +261,35 @@ export function ResourcesPage() {
         </Card>
       )}
 
+      {section === "overview" && (
+        <Card className="overflow-hidden">
+          {[
+            { key: "servers" as const, label: "Servers", value: `${data?.servers?.length || 0} connected resources` },
+            { key: "volumes" as const, label: "Volumes", value: `${data?.volumes?.length || 0} attached or retained volumes` },
+            {
+              key: "object-storage" as const,
+              label: "Object Storage",
+              value: data?.s3_configured
+                ? `${data.buckets?.length || 0} buckets · Hetzner ${data.s3_region}`
+                : "Not configured",
+            },
+            { key: "tools" as const, label: "Tools", value: "Build workers, server enrollment, and disk cleanup" },
+          ].map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => setSection(item.key)}
+              className="flex w-full items-center justify-between gap-4 border-b border-fg/10 px-4 py-3 text-left last:border-b-0 hover:bg-alt/50"
+            >
+              <span className="font-mono text-[10px] font-bold uppercase tracking-wider">{item.label}</span>
+              <span className="font-mono text-[9px] text-muted text-right">{item.value}</span>
+            </button>
+          ))}
+        </Card>
+      )}
+
       {/* Servers */}
-      <Card className="p-4">
+      {section === "servers" && <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">
           <Server size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Servers ({data?.servers?.length || 0})</h3>
@@ -339,10 +380,10 @@ export function ResourcesPage() {
             ))}
           </Table>
         )}
-      </Card>
+      </Card>}
 
       {/* Object storage */}
-      <Card className="p-4">
+      {section === "object-storage" && <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">
           <Cloud size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">S3 Buckets ({data?.buckets?.length || 0})</h3>
@@ -389,10 +430,10 @@ export function ResourcesPage() {
             )}
           </>
         )}
-      </Card>
+      </Card>}
 
       {/* Volumes */}
-      <Card className="p-4">
+      {section === "volumes" && <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">
           <Database size={14} className="text-fg" />
           <h3 className="font-mono text-[9px] text-fg font-bold uppercase tracking-wider">Volumes ({data?.volumes?.length || 0})</h3>
@@ -462,9 +503,9 @@ export function ResourcesPage() {
             )}
           </div>
         )}
-      </Card>
+      </Card>}
 
-      <InfrastructureTools />
+      {section === "tools" && <InfrastructureTools />}
     </PageShell>
   );
 }
