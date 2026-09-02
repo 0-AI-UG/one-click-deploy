@@ -1,5 +1,12 @@
 import { sshExec } from "./ssh.ts";
-import { asUser, log, OCD_IMAGE_LABEL, withExclusiveImageGc } from "./container-common.ts";
+import {
+  asUser,
+  log,
+  OCD_IMAGE_PULL_MARKER_DIR,
+  OCD_IMAGE_LABEL,
+  OCD_RUNTIME_IMAGE_REPOSITORY,
+  withExclusiveImageGc,
+} from "./container-common.ts";
 
 const JOURNALD_LIMITS = `[Journal]\nSystemMaxUse=500M\nSystemKeepFree=1G\nRuntimeMaxUse=100M\nMaxRetentionSec=7day\n`;
 
@@ -81,7 +88,13 @@ export type ServerGcInventory = {
   executed: boolean;
 };
 
-type GcRunOptions = { activeAppNames: string[]; protectedImageRefs?: string[]; execute: boolean };
+type GcRunOptions = {
+  activeAppNames: string[];
+  protectedImageRefs?: string[];
+  activeOperationIds?: number[];
+  buildCacheKeepStorage?: "1GB" | "4GB";
+  execute: boolean;
+};
 
 /** Parse the decimal units emitted by `docker system df`. */
 export function parseDockerSize(value: string): number | null {
@@ -114,6 +127,12 @@ export function parseDockerSize(value: string): number | null {
 export function buildServerGcScript(opts: GcRunOptions): string {
   const activeNames = safeNames(opts.activeAppNames);
   const protectedImageRefs = safeImageRefs(opts.protectedImageRefs ?? []);
+  const activeOperationIds = [...new Set(opts.activeOperationIds ?? [])];
+  if (activeOperationIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+    throw new Error("Unsafe active operation ID in GC protection set");
+  }
+  const activeOperations = activeOperationIds.join(" ");
+  const buildCacheKeepStorage = opts.buildCacheKeepStorage ?? "1GB";
   const activePattern = activeNames.length
     ? activeNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
     : "ocd-no-active-app";
@@ -127,6 +146,12 @@ export function buildServerGcScript(opts: GcRunOptions): string {
     ...protectedImageRefs.map((ref) =>
       `if protected_id=$(docker image inspect --format '{{.Id}}' '${ref}' 2>/dev/null); then protected_images="$protected_images\n$protected_id"; fi`
     ),
+    `for marker in ${OCD_IMAGE_PULL_MARKER_DIR}/*; do`,
+    `  [ -f "$marker" ] || continue;`,
+    `  find "$marker" -mmin -60 -print -quit | grep -q . || continue;`,
+    `  digest=${"${marker##*/}"};`,
+    `  for protected_id in $(docker images --filter "reference=${OCD_RUNTIME_IMAGE_REPOSITORY}/*:$digest" -q --no-trunc); do protected_images="$protected_images\n$protected_id"; done`,
+    `done`,
     "running_containers=$(docker ps -q)",
     "all_containers=$(docker ps -aq)",
     "for cid in $all_containers; do",
@@ -164,6 +189,19 @@ export function buildServerGcScript(opts: GcRunOptions): string {
       `  docker image rm "$id" >/dev/null 2>&1 || { docker image inspect "$id" >/dev/null 2>&1 && removal_ok=false || true; }`,
       `  if [ "$removal_ok" = true ]; then printf 'OCD_REMOVED\\t%s\\n' "$id"; else printf 'OCD_SKIPPED\\t%s\\n' "$id"; fi`,
       "done",
+      `find ${OCD_IMAGE_PULL_MARKER_DIR} -xdev -type f -mmin +60 -delete 2>/dev/null || true`,
+      `find /home/deploy/apps -xdev -mindepth 2 -maxdepth 2 -type d -name .git -prune -exec rm -rf {} + 2>/dev/null || true`,
+      `active_operations=' ${activeOperations} '`,
+      `for dir in /home/deploy/apps/*/.ocd-revision-snapshot-*; do`,
+      `  [ -d "$dir" ] || continue; op_id=${"${dir##*-}"};`,
+      `  case "$op_id" in ''|*[!0-9]*) continue ;; esac;`,
+      `  case "$active_operations" in *" $op_id "*) ;; *) rm -rf "$dir" ;; esac`,
+      `done`,
+      `docker builder prune -af --keep-storage ${buildCacheKeepStorage} >/dev/null 2>&1 || true`,
+      `for builder in $(docker buildx ls --format '{{.Name}}' 2>/dev/null | sort -u); do`,
+      `  docker buildx inspect "$builder" >/dev/null 2>&1 || continue;`,
+      `  docker buildx prune --builder "$builder" -af --keep-storage ${buildCacheKeepStorage} >/dev/null 2>&1 || true`,
+      `done`,
     );
   }
   lines.push(
@@ -249,11 +287,12 @@ async function runServerGc(ip: string, hostKey: string | undefined, opts: GcRunO
 export async function inspectServerGc(
   ip: string,
   hostKey?: string,
-  opts: { activeAppNames?: string[]; protectedImageRefs?: string[] } = {},
+  opts: { activeAppNames?: string[]; protectedImageRefs?: string[]; activeOperationIds?: number[] } = {},
 ): Promise<ServerGcInventory> {
   return runServerGc(ip, hostKey, {
     activeAppNames: opts.activeAppNames ?? [],
     protectedImageRefs: opts.protectedImageRefs,
+    activeOperationIds: opts.activeOperationIds,
     execute: false,
   });
 }
@@ -264,11 +303,18 @@ export async function inspectServerGc(
 export async function garbageCollectServer(
   ip: string,
   hostKey?: string,
-  opts: { activeAppNames?: string[]; protectedImageRefs?: string[] } = {},
+  opts: {
+    activeAppNames?: string[];
+    protectedImageRefs?: string[];
+    activeOperationIds?: number[];
+    buildCacheKeepStorage?: "1GB" | "4GB";
+  } = {},
 ): Promise<ServerGcInventory> {
   return runServerGc(ip, hostKey, {
     activeAppNames: opts.activeAppNames ?? [],
     protectedImageRefs: opts.protectedImageRefs,
+    activeOperationIds: opts.activeOperationIds,
+    buildCacheKeepStorage: opts.buildCacheKeepStorage,
     execute: true,
   });
 }
@@ -308,6 +354,17 @@ export function buildServerPruneSteps(opts: PruneServerOptions = {}): string[] {
         ? `case "$name" in ${protectedContainers}) ;; *) docker container rm -f "$name" >/dev/null 2>&1 || true ;; esac`
         : `docker container rm -f "$name" >/dev/null 2>&1 || true`) +
       ` ;; esac; done`,
+    // Current OCD versions tag every pulled immutable digest locally. Remove
+    // only those owned tags when no running or stopped container uses the
+    // image; operator-owned images remain outside this namespace.
+    `for ref in $(docker images --filter 'reference=${OCD_RUNTIME_IMAGE_REPOSITORY}/*:*' --format '{{.Repository}}:{{.Tag}}'); do ` +
+      `id=$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true); ` +
+      `[ -z "$id" ] && continue; ` +
+      `digest=${"${ref##*:}"}; marker=${OCD_IMAGE_PULL_MARKER_DIR}/$digest; ` +
+      `if [ -f "$marker" ] && find "$marker" -mmin -60 -print -quit | grep -q .; then continue; fi; ` +
+      `if ! docker ps -aq --filter ancestor="$id" | grep -q .; then ` +
+      `docker image rm "$ref" >/dev/null 2>&1 && rm -f "$marker" || true; fi; done; ` +
+      `find ${OCD_IMAGE_PULL_MARKER_DIR} -xdev -type f -mmin +60 -delete 2>/dev/null || true`,
   ];
 
   if (activeAppNames.length > 0) {

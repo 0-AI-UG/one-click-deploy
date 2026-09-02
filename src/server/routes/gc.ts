@@ -2,6 +2,7 @@ import { corsHeaders } from "../lib/cors.ts";
 import { requirePermission } from "../lib/permissions.ts";
 import { handleError } from "../lib/utils.ts";
 import * as db from "../../shared/db.ts";
+import { listPendingOperations, listRunningOperations } from "../../shared/db/operations.ts";
 import { garbageCollectServer, inspectServerGc } from "../../engine/hetzner/prune.ts";
 
 function protectedAppNames(serverId: number): string[] {
@@ -18,6 +19,13 @@ function protectedPanelImages(serverId: number): string[] {
     .filter((deployment) => deployment.status === "deployed")
     .slice(0, 2)
     .map((deployment) => deployment.image_tag);
+}
+
+function activeOperationIds(): number[] {
+  return [...new Set([
+    ...listPendingOperations(10_000),
+    ...listRunningOperations(),
+  ].map((operation) => operation.id))];
 }
 
 function selectedServers(request: Request) {
@@ -43,6 +51,7 @@ export async function handleGcInventory(request: Request): Promise<Response> {
         ...(await inspectServerGc(server.ipv4, server.ssh_host_key || undefined, {
           activeAppNames,
           protectedImageRefs: protectedPanelImages(server.id),
+          activeOperationIds: activeOperationIds(),
         })),
         size_caveat: "Image sizes include shared layers and are not additive; reclaimable bytes is an upper bound.",
       });
@@ -66,6 +75,8 @@ export async function handleGcExecute(request: Request): Promise<Response> {
         ...(await garbageCollectServer(server.ipv4, server.ssh_host_key || undefined, {
           activeAppNames,
           protectedImageRefs: protectedPanelImages(server.id),
+          activeOperationIds: activeOperationIds(),
+          buildCacheKeepStorage: server.pool === "build-workers" ? "4GB" : "1GB",
         })),
         size_caveat: "Image sizes include shared layers. reclaimed_bytes is the observed root-filesystem free-space increase.",
       });

@@ -6,6 +6,8 @@ describe("buildServerGcScript", () => {
     const script = buildServerGcScript({
       activeAppNames: ["api"],
       protectedImageRefs: ["ghcr.io/acme/ocd:sha-abc123"],
+      activeOperationIds: [42, 77],
+      buildCacheKeepStorage: "1GB",
       execute: true,
     });
 
@@ -13,12 +15,18 @@ describe("buildServerGcScript", () => {
     expect(script).toContain("category=reclaimable-foreign");
     expect(script).toContain("category=reclaimable-ocd");
     expect(script).toContain("ghcr.io/acme/ocd:sha-abc123");
+    expect(script).toContain("/home/deploy/.ocd-image-pulls");
+    expect(script).toContain("-mmin -60");
     expect(script).toContain('printf \'%b\\n\' "$protected_images"');
     expect(script).toContain('docker ps -aq --filter ancestor="$id"');
     expect(script).toContain('{{if .Config.Labels}}{{index .Config.Labels "ocd.managed"}}{{end}}');
     expect(script).toContain('\\"($active_pattern):(latest|rollback)\\"');
     expect(script).toContain('docker image rm "$ref"');
     expect(script).not.toContain("docker image rm -f");
+    expect(script).toContain("find /home/deploy/apps");
+    expect(script).toContain("active_operations=' 42 77 '");
+    expect(script).toContain("docker builder prune -af --keep-storage 1GB");
+    expect(script).toContain("docker buildx prune --builder");
     expect(script).toContain("OCD_SPACE");
     expect(Bun.spawnSync({ cmd: ["bash", "-n"], stdin: new Blob([script]) }).exitCode).toBe(0);
   });
@@ -26,6 +34,8 @@ describe("buildServerGcScript", () => {
   test("dry-run does not contain removal or prune commands", () => {
     const script = buildServerGcScript({ activeAppNames: ["api"], execute: false });
     expect(script).not.toContain('docker image rm "$ref"');
+    expect(script).not.toContain("docker builder prune");
+    expect(script).not.toContain("find /home/deploy/apps");
     expect(script).toContain("docker image ls");
   });
 
@@ -41,6 +51,14 @@ describe("buildServerGcScript", () => {
       protectedImageRefs: ["valid:tag'; docker image prune -af"],
       execute: true,
     })).toThrow("Unsafe Docker image reference");
+  });
+
+  test("fails closed for an unsafe active operation id", () => {
+    expect(() => buildServerGcScript({
+      activeAppNames: [],
+      activeOperationIds: [-1],
+      execute: true,
+    })).toThrow("Unsafe active operation ID");
   });
 });
 
@@ -66,6 +84,10 @@ describe("buildServerPruneSteps", () => {
     expect(script).toContain('case "$repo" in api)');
     expect(script).toContain('case "$tag" in latest|rollback)');
     expect(script).toContain('docker ps -aq --filter ancestor="$ref"');
+    expect(script).toContain("reference=ocd-managed/*:*");
+    expect(script).toContain(".ocd-image-pulls");
+    expect(script).toContain("-mmin -60");
+    expect(script).toContain('docker ps -aq --filter ancestor="$id"');
     expect(script).not.toContain("docker container prune");
     expect(script).not.toContain("docker image prune");
   });
@@ -88,6 +110,7 @@ describe("buildServerPruneSteps", () => {
   test("removes orphan containers before attempting stale image removal", () => {
     const steps = buildServerPruneSteps({ activeAppNames: ["api"] });
     expect(steps[0]).toContain("docker container rm");
-    expect(steps[1]).toContain("docker image rm");
+    expect(steps[1]).toContain("ocd-managed");
+    expect(steps[2]).toContain("docker image rm");
   });
 });

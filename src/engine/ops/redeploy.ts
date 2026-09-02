@@ -257,6 +257,11 @@ const snapshotCurrentRevision: Step<RedeployInput, RollbackSnapshot | null> = {
     if (!health.healthy && !health.inconclusive) {
       throw new Error(`Rollback restored the previous container for ${app.name} but it is unhealthy`);
     }
+    try {
+      await discardRemoteRevisionSnapshot(redeploySnapshotTarget(ctx).remote);
+    } catch (err) {
+      ctx.log(`Failed to discard compensated revision snapshot: ${err}`);
+    }
   },
 };
 

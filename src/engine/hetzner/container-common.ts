@@ -20,6 +20,8 @@ export const asUser = (cmd: string) => `su - deploy -c ${shellSingleQuote(cmd)}`
 // other applications on the same host.
 export const OCD_IMAGE_LABEL_KEY = "ocd.managed";
 export const OCD_IMAGE_LABEL = `${OCD_IMAGE_LABEL_KEY}=true`;
+export const OCD_RUNTIME_IMAGE_REPOSITORY = "ocd-managed";
+export const OCD_IMAGE_PULL_MARKER_DIR = "/home/deploy/.ocd-image-pulls";
 export const IMAGE_GC_LOCK_PATH = "/tmp/ocd-image-gc.lock";
 
 /** Coordinate image consumers with host-wide garbage collection. Builds and

@@ -195,6 +195,11 @@ const snapshotCurrentRevision: Step<{ appId: number }, PriorContainerSnapshot | 
     if (!health.healthy && !health.inconclusive) {
       throw new Error(`Rollback restored the previous container for ${app.name} but it is unhealthy`);
     }
+    try {
+      await discardRemoteRevisionSnapshot(rollbackSnapshotTarget(ctx, prior).remote);
+    } catch (err) {
+      ctx.log(`Failed to discard compensated revision snapshot: ${err}`);
+    }
   },
 };
 

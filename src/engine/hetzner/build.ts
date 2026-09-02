@@ -1,11 +1,35 @@
 import { sshExec, sshExecStreaming, describeFailure } from "./ssh.ts";
-import { asUser } from "./container-common.ts";
+import {
+  asUser,
+  OCD_IMAGE_PULL_MARKER_DIR,
+  OCD_RUNTIME_IMAGE_REPOSITORY,
+  withImageGcLease,
+} from "./container-common.ts";
 import { dockerLoginRegistry, type RegistryAuth } from "./registry.ts";
 import { startAppReplica } from "./docker-run.ts";
 import { ensureOcdNetwork } from "./lifecycle.ts";
 import { resolveRegistryCredentialsForImage } from "../registry-config.ts";
 
 const IMMUTABLE_IMAGE = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
+
+/** Local ownership tag for immutable artifacts pulled by OCD. Runtime identity
+ * remains the original registry digest; this tag exists only so maintenance
+ * can distinguish OCD-owned unused images from operator-owned images. */
+export function managedRuntimeImageTag(name: string, imageRef: string): string {
+  if (!/^[a-z0-9][a-z0-9_.-]*$/.test(name) || !IMMUTABLE_IMAGE.test(imageRef)) {
+    throw new Error("Cannot create a managed runtime tag for an invalid app or image");
+  }
+  const digest = imageRef.slice(imageRef.lastIndexOf("sha256:") + "sha256:".length).toLowerCase();
+  return `${OCD_RUNTIME_IMAGE_REPOSITORY}/${name}:${digest}`;
+}
+
+export function managedRuntimeImageMarker(imageRef: string): string {
+  if (!IMMUTABLE_IMAGE.test(imageRef)) {
+    throw new Error("Cannot create a pull marker for a mutable image");
+  }
+  const digest = imageRef.slice(imageRef.lastIndexOf("sha256:") + "sha256:".length).toLowerCase();
+  return `${OCD_IMAGE_PULL_MARKER_DIR}/${digest}`;
+}
 
 /** Pull one immutable OCI runtime artifact. */
 export async function pullImmutableImageAndRun(
@@ -86,9 +110,15 @@ export async function pullImmutableImage(
   }
   try {
     onLog?.(`Pulling immutable image ${opts.imageRef}`);
+    const managedTag = managedRuntimeImageTag(opts.name, opts.imageRef);
+    const pullMarker = managedRuntimeImageMarker(opts.imageRef);
     const pull = await sshExecStreaming(
       ip,
-      asUser(`${auth?.envPrefix ?? ""}docker pull ${opts.imageRef}`),
+      asUser(withImageGcLease(
+        `${auth?.envPrefix ?? ""}docker pull ${opts.imageRef} && ` +
+          `docker image tag ${opts.imageRef} ${managedTag} && ` +
+          `mkdir -p ${OCD_IMAGE_PULL_MARKER_DIR} && touch ${pullMarker}`,
+      )),
       { hostKey: opts.hostKey, onLine: (line) => line.trim() && onLog?.(line) },
     );
     if (pull.exitCode !== 0) throw new Error(describeFailure("Docker image pull failed", pull));
