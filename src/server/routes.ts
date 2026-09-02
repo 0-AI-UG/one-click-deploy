@@ -36,6 +36,11 @@ import { handleConnectServer, handleDeleteServer, handleGetServerEnrollmentKey, 
 import { handleGetSettings, handleSaveSettings, handleGetServerTypes } from "./routes/settings.ts";
 import { handleGetResources, handleGetServerMetricsHistory, handleDeleteResource, handleCreateServer, handleGetVolumeDetail, handleListVolumeFiles, handleGetVolumeFile, handleGetServerDetail, handleGetVolumeDeletionAudit } from "./routes/resources.ts";
 import { handleCreateBucket, handleDeleteBucket, handleListBuckets } from "./routes/buckets.ts";
+import {
+  handleGetPanelReleaseWebhook,
+  handlePanelReleaseWebhook,
+  handleRotatePanelReleaseWebhook,
+} from "./routes/panel-release.ts";
 import { handleWakeApp, handleGetReplicas, handleGetScalingEvents, handleGetAppMetrics, handleGetAppMetricsHistory, handleMigrateReplica } from "./routes/scaling.ts";
 import { handleGetAvailability } from "./routes/availability.ts";
 import {
@@ -300,6 +305,11 @@ export const apiRoutes = {
   // Fleet-internal: ocd-proxy wake endpoint (shared-secret auth, no user token)
   "/api/internal/wake": { POST: (req: Request) => handleInternalWake(req) },
 
+  // GitHub Actions panel release receiver (HMAC verified, no user token).
+  "/webhooks/github/panel-release": {
+    POST: (req: Request) => handlePanelReleaseWebhook(req),
+  },
+
   // (Wake is now transparent: sleeping apps' Traefik routers point at the
   // in-process hold-and-forward waker — see src/engine/scale/waker.ts. There is
   // no browser wake page or token dance. Explicit wake actions use the
@@ -324,6 +334,10 @@ export const apiRoutes = {
   // --- Admin: Panel (hosted self) ---
   "/api/admin/panel": { GET: (req: Request) => handleGetPanel(req) },
   "/api/admin/panel/redeploy": { POST: (req: Request) => handleRedeployPanel(req) },
+  "/api/admin/panel/release-webhook": {
+    GET: (req: Request) => handleGetPanelReleaseWebhook(req),
+    POST: (req: Request) => handleRotatePanelReleaseWebhook(req),
+  },
   "/api/admin/panel/logs": { GET: (req: Request) => handleGetPanelLogs(req) },
   "/api/admin/panel/deployments": { GET: (req: Request) => handleGetPanelDeployments(req) },
 

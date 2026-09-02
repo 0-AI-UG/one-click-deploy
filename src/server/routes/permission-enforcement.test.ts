@@ -161,6 +161,10 @@ import {
 } from "./confirmations.ts";
 import { handleListOperations, handleCancelOperation } from "./operations.ts";
 import { handleGetPanel, handleRedeployPanel } from "./panel.ts";
+import {
+  handleGetPanelReleaseWebhook,
+  handleRotatePanelReleaseWebhook,
+} from "./panel-release.ts";
 import { handleTerminalExec } from "./terminal-exec.ts";
 
 // ---------------------------------------------------------------------------
@@ -817,6 +821,16 @@ const CASES: Case[] = [
     name: "panel: handleRedeployPanel",
     permission: "panel.manage",
     call: (c) => handleRedeployPanel(req("/api/panel/redeploy", { body: {}, token: c.token })),
+  },
+  {
+    name: "panel: handleGetPanelReleaseWebhook",
+    permission: "panel.manage",
+    call: (c) => handleGetPanelReleaseWebhook(req("/api/admin/panel/release-webhook", { token: c.token })),
+  },
+  {
+    name: "panel: handleRotatePanelReleaseWebhook",
+    permission: "panel.manage",
+    call: (c) => handleRotatePanelReleaseWebhook(req("/api/admin/panel/release-webhook", { body: {}, token: c.token })),
   },
 
   // --- terminal -------------------------------------------------------------
