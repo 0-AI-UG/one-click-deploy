@@ -80,6 +80,7 @@ import {
   handleFinalizeOperation,
 } from "./routes/operations.ts";
 import { handleTerminalExec } from "./routes/terminal-exec.ts";
+import { handleTerminalFile } from "./routes/terminal-file.ts";
 import { handleInternalWake } from "./routes/internal.ts";
 import {
   handleDeployStack,
@@ -462,6 +463,7 @@ export const apiRoutes = {
 
   // --- Terminal ---
   "/api/terminal/exec": { POST: (req: Request) => handleTerminalExec(req) },
+  "/api/terminal/file": { POST: (req: Request) => handleTerminalFile(req) },
 
   // --- Volumes ---
 };

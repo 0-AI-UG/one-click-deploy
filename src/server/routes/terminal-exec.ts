@@ -10,16 +10,16 @@ function log(context: string, ...args: unknown[]) {
 
 const MAX_COMMAND_BYTES = 256 * 1024;
 
-type TargetKind = "server" | "replica";
+export type TargetKind = "server" | "replica";
 
-function parseTarget(raw: unknown): { kind: TargetKind; id: number } | null {
+export function parseTarget(raw: unknown): { kind: TargetKind; id: number } | null {
   if (typeof raw !== "string") return null;
   const m = raw.match(/^(server|replica):(\d+)$/);
   if (!m) return null;
   return { kind: m[1] as TargetKind, id: parseInt(m[2], 10) };
 }
 
-function resolveTarget(kind: TargetKind, id: number): { ip: string; hostKey?: string; container?: string; appId?: number } | { error: string } {
+export function resolveTerminalTarget(kind: TargetKind, id: number): { ip: string; hostKey?: string; container?: string; appId?: number } | { error: string } {
   if (kind === "server") {
     const srv = db.getServer(id);
     if (!srv) return { error: "server not found" };
@@ -35,7 +35,7 @@ function resolveTarget(kind: TargetKind, id: number): { ip: string; hostKey?: st
   return { error: "bad target" };
 }
 
-function buildRemoteCommand(userCommand: string, container: string | undefined): string {
+export function buildRemoteCommand(userCommand: string, container: string | undefined): string {
   // Base64 the user command so no quoting/escaping is needed remotely, then
   // pipe the decoded script into sh. For container targets, pipe through
   // `docker exec -i` (no TTY) as the deploy user.
@@ -73,7 +73,7 @@ export async function handleTerminalExec(request: Request): Promise<Response> {
     return Response.json({ error: "command too large" }, { status: 413 });
   }
 
-  const resolved = resolveTarget(target.kind, target.id);
+  const resolved = resolveTerminalTarget(target.kind, target.id);
   if ("error" in resolved) return Response.json({ error: resolved.error }, { status: 404 });
 
   // A shell inside a container and a shell on the host are very different

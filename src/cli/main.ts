@@ -14,6 +14,7 @@ import { stack } from "./commands/stack.ts";
 import { ops } from "./commands/ops.ts";
 import { servers } from "./commands/servers.ts";
 import { ssh } from "./commands/ssh.ts";
+import { cp } from "./commands/cp.ts";
 import { skill } from "./commands/skill.ts";
 import { app } from "./commands/app.ts";
 import { scale } from "./commands/scale.ts";
@@ -44,6 +45,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   ops,
   servers,
   ssh,
+  cp,
   skill,
   app,
   scale,
@@ -98,6 +100,7 @@ ${BOLD}Commands:${RESET}
   ssh <app> <cmd>        Run a command in an app container
   ssh <app> -i           Interactive shell session
   ssh <server> --server  Interactive shell on a server
+  cp <app>:/path <file>  Download a file from an app container
   skill install --agent X  Install the OCD skill for an AI coding agent
 
 ${DIM}App/server arguments accept name or numeric ID.${RESET}`);

@@ -62,7 +62,7 @@ async function findApp(nameOrId: string): Promise<App | null> {
   return app || null;
 }
 
-async function resolveTarget(args: string[]): Promise<{ wsTarget: string; label: string; isServer: boolean }> {
+export async function resolveTarget(args: string[]): Promise<{ wsTarget: string; label: string; isServer: boolean }> {
   const isServer = args.includes("--server");
   const target = args.find((a) => !a.startsWith("-"))!;
 

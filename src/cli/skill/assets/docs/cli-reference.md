@@ -102,7 +102,13 @@ ocd resources <ls|volume|volumes|delete>
 ocd volumes <list|show|audit|ls|cat|delete>
 ocd buckets <list|create|delete>
 ocd ssh
+ocd cp <app|server>:/absolute/path <local-path> [--force] [--server] [--replica=ID]
 ```
+
+`ocd cp` streams one regular file from an app container or server to the local
+machine. It writes through a temporary file, verifies the received byte count,
+and refuses to replace an existing destination unless `--force` is supplied.
+Remote-to-local copies only are supported.
 
 DNS has no mutation command. The panel displays records for the operator to
 create at any DNS provider.

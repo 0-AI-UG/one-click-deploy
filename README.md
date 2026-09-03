@@ -122,6 +122,7 @@ ocd deploy .ocd-deploy.json
 ocd deploy stack ocd-stack.json
 ocd logs my-app --tail=200
 ocd ssh my-app -i
+ocd cp my-app:/tmp/export.tar.gz ./export.tar.gz
 ```
 
 Apps and stacks are created and configured only through versioned manifests
