@@ -77,7 +77,7 @@ export async function handleTerminalFile(request: Request): Promise<Response> {
   return new Response(process.stdout, {
     headers: {
       "Content-Type": "application/octet-stream",
-      "Content-Length": String(size),
+      "X-OCD-File-Size": String(size),
       "Cache-Control": "no-store",
     },
   });

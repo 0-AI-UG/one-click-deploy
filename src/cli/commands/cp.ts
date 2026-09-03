@@ -82,7 +82,7 @@ ${DIM}Remote-to-local copies only. The remote path must be absolute.${RESET}`);
     const body = await response.text().catch(() => "");
     throw new Error(`File download failed (HTTP ${response.status}): ${body.slice(0, 500)}`);
   }
-  const expected = Number(response.headers.get("content-length"));
+  const expected = Number(response.headers.get("x-ocd-file-size"));
   if (!Number.isSafeInteger(expected) || expected < 0) throw new Error("Panel returned an invalid file size");
 
   const output = createWriteStream(temporary, { flags: "wx", mode: 0o600 });
