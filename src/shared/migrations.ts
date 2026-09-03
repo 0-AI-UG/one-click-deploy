@@ -2629,6 +2629,16 @@ export const migrations: Migration[] = [
       db.run("DROP TABLE services");
     },
   },
+  {
+    version: 113,
+    description: "Repair committed manifest paths for webhook builds",
+    up: (db) => {
+      db.run(`UPDATE apps
+        SET manifest_path = last_manifest_path
+        WHERE manifest_path IS NULL
+          AND last_manifest_path IS NOT NULL`);
+    },
+  },
 ];
 
 /** Helper for migration 82: merge two v2 entry lists (override wins by key) and

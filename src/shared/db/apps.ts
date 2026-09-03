@@ -689,8 +689,8 @@ export function updateAppImageRef(id: number, imageRef: string): void {
  * itself runtime configuration and therefore does not bump config_revision. */
 export function recordAppManifestApplied(id: number, path: string, hash: string): void {
   db.query(
-    "UPDATE apps SET last_manifest_path = ?, last_manifest_hash = ?, last_manifest_applied_at = datetime('now'), last_manifest_config_revision = config_revision WHERE id = ?",
-  ).run(path, hash, id);
+    "UPDATE apps SET manifest_path = ?, last_manifest_path = ?, last_manifest_hash = ?, last_manifest_applied_at = datetime('now'), last_manifest_config_revision = config_revision WHERE id = ?",
+  ).run(path, path, hash, id);
 }
 
 export function updateAppStackManifestPath(id: number, path: string | null): void {

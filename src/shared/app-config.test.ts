@@ -106,6 +106,7 @@ describe("desired app configuration", () => {
     expect(db.parseAppCommand(updated)).toEqual(["postgres"]);
     expect(db.parseAppCapabilities(updated)).toEqual(["CHOWN", "SETUID"]);
     expect(updated.post_start_command).toBe("pg_isready");
+    expect(updated.manifest_path).toBe(".ocd-deploy.json");
     expect(updated.last_manifest_path).toBe(".ocd-deploy.json");
     expect(updated.last_manifest_hash).toBe("abc123");
     expect(updated.last_manifest_config_revision).toBe(updated.config_revision);

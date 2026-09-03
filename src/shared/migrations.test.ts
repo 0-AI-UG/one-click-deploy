@@ -103,6 +103,20 @@ describe("runMigrations", () => {
       .toEqual({ permission: "services.view" });
   });
 
+  test("migration 113 repairs committed manifest paths for webhook builds", () => {
+    const db = freshDb();
+    runMigrationsWithImageCutover(db);
+    db.run(
+      "INSERT INTO apps (name, domain, image_ref, last_manifest_path, manifest_path) VALUES ('legacy-build', '', ?, 'services/api/.ocd-deploy.json', NULL)",
+      [IMAGE_REF],
+    );
+
+    migrations.find((migration) => migration.version === 113)!.up(db);
+
+    expect(db.query("SELECT manifest_path FROM apps WHERE name = 'legacy-build'").get())
+      .toEqual({ manifest_path: "services/api/.ocd-deploy.json" });
+  });
+
   test("adds ssh_host_key column to servers", () => {
     const db = freshDb();
     runMigrationsWithImageCutover(db);
