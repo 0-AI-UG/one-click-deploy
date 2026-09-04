@@ -26,7 +26,7 @@ export async function createVolume(opts: {
       server: opts.server_id,
       format: "ext4",
       automount: true,
-      labels: { managed_by: "one-click-deploy" },
+      labels: { managed_by: "open-cli-deployment" },
     }),
   }) as unknown as WithAction & WithVolume;
   if (data.action?.id) {

@@ -67,7 +67,7 @@ const ensureInfra: Step<ProvisionInput, EnsureInfraOut> = {
     const compute = hetzner;
     const { publicKey } = await getOrCreateLocalKeyPair();
     const [sshKey, firewallId, networkId] = await Promise.all([
-      compute.ensureSshKey("one-click-deploy", publicKey),
+      compute.ensureSshKey("open-cli-deployment", publicKey),
       compute.ensureFirewall(),
       ensureSharedNetwork(),
     ]);

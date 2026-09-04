@@ -8,7 +8,7 @@ Bring existing VPSs or let OCD provision managed capacity on Hetzner.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/0-AI-UG/open-cli-deployment?style=social)](https://github.com/0-AI-UG/open-cli-deployment)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/orgs/0-AI-UG/packages/container/package/one-click-deploy)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/orgs/0-AI-UG/packages/container/package/open-cli-deployment)
 
 </div>
 
@@ -30,7 +30,7 @@ with Read & Write access. Normal account setup and connected-host operation do
 not require cloud credentials.
 
 ```bash
-PANEL_IMAGE='ghcr.io/0-ai-ug/one-click-deploy@sha256:<64-hex-digest>'
+PANEL_IMAGE='ghcr.io/0-ai-ug/open-cli-deployment@sha256:<64-hex-digest>'
 docker run --rm \
   -e HETZNER_API_TOKEN='<hetzner_token>' \
   -e OCD_AUTO_DEPLOY="{\"panel_image_ref\":\"$PANEL_IMAGE\",\"domain\":\"panel.example.com\"}" \
@@ -54,7 +54,7 @@ pending, correct, or conflicting, but it never modifies or deletes DNS.
 
 > **No domain?** Omit `domain` entirely. Bootstrap derives a `<server-ip>.nip.io` domain once the server exists and serves it with a self-signed certificate — no DNS setup and no real domain needed (your browser will warn on first visit). Just:
 > ```bash
-> PANEL_IMAGE='ghcr.io/0-ai-ug/one-click-deploy@sha256:<64-hex-digest>'
+> PANEL_IMAGE='ghcr.io/0-ai-ug/open-cli-deployment@sha256:<64-hex-digest>'
 > docker run --rm \
 >   -e HETZNER_API_TOKEN='<hetzner_token>' \
 >   -e OCD_AUTO_DEPLOY="{\"panel_image_ref\":\"$PANEL_IMAGE\"}" \
@@ -154,5 +154,5 @@ Built with [Bun](https://bun.sh), TypeScript, React, SQLite, and [Traefik](https
 ## Links
 
 - [Contributing](CONTRIBUTING.md)
-- [Issues](https://github.com/0-AI-UG/one-click-deploy/issues) · [Discussions](https://github.com/0-AI-UG/one-click-deploy/discussions)
+- [Issues](https://github.com/0-AI-UG/open-cli-deployment/issues) · [Discussions](https://github.com/0-AI-UG/open-cli-deployment/discussions)
 - [MIT License](LICENSE)

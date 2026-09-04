@@ -17,7 +17,7 @@ export async function getOrCreateLocalKeyPair(): Promise<{ publicKey: string; pr
   if (!existsSync(keyPath)) {
     log("ssh-key", `Generating new Ed25519 key at ${keyPath}`);
     const proc = Bun.spawn(
-      ["ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", "", "-C", "one-click-deploy"],
+      ["ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", "", "-C", "open-cli-deployment"],
       { stdout: "pipe", stderr: "pipe" }
     );
     await proc.exited;

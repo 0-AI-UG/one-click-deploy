@@ -196,7 +196,7 @@ export const hetzner = {
       };
     },
     async list(): Promise<VolumeInfo[]> {
-      const data = await hetznerApi("/volumes?label_selector=managed_by%3Done-click-deploy&per_page=50") as any;
+      const data = await hetznerApi("/volumes?label_selector=managed_by%3Dopen-cli-deployment&per_page=50") as any;
       return (data.volumes ?? []).map((v: any) => ({
         providerId: String(v.id),
         name: v.name,

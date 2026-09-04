@@ -56,7 +56,7 @@ export async function ensureNetwork(): Promise<{ id: number; ipRange: string }> 
           network_zone: NETWORK_ZONE,
         },
       ],
-      labels: { managed_by: "one-click-deploy" },
+      labels: { managed_by: "open-cli-deployment" },
     }),
   })) as unknown as WithNetwork;
   log("network", `Network created: id=${data.network.id}`);

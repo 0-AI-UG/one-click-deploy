@@ -11,7 +11,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-const IMAGE = process.env.OCD_IMAGE || "ghcr.io/0-ai-ug/one-click-deploy:latest";
+const IMAGE = process.env.OCD_IMAGE || "ghcr.io/0-ai-ug/open-cli-deployment:latest";
 const configPath = resolve(process.argv[2] || "panel.json");
 
 if (!existsSync(configPath)) {

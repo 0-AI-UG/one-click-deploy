@@ -59,7 +59,7 @@ export async function provisionServer(opts: {
   log("ssh", "Ensuring SSH key, firewall, and private network exist...");
   const { publicKey } = await getOrCreateLocalKeyPair();
   const [sshKey, firewallId, networkId] = await Promise.all([
-    compute.ensureSshKey("one-click-deploy", publicKey),
+    compute.ensureSshKey("open-cli-deployment", publicKey),
     compute.ensureFirewall(),
     ensureSharedNetwork(),
   ]);

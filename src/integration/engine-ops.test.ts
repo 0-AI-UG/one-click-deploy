@@ -177,7 +177,7 @@ d(
 
         // List and delete volumes.
         const volumes = (await hetznerApi(
-          `/volumes?label_selector=managed-by%3Done-click-deploy`,
+          `/volumes?label_selector=managed-by%3Dopen-cli-deployment`,
         )) as { volumes?: Array<{ id: number; name: string }> };
         for (const v of volumes.volumes ?? []) {
           if (v.name.startsWith("ocd-itest-")) {

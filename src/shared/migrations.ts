@@ -235,12 +235,13 @@ export const migrations: Migration[] = [
 
       // Migrate any existing panel-like apps row (hosted instances that were
       // deployed before this split) out of the apps table. Match heuristic:
-      // git_repo mentioning "one-click-deploy". If multiple match, take the
-      // oldest.
+      // the conventional `ocd-panel` app name, with the canonical repository
+      // as a fallback. If multiple match, prefer the named panel, then oldest.
       type LegacyApp = { id: number; server_id: number; name: string; domain: string; git_repo: string; webhook_branch?: string; container_port: number; host_port: number; volume_id?: string; volume_mount?: string; env_vars?: string; status?: string; deploy_log?: string; created_at: string };
       const panelApp = db
         .query(
-          "SELECT * FROM apps WHERE git_repo LIKE '%one-click-deploy%' ORDER BY id ASC LIMIT 1",
+          "SELECT * FROM apps WHERE name = 'ocd-panel' OR git_repo LIKE '%open-cli-deployment%' " +
+            "ORDER BY CASE WHEN name = 'ocd-panel' THEN 0 ELSE 1 END, id ASC LIMIT 1",
         )
         .get() as LegacyApp | null;
 

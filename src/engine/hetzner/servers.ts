@@ -33,7 +33,7 @@ type WithServer = { server: HetznerServer };
 
 // --- Firewall ---
 
-const FIREWALL_NAME = "one-click-deploy";
+const FIREWALL_NAME = "open-cli-deployment";
 
 const ANY_SOURCE = ["0.0.0.0/0", "::/0"];
 
@@ -121,7 +121,7 @@ export async function ensureFirewall(): Promise<number> {
     method: "POST",
     body: JSON.stringify({
       name: FIREWALL_NAME,
-      labels: { managed_by: "one-click-deploy" },
+      labels: { managed_by: "open-cli-deployment" },
       rules: BASE_FIREWALL_RULES,
     }),
   }) as unknown as WithFirewall;
@@ -165,7 +165,7 @@ export async function createServer(opts: {
     image: "docker-ce",
     ssh_keys: [opts.ssh_key_name],
     firewalls: [{ firewall: opts.firewall_id }],
-    labels: { managed_by: "one-click-deploy" },
+    labels: { managed_by: "open-cli-deployment" },
     user_data: opts.user_data,
   };
   if (opts.network_id) {
@@ -218,7 +218,7 @@ export async function deleteHetznerServer(serverId: string) {
 
 export async function listHetznerServers(): Promise<HetznerServer[]> {
   const data = await hetznerApi(
-    "/servers?label_selector=managed_by%3Done-click-deploy&per_page=50"
+    "/servers?label_selector=managed_by%3Dopen-cli-deployment&per_page=50"
   ) as unknown as { servers: HetznerServer[] };
   return data.servers;
 }

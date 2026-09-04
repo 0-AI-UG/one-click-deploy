@@ -10,7 +10,7 @@ import { buildPanelReleaseScript } from "./panel.ts";
 describe("buildPanelReleaseScript", () => {
   const base = {
     containerName: "ocd-panel",
-    image: "ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    image: "ghcr.io/0-ai-ug/open-cli-deployment@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     hostPort: 3001,
     containerPort: 3001,
     privateIpv4: "10.0.0.2",
@@ -24,7 +24,7 @@ describe("buildPanelReleaseScript", () => {
 
   test("pulls the prebuilt image and no longer runs docker build", () => {
     const script = buildPanelReleaseScript(base);
-    expect(script).toContain("docker pull ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    expect(script).toContain("docker pull ghcr.io/0-ai-ug/open-cli-deployment@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     // The whole point of the change: never build on the panel's own host.
     expect(script).not.toContain("docker build");
     // And no longer git-pulls the source tree.
@@ -34,7 +34,7 @@ describe("buildPanelReleaseScript", () => {
   test("runs the new container on the same loopback port Traefik targets", () => {
     const script = buildPanelReleaseScript(base);
     expect(script).toContain(
-      "docker run -d --name ocd-panel --restart unless-stopped --log-opt max-size=20m --log-opt max-file=3 -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "docker run -d --name ocd-panel --restart unless-stopped --log-opt max-size=20m --log-opt max-file=3 -p 127.0.0.1:3001:3001 -p 10.0.0.2:8896:8896 --env-file /home/deploy/apps/ocd-panel/.env.deploy -v /mnt/data:/app/data ghcr.io/0-ai-ug/open-cli-deployment@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     );
     // Old container is removed only after a successful pull (pull-then-swap).
     expect(script).toContain("docker rm -f ocd-panel");
@@ -77,7 +77,7 @@ describe("buildPanelReleaseScript", () => {
       const script = buildPanelReleaseScript(base);
       // A first-ever deploy, or a redeploy of the identical tag, has no distinct
       // previous image — rolling back would just reproduce the failure.
-      expect(script).toContain('[ -z "$PREV_IMAGE" ] || [ "$PREV_IMAGE" = "ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ]');
+      expect(script).toContain('[ -z "$PREV_IMAGE" ] || [ "$PREV_IMAGE" = "ghcr.io/0-ai-ug/open-cli-deployment@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ]');
     });
 
     test("exits non-zero when it had to roll back, so the deploy is recorded as failed", () => {
@@ -177,7 +177,7 @@ describe("buildPanelReleaseScript", () => {
 
   test("omits registry auth wiring for an anonymous pull", () => {
     const script = buildPanelReleaseScript({ ...base, registryEnvPrefix: "", registryConfigDir: "" });
-    expect(script).toContain("su - deploy -c \"docker pull ghcr.io/0-ai-ug/one-click-deploy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"");
+    expect(script).toContain("su - deploy -c \"docker pull ghcr.io/0-ai-ug/open-cli-deployment@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"");
     expect(script).not.toContain("DOCKER_CONFIG=");
     expect(script).not.toContain("rm -rf /home/deploy/.docker-ocd-");
   });
