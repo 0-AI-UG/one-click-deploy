@@ -30,10 +30,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # Keep the production package stable when the GitHub repository is
-          # renamed. The running panel only accepts releases from its current
-          # immutable image repository.
-          images: ghcr.io/0-ai-ug/one-click-deploy
+          images: ghcr.io/0-ai-ug/open-cli-deployment
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -61,7 +58,7 @@ jobs:
           OCD_PANEL_URL: ${{ vars.OCD_PANEL_URL }}
           OCD_PANEL_RELEASE_SECRET: ${{ secrets.OCD_PANEL_RELEASE_SECRET }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-          IMAGE_REPOSITORY: ghcr.io/0-ai-ug/one-click-deploy
+          IMAGE_REPOSITORY: ghcr.io/0-ai-ug/open-cli-deployment
         run: |
           set -euo pipefail
           : "${OCD_PANEL_URL:?Configure the OCD_PANEL_URL repository variable}"
