@@ -30,7 +30,7 @@ function getRpConfig(request: Request) {
     request.headers.get("Origin") ||
     `${request.headers.get("X-Forwarded-Proto") || "https"}://${hostname}`;
   return {
-    rpName: "OneClickDeploy",
+    rpName: "Open CLI Deployment",
     rpID: process.env.WEBAUTHN_RP_ID || hostname,
     origin: browserOrigin,
   };

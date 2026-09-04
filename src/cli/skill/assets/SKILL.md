@@ -1,11 +1,11 @@
 ---
 name: ocd-deploy
-description: Build, deploy, configure, operate, recover, and troubleshoot applications on One-Click Deploy (OCD).
+description: Build, deploy, configure, operate, recover, and troubleshoot applications on Open CLI Deployment (OCD).
 ---
 
 # OCD Deploy
 
-Use the `ocd` CLI for One-Click Deploy panels. OCD owns provider-neutral HTTPS
+Use the `ocd` CLI for Open CLI Deployment panels. OCD owns provider-neutral HTTPS
 Git checkout, BuildKit image creation, immutable OCI publication, manifest
 reconciliation, and runtime rollout. GitHub signed push webhooks are an optional
 trigger integration; GitHub Actions is not part of app delivery.

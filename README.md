@@ -1,8 +1,8 @@
 <div align="center">
 
-# One-Click Deploy
+# Open CLI Deployment
 
-**Self-hosted PaaS for Docker hosts, with optional Hetzner provisioning.**
+**A self-hostable, CLI-first PaaS for humans and coding agents.**
 
 Bring existing VPSs or let OCD provision managed capacity on Hetzner.
 
@@ -14,7 +14,7 @@ Bring existing VPSs or let OCD provision managed capacity on Hetzner.
 
 ---
 
-A lightweight, self-hostable alternative to Heroku, Railway, and Render. Git supplies versioned runtime configuration; OCD checks out exact commits, builds with BuildKit, pushes immutable images to your registry, and deploys those digests to connected servers. Existing VPSs can be connected directly, while [Hetzner Cloud](https://www.hetzner.com/cloud) remains an optional convenience for provisioning servers and volumes. DNS stays operator-owned and provider-neutral.
+Open CLI Deployment (OCD) is a lightweight, self-hostable alternative to Heroku, Railway, and Render. Its CLI-first workflow is designed for both human operators and coding agents. Git supplies versioned runtime configuration; OCD checks out exact commits, builds with BuildKit, pushes immutable images to your registry, and deploys those digests to connected servers. Existing VPSs can be connected directly, while [Hetzner Cloud](https://www.hetzner.com/cloud) remains an optional convenience for provisioning servers and volumes. DNS stays operator-owned and provider-neutral.
 
 Application delivery is provider-neutral: source checkout works with HTTPS Git
 hosts and image publication works with compatible OCI registries such as GHCR,

@@ -115,7 +115,7 @@ export const server = Bun.serve({
   websocket: terminalWsHandlers,
 });
 
-console.log(`[server] One-Click Deploy API running on http://localhost:${PORT}`);
+console.log(`[server] Open CLI Deployment API running on http://localhost:${PORT}`);
 
 // Start the operation engine in-process unless disabled (for running a
 // dedicated engine process, set OCD_ENGINE=0 on the server and run

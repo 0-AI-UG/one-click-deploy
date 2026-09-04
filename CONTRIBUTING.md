@@ -1,4 +1,4 @@
-# Contributing to One-Click Deploy
+# Contributing to Open CLI Deployment
 
 Thanks for your interest in contributing! Here's how to get started.
 

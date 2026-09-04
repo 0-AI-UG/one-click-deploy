@@ -1,5 +1,5 @@
 {
-  "name": "one-click-deploy",
+  "name": "open-cli-deployment",
   "version": "0.8.2",
   "type": "module",
   "scripts": {

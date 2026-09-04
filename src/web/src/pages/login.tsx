@@ -32,7 +32,7 @@ export function LoginPage() {
   };
 
   return (
-    <AuthShell icon={<Terminal size={24} />} title="One-Click Deploy">
+    <AuthShell icon={<Terminal size={24} />} title="Open CLI Deployment">
         <Card className="p-6">
           <h2 className="font-mono text-sm font-bold text-fg uppercase mb-4">Sign In</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
