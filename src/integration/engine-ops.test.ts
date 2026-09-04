@@ -6,7 +6,7 @@
 //
 // Optional env vars:
 //   OCD_TEST_GIT_REPO=<public-git-url>
-//     — defaults to this repo (github.com/0-AI-UG/one-click-deploy) which ships
+//     — defaults to this repo (github.com/0-AI-UG/open-cli-deployment) which ships
 //       a small nginx fixture at test/fixtures/hello-app. Override if you want
 //       to point at a different public repo.
 //   OCD_TEST_GIT_BRANCH=<branch>
@@ -30,7 +30,7 @@ const RUN =
   !!process.env.HCLOUD_TOKEN;
 
 // Defaults point at this repo's shipped fixture so the suite runs out of the box.
-const DEFAULT_GIT_REPO = "https://github.com/0-AI-UG/one-click-deploy.git";
+const DEFAULT_GIT_REPO = "https://github.com/0-AI-UG/open-cli-deployment.git";
 const DEFAULT_DOCKER_CONTEXT = "test/fixtures/hello-app";
 const d = RUN ? describe : describe.skip;
 const appTest = RUN ? test : test.skip;

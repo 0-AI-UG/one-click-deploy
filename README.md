@@ -7,8 +7,8 @@
 Bring existing VPSs or let OCD provision managed capacity on Hetzner.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/0-AI-UG/one-click-deploy/pkgs/container/one-click-deploy)
-[![Stars](https://img.shields.io/github/stars/0-AI-UG/one-click-deploy?style=social)](https://github.com/0-AI-UG/one-click-deploy)
+[![Stars](https://img.shields.io/github/stars/0-AI-UG/open-cli-deployment?style=social)](https://github.com/0-AI-UG/open-cli-deployment)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/orgs/0-AI-UG/packages/container/package/one-click-deploy)
 
 </div>
 

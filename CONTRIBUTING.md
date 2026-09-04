@@ -13,8 +13,8 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ```bash
 # Clone the repo
-git clone https://github.com/0-AI-UG/one-click-deploy.git
-cd one-click-deploy
+git clone https://github.com/0-AI-UG/open-cli-deployment.git
+cd open-cli-deployment
 
 # Install dependencies
 bun install
@@ -51,7 +51,7 @@ bun run dev
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/0-AI-UG/one-click-deploy/issues) to report bugs or request features. Include:
+Use [GitHub Issues](https://github.com/0-AI-UG/open-cli-deployment/issues) to report bugs or request features. Include:
 
 - Steps to reproduce (for bugs)
 - Expected vs actual behavior
