@@ -13,6 +13,7 @@ export const PANEL_RELEASE_MAX_SKEW_SECONDS = 300;
 const IMMUTABLE_IMAGE = /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/i;
 const FULL_COMMIT = /^[a-f0-9]{40}$/i;
 const MAX_BODY_BYTES = 4096;
+const CANONICAL_PANEL_IMAGE_REPOSITORY = "ghcr.io/0-ai-ug/open-cli-deployment";
 
 function imageRepository(image: string): string {
   return image.split("@sha256:", 1)[0].toLowerCase();
@@ -45,7 +46,11 @@ export function validatePanelRelease(
   if (!FULL_COMMIT.test(commit)) {
     return { valid: false, error: "commit must be a full 40-character Git SHA" };
   }
-  if (!IMMUTABLE_IMAGE.test(currentImage) || imageRepository(image) !== imageRepository(currentImage)) {
+  if (
+    !IMMUTABLE_IMAGE.test(currentImage) ||
+    (imageRepository(image) !== imageRepository(currentImage) &&
+      imageRepository(image) !== CANONICAL_PANEL_IMAGE_REPOSITORY)
+  ) {
     return { valid: false, error: "release image repository does not match the current panel" };
   }
   return { valid: true, image, commit };

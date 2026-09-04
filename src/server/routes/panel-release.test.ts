@@ -34,6 +34,15 @@ describe("panel release validation", () => {
     });
   });
 
+  test("accepts a migration to the canonical panel image repository", () => {
+    const canonical = `ghcr.io/0-ai-ug/open-cli-deployment@sha256:${"c".repeat(64)}`;
+    expect(validatePanelRelease({ image: canonical, commit: COMMIT }, IMAGE)).toEqual({
+      valid: true,
+      image: canonical,
+      commit: COMMIT,
+    });
+  });
+
   test("rejects tags, abbreviated commits, and repository changes", () => {
     expect(validatePanelRelease({ image: "ghcr.io/acme/panel:latest", commit: COMMIT }, IMAGE)).toEqual({
       valid: false,
