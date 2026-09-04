@@ -30,7 +30,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          # Keep the production package stable when the GitHub repository is
+          # renamed. The running panel only accepts releases from its current
+          # immutable image repository.
+          images: ghcr.io/0-ai-ug/one-click-deploy
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
