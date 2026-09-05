@@ -1,5 +1,8 @@
 import db from "./connection.ts";
 
+// Keep older engines compatible with the renamed routing-address schema.
+const serverReadColumns = (db.query("PRAGMA table_info(servers)").all() as Array<{ name: string }>).some(column => column.name === "routing_address") ? "*, routing_address AS private_ipv4" : "*";
+
 export type ServerRow = {
   id: number;
   name: string;
@@ -32,17 +35,17 @@ export type ServerRow = {
 
 export function getServers(): ServerRow[] {
   return db
-    .query("SELECT * FROM servers ORDER BY created_at DESC")
+    .query(`SELECT ${serverReadColumns} FROM servers ORDER BY created_at DESC`)
     .all() as ServerRow[];
 }
 
 export function getServer(id: number): ServerRow | null {
-  return db.query("SELECT * FROM servers WHERE id = ?").get(id) as ServerRow | null;
+  return db.query(`SELECT ${serverReadColumns} FROM servers WHERE id = ?`).get(id) as ServerRow | null;
 }
 
 export function getServerByProviderId(providerId: string): ServerRow | null {
   return db
-    .query("SELECT * FROM servers WHERE provider_id = ?")
+    .query(`SELECT ${serverReadColumns} FROM servers WHERE provider_id = ?`)
     .get(providerId) as ServerRow | null;
 }
 
@@ -164,7 +167,7 @@ export function clearServerGcRequest(id: number): void {
 
 export function getServersByPool(pool: string): ServerRow[] {
   return db
-    .query("SELECT * FROM servers WHERE pool = ? ORDER BY created_at DESC")
+    .query(`SELECT ${serverReadColumns} FROM servers WHERE pool = ? ORDER BY created_at DESC`)
     .all(pool) as ServerRow[];
 }
 
