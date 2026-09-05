@@ -154,15 +154,7 @@ export async function handleCliActionRun(request: Request): Promise<Response> {
         const enqueue = (value: Uint8Array) => {
           if (!streamCancelled) controller.enqueue(value);
         };
-        const configRoot = mkdtempSync(path.join(tmpdir(), "ocd-ui-action-"));
-        const configDir = path.join(configRoot, "ocd");
-        mkdirSync(configDir, { recursive: true, mode: 0o700 });
-        writeFileSync(
-          path.join(configDir, "config.json"),
-          `${JSON.stringify({ panel_url: localPanelUrl(), token, username: payload.username })}\n`,
-          { mode: 0o600 },
-        );
-
+        let configRoot: string | undefined;
         let proc: ReturnType<typeof Bun.spawn> | undefined;
         let outputBytes = 0;
         let timedOut = false;
@@ -195,6 +187,16 @@ export async function handleCliActionRun(request: Request): Promise<Response> {
         };
 
         try {
+          // Setup can fail before a process exists (for example, an unwritable
+          // temp directory). Report it through the same error stream.
+          configRoot = mkdtempSync(path.join(tmpdir(), "ocd-ui-action-"));
+          const configDir = path.join(configRoot, "ocd");
+          mkdirSync(configDir, { recursive: true, mode: 0o700 });
+          writeFileSync(
+            path.join(configDir, "config.json"),
+            `${JSON.stringify({ panel_url: localPanelUrl(), token, username: payload.username })}\n`,
+            { mode: 0o600 },
+          );
           const cwd = prepareWorkspace(configRoot, command.id, body.workspace);
           enqueue(event("start", { command: formatWebCliCommand(argv) }));
           proc = Bun.spawn(invocation, {
@@ -254,8 +256,13 @@ export async function handleCliActionRun(request: Request): Promise<Response> {
         } finally {
           clearTimeout(timeout);
           request.signal.removeEventListener("abort", abort);
-          rmSync(configRoot, { recursive: true, force: true });
-          if (!streamCancelled) controller.close();
+          try {
+            if (configRoot) rmSync(configRoot, { recursive: true, force: true });
+          } catch (err) {
+            console.error("[cli-action] Failed to remove temporary CLI configuration", err);
+          } finally {
+            if (!streamCancelled) controller.close();
+          }
         }
       },
       cancel() {
