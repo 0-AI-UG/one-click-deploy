@@ -113,3 +113,14 @@ now use their original committed manifests, source 15, and images built from
 health checks still returned HTTP 200 after the retries. Stack-level status
 continues to reflect the unresolved provider-volume operations, not a completed
 cleanup; reconnect Hetzner before retrying full stack reconciliation.
+
+### Provider regression identified
+
+The missing-token error was caused by a regressed panel release, not missing
+credentials. The provider assignment and encrypted `provider.hetzner-main.api_token`
+record remained intact; a read-only Hetzner lookup returned HTTP 200. A panel
+rebuild from main had omitted the previously deployed, uncommitted provider UI
+and infrastructure adapter changes. Those sources were recovered from the known
+provider-capable image and merged with all migration fixes. No credential
+re-entry is required. The merged source passed typechecking, the UI build and
+all 133 isolated test files (six localhost socket suites rerun outside sandbox).
