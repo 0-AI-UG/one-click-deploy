@@ -68,8 +68,9 @@ Rollback database settings are encrypted under `ROLLBACK_*` keys in each project
 environment and excluded from app projections. After new writes occur, rollback
 requires reconciling those writes; simply reconnecting an old database loses them.
 
-Rehearsal databases remain isolated in the shared cluster and are included in
-backups until explicitly retired. Backup recovery instructions are in
+The four temporary rehearsal databases were removed after confirming zero active
+clients and successful backup restores. Subsequent backups cover the four
+application databases plus postgres. Backup recovery instructions are in
 `services/postgres-backup/README.md`; migration tooling is in
 `services/database-migration/`. Run those tools only as an intentional migration,
 never as normal application startup.
