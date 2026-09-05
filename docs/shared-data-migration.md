@@ -74,3 +74,42 @@ application databases plus postgres. Backup recovery instructions are in
 `services/postgres-backup/README.md`; migration tooling is in
 `services/database-migration/`. Run those tools only as an intentional migration,
 never as normal application startup.
+
+## Resumed rollout verification
+
+The interrupted session was resumed on 2026-09-05. Foody, Sight, Skyline and
+Docs public health checks returned HTTP 200. The shared backup service passed
+its configured health probe. The cluster contains only `foody`, `sight`,
+`sight_docs`, `skyline` and `postgres`. Each project runtime role can connect
+only to its own application database and has no superuser, create-database or
+create-role attribute. No OCD environment retains raw S3 credential keys.
+
+Sight's source build was blocked by four high-severity `fast-uri` advisories.
+Commit `663e412` updates the root and Docs pins/lockfiles to 3.1.7. Both audits
+pass, and the Docs, renderer and monitor images were built and deployed.
+All four Skyline app images were also rebuilt from its committed main branch
+and deployed successfully.
+
+Remaining infrastructure blocker: the running panel reports `Hetzner API token
+not configured`. This prevents its no-op verification of the detector's existing
+10 GB volume (operation 3816) and detachment/retirement of the old Docs and
+restore-test database volumes (operations 3832 and 3833). Their containers were
+removed, but the original volumes remain intact; the obsolete app records show
+`cleanup_failed`. Reconnect the Hetzner infrastructure provider before retrying
+those cleanup operations. Do not delete the retained recovery volumes.
+
+The app host (server 7) also exhausted its root filesystem during source-image
+rollout. OCD's reviewed safe GC removed 60 unused images, safely skipped one,
+and reclaimed 14,751 MiB while retaining running/rollback references and all
+database volumes. This restored roughly 15 GB free space. The failed registry
+login and revision-snapshot writes occurred while this filesystem was full.
+
+Sight's core stack also stopped at the same provider-dependent Redis volume
+check (operation 3875). The API and workers were then reconciled independently
+using the committed stack's exact environment projections. Operations 3902,
+3903 and 3904 completed successfully; `sight-web`, `sight-scan` and `sight-ops`
+now use their original committed manifests, source 15, and images built from
+`663e412`. No temporary image manifest remains on these apps. All four public
+health checks still returned HTTP 200 after the retries. Stack-level status
+continues to reflect the unresolved provider-volume operations, not a completed
+cleanup; reconnect Hetzner before retrying full stack reconciliation.
