@@ -1,0 +1,30 @@
+{
+  "$schema": 1,
+  "name": "skyline final database migration",
+  "image": "ghcr.io/0-ai-ug/ocd-postgres-backup@sha256:e324ec538988e2beaa9ad857a8105e840b30b7ab28c972d81483bd233081f748",
+  "environment": "skyline",
+  "env_projection": [
+    "POSTGRES_URL",
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_DB",
+    "SHARED_DATABASE_URL",
+    "DATABASE_CUTOVER_CONFIRMED"
+  ],
+  "command": [
+    "bun",
+    "/app/migrate.ts",
+    "skyline",
+    "final"
+  ],
+  "volume": null,
+  "public": false,
+  "container_port": 3000,
+  "replicas": 1,
+  "memory_mb": 1024,
+  "health_check": {
+    "mode": "exec",
+    "command": "test -f /app/migrate.ts"
+  },
+  "suggested_app_name": "skyline-database-migration"
+}

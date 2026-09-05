@@ -1,3 +1,4 @@
+import { handleStorageAuthorize, handleStorageGrants } from "./routes/storage-access.ts";
 import { handleSetupStatus, handleSetupComplete } from "./routes/setup.ts";
 import { handleLogin, handleMe, handleUpdateMe } from "./routes/auth.ts";
 import {
@@ -181,6 +182,8 @@ function confirmationCodeFrom(req: Request): string {
 
 
 export const apiRoutes = {
+  "/api/storage/authorize": { POST: handleStorageAuthorize },
+  "/api/admin/storage-grants": { GET: handleStorageGrants, POST: handleStorageGrants, DELETE: handleStorageGrants },
   // --- Health probe (public, used by Docker HEALTHCHECK and reverse proxies) ---
   "/api/health": {
     GET: () =>

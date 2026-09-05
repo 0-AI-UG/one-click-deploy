@@ -1,0 +1,141 @@
+{
+  "$schema": 1,
+  "$llm": "https://ocd.cero-ai.com/llm.txt",
+  "name": "Foody Worker",
+  "description": "Private PGMQ worker for Foody background jobs and transactional delivery.",
+  "container_port": 3017,
+  "volume": null,
+  "env": [
+    {
+      "key": "CAPTURE_PROVIDER",
+      "default": "openrouter"
+    },
+    {
+      "key": "OPENROUTER_API_KEY",
+      "secret": true,
+      "required": true
+    },
+    {
+      "key": "OPENROUTER_CAPTURE_MODEL"
+    },
+    {
+      "key": "OPENROUTER_ADMIN_RECIPE_MODEL"
+    },
+    {
+      "key": "OPENROUTER_RECIPE_TRANSLATION_MODEL"
+    },
+    {
+      "key": "OPENROUTER_RECIPE_IMPORT_MODEL",
+      "default": "z-ai/glm-5.3-flash"
+    },
+    {
+      "key": "RECIPE_IMPORT_TIMEOUT_MS",
+      "default": "100000"
+    },
+    {
+      "key": "OPENROUTER_BASE_URL"
+    },
+    {
+      "key": "OPENAI_API_KEY",
+      "secret": true
+    },
+    {
+      "key": "OPENAI_RECEIPT_MODEL"
+    },
+    {
+      "key": "OPENAI_ADMIN_CATALOG_MODEL"
+    },
+    {
+      "key": "OPENAI_BASE_URL"
+    },
+    {
+      "key": "RESEND_API_KEY",
+      "secret": true,
+      "required": true
+    },
+    {
+      "key": "RESEND_FROM",
+      "required": true
+    },
+    {
+      "key": "RESEND_REPLY_TO"
+    },
+    {
+      "key": "APNS_TEAM_ID"
+    },
+    {
+      "key": "APNS_KEY_ID"
+    },
+    {
+      "key": "APNS_PRIVATE_KEY",
+      "secret": true
+    },
+    {
+      "key": "APPLE_APP_BUNDLE_IDENTIFIER",
+      "default": "com.0ai.foody",
+      "required": true
+    },
+    {
+      "key": "APPLE_TEAM_ID",
+      "default": "F7PH54XQ6J",
+      "required": true
+    },
+    {
+      "key": "APPLE_KEY_ID",
+      "default": "A9LH4GWK5J",
+      "required": true
+    },
+    {
+      "key": "APPLE_PRIVATE_KEY",
+      "secret": true,
+      "required": true
+    },
+    {
+      "key": "APPLE_NATIVE_CLIENT_SECRET",
+      "secret": true
+    },
+    {
+      "key": "DEEPSEEK_API_KEY",
+      "secret": true,
+      "required": true
+    },
+    {
+      "key": "WORKER_CRITICAL_CONCURRENCY",
+      "default": "2"
+    },
+    {
+      "key": "WORKER_INTERACTIVE_CONCURRENCY",
+      "default": "3"
+    },
+    {
+      "key": "WORKER_BULK_CONCURRENCY",
+      "default": "2"
+    },
+    {
+      "key": "WORKER_MAINTENANCE_CONCURRENCY",
+      "default": "1"
+    },
+    {
+      "key": "STORAGE_DRIVER",
+      "default": "ocd",
+      "required": true
+    },
+    {
+      "key": "OCD_STORAGE_URL",
+      "required": true
+    },
+    {
+      "key": "OCD_STORAGE_TOKEN",
+      "required": true,
+      "secret": true
+    }
+  ],
+  "suggested_app_name": "foody-worker",
+  "public": false,
+  "health_check": {
+    "enabled": true,
+    "path": "/readiness"
+  },
+  "memory_mb": 1536,
+  "image": "ghcr.io/0-ai-ug/ocd-storage-apps@sha256:58d0553c0e358dcab68760fbbf83ea68c9bcb9e8c1f8ae2eced838de002e031f"
+}

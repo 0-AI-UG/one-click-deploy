@@ -1,0 +1,56 @@
+{
+  "$schema": 1,
+  "name": "Shared PostgreSQL",
+  "description": "Shared PostgreSQL 17 with PGMQ, PostGIS and pgvector; separate databases and roles per project.",
+  "build": {
+    "repository": "https://github.com/0-AI-UG/open-cli-deployment.git",
+    "branch": "main",
+    "dockerfile": "services/shared-postgres/Dockerfile",
+    "context": ".",
+    "image_repository": "ghcr.io/0-ai-ug/ocd-shared-postgres",
+    "webhook": false
+  },
+  "container_port": 5432,
+  "public": false,
+  "internal_protocol": "tcp",
+  "env": [
+    {
+      "key": "POSTGRES_USER",
+      "default": "postgres"
+    },
+    {
+      "key": "POSTGRES_PASSWORD",
+      "generate": "password",
+      "secret": true
+    },
+    {
+      "key": "POSTGRES_DB",
+      "default": "postgres"
+    },
+    {
+      "key": "PGDATA",
+      "default": "/var/lib/postgresql/data/pgdata"
+    }
+  ],
+  "volume": {
+    "size": 10,
+    "path": "/var/lib/postgresql/data",
+    "driver": "local-directory"
+  },
+  "memory_mb": 2048,
+  "replicas": 1,
+  "health_check": {
+    "mode": "exec",
+    "command": "pg_isready -U postgres -d postgres"
+  },
+  "exports": {
+    "HOST": {
+      "value": "{app.host}"
+    },
+    "PORT": {
+      "value": "{app.port}"
+    }
+  },
+  "suggested_app_name": "ocd-shared-postgres",
+  "environment": "shared-data"
+}

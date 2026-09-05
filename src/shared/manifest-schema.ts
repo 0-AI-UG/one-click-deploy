@@ -167,6 +167,7 @@ const CAPABILITY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
  * reconciler can grow deterministically and reject impossible shrink requests. */
 const volumeSchema = z.object(
   {
+    driver: nonEmptyString("expected a storage driver id").optional(),
     id: nonEmptyString("expected a non-empty provider volume id").optional(),
     size: guardedNumber("expected positive integer", (v) => Number.isInteger(v) && v >= 1),
     path: z

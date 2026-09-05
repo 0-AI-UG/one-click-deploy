@@ -1,0 +1,44 @@
+{
+  "$schema": 1,
+  "$llm": "https://ocd.cero-ai.com/llm.txt",
+  "name": "BC Postgres",
+  "description": "Postgres 17 with PostGIS, pgmq and pgvector compiled in. Extensions are created on first boot by the baked-in init script. Deploy this first, then point the other services' DATABASE_URL at it.",
+  "container_port": 5432,
+  "environment": "skyline",
+  "env": [
+    {
+      "key": "POSTGRES_USER",
+      "description": "Superuser name.",
+      "default": "postgres"
+    },
+    {
+      "key": "POSTGRES_PASSWORD",
+      "description": "Superuser password.",
+      "required": true,
+      "secret": true
+    },
+    {
+      "key": "POSTGRES_DB",
+      "description": "Database created on first boot.",
+      "default": "building_classification"
+    },
+    {
+      "key": "PGDATA",
+      "description": "Data directory. On OCD block volumes this must be a subdirectory of the volume mount (/var/lib/postgresql/data) so initdb doesn't trip over lost+found.",
+      "default": "/var/lib/postgresql/data/pgdata"
+    }
+  ],
+  "volume": {
+    "id": "106763609",
+    "size": 10,
+    "path": "/var/lib/postgresql/data"
+  },
+  "suggested_app_name": "bc-postgres",
+  "public": false,
+  "internal_protocol": "tcp",
+  "health_check": {
+    "mode": "container"
+  },
+  "memory_mb": 2048,
+  "image": "ghcr.io/0-ai-ug/ocd-shared-postgres@sha256:e43f62150d6e35bf1dd219f8f54542be6a5db818f5e374e51d8975b306238544"
+}

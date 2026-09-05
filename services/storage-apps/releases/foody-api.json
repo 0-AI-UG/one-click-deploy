@@ -1,0 +1,170 @@
+{
+  "$schema": 1,
+  "$llm": "https://ocd.cero-ai.com/llm.txt",
+  "name": "Foody API",
+  "description": "Foody API and Better Auth.",
+  "container_port": 3016,
+  "volume": null,
+  "env": [
+    {
+      "key": "BETTER_AUTH_SECRET",
+      "secret": true,
+      "required": true
+    },
+    {
+      "key": "BETTER_AUTH_URL",
+      "default": "https://foody-api.cero-ai.com",
+      "required": true
+    },
+    {
+      "key": "TRUSTED_ORIGINS",
+      "default": "https://foody.cero-ai.com,foody://app,https://appleid.apple.com",
+      "required": true
+    },
+    {
+      "key": "IDENTITY_EMAIL_VERIFICATION_URL_BASE",
+      "default": "https://foody.cero-ai.com/email-bestaetigt",
+      "required": true
+    },
+    {
+      "key": "IDENTITY_PASSWORD_RESET_URL_BASE",
+      "default": "https://foody.cero-ai.com/passwort-zuruecksetzen",
+      "required": true
+    },
+    {
+      "key": "ADMIN_INVITE_URL_BASE",
+      "default": "https://foody.cero-ai.com/admin",
+      "required": true
+    },
+    {
+      "key": "ADMIN_INVITE_LIFETIME_HOURS",
+      "default": "72",
+      "required": true
+    },
+    {
+      "key": "WEBAUTHN_RP_NAME",
+      "default": "Foody Admin",
+      "required": true
+    },
+    {
+      "key": "WEBAUTHN_RP_ID",
+      "default": "foody.cero-ai.com",
+      "required": true
+    },
+    {
+      "key": "WEBAUTHN_ORIGIN",
+      "default": "https://foody.cero-ai.com",
+      "required": true
+    },
+    {
+      "key": "OPENROUTER_ADMIN_RECIPE_MODEL",
+      "default": "z-ai/glm-5.3-flash",
+      "required": true
+    },
+    {
+      "key": "OPENROUTER_RECIPE_TRANSLATION_MODEL",
+      "default": "z-ai/glm-5.3-flash",
+      "required": true
+    },
+    {
+      "key": "HOUSEHOLD_INVITE_URL_BASE",
+      "default": "https://foody.cero-ai.com/einladung",
+      "required": true
+    },
+    {
+      "key": "HOUSEHOLD_INVITE_LIFETIME_HOURS",
+      "default": "168",
+      "required": true
+    },
+    {
+      "key": "APPLE_CLIENT_ID",
+      "default": "com.0ai.foody.auth"
+    },
+    {
+      "key": "APPLE_CLIENT_SECRET",
+      "secret": true
+    },
+    {
+      "key": "APPLE_NATIVE_CLIENT_SECRET",
+      "secret": true
+    },
+    {
+      "key": "APPLE_APP_BUNDLE_IDENTIFIER",
+      "default": "com.0ai.foody"
+    },
+    {
+      "key": "APPLE_APP_ID",
+      "default": "6796754759",
+      "required": true
+    },
+    {
+      "key": "ENFORCE_SUBSCRIPTION_LIMITS",
+      "default": "true",
+      "required": true
+    },
+    {
+      "key": "APPLE_ADDITIONAL_APP_BUNDLE_IDENTIFIERS",
+      "default": "com.0ai.foody.dev"
+    },
+    {
+      "key": "APPLE_TEAM_ID",
+      "default": "F7PH54XQ6J"
+    },
+    {
+      "key": "APPLE_KEY_ID",
+      "default": "A9LH4GWK5J"
+    },
+    {
+      "key": "APPLE_PRIVATE_KEY",
+      "secret": true
+    },
+    {
+      "key": "API_PORT",
+      "default": "3016"
+    },
+    {
+      "key": "MINIMUM_IOS_BUILD",
+      "default": "72",
+      "required": true
+    },
+    {
+      "key": "API_MAINTENANCE_MODE",
+      "default": "false",
+      "required": true
+    },
+    {
+      "key": "API_MAINTENANCE_MESSAGE"
+    },
+    {
+      "key": "SUPPORTED_APP_LOCALES",
+      "default": "de,en,es,fr,tr",
+      "required": true
+    },
+    {
+      "key": "DB_POOL_MAX",
+      "default": "10"
+    },
+    {
+      "key": "STORAGE_DRIVER",
+      "default": "ocd",
+      "required": true
+    },
+    {
+      "key": "OCD_STORAGE_URL",
+      "required": true
+    },
+    {
+      "key": "OCD_STORAGE_TOKEN",
+      "required": true,
+      "secret": true
+    }
+  ],
+  "suggested_app_name": "foody-api",
+  "public": true,
+  "health_check": {
+    "enabled": true,
+    "path": "/api/health"
+  },
+  "memory_mb": 512,
+  "image": "ghcr.io/0-ai-ug/ocd-storage-apps@sha256:d907ca1c898cf336dfee25fb4b8ba0068b3d2956a047d16779f00b968a3eb412"
+}

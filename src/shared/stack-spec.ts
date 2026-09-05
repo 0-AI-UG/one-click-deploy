@@ -127,6 +127,7 @@ export function buildStackAppSpec(
   if (scaleToZeroAfter !== undefined) spec.scale_to_zero_after = scaleToZeroAfter;
 
   spec.volume_id = manifest.volume?.id ?? "";
+  spec.volume_driver = manifest.volume?.driver;
   spec.volume_size = manifest.volume?.size ?? 0;
   spec.volume_path = manifest.volume?.path ?? "/data";
   if (manifest.extra_volumes?.length) spec.extra_volumes = manifest.extra_volumes;

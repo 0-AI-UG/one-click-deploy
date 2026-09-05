@@ -31,6 +31,12 @@ const validateDeployManifest = (raw: unknown) => validateDeployManifestRaw(
 );
 
 describe("assertSafeHostPath", () => {
+  test("accepts provisioned local volumes only for the exact app and operation", () => {
+    expect(() => assertSafeHostPath("/var/lib/ocd/volumes/ocd-myapp-op3575", "myapp")).not.toThrow();
+    expect(() => assertSafeHostPath("/var/lib/ocd/volumes/ocd-myapp-op3575/data", "myapp")).not.toThrow();
+    expect(() => assertSafeHostPath("/var/lib/ocd/volumes/ocd-other-op3575", "myapp")).toThrow(/allowlist/);
+    expect(() => assertSafeHostPath("/var/lib/ocd/volumes/ocd-myapp-op3575-op9", "myapp")).toThrow(/allowlist/);
+  });
   test("accepts per-app volume root", () => {
     expect(() => assertSafeHostPath("/home/deploy/apps/myapp/volumes/data", "myapp")).not.toThrow();
   });

@@ -126,6 +126,7 @@ export type DeployRequest = {
    *  all keys (legacy); [] = platform OCD_INTERNAL_* variables only. */
   env_projection?: string[] | null;
   volume_id?: string; // Explicit provider volume to adopt; empty = OCD-managed or none
+  volume_driver?: string; // Explicit storage driver for connected-provider panels.
   volume_size?: number; // Desired GB; 0 = explicitly no primary volume
   volume_path?: string; // Container mount path, defaults to /data
   auth_password?: string; // If set, the ingress enforces HTTP basic auth (username "admin"). Requires internal_protocol 'http' (the default)
